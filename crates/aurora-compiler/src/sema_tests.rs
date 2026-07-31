@@ -92,6 +92,8 @@ def main():
     old: Option[int32] = values.set(index=[0, 1], value=9)
     values.fill(value=0)
     item: int32 = values[0, 1]
+    coordinates: Vec[int32] = [0]
+    borrowed_item: int32 = values[coordinates[0]]
     values[0, 1] = item
     rows: Array[int32] = values[:1]
 
@@ -115,6 +117,7 @@ def main():
     print(shape)
     print(count)
     print(full)
+    print(borrowed_item)
     print(arrays)
     print(right_scalar)
     print(left_scalar)
@@ -158,6 +161,11 @@ fn array_surface_rejects_invalid_dtypes_mixed_arithmetic_and_invalid_members() {
             "Array equality is not supported",
         ),
         (
+            "def main():\n    left = Array[float64].zeros(shape=[1])\n    right = Array[float64].zeros(shape=[1])\n    print(left != right)\n",
+            "AU2003",
+            "Array equality is not supported",
+        ),
+        (
             "def main():\n    values = Array[int32].zeros(shape=[1])\n    mapped = values.map(lambda value: value > 0)\n    print(mapped)\n",
             "AU2002",
             "Array.map callback must return",
@@ -191,6 +199,406 @@ fn array_surface_rejects_invalid_dtypes_mixed_arithmetic_and_invalid_members() {
             diagnostic.message
         );
     }
+}
+
+#[test]
+fn array_surface_reports_reachable_constructor_member_and_operator_contracts() {
+    let cases = [
+        (
+            "missing constructor dtype",
+            "def main():\n    values = Array.zeros([1])\n    print(values)\n",
+            "AU2005",
+            "Array associated functions require an explicit dtype such as `Array[int32]`",
+        ),
+        (
+            "too many constructor dtype arguments",
+            "def main():\n    values = Array[int32, int64].zeros([1])\n    print(values)\n",
+            "AU2002",
+            "`Array` expects exactly one type argument, found 2",
+        ),
+        (
+            "invalid constructor dtype",
+            "def main():\n    values = Array[String].zeros([1])\n    print(values)\n",
+            "AU2002",
+            "Array dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `String`",
+        ),
+        (
+            "unknown constructor",
+            "def main():\n    values = Array[int32].unknown([1])\n    print(values)\n",
+            "AU2001",
+            "type `Array` has no associated function `unknown`",
+        ),
+        (
+            "constructor method type arguments",
+            "def main():\n    values = Array[int32].zeros[int64]([1])\n    print(values)\n",
+            "AU2005",
+            "`Array.zeros` does not take explicit type arguments",
+        ),
+        (
+            "builtin member type arguments",
+            "def main():\n    values = Array[int32].zeros([1])\n    print(values.len[int64]())\n",
+            "AU2005",
+            "builtin method `Array.len` does not take explicit type arguments",
+        ),
+        (
+            "zeros shape",
+            "def main():\n    shape: Vec[int32] = [1]\n    values = Array[int32].zeros(shape)\n    print(values)\n",
+            "AU2002",
+            "`Array.zeros` expects `Vec[int64]` for `shape`, found `Vec[int32]`",
+        ),
+        (
+            "full value",
+            "def main():\n    values = Array[int32].full([1], \"bad\")\n    print(values)\n",
+            "AU2002",
+            "`Array.full` expects `int32` for `value`, found `String`",
+        ),
+        (
+            "from_vec values",
+            "def main():\n    values: Vec[int64] = [1]\n    array = Array[int32].from_vec(values, [1])\n    print(array)\n",
+            "AU2002",
+            "`Array.from_vec` expects `Vec[int32]` for `values`, found `Vec[int64]`",
+        ),
+        (
+            "from_vec shape",
+            "def main():\n    shape: Vec[int32] = [1]\n    array = Array[int32].from_vec([1], shape)\n    print(array)\n",
+            "AU2002",
+            "`Array.from_vec` expects `Vec[int64]` for `shape`, found `Vec[int32]`",
+        ),
+        (
+            "get index",
+            "def main():\n    values = Array[int32].zeros([1])\n    index: Vec[int64] = [0]\n    print(values.get(index))\n",
+            "AU2002",
+            "`Array.get` expects `Vec[int32]`, found `Vec[int64]`",
+        ),
+        (
+            "set index",
+            "def main():\n    mut values = Array[int32].zeros([1])\n    index: Vec[int64] = [0]\n    print(values.set(index, 1))\n",
+            "AU2002",
+            "`Array.set` expects `Vec[int32]`, found `Vec[int64]`",
+        ),
+        (
+            "set value",
+            "def main():\n    mut values = Array[int32].zeros([1])\n    print(values.set([0], \"bad\"))\n",
+            "AU2002",
+            "`Array.set` expects `int32`, found `String`",
+        ),
+        (
+            "fill value",
+            "def main():\n    mut values = Array[int32].zeros([1])\n    values.fill(\"bad\")\n",
+            "AU2002",
+            "`Array.fill` expects `int32`, found `String`",
+        ),
+        (
+            "map type argument arity",
+            "def widen(value: int32) -> float64:\n    return value.to_float()\n\ndef main():\n    values = Array[int32].zeros([1])\n    print(values.map[int64, float64](widen))\n",
+            "AU2002",
+            "`Array.map` expects exactly one type argument, found 2",
+        ),
+        (
+            "map output dtype",
+            "def widen(value: int32) -> float64:\n    return value.to_float()\n\ndef main():\n    values = Array[int32].zeros([1])\n    print(values.map[String](widen))\n",
+            "AU2002",
+            "Array.map output dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `String`",
+        ),
+        (
+            "integer-only method",
+            "def main():\n    values = Array[float64].zeros([1])\n    print(values.wrapping_add(1.0))\n",
+            "AU2003",
+            "`Array.wrapping_add` is available only for integer Arrays",
+        ),
+        (
+            "array floor division",
+            "def main():\n    values = Array[int32].zeros([1])\n    print(values // values)\n",
+            "AU2003",
+            "operator `//` is not supported for Array values",
+        ),
+        (
+            "array remainder",
+            "def main():\n    values = Array[int32].zeros([1])\n    print(values % values)\n",
+            "AU2003",
+            "operator `%` is not supported for Array values",
+        ),
+        (
+            "array less-than",
+            "def main():\n    values = Array[int32].zeros([1])\n    print(values < values)\n",
+            "AU2003",
+            "operator `<` is not supported for Array values",
+        ),
+        (
+            "array less-than-or-equal",
+            "def main():\n    values = Array[int32].zeros([1])\n    print(values <= values)\n",
+            "AU2003",
+            "operator `<=` is not supported for Array values",
+        ),
+        (
+            "array greater-than",
+            "def main():\n    values = Array[int32].zeros([1])\n    print(values > values)\n",
+            "AU2003",
+            "operator `>` is not supported for Array values",
+        ),
+        (
+            "array greater-than-or-equal",
+            "def main():\n    values = Array[int32].zeros([1])\n    print(values >= values)\n",
+            "AU2003",
+            "operator `>=` is not supported for Array values",
+        ),
+        (
+            "array logical and",
+            "def main():\n    values = Array[int32].zeros([1])\n    print(values and values)\n",
+            "AU2003",
+            "operator `logical operator` is not supported for Array values",
+        ),
+        (
+            "array logical or",
+            "def main():\n    values = Array[int32].zeros([1])\n    print(values or values)\n",
+            "AU2003",
+            "operator `logical operator` is not supported for Array values",
+        ),
+        (
+            "right scalar dtype",
+            "def main():\n    values = Array[int32].zeros([1])\n    print(values + 1.0)\n",
+            "AU2002",
+            "Array arithmetic requires scalar dtype `int32`, found `float64`",
+        ),
+        (
+            "left scalar dtype",
+            "def main():\n    values = Array[int32].zeros([1])\n    print(1.0 + values)\n",
+            "AU2002",
+            "Array arithmetic requires scalar dtype `int32`, found `float64`",
+        ),
+    ];
+
+    for (shape, source, code, message) in cases {
+        let diagnostic = crate::check_source(source).expect_err(shape);
+        assert_eq!(diagnostic.code, code, "{shape}: {diagnostic:?}");
+        assert_eq!(diagnostic.message, message, "{shape}");
+    }
+}
+
+#[test]
+fn array_containment_rejects_contextual_empty_sets_and_map_indexing() {
+    let cases = [
+        (
+            "empty contextual Set",
+            r#"
+def main():
+    values: Set[Array[int32]] = {}
+    print(values)
+"#,
+            "cannot use `Array[int32]` as a Set element because it contains `Array[int32]`, whose equality is unavailable",
+        ),
+        (
+            "map indexed read",
+            r#"
+def read(values: Map[Array[int32], int64], key: Array[int32]) -> int64:
+    return values[key]
+"#,
+            "cannot use map indexing with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
+        ),
+        (
+            "map indexed write",
+            r#"
+def write(values: mut Map[Array[int32], int64], key: Array[int32]):
+    values[key] = 1
+"#,
+            "cannot use map indexing with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
+        ),
+        (
+            "mismatched nested equality",
+            r#"
+def main():
+    values: Vec[Array[int32]] = [Array[int32].zeros([1])]
+    print(1 == values)
+"#,
+            "cannot compare `Vec[Array[int32]]` because it contains `Array[int32]`, whose equality is unavailable",
+        ),
+    ];
+
+    for (shape, source, message) in cases {
+        let diagnostic = crate::check_source(source).expect_err(shape);
+        assert_eq!(diagnostic.code, "AU2003", "{shape}: {diagnostic:?}");
+        assert_eq!(diagnostic.message, message, "{shape}");
+    }
+}
+
+#[test]
+fn recursive_array_free_enums_remain_equality_eligible() {
+    crate::check_source(
+        r#"
+enum Chain:
+    End
+    Next(indirect Chain)
+
+def equal(left: Chain, right: Chain) -> bool:
+    return left == right
+"#,
+    )
+    .expect("recursive Array-free enums should terminate equality containment analysis");
+}
+
+#[test]
+fn trait_equality_contracts_reject_concrete_arrays_and_strengthening_impls() {
+    let specialized = crate::check_source(
+        r#"
+trait Equaler[Item]:
+    def equal(self, left: Item, right: Item) -> bool:
+        return left == right
+
+class Fixed:
+    value: int64
+
+impl Equaler[Array[int32]] for Fixed:
+    pass
+"#,
+    )
+    .expect_err("a concrete Array specialization cannot satisfy an equality-bearing default");
+    assert_eq!(specialized.code, "AU2003");
+    assert_eq!(
+        specialized.message,
+        "impl method `equal` cannot satisfy the trait's equality contract because `Array[int32]` contains `Array[int32]`, whose equality is unavailable"
+    );
+
+    let strengthened = crate::check_source(
+        r#"
+trait Equaler[T]:
+    def equal(self, left: T, right: T) -> bool
+
+class Matcher[T]:
+    value: T
+
+impl[T] Equaler[T] for Matcher[T]:
+    def equal(self, left: T, right: T) -> bool:
+        return left == right
+"#,
+    )
+    .expect_err("an impl may not strengthen an abstract trait equality contract");
+    assert_eq!(strengthened.code, "AU2003");
+    assert_eq!(
+        strengthened.message,
+        "impl method `equal` would strengthen its trait's equality contract for type parameter `T`; put the equality-bearing behavior in the trait default method so callers can enforce it"
+    );
+}
+
+#[test]
+fn trait_method_generics_defer_array_equality_until_call_inference() {
+    let surface = r#"
+trait Equaler:
+    def equal[T](self, left: T, right: T) -> bool:
+        return left == right
+
+class Marker:
+    value: int64
+
+impl Equaler for Marker:
+    pass
+"#;
+
+    crate::check_source(&format!(
+        "{surface}\ndef main():\n    marker = Marker(0)\n    print(marker.equal(1, 1))\n"
+    ))
+    .expect("eligible inferred method arguments should satisfy the equality contract");
+
+    let direct = crate::check_source(&format!(
+        "{surface}\ndef main():\n    marker = Marker(0)\n    left = Array[int32].zeros([1])\n    right = Array[int32].zeros([1])\n    print(marker.equal(left, right))\n"
+    ))
+    .expect_err("direct trait dispatch must reject an inferred Array method argument");
+    assert_eq!(direct.code, "AU2003", "{direct:?}");
+    assert_eq!(
+        direct.message,
+        "cannot use method `equal` with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable"
+    );
+
+    let bound = crate::check_source(&format!(
+        "{surface}\ndef forward[T, C: Equaler](marker: C, left: T, right: T) -> bool:\n    return marker.equal(left, right)\n\ndef main():\n    marker = Marker(0)\n    left = Array[int32].zeros([1])\n    right = Array[int32].zeros([1])\n    print(forward[Array[int32], Marker](marker, left, right))\n"
+    ))
+    .expect_err("bound dispatch must propagate the inferred Array equality obligation");
+    assert_eq!(bound.code, "AU2003");
+    assert_eq!(
+        bound.message,
+        "cannot use function `forward` with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable"
+    );
+}
+
+#[test]
+fn operator_dispatch_propagates_array_equality_contracts() {
+    let binary_surface = r#"
+trait Add[Rhs]:
+    def add[T](self, rhs: T) -> bool:
+        return rhs == rhs
+
+class Marker:
+    value: int64
+
+class Payload[T]:
+    value: T
+
+class BoundMarker:
+    value: int64
+
+impl[Rhs] Add[Rhs] for Marker:
+    pass
+
+impl Add[int64] for BoundMarker:
+    pass
+"#;
+
+    crate::check_source(&format!(
+        "{binary_surface}\ndef main():\n    marker = Marker(0)\n    print(marker + 1)\n"
+    ))
+    .expect("eligible inferred operator arguments should satisfy equality");
+
+    let direct = crate::check_source(&format!(
+        "{binary_surface}\ndef main():\n    marker = Marker(0)\n    payload = Payload(Array[int32].zeros([1]))\n    print(marker + payload)\n"
+    ))
+    .expect_err("concrete operator dispatch must reject an inferred Array argument");
+    assert_eq!(direct.code, "AU2003", "{direct:?}");
+    assert_eq!(
+        direct.message,
+        "cannot use operator trait `Add.add` with `Payload[Array[int32]]` because it contains `Array[int32]`, whose equality is unavailable"
+    );
+
+    crate::check_source(&format!(
+        "{binary_surface}\ndef combine[C: Add[int64]](marker: C, rhs: int64) -> bool:\n    return marker + rhs\n\ndef main():\n    marker = BoundMarker(0)\n    print(combine[BoundMarker](marker, 1))\n"
+    ))
+    .expect("bound operator dispatch should preserve eligible method-generic equality");
+
+    let unary_surface = r#"
+trait Neg[Out]:
+    def neg(self):
+        print(self == self)
+
+class Wrapper[T]:
+    value: T
+
+class BoundWrapper:
+    value: int64
+
+impl[T] Neg[None] for Wrapper[T]:
+    pass
+
+impl Neg[None] for BoundWrapper:
+    pass
+"#;
+
+    crate::check_source(&format!(
+        "{unary_surface}\ndef main():\n    wrapper = Wrapper(1)\n    print(-wrapper)\n"
+    ))
+    .expect("eligible unary operator receivers should satisfy equality");
+
+    let unary = crate::check_source(&format!(
+        "{unary_surface}\ndef main():\n    wrapper = Wrapper(Array[int32].zeros([1]))\n    print(-wrapper)\n"
+    ))
+    .expect_err("unary operator dispatch must reject an Array-containing receiver");
+    assert_eq!(unary.code, "AU2003");
+    assert_eq!(
+        unary.message,
+        "cannot use operator trait `Neg.neg` with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable"
+    );
+
+    crate::check_source(&format!(
+        "{unary_surface}\ndef negate[C: Neg[None]](value: C):\n    -value\n\ndef main():\n    wrapper = BoundWrapper(1)\n    negate[BoundWrapper](wrapper)\n"
+    ))
+    .expect("bound unary dispatch should preserve eligible receiver equality");
 }
 
 #[test]

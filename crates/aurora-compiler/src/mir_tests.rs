@@ -83,6 +83,65 @@ fn arg(value: Expr) -> Argument {
 }
 
 #[test]
+fn array_and_builtin_associated_results_retain_checked_types_in_mir() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    values = Array[int32].from_vec([1, 2], [2])
+    scalar: int32 = 2
+    right = values + scalar
+    left = scalar - values
+    mapped = values.map(lambda value: value.to_float())
+    offset: int32 = 1
+    captured_mapped = values.map(lambda value: value + offset)
+    coordinate: int32 = 0
+    item = values[(coordinate)]
+    duration = Duration.ms(1)
+    bytes: Vec[uint8] = [65]
+    decoded = String.from_bytes(bytes)
+    print(right)
+    print(left)
+    print(mapped)
+    print(captured_mapped)
+    print(item)
+    print(duration)
+    print(decoded)
+"#,
+    )
+    .expect("checked Array and associated-function expressions should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let locals = main
+        .local_types
+        .iter()
+        .map(|local| (local.name.as_str(), local.ty.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let int_array = Type::Named("Array".to_string(), vec![Type::named("int32")]);
+    assert_eq!(locals["right"], int_array);
+    assert_eq!(locals["left"], int_array);
+    assert_eq!(
+        locals["mapped"],
+        Type::Named("Array".to_string(), vec![Type::named("float64")])
+    );
+    assert_eq!(
+        locals["captured_mapped"],
+        Type::Named("Array".to_string(), vec![Type::named("int32")])
+    );
+    assert_eq!(locals["item"], Type::named("int32"));
+    assert_eq!(locals["duration"], Type::named("Duration"));
+    assert_eq!(
+        locals["decoded"],
+        Type::Named(
+            "Result".to_string(),
+            vec![Type::named("String"), Type::named("bytes.Error")]
+        )
+    );
+}
+
+#[test]
 fn extern_calls_lower_to_explicit_abi_metadata_without_synthetic_function_bodies() {
     let module = lower_ffi_source(
         r#"

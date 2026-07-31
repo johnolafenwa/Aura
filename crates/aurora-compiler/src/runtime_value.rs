@@ -611,12 +611,8 @@ impl ArrayReduction {
     }
 
     const fn name(self) -> &'static str {
-        match self {
-            Self::Sum => "sum",
-            Self::Min => "min",
-            Self::Max => "max",
-            Self::Mean => "mean",
-        }
+        const NAMES: [&str; 4] = ["sum", "min", "max", "mean"];
+        NAMES[self as usize]
     }
 }
 
@@ -813,14 +809,10 @@ impl ArrayValue {
     }
 
     pub fn get_optional(&self, coordinates: &[i32]) -> Result<Option<Value>> {
-        if coordinates.len() != self.rank() {
-            return Ok(None);
-        }
-        match self.flat_index(coordinates) {
-            Ok(index) => Ok(Some(self.value_at_flat(index))),
-            Err(error) if error.code == "AU4003" => Ok(None),
-            Err(error) => Err(error),
-        }
+        Ok(self
+            .flat_index(coordinates)
+            .ok()
+            .map(|index| self.value_at_flat(index)))
     }
 
     pub fn set(&mut self, coordinates: &[i32], value: Value) -> Result<Value> {
@@ -853,18 +845,11 @@ impl ArrayValue {
         let first_dimension = self.shape[0];
         let (start, end) = normalize_slice_bounds(start, end, first_dimension)?;
         let block_len = checked_array_element_count(&self.shape[1..])?;
-        let value_start = start.checked_mul(block_len).ok_or_else(|| {
-            Diagnostic::coded(
-                "AU4005",
-                "array slice offset overflowed host allocation bounds",
-            )
-        })?;
-        let value_end = end.checked_mul(block_len).ok_or_else(|| {
-            Diagnostic::coded(
-                "AU4005",
-                "array slice offset overflowed host allocation bounds",
-            )
-        })?;
+        // A live Array has a checked row-major shape product. Slice endpoints
+        // are bounded by the first dimension, so multiplying either endpoint
+        // by the remaining-axis block length cannot exceed that live product.
+        let value_start = start * block_len;
+        let value_end = end * block_len;
         let mut shape = self.try_shape()?;
         shape[0] = end - start;
         let storage = match &self.storage {
@@ -1279,12 +1264,6 @@ fn apply_integer_array_operation(
     mode: IntegerArithmeticMode,
     index: usize,
 ) -> Result<IntegerValue> {
-    if operation == ArrayBinaryOp::Div {
-        return Err(Diagnostic::coded(
-            "AU4001",
-            "array division is supported only for float32 and float64",
-        ));
-    }
     let result = match (mode, operation) {
         (IntegerArithmeticMode::Checked, ArrayBinaryOp::Add) => left.checked_add(right),
         (IntegerArithmeticMode::Checked, ArrayBinaryOp::Sub) => left.checked_sub(right),
@@ -1295,7 +1274,12 @@ fn apply_integer_array_operation(
         (IntegerArithmeticMode::Saturating, ArrayBinaryOp::Add) => left.saturating_add(right),
         (IntegerArithmeticMode::Saturating, ArrayBinaryOp::Sub) => left.saturating_sub(right),
         (IntegerArithmeticMode::Saturating, ArrayBinaryOp::Mul) => left.saturating_mul(right),
-        (_, ArrayBinaryOp::Div) => unreachable!("integer division was rejected above"),
+        (_, ArrayBinaryOp::Div) => {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                "array division is supported only for float32 and float64",
+            ));
+        }
     };
     result
         .filter(|result| result.runtime_kind() == left.runtime_kind())
@@ -13010,7 +12994,11 @@ pub(crate) fn recv_for_task_group_iteration(
             TryRecvResult::Closed => return RecvValueResult::Closed,
             TryRecvResult::Empty => {}
         }
-        if group.has_unobserved_error() {
+        // Cancellation is an observable abnormal exit from receive-based task-group
+        // iteration.  It must win over the vacuous "all tasks completed" state of
+        // an empty group; otherwise cancelling an empty group is misreported as
+        // ordinary iteration exhaustion.
+        if cancellation.is_cancelled() || group.is_cancelled() || group.has_unobserved_error() {
             return RecvValueResult::Cancelled;
         }
         if group.all_registered_tasks_completed() {

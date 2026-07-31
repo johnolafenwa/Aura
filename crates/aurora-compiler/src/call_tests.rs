@@ -579,6 +579,58 @@ fn array_call_metadata_pins_constructors_members_and_integer_modes() {
 }
 
 #[test]
+fn integer_and_array_arithmetic_hover_contracts_name_each_operation() {
+    for (member, detail) in [
+        (
+            BuiltinMember::IntegerWrappingAdd,
+            "wrapping_add(rhs: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerWrappingSub,
+            "wrapping_sub(rhs: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerWrappingMul,
+            "wrapping_mul(rhs: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerSaturatingAdd,
+            "saturating_add(rhs: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerSaturatingSub,
+            "saturating_sub(rhs: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerSaturatingMul,
+            "saturating_mul(rhs: Self) -> Self",
+        ),
+    ] {
+        assert_eq!(member.detail(), detail);
+        assert!(
+            member.docs().contains("fixed-width integer arithmetic"),
+            "{} should expose its overflow contract to hover",
+            member.name()
+        );
+    }
+
+    for (member, expected) in [
+        (BuiltinMember::ArrayLen, "total number"),
+        (BuiltinMember::ArrayClone, "independent copy"),
+        (BuiltinMember::ArrayGet, "Option.None"),
+        (BuiltinMember::ArrayFill, "every scalar"),
+        (BuiltinMember::ArrayMin, "minimum"),
+        (BuiltinMember::ArrayMax, "maximum"),
+    ] {
+        assert!(
+            member.docs().contains(expected),
+            "{} hover should describe its observable behavior",
+            member.name()
+        );
+    }
+}
+
+#[test]
 fn builtin_function_call_shapes_expose_bare_shared_argument_metadata() {
     for (builtin, positions) in [
         (BuiltinFunction::Range, &[0, 1][..]),

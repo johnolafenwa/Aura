@@ -417,8 +417,30 @@ versus `0.251602 ms` for NumPy 2.0.2, and `1.150392 ms` for Aurora sum versus
 claims. Release disassembly emitted scalar floating-point kernels, so no
 float-SIMD claim is made.
 
-The remaining Phase 7.3 work is the measured-evidence commit and exact clean
-full CI.
+The aggregate coverage closure is green after 334/334 instrumented CLI tests,
+1,498/1,498 compiler-library tests, and every integration target. Compiler
+coverage is 86,645/89,983 lines (96.290410411%), 5,704/5,866 functions
+(97.238322537%), and 126,842/134,034 regions (94.634197293%), above the frozen
+`96.18/96.97/94.62` floors.
+
+The closure found and fixed specialized Array analysis inference, builtin
+associated-call MIR result inference, `None` impl-parameter inference, typed
+scalar-on-left Array MIR metadata, clean-target runtime-archive resolution in
+CLI installed/cache tests, and cancellation precedence for empty task-group
+Queue iteration. All additions pin observable diagnostics, types, runtime
+outcomes, public ABI behavior, or backend parity. No synthetic coverage test
+was added. Deliberately unforced code is limited to genuine host-OOM clone
+cleanup and compiler-enforced Array and checked-MIR invariants; no coverage
+exclusion was installed.
+
+The retained coverage log is
+`/private/tmp/aurora-array-coverage-closure-6.log`, SHA-256
+`99359fa3f8dacb346bc98c325b56c7be3f4a170f6021a39f1a91c50d557e905b`.
+The JSON report is
+`/private/tmp/aurora-array-coverage-closure-6.json`, SHA-256
+`246765c9ffff71e2f54917c42f93d7b8804dd10d793818ee9bad7004751cf18b`.
+The remaining Phase 7.3 work is the exact clean full-CI proof from the
+coverage-closure commit.
 
 ## Authorized sequence
 

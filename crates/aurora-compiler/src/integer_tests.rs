@@ -322,6 +322,70 @@ fn saturating_integer_arithmetic_clamps_to_the_declared_bounds() {
 }
 
 #[test]
+fn width_arithmetic_obeys_every_declared_integer_boundary() {
+    let signed_kinds = [
+        IntegerKind::Int8,
+        IntegerKind::Int16,
+        IntegerKind::Int32,
+        IntegerKind::Int64,
+        IntegerKind::Int128,
+        IntegerKind::IntSize,
+    ];
+    for kind in signed_kinds {
+        let IntegerBounds::Signed { min, max } = kind.bounds() else {
+            panic!("{kind:?} should have signed bounds");
+        };
+        let min_value =
+            IntegerValue::from_typed_signed(min, kind).expect("minimum should fit its kind");
+        let max_value =
+            IntegerValue::from_typed_signed(max, kind).expect("maximum should fit its kind");
+        let one = IntegerValue::from_typed_signed(1, kind).expect("one should fit its kind");
+        let two = IntegerValue::from_typed_signed(2, kind).expect("two should fit its kind");
+
+        assert_eq!(max_value.wrapping_add(one), Some(min_value), "{kind:?}");
+        assert_eq!(min_value.wrapping_sub(one), Some(max_value), "{kind:?}");
+        assert_eq!(
+            max_value.wrapping_mul(two),
+            IntegerValue::from_typed_signed(-2, kind),
+            "{kind:?}"
+        );
+        assert_eq!(max_value.saturating_add(one), Some(max_value), "{kind:?}");
+        assert_eq!(min_value.saturating_sub(one), Some(min_value), "{kind:?}");
+        assert_eq!(max_value.saturating_mul(two), Some(max_value), "{kind:?}");
+    }
+
+    let unsigned_kinds = [
+        IntegerKind::Uint8,
+        IntegerKind::Uint16,
+        IntegerKind::Uint32,
+        IntegerKind::Uint64,
+        IntegerKind::Uint128,
+        IntegerKind::UintSize,
+    ];
+    for kind in unsigned_kinds {
+        let IntegerBounds::Unsigned { max } = kind.bounds() else {
+            panic!("{kind:?} should have unsigned bounds");
+        };
+        let zero = IntegerValue::from_typed_unsigned(0, kind).expect("zero should fit its kind");
+        let one = IntegerValue::from_typed_unsigned(1, kind).expect("one should fit its kind");
+        let two = IntegerValue::from_typed_unsigned(2, kind).expect("two should fit its kind");
+        let max_value =
+            IntegerValue::from_typed_unsigned(max, kind).expect("maximum should fit its kind");
+
+        assert_eq!(max_value.wrapping_add(one), Some(zero), "{kind:?}");
+        assert_eq!(zero.wrapping_sub(one), Some(max_value), "{kind:?}");
+        assert_eq!(
+            max_value.wrapping_mul(two),
+            IntegerValue::from_typed_unsigned(max - 1, kind),
+            "{kind:?}"
+        );
+        assert_eq!(max_value.saturating_add(one), Some(max_value), "{kind:?}");
+        assert_eq!(zero.saturating_sub(one), Some(zero), "{kind:?}");
+        assert_eq!(max_value.saturating_mul(two), Some(max_value), "{kind:?}");
+    }
+}
+
+#[test]
 fn d3_negative_literal_default_is_int64_and_does_not_widen_implicitly() {
     assert_eq!(
         minimal_signed_type_for_negative_literal(7),

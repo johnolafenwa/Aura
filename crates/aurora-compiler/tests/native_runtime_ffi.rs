@@ -1125,12 +1125,24 @@ fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_libra
         release(source);
 
         let maximum = int32_value(i32::MAX);
+        let minimum = int32_value(i32::MIN);
         let one = int32_value(1);
+        let two = int32_value(2);
         let wrapped = aurora_direct_integer_width_binary(maximum, one, 0, 1, 12, 13);
         assert_eq!(expect_i64(wrapped), i64::from(i32::MIN));
+        let wrapped = aurora_direct_integer_width_binary(minimum, one, 1, 1, 12, 13);
+        assert_eq!(expect_i64(wrapped), i64::from(i32::MAX));
+        let wrapped = aurora_direct_integer_width_binary(maximum, two, 2, 1, 12, 13);
+        assert_eq!(expect_i64(wrapped), -2);
         let saturated = aurora_direct_integer_width_binary(maximum, one, 0, 2, 12, 13);
         assert_eq!(expect_i64(saturated), i64::from(i32::MAX));
+        let saturated = aurora_direct_integer_width_binary(minimum, one, 1, 2, 12, 13);
+        assert_eq!(expect_i64(saturated), i64::from(i32::MIN));
+        let saturated = aurora_direct_integer_width_binary(maximum, two, 2, 2, 12, 13);
+        assert_eq!(expect_i64(saturated), i64::from(i32::MAX));
+        release(two);
         release(one);
+        release(minimum);
         release(maximum);
     }
 }

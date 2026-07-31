@@ -1,0 +1,3 @@
+def main():
+    mut values = Array[int32].zeros([2, 2])
+    values[2, 0] = 7

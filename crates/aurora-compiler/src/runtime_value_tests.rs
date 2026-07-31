@@ -97,11 +97,18 @@ fn dense_arrays_validate_shape_storage_and_deep_clone() {
     assert_eq!(shape_error.code, "AU4007");
 
     let product_error = ArrayValue::new(
-        vec![usize::MAX, 2].into_boxed_slice(),
+        vec![i64::MAX as usize, 3].into_boxed_slice(),
         ArrayStorage::Float32(Vec::new().into_boxed_slice()),
     )
     .expect_err("shape products must be checked");
     assert_eq!(product_error.code, "AU4005");
+    assert_eq!(
+        product_error.message,
+        format!(
+            "array shape product overflows host allocation bounds: [{}, 3]",
+            i64::MAX
+        )
+    );
 
     ArrayValue::new(
         vec![i64::MAX as usize, 2, 0].into_boxed_slice(),
@@ -223,6 +230,157 @@ fn dense_arrays_copy_vec_inputs_normalize_coordinates_and_slice_the_first_axis()
 }
 
 #[test]
+fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
+    fn assert_independent_clone(array: &ArrayValue) {
+        let copy = array
+            .try_clone()
+            .expect("every supported Array dtype should clone fallibly");
+        assert_eq!(copy, *array);
+        assert_ne!(copy.shape.as_ptr(), array.shape.as_ptr());
+        match (&array.storage, &copy.storage) {
+            (ArrayStorage::Int32(source), ArrayStorage::Int32(copy)) => {
+                assert_ne!(source.as_ptr(), copy.as_ptr());
+            }
+            (ArrayStorage::Int64(source), ArrayStorage::Int64(copy)) => {
+                assert_ne!(source.as_ptr(), copy.as_ptr());
+            }
+            (ArrayStorage::Float32(source), ArrayStorage::Float32(copy)) => {
+                assert_ne!(source.as_ptr(), copy.as_ptr());
+            }
+            (ArrayStorage::Float64(source), ArrayStorage::Float64(copy)) => {
+                assert_ne!(source.as_ptr(), copy.as_ptr());
+            }
+            _ => panic!("an Array clone must retain its exact dtype"),
+        }
+    }
+
+    let full_cases = [
+        (
+            ArrayDType::Int32,
+            Value::Int(IntegerValue::from_i32(6)),
+            ArrayStorage::Int32(vec![6, 6].into_boxed_slice()),
+        ),
+        (
+            ArrayDType::Int64,
+            Value::Int(IntegerValue::from_i64(7)),
+            ArrayStorage::Int64(vec![7, 7].into_boxed_slice()),
+        ),
+        (
+            ArrayDType::Float32,
+            Value::Float(1.25),
+            ArrayStorage::Float32(vec![1.25, 1.25].into_boxed_slice()),
+        ),
+        (
+            ArrayDType::Float64,
+            Value::Float(-2.5),
+            ArrayStorage::Float64(vec![-2.5, -2.5].into_boxed_slice()),
+        ),
+    ];
+    for (dtype, value, storage) in full_cases {
+        assert_eq!(
+            ArrayValue::full(dtype, vec![2].into_boxed_slice(), &value)
+                .expect("Array.full should create every supported dtype"),
+            ArrayValue::new(vec![2].into_boxed_slice(), storage).unwrap()
+        );
+    }
+
+    let mut int64_array = ArrayValue::from_vec(
+        &VecValue {
+            element_type: Type::named("int64"),
+            elements: [-3_i64, 5, 9]
+                .into_iter()
+                .map(|value| Value::Int(IntegerValue::from_i64(value)))
+                .collect(),
+        },
+        None,
+    )
+    .expect("Array[int64].from_vec should infer a one-dimensional shape");
+    assert_eq!(int64_array.shape.as_ref(), &[3]);
+    assert_eq!(
+        int64_array
+            .set(&[-1], Value::Int(IntegerValue::from_i64(11)))
+            .unwrap(),
+        Value::Int(IntegerValue::from_i64(9))
+    );
+    int64_array
+        .fill(Value::Int(IntegerValue::from_i64(-7)))
+        .unwrap();
+    assert_eq!(
+        int64_array
+            .slice_first_axis(Some(1), None)
+            .expect("int64 slicing should preserve dtype and normalized bounds"),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Int64(vec![-7, -7].into_boxed_slice()),
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        int64_array.render(),
+        "Array[int64](shape=[3], values=[-7, -7, -7])"
+    );
+    assert_independent_clone(&int64_array);
+
+    let mut float32_array = ArrayValue::from_vec(
+        &VecValue {
+            element_type: Type::named("float32"),
+            elements: [1.25, -2.5, 4.0].into_iter().map(Value::Float).collect(),
+        },
+        Some(&[3]),
+    )
+    .expect("Array[float32].from_vec should retain float32 storage");
+    assert_eq!(
+        float32_array.set(&[1], Value::Float(3.5)).unwrap(),
+        Value::Float(-2.5)
+    );
+    float32_array.fill(Value::Float(2.25)).unwrap();
+    assert_eq!(
+        float32_array
+            .slice_first_axis(None, Some(-1))
+            .expect("float32 slicing should preserve its narrowed storage"),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Float32(vec![2.25, 2.25].into_boxed_slice()),
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        float32_array.render(),
+        "Array[float32](shape=[3], values=[2.25, 2.25, 2.25])"
+    );
+    assert_independent_clone(&float32_array);
+
+    let mut float64_array = ArrayValue::from_vec(
+        &VecValue {
+            element_type: Type::named("float64"),
+            elements: [1.5, 2.5, 3.5].into_iter().map(Value::Float).collect(),
+        },
+        Some(&[3]),
+    )
+    .expect("Array[float64].from_vec should retain float64 storage");
+    assert_eq!(
+        float64_array.set(&[0], Value::Float(-4.5)).unwrap(),
+        Value::Float(1.5)
+    );
+    float64_array.fill(Value::Float(8.5)).unwrap();
+    assert_eq!(
+        float64_array
+            .slice_first_axis(Some(-2), None)
+            .expect("float64 slicing should normalize negative bounds"),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Float64(vec![8.5, 8.5].into_boxed_slice()),
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        float64_array.render(),
+        "Array[float64](shape=[3], values=[8.5, 8.5, 8.5])"
+    );
+    assert_independent_clone(&float64_array);
+}
+
+#[test]
 fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
     let malformed_source = VecValue {
         element_type: Type::named("int32"),
@@ -262,6 +420,82 @@ fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
     assert_eq!(
         conversion_error.message,
         "array int32 storage requires int32 scalar at flat index 0, found 7"
+    );
+}
+
+#[test]
+fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
+    let unsupported = VecValue {
+        element_type: Type::named("String"),
+        elements: vec![Value::String("one".to_string())],
+    };
+    let from_vec_error = ArrayValue::from_vec(&unsupported, None)
+        .expect_err("Array.from_vec must reject non-numeric element types");
+    assert_eq!(from_vec_error.code, "AU4007");
+    assert_eq!(
+        from_vec_error.message,
+        "Array values require int32, int64, float32, or float64 elements, found `String`"
+    );
+
+    let from_values_error = ArrayValue::from_values(
+        &Type::Tuple(vec![Type::named("int32")]),
+        vec![1].into_boxed_slice(),
+        vec![Value::Int(IntegerValue::from_i32(1))],
+    )
+    .expect_err("the native Array constructor must enforce the same numeric type boundary");
+    assert_eq!(from_values_error.code, "AU4007");
+    assert_eq!(
+        from_values_error.message,
+        "Array values require int32, int64, float32, or float64 elements, found `(int32,)`"
+    );
+
+    assert_eq!(
+        ArrayDType::from_type(&Type::Named(
+            "int32".to_string(),
+            vec![Type::named("String")]
+        )),
+        None,
+        "numeric Array dtypes are exact non-generic scalar types"
+    );
+    assert_eq!(ArrayDType::from_type(&Type::Unit), None);
+
+    for (element_type, value, expected) in [
+        (
+            Type::named("int32"),
+            Value::Bool(true),
+            "array int32 storage requires int32 scalar at flat index 0, found true",
+        ),
+        (
+            Type::named("int64"),
+            Value::Int(IntegerValue::from_i32(7)),
+            "array int64 storage requires int64 scalar at flat index 0, found 7",
+        ),
+        (
+            Type::named("float32"),
+            Value::Int(IntegerValue::from_i32(3)),
+            "array float32 storage requires float32 scalar at flat index 0, found 3",
+        ),
+        (
+            Type::named("float64"),
+            Value::String("3.0".to_string()),
+            "array float64 storage requires float64 scalar at flat index 0, found 3.0",
+        ),
+    ] {
+        let error = ArrayValue::from_values(&element_type, vec![1].into_boxed_slice(), vec![value])
+            .expect_err("Array storage must preserve exact scalar runtime metadata");
+        assert_eq!(error.code, "AU4007");
+        assert_eq!(error.message, expected);
+    }
+
+    let mut int64_array = ArrayValue::zeros(ArrayDType::Int64, vec![1].into_boxed_slice())
+        .expect("the dynamic-result diagnostic probe should construct its destination Array");
+    let callback_result_error = int64_array
+        .fill(Value::String("not an int64".to_string()))
+        .expect_err("a dynamically produced non-integer cannot enter int64 Array storage");
+    assert_eq!(callback_result_error.code, "AU4007");
+    assert_eq!(
+        callback_result_error.message,
+        "array int64 storage requires int64 scalar at flat index 0, found not an int64"
     );
 }
 
@@ -821,6 +1055,264 @@ fn dense_array_kernels_cover_checked_arithmetic_broadcast_and_modes() {
 }
 
 #[test]
+fn dense_array_arithmetic_preserves_dtype_operand_order_and_integer_modes() {
+    fn int32_array(values: &[i32]) -> ArrayValue {
+        ArrayValue::new(
+            vec![values.len()].into_boxed_slice(),
+            ArrayStorage::Int32(values.to_vec().into_boxed_slice()),
+        )
+        .unwrap()
+    }
+
+    let integer_left = int32_array(&[i32::MIN, 4]);
+    let integer_right = int32_array(&[1, 3]);
+    let multiplication_left = int32_array(&[i32::MAX, 4]);
+    let multiplication_right = int32_array(&[2, 3]);
+    for (left, right, mode, operation, expected) in [
+        (
+            &integer_left,
+            &integer_right,
+            IntegerArithmeticMode::Wrapping,
+            ArrayBinaryOp::Sub,
+            int32_array(&[i32::MAX, 1]),
+        ),
+        (
+            &multiplication_left,
+            &multiplication_right,
+            IntegerArithmeticMode::Wrapping,
+            ArrayBinaryOp::Mul,
+            int32_array(&[-2, 12]),
+        ),
+        (
+            &integer_left,
+            &integer_right,
+            IntegerArithmeticMode::Saturating,
+            ArrayBinaryOp::Sub,
+            int32_array(&[i32::MIN, 1]),
+        ),
+        (
+            &multiplication_left,
+            &multiplication_right,
+            IntegerArithmeticMode::Saturating,
+            ArrayBinaryOp::Mul,
+            int32_array(&[i32::MAX, 12]),
+        ),
+    ] {
+        assert_eq!(
+            left.binary(right, operation, mode)
+                .expect("wrapping and saturating integer modes should return exact values"),
+            expected
+        );
+    }
+
+    for (operation, expected_message) in [
+        (
+            ArrayBinaryOp::Sub,
+            "array subtraction overflowed at flat index 0",
+        ),
+        (
+            ArrayBinaryOp::Mul,
+            "array multiplication overflowed at flat index 0",
+        ),
+    ] {
+        let right = if operation == ArrayBinaryOp::Sub {
+            int32_array(&[1, 1])
+        } else {
+            int32_array(&[2, 1])
+        };
+        let left = if operation == ArrayBinaryOp::Sub {
+            &integer_left
+        } else {
+            &multiplication_left
+        };
+        let error = left
+            .binary(&right, operation, IntegerArithmeticMode::Checked)
+            .expect_err("checked subtraction and multiplication must diagnose overflow");
+        assert_eq!(error.code, "AU4002");
+        assert_eq!(error.message, expected_message);
+    }
+
+    let int64_left = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Int64(vec![6, -4].into_boxed_slice()),
+    )
+    .unwrap();
+    let int64_right = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Int64(vec![5, 3].into_boxed_slice()),
+    )
+    .unwrap();
+    assert_eq!(
+        int64_left
+            .binary(
+                &int64_right,
+                ArrayBinaryOp::Mul,
+                IntegerArithmeticMode::Checked,
+            )
+            .unwrap(),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Int64(vec![30, -12].into_boxed_slice()),
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        int64_left
+            .scalar_binary(
+                &Value::Int(IntegerValue::from_i64(10)),
+                true,
+                ArrayBinaryOp::Sub,
+                IntegerArithmeticMode::Checked,
+            )
+            .unwrap(),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Int64(vec![4, 14].into_boxed_slice()),
+        )
+        .unwrap(),
+        "a scalar on the left must retain operand order"
+    );
+    assert_eq!(
+        int64_left
+            .scalar_binary(
+                &Value::Int(IntegerValue::from_i64(2)),
+                false,
+                ArrayBinaryOp::Mul,
+                IntegerArithmeticMode::Checked,
+            )
+            .unwrap(),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Int64(vec![12, -8].into_boxed_slice()),
+        )
+        .unwrap()
+    );
+    let int64_scalar_overflow = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Int64(vec![3, i64::MAX].into_boxed_slice()),
+    )
+    .unwrap()
+    .scalar_binary(
+        &Value::Int(IntegerValue::from_i64(2)),
+        false,
+        ArrayBinaryOp::Mul,
+        IntegerArithmeticMode::Checked,
+    )
+    .expect_err("checked int64 scalar arithmetic must report the first overflowing element");
+    assert_eq!(int64_scalar_overflow.code, "AU4002");
+    assert_eq!(
+        int64_scalar_overflow.message,
+        "array multiplication overflowed at flat index 1"
+    );
+
+    let float32_left = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Float32(vec![8.0, 9.0].into_boxed_slice()),
+    )
+    .unwrap();
+    let float32_right = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Float32(vec![2.0, 3.0].into_boxed_slice()),
+    )
+    .unwrap();
+    for (operation, expected) in [
+        (ArrayBinaryOp::Add, [10.0_f32, 12.0]),
+        (ArrayBinaryOp::Sub, [6.0_f32, 6.0]),
+        (ArrayBinaryOp::Mul, [16.0_f32, 27.0]),
+        (ArrayBinaryOp::Div, [4.0_f32, 3.0]),
+    ] {
+        assert_eq!(
+            float32_left
+                .binary(&float32_right, operation, IntegerArithmeticMode::Checked,)
+                .unwrap(),
+            ArrayValue::new(
+                vec![2].into_boxed_slice(),
+                ArrayStorage::Float32(expected.into()),
+            )
+            .unwrap()
+        );
+    }
+    let float32_zero_divisor = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Float32(vec![2.0, 0.0].into_boxed_slice()),
+    )
+    .unwrap();
+    let float32_division_error = float32_left
+        .binary(
+            &float32_zero_divisor,
+            ArrayBinaryOp::Div,
+            IntegerArithmeticMode::Checked,
+        )
+        .expect_err("float32 Array division must report the first zero divisor");
+    assert_eq!(float32_division_error.code, "AU4004");
+    assert_eq!(
+        float32_division_error.message,
+        "array division has a zero divisor at flat index 1"
+    );
+
+    let float64_left = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Float64(vec![12.0, 15.0].into_boxed_slice()),
+    )
+    .unwrap();
+    let float64_right = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Float64(vec![3.0, 5.0].into_boxed_slice()),
+    )
+    .unwrap();
+    for (operation, expected) in [
+        (ArrayBinaryOp::Add, [15.0_f64, 20.0]),
+        (ArrayBinaryOp::Sub, [9.0_f64, 10.0]),
+        (ArrayBinaryOp::Mul, [36.0_f64, 75.0]),
+        (ArrayBinaryOp::Div, [4.0_f64, 3.0]),
+    ] {
+        assert_eq!(
+            float64_left
+                .binary(&float64_right, operation, IntegerArithmeticMode::Checked,)
+                .unwrap(),
+            ArrayValue::new(
+                vec![2].into_boxed_slice(),
+                ArrayStorage::Float64(expected.into()),
+            )
+            .unwrap()
+        );
+    }
+    assert_eq!(
+        float64_left
+            .scalar_binary(
+                &Value::Float(3.0),
+                false,
+                ArrayBinaryOp::Div,
+                IntegerArithmeticMode::Checked,
+            )
+            .unwrap(),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Float64(vec![4.0, 5.0].into_boxed_slice()),
+        )
+        .unwrap()
+    );
+
+    let zero_divisor = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Float64(vec![2.0, 0.0].into_boxed_slice()),
+    )
+    .unwrap();
+    let error = float64_left
+        .binary(
+            &zero_divisor,
+            ArrayBinaryOp::Div,
+            IntegerArithmeticMode::Checked,
+        )
+        .expect_err("Array division by zero must report the first failing flat index");
+    assert_eq!(error.code, "AU4004");
+    assert_eq!(
+        error.message,
+        "array division has a zero divisor at flat index 1"
+    );
+}
+
+#[test]
 fn dense_array_reductions_define_empty_and_dtype_behavior() {
     let ints = ArrayValue::new(
         vec![2, 2].into_boxed_slice(),
@@ -874,6 +1366,19 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
     assert_eq!(overflow.code, "AU4002");
     assert!(overflow.message.contains("flat index 1"));
 
+    let int64_overflow = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Int64(vec![i64::MAX, 1].into_boxed_slice()),
+    )
+    .unwrap()
+    .reduce(ArrayReduction::Sum)
+    .expect_err("int64 sums must retain checked arithmetic");
+    assert_eq!(int64_overflow.code, "AU4002");
+    assert_eq!(
+        int64_overflow.message,
+        "array addition overflowed at flat index 1"
+    );
+
     let wide_mean = ArrayValue::new(
         vec![2].into_boxed_slice(),
         ArrayStorage::Int32(vec![i32::MAX, i32::MAX].into_boxed_slice()),
@@ -883,6 +1388,26 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
         wide_mean.reduce(ArrayReduction::Mean).unwrap(),
         Value::Float(i32::MAX as f64),
         "mean must accumulate independently in f64 instead of overflowing a same-dtype sum"
+    );
+    assert_eq!(
+        ArrayValue::new(
+            vec![3].into_boxed_slice(),
+            ArrayStorage::Int32(vec![7, -4, 2].into_boxed_slice()),
+        )
+        .unwrap()
+        .reduce(ArrayReduction::Min)
+        .unwrap(),
+        Value::Int(IntegerValue::from_i32(-4))
+    );
+    assert_eq!(
+        ArrayValue::new(
+            vec![3].into_boxed_slice(),
+            ArrayStorage::Int32(vec![7, -4, 2].into_boxed_slice()),
+        )
+        .unwrap()
+        .reduce(ArrayReduction::Max)
+        .unwrap(),
+        Value::Int(IntegerValue::from_i32(7))
     );
 
     let rounded_sum = ArrayValue::new(
@@ -895,6 +1420,55 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
         Value::Float(0.0),
         "float32 sum must preserve left-to-right float32 rounding"
     );
+
+    for (storage, expected_sum, expected_min, expected_max, expected_mean) in [
+        (
+            ArrayStorage::Float32(vec![1.5, -2.0, 6.5].into_boxed_slice()),
+            6.0,
+            -2.0,
+            6.5,
+            2.0,
+        ),
+        (
+            ArrayStorage::Float64(vec![1.5, -2.0, 6.5].into_boxed_slice()),
+            6.0,
+            -2.0,
+            6.5,
+            2.0,
+        ),
+    ] {
+        let array = ArrayValue::new(vec![3].into_boxed_slice(), storage).unwrap();
+        for (reduction, expected) in [
+            (ArrayReduction::Sum, expected_sum),
+            (ArrayReduction::Min, expected_min),
+            (ArrayReduction::Max, expected_max),
+            (ArrayReduction::Mean, expected_mean),
+        ] {
+            assert_eq!(
+                array.reduce(reduction).unwrap(),
+                Value::Float(expected),
+                "{reduction:?} must preserve the finite floating reduction contract"
+            );
+        }
+    }
+
+    for storage in [
+        ArrayStorage::Int64(Vec::new().into_boxed_slice()),
+        ArrayStorage::Float32(Vec::new().into_boxed_slice()),
+        ArrayStorage::Float64(Vec::new().into_boxed_slice()),
+    ] {
+        let array = ArrayValue::new(vec![0].into_boxed_slice(), storage).unwrap();
+        let expected = match array.dtype() {
+            ArrayDType::Int64 => Value::Int(IntegerValue::from_i64(0)),
+            ArrayDType::Float32 | ArrayDType::Float64 => Value::Float(0.0),
+            ArrayDType::Int32 => unreachable!("the int32 empty identity is covered above"),
+        };
+        assert_eq!(
+            array.reduce(ArrayReduction::Sum).unwrap(),
+            expected,
+            "every dtype must expose its exact empty-sum identity"
+        );
+    }
 
     for storage in [
         ArrayStorage::Float32(vec![1.0, f32::NAN, -2.0].into_boxed_slice()),
@@ -1005,6 +1579,57 @@ fn retry_runtime_policy_validates_host_limits_and_checked_doubling() {
     let host_overflow = next_retry_runtime_backoff(i128::MAX / 2)
         .expect_err("host timer overflow must be diagnosed");
     assert_eq!(host_overflow.code, "AU4002");
+}
+
+#[test]
+fn retry_host_dispatch_rejects_inexact_runtime_argument_types() {
+    for (name, args, expected) in [
+        (
+            "control::__retry_validate",
+            vec![Value::Bool(true), Value::Duration(0)],
+            "control.retry max_attempts must be an int32",
+        ),
+        (
+            "control::__retry_validate",
+            vec![
+                Value::Int(IntegerValue::from_i64(i64::MAX)),
+                Value::Duration(0),
+            ],
+            "control.retry max_attempts must be an int32",
+        ),
+        (
+            "control::__retry_validate",
+            vec![
+                Value::Int(IntegerValue::from_i32(2)),
+                Value::Int(IntegerValue::from_i32(0)),
+            ],
+            "control.retry initial_backoff must be a Duration",
+        ),
+        (
+            "control::__retry_next_backoff",
+            vec![Value::String("1s".to_string())],
+            "control.retry backoff must be a Duration",
+        ),
+    ] {
+        let error = super::evaluate_host_builtin(name, args)
+            .expect_err("retry host helpers must validate their erased runtime inputs");
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(error.message, expected);
+    }
+
+    assert_eq!(
+        super::evaluate_host_builtin(
+            "control::__retry_validate",
+            vec![Value::Int(IntegerValue::from_i32(2)), Value::Duration(1)],
+        )
+        .expect("exact retry argument metadata should pass host validation"),
+        Value::Unit
+    );
+    assert_eq!(
+        super::evaluate_host_builtin("control::__retry_next_backoff", vec![Value::Duration(7)],)
+            .expect("a valid retry backoff should double through host dispatch"),
+        Value::Duration(14)
+    );
 }
 use crate::ast::ReceiverKind;
 use crate::diag::{Diagnostic, Span};
@@ -4759,6 +5384,75 @@ fn runtime_json(value: crate::json_codec::JsonValue) -> Value {
 }
 
 #[test]
+fn phase73_observable_runtime_json_clone_preserves_empty_containers_and_nested_buffers() {
+    use crate::json_codec::JsonValue;
+
+    fn container_buffers(value: &Value, output: &mut Vec<usize>) {
+        let Value::EnumVariant(variant) = value else {
+            return;
+        };
+        match variant.payloads.as_slice() {
+            [Value::Vec(vector)] => {
+                if !vector.elements.is_empty() {
+                    output.push(vector.elements.as_ptr() as usize);
+                }
+                for element in &vector.elements {
+                    container_buffers(element, output);
+                }
+            }
+            [Value::Map(map)] => {
+                if !map.entries.is_empty() {
+                    output.push(map.entries.as_ptr() as usize);
+                }
+                for (_, value) in &map.entries {
+                    container_buffers(value, output);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let expected = JsonValue::object(vec![
+        ("empty_array".to_string(), JsonValue::Array(Vec::new())),
+        ("empty_object".to_string(), JsonValue::Object(Vec::new())),
+        (
+            "nested".to_string(),
+            JsonValue::Array(vec![
+                JsonValue::Null,
+                JsonValue::Bool(false),
+                JsonValue::Int(-7),
+                JsonValue::Float(2.5),
+                JsonValue::String("aurora".to_string()),
+                JsonValue::object(vec![
+                    ("left".to_string(), JsonValue::Int(1)),
+                    ("right".to_string(), JsonValue::Int(2)),
+                ]),
+            ]),
+        ),
+    ]);
+    let original = runtime_json(expected.clone());
+    let cloned = original.clone();
+
+    assert_eq!(
+        super::runtime_value_to_json(&cloned)
+            .expect("a copied public json.Value must remain serializable"),
+        expected,
+    );
+    let mut original_buffers = Vec::new();
+    let mut cloned_buffers = Vec::new();
+    container_buffers(&original, &mut original_buffers);
+    container_buffers(&cloned, &mut cloned_buffers);
+    assert_eq!(original_buffers.len(), cloned_buffers.len());
+    assert!(
+        original_buffers
+            .iter()
+            .zip(&cloned_buffers)
+            .all(|(original, cloned)| original != cloned),
+        "copying json.Value must rebuild every non-empty Array and Object buffer",
+    );
+}
+
+#[test]
 fn dynamic_json_runtime_conversion_round_trips_every_variant_and_preserves_object_slots() {
     use crate::json_codec::JsonValue;
 
@@ -6438,6 +7132,14 @@ fn task_and_cancellation_helpers_cover_current_runtime_contract() {
     let task = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Int(IntegerValue::from_signed(9)))
     }));
+    assert_eq!(task.runtime_type_name(), None);
+    task.set_runtime_type_name("Task[int32]".to_string());
+    assert_eq!(task.runtime_type_name().as_deref(), Some("Task[int32]"));
+    assert_eq!(
+        task.clone().runtime_type_name().as_deref(),
+        Some("Task[int32]"),
+        "Task aliases must observe the same native-runtime type metadata"
+    );
     assert_eq!(
         wait_task_ready(&task).expect("first wait should succeed"),
         Value::Int(IntegerValue::from_signed(9))
@@ -6469,6 +7171,19 @@ fn task_and_cancellation_helpers_cover_current_runtime_contract() {
     assert!(inactive_cancellable_spawn
         .message
         .contains("requires an active task scheduler"));
+
+    let channel = ChannelValue::new();
+    assert_eq!(channel.runtime_type_name(), None);
+    channel.set_runtime_type_name("Queue[String]".to_string());
+    assert_eq!(
+        channel.runtime_type_name().as_deref(),
+        Some("Queue[String]")
+    );
+    assert_eq!(
+        channel.clone().runtime_type_name().as_deref(),
+        Some("Queue[String]"),
+        "Queue aliases must observe the same native-runtime type metadata"
+    );
 }
 
 #[test]
@@ -8500,6 +9215,116 @@ fn queue_iteration_wait_wakes_for_unobserved_task_group_failure() {
 }
 
 #[test]
+fn phase73_observable_runtime_task_group_cancellation_precedes_empty_completion() {
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    group.cancel();
+
+    assert_eq!(
+        recv_for_task_group_iteration(
+            &ChannelValue::new(),
+            &CancellationContext::default(),
+            &group,
+        ),
+        RecvValueResult::Cancelled,
+        "an explicit task-group cancellation must not be reported as normal iteration exhaustion",
+    );
+
+    let parent = TaskGroupValue::new(&CancellationContext::default());
+    let caller_cancellation = parent.child_cancellation();
+    parent.cancel();
+    assert_eq!(
+        recv_for_task_group_iteration(
+            &ChannelValue::new(),
+            &caller_cancellation,
+            &TaskGroupValue::new(&CancellationContext::default()),
+        ),
+        RecvValueResult::Cancelled,
+        "caller cancellation must also precede empty task-group exhaustion",
+    );
+}
+
+#[test]
+fn phase73_observable_runtime_task_group_distinguishes_values_and_normal_completion() {
+    let cancellation = CancellationContext::default();
+    let group = TaskGroupValue::new(&cancellation);
+    let channel = ChannelValue::new();
+    channel
+        .send(Value::String("first".to_string()))
+        .expect("the first produced value should be admitted");
+    channel
+        .send(Value::String("second".to_string()))
+        .expect("the second produced value should be admitted");
+
+    assert_eq!(
+        recv_for_task_group_iteration(&channel, &cancellation, &group),
+        RecvValueResult::Value(Value::String("first".to_string())),
+        "iteration must preserve producer ordering when more values remain queued",
+    );
+    assert_eq!(
+        recv_for_task_group_iteration(&channel, &cancellation, &group),
+        RecvValueResult::Value(Value::String("second".to_string())),
+    );
+    channel.close();
+    assert_eq!(
+        recv_for_task_group_iteration(&channel, &cancellation, &group),
+        RecvValueResult::Closed,
+        "an explicitly closed receive channel must end iteration normally",
+    );
+
+    assert_eq!(
+        recv_for_task_group_iteration(
+            &ChannelValue::new(),
+            &CancellationContext::default(),
+            &TaskGroupValue::new(&CancellationContext::default()),
+        ),
+        RecvValueResult::Closed,
+        "an empty completed task group must end iteration without waiting forever",
+    );
+}
+
+#[test]
+fn phase73_observable_runtime_task_group_wait_wakes_as_cancelled() {
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = CancellationContext::default();
+    let channel = ChannelValue::new();
+    let (release_task, task_release) = std::sync::mpsc::channel();
+    let task = TaskValue::from_handle(thread::spawn(move || {
+        task_release
+            .recv()
+            .expect("the task-group iteration probe should release its producer");
+        Ok(Value::Unit)
+    }));
+    group.register_task(task.clone());
+
+    let waiting_group = group.clone();
+    let (wait_started, started) = std::sync::mpsc::channel();
+    let waiter = thread::spawn(move || {
+        wait_started
+            .send(())
+            .expect("the queue-iteration waiter should announce its start");
+        recv_for_task_group_iteration(&channel, &cancellation, &waiting_group)
+    });
+    started
+        .recv_timeout(StdDuration::from_secs(1))
+        .expect("the queue-iteration waiter should start");
+    thread::sleep(StdDuration::from_millis(20));
+    group.cancel();
+
+    assert_eq!(
+        waiter.join().expect("the cancelled waiter should join"),
+        RecvValueResult::Cancelled,
+        "cancelling a live task group must wake a blocked receive-based iteration",
+    );
+    release_task
+        .send(())
+        .expect("the producer task should be released after the observation");
+    assert_eq!(
+        wait_task_ready(&task).expect("the released producer should finish"),
+        Value::Unit,
+    );
+}
+
+#[test]
 fn task_group_cleanup_probe_detects_unbounded_waits_after_fresh_spawns() {
     let root_result = run_lightweight_root_task(|| {
         let group = TaskGroupValue::new(&CancellationContext::default());
@@ -9308,6 +10133,31 @@ fn process_child_helpers_cover_empty_command_and_cancellation_edges() {
     );
     child.close();
 
+    let killed_child = ProcessChildValue::spawn(
+        vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "sleep 10".to_string(),
+        ],
+        None,
+        Vec::new(),
+        ProcessStdioConfig::Null,
+        ProcessStdioConfig::Null,
+        ProcessStdioConfig::Null,
+        false,
+    )
+    .expect("a live child should spawn for the kill contract");
+    killed_child
+        .kill()
+        .expect("killing a running process should request immediate termination");
+    let ProcessChildWaitStatus::Exited(killed_status) =
+        killed_child.wait(Some(StdDuration::from_secs(2)), None)
+    else {
+        panic!("a killed process should still yield its exit status");
+    };
+    assert!(!killed_status.success());
+    killed_child.close();
+
     let completed_child = ProcessChildValue::spawn(
         vec![
             "/bin/sh".to_string(),
@@ -9729,6 +10579,8 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
         .local_addr()
         .expect("listener local addr should succeed");
     let server = listener.clone();
+    let tcp_shutdown_barrier = Arc::new(Barrier::new(2));
+    let server_shutdown_barrier = tcp_shutdown_barrier.clone();
     let server_thread = thread::spawn(move || {
         let stream = server
             .accept(Some(short_timeout), Some(&CancellationContext::default()))
@@ -9744,6 +10596,7 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
                 Some(&CancellationContext::default()),
             )
             .expect("tcp write_bytes should succeed");
+        server_shutdown_barrier.wait();
         stream.close();
     });
 
@@ -9756,6 +10609,10 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
         .read_exact(4, Some(short_timeout), Some(&cancellation))
         .expect("tcp read_exact should succeed");
     assert_eq!(bytes, b"pong");
+    client
+        .shutdown_both()
+        .expect("a connected TCP stream should support a two-way shutdown");
+    tcp_shutdown_barrier.wait();
     server_thread.join().expect("tcp server thread should join");
 
     let udp_server = UdpSocketValue::bind("127.0.0.1:0").expect("udp bind should succeed");
@@ -9788,6 +10645,13 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
         })
     };
     let udp_client = UdpSocketValue::bind("127.0.0.1:0").expect("udp client bind should succeed");
+    assert_eq!(
+        udp_client
+            .peer_addr()
+            .expect_err("a bound but unconnected UDP socket has no peer")
+            .kind(),
+        io::ErrorKind::NotConnected
+    );
     udp_client
         .send_to_text(
             &udp_address,
@@ -9802,6 +10666,21 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
         .expect("udp recv should return data");
     assert_eq!(reply, b"pong");
     udp_thread.join().expect("udp thread should join");
+    udp_client.close();
+    assert_eq!(
+        udp_client
+            .recv(64, Some(short_timeout), Some(&cancellation))
+            .expect_err("a closed UDP socket cannot receive connected datagrams")
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+    assert_eq!(
+        udp_client
+            .recv_from(64, Some(short_timeout), Some(&cancellation))
+            .expect_err("a closed UDP socket cannot receive addressed datagrams")
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
 
     let http_listener =
         HttpListenerValue::bind("127.0.0.1:0").expect("http listener bind should succeed");
@@ -13201,6 +14080,96 @@ fn http_response_limit_rejects_declared_and_close_delimited_overflow_early() {
     let close_delimited = response_error(close_delimited);
     assert_eq!(close_delimited.kind(), io::ErrorKind::InvalidData);
     assert!(close_delimited.to_string().contains("64 bytes"));
+}
+
+#[test]
+fn http_streams_report_truncated_chunked_messages_and_incremental_limit_overflow() {
+    struct ScriptedHttpReader {
+        chunks: std::collections::VecDeque<Vec<u8>>,
+    }
+
+    impl Read for ScriptedHttpReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let Some(chunk) = self.chunks.pop_front() else {
+                return Ok(0);
+            };
+            buffer[..chunk.len()].copy_from_slice(&chunk);
+            Ok(chunk.len())
+        }
+    }
+
+    impl super::HttpDeadlineReader for ScriptedHttpReader {
+        fn read_http_some(
+            &mut self,
+            max_bytes: usize,
+            _deadline: Option<Instant>,
+            _cancellation: Option<&CancellationContext>,
+        ) -> io::Result<Option<Vec<u8>>> {
+            let mut buffer = vec![0; max_bytes];
+            let count = self.read(&mut buffer)?;
+            if count == 0 {
+                Ok(None)
+            } else {
+                buffer.truncate(count);
+                Ok(Some(buffer))
+            }
+        }
+    }
+
+    let mut truncated_response = ScriptedHttpReader {
+        chunks: std::collections::VecDeque::from([
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nab".to_vec(),
+        ]),
+    };
+    let error =
+        super::read_http_response_from_stream_with_limit(&mut truncated_response, None, None, 128)
+            .expect_err("EOF in a declared chunk must be reported, not accepted as a short body");
+    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(
+        error.to_string(),
+        "stream closed before the chunked HTTP response body was fully received"
+    );
+
+    let mut incremental_overflow = ScriptedHttpReader {
+        chunks: std::collections::VecDeque::from([
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec(),
+            vec![b'a'; 20],
+            vec![b'b'; 10],
+        ]),
+    };
+    let error =
+        super::read_http_response_from_stream_with_limit(&mut incremental_overflow, None, None, 64)
+            .expect_err("a close-delimited body must retain the cap across incremental reads");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("64 bytes"));
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("server should bind");
+    let address = listener.local_addr().expect("server address should exist");
+    let client = thread::spawn(move || {
+        let mut stream = std::net::TcpStream::connect(address).expect("client should connect");
+        stream
+            .write_all(
+                b"POST /upload HTTP/1.1\r\nHost: local\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nab",
+            )
+            .expect("truncated request prefix should write");
+        stream
+            .shutdown(std::net::Shutdown::Write)
+            .expect("the client write side should close");
+    });
+    let (mut stream, _) = listener.accept().expect("server should accept");
+    let error = super::read_http_request_from_stream_with_limit(
+        &mut stream,
+        Some(Instant::now() + StdDuration::from_secs(2)),
+        Some(&CancellationContext::default()),
+        128,
+    )
+    .expect_err("EOF in a chunked request must be reported, not accepted as a short body");
+    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(
+        error.to_string(),
+        "stream closed before the chunked HTTP request body was fully received"
+    );
+    client.join().expect("client thread should join");
 }
 
 #[test]

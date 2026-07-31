@@ -54,10 +54,6 @@ impl Program {
     pub fn closure_info(&self, id: &ClosureId) -> Option<&ClosureInfo> {
         self.closures.get(id)
     }
-
-    pub fn comprehension_info(&self, id: &ComprehensionId) -> Option<&ComprehensionInfo> {
-        self.comprehensions.get(id)
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -1916,32 +1912,15 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         let Item::Class(class_decl) = item else {
             continue;
         };
-        let class_info = classes.get(&class_decl.name).ok_or_else(|| {
-            Diagnostic::at(
-                class_decl.span,
-                format!(
-                    "internal error: class `{}` disappeared after collection",
-                    class_decl.name
-                ),
-            )
-        })?;
+        // This pass walks the same declarations that populated `classes`
+        // above, so absence here is a compiler invariant rather than a source
+        // diagnostic.
+        let class_info = &classes[&class_decl.name];
         for field_decl in &class_decl.fields {
             if field_decl.ty.indirect {
                 continue;
             }
-            let field_ty = &class_info
-                .fields
-                .get(&field_decl.name)
-                .ok_or_else(|| {
-                    Diagnostic::at(
-                        field_decl.span,
-                        format!(
-                            "internal error: class field `{}` on `{}` lost its lowered type",
-                            field_decl.name, class_decl.name
-                        ),
-                    )
-                })?
-                .ty;
+            let field_ty = &class_info.fields[&field_decl.name].ty;
             if type_reaches_class_through_non_indirect_fields(
                 field_ty,
                 &class_decl.name,
@@ -1961,19 +1940,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             continue;
         }
         for field_decl in &class.decl.fields {
-            let field_ty = &class
-                .fields
-                .get(&field_decl.name)
-                .ok_or_else(|| {
-                    Diagnostic::at(
-                        field_decl.span,
-                        format!(
-                            "internal error: class field `{}` on `{}` lost its lowered type",
-                            field_decl.name, class.decl.name
-                        ),
-                    )
-                })?
-                .ty;
+            let field_ty = &class.fields[&field_decl.name].ty;
             if !type_is_copy_in_context_with_modules(
                 field_ty,
                 &classes,
@@ -2074,20 +2041,9 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             let Some(default) = &field.default else {
                 continue;
             };
-            let lowered = class
-                .fields
-                .get(&field.name)
-                .ok_or_else(|| {
-                    Diagnostic::at(
-                        field.span,
-                        format!(
-                            "internal error: class field `{}` on `{}` lost its lowered type",
-                            field.name, class.decl.name
-                        ),
-                    )
-                })?
-                .ty
-                .clone();
+            // Field lowering and default checking consume the same collected
+            // declaration, so missing metadata is not recoverable user input.
+            let lowered = class.fields[&field.name].ty.clone();
             let default_ty = default_checker
                 .with_type_params(class_type_param_scope.clone(), BTreeMap::new())
                 .type_of_expr_hint(default, &mut HashMap::new(), Some(&lowered))
@@ -2437,19 +2393,10 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 },
             );
         }
-        for trait_method_name in trait_info.methods.keys() {
+        for (trait_method_name, trait_method) in &trait_info.methods {
             if methods.contains_key(trait_method_name) {
                 continue;
             }
-            let trait_method = trait_info.methods.get(trait_method_name).ok_or_else(|| {
-                Diagnostic::at(
-                    impl_decl.span,
-                    format!(
-                        "internal error: trait method `{}` disappeared during impl checking",
-                        trait_method_name
-                    ),
-                )
-            })?;
             if trait_method.decl.body.is_empty() {
                 return Err(Diagnostic::at(
                     impl_decl.span,
@@ -2529,12 +2476,11 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         .functions
         .get("main")
         .filter(|function| function.module_name == program.module_name);
-    if context.is_entry_module && !program.top_level_stmts.is_empty() && local_main.is_some() {
-        let main = local_main.ok_or_else(|| {
-            Diagnostic::new(
-                "internal error: local `main` disappeared while validating top-level statements",
-            )
-        })?;
+    if let (true, false, Some(main)) = (
+        context.is_entry_module,
+        program.top_level_stmts.is_empty(),
+        local_main,
+    ) {
         return Err(Diagnostic::at(
             main.decl.span,
             "files cannot mix top-level statements, including declarations, with an explicit `main` function",
@@ -2837,24 +2783,17 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         // dispatch observes the same contract as dispatch through a bound.
         let mut mapped_impl_contracts = BTreeMap::<(usize, String), BTreeSet<String>>::new();
         for (impl_index, trait_impl) in program.trait_impls.iter().enumerate() {
-            let trait_info = program.traits.get(&trait_impl.trait_name).ok_or_else(|| {
-                Diagnostic::at(
-                    trait_impl.decl.span,
-                    format!(
-                        "internal error: trait `{}` disappeared during clone-safety contract checking",
-                        trait_impl.trait_name
-                    ),
-                )
-            })?;
+            // Trait impl collection has already resolved and validated this
+            // nominal identity; the fixed-point pass cannot observe a missing
+            // trait or method without an internal Program corruption.
+            let trait_info = &program.traits[&trait_impl.trait_name];
             let substitutions = self_type_substitutions(
                 &trait_info.decl,
                 &trait_impl.trait_args,
                 trait_impl.for_type.clone(),
             );
             for (method_name, impl_method) in &trait_impl.methods {
-                let Some(trait_method) = trait_info.methods.get(method_name) else {
-                    continue;
-                };
+                let trait_method = &trait_info.methods[method_name];
                 let mut mapped = BTreeSet::new();
                 for requirement in &trait_method.signature.rng_clone_safe_type_params {
                     let resolved =
@@ -2930,24 +2869,16 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             .with_ffi(&program.extern_functions, &program.opaque_handles);
             let mut mapped = BTreeMap::<(usize, String), BTreeSet<String>>::new();
             for (impl_index, trait_impl) in program.trait_impls.iter().enumerate() {
-                let trait_info = program.traits.get(&trait_impl.trait_name).ok_or_else(|| {
-                    Diagnostic::at(
-                        trait_impl.decl.span,
-                        format!(
-                            "internal error: trait `{}` disappeared during equality contract checking",
-                            trait_impl.trait_name
-                        ),
-                    )
-                })?;
+                // Trait implementations have already been validated and linked
+                // before contract propagation begins.
+                let trait_info = &program.traits[&trait_impl.trait_name];
                 let substitutions = self_type_substitutions(
                     &trait_info.decl,
                     &trait_impl.trait_args,
                     trait_impl.for_type.clone(),
                 );
                 for (method_name, impl_method) in &trait_impl.methods {
-                    let Some(trait_method) = trait_info.methods.get(method_name) else {
-                        continue;
-                    };
+                    let trait_method = &trait_info.methods[method_name];
                     let mut requirements = BTreeSet::new();
                     for requirement in &trait_method.signature.array_equality_safe_type_params {
                         let resolved =
@@ -3537,16 +3468,9 @@ fn validate_ffi_signature(
     type_arities: &BTreeMap<String, usize>,
     canonical_type_names: &BTreeMap<String, String>,
 ) -> Result<()> {
-    if decl.abi != "C" {
-        return Err(Diagnostic::coded_at(
-            "AU2005",
-            decl.span,
-            format!(
-                "FFI ABI `{}` is reserved; FFI v0 supports only `extern \"C\"`",
-                decl.abi
-            ),
-        ));
-    }
+    // The parser accepts only the ratified `extern "C"` spelling and owns its
+    // user-facing diagnostic. Semantic checking therefore never receives an
+    // alternate ABI from source and need not duplicate that unreachable gate.
     validate_params(
         None,
         &decl.params,
@@ -3823,6 +3747,10 @@ fn collect_type_ref_type_params(
             if include_self
                 && args.is_empty()
                 && !type_ref.indirect
+                // `None` is the surface spelling of the unit type, not an
+                // undeclared impl type parameter. It is lowered specially
+                // before the ordinary builtin-type path.
+                && name != "None"
                 && !is_builtin_type(name)
                 && !type_names.contains_key(name)
             {
@@ -5052,23 +4980,19 @@ fn is_numeric_type(ty: &Type) -> bool {
     is_integer_type(ty) || is_float_type(ty)
 }
 
-fn binary_operator_name(op: BinaryOp) -> &'static str {
-    match op {
-        BinaryOp::Add => "+",
-        BinaryOp::Sub => "-",
-        BinaryOp::Mul => "*",
-        BinaryOp::Div => "/",
-        BinaryOp::FloorDiv => "//",
-        BinaryOp::Mod => "%",
-        BinaryOp::Eq => "==",
-        BinaryOp::NotEq => "!=",
-        BinaryOp::Less => "<",
-        BinaryOp::LessEq => "<=",
-        BinaryOp::Greater => ">",
-        BinaryOp::GreaterEq => ">=",
-        BinaryOp::And => "and",
-        BinaryOp::Or => "or",
-    }
+fn unsupported_array_operator_name(op: BinaryOp) -> &'static str {
+    const NAMES: &[(BinaryOp, &str)] = &[
+        (BinaryOp::FloorDiv, "//"),
+        (BinaryOp::Mod, "%"),
+        (BinaryOp::Less, "<"),
+        (BinaryOp::LessEq, "<="),
+        (BinaryOp::Greater, ">"),
+        (BinaryOp::GreaterEq, ">="),
+    ];
+    NAMES
+        .iter()
+        .find_map(|(candidate, name)| (*candidate == op).then_some(*name))
+        .unwrap_or("logical operator")
 }
 
 fn is_array_dtype(ty: &Type) -> bool {
@@ -6685,11 +6609,7 @@ impl<'a> FunctionChecker<'a> {
             Type::Named(name, args) if name == "Array" && args.len() == 1 => Some(ty.clone()),
             Type::Named(name, args) => {
                 if let Some(class_info) = self.resolve_class_info(name) {
-                    if args.len() != class_info.decl.type_params.len() {
-                        return args
-                            .iter()
-                            .find_map(|arg| self.array_in_equality_type_inner(arg, visiting));
-                    }
+                    debug_assert_eq!(args.len(), class_info.decl.type_params.len());
                     let key = format!("class:{}:{}", class_info.module_name, class_info.decl.name);
                     if !visiting.insert(key.clone()) {
                         return None;
@@ -6705,11 +6625,7 @@ impl<'a> FunctionChecker<'a> {
                 }
 
                 if let Some(enum_info) = self.resolve_enum_info(name) {
-                    if args.len() != enum_info.decl.type_params.len() {
-                        return args
-                            .iter()
-                            .find_map(|arg| self.array_in_equality_type_inner(arg, visiting));
-                    }
+                    debug_assert_eq!(args.len(), enum_info.decl.type_params.len());
                     let key = format!("enum:{}:{}", enum_info.module_name, enum_info.decl.name);
                     if !visiting.insert(key.clone()) {
                         return None;
@@ -6766,46 +6682,43 @@ impl<'a> FunctionChecker<'a> {
             }
             Type::Named(name, args) => {
                 if let Some(class_info) = self.resolve_class_info(name) {
-                    if args.len() == class_info.decl.type_params.len() {
-                        let key =
-                            format!("class:{}:{}", class_info.module_name, class_info.decl.name);
-                        if !visiting.insert(key.clone()) {
-                            return;
-                        }
-                        let substitutions =
-                            substitutions_from_decl_type_args(&class_info.decl.type_params, args);
-                        for field in class_info.fields.values() {
-                            self.collect_array_equality_type_params_inner(
-                                &substitute_type(&field.ty, &substitutions),
-                                visiting,
-                                params,
-                            );
-                        }
-                        visiting.remove(&key);
+                    debug_assert_eq!(args.len(), class_info.decl.type_params.len());
+                    let key = format!("class:{}:{}", class_info.module_name, class_info.decl.name);
+                    if !visiting.insert(key.clone()) {
                         return;
                     }
+                    let substitutions =
+                        substitutions_from_decl_type_args(&class_info.decl.type_params, args);
+                    for field in class_info.fields.values() {
+                        self.collect_array_equality_type_params_inner(
+                            &substitute_type(&field.ty, &substitutions),
+                            visiting,
+                            params,
+                        );
+                    }
+                    visiting.remove(&key);
+                    return;
                 } else if let Some(enum_info) = self.resolve_enum_info(name) {
-                    if args.len() == enum_info.decl.type_params.len() {
-                        let key = format!("enum:{}:{}", enum_info.module_name, enum_info.decl.name);
-                        if !visiting.insert(key.clone()) {
-                            return;
-                        }
-                        let substitutions =
-                            substitutions_from_decl_type_args(&enum_info.decl.type_params, args);
-                        for payload in enum_info
-                            .variants
-                            .values()
-                            .flat_map(|variant| &variant.payloads)
-                        {
-                            self.collect_array_equality_type_params_inner(
-                                &substitute_type(&payload.ty, &substitutions),
-                                visiting,
-                                params,
-                            );
-                        }
-                        visiting.remove(&key);
+                    debug_assert_eq!(args.len(), enum_info.decl.type_params.len());
+                    let key = format!("enum:{}:{}", enum_info.module_name, enum_info.decl.name);
+                    if !visiting.insert(key.clone()) {
                         return;
                     }
+                    let substitutions =
+                        substitutions_from_decl_type_args(&enum_info.decl.type_params, args);
+                    for payload in enum_info
+                        .variants
+                        .values()
+                        .flat_map(|variant| &variant.payloads)
+                    {
+                        self.collect_array_equality_type_params_inner(
+                            &substitute_type(&payload.ty, &substitutions),
+                            visiting,
+                            params,
+                        );
+                    }
+                    visiting.remove(&key);
+                    return;
                 }
                 for arg in args {
                     self.collect_array_equality_type_params_inner(arg, visiting, params);
@@ -7188,17 +7101,9 @@ impl<'a> FunctionChecker<'a> {
         &self,
         operation: &str,
         obligations: &[Type],
-        method_type_params: &[String],
         span: crate::diag::Span,
     ) -> Result<()> {
         for ty in obligations {
-            if matches!(
-                ty,
-                Type::TypeParam(name)
-                    if method_type_params.iter().any(|candidate| candidate == name)
-            ) {
-                continue;
-            }
             self.require_array_equality_eligible(
                 ty,
                 format!("cannot use {operation} with `{ty}`"),
@@ -13196,7 +13101,7 @@ impl<'a> FunctionChecker<'a> {
                     span,
                     format!(
                         "operator `{}` is not supported for Array values",
-                        binary_operator_name(op)
+                        unsupported_array_operator_name(op)
                     ),
                 ));
             }
@@ -13492,7 +13397,6 @@ impl<'a> FunctionChecker<'a> {
             self.enforce_resolved_array_equality_obligations_before_method_inference(
                 &operation,
                 &method.array_equality_safe_types,
-                &method.decl.type_params,
                 span,
             )?;
             let substitutions = self.infer_method_type_substitutions(
@@ -13528,7 +13432,6 @@ impl<'a> FunctionChecker<'a> {
         self.enforce_resolved_array_equality_obligations_before_method_inference(
             &operation,
             &method.array_equality_safe_types,
-            &method.decl.type_params,
             span,
         )?;
         let substitutions = self.infer_method_type_substitutions(
@@ -13580,7 +13483,6 @@ impl<'a> FunctionChecker<'a> {
             self.enforce_resolved_array_equality_obligations_before_method_inference(
                 &operation,
                 &method.array_equality_safe_types,
-                &method.decl.type_params,
                 span,
             )?;
             let substitutions = self.infer_method_type_substitutions(
@@ -13628,7 +13530,6 @@ impl<'a> FunctionChecker<'a> {
         self.enforce_resolved_array_equality_obligations_before_method_inference(
             &operation,
             &method.array_equality_safe_types,
-            &method.decl.type_params,
             span,
         )?;
         let substitutions = self.infer_method_type_substitutions(
@@ -15112,139 +15013,134 @@ impl<'a> FunctionChecker<'a> {
                 let (base_object, object_type_args) = self.peel_specialization(object);
                 if let ExprKind::Name(type_name) = &base_object.kind {
                     if type_name == "Array" && !locals.contains_key(type_name) {
-                        let type_args = object_type_args.ok_or_else(|| {
-                            Diagnostic::coded_at(
-                                "AU2005",
-                                object.span,
-                                "Array associated functions require an explicit dtype such as `Array[int32]`",
-                            )
-                        })?;
-                        let explicit_args = self.lower_explicit_type_args(type_args)?;
-                        if explicit_args.len() != 1 {
-                            return Err(Diagnostic::coded_at(
-                                "AU2002",
-                                object.span,
-                                format!(
-                                    "`Array` expects exactly one type argument, found {}",
-                                    explicit_args.len()
-                                ),
-                            ));
-                        }
-                        let dtype = explicit_args[0].clone();
-                        if !is_array_dtype(&dtype) {
-                            return Err(Diagnostic::coded_at(
+                        if let Some(type_args) = object_type_args {
+                            let explicit_args = self.lower_explicit_type_args(type_args)?;
+                            if explicit_args.len() != 1 {
+                                return Err(Diagnostic::coded_at(
+                                    "AU2002",
+                                    object.span,
+                                    format!(
+                                        "`Array` expects exactly one type argument, found {}",
+                                        explicit_args.len()
+                                    ),
+                                ));
+                            }
+                            let dtype = explicit_args[0].clone();
+                            if !is_array_dtype(&dtype) {
+                                return Err(Diagnostic::coded_at(
                                 "AU2002",
                                 object.span,
                                 format!(
                                     "Array dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `{dtype}`"
                                 ),
                             ));
-                        }
-                        let constructor = BuiltinAssociatedFunction::resolve("Array", field)
-                            .ok_or_else(|| {
-                                Diagnostic::coded_at(
-                                    "AU2001",
+                            }
+                            let constructor = BuiltinAssociatedFunction::resolve("Array", field)
+                                .ok_or_else(|| {
+                                    Diagnostic::coded_at(
+                                        "AU2001",
+                                        span,
+                                        format!(
+                                            "type `Array` has no associated function `{field}`"
+                                        ),
+                                    )
+                                })?;
+                            if explicit_type_args.is_some() {
+                                return Err(Diagnostic::coded_at(
+                                    "AU2005",
                                     span,
-                                    format!("type `Array` has no associated function `{field}`"),
-                                )
-                            })?;
-                        if explicit_type_args.is_some() {
-                            return Err(Diagnostic::coded_at(
-                                "AU2005",
-                                span,
-                                format!("`Array.{field}` does not take explicit type arguments"),
-                            ));
-                        }
-                        let ordered_args = constructor.bind_args(args, span)?;
-                        self.reject_builtin_associated_argument_sibling_overlap(
-                            constructor,
-                            args,
-                            &ordered_args,
-                            locals,
-                        )?;
-                        let shape_ty = Type::Named("Vec".to_string(), vec![Type::named("int64")]);
-                        let array_ty = Type::Named("Array".to_string(), vec![dtype.clone()]);
-                        match constructor {
-                            BuiltinAssociatedFunction::ArrayZeros => {
-                                let shape = required_ordered_arg(
-                                    &ordered_args,
-                                    0,
-                                    span,
-                                    "internal error: Array.zeros should bind shape",
-                                )?;
-                                let actual =
-                                    self.type_of_expr_hint(&shape.value, locals, Some(&shape_ty))?;
-                                if actual != shape_ty {
-                                    return Err(Diagnostic::coded_at(
+                                    format!(
+                                        "`Array.{field}` does not take explicit type arguments"
+                                    ),
+                                ));
+                            }
+                            let ordered_args = constructor.bind_args(args, span)?;
+                            self.reject_builtin_associated_argument_sibling_overlap(
+                                constructor,
+                                args,
+                                &ordered_args,
+                                locals,
+                            )?;
+                            let shape_ty =
+                                Type::Named("Vec".to_string(), vec![Type::named("int64")]);
+                            let array_ty = Type::Named("Array".to_string(), vec![dtype.clone()]);
+                            match constructor {
+                                BuiltinAssociatedFunction::ArrayZeros => {
+                                    let shape = ordered_args[0].expect(
+                                        "Array.zeros binding should retain its shape argument",
+                                    );
+                                    let actual = self.type_of_expr_hint(
+                                        &shape.value,
+                                        locals,
+                                        Some(&shape_ty),
+                                    )?;
+                                    if actual != shape_ty {
+                                        return Err(Diagnostic::coded_at(
                                         "AU2002",
                                         shape.span,
                                         format!(
                                             "`Array.zeros` expects `Vec[int64]` for `shape`, found `{actual}`"
                                         ),
                                     ));
+                                    }
                                 }
-                            }
-                            BuiltinAssociatedFunction::ArrayFull => {
-                                for (index, expected_ty, label) in
-                                    [(0, &shape_ty, "shape"), (1, &dtype, "value")]
-                                {
-                                    let argument = required_ordered_arg(
-                                        &ordered_args,
-                                        index,
-                                        span,
-                                        "internal error: Array.full argument was not bound",
-                                    )?;
-                                    let actual = self.type_of_expr_hint(
-                                        &argument.value,
-                                        locals,
-                                        Some(expected_ty),
-                                    )?;
-                                    if actual != *expected_ty {
-                                        return Err(Diagnostic::coded_at(
+                                BuiltinAssociatedFunction::ArrayFull => {
+                                    for (index, expected_ty, label) in
+                                        [(0, &shape_ty, "shape"), (1, &dtype, "value")]
+                                    {
+                                        let argument = ordered_args[index].expect(
+                                            "Array.full binding should retain every argument",
+                                        );
+                                        let actual = self.type_of_expr_hint(
+                                            &argument.value,
+                                            locals,
+                                            Some(expected_ty),
+                                        )?;
+                                        if actual != *expected_ty {
+                                            return Err(Diagnostic::coded_at(
                                             "AU2002",
                                             argument.span,
                                             format!(
                                                 "`Array.full` expects `{expected_ty}` for `{label}`, found `{actual}`"
                                             ),
                                         ));
+                                        }
                                     }
                                 }
-                            }
-                            BuiltinAssociatedFunction::ArrayFromVec => {
-                                let values_ty = Type::Named("Vec".to_string(), vec![dtype.clone()]);
-                                for (index, expected_ty, label) in
-                                    [(0, &values_ty, "values"), (1, &shape_ty, "shape")]
-                                {
-                                    let argument = required_ordered_arg(
-                                        &ordered_args,
-                                        index,
-                                        span,
-                                        "internal error: Array.from_vec argument was not bound",
-                                    )?;
-                                    let actual = self.type_of_expr_hint(
-                                        &argument.value,
-                                        locals,
-                                        Some(expected_ty),
-                                    )?;
-                                    if actual != *expected_ty {
-                                        return Err(Diagnostic::coded_at(
+                                BuiltinAssociatedFunction::ArrayFromVec => {
+                                    let values_ty =
+                                        Type::Named("Vec".to_string(), vec![dtype.clone()]);
+                                    for (index, expected_ty, label) in
+                                        [(0, &values_ty, "values"), (1, &shape_ty, "shape")]
+                                    {
+                                        let argument = ordered_args[index].expect(
+                                            "Array.from_vec binding should retain every argument",
+                                        );
+                                        let actual = self.type_of_expr_hint(
+                                            &argument.value,
+                                            locals,
+                                            Some(expected_ty),
+                                        )?;
+                                        if actual != *expected_ty {
+                                            return Err(Diagnostic::coded_at(
                                             "AU2002",
                                             argument.span,
                                             format!(
                                                 "`Array.from_vec` expects `{expected_ty}` for `{label}`, found `{actual}`"
                                             ),
                                         ));
+                                        }
                                     }
                                 }
+                                BuiltinAssociatedFunction::DurationMilliseconds
+                                | BuiltinAssociatedFunction::DurationSeconds
+                                | BuiltinAssociatedFunction::DurationMinutes
+                                | BuiltinAssociatedFunction::StringFromBytes => unreachable!(
+                                    "Array associated lookup returned a non-Array constructor"
+                                ),
                             }
-                            BuiltinAssociatedFunction::DurationMilliseconds
-                            | BuiltinAssociatedFunction::DurationSeconds
-                            | BuiltinAssociatedFunction::DurationMinutes
-                            | BuiltinAssociatedFunction::StringFromBytes => unreachable!(
-                                "Array associated lookup returned a non-Array constructor"
-                            ),
+                            return Ok(array_ty);
                         }
-                        return Ok(array_ty);
                     }
                 }
                 if let Some((module_path, item_name)) = self.qualified_module_item(object) {
@@ -15664,12 +15560,9 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::ArrayLen => Ok(Type::named("int64")),
                                 BuiltinMember::ArrayClone => Ok(receiver_ty.clone()),
                                 BuiltinMember::ArrayGet => {
-                                    let index = self.bound_argument(
-                                        &ordered_args,
-                                        0,
-                                        span,
-                                        "`Array.get` requires an `index` argument",
-                                    )?;
+                                    let index = ordered_args[0].expect(
+                                        "Array.get binding should retain its index argument",
+                                    );
                                     let expected_index =
                                         Type::Named("Vec".to_string(), vec![Type::named("int32")]);
                                     let actual = self.type_of_expr_hint(
@@ -15690,12 +15583,9 @@ impl<'a> FunctionChecker<'a> {
                                 }
                                 BuiltinMember::ArraySet => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
-                                    let index = self.bound_argument(
-                                        &ordered_args,
-                                        0,
-                                        span,
-                                        "`Array.set` requires an `index` argument",
-                                    )?;
+                                    let index = ordered_args[0].expect(
+                                        "Array.set binding should retain its index argument",
+                                    );
                                     let expected_index =
                                         Type::Named("Vec".to_string(), vec![Type::named("int32")]);
                                     let actual = self.type_of_expr_hint(
@@ -15712,12 +15602,9 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let value = self.bound_argument(
-                                        &ordered_args,
-                                        1,
-                                        span,
-                                        "`Array.set` requires a `value` argument",
-                                    )?;
+                                    let value = ordered_args[1].expect(
+                                        "Array.set binding should retain its value argument",
+                                    );
                                     let actual =
                                         self.type_of_expr_hint(&value.value, locals, Some(dtype))?;
                                     if actual != *dtype {
@@ -15733,12 +15620,9 @@ impl<'a> FunctionChecker<'a> {
                                 }
                                 BuiltinMember::ArrayFill => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
-                                    let value = self.bound_argument(
-                                        &ordered_args,
-                                        0,
-                                        span,
-                                        "`Array.fill` requires a `value` argument",
-                                    )?;
+                                    let value = ordered_args[0].expect(
+                                        "Array.fill binding should retain its value argument",
+                                    );
                                     let actual =
                                         self.type_of_expr_hint(&value.value, locals, Some(dtype))?;
                                     if actual != *dtype {
@@ -15753,12 +15637,8 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Unit)
                                 }
                                 BuiltinMember::ArrayMap => {
-                                    let callback = self.bound_argument(
-                                        &ordered_args,
-                                        0,
-                                        span,
-                                        "`Array.map` requires an `f` argument",
-                                    )?;
+                                    let callback = ordered_args[0]
+                                        .expect("Array.map binding should retain its callback");
                                     let output_ty =
                                         self.array_callback_return_type(callback, dtype, locals)?;
                                     if !is_array_dtype(&output_ty) {
@@ -15829,12 +15709,9 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let rhs = self.bound_argument(
-                                        &ordered_args,
-                                        0,
-                                        span,
-                                        format!("`Array.{field}` requires an `rhs` argument"),
-                                    )?;
+                                    let rhs = ordered_args[0].expect(
+                                        "Array integer arithmetic binding should retain its rhs",
+                                    );
                                     let rhs_ty = if Self::is_numeric_literal_expr(&rhs.value) {
                                         self.type_of_expr_hint(&rhs.value, locals, Some(dtype))?
                                     } else {
@@ -18788,7 +18665,6 @@ impl<'a> FunctionChecker<'a> {
                         self.enforce_resolved_array_equality_obligations_before_method_inference(
                             &format!("method `{}`", field),
                             &method.array_equality_safe_types,
-                            &method.decl.type_params,
                             span,
                         )?;
                         let receiver_borrows = self.prepare_method_receiver_borrows(

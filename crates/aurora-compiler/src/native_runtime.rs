@@ -48,17 +48,17 @@ use crate::runtime_value::{
     spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
-    task_result_timed_out, try_array_buffer, wait_all_cancelled, wait_all_error, wait_all_ready,
-    wait_all_timed_out, wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
-    wait_for_runtime_scheduler, yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType,
-    ArrayReduction, ArrayValue, CancellationContext, ChannelValue, ClosureCaptureValue,
-    ClosureEnvironment, EnumVariantValue, FfiHandleValue, FileValue, FunctionValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode,
-    LightweightTaskFailureSignal, MapValue, ProcessChildValue, ProcessChildWaitStatus,
-    ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    RecvValueResult, RngValue, RuntimeSchedulerWakeReason, SendValueError, SetValue,
-    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
-    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
+    task_result_timed_out, try_array_buffer, try_clone_array_containing_value, wait_all_cancelled,
+    wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
+    wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
+    yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
+    CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
+    FfiHandleValue, FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, InstanceValue,
+    IntegerArithmeticMode, LightweightTaskFailureSignal, MapValue, ProcessChildValue,
+    ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
+    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RuntimeSchedulerWakeReason,
+    SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus,
+    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
     DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
@@ -4750,8 +4750,10 @@ pub extern "C-unwind" fn aurora_direct_vec_get(
         let value = with_vector(vec, |vector| {
             normalize_vec_index(index, vector.elements.len())
                 .and_then(|index| vector.elements.get(index))
-                .cloned()
+                .map(try_clone_array_containing_value)
+                .transpose()
         });
+        let value = direct_array_result(value, 0, 0);
         boxed_value(value.map(option_some).unwrap_or_else(option_none))
     })
 }
@@ -4911,7 +4913,7 @@ pub extern "C-unwind" fn aurora_direct_vec_index(
             (
                 normalize_vec_index(index, vector.elements.len())
                     .and_then(|normalized| vector.elements.get(normalized))
-                    .cloned(),
+                    .map(try_clone_array_containing_value),
                 vector.elements.len(),
             )
         });
@@ -4930,7 +4932,7 @@ pub extern "C-unwind" fn aurora_direct_vec_index(
                 )),
             }
         };
-        boxed_value(value)
+        boxed_value(direct_array_result(value, line, column))
     })
 }
 
@@ -4943,8 +4945,10 @@ pub extern "C-unwind" fn aurora_direct_vec_index_option(
         let value = with_vector(vec, |vector| {
             normalize_vec_index(index, vector.elements.len())
                 .and_then(|normalized| vector.elements.get(normalized))
-                .cloned()
+                .map(try_clone_array_containing_value)
+                .transpose()
         });
+        let value = direct_array_result(value, 0, 0);
         boxed_value(value.map(option_some).unwrap_or_else(option_none))
     })
 }
@@ -5085,38 +5089,35 @@ fn direct_array_shape(shape: *mut OpaqueValue) -> std::result::Result<Box<[usize
                 ),
             ));
         }
-        shape
-            .elements
-            .iter()
-            .enumerate()
-            .map(|(axis, dimension)| {
-                let Value::Int(dimension) = dimension else {
-                    return Err(Diagnostic::coded(
-                        "AU4007",
-                        format!("array shape axis {axis} is not an int64 value"),
-                    ));
-                };
-                if dimension.runtime_kind() != Some(IntegerKind::Int64) {
-                    return Err(Diagnostic::coded(
-                        "AU4007",
-                        format!("array shape axis {axis} is not an int64 value"),
-                    ));
-                }
-                let dimension = dimension.as_i128().ok_or_else(|| {
-                    Diagnostic::coded(
-                        "AU4007",
-                        format!("array shape axis {axis} is outside the signed dimension range"),
-                    )
-                })?;
-                usize::try_from(dimension).map_err(|_| {
-                    Diagnostic::coded(
-                        "AU4007",
-                        format!("Array shape axis {axis} cannot be negative, found {dimension}"),
-                    )
-                })
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map(Vec::into_boxed_slice)
+        let mut dimensions = try_array_buffer(shape.elements.len(), "Array shape")?;
+        for (axis, dimension) in shape.elements.iter().enumerate() {
+            let Value::Int(dimension) = dimension else {
+                return Err(Diagnostic::coded(
+                    "AU4007",
+                    format!("array shape axis {axis} is not an int64 value"),
+                ));
+            };
+            if dimension.runtime_kind() != Some(IntegerKind::Int64) {
+                return Err(Diagnostic::coded(
+                    "AU4007",
+                    format!("array shape axis {axis} is not an int64 value"),
+                ));
+            }
+            // `IntegerValue::with_runtime_kind` only installs `int64` after
+            // validating the signed bounds, so an int64 runtime value always
+            // has an exact i128 representation.
+            let dimension = match dimension.representation() {
+                IntegerRepresentation::Signed(value) => value,
+                IntegerRepresentation::Unsigned(value) => value as i128,
+            };
+            dimensions.push(usize::try_from(dimension).map_err(|_| {
+                Diagnostic::coded(
+                    "AU4007",
+                    format!("Array shape axis {axis} cannot be negative, found {dimension}"),
+                )
+            })?);
+        }
+        Ok(dimensions.into_boxed_slice())
     })
 }
 
@@ -5133,16 +5134,11 @@ fn direct_array_coordinates(
                             "array coordinates require int32 values",
                         ));
                     }
-                    return coordinate
-                        .as_i128()
-                        .and_then(|value| i32::try_from(value).ok())
-                        .map(|value| vec![value].into_boxed_slice())
-                        .ok_or_else(|| {
-                            Diagnostic::coded(
-                                "AU4007",
-                                "array coordinate on axis 0 does not fit int32",
-                            )
-                        });
+                    let value = match coordinate.representation() {
+                        IntegerRepresentation::Signed(value) => value as i32,
+                        IntegerRepresentation::Unsigned(value) => value as i32,
+                    };
+                    return Ok(vec![value].into_boxed_slice());
                 }
                 Value::Vec(coordinates) => (
                     coordinates.element_type == Type::named("int32"),
@@ -5187,15 +5183,10 @@ fn direct_array_coordinates(
                             format!("array coordinate on axis {axis} is not an int32 value"),
                         ));
                     }
-                    coordinate
-                        .as_i128()
-                        .and_then(|value| i32::try_from(value).ok())
-                        .ok_or_else(|| {
-                            Diagnostic::coded(
-                                "AU4007",
-                                format!("array coordinate on axis {axis} does not fit int32"),
-                            )
-                        })
+                    Ok(match coordinate.representation() {
+                        IntegerRepresentation::Signed(value) => value as i32,
+                        IntegerRepresentation::Unsigned(value) => value as i32,
+                    })
                 })
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .map(Vec::into_boxed_slice)
@@ -5533,8 +5524,10 @@ pub extern "C-unwind" fn aurora_direct_map_get(
             map.entries
                 .iter()
                 .find(|(candidate_key, _)| *candidate_key == key)
-                .map(|(_, value)| value.clone())
+                .map(|(_, value)| try_clone_array_containing_value(value))
+                .transpose()
         });
+        let value = direct_array_result(value, 0, 0);
         boxed_value(value.map(option_some).unwrap_or_else(option_none))
     })
 }
@@ -5615,15 +5608,15 @@ pub extern "C-unwind" fn aurora_direct_map_contains_key(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_keys(map: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let (key_type, elements) = with_map(map, |map| {
-            (
-                map.key_type.clone(),
-                map.entries
-                    .iter()
-                    .map(|(key, _)| key.clone())
-                    .collect::<Vec<_>>(),
-            )
+        let result = with_map(map, |map| {
+            let mut elements =
+                try_array_buffer(map.entries.len(), "Array-containing Map keys copy")?;
+            for (key, _) in &map.entries {
+                elements.push(try_clone_array_containing_value(key)?);
+            }
+            Ok((map.key_type.clone(), elements))
         });
+        let (key_type, elements) = direct_array_result(result, 0, 0);
         boxed_value(Value::Vec(VecValue {
             element_type: key_type,
             elements,
@@ -5634,15 +5627,15 @@ pub extern "C-unwind" fn aurora_direct_map_keys(map: *mut OpaqueValue) -> *mut O
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_values(map: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let (value_type, elements) = with_map(map, |map| {
-            (
-                map.value_type.clone(),
-                map.entries
-                    .iter()
-                    .map(|(_, value)| value.clone())
-                    .collect::<Vec<_>>(),
-            )
+        let result = with_map(map, |map| {
+            let mut elements =
+                try_array_buffer(map.entries.len(), "Array-containing Map values copy")?;
+            for (_, value) in &map.entries {
+                elements.push(try_clone_array_containing_value(value)?);
+            }
+            Ok((map.value_type.clone(), elements))
         });
+        let (value_type, elements) = direct_array_result(result, 0, 0);
         boxed_value(Value::Vec(VecValue {
             element_type: value_type,
             elements,
@@ -5653,26 +5646,28 @@ pub extern "C-unwind" fn aurora_direct_map_values(map: *mut OpaqueValue) -> *mut
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_items(map: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let (element_type, elements) = with_map(map, |map| {
-            (
-                Type::Named(
-                    "MapEntry".to_string(),
-                    vec![map.key_type.clone(), map.value_type.clone()],
-                ),
-                map.entries
-                    .iter()
-                    .map(|(key, value)| {
-                        Value::Instance(InstanceValue {
-                            class_name: "MapEntry".to_string(),
-                            fields: BTreeMap::from([
-                                ("key".to_string(), key.clone()),
-                                ("value".to_string(), value.clone()),
-                            ]),
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            )
+        let result = with_map(map, |map| {
+            let element_type = Type::Named(
+                "MapEntry".to_string(),
+                vec![map.key_type.clone(), map.value_type.clone()],
+            );
+            let mut elements =
+                try_array_buffer(map.entries.len(), "Array-containing Map items copy")?;
+            for (key, value) in &map.entries {
+                elements.push(Value::Instance(InstanceValue {
+                    class_name: "MapEntry".to_string(),
+                    fields: BTreeMap::from([
+                        ("key".to_string(), try_clone_array_containing_value(key)?),
+                        (
+                            "value".to_string(),
+                            try_clone_array_containing_value(value)?,
+                        ),
+                    ]),
+                }));
+            }
+            Ok((element_type, elements))
         });
+        let (element_type, elements) = direct_array_result(result, 0, 0);
         boxed_value(Value::Vec(VecValue {
             element_type,
             elements,
@@ -5698,7 +5693,7 @@ pub extern "C-unwind" fn aurora_direct_map_index(
             map.entries
                 .iter()
                 .find(|(candidate_key, _)| *candidate_key == key)
-                .map(|(_, value)| value.clone())
+                .map(|(_, value)| try_clone_array_containing_value(value))
         });
         let Some(value) = value else {
             let message = format!("map key `{}` was not present", key.render());
@@ -5709,7 +5704,7 @@ pub extern "C-unwind" fn aurora_direct_map_index(
                 None => runtime_diagnostic_error(Diagnostic::coded("AU4003", message)),
             }
         };
-        boxed_value(value)
+        boxed_value(direct_array_result(value, line, column))
     })
 }
 
@@ -5870,7 +5865,13 @@ pub extern "C-unwind" fn aurora_direct_set_index_option(
         // Every supported Aurora release target is 64-bit, so a validated
         // non-negative int64 index always fits usize.
         let index = index as usize;
-        let value = with_set(set, |set| set.elements.get(index).cloned());
+        let value = with_set(set, |set| {
+            set.elements
+                .get(index)
+                .map(try_clone_array_containing_value)
+                .transpose()
+        });
+        let value = direct_array_result(value, 0, 0);
         boxed_value(value.map(option_some).unwrap_or_else(option_none))
     })
 }
@@ -5898,7 +5899,8 @@ pub extern "C-unwind" fn aurora_direct_set_take_index_in_place(
 pub extern "C-unwind" fn aurora_direct_clone_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let runtime_type_name = unsafe { explicit_runtime_type_name(value) };
-        boxed_value_with_type(unsafe { value_ref(value) }, runtime_type_name)
+        let cloned = unsafe { with_value(value, try_clone_array_containing_value) };
+        boxed_value_with_type(direct_array_result(cloned, 0, 0), runtime_type_name)
     })
 }
 
@@ -6723,24 +6725,28 @@ pub extern "C-unwind" fn aurora_direct_instance_get_field(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let field = decode_bytes(field_ptr, field_len);
-        match unsafe { value_ref(value) } {
-            Value::Instance(instance) => instance
-                .fields
-                .get(&field)
-                .cloned()
-                .map(boxed_value)
-                .unwrap_or_else(|| {
+        let cloned = unsafe {
+            with_value(value, |value| {
+                let Value::Instance(instance) = value else {
                     runtime_error(format!(
-                        "class `{}` has no field `{}`",
-                        instance.class_name, field
-                    ))
-                }),
-            other => runtime_error(format!(
-                "cannot access field `{}` on non-instance `{}`",
-                field,
-                value_type_name(other)
-            )),
-        }
+                        "cannot access field `{}` on non-instance `{}`",
+                        field,
+                        value_type_name(value)
+                    ));
+                };
+                instance
+                    .fields
+                    .get(&field)
+                    .map(try_clone_array_containing_value)
+                    .unwrap_or_else(|| {
+                        runtime_error(format!(
+                            "class `{}` has no field `{}`",
+                            instance.class_name, field
+                        ))
+                    })
+            })
+        };
+        boxed_value(direct_array_result(cloned, 0, 0))
     })
 }
 
@@ -6806,20 +6812,19 @@ pub extern "C-unwind" fn aurora_direct_instance_set_field(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let field = decode_bytes(field_ptr, field_len);
-        match unsafe { value_ref(value) } {
-            Value::Instance(instance) => {
-                let mut updated = instance.clone();
-                updated
-                    .fields
-                    .insert(field, unsafe { take_value(new_value) });
-                boxed_value(Value::Instance(updated))
-            }
-            other => runtime_error(format!(
+        let updated = unsafe { with_value(value, try_clone_array_containing_value) };
+        let Value::Instance(mut updated) = direct_array_result(updated, 0, 0) else {
+            let other = unsafe { with_value(value, |value| value_type_name(value)) };
+            runtime_error(format!(
                 "cannot assign field `{}` on non-instance `{}`",
-                field,
-                value_type_name(other)
-            )),
-        }
+                field, other
+            ));
+        };
+        let new_value = unsafe { with_value(new_value, try_clone_array_containing_value) };
+        updated
+            .fields
+            .insert(field, direct_array_result(new_value, 0, 0));
+        boxed_value(Value::Instance(updated))
     })
 }
 

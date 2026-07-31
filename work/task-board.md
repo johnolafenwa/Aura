@@ -262,7 +262,21 @@ Last updated: 2026-07-31
   The raw/summary evidence hashes are `f51b9799…` / `f6fc84c1…`. Release
   disassembly showed scalar float kernels, so no float-SIMD claim is made.
 
-  Phase 7.3 remains active only until the measured evidence commit and exact
+  The aggregate compiler-coverage proof is green after 334 instrumented CLI
+  tests, 1,498 compiler-library tests, and every integration target. Coverage
+  is 86,645/89,983 lines (96.290410411%), 5,704/5,866 functions
+  (97.238322537%), and 126,842/134,034 regions (94.634197293%), above all
+  frozen floors. The closure found and fixed specialized Array analysis
+  inference, builtin associated-call MIR result inference, `None`
+  impl-parameter inference, typed scalar-on-left Array MIR metadata,
+  clean-target runtime-archive resolution in CLI installed/cache tests, and
+  cancellation precedence for empty task-group Queue iteration. No synthetic
+  coverage test or exclusion was added; genuine host-OOM cleanup and
+  compiler-enforced Array/checked-MIR invariants remain deliberately
+  unforced. The retained log and JSON report have SHA-256
+  `99359fa3f8da…` and `246765c9ffff…`.
+
+  Phase 7.3 remains active only until the coverage-closure commit and exact
   clean full CI pass. There is no current implementation blocker.
 - Work note: `work/2026-07-30-batch6-phase7-release.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;

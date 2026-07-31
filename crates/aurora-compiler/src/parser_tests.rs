@@ -2202,7 +2202,12 @@ fn phase72_parser_keeps_index_specialization_and_postfix_chains_distinct() {
 
 #[test]
 fn phase72_parser_rejects_slice_steps_and_slice_assignment_with_teaching_diagnostics() {
-    for (source, column) in [("values[::]", 9), ("values[1:3:2]", 11)] {
+    for (source, column) in [
+        ("values[::]", 9),
+        ("values[:3:2]", 10),
+        ("values[1::2]", 10),
+        ("values[1:3:2]", 11),
+    ] {
         let error = parse_expression(source).expect_err("slice steps are reserved");
         assert_eq!(error.code, "AU2005", "{source}");
         assert_eq!(error.span, Some(Span::new(1, column)), "{source}");
@@ -3670,4 +3675,89 @@ fn misplaced_capability_prefixes_name_the_valid_positions() {
         .expect("mutable loop selectors remain valid");
     parse_stmt_from("match own value:\n    case _:\n        pass\n")
         .expect("owned match selectors remain valid");
+}
+
+#[test]
+fn declaration_parser_reports_the_exact_stage_that_rejected_incomplete_syntax() {
+    // Each row is a source-level recovery contract.  These are deliberately
+    // distinct parse stages: editors use the diagnostic span and message to
+    // decide which token the user should repair next.
+    let cases = [
+        ("import \n", "expected identifier"),
+        ("import app.\n", "expected identifier"),
+        ("import app extra\n", "expected Newline"),
+        ("from app import \n", "expected identifier"),
+        ("from app import one,\n", "expected identifier"),
+        ("from app import one two\n", "expected Newline"),
+        ("extern \"C\" opaque nope Handle\n", "expected KwClass"),
+        ("extern \"C\" opaque class \n", "expected identifier"),
+        (
+            "extern \"C\" opaque class Handle extra\n",
+            "expected Newline",
+        ),
+        ("extern \"C\" class Handle\n", "expected KwDef"),
+        ("extern \"C\" def \n", "expected identifier"),
+        ("extern \"C\" def read -> int32\n", "expected LParen"),
+        (
+            "extern \"C\" def read(value: int32 extra) -> int32\n",
+            "expected RParen",
+        ),
+        ("extern \"C\" def read() -> \n", "expected identifier"),
+        (
+            "extern \"C\" def read() -> int32 extra\n",
+            "expected Newline",
+        ),
+        ("class \n", "expected identifier"),
+        ("class Box\n", "expected Colon"),
+        ("class Box:\n", "expected Indent"),
+        ("class Box:\n    value int32\n", "expected Colon"),
+        ("class Box:\n    value: \n", "expected identifier"),
+        (
+            "class Box:\n    value: int32 =\n",
+            "unexpected token in expression",
+        ),
+        ("enum \n", "expected identifier"),
+        ("enum Result\n", "expected Colon"),
+        ("enum Result:\n", "expected Indent"),
+        ("enum Result:\n    Ok(int32 extra)\n", "expected RParen"),
+        ("trait \n", "expected identifier"),
+        ("trait Display\n", "expected Colon"),
+        ("trait Display: Show\n", "expected Colon"),
+        ("trait Display:\n", "expected Indent"),
+        ("impl \n", "expected identifier"),
+        ("impl Display Point:\n    pass\n", "expected KwFor"),
+        ("impl Display for \n", "expected identifier"),
+        ("impl Display for Point\n", "expected Colon"),
+        (
+            "impl Display[int32 Extra] for Point:\n    pass\n",
+            "expected RBracket",
+        ),
+        ("impl Display for Point:\n", "expected Indent"),
+        (
+            "impl Display for Point:\n    value: int32\n",
+            "expected KwDef",
+        ),
+        ("def \n", "expected identifier"),
+        ("def render\n", "expected LParen"),
+        (
+            "def render(value: int32 extra):\n    pass\n",
+            "expected RParen",
+        ),
+        ("def render()\n", "expected Colon"),
+        ("def render():\n", "expected Indent"),
+    ];
+
+    for (source, expected_message_fragment) in cases {
+        let diagnostic = parse(source).expect_err(source);
+        assert_eq!(diagnostic.code, "AU1101", "{source}");
+        assert!(
+            diagnostic.message.contains(expected_message_fragment),
+            "source `{source}` produced `{}` instead of a diagnostic containing `{expected_message_fragment}`",
+            diagnostic.message
+        );
+        assert!(
+            diagnostic.span.is_some(),
+            "parser diagnostics must identify the token to repair: {source}"
+        );
+    }
 }

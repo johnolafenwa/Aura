@@ -8757,34 +8757,45 @@ impl<'a> Lowerer<'a> {
                                 return self.infer_option_some_call_type(&args[0].value);
                             }
                         }
-                        let receiver_type = receiver_type?;
-                        if let Type::Named(name, arguments) = &receiver_type {
-                            if let Some(associated) =
-                                BuiltinAssociatedFunction::resolve(name, field)
-                            {
-                                match associated {
-                                    BuiltinAssociatedFunction::ArrayZeros
-                                    | BuiltinAssociatedFunction::ArrayFull
-                                    | BuiltinAssociatedFunction::ArrayFromVec
-                                        if arguments.len() == 1 =>
-                                    {
-                                        return Some(receiver_type.clone());
-                                    }
-                                    BuiltinAssociatedFunction::DurationMilliseconds
-                                    | BuiltinAssociatedFunction::DurationSeconds
-                                    | BuiltinAssociatedFunction::DurationMinutes => {
-                                        return Some(Type::named("Duration"));
-                                    }
-                                    BuiltinAssociatedFunction::StringFromBytes => {
-                                        return Some(Type::Named(
-                                            "Result".to_string(),
-                                            vec![Type::named("String"), Type::named("bytes.Error")],
-                                        ));
-                                    }
-                                    _ => {}
+                        let associated_owner = match &object.kind {
+                            ExprKind::Specialize { expr, .. } => expr.as_ref(),
+                            _ => object.as_ref(),
+                        };
+                        if let ExprKind::Name(type_name) = &associated_owner.kind {
+                            if self.infer_expr_type(associated_owner).is_none() {
+                                if let Some(associated) =
+                                    BuiltinAssociatedFunction::resolve(type_name, field)
+                                {
+                                    return match associated {
+                                        BuiltinAssociatedFunction::ArrayZeros
+                                        | BuiltinAssociatedFunction::ArrayFull
+                                        | BuiltinAssociatedFunction::ArrayFromVec => receiver_type
+                                            .filter(|ty| {
+                                                matches!(
+                                                    ty,
+                                                    Type::Named(name, arguments)
+                                                        if name == "Array" && arguments.len() == 1
+                                                )
+                                            }),
+                                        BuiltinAssociatedFunction::DurationMilliseconds
+                                        | BuiltinAssociatedFunction::DurationSeconds
+                                        | BuiltinAssociatedFunction::DurationMinutes => {
+                                            Some(Type::named("Duration"))
+                                        }
+                                        BuiltinAssociatedFunction::StringFromBytes => {
+                                            Some(Type::Named(
+                                                "Result".to_string(),
+                                                vec![
+                                                    Type::named("String"),
+                                                    Type::named("bytes.Error"),
+                                                ],
+                                            ))
+                                        }
+                                    };
                                 }
                             }
                         }
+                        let receiver_type = receiver_type?;
                         if let Some(enum_ty) = self.builtin_enum_variant_type(&receiver_type, field)
                         {
                             return Some(enum_ty);
@@ -9021,7 +9032,17 @@ impl<'a> Lowerer<'a> {
                     adjusted_binary_operand_types(left, left_ty, right, right_ty);
                 if is_builtin_binary_operator(*op, &left_ty, &right_ty) {
                     let duration = Type::named("Duration");
-                    if left_ty == duration || right_ty == duration {
+                    if matches!(
+                        &left_ty,
+                        Type::Named(name, arguments) if name == "Array" && arguments.len() == 1
+                    ) {
+                        Some(left_ty)
+                    } else if matches!(
+                        &right_ty,
+                        Type::Named(name, arguments) if name == "Array" && arguments.len() == 1
+                    ) {
+                        Some(right_ty)
+                    } else if left_ty == duration || right_ty == duration {
                         Some(duration)
                     } else {
                         Some(left_ty)

@@ -80,6 +80,7 @@ def double(value: int32) -> float64:
 
 def main():
     source: Vec[int32] = [1, 2, 3, 4]
+    scalar: int32 = 10
     mut values = Array[int32].from_vec(values=source, shape=[2, 2])
     copied = values.clone()
     print(values.shape())
@@ -93,7 +94,8 @@ def main():
     print(values[-1, -1])
     print(values[:1])
     print(values + copied)
-    print(10 - values)
+    print(values + scalar)
+    print(scalar - values)
     print(values.wrapping_add(rhs=2147483647))
     print(values.saturating_mul(rhs=2147483647))
     print(values.map(f=double))
@@ -117,6 +119,7 @@ Option.Some(2)\n\
 4\n\
 Array[int32](shape=[1, 2], values=[1, 6])\n\
 Array[int32](shape=[2, 2], values=[2, 8, 6, 8])\n\
+Array[int32](shape=[2, 2], values=[11, 16, 13, 14])\n\
 Array[int32](shape=[2, 2], values=[9, 4, 7, 6])\n\
 Array[int32](shape=[2, 2], values=[-2147483648, -2147483643, -2147483646, -2147483645])\n\
 Array[int32](shape=[2, 2], values=[2147483647, 2147483647, 2147483647, 2147483647])\n\
@@ -131,6 +134,48 @@ Array[float64](shape=[2, 2], values=[2.0, 12.0, 6.0, 8.0])\n\
 3.5\n"
     );
     assert_eq!(output.value, Value::Unit);
+}
+
+#[test]
+fn mir_arrays_preserve_named_argument_order_and_capturing_map_results() {
+    let source = r#"
+def shape() -> Vec[int64]:
+    print("shape")
+    return [2]
+
+def seed() -> int32:
+    print("seed")
+    return 4
+
+def coordinate() -> Vec[int32]:
+    print("index")
+    return [1]
+
+def replacement() -> int32:
+    print("value")
+    return 7
+
+def main():
+    mut values = Array[int32].full(value=seed(), shape=shape())
+    offset: int32 = 3
+    mapped = values.map(f=lambda item: item + offset)
+    print(mapped)
+    print(values.set(value=replacement(), index=coordinate()))
+    print(values)
+"#;
+    let output = crate::run_source(source)
+        .expect("named Array arguments and a capturing map callback should execute in MIR");
+    assert_eq!(
+        output.stdout,
+        "\
+seed\n\
+shape\n\
+Array[int32](shape=[2], values=[7, 7])\n\
+value\n\
+index\n\
+Option.Some(4)\n\
+Array[int32](shape=[2], values=[4, 7])\n"
+    );
 }
 
 #[test]

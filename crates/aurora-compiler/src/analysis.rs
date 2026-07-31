@@ -313,14 +313,6 @@ impl<'a> AnalysisBuilder<'a> {
                     }
                 }
             }
-            if let ExprKind::Specialize {
-                expr: specialized, ..
-            } = &receiver_expr.kind
-            {
-                if matches!(&specialized.kind, ExprKind::Name(name) if name == "Array") {
-                    return Ok(builtin_associated_function_completions("Array"));
-                }
-            }
             if let ExprKind::Index { object, .. } = &receiver_expr.kind {
                 if matches!(&object.kind, ExprKind::Name(name) if name == "Array") {
                     return Ok(builtin_associated_function_completions("Array"));
@@ -806,9 +798,6 @@ impl<'a> AnalysisBuilder<'a> {
                 let binding_ty = checked_clause_types
                     .get(clause_index)
                     .cloned()
-                    .or_else(|| {
-                        self.infer_iterable_binding_type(&clause.iterable, &comprehension_scope)
-                    })
                     .unwrap_or(Type::Unit);
                 self.insert_scope_target_exact(
                     &clause.target,
@@ -874,9 +863,6 @@ impl<'a> AnalysisBuilder<'a> {
             let binding_ty = checked_clause_types
                 .get(clause_index)
                 .cloned()
-                .or_else(|| {
-                    self.infer_iterable_binding_type(&clause.iterable, &comprehension_scope)
-                })
                 .unwrap_or(Type::Unit);
             self.insert_scope_target_exact(
                 &clause.target,
@@ -2182,9 +2168,6 @@ impl<'a> AnalysisBuilder<'a> {
                     let binding_ty = checked_clause_types
                         .get(clause_index)
                         .cloned()
-                        .or_else(|| {
-                            self.infer_iterable_binding_type(&clause.iterable, &comprehension_scope)
-                        })
                         .unwrap_or(Type::Unit);
                     self.bind_target_value_exact(
                         &clause.target,
@@ -2396,33 +2379,28 @@ impl<'a> AnalysisBuilder<'a> {
             if matches!(&specialized.kind, ExprKind::Name(name) if name == "Array")
                 && type_args.len() == 1
             {
-                if let Some(associated) = BuiltinAssociatedFunction::resolve("Array", field) {
-                    let dtype = self.lower_analysis_type_ref(&type_args[0]);
-                    return Some(ResolvedMember {
-                        hover: builtin_function_hover(associated.detail(), associated.docs()),
-                        definition: None,
-                        ty: Some(Type::Named("Array".to_string(), vec![dtype])),
-                    });
-                }
+                let associated = BuiltinAssociatedFunction::resolve("Array", field)?;
+                let dtype = self.lower_analysis_type_ref(&type_args[0]);
+                return Some(ResolvedMember {
+                    hover: builtin_function_hover(associated.detail(), associated.docs()),
+                    definition: None,
+                    ty: Some(Type::Named("Array".to_string(), vec![dtype])),
+                });
             }
         }
         if let ExprKind::Name(type_name) = &object.kind {
             if !scope.contains_key(type_name) {
-                if let Some(associated) = BuiltinAssociatedFunction::resolve(type_name, field) {
-                    let ty = match associated {
-                        BuiltinAssociatedFunction::DurationMilliseconds
-                        | BuiltinAssociatedFunction::DurationSeconds
-                        | BuiltinAssociatedFunction::DurationMinutes => Type::named("Duration"),
-                        BuiltinAssociatedFunction::StringFromBytes => Type::Named(
-                            "Result".to_string(),
-                            vec![Type::named("String"), Type::named("bytes.Error")],
-                        ),
-                        BuiltinAssociatedFunction::ArrayZeros
-                        | BuiltinAssociatedFunction::ArrayFull
-                        | BuiltinAssociatedFunction::ArrayFromVec => {
-                            Type::Named("Array".to_string(), vec![Type::named("Unknown")])
-                        }
-                    };
+                let associated_ty = match (type_name.as_str(), field) {
+                    ("Duration", "ms" | "seconds" | "minutes") => Some(Type::named("Duration")),
+                    ("String", "from_bytes") => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![Type::named("String"), Type::named("bytes.Error")],
+                    )),
+                    _ => None,
+                };
+                if let Some(ty) = associated_ty {
+                    let associated = BuiltinAssociatedFunction::resolve(type_name, field)
+                        .expect("recognized associated member should resolve");
                     return Some(ResolvedMember {
                         hover: builtin_function_hover(associated.detail(), associated.docs()),
                         definition: None,
@@ -2628,15 +2606,6 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         if let Some(builtin_member) = BuiltinMember::resolve(base_name, field) {
-            if is_array_integer_arithmetic_member(builtin_member)
-                && !matches!(
-                    receiver_type.type_arguments().first(),
-                    Some(Type::Named(dtype, args))
-                        if args.is_empty() && matches!(dtype.as_str(), "int32" | "int64")
-                )
-            {
-                return None;
-            }
             let ty = match builtin_member {
                 BuiltinMember::FloatSqrt
                 | BuiltinMember::IntegerToFloat
@@ -3491,46 +3460,9 @@ impl<'a> AnalysisBuilder<'a> {
                         .unwrap_or(Type::named("Unknown")),
                 ],
             )),
-            ExprKind::Comprehension { output, clauses } => {
-                if let Some(info) = self.comprehension_info(expr) {
-                    return Some(info.result_type.clone());
-                }
-                let mut comprehension_scope = scope.clone();
-                for clause in clauses {
-                    let binding_ty = self
-                        .infer_iterable_binding_type(&clause.iterable, &comprehension_scope)
-                        .unwrap_or(Type::Unit);
-                    self.insert_scope_target_exact(
-                        &clause.target,
-                        &binding_ty,
-                        "local",
-                        &mut comprehension_scope,
-                    );
-                }
-                match output {
-                    ComprehensionOutput::List(value) => Some(Type::Named(
-                        "Vec".to_string(),
-                        vec![self
-                            .infer_expr_type(value, &comprehension_scope)
-                            .unwrap_or(Type::named("Unknown"))],
-                    )),
-                    ComprehensionOutput::Set(value) => Some(Type::Named(
-                        "Set".to_string(),
-                        vec![self
-                            .infer_expr_type(value, &comprehension_scope)
-                            .unwrap_or(Type::named("Unknown"))],
-                    )),
-                    ComprehensionOutput::Map { key, value } => Some(Type::Named(
-                        "Map".to_string(),
-                        vec![
-                            self.infer_expr_type(key, &comprehension_scope)
-                                .unwrap_or(Type::named("Unknown")),
-                            self.infer_expr_type(value, &comprehension_scope)
-                                .unwrap_or(Type::named("Unknown")),
-                        ],
-                    )),
-                }
-            }
+            ExprKind::Comprehension { .. } => self
+                .comprehension_info(expr)
+                .map(|info| info.result_type.clone()),
             ExprKind::FString(_) => Some(Type::named("String")),
             ExprKind::Specialize { expr, type_args } => match &expr.kind {
                 ExprKind::Name(name)
@@ -3732,12 +3664,11 @@ impl<'a> AnalysisBuilder<'a> {
                 let left_array = (base_type_name(&left_ty) == "Array").then_some(&left_ty);
                 let right_array = (base_type_name(&right_ty) == "Array").then_some(&right_ty);
                 if left_array.is_some() || right_array.is_some() {
-                    return match op {
-                        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
-                            left_array.or(right_array).cloned()
-                        }
-                        _ => None,
-                    };
+                    debug_assert!(matches!(
+                        op,
+                        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+                    ));
+                    return left_array.or(right_array).cloned();
                 }
                 if let Some(result) = builtin_duration_binary_result(*op, &left_ty, &right_ty) {
                     return Some(result);
@@ -3896,25 +3827,17 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Member { object, field } => {
                 if let ExprKind::Name(enum_name) = &object.kind {
                     if !scope.contains_key(enum_name) {
-                        if let Some(associated) =
-                            BuiltinAssociatedFunction::resolve(enum_name, field)
-                        {
-                            return Some(match associated {
-                                BuiltinAssociatedFunction::DurationMilliseconds
-                                | BuiltinAssociatedFunction::DurationSeconds
-                                | BuiltinAssociatedFunction::DurationMinutes => {
-                                    Type::named("Duration")
-                                }
-                                BuiltinAssociatedFunction::StringFromBytes => Type::Named(
+                        match (enum_name.as_str(), field.as_str()) {
+                            ("Duration", "ms" | "seconds" | "minutes") => {
+                                return Some(Type::named("Duration"));
+                            }
+                            ("String", "from_bytes") => {
+                                return Some(Type::Named(
                                     "Result".to_string(),
                                     vec![Type::named("String"), Type::named("bytes.Error")],
-                                ),
-                                BuiltinAssociatedFunction::ArrayZeros
-                                | BuiltinAssociatedFunction::ArrayFull
-                                | BuiltinAssociatedFunction::ArrayFromVec => {
-                                    Type::Named("Array".to_string(), vec![Type::named("Unknown")])
-                                }
-                            });
+                                ));
+                            }
+                            _ => {}
                         }
                     }
                     if enum_name == "Duration" {

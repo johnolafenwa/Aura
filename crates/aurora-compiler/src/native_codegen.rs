@@ -117,8 +117,8 @@ fn direct_array_binary_opcode(op: BinaryOp) -> std::result::Result<i64, String> 
         BinaryOp::Sub => Ok(1),
         BinaryOp::Mul => Ok(2),
         BinaryOp::Div => Ok(3),
-        other => Err(format!(
-            "direct backend does not support Array binary operation `{other:?}`"
+        _ => Err(format!(
+            "direct backend does not support Array binary operation `{op:?}`"
         )),
     }
 }
@@ -5508,8 +5508,10 @@ impl<'a> FunctionCompiler<'a> {
             result: result_spec,
         });
         let (spec_ptr, spec_len) = self.string_constant(&encoded_spec)?;
-        let buffer_size = u32::try_from(args.len().max(1).saturating_mul(8))
-            .map_err(|_| "direct backend FFI argument buffer is too large".to_string())?;
+        let buffer_size = match u32::try_from(args.len().max(1).saturating_mul(8)) {
+            Ok(buffer_size) => buffer_size,
+            Err(_) => return Err("direct backend FFI argument buffer is too large".to_string()),
+        };
         let buffer_slot = self.builder.create_sized_stack_slot(StackSlotData::new(
             StackSlotKind::ExplicitSlot,
             buffer_size,
@@ -5845,76 +5847,62 @@ impl<'a> FunctionCompiler<'a> {
             .strip_prefix("Array.")
             .and_then(|field| BuiltinAssociatedFunction::resolve("Array", field))
         {
-            let array_ty = match target {
+            let (array_ty, element_type) = match target {
                 Some(DirectType::Opaque(ty @ Type::Named(owner, arguments)))
                     if owner == "Array" && arguments.len() == 1 =>
                 {
-                    ty.clone()
+                    (ty.clone(), arguments[0].clone())
                 }
                 other => {
+                    let rendered = match other {
+                        Some(ty) => render_direct_type(ty),
+                        None => "no target type".to_string(),
+                    };
                     return Err(format!(
                         "direct backend requires an Array result type for `{name}`, found {}",
-                        other
-                            .map(render_direct_type)
-                            .unwrap_or_else(|| "no target type".to_string())
-                    ))
+                        rendered
+                    ));
                 }
             };
-            let Type::Named(_, element_types) = &array_ty else {
-                unreachable!("validated Array type must be nominal")
-            };
-            let element_type = element_types
-                .first()
-                .expect("validated Array type has one dtype");
             let dtype = self
                 .builder
                 .ins()
-                .iconst(types::I64, direct_array_dtype_code(element_type)?);
+                .iconst(types::I64, direct_array_dtype_code(&element_type)?);
             let zero = self.builder.ins().iconst(types::I64, 0);
             let shape_ty =
                 DirectType::Opaque(Type::Named("Vec".to_string(), vec![Type::named("int64")]));
-            let inst = match associated {
-                BuiltinAssociatedFunction::ArrayZeros => {
-                    let ordered = ordered_named_args(&["shape"], args)?;
-                    let shape = self.load_operand_for_target(&ordered[0].value, &shape_ty)?;
-                    let shape = self.ensure_opaque(shape)?;
-                    self.builder
-                        .ins()
-                        .call(self.array_zeros, &[dtype, shape.values[0], zero, zero])
-                }
-                BuiltinAssociatedFunction::ArrayFull => {
-                    let ordered = ordered_named_args(&["shape", "value"], args)?;
-                    let shape = self.load_operand_for_target(&ordered[0].value, &shape_ty)?;
-                    let shape = self.ensure_opaque(shape)?;
-                    let element_direct =
-                        ensure_direct_type(element_type, &self.classes, "Array dtype")?;
-                    let value =
-                        self.load_operand_as_opaque_direct(&ordered[1].value, &element_direct)?;
-                    self.builder.ins().call(
-                        self.array_full,
-                        &[dtype, shape.values[0], value.values[0], zero, zero],
-                    )
-                }
-                BuiltinAssociatedFunction::ArrayFromVec => {
-                    let ordered = ordered_named_args(&["values", "shape"], args)?;
-                    let values_ty = DirectType::Opaque(Type::Named(
-                        "Vec".to_string(),
-                        vec![element_type.clone()],
-                    ));
-                    let values = self.load_operand_for_target(&ordered[0].value, &values_ty)?;
-                    let values = self.ensure_opaque(values)?;
-                    let shape = self.load_operand_for_target(&ordered[1].value, &shape_ty)?;
-                    let shape = self.ensure_opaque(shape)?;
-                    self.builder.ins().call(
-                        self.array_from_vec,
-                        &[dtype, values.values[0], shape.values[0], zero, zero],
-                    )
-                }
-                _ => {
-                    return Err(format!(
-                        "direct backend received non-Array associated function `{name}`"
-                    ))
-                }
+            let inst = if associated == BuiltinAssociatedFunction::ArrayZeros {
+                let ordered = ordered_named_args(&["shape"], args)?;
+                let shape = self.load_operand_for_target(&ordered[0].value, &shape_ty)?;
+                let shape = self.ensure_opaque(shape)?;
+                self.builder
+                    .ins()
+                    .call(self.array_zeros, &[dtype, shape.values[0], zero, zero])
+            } else if associated == BuiltinAssociatedFunction::ArrayFull {
+                let ordered = ordered_named_args(&["shape", "value"], args)?;
+                let shape = self.load_operand_for_target(&ordered[0].value, &shape_ty)?;
+                let shape = self.ensure_opaque(shape)?;
+                let element_direct =
+                    ensure_direct_type(&element_type, &self.classes, "Array dtype")?;
+                let value =
+                    self.load_operand_as_opaque_direct(&ordered[1].value, &element_direct)?;
+                self.builder.ins().call(
+                    self.array_full,
+                    &[dtype, shape.values[0], value.values[0], zero, zero],
+                )
+            } else {
+                debug_assert_eq!(associated, BuiltinAssociatedFunction::ArrayFromVec);
+                let ordered = ordered_named_args(&["values", "shape"], args)?;
+                let values_ty =
+                    DirectType::Opaque(Type::Named("Vec".to_string(), vec![element_type]));
+                let values = self.load_operand_for_target(&ordered[0].value, &values_ty)?;
+                let values = self.ensure_opaque(values)?;
+                let shape = self.load_operand_for_target(&ordered[1].value, &shape_ty)?;
+                let shape = self.ensure_opaque(shape)?;
+                self.builder.ins().call(
+                    self.array_from_vec,
+                    &[dtype, values.values[0], shape.values[0], zero, zero],
+                )
             };
             return Ok(self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), array_ty));
         }
@@ -5938,16 +5926,9 @@ impl<'a> FunctionCompiler<'a> {
                 BuiltinAssociatedFunction::DurationSeconds => {
                     crate::runtime_value::NANOS_PER_SECOND
                 }
-                BuiltinAssociatedFunction::DurationMinutes => {
+                _ => {
+                    debug_assert_eq!(associated, BuiltinAssociatedFunction::DurationMinutes);
                     crate::runtime_value::NANOS_PER_MINUTE
-                }
-                BuiltinAssociatedFunction::StringFromBytes => {
-                    unreachable!("String.from_bytes is not a Duration constructor")
-                }
-                BuiltinAssociatedFunction::ArrayZeros
-                | BuiltinAssociatedFunction::ArrayFull
-                | BuiltinAssociatedFunction::ArrayFromVec => {
-                    unreachable!("Array constructors are not Duration constructors")
                 }
             };
             let unit_nanoseconds = self
@@ -7062,8 +7043,10 @@ impl<'a> FunctionCompiler<'a> {
                     "add" => 0,
                     "sub" => 1,
                     "mul" => 2,
-                    "div" => 3,
-                    _ => unreachable!(),
+                    _ => {
+                        debug_assert_eq!(field, "div");
+                        3
+                    }
                 };
                 let operation = self.builder.ins().iconst(types::I64, operation_code);
                 let checked_mode = self.builder.ins().iconst(types::I64, 0);
@@ -7119,17 +7102,18 @@ impl<'a> FunctionCompiler<'a> {
                             | "saturating_mul"
                     )
                 {
-                    let [argument] = ordered_named_args(&["rhs"], args)?[..] else {
-                        unreachable!("integer width arithmetic binds exactly one argument")
-                    };
+                    let ordered = ordered_named_args(&["rhs"], args)?;
+                    let argument = ordered[0];
                     let target = object.ty.clone();
                     let left = self.ensure_opaque(object)?;
                     let right = self.load_operand_as_opaque_direct(&argument.value, &target)?;
                     let operation = match field {
                         "wrapping_add" | "saturating_add" => 0,
                         "wrapping_sub" | "saturating_sub" => 1,
-                        "wrapping_mul" | "saturating_mul" => 2,
-                        _ => unreachable!(),
+                        _ => {
+                            debug_assert!(matches!(field, "wrapping_mul" | "saturating_mul"));
+                            2
+                        }
                     };
                     let arithmetic_mode = if field.starts_with("wrapping_") { 1 } else { 2 };
                     let operation = self.builder.ins().iconst(types::I64, operation);
@@ -7292,19 +7276,23 @@ impl<'a> FunctionCompiler<'a> {
                 })?;
                 let binder_ptr = self.builder.ins().func_addr(types::I64, binder_ref);
                 let (name_ptr, name_len) = self.string_constant(name.as_bytes())?;
-                let signature_json = serde_json::to_vec(signature).map_err(|error| {
-                    format!("failed to serialize function signature for `{name}`: {error}")
-                })?;
+                let signature_json = match serde_json::to_vec(signature) {
+                    Ok(signature_json) => signature_json,
+                    Err(error) => {
+                        return Err(format!(
+                            "failed to serialize function signature for `{name}`: {error}"
+                        ))
+                    }
+                };
                 let (signature_ptr, signature_len) = self.string_constant(&signature_json)?;
-                let (path, span) =
-                    self.function_frame_metadata
-                        .get(name)
-                        .cloned()
-                        .ok_or_else(|| {
-                            format!(
+                let (path, span) = match self.function_frame_metadata.get(name).cloned() {
+                    Some(metadata) => metadata,
+                    None => {
+                        return Err(format!(
                             "direct backend is missing source-frame metadata for function `{name}`"
-                        )
-                        })?;
+                        ))
+                    }
+                };
                 let (path_ptr, path_len) = self.string_constant(path.as_bytes())?;
                 let line = self.builder.ins().iconst(types::I64, span.line as i64);
                 let column = self.builder.ins().iconst(types::I64, span.column as i64);
@@ -8928,17 +8916,18 @@ impl<'a> FunctionCompiler<'a> {
                     | "saturating_mul"
             )
         {
-            let [argument] = ordered_named_args(&["rhs"], args)?[..] else {
-                unreachable!("integer width arithmetic binds exactly one argument")
-            };
+            let ordered = ordered_named_args(&["rhs"], args)?;
+            let argument = ordered[0];
             let target = ensure_direct_type(object_ty, &self.classes, "integer receiver")?;
             let left = self.ensure_opaque(object)?;
             let right = self.load_operand_as_opaque_direct(&argument.value, &target)?;
             let operation = match field {
                 "wrapping_add" | "saturating_add" => 0,
                 "wrapping_sub" | "saturating_sub" => 1,
-                "wrapping_mul" | "saturating_mul" => 2,
-                _ => unreachable!(),
+                _ => {
+                    debug_assert!(matches!(field, "wrapping_mul" | "saturating_mul"));
+                    2
+                }
             };
             let arithmetic_mode = if field.starts_with("wrapping_") { 1 } else { 2 };
             let operation = self.builder.ins().iconst(types::I64, operation);
@@ -9350,40 +9339,28 @@ impl<'a> FunctionCompiler<'a> {
                 return match field {
                     "__slice" => {
                         let [start_arg, has_start_arg, end_arg, has_end_arg, line_arg, column_arg] =
-                            args
-                        else {
-                            return Err(
-                                "direct backend expected internal Array slicing to receive start, start presence, end, end presence, line, and column"
-                                    .to_string(),
-                            );
-                        };
-                        let start = self.load_operand_with_integer_hint(
-                            &start_arg.value,
-                            Some(ScalarKind::Int32),
-                        )?;
+                            <&[MirArg; 6]>::try_from(args)
+                                .expect("MIR lowering emits six arguments for Array slicing");
+                        let integer_hint = Some(ScalarKind::Int32);
+                        let start =
+                            self.load_operand_with_integer_hint(&start_arg.value, integer_hint)?;
                         let start =
                             self.coerce_value(start, &DirectType::Scalar(ScalarKind::Int32))?;
                         let has_start = self.load_operand(&has_start_arg.value)?;
                         let has_start =
                             self.coerce_value(has_start, &DirectType::Scalar(ScalarKind::Bool))?;
-                        let end = self.load_operand_with_integer_hint(
-                            &end_arg.value,
-                            Some(ScalarKind::Int32),
-                        )?;
+                        let end =
+                            self.load_operand_with_integer_hint(&end_arg.value, integer_hint)?;
                         let end = self.coerce_value(end, &DirectType::Scalar(ScalarKind::Int32))?;
                         let has_end = self.load_operand(&has_end_arg.value)?;
                         let has_end =
                             self.coerce_value(has_end, &DirectType::Scalar(ScalarKind::Bool))?;
-                        let line = self.load_operand_with_integer_hint(
-                            &line_arg.value,
-                            Some(ScalarKind::Int32),
-                        )?;
+                        let line =
+                            self.load_operand_with_integer_hint(&line_arg.value, integer_hint)?;
                         let line =
                             self.coerce_value(line, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let column = self.load_operand_with_integer_hint(
-                            &column_arg.value,
-                            Some(ScalarKind::Int32),
-                        )?;
+                        let column =
+                            self.load_operand_with_integer_hint(&column_arg.value, integer_hint)?;
                         let column =
                             self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
                         let inst = self.builder.ins().call(
@@ -9404,12 +9381,7 @@ impl<'a> FunctionCompiler<'a> {
                         ))
                     }
                     "shape" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `Array.shape()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
+                        ordered_named_args(&[], args)?;
                         let inst = self
                             .builder
                             .ins()
@@ -9420,12 +9392,7 @@ impl<'a> FunctionCompiler<'a> {
                         ))
                     }
                     "len" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `Array.len()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
+                        ordered_named_args(&[], args)?;
                         let inst = self.builder.ins().call(self.array_len, &[object.values[0]]);
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
@@ -9484,24 +9451,17 @@ impl<'a> FunctionCompiler<'a> {
                         Ok(unit_value(&mut self.builder))
                     }
                     "__index" => {
-                        let [coordinate_arg, line_arg, column_arg] = args else {
-                            return Err(
-                                "direct backend expected internal Array indexing to receive coordinates, line, and column"
-                                    .to_string(),
-                            );
-                        };
+                        let [coordinate_arg, line_arg, column_arg] = <&[MirArg; 3]>::try_from(args)
+                            .expect("MIR lowering emits three arguments for Array indexing");
                         let coordinates = self.load_operand(&coordinate_arg.value)?;
                         let coordinates = self.ensure_opaque(coordinates)?;
-                        let line = self.load_operand_with_integer_hint(
-                            &line_arg.value,
-                            Some(ScalarKind::Int32),
-                        )?;
+                        let integer_hint = Some(ScalarKind::Int32);
+                        let line =
+                            self.load_operand_with_integer_hint(&line_arg.value, integer_hint)?;
                         let line =
                             self.coerce_value(line, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let column = self.load_operand_with_integer_hint(
-                            &column_arg.value,
-                            Some(ScalarKind::Int32),
-                        )?;
+                        let column =
+                            self.load_operand_with_integer_hint(&column_arg.value, integer_hint)?;
                         let column =
                             self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
                         let inst = self.builder.ins().call(
@@ -9520,26 +9480,21 @@ impl<'a> FunctionCompiler<'a> {
                         self.coerce_value(result, &element_direct_ty)
                     }
                     "__set_index" => {
-                        let [coordinate_arg, value_arg, line_arg, column_arg] = args else {
-                            return Err(
-                                "direct backend expected internal Array indexed assignment to receive coordinates, value, line, and column"
-                                    .to_string(),
+                        let [coordinate_arg, value_arg, line_arg, column_arg] =
+                            <&[MirArg; 4]>::try_from(args).expect(
+                                "MIR lowering emits four arguments for Array indexed assignment",
                             );
-                        };
                         let coordinates = self.load_operand(&coordinate_arg.value)?;
                         let coordinates = self.ensure_opaque(coordinates)?;
                         let value = self
                             .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
-                        let line = self.load_operand_with_integer_hint(
-                            &line_arg.value,
-                            Some(ScalarKind::Int32),
-                        )?;
+                        let integer_hint = Some(ScalarKind::Int32);
+                        let line =
+                            self.load_operand_with_integer_hint(&line_arg.value, integer_hint)?;
                         let line =
                             self.coerce_value(line, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let column = self.load_operand_with_integer_hint(
-                            &column_arg.value,
-                            Some(ScalarKind::Int32),
-                        )?;
+                        let column =
+                            self.load_operand_with_integer_hint(&column_arg.value, integer_hint)?;
                         let column =
                             self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
                         let inst = self.builder.ins().call(
@@ -9592,17 +9547,15 @@ impl<'a> FunctionCompiler<'a> {
                         ))
                     }
                     "sum" | "min" | "max" | "mean" => {
-                        if !args.is_empty() {
-                            return Err(format!(
-                                "direct backend expected `Array.{field}()` to take no arguments"
-                            ));
-                        }
+                        ordered_named_args(&[], args)?;
                         let reduction_code = match field {
                             "sum" => 0,
                             "min" => 1,
                             "max" => 2,
-                            "mean" => 3,
-                            _ => unreachable!(),
+                            _ => {
+                                debug_assert_eq!(field, "mean");
+                                3
+                            }
                         };
                         let reduction = self.builder.ins().iconst(types::I64, reduction_code);
                         let inst = self.builder.ins().call(
@@ -9633,8 +9586,10 @@ impl<'a> FunctionCompiler<'a> {
                         let operation_code = match field {
                             "wrapping_add" | "saturating_add" => 0,
                             "wrapping_sub" | "saturating_sub" => 1,
-                            "wrapping_mul" | "saturating_mul" => 2,
-                            _ => unreachable!(),
+                            _ => {
+                                debug_assert!(matches!(field, "wrapping_mul" | "saturating_mul"));
+                                2
+                            }
                         };
                         let arithmetic_mode = if field.starts_with("wrapping_") { 1 } else { 2 };
                         let operation = self.builder.ins().iconst(types::I64, operation_code);
@@ -14709,10 +14664,11 @@ fn infer_rvalue_type(
                 )))
             }
             CallTarget::Name(name)
-                if name
-                    .strip_prefix("Duration.")
-                    .and_then(|field| BuiltinAssociatedFunction::resolve("Duration", field))
-                    .is_some() =>
+                if matches!(
+                    name.strip_prefix("Duration."),
+                    Some(field)
+                        if BuiltinAssociatedFunction::resolve("Duration", field).is_some()
+                ) =>
             {
                 Some(DirectType::Opaque(Type::named("Duration")))
             }
@@ -14748,11 +14704,13 @@ fn infer_rvalue_type(
                 if object_ty.scalar_kind().is_some()
                     && matches!(field.as_str(), "add" | "sub" | "mul" | "div")
                 {
-                    if let Some(array_ty) = args.first().and_then(|argument| {
-                        infer_operand_type(&argument.value, variable_types, classes)
-                    }) {
-                        if direct_array_element_type(&array_ty).is_some() {
-                            return Some(array_ty);
+                    if let Some(argument) = args.first() {
+                        if let Some(array_ty) =
+                            infer_operand_type(&argument.value, variable_types, classes)
+                        {
+                            if direct_array_element_type(&array_ty).is_some() {
+                                return Some(array_ty);
+                            }
                         }
                     }
                 }

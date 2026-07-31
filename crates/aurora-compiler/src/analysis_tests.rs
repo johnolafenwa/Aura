@@ -673,22 +673,49 @@ def widen(value: int32) -> float64:
     return value.to_float()
 
 def main():
-    values = Array[int32].zeros(shape=[2, 2])
+    zeros = Array[int32].zeros(shape=[2, 2])
+    full = Array[int32].full(shape=[2, 2], value=1)
+    source: Vec[int32] = [1, 2, 3, 4]
+    mut values = Array[int32].from_vec(values=source, shape=[2, 2])
     mapped = values.map[float64](f=widen)
     average = values.mean()
+    count = values.len()
+    copied = values.clone()
+    maybe = values.get([0, 1])
+    previous = values.set([0, 1], 7)
+    values.fill(0)
+    wrapped = values.wrapping_add(1)
+    scalar: int32 = 7
+    scalar_wrapped = scalar.wrapping_add(1)
+    builtin_count = len(source)
     item = values[0, 1]
     rows = values[:1]
     print(mapped)
     print(average)
+    print(count)
+    print(copied)
+    print(maybe)
+    print(previous)
+    print(wrapped)
+    print(scalar_wrapped)
     print(item)
     print(rows)
 "#;
     let output = analyze_source(source);
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
     for expected_hover in [
+        "binding zeros: Array[int32]",
+        "binding full: Array[int32]",
         "binding values: Array[int32]",
         "binding mapped: Array[float64]",
         "binding average: float64",
+        "binding count: int64",
+        "binding copied: Array[int32]",
+        "binding maybe: Option[int32]",
+        "binding previous: Option[int32]",
+        "binding wrapped: Array[int32]",
+        "binding scalar_wrapped: int32",
+        "binding builtin_count: int64",
         "binding item: int32",
         "binding rows: Array[int32]",
     ] {
@@ -757,6 +784,92 @@ def main():
     assert!(top_level
         .iter()
         .any(|item| item.name == "Array" && item.kind == "class"));
+}
+
+#[test]
+fn incomplete_expression_inference_preserves_stable_editor_types() {
+    let program = checked_program("def main():\n    pass\n");
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    let binding = |ty: Type| super::BindingInfo {
+        ty,
+        trait_bounds: Vec::new(),
+        definition: super::AnalysisRange {
+            file_path: None,
+            line: 0,
+            start_character: 0,
+            end_character: 1,
+        },
+        hover: String::new(),
+    };
+    let scope = BTreeMap::from([
+        ("unit".to_string(), binding(Type::Unit)),
+        ("number".to_string(), binding(Type::named("int32"))),
+        ("text".to_string(), binding(Type::named("String"))),
+        (
+            "pair".to_string(),
+            binding(Type::Tuple(vec![
+                Type::named("int32"),
+                Type::named("String"),
+            ])),
+        ),
+        (
+            "vector".to_string(),
+            binding(Type::Named("Vec".to_string(), vec![Type::named("int32")])),
+        ),
+        (
+            "array".to_string(),
+            binding(Type::Named("Array".to_string(), vec![Type::named("int32")])),
+        ),
+        ("not_callable".to_string(), binding(Type::named("int32"))),
+    ]);
+    let conditional = |then_name: &str, else_name: &str| {
+        expr(ExprKind::Conditional {
+            then_expr: Box::new(expr(ExprKind::Name(then_name.to_string()))),
+            condition: Box::new(expr(ExprKind::Bool(true))),
+            else_expr: Box::new(expr(ExprKind::Name(else_name.to_string()))),
+        })
+    };
+
+    assert_eq!(
+        builder.infer_expr_type(&conditional("unit", "number"), &scope),
+        Some(Type::named("int32")),
+        "a contextual None arm must not erase the concrete editor type"
+    );
+    assert_eq!(
+        builder.infer_expr_type(&conditional("number", "unit"), &scope),
+        Some(Type::named("int32")),
+        "a trailing contextual None arm must preserve the concrete editor type"
+    );
+    assert_eq!(
+        builder.infer_expr_type(&conditional("number", "text"), &scope),
+        Some(Type::named("int32")),
+        "during incomplete editing, incompatible arms retain the leading inferred type"
+    );
+
+    let dynamic_tuple_index = expr(ExprKind::Index {
+        object: Box::new(expr(ExprKind::Name("pair".to_string()))),
+        index: Box::new(expr(ExprKind::Name("number".to_string()))),
+    });
+    assert_eq!(
+        builder.infer_expr_type(&dynamic_tuple_index, &scope),
+        None,
+        "analysis must not invent a tuple element type for a dynamic index"
+    );
+
+    for collection in ["vector", "array"] {
+        let invalid_map = expr(ExprKind::Call {
+            callee: Box::new(expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name(collection.to_string()))),
+                field: "map".to_string(),
+            })),
+            args: vec![arg(expr(ExprKind::Name("not_callable".to_string())))],
+        });
+        assert_eq!(
+            builder.infer_expr_type(&invalid_map, &scope),
+            None,
+            "{collection}.map must not advertise a result type for a non-callable callback"
+        );
+    }
 }
 
 #[test]
@@ -6989,6 +7102,47 @@ fn path_analysis_infers_imported_function_values_and_member_call_results() {
         assert!(
             hovers.contains(&expected),
             "direct and indirect imported calls must infer String: {hovers:?}"
+        );
+    }
+}
+
+#[test]
+fn completion_preserves_array_types_through_group_call_index_and_slice_receivers() {
+    let cases = [
+        (
+            "def main():\n    values = Array[int32].zeros(shape=[2, 2])\n    (values).\n",
+            2,
+            13,
+            "shape",
+        ),
+        (
+            "def main():\n    values = Array[int32].zeros(shape=[2, 2])\n    values.clone().\n",
+            2,
+            19,
+            "mean",
+        ),
+        (
+            "def main():\n    values = Array[int32].zeros(shape=[2, 2])\n    values[:1].\n",
+            2,
+            15,
+            "sum",
+        ),
+        (
+            "def main():\n    values = Array[int32].zeros(shape=[2, 2])\n    values[0, 1].\n",
+            2,
+            17,
+            "wrapping_add",
+        ),
+    ];
+
+    for (source, line, character, expected_member) in cases {
+        let completions = complete_source(source, line, character, Some('.'))
+            .unwrap_or_else(|error| panic!("completion failed for `{source}`: {error}"));
+        assert!(
+            completions
+                .iter()
+                .any(|completion| completion.name == expected_member),
+            "`{expected_member}` missing for `{source}`: {completions:?}"
         );
     }
 }

@@ -88,6 +88,25 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn native_runtime_archive() -> PathBuf {
+    let target_dir = if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        repo_root().join("target/native-runtime-uninstrumented")
+    } else {
+        match std::env::var_os("CARGO_TARGET_DIR") {
+            Some(target) if std::path::Path::new(&target).is_absolute() => PathBuf::from(target),
+            Some(target) => repo_root().join(target),
+            None => repo_root().join("target"),
+        }
+    };
+    target_dir
+        .join(if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        })
+        .join("libaurora_compiler.a")
+}
+
 struct TempDir {
     path: PathBuf,
 }
@@ -3276,10 +3295,7 @@ impl NativeCacheFixture {
         let installed_aura = bin_dir.join("aura");
         fs::copy(aura_bin(), &installed_aura).expect("aura executable should be installable");
         fs::copy(
-            repo_root()
-                .join("target")
-                .join("debug")
-                .join("libaurora_compiler.a"),
+            native_runtime_archive(),
             runtime_dir.join("libaurora_compiler.a"),
         )
         .expect("native runtime archive should be installable");
@@ -4551,10 +4567,7 @@ fn installed_direct_run_keeps_native_cache_optional_for_build_locking() {
     let installed_aura = bin_dir.join("aura");
     fs::copy(aura_bin(), &installed_aura).expect("aura executable should be installable");
     fs::copy(
-        repo_root()
-            .join("target")
-            .join("debug")
-            .join("libaurora_compiler.a"),
+        native_runtime_archive(),
         runtime_dir.join("libaurora_compiler.a"),
     )
     .expect("native runtime archive should be installable");
@@ -5110,6 +5123,59 @@ fn numeric_array_matrix_matches_forced_mir_and_direct_backends() {
 }
 
 #[test]
+fn numeric_array_operator_modes_match_forced_mir_and_direct_backends() {
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/array_operator_modes.au");
+    let expected =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/array_operator_modes.stdout");
+    assert_run_and_direct_source_stdout("aurora-numeric-array-operator-modes", source, expected);
+}
+
+#[test]
+fn numeric_array_composed_member_results_match_forced_mir_and_direct_backends() {
+    let source = r#"
+def increment(value: int32) -> int32:
+    return value + 1
+
+def main() -> int32:
+    print(Array[int32].zeros([2]).shape())
+    print(Array[int32].full([2], 3).len())
+    print(Array[int32].full([2], 4).clone())
+    print(Array[int32].full([2], 5)[0:1])
+    print(Array[int32].full([2], 6).get([0]))
+    print(Array[int32].full([2], 7)[0])
+    print(Array[int32].full([2], 8).map(increment).shape())
+    print(Array[int32].full([2], 9).sum())
+    print(Array[int32].full([2], 10).min())
+    print(Array[int32].full([2], 11).max())
+    print(Array[int32].full([2], 12).mean())
+    print(Array[int32].full([2], 2147483647).wrapping_add(1))
+    print(Array[int32].full([2], 2147483647).saturating_add(1))
+    return 0
+"#;
+    let expected = concat!(
+        "[2]\n",
+        "2\n",
+        "Array[int32](shape=[2], values=[4, 4])\n",
+        "Array[int32](shape=[1], values=[5])\n",
+        "Option.Some(6)\n",
+        "7\n",
+        "[2]\n",
+        "18\n",
+        "10\n",
+        "11\n",
+        "12.0\n",
+        "Array[int32](shape=[2], values=[-2147483648, -2147483648])\n",
+        "Array[int32](shape=[2], values=[2147483647, 2147483647])\n",
+    );
+    assert_run_and_direct_source_stdout(
+        "aurora-numeric-array-composed-member-results",
+        source,
+        expected,
+    );
+}
+
+#[test]
 fn numeric_array_all_dtypes_match_forced_mir_and_direct_backends() {
     let source = r#"
 def main() -> int32:
@@ -5208,6 +5274,70 @@ def main() -> int32:
         std::time::Duration::from_secs(60),
         expected,
         1,
+    );
+}
+
+#[test]
+fn numeric_array_nested_collection_clones_match_forced_mir_and_direct_backends() {
+    let source = r#"
+class ArrayHolder:
+    array: Array[int32]
+    count: int32
+
+def print_array(value: own Option[Array[int32]]):
+    match own value:
+        case Some(array):
+            print(array)
+        case None:
+            print("missing")
+
+def main() -> int32:
+    source: Vec[int32] = [3, 4]
+    arrays: Vec[Array[int32]] = [Array[int32].from_vec(source, [2])]
+    print_array(arrays.get(0))
+    arrays_copy = arrays.clone()
+    print_array(arrays_copy.get(0))
+
+    map_source: Vec[int32] = [7, 8]
+    arrays_by_name: Map[String, Array[int32]] = {
+        "item": Array[int32].from_vec(map_source, [2])
+    }
+    print_array(arrays_by_name.get("item"))
+    values = arrays_by_name.values()
+    print_array(values.get(0))
+    items = arrays_by_name.items()
+    match own items.get(0):
+        case Some(entry):
+            print(entry.value)
+        case None:
+            print("missing item")
+    map_copy = arrays_by_name.clone()
+    print_array(map_copy.get("item"))
+
+    holder_source: Vec[int32] = [11, 12]
+    mut holder = ArrayHolder(
+        array=Array[int32].from_vec(holder_source, [2]),
+        count=0
+    )
+    holder.count = 1
+    print(holder.array)
+    print(holder.count)
+    return 0
+"#;
+    let expected = concat!(
+        "Array[int32](shape=[2], values=[3, 4])\n",
+        "Array[int32](shape=[2], values=[3, 4])\n",
+        "Array[int32](shape=[2], values=[7, 8])\n",
+        "Array[int32](shape=[2], values=[7, 8])\n",
+        "Array[int32](shape=[2], values=[7, 8])\n",
+        "Array[int32](shape=[2], values=[7, 8])\n",
+        "Array[int32](shape=[2], values=[11, 12])\n",
+        "1\n",
+    );
+    assert_run_and_direct_source_stdout(
+        "aurora-numeric-array-nested-collection-clones",
+        source,
+        expected,
     );
 }
 
@@ -5314,13 +5444,73 @@ fn numeric_array_traps_match_forced_mir_and_direct_backends() {
     let root = repo_root();
     let cases = [
         (
+            "binary shape mismatch",
+            "crates/aurora-compiler/tests/fixtures/run-fail/array_binary_shape_mismatch.au",
+            "error[AU4007]",
+        ),
+        (
             "checked overflow",
             "crates/aurora-compiler/tests/fixtures/run-fail/array_checked_overflow.au",
             "error[AU4002]",
         ),
         (
+            "floating division by zero",
+            "crates/aurora-compiler/tests/fixtures/run-fail/array_division_by_zero.au",
+            "error[AU4004]",
+        ),
+        (
+            "empty minimum",
+            "crates/aurora-compiler/tests/fixtures/run-fail/array_empty_min.au",
+            "error[AU4007]",
+        ),
+        (
+            "empty maximum",
+            "crates/aurora-compiler/tests/fixtures/run-fail/array_empty_max.au",
+            "error[AU4007]",
+        ),
+        (
+            "empty mean",
+            "crates/aurora-compiler/tests/fixtures/run-fail/array_empty_mean.au",
+            "error[AU4007]",
+        ),
+        (
+            "index rank mismatch",
+            "crates/aurora-compiler/tests/fixtures/run-fail/array_index_rank_mismatch.au",
+            "error[AU4007]",
+        ),
+        (
+            "integer mode shape mismatch",
+            "crates/aurora-compiler/tests/fixtures/run-fail/array_integer_mode_shape_mismatch.au",
+            "error[AU4007]",
+        ),
+        (
+            "map callback trap",
+            "crates/aurora-compiler/tests/fixtures/run-fail/array_map_callback_trap.au",
+            "error[AU4003]",
+        ),
+        (
             "set out of bounds",
             "crates/aurora-compiler/tests/fixtures/run-fail/array_set_out_of_bounds.au",
+            "error[AU4003]",
+        ),
+        (
+            "set rank mismatch",
+            "crates/aurora-compiler/tests/fixtures/run-fail/array_set_rank_mismatch.au",
+            "error[AU4007]",
+        ),
+        (
+            "indexed assignment out of bounds",
+            "crates/aurora-compiler/tests/fixtures/run-fail/array_index_assignment_out_of_bounds.au",
+            "error[AU4003]",
+        ),
+        (
+            "shape mismatch",
+            "crates/aurora-compiler/tests/fixtures/run-fail/array_shape_mismatch.au",
+            "error[AU4007]",
+        ),
+        (
+            "slice out of bounds",
+            "crates/aurora-compiler/tests/fixtures/run-fail/array_slice_negative_no_clamp.au",
             "error[AU4003]",
         ),
     ];

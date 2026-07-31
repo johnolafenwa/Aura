@@ -15,7 +15,7 @@ use crate::diag::{
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
-    run_lightweight_root_task, spawn_lightweight_task, ArrayStorage, ArrayValue,
+    run_lightweight_root_task, spawn_lightweight_task, ArrayDType, ArrayStorage, ArrayValue,
     CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
     FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, InstanceValue,
     LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
@@ -24,7 +24,9 @@ use crate::runtime_value::{
     TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
-use crate::sema::{FunctionParamContract, Type};
+use crate::sema::{
+    ClosureCallKind, ClosureCapture, ClosureCaptureMode, FunctionParamContract, Type,
+};
 #[cfg(unix)]
 use corosensei::stack::Stack;
 use rcgen::generate_simple_self_signed;
@@ -128,6 +130,9 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
         Value::Int(IntegerValue::from_i32(8)),
         "rank-one Array indexing lowers its single coordinate as a scalar int32"
     );
+    let missing_index = super::aurora_direct_box_i32(9);
+    let missing = super::aurora_direct_array_get(vector, missing_index, 7, 9);
+    expect_option_none(missing);
 
     let clone_count = super::direct_value_clone_count();
     let scalar = super::aurora_direct_box_i32(10);
@@ -222,6 +227,8 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
         vector,
         scalar_index,
         scalar_indexed,
+        missing_index,
+        missing,
         scalar,
         added,
         self_added,
@@ -231,6 +238,487 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
         callback,
         mapped,
     ] {
+        unsafe {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
+fn direct_array_abi_accepts_positive_literal_representations_at_signed_boundaries() {
+    let tagged_literal = |value: u128, kind| {
+        Value::Int(
+            IntegerValue::from_literal(value)
+                .with_runtime_kind(kind)
+                .expect("the positive literal fits the requested signed runtime kind"),
+        )
+    };
+    let shape = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("int64"),
+        elements: vec![tagged_literal(2, IntegerKind::Int64)],
+    }));
+    let values = integer_vector(IntegerKind::Int32, &[7, 11]);
+    let array = super::aurora_direct_array_from_vec(0, values, shape, 17, 19);
+
+    let scalar_coordinate = boxed_value(tagged_literal(1, IntegerKind::Int32));
+    let scalar_result = super::aurora_direct_array_index(array, scalar_coordinate, 23, 29);
+    assert_eq!(
+        unsafe { take_value(scalar_result) },
+        Value::Int(IntegerValue::from_i32(11))
+    );
+
+    let vector_coordinate = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("int32"),
+        elements: vec![tagged_literal(0, IntegerKind::Int32)],
+    }));
+    let vector_result = super::aurora_direct_array_index(array, vector_coordinate, 31, 37);
+    assert_eq!(
+        unsafe { take_value(vector_result) },
+        Value::Int(IntegerValue::from_i32(7))
+    );
+
+    for value in [
+        shape,
+        values,
+        array,
+        scalar_coordinate,
+        scalar_result,
+        vector_coordinate,
+        vector_result,
+    ] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
+    fn capture_diagnostic(invoke: impl FnOnce() + Send + 'static) -> Diagnostic {
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                invoke();
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("invalid direct Array ABI input should trap")
+    }
+
+    fn assert_diagnostic(diagnostic: &Diagnostic, code: &str, message: &str, span: Option<Span>) {
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(diagnostic.message, message);
+        assert_eq!(diagnostic.span, span);
+    }
+
+    let shape = integer_vector(IntegerKind::Int64, &[1]);
+    let shape_address = shape as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_zeros(-1, shape_address as *mut OpaqueValue, 71, 73);
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4001",
+        "direct Array ABI received invalid dtype code `-1`",
+        Some(Span::new(71, 73)),
+    );
+
+    let wrong_shape_type = integer_vector(IntegerKind::Int32, &[1]);
+    let wrong_shape_type_address = wrong_shape_type as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_zeros(
+            0,
+            wrong_shape_type_address as *mut OpaqueValue,
+            75,
+            77,
+        );
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4007",
+        "array shape requires `Vec[int64]`, found `Vec[int32]`",
+        Some(Span::new(75, 77)),
+    );
+
+    let malformed_shape = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("int64"),
+        elements: vec![Value::String("one".to_string())],
+    }));
+    let malformed_shape_address = malformed_shape as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_zeros(
+            0,
+            malformed_shape_address as *mut OpaqueValue,
+            79,
+            83,
+        );
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4007",
+        "array shape axis 0 is not an int64 value",
+        Some(Span::new(79, 83)),
+    );
+
+    let wrong_kind_shape = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("int64"),
+        elements: vec![Value::Int(IntegerValue::from_i32(1))],
+    }));
+    let wrong_kind_shape_address = wrong_kind_shape as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_zeros(
+            0,
+            wrong_kind_shape_address as *mut OpaqueValue,
+            85,
+            87,
+        );
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4007",
+        "array shape axis 0 is not an int64 value",
+        Some(Span::new(85, 87)),
+    );
+
+    let negative_shape = integer_vector(IntegerKind::Int64, &[-1]);
+    let negative_shape_address = negative_shape as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ =
+            super::aurora_direct_array_zeros(0, negative_shape_address as *mut OpaqueValue, 88, 89);
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4007",
+        "Array shape axis 0 cannot be negative, found -1",
+        Some(Span::new(88, 89)),
+    );
+
+    let values = integer_vector(IntegerKind::Int64, &[1]);
+    let values_address = values as usize;
+    let shape_address = shape as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_from_vec(
+            0,
+            values_address as *mut OpaqueValue,
+            shape_address as *mut OpaqueValue,
+            89,
+            97,
+        );
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4007",
+        "Array[int32].from_vec requires `Vec[int32]`, found `Vec[int64]`",
+        Some(Span::new(89, 97)),
+    );
+
+    let source_values = integer_vector(IntegerKind::Int32, &[5]);
+    let array = super::aurora_direct_array_from_vec(0, source_values, shape, 1, 1);
+    let array_address = array as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_reduce(array_address as *mut OpaqueValue, 9, 101, 103);
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4001",
+        "direct Array ABI received invalid reduction code `9`",
+        Some(Span::new(101, 103)),
+    );
+
+    let array_address = array as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_binary(
+            array_address as *mut OpaqueValue,
+            array_address as *mut OpaqueValue,
+            0,
+            9,
+            0,
+            107,
+            109,
+        );
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4001",
+        "direct Array ABI received invalid binary operation code `9`",
+        Some(Span::new(107, 109)),
+    );
+
+    let array_address = array as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_binary(
+            array_address as *mut OpaqueValue,
+            array_address as *mut OpaqueValue,
+            0,
+            0,
+            9,
+            113,
+            127,
+        );
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4001",
+        "direct Array ABI received invalid arithmetic mode code `9`",
+        Some(Span::new(113, 127)),
+    );
+
+    let left = super::aurora_direct_box_i32(1);
+    let right = super::aurora_direct_box_i32(2);
+    let left_address = left as usize;
+    let right_address = right as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_binary(
+            left_address as *mut OpaqueValue,
+            right_address as *mut OpaqueValue,
+            0,
+            0,
+            0,
+            131,
+            137,
+        );
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4001",
+        "direct Array ABI received inconsistent operands `integer` and `integer` with scalar-left flag `0`",
+        Some(Span::new(131, 137)),
+    );
+
+    let scalar_coordinate = super::aurora_direct_box_i64(0);
+    let scalar_coordinate_address = scalar_coordinate as usize;
+    let array_address = array as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_index(
+            array_address as *mut OpaqueValue,
+            scalar_coordinate_address as *mut OpaqueValue,
+            139,
+            149,
+        );
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4007",
+        "array coordinates require int32 values",
+        Some(Span::new(139, 149)),
+    );
+
+    let wrong_tuple_coordinate = boxed_value(Value::Tuple(TupleValue {
+        element_types: vec![Type::named("int64")],
+        elements: vec![Value::Int(IntegerValue::from_i64(0))],
+    }));
+    let wrong_tuple_coordinate_address = wrong_tuple_coordinate as usize;
+    let array_address = array as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_index(
+            array_address as *mut OpaqueValue,
+            wrong_tuple_coordinate_address as *mut OpaqueValue,
+            150,
+            151,
+        );
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4007",
+        "array coordinates require int32 values",
+        Some(Span::new(150, 151)),
+    );
+
+    let tuple_coordinate = boxed_value(Value::Tuple(TupleValue {
+        element_types: vec![Type::named("int32")],
+        elements: vec![Value::Int(IntegerValue::from_i32(0))],
+    }));
+    let indexed = super::aurora_direct_array_index(array, tuple_coordinate, 151, 157);
+    assert_eq!(
+        unsafe { take_value(indexed) },
+        Value::Int(IntegerValue::from_i32(5))
+    );
+
+    let invalid_coordinate = string_value("zero");
+    let invalid_coordinate_address = invalid_coordinate as usize;
+    let array_address = array as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_index(
+            array_address as *mut OpaqueValue,
+            invalid_coordinate_address as *mut OpaqueValue,
+            163,
+            167,
+        );
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4007",
+        "array coordinates require `Vec[int32]` or an int32 tuple, found `String`",
+        Some(Span::new(163, 167)),
+    );
+
+    let malformed_coordinates = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("int32"),
+        elements: vec![Value::String("zero".to_string())],
+    }));
+    let malformed_coordinates_address = malformed_coordinates as usize;
+    let array_address = array as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_index(
+            array_address as *mut OpaqueValue,
+            malformed_coordinates_address as *mut OpaqueValue,
+            173,
+            179,
+        );
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4007",
+        "array coordinate on axis 0 is not an int32 value",
+        Some(Span::new(173, 179)),
+    );
+
+    let wrong_kind_coordinates = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("int32"),
+        elements: vec![Value::Int(IntegerValue::from_i64(0))],
+    }));
+    let wrong_kind_coordinates_address = wrong_kind_coordinates as usize;
+    let array_address = array as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_index(
+            array_address as *mut OpaqueValue,
+            wrong_kind_coordinates_address as *mut OpaqueValue,
+            181,
+            191,
+        );
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4007",
+        "array coordinate on axis 0 is not an int32 value",
+        Some(Span::new(181, 191)),
+    );
+
+    let wrong_array = super::aurora_direct_box_i32(1);
+    let wrong_array_address = wrong_array as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_len(wrong_array_address as *mut OpaqueValue);
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4001",
+        "expected `Array`, found `integer`",
+        None,
+    );
+
+    let wrong_array_address = wrong_array as usize;
+    let fill_value = super::aurora_direct_box_i32(7);
+    let fill_value_address = fill_value as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let _ = super::aurora_direct_array_fill_in_place(
+            wrong_array_address as *mut OpaqueValue,
+            fill_value_address as *mut OpaqueValue,
+            193,
+            197,
+        );
+    });
+    assert_diagnostic(
+        &diagnostic,
+        "AU4001",
+        "expected `Array`, found `integer`",
+        None,
+    );
+
+    let array_type = b"Array[int32]";
+    assert_eq!(
+        super::aurora_direct_value_type_matches(array, array_type.as_ptr(), array_type.len()),
+        1
+    );
+
+    for value in [
+        wrong_shape_type,
+        malformed_shape,
+        wrong_kind_shape,
+        negative_shape,
+        values,
+        source_values,
+        array,
+        left,
+        right,
+        scalar_coordinate,
+        wrong_tuple_coordinate,
+        tuple_coordinate,
+        indexed,
+        invalid_coordinate,
+        malformed_coordinates,
+        wrong_kind_coordinates,
+        wrong_array,
+        fill_value,
+    ] {
+        unsafe {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
+fn direct_integer_width_public_abi_preserves_validation_diagnostics() {
+    fn capture(
+        left: *mut OpaqueValue,
+        right: *mut OpaqueValue,
+        operation: i64,
+        mode: i64,
+        line: i64,
+        column: i64,
+    ) -> Diagnostic {
+        let left = left as usize;
+        let right = right as usize;
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                let _ = super::aurora_direct_integer_width_binary(
+                    left as *mut OpaqueValue,
+                    right as *mut OpaqueValue,
+                    operation,
+                    mode,
+                    line,
+                    column,
+                );
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("invalid direct integer width ABI input should trap")
+    }
+
+    let int32 = super::aurora_direct_box_i32(1);
+    let other_int32 = super::aurora_direct_box_i32(2);
+    let int64 = super::aurora_direct_box_i64(2);
+    let boolean = bool_value(true);
+
+    let diagnostic = capture(int32, other_int32, 9, 1, 181, 191);
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        "direct integer width-arithmetic ABI received invalid operation code `9`"
+    );
+    assert_eq!(diagnostic.span, Some(Span::new(181, 191)));
+
+    let diagnostic = capture(int32, other_int32, 0, 9, 193, 197);
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        "direct integer width-arithmetic ABI received invalid mode code `9`"
+    );
+    assert_eq!(diagnostic.span, Some(Span::new(193, 197)));
+
+    let diagnostic = capture(boolean, other_int32, 0, 1, 199, 211);
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        "direct integer width-arithmetic ABI expected an integer left operand, found `bool`"
+    );
+    assert_eq!(diagnostic.span, Some(Span::new(199, 211)));
+
+    let diagnostic = capture(int32, int64, 0, 1, 223, 227);
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        "`wrapping_add` expects matching fixed-width integer operands"
+    );
+    assert_eq!(diagnostic.span, Some(Span::new(223, 227)));
+
+    for value in [int32, other_int32, int64, boolean] {
         unsafe {
             release_value(value);
         }
@@ -350,6 +838,137 @@ fn direct_array_clone_uses_fallible_storage_copy_and_preserves_span() {
         .contains("Array.shape result could not allocate"));
 
     for value in [shape, values, array, cloned] {
+        unsafe {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
+fn direct_array_constructor_shape_copy_reports_au4005_at_call_site() {
+    let shape = integer_vector(IntegerKind::Int64, &[1]);
+    let shape_address = shape as usize;
+    let diagnostic = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            crate::runtime_value::with_array_allocation_budget(0, || {
+                let _ =
+                    super::aurora_direct_array_zeros(0, shape_address as *mut OpaqueValue, 47, 53);
+            });
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("an Array constructor shape-copy allocation failure should trap");
+
+    assert_eq!(diagnostic.code, "AU4005");
+    assert_eq!(diagnostic.span, Some(Span::new(47, 53)));
+    assert!(
+        diagnostic
+            .message
+            .contains("Array shape could not allocate storage"),
+        "unexpected allocation diagnostic: {}",
+        diagnostic.message
+    );
+
+    unsafe {
+        release_value(shape);
+    }
+}
+
+#[test]
+fn direct_nested_array_collection_reads_and_clones_use_fallible_copy() {
+    fn array_value(value: i32) -> Value {
+        Value::Array(ArrayValue {
+            shape: vec![1].into_boxed_slice(),
+            storage: ArrayStorage::Int32(vec![value].into_boxed_slice()),
+        })
+    }
+
+    fn allocation_diagnostic(invoke: impl FnOnce() + Send + 'static) -> crate::diag::Diagnostic {
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                crate::runtime_value::with_array_allocation_budget(0, invoke);
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("copying a nested Array with no allocation budget should trap")
+    }
+
+    let vector = boxed_value(Value::Vec(VecValue {
+        element_type: Type::Named("Array".to_string(), vec![Type::named("int32")]),
+        elements: vec![array_value(7)],
+    }));
+    let vector_address = vector as usize;
+    let diagnostic = allocation_diagnostic(move || {
+        let _ = super::aurora_direct_vec_get(vector_address as *mut OpaqueValue, 0);
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    assert!(diagnostic
+        .message
+        .contains("Array shape could not allocate"));
+
+    let map = boxed_value(Value::Map(MapValue {
+        key_type: Type::named("String"),
+        value_type: Type::Named("Array".to_string(), vec![Type::named("int32")]),
+        entries: vec![(Value::String("item".to_string()), array_value(11))],
+    }));
+    let map_address = map as usize;
+    let key = string_value("item");
+    let key_address = key as usize;
+    let diagnostic = allocation_diagnostic(move || {
+        let _ = super::aurora_direct_map_index(
+            map_address as *mut OpaqueValue,
+            key_address as *mut OpaqueValue,
+            59,
+            61,
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    assert_eq!(diagnostic.span, Some(Span::new(59, 61)));
+    assert!(diagnostic
+        .message
+        .contains("Array shape could not allocate"));
+
+    let clone_source = boxed_value(Value::Tuple(TupleValue {
+        element_types: vec![Type::Named("Array".to_string(), vec![Type::named("int32")])],
+        elements: vec![array_value(13)],
+    }));
+    let clone_source_address = clone_source as usize;
+    let diagnostic = allocation_diagnostic(move || {
+        let _ = super::aurora_direct_clone_value(clone_source_address as *mut OpaqueValue);
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    assert!(diagnostic.message.contains("Array"));
+
+    let instance = boxed_value(Value::Instance(InstanceValue {
+        class_name: "Holder".to_string(),
+        fields: BTreeMap::from([("array".to_string(), array_value(23))]),
+    }));
+    let instance_address = instance as usize;
+    let diagnostic = allocation_diagnostic(move || {
+        let _ = super::aurora_direct_instance_get_field(
+            instance_address as *mut OpaqueValue,
+            b"array".as_ptr(),
+            "array".len(),
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    assert!(diagnostic.message.contains("Array"));
+
+    let new_value = int_value(29);
+    let instance_address = instance as usize;
+    let new_value_address = new_value as usize;
+    let diagnostic = allocation_diagnostic(move || {
+        let _ = super::aurora_direct_instance_set_field(
+            instance_address as *mut OpaqueValue,
+            b"other".as_ptr(),
+            "other".len(),
+            new_value_address as *mut OpaqueValue,
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    assert!(diagnostic.message.contains("Array"));
+
+    for value in [vector, map, key, clone_source, instance, new_value] {
         unsafe {
             release_value(value);
         }
@@ -4278,6 +4897,130 @@ fn direct_function_value_type_patterns_bind_nested_types_and_capabilities() {
 }
 
 #[test]
+fn direct_closure_type_matching_preserves_callable_and_capture_contracts() {
+    let param = |ty, passing| FunctionParamContract {
+        name: "value".to_string(),
+        ty,
+        passing,
+        has_default: false,
+        default_erased: false,
+    };
+    let capture = |ty, mode| ClosureCapture {
+        name: "captured".to_string(),
+        ty,
+        mode,
+        span: Span::new(3, 5),
+    };
+    let closure = |parameter_ty, passing, capture_ty, mode, call_kind| Type::Closure {
+        params: Box::new(vec![param(parameter_ty, passing)]),
+        return_type: Box::new(Type::named("int64")),
+        captures: Box::new(vec![capture(capture_ty, mode)]),
+        call_kind,
+    };
+
+    let actual = closure(
+        Type::named("int64"),
+        ReceiverKind::Borrow,
+        Type::named("String"),
+        ClosureCaptureMode::Copy,
+        ClosureCallKind::Repeatable,
+    );
+    let value = boxed_value(Value::Function(Box::new(FunctionValue {
+        name: "predicate".to_string(),
+        signature: actual.clone(),
+        source_path: Some("/workspace/closure.au".to_string()),
+        entry_span: Span::new(7, 11),
+        direct_thunk: Some(1),
+        direct_default_binder: Some(1),
+        closure_environment: None,
+    })));
+    let wildcard = Type::TypeParam("T".to_string());
+    let matching = closure(
+        wildcard.clone(),
+        ReceiverKind::Borrow,
+        Type::TypeParam("Captured".to_string()),
+        ClosureCaptureMode::Copy,
+        ClosureCallKind::Repeatable,
+    );
+    let no_params = Type::Closure {
+        params: Box::new(Vec::new()),
+        return_type: Box::new(Type::named("int64")),
+        captures: Box::new(vec![capture(
+            Type::TypeParam("Captured".to_string()),
+            ClosureCaptureMode::Copy,
+        )]),
+        call_kind: ClosureCallKind::Repeatable,
+    };
+    let no_captures = Type::Closure {
+        params: Box::new(vec![param(
+            Type::TypeParam("T".to_string()),
+            ReceiverKind::Borrow,
+        )]),
+        return_type: Box::new(Type::named("int64")),
+        captures: Box::new(Vec::new()),
+        call_kind: ClosureCallKind::Repeatable,
+    };
+    let cases = [
+        ("matching closure", matching, 1),
+        ("parameter count", no_params, 0),
+        ("capture count", no_captures, 0),
+        (
+            "call kind",
+            closure(
+                wildcard.clone(),
+                ReceiverKind::Borrow,
+                Type::TypeParam("Captured".to_string()),
+                ClosureCaptureMode::Copy,
+                ClosureCallKind::Consuming,
+            ),
+            0,
+        ),
+        (
+            "parameter capability",
+            closure(
+                wildcard.clone(),
+                ReceiverKind::BorrowMut,
+                Type::TypeParam("Captured".to_string()),
+                ClosureCaptureMode::Copy,
+                ClosureCallKind::Repeatable,
+            ),
+            0,
+        ),
+        (
+            "capture mode",
+            closure(
+                wildcard,
+                ReceiverKind::Borrow,
+                Type::TypeParam("Captured".to_string()),
+                ClosureCaptureMode::Move,
+                ClosureCallKind::Repeatable,
+            ),
+            0,
+        ),
+    ];
+    for (label, pattern, expected) in cases {
+        let encoded = super::canonical_runtime_type_name(&pattern);
+        assert_eq!(
+            super::aurora_direct_value_type_matches(value, encoded.as_ptr(), encoded.len()),
+            expected,
+            "{label}"
+        );
+    }
+
+    let function_pattern = Type::Function {
+        params: vec![param(Type::named("int64"), ReceiverKind::Borrow)],
+        return_type: Box::new(Type::named("int64")),
+    };
+    let encoded = super::canonical_runtime_type_name(&function_pattern);
+    assert_eq!(
+        super::aurora_direct_value_type_matches(value, encoded.as_ptr(), encoded.len()),
+        0,
+        "a closure contract must not masquerade as a plain function contract"
+    );
+    unsafe { release_value(value) };
+}
+
+#[test]
 fn direct_function_value_abi_rejects_invalid_signatures_and_missing_native_targets() {
     let signature = Type::Function {
         params: Vec::new(),
@@ -6036,6 +6779,13 @@ fn native_runtime_direct_filesystem_wrappers_cover_io_error_results() {
         .to_str()
         .expect("file path should be valid UTF-8")
         .to_string();
+    let invalid_utf8_path = root.join("invalid-utf8.bin");
+    std::fs::write(&invalid_utf8_path, [0xff, 0xfe])
+        .expect("invalid UTF-8 fixture should be written");
+    let invalid_utf8_text = invalid_utf8_path
+        .to_str()
+        .expect("invalid UTF-8 fixture path should be valid UTF-8")
+        .to_string();
 
     expect_io_result_error(super::aurora_direct_fs_read_to_string(string_value(
         &missing_text,
@@ -6050,6 +6800,13 @@ fn native_runtime_direct_filesystem_wrappers_cover_io_error_results() {
     expect_io_result_error(super::aurora_direct_fs_remove_file(string_value(
         &missing_text,
     )));
+    let invalid_data = expect_result_err_payload(super::aurora_direct_fs_read_to_string(
+        string_value(&invalid_utf8_text),
+    ));
+    assert!(
+        expect_variant_value(invalid_data, "io.Error", "InvalidData").is_empty(),
+        "fs.read_to_string must classify non-UTF-8 file contents as io.Error.InvalidData"
+    );
 
     expect_io_result_error(super::aurora_direct_fs_write_string(
         string_value(&directory_text),
@@ -13079,6 +13836,15 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
             elements: Vec::new(),
         })),
         "Vec"
+    );
+    let array = Value::Array(
+        ArrayValue::zeros(ArrayDType::Int64, vec![2].into_boxed_slice())
+            .expect("metadata Array allocation should succeed"),
+    );
+    assert_eq!(value_type_name(&array), "Array[int64]");
+    assert_eq!(
+        inferred_collection_type(&array),
+        Type::Named("Array".to_string(), vec![Type::named("int64")])
     );
     assert_eq!(
         value_type_name(&Value::Set(SetValue {
