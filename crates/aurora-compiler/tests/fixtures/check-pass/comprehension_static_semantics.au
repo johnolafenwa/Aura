@@ -1,0 +1,18 @@
+def main():
+    numbers: Vec[int32] = [1, 2, 3]
+    names = ["a", "b"]
+    selected: Vec[int32] = [value * 2 for value in numbers if value > 0]
+    unique: Set[int32] = {value for value in numbers}
+    source_set = Set{1, 2, 3}
+    from_set: Vec[int64] = [value for value in source_set]
+    lookup: Map[int64, String] = {index: name.clone() for index, name in enumerate(names)}
+    pairs: Vec[int32] = [left + right for left, right in zip(numbers, numbers)]
+    nested: Vec[int32] = [
+        outer * 10 + inner
+        for outer in range(0, 2)
+        if outer >= 0
+        for inner in range(0, outer)
+    ]
+    copies: Vec[String] = [name.clone() for name in names]
+    jobs = Queue[String]()
+    received: Vec[String] = [job for job in jobs]

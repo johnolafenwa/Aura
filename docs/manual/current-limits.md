@@ -46,7 +46,7 @@ This page documents known current limits of the Aurora compiler and runtime.
   zero-parameter lambda may infer `def() -> R` from its expression body.
   Captures are by value and closure environments are read-only in Phase 6.3.
   Shared/mutable capability capture, inline parameter types, defaults,
-  generics, statement bodies, capture lists, and comprehensions remain
+  generics, statement bodies, and capture lists remain
   unavailable. A consuming closure is single-use. Capturing closures cannot
   pass through arbitrary written-`def` parameters, fields, collections, or
   annotated returns because those boundaries describe capture-free code
@@ -55,6 +55,13 @@ This page documents known current limits of the Aurora compiler and runtime.
   Conditional and `match` expressions cannot merge capturing closures from
   multiple branches because Phase 6.3 has no closure-union type; invoke the
   closure within each branch or use capture-free lambdas or named functions.
+- List, set, and map comprehensions are eager and always return fresh owned
+  collections. Their clauses use bare-loop iteration only; there is no
+  comprehension `mut`/`own` source form, early `break`/`continue`, or lazy
+  result. Nested clauses are outer-major and Queue comprehensions receive
+  until ordinary Queue iteration ends. Generator expressions
+  remain unavailable and report `AU2005` with an eager-comprehension or
+  explicit-loop migration.
 - FFI v0 is package-only and requires `[package] allow_ffi = true`; a root
   package also reports every reachable FFI-enabled dependency under exact
   `[ffi] dependencies`. Calls resolve already-loaded process-global symbols

@@ -56,7 +56,8 @@ The chapters are ordered so that each idea has a practical reason to exist befor
 1. [Getting Aurora Running](/learn/install-and-run) — install the CLI, run your first program, build your first binary.
 2. [The First Program](/learn/small-programs) — bindings, functions, control flow, and small decisions made with `match`.
 3. [Shaping Data](/learn/data-modeling) — classes, enums, methods, and the patterns that keep domain data honest.
-4. [Working With Collections](/learn/collections) — `Vec[T]`, `Map[K, V]`, and `Set[T]` on real text and counting problems.
+4. [Working With Collections](/learn/collections) — `Vec[T]`, `Map[K, V]`,
+   `Set[T]`, and eager owned comprehensions on real text and counting problems.
 5. [Values, Moves, And Borrows](/learn/ownership-and-borrowing) — the ownership model, explained through the programs that benefit from it.
 6. [Results, Options, And `try`](/learn/results-and-options) — how Aurora represents recoverable failure without hiding control flow.
 7. [Organizing Code](/learn/modules-and-packages) — splitting a program into files, packages, and workspaces.

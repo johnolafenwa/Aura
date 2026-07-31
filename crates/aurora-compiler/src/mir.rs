@@ -1,7 +1,8 @@
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, BindingTarget, CompareLink, CompareOp,
-    DestructureStmt, Expr, ExprKind, IfStmt, LiteralPatternKind, MatchStmt, Param, Pattern,
-    ReceiverKind, Stmt, TypeRefKind, UnaryOp, WhileStmt,
+    ComprehensionClause, ComprehensionOutput, DestructureStmt, Expr, ExprKind, IfStmt,
+    LiteralPatternKind, MatchStmt, Param, Pattern, ReceiverKind, Stmt, TypeRefKind, UnaryOp,
+    WhileStmt,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
@@ -12,8 +13,8 @@ use crate::integer::{minimal_signed_type_for_negative_literal, IntegerValue};
 use crate::sema::{
     binary_operator_trait, resolve_param_passing, substitute_trait_bound, substitute_type,
     substitutions_from_decl_type_args, type_is_copy_in_program, unary_operator_trait,
-    ClosureCallKind, ClosureCaptureMode, ClosureInfo, FunctionParamContract, ModuleNamespace,
-    Program, TraitBound, Type,
+    ClosureCallKind, ClosureCaptureMode, ClosureInfo, ClosureOwner, ComprehensionClauseInfo,
+    ComprehensionInfo, FunctionParamContract, ModuleNamespace, Program, TraitBound, Type,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -676,6 +677,7 @@ pub fn lower(program: &Program) -> MirModule {
                 program,
                 &function.decl.name,
                 &function.module_name,
+                ClosureOwner::Function(function.decl.name.clone()),
                 function.decl.receiver,
                 None,
                 &function.decl,
@@ -717,6 +719,10 @@ pub fn lower(program: &Program) -> MirModule {
                 program,
                 &qualified_name,
                 &class.module_name,
+                ClosureOwner::ClassMethod {
+                    class_name: class.decl.name.clone(),
+                    method_name: method.decl.name.clone(),
+                },
                 method.decl.receiver,
                 Some(Type::Named(
                     class_name.clone(),
@@ -900,6 +906,10 @@ fn push_imported_module_classes_from_namespace(
                     program,
                     &qualified_name,
                     &class.module_name,
+                    ClosureOwner::ClassMethod {
+                        class_name: class.decl.name.clone(),
+                        method_name: method.decl.name.clone(),
+                    },
                     method.decl.receiver,
                     Some(Type::Named(
                         class_name.clone(),
@@ -993,6 +1003,11 @@ fn lower_trait_impl(
                 program,
                 &qualified_name,
                 module_name,
+                ClosureOwner::TraitImplMethod {
+                    trait_name: trait_impl.trait_name.clone(),
+                    for_type: trait_impl.for_type.to_string(),
+                    method_name: method.decl.name.clone(),
+                },
                 method.decl.receiver,
                 Some(trait_impl.for_type.clone()),
                 &method.decl,
@@ -1055,6 +1070,7 @@ fn push_imported_module_functions_from_namespace(
                 program,
                 &qualified_name,
                 &function.module_name,
+                ClosureOwner::Function(function.decl.name.clone()),
                 function.decl.receiver,
                 None,
                 &function.decl,
@@ -1087,6 +1103,7 @@ fn lower_function(
     program: &Program,
     name: &str,
     module_name: &str,
+    metadata_owner: ClosureOwner,
     receiver: Option<ReceiverKind>,
     receiver_type: Option<Type>,
     function: &crate::ast::FunctionDecl,
@@ -1123,6 +1140,7 @@ fn lower_function(
                     program,
                     &format!("{name}::__default_{index}_{}", param.name),
                     module_name,
+                    metadata_owner.clone(),
                     default,
                     ty,
                     type_param_bounds.clone(),
@@ -1137,7 +1155,8 @@ fn lower_function(
         module_name,
         return_type.clone(),
         type_param_bounds,
-    );
+    )
+    .with_metadata_owner(metadata_owner);
     if let Some(receiver_type) = receiver_type {
         lowerer
             .local_types
@@ -1218,6 +1237,7 @@ fn lower_default_function(
     program: &Program,
     name: &str,
     module_name: &str,
+    metadata_owner: ClosureOwner,
     default: &Expr,
     return_type: &Type,
     type_param_bounds: BTreeMap<String, Vec<crate::sema::TraitBound>>,
@@ -1228,7 +1248,8 @@ fn lower_default_function(
         module_name,
         return_type.clone(),
         type_param_bounds,
-    );
+    )
+    .with_metadata_owner(metadata_owner);
     let value = lowerer.lower_expr_for_owned_value(default, Some(return_type));
     lowerer.terminate(Terminator::Return(value));
     lowerer.finish_with_generated(MirFunctionSpec {
@@ -1248,7 +1269,8 @@ fn lower_top_level(program: &Program) -> Vec<MirFunction> {
         &program.module_name,
         Type::named("int32"),
         BTreeMap::new(),
-    );
+    )
+    .with_metadata_owner(ClosureOwner::TopLevel);
     lowerer.lower_stmts(&program.top_level_stmts);
     lowerer.finish_with_generated(MirFunctionSpec {
         name: "__script".to_string(),
@@ -1278,6 +1300,8 @@ struct Lowerer<'a> {
     program: &'a Program,
     function_name: &'a str,
     module_name: &'a str,
+    metadata_module_name: Option<String>,
+    metadata_owner: Option<ClosureOwner>,
     return_type: Type,
     type_param_bounds: BTreeMap<String, Vec<crate::sema::TraitBound>>,
     blocks: Vec<BasicBlockBuilder>,
@@ -1431,6 +1455,8 @@ impl<'a> Lowerer<'a> {
             program,
             function_name,
             module_name,
+            metadata_module_name: None,
+            metadata_owner: None,
             return_type,
             type_param_bounds,
             blocks: vec![BasicBlockBuilder {
@@ -1452,6 +1478,11 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn with_metadata_owner(mut self, owner: ClosureOwner) -> Self {
+        self.metadata_owner = Some(owner);
+        self
+    }
+
     fn closure_info_at(&self, span: Span) -> Option<&ClosureInfo> {
         let closures = if self.module_name == self.program.module_name {
             &self.program.closures
@@ -1465,6 +1496,47 @@ impl<'a> Lowerer<'a> {
         });
         let found = matching.next()?;
         matching.next().is_none().then_some(found)
+    }
+
+    fn comprehension_info_at(&self, span: Span) -> Option<&ComprehensionInfo> {
+        let module_name = self
+            .metadata_module_name
+            .as_deref()
+            .unwrap_or(self.module_name);
+        let comprehensions = if module_name == self.program.module_name {
+            &self.program.comprehensions
+        } else {
+            &self.module_namespace(module_name)?.comprehensions
+        };
+        let matching = comprehensions.values().filter(|info| {
+            info.id.module_name == module_name
+                && info.id.line == span.line
+                && info.id.column == span.column
+        });
+        if let Some(owner) = &self.metadata_owner {
+            if let Some(found) = matching.clone().find(|info| &info.id.owner == owner) {
+                return Some(found);
+            }
+        }
+        let mut matching = matching;
+        let found = matching.next()?;
+        matching.next().is_none().then_some(found)
+    }
+
+    fn lower_field_default(
+        &mut self,
+        default: &Expr,
+        field_type: &Type,
+        defining_module: &str,
+    ) -> Operand {
+        let previous_module = self
+            .metadata_module_name
+            .replace(defining_module.to_string());
+        let previous_owner = self.metadata_owner.replace(ClosureOwner::TopLevel);
+        let value = self.lower_expr_for_owned_value(default, Some(field_type));
+        self.metadata_module_name = previous_module;
+        self.metadata_owner = previous_owner;
+        value
     }
 
     fn module_namespace(&self, path: &str) -> Option<&ModuleNamespace> {
@@ -1686,6 +1758,8 @@ impl<'a> Lowerer<'a> {
             info.return_type.clone(),
             self.type_param_bounds.clone(),
         );
+        lowerer.metadata_module_name = self.metadata_module_name.clone();
+        lowerer.metadata_owner = self.metadata_owner.clone();
         for capture in &info.captures {
             lowerer
                 .local_types
@@ -3203,24 +3277,42 @@ impl<'a> Lowerer<'a> {
     /// read index-addressable collections in lockstep through the same
     /// position-indexed member the ordinary loop uses, and stop as soon as any
     /// one of them runs out.
-    fn lower_lockstep_for(
+    fn lower_lockstep_for_with_body(
         &mut self,
         for_stmt: &crate::ast::ForStmt,
         enumerated: bool,
         iterables: &[&Expr],
+        checked_binding: Option<&ComprehensionClauseInfo>,
+        lower_body: &mut dyn FnMut(&mut Self),
     ) {
         let dispatch_block = self.new_block("for_lockstep");
         let body_block = self.new_block("for_body");
         let safepoint_block = self.new_block("for_safepoint");
         let after_block = self.new_block("for_end");
 
+        let checked_elements = checked_binding.and_then(|binding| match &binding.binding_type {
+            Type::Tuple(elements) => Some(elements.as_slice()),
+            _ => None,
+        });
+        if let Some(binding) = checked_binding {
+            debug_assert!(
+                !binding.receive_owned,
+                "enumerate/zip comprehension targets are shared or copy values"
+            );
+        }
         let sources = iterables
             .iter()
-            .map(|iterable| {
-                let element_ty = self
-                    .infer_expr_type(iterable)
-                    .as_ref()
-                    .and_then(crate::sema::lockstep_element_type)
+            .enumerate()
+            .map(|(index, iterable)| {
+                let checked_index = index + usize::from(enumerated);
+                let element_ty = checked_elements
+                    .and_then(|elements| elements.get(checked_index))
+                    .cloned()
+                    .or_else(|| {
+                        self.infer_expr_type(iterable)
+                            .as_ref()
+                            .and_then(crate::sema::lockstep_element_type)
+                    })
                     .unwrap_or_else(|| Type::named("Unknown"));
                 let object = self.lower_expr_at_sequence_point(iterable, None);
                 let receiver_place = self.render_place_expr_option(iterable);
@@ -3343,7 +3435,7 @@ impl<'a> Lowerer<'a> {
             &tuple_ty,
             false,
         );
-        self.lower_stmts(&for_stmt.body);
+        lower_body(self);
         if !self.current_terminated() {
             self.terminate(Terminator::Goto(self.label(safepoint_block)));
         }
@@ -3358,8 +3450,24 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_for(&mut self, for_stmt: &crate::ast::ForStmt) {
+        let mut lower_body = |lowerer: &mut Self| lowerer.lower_stmts(&for_stmt.body);
+        self.lower_for_with_body(for_stmt, None, &mut lower_body);
+    }
+
+    fn lower_for_with_body(
+        &mut self,
+        for_stmt: &crate::ast::ForStmt,
+        checked_binding: Option<&ComprehensionClauseInfo>,
+        lower_body: &mut dyn FnMut(&mut Self),
+    ) {
         if let Some((enumerated, iterables)) = self.lockstep_loop_iterables(&for_stmt.iterable) {
-            self.lower_lockstep_for(for_stmt, enumerated, &iterables);
+            self.lower_lockstep_for_with_body(
+                for_stmt,
+                enumerated,
+                &iterables,
+                checked_binding,
+                lower_body,
+            );
             return;
         }
         let mut tuple_target_source: Option<(String, Type, bool)> = None;
@@ -3380,15 +3488,17 @@ impl<'a> Lowerer<'a> {
         } else {
             self.lower_expr_at_sequence_point(&for_stmt.iterable, None)
         };
-        let target_ty = match iterable_ty.as_ref() {
-            Some(Type::Named(name, _)) if name == "Range" => Type::named("int32"),
-            Some(Type::Named(name, args))
-                if matches!(name.as_str(), "Queue" | "Vec" | "Set") && args.len() == 1 =>
-            {
-                args[0].clone()
-            }
-            _ => Type::named("int32"),
-        };
+        let target_ty = checked_binding
+            .map(|binding| binding.binding_type.clone())
+            .unwrap_or_else(|| match iterable_ty.as_ref() {
+                Some(Type::Named(name, _)) if name == "Range" => Type::named("int32"),
+                Some(Type::Named(name, args))
+                    if matches!(name.as_str(), "Queue" | "Vec" | "Set") && args.len() == 1 =>
+                {
+                    args[0].clone()
+                }
+                _ => Type::named("int32"),
+            });
         let target_scope = self.fresh_scoped_binding_target_slots(&for_stmt.target, &target_ty);
         let simple_binding = match &for_stmt.target {
             BindingTarget::Name { name, .. } => Some(
@@ -3423,7 +3533,13 @@ impl<'a> Lowerer<'a> {
                     Some(binding) => binding,
                     None => {
                         let binding = self.new_typed_temp(element_ty.clone());
-                        tuple_target_source = Some((binding.clone(), element_ty.clone(), true));
+                        tuple_target_source = Some((
+                            binding.clone(),
+                            element_ty.clone(),
+                            checked_binding
+                                .map(|binding| binding.receive_owned)
+                                .unwrap_or(true),
+                        ));
                         binding
                     }
                 };
@@ -3500,8 +3616,13 @@ impl<'a> Lowerer<'a> {
                     Some(binding) => binding,
                     None => {
                         let binding = self.new_typed_temp(element_ty.clone());
-                        tuple_target_source =
-                            Some((binding.clone(), element_ty.clone(), takes_owned));
+                        tuple_target_source = Some((
+                            binding.clone(),
+                            element_ty.clone(),
+                            checked_binding
+                                .map(|binding| binding.receive_owned)
+                                .unwrap_or(takes_owned),
+                        ));
                         binding
                     }
                 };
@@ -3600,7 +3721,7 @@ impl<'a> Lowerer<'a> {
                         cleanup_depth,
                     });
                     self.scoped_names.push(target_scope.clone());
-                    self.lower_stmts(&for_stmt.body);
+                    lower_body(self);
                     if !self.current_terminated() {
                         self.terminate(Terminator::Goto(self.label(continue_block)));
                     }
@@ -3676,8 +3797,13 @@ impl<'a> Lowerer<'a> {
                     Some(binding) => binding,
                     None => {
                         let binding = self.new_typed_temp(element_ty.clone());
-                        tuple_target_source =
-                            Some((binding.clone(), element_ty.clone(), takes_owned));
+                        tuple_target_source = Some((
+                            binding.clone(),
+                            element_ty.clone(),
+                            checked_binding
+                                .map(|binding| binding.receive_owned)
+                                .unwrap_or(takes_owned),
+                        ));
                         binding
                     }
                 };
@@ -3793,7 +3919,7 @@ impl<'a> Lowerer<'a> {
                 consume_non_copy,
             );
         }
-        self.lower_stmts(&for_stmt.body);
+        lower_body(self);
         if !self.current_terminated() {
             self.terminate(Terminator::Goto(self.label(safepoint_block)));
         }
@@ -3885,6 +4011,220 @@ impl<'a> Lowerer<'a> {
         self.switch_to(after_block);
     }
 
+    fn lower_comprehension(
+        &mut self,
+        expr: &Expr,
+        output: &ComprehensionOutput,
+        clauses: &[ComprehensionClause],
+    ) -> Operand {
+        let info = self
+            .comprehension_info_at(expr.span)
+            .cloned()
+            .expect("checked comprehension should retain owner-qualified type metadata");
+        let result_place = self.new_typed_temp(info.result_type.clone());
+        let result_literal = match (&info.result_type, output) {
+            (Type::Named(name, args), ComprehensionOutput::List(_))
+                if name == "Vec" && args.len() == 1 =>
+            {
+                Rvalue::VecLiteral {
+                    elements: Vec::new(),
+                    element_type: args[0].clone(),
+                }
+            }
+            (Type::Named(name, args), ComprehensionOutput::Set(_))
+                if name == "Set" && args.len() == 1 =>
+            {
+                Rvalue::SetLiteral {
+                    elements: Vec::new(),
+                    element_type: args[0].clone(),
+                }
+            }
+            (Type::Named(name, args), ComprehensionOutput::Map { .. })
+                if name == "Map" && args.len() == 2 =>
+            {
+                Rvalue::MapLiteral {
+                    entries: Vec::new(),
+                    key_type: args[0].clone(),
+                    value_type: args[1].clone(),
+                }
+            }
+            _ => panic!(
+                "comprehension output and checked result type disagree: {:?}",
+                info.result_type
+            ),
+        };
+        self.emit(Instruction::Assign {
+            target: result_place.clone(),
+            value: result_literal,
+        });
+        self.lower_comprehension_clause(output, clauses, 0, &result_place, &info);
+        Operand::Place(result_place)
+    }
+
+    fn lower_comprehension_clause(
+        &mut self,
+        output: &ComprehensionOutput,
+        clauses: &[ComprehensionClause],
+        clause_index: usize,
+        result_place: &str,
+        info: &ComprehensionInfo,
+    ) {
+        let clause = clauses
+            .get(clause_index)
+            .expect("checked comprehension should contain an iteration clause");
+        let for_stmt = crate::ast::ForStmt {
+            target: clause.target.clone(),
+            iterable: clause.iterable.clone(),
+            borrow_mode: None,
+            body: Vec::new(),
+            span: clause.span,
+        };
+        let mut lower_body = |lowerer: &mut Self| {
+            lowerer.lower_comprehension_filters(
+                output,
+                clauses,
+                clause_index,
+                0,
+                result_place,
+                info,
+            );
+        };
+        let checked_binding = info
+            .clauses
+            .get(clause_index)
+            .expect("checked comprehension should retain every clause binding type");
+        self.lower_for_with_body(&for_stmt, Some(checked_binding), &mut lower_body);
+    }
+
+    fn lower_comprehension_filters(
+        &mut self,
+        output: &ComprehensionOutput,
+        clauses: &[ComprehensionClause],
+        clause_index: usize,
+        filter_index: usize,
+        result_place: &str,
+        info: &ComprehensionInfo,
+    ) {
+        let clause = &clauses[clause_index];
+        if let Some(filter) = clause.filters.get(filter_index) {
+            let pass_block = self.new_block("comprehension_filter");
+            let continue_label = self
+                .loop_stack
+                .last()
+                .expect("comprehension filter should be inside its clause loop")
+                .continue_label
+                .clone();
+            let condition = self.lower_expr_with_expected(filter, Some(&Type::named("bool")));
+            self.terminate(Terminator::Branch {
+                condition,
+                then_label: self.label(pass_block),
+                else_label: continue_label,
+            });
+            self.switch_to(pass_block);
+            self.lower_comprehension_filters(
+                output,
+                clauses,
+                clause_index,
+                filter_index + 1,
+                result_place,
+                info,
+            );
+            return;
+        }
+        if clause_index + 1 < clauses.len() {
+            self.lower_comprehension_clause(output, clauses, clause_index + 1, result_place, info);
+            return;
+        }
+        self.lower_comprehension_output(output, result_place, &info.result_type);
+    }
+
+    fn lower_comprehension_output(
+        &mut self,
+        output: &ComprehensionOutput,
+        result_place: &str,
+        result_type: &Type,
+    ) {
+        match (output, result_type) {
+            (ComprehensionOutput::List(value), Type::Named(name, args))
+                if name == "Vec" && args.len() == 1 =>
+            {
+                let value = self.lower_expr_for_owned_value(value, Some(&args[0]));
+                self.emit_vec_push(
+                    Operand::Place(result_place.to_string()),
+                    result_place,
+                    value,
+                );
+            }
+            (ComprehensionOutput::Set(value), Type::Named(name, args))
+                if name == "Set" && args.len() == 1 =>
+            {
+                let value = self.lower_expr_for_owned_value(value, Some(&args[0]));
+                let ignored = self.new_typed_temp(Type::named("bool"));
+                self.emit(Instruction::Assign {
+                    target: ignored,
+                    value: Rvalue::Call {
+                        callee: CallTarget::Member {
+                            object: Operand::Place(result_place.to_string()),
+                            field: "insert".to_string(),
+                            receiver_place: Some(result_place.to_string()),
+                        },
+                        args: vec![MirArg {
+                            name: None,
+                            value,
+                            writeback_place: None,
+                        }],
+                    },
+                });
+            }
+            (
+                ComprehensionOutput::Map {
+                    key: key_expr,
+                    value,
+                },
+                Type::Named(name, args),
+            ) if name == "Map" && args.len() == 2 => {
+                // Map output preserves source order: evaluate the key fully
+                // before beginning the value, then replace any prior entry.
+                let key = self.lower_expr_for_owned_value(key_expr, Some(&args[0]));
+                let value = self.lower_expr_for_owned_value(value, Some(&args[1]));
+                let ignored = self.new_typed_temp(Type::Unit);
+                self.emit(Instruction::Assign {
+                    target: ignored,
+                    value: Rvalue::Call {
+                        callee: CallTarget::Member {
+                            object: Operand::Place(result_place.to_string()),
+                            field: INTERNAL_MAP_SET_INDEX_FIELD.to_string(),
+                            receiver_place: Some(result_place.to_string()),
+                        },
+                        args: vec![
+                            MirArg {
+                                name: None,
+                                value: key,
+                                writeback_place: None,
+                            },
+                            MirArg {
+                                name: None,
+                                value,
+                                writeback_place: None,
+                            },
+                            MirArg {
+                                name: None,
+                                value: Operand::Int(key_expr.span.line as u128),
+                                writeback_place: None,
+                            },
+                            MirArg {
+                                name: None,
+                                value: Operand::Int(key_expr.span.column as u128),
+                                writeback_place: None,
+                            },
+                        ],
+                    },
+                });
+            }
+            _ => unreachable!("checked comprehension result shape should match its output"),
+        }
+    }
+
     fn lower_expr(&mut self, expr: &Expr) -> Operand {
         if let Some(function) = self.lower_function_value(expr) {
             return function;
@@ -3965,6 +4305,9 @@ impl<'a> Lowerer<'a> {
                     },
                 });
                 Operand::Place(temp)
+            }
+            ExprKind::Comprehension { output, clauses } => {
+                self.lower_comprehension(expr, output, clauses)
             }
             ExprKind::FString(parts) => {
                 let temp = self.new_typed_temp(Type::named("String"));
@@ -6433,8 +6776,11 @@ impl<'a> Lowerer<'a> {
                                         .ty,
                                     &substitutions,
                                 );
-                                let value =
-                                    self.lower_expr_for_owned_value(default, Some(&field_type));
+                                let value = self.lower_field_default(
+                                    default,
+                                    &field_type,
+                                    &class.module_name,
+                                );
                                 self.retarget_operand_place(&value, &field_type);
                                 MirFieldInit {
                                     name: field.name.clone(),
@@ -6845,9 +7191,10 @@ impl<'a> Lowerer<'a> {
                                                     .ty,
                                                 &substitutions,
                                             );
-                                            let value = self.lower_expr_for_owned_value(
+                                            let value = self.lower_field_default(
                                                 default,
-                                                Some(&field_type),
+                                                &field_type,
+                                                &class.module_name,
                                             );
                                             self.retarget_operand_place(&value, &field_type);
                                             MirFieldInit {
@@ -7803,6 +8150,9 @@ impl<'a> Lowerer<'a> {
                         .unwrap_or_else(|| Type::named("Unknown")),
                 ],
             )),
+            ExprKind::Comprehension { .. } => self
+                .comprehension_info_at(expr.span)
+                .map(|info| info.result_type.clone()),
             ExprKind::FString(_) => Some(Type::named("String")),
             ExprKind::Specialize { expr, type_args } => {
                 if let Some((_runtime_name, function)) = self.resolve_function_value_target(expr) {

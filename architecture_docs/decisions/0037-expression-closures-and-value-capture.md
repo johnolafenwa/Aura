@@ -137,6 +137,8 @@ closure escape hatch.
 The phase deliberately does not provide mutable environments, reference
 capture, in-loan capture, capture lists, closure trait objects, callbacks
 across FFI, async closure syntax, comprehensions, or statement bodies.
+Phase 7 later adds eager comprehensions under ADR-0039. Lambdas evaluated
+inside them retain this ADR's capture and storage rules unchanged.
 
 ## Completion tests
 

@@ -71,6 +71,15 @@ pointers, variadics, returned views, nullable handles, and explicit library
 loading remain unavailable. This is an unsafe native boundary, not a memory
 safety promise for a false declaration or misbehaving C implementation.
 
+Phase 7.1 adds eager owned list, set, and map comprehensions under Accepted
+ADR-0039. Clauses inherit statement bare-loop iteration, including shared
+Vec/Set traversal, Range copy values, compiler-known `enumerate`/`zip`, and
+Queue's receive-owned item carve-out. Nested clauses are outer-major, filters
+run left to right, map keys run before values, and target names never leak.
+Result insertion follows ordinary Copy, move, explicit-clone, and ADR-0037
+capture rules. Generator expressions remain unavailable and
+receive an `AU2005` migration to an eager comprehension or explicit loop.
+
 See [Language Specification](/manual/language-specification) and [Conformance](/manual/conformance).
 
 ## Stability Policy

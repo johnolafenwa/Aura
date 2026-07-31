@@ -265,6 +265,10 @@ The current compiler supports these expression forms:
 - list literals such as `[1, 2, 3]`
 - map literals such as `{"aurora": 1}`
 - set literals such as `{1, 2, 3}`
+- eager owned list, set, and map comprehensions such as
+  `[value * 2 for value in values if value > 0]`; nested clauses are
+  outer-major, targets do not leak, and every clause uses the bare-loop
+  contract (including Queue's receive-owned item carve-out)
 - member access with `.`
 - indexing with `expr[index]`
 - function and method calls
@@ -295,6 +299,11 @@ The current compiler supports these expression forms:
     tuples require one comma
   - backslashes and physical newlines inside ordinary/f-strings do not
     continue source
+
+Parenthesized generator expressions are not implemented. They report `AU2005`
+with guidance to use an eager owned list comprehension or an explicit loop.
+Comprehension clauses do not accept `mut` or `own`; use a statement loop for
+mutable or consuming source traversal.
 
 Indexed expressions remain ordinary values after parsing. Copy-typed element reads like `values[idx]` still work directly, while clone-safe non-copy vector elements such as `String` use `get(index)` for an explicit cloned read, and elements carrying `random.Rng` state must use `remove(index)` because they cannot be cloned at all. Negative Vec indexes normalize as `len + index` for direct access and every maintained Vec index method. Map indexing and interpolations such as `f"{counts['key']}"` remain supported when the Map value type is copy; clone-safe non-copy values use `get(key)` for an explicit cloned optional read, while `remove(key)` transfers any stored value. Integer indexing and slicing are not supported on `String`.
 

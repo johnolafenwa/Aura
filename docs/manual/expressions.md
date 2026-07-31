@@ -11,6 +11,7 @@ Primary expressions are the atoms from which postfix, prefix, and binary express
 - `None`
 - a parenthesized expression or tuple
 - a list, set, or map literal
+- a list, set, or map comprehension
 
 ```python
 count
@@ -88,6 +89,9 @@ Except for short-circuit boolean operators and control-flow expressions, evaluat
   copy or move results captured before later argument side effects
 - collection elements are evaluated in source order
 - each map key is evaluated before its value, and entries are evaluated in source order
+- a comprehension evaluates its clauses and filters before its textually
+  leading output expression; nested clauses are outer-major, filters are
+  left-to-right, and a map output key precedes its value
 - f-string interpolations are evaluated from left to right
 - a conditional expression evaluates its condition first and then exactly one arm
 - a match scrutinee is evaluated once, before arm selection
@@ -515,6 +519,59 @@ in source order. Maps evaluate each key before its value and entries in source
 order. If two evaluated map keys are equal, the later value replaces the
 earlier value while the key retains its first insertion position.
 
+## Comprehensions
+
+A comprehension is an eager collection expression:
+
+    doubled = [value * 2 for value in values]
+    visible = {value for value in values if value >= 0}
+    by_id = {item.id: item for item in items}
+
+One or more `for` clauses are required. A clause may have multiple `if`
+filters and may be followed by another clause:
+
+    coordinates = [
+        (row, column)
+        for row in rows if row >= 0
+        for column in columns if column >= 0
+    ]
+
+The syntax places the output expression first, but runtime order starts at the
+first iterable. Its target is bound, its filters run left to right, and then
+the next iterable is selected. At the innermost surviving combination the
+output runs. Nested traversal is outer-major: every surviving inner item for
+one outer target is produced before the next outer item. Map output evaluates
+and captures the key before evaluating the value.
+
+Each clause uses ordinary bare-loop iteration. Vec and Set inputs are shared
+and frozen, Range yields copy values, `enumerate(...)` and `zip(...)` retain
+their loop contracts, and Queue retains its special receive semantics in which
+the handle is copied and each target arrives owned. A comprehension does not
+accept `mut` or `own` before its source.
+
+The result is a newly owned `Vec[T]`, `Set[T]`, or `Map[K, V]`, never a view or
+lazy iterator. Result insertion owns non-Copy values. A shared non-Copy source
+element must be explicitly cloned when clone-safe; Queue-received owned values
+may move directly. Targets are progressively scoped over their filters, later
+clauses, and the output, then disappear when the expression ends.
+
+Lambdas reached inside a comprehension use the ordinary ADR-0037 capture
+contract. For example, a compiler-known callback can capture a Copy value
+while it is called from an element expression:
+
+    shifted_rows = [
+        row.map(lambda value: value + offset)
+        for row in rows
+    ]
+
+The lambda is created only for a reached element. Shared non-Copy capability
+capture remains rejected, and a capturing closure cannot itself become a
+stored comprehension element. See [Closures](/manual/closures).
+
+Generator expressions remain unavailable. `(value for value in values)` and
+`consume(value for value in values)` report `AU2005` and direct the author to
+an eager owned list comprehension or an explicit loop.
+
 ## F-Strings
 
 An f-string produces an owned `String` and evaluates interpolations from left
@@ -618,8 +675,8 @@ unavailable.
 
 ## Forms Not Implemented
 
-Aurora 0.1 expressions do not include comprehensions, method values,
-assignment expressions, call-site borrow annotations, non-numeric casts, or
+Aurora 0.2 expressions do not include generator expressions, method values,
+assignment expressions, call-site capability annotations, non-numeric casts, or
 ordinary trailing commas. Lambdas are expression-bodied and contextually
 typed; they do not add statement-bodied or implicitly reference-capturing
 forms. The required singleton-tuple comma is the one tuple-specific exception.
@@ -629,8 +686,8 @@ implemented expression language.
 ## Grammar
 
 Primary, postfix, unary, multiplicative, additive, comparison, Boolean,
-conditional, `match`, `try`, lambda, collection, constructor, and f-string
-expression
+conditional, `match`, `try`, lambda, collection literal/comprehension,
+constructor, and f-string expression
 productions are normative in [Grammar](/manual/grammar). The comparison
 production covers equality, ordering, and membership at one level and admits a
 chain of two or more operators. The precedence and
@@ -647,6 +704,11 @@ literal, including an exactly representable integer literal in a floating
 context, but never converts a bound variable. Branching expressions require a
 single result type on every arm.
 
+List and set comprehension output expressions determine `T`; map key and value
+expressions determine `K` and `V`. An expected result specialization provides
+context before inference. Filters require exact `bool`, and every source uses
+the static iterable rules of a bare statement loop.
+
 ## Runtime Semantics
 
 Operands and call arguments evaluate left to right, with each copy or move
@@ -662,6 +724,12 @@ evaluates once; and each f-string interpolation renders immediately before the
 next begins.
 `try` either yields an `Ok` payload or returns the `Err` from the enclosing
 function after required cleanup.
+
+A comprehension allocates one result, evaluates every reached source once for
+its current outer combination, applies filters left to right, and then
+evaluates its output. Nested clauses are outer-major. Map key evaluation
+precedes value evaluation. A trap or `try` propagation drops the partial
+result.
 
 ## Ownership And Evaluation Order
 
@@ -680,13 +748,21 @@ indexed-assignment targets retain their non-copy borrow through later inputs.
 An overlapping mutable borrow or consumption is rejected with `AU3002`, and
 no hidden clone repairs the invalid expression.
 
+Comprehension targets use progressive child scopes and do not leak. Active
+shared sources stay borrowed and frozen through downstream filters, clauses,
+and output evaluation. Insertion into the result is owned, so copy, move,
+explicit-clone, loop-carried-move, and ADR-0037 capture checks apply exactly as
+they do in the equivalent nested bare loops.
+
 ## Diagnostics
 
-`AU1101` means invalid expression syntax. `AU2001` means an unresolved name or
+`AU1101` means invalid expression syntax, including malformed comprehension
+clauses and forbidden comprehension `mut`/`own` modifiers. `AU2001` means an unresolved name or
 member. `AU2002` means a type, constructor-payload, match-result, or index-type
 mismatch. `AU2003` means an unsupported unary, binary, compound, membership, or
-cast operator. `AU2004` means call or constructor argument binding failed. `AU2005`
-means focused migration guidance for a Python-shaped expression. `AU2999`
+cast operator. `AU2004` means call or constructor argument binding failed.
+`AU2005` means focused migration guidance for a Python-shaped expression,
+including the exact generator-expression guidance recorded above. `AU2999`
 means an expression rejection without a narrower compile-time code. `AU3001`
 means use of a moved value; `AU3002` means a borrow conflict, including a later
 mutable borrow or consumption overlapping a retained non-copy binary operand,
@@ -714,6 +790,9 @@ continue only while a source delimiter remains open; backslashes and
 multiline string/f-string literals do not continue them. Ordinary trailing
 commas are unavailable; `(value,)` is the required singleton tuple spelling.
 Collection and string resource caps are documented by their feature pages.
+Comprehensions are eager, have no `mut`/`own` source form, and do not provide
+early exit, lazy resumption, or a user-defined iterable protocol; use an
+explicit loop when those properties are required.
 Floating values follow the specified Aurora operations and shortest-round-trip
 printing; no backend may substitute a different expression result as an
 implementation-defined choice.
@@ -727,5 +806,6 @@ membership operators plus comparison chains are accepted under ADR-0028. The
 minimal tuple surface and its Batch 3 B3.0-c equality amendment are Accepted
 under ADR-0026. Capture-free named function values, indirect calls, and
 contextually typed by-value expression closures are implemented. Method
-values, comprehensions, assignment expressions, nonnumeric casts, and
-call-site ownership modifiers are unavailable.
+values, generator expressions, assignment expressions, nonnumeric casts, and
+call-site capability modifiers are unavailable. Eager owned list, set, and map
+comprehensions are implemented under Accepted ADR-0039.

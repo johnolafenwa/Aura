@@ -314,8 +314,20 @@ that message come from the rejected declaration.
 
 `AU2005` identifies focused migration guidance where Python-looking source has
 an Aurora spelling or an explicitly later language surface. Maintained hints
-cover `True`/`False`, `.append(...)`, `is` and `is None`, `try`/`except`, and
-comprehensions. Related diagnostics
+cover `True`/`False`, `.append(...)`, `is` and `is None`, and `try`/`except`.
+The former comprehension hint is retired because eager list, set, and map
+comprehensions are implemented. A generator expression, whether parenthesized
+or used as a call argument, instead receives this exact `AU2005`:
+
+    generator expressions are unavailable; use an eager owned list comprehension or an explicit loop
+
+`mut` or `own` in a comprehension clause is malformed syntax and receives
+`AU1101` with the exact teaching message:
+
+    comprehensions use bare iteration; remove `mut` or `own` and write `for name in values`
+
+The bare form preserves the iterable's ordinary contract, including owned
+receive items for Queue. Related diagnostics
 cover missing `mut`, consuming calls, integer `/`, typed `self: Type`, tab
 indentation, and single-quoted f-strings.
 

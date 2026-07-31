@@ -342,9 +342,9 @@
       "stderr": ""
     },
     "docs/manual/collections.md#aurora-11": {
-      "sha256": "973610701f25a9b029a4e28cda0761597ef8b2552e077cf8ed004fe4ae224f42",
+      "sha256": "950ac4be7a7ca029863ab3afc1118c97e2dac5e60fd90d1a7fe81ee23342bc3d",
       "mode": "run",
-      "stdout": "[6, 2, 4, 8]\n[2, 4]\n[1, 2, 3, 4]\n[4, 3, 2, 1]\n[3, 1, 2, 4]\n",
+      "stdout": "[6, 2, 4, 8]\n[2, 4]\n[1, 2, 3, 4]\n[4, 3, 2, 1]\n[3, 1, 2, 4]\n[9, 1, 4, 16]\n[4, 16]\n{3: 30, 4: 40}\n[11, 12, 21, 22]\n",
       "stderr": ""
     },
     "docs/manual/collections.md#aurora-2": {
@@ -972,9 +972,9 @@
       "reason": "Normative EBNF expression grammar, not an executable Aurora program."
     },
     "docs/manual/grammar.md#ebnf-14": {
-      "sha256": "4f5a7b665a261413f7984e1525a2484f05310f45aec639af0f4b071aaaf15895",
+      "sha256": "0ad0aa021a2f79f1e38fc1fc963a4d3c291e1ee600c7ac54e04295b440b80940",
       "mode": "illustrative",
-      "reason": "Normative primary-and-collection-literal EBNF fragment interpreted by the grammar prose, not Aurora source."
+      "reason": "Normative primary, collection-literal, and comprehension EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#ebnf-15": {
       "sha256": "4a947603dadc36bd655ee3be9144749e051597a9f7dd5642d896feba00bcbb98",

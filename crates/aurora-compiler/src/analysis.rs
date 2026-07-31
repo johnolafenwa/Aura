@@ -4,9 +4,9 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::ast::{
-    AssignStmt, AssignTarget, BinaryOp, Expr, ExprKind, FunctionDecl, ImportKind, Item,
-    LambdaParam, MatchArm, Module, Param, ParamMode, Pattern, ReceiverKind, Stmt, TypeRef,
-    VariantPattern,
+    AssignStmt, AssignTarget, BinaryOp, ComprehensionOutput, Expr, ExprKind, FunctionDecl,
+    ImportKind, Item, LambdaParam, MatchArm, Module, Param, ParamMode, Pattern, ReceiverKind, Stmt,
+    TypeRef, VariantPattern,
 };
 use crate::call::{
     BuiltinAssociatedFunction, BuiltinClassConstructor, BuiltinFunction, BuiltinMember,
@@ -16,8 +16,8 @@ use crate::diag::{Diagnostic, Result, RuntimeSourceSpan, Span};
 use crate::parser;
 use crate::sema::{
     builtin_duration_binary_result, resolve_param_passing, substitute_trait_bound, ClassInfo,
-    ClosureInfo, EnumInfo, ExternFunctionInfo, FunctionInfo, FunctionParamContract, MethodInfo,
-    OpaqueHandleInfo, Program, TraitBound, Type,
+    ClosureInfo, ComprehensionInfo, EnumInfo, ExternFunctionInfo, FunctionInfo,
+    FunctionParamContract, MethodInfo, OpaqueHandleInfo, Program, TraitBound, Type,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -461,6 +461,14 @@ impl<'a> AnalysisBuilder<'a> {
         })
     }
 
+    fn comprehension_info(&self, expr: &Expr) -> Option<&ComprehensionInfo> {
+        self.program.comprehensions.values().find(|info| {
+            info.id.line == expr.span.line
+                && info.id.column == expr.span.column
+                && info.id.module_name == self.program.module_name
+        })
+    }
+
     fn extend_lambda_scope_from_stmts(
         &self,
         stmts: &[Stmt],
@@ -694,6 +702,16 @@ impl<'a> AnalysisBuilder<'a> {
                 self.extend_lambda_scope_from_expr(condition, target_line, character, scope);
                 self.extend_lambda_scope_from_expr(else_expr, target_line, character, scope);
             }
+            ExprKind::Comprehension { output, clauses } => {
+                self.extend_comprehension_scope_for_position(
+                    expr,
+                    output,
+                    clauses,
+                    target_line,
+                    character,
+                    scope,
+                );
+            }
             ExprKind::Tuple(elements) | ExprKind::List(elements) | ExprKind::Set(elements) => {
                 for element in elements {
                     self.extend_lambda_scope_from_expr(element, target_line, character, scope);
@@ -724,6 +742,164 @@ impl<'a> AnalysisBuilder<'a> {
             | ExprKind::Float(_)
             | ExprKind::Bool(_)
             | ExprKind::String(_) => {}
+        }
+    }
+
+    fn extend_comprehension_scope_for_position(
+        &self,
+        expr: &Expr,
+        output: &ComprehensionOutput,
+        clauses: &[crate::ast::ComprehensionClause],
+        target_line: usize,
+        character: usize,
+        scope: &mut BTreeMap<String, BindingInfo>,
+    ) {
+        let Some(first_clause) = clauses.first() else {
+            return;
+        };
+        let expression_start = expression_start_span(expr);
+        if position_is_before_span(target_line, character, expression_start)
+            || target_line > expression_end_line(expr)
+        {
+            return;
+        }
+        let mut comprehension_scope = scope.clone();
+        let checked_clause_types = self
+            .comprehension_info(expr)
+            .map(|info| {
+                info.clauses
+                    .iter()
+                    .map(|clause| clause.binding_type.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        // The output is written first but executes after every clause. A
+        // cursor before the first `for` therefore sees all comprehension
+        // targets, in execution order.
+        if position_is_before_span(target_line, character, first_clause.span) {
+            for (clause_index, clause) in clauses.iter().enumerate() {
+                let binding_ty = checked_clause_types
+                    .get(clause_index)
+                    .cloned()
+                    .or_else(|| {
+                        self.infer_iterable_binding_type(&clause.iterable, &comprehension_scope)
+                    })
+                    .unwrap_or(Type::Unit);
+                self.insert_scope_target_exact(
+                    &clause.target,
+                    &binding_ty,
+                    "local",
+                    &mut comprehension_scope,
+                );
+            }
+            self.extend_lambda_scope_from_comprehension_output(
+                output,
+                target_line,
+                character,
+                &mut comprehension_scope,
+            );
+            *scope = comprehension_scope;
+            return;
+        }
+
+        for (clause_index, clause) in clauses.iter().enumerate() {
+            if position_is_before_span(
+                target_line,
+                character,
+                expression_start_span(&clause.iterable),
+            ) {
+                *scope = comprehension_scope;
+                return;
+            }
+
+            let next_clause_span = clauses.get(clause_index + 1).map(|next| next.span);
+            let iterable_boundary = clause
+                .filters
+                .first()
+                .map(expression_start_span)
+                .or(next_clause_span);
+            if iterable_boundary
+                .is_some_and(|boundary| position_is_before_span(target_line, character, boundary))
+            {
+                self.extend_lambda_scope_from_expr(
+                    &clause.iterable,
+                    target_line,
+                    character,
+                    &mut comprehension_scope,
+                );
+                *scope = comprehension_scope;
+                return;
+            }
+            if iterable_boundary.is_none() && target_line <= expression_end_line(&clause.iterable) {
+                self.extend_lambda_scope_from_expr(
+                    &clause.iterable,
+                    target_line,
+                    character,
+                    &mut comprehension_scope,
+                );
+                *scope = comprehension_scope;
+                return;
+            }
+
+            let binding_ty = checked_clause_types
+                .get(clause_index)
+                .cloned()
+                .or_else(|| {
+                    self.infer_iterable_binding_type(&clause.iterable, &comprehension_scope)
+                })
+                .unwrap_or(Type::Unit);
+            self.insert_scope_target_exact(
+                &clause.target,
+                &binding_ty,
+                "local",
+                &mut comprehension_scope,
+            );
+
+            for (filter_index, filter) in clause.filters.iter().enumerate() {
+                if position_is_before_span(target_line, character, expression_start_span(filter)) {
+                    *scope = comprehension_scope;
+                    return;
+                }
+                let filter_boundary = clause
+                    .filters
+                    .get(filter_index + 1)
+                    .map(expression_start_span)
+                    .or(next_clause_span);
+                if filter_boundary.is_some_and(|boundary| {
+                    position_is_before_span(target_line, character, boundary)
+                }) || (filter_boundary.is_none() && target_line <= expression_end_line(filter))
+                {
+                    self.extend_lambda_scope_from_expr(
+                        filter,
+                        target_line,
+                        character,
+                        &mut comprehension_scope,
+                    );
+                    *scope = comprehension_scope;
+                    return;
+                }
+            }
+        }
+
+        *scope = comprehension_scope;
+    }
+
+    fn extend_lambda_scope_from_comprehension_output(
+        &self,
+        output: &ComprehensionOutput,
+        target_line: usize,
+        character: usize,
+        scope: &mut BTreeMap<String, BindingInfo>,
+    ) {
+        match output {
+            ComprehensionOutput::List(value) | ComprehensionOutput::Set(value) => {
+                self.extend_lambda_scope_from_expr(value, target_line, character, scope);
+            }
+            ComprehensionOutput::Map { key, value } => {
+                self.extend_lambda_scope_from_expr(key, target_line, character, scope);
+                self.extend_lambda_scope_from_expr(value, target_line, character, scope);
+            }
         }
     }
 
@@ -1819,6 +1995,38 @@ impl<'a> AnalysisBuilder<'a> {
         }
     }
 
+    fn bind_target_value_exact(
+        &mut self,
+        target: &crate::ast::BindingTarget,
+        ty: &Type,
+        kind: &str,
+        scope: &mut BTreeMap<String, BindingInfo>,
+    ) {
+        match (target, ty) {
+            (crate::ast::BindingTarget::Name { name, span }, ty) => {
+                let definition =
+                    range_from_span_with_path(*span, name.len(), self.current_source_path());
+                let hover = format_value_hover(kind, name, ty);
+                scope.insert(
+                    name.clone(),
+                    BindingInfo {
+                        ty: ty.clone(),
+                        trait_bounds: Vec::new(),
+                        definition: definition.clone(),
+                        hover: hover.clone(),
+                    },
+                );
+                self.push_occurrence(definition.clone(), hover, Some(definition));
+            }
+            (crate::ast::BindingTarget::Tuple { elements, .. }, Type::Tuple(element_types)) => {
+                for (element, element_ty) in elements.iter().zip(element_types) {
+                    self.bind_target_value_exact(element, element_ty, kind, scope);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn visit_expr(&mut self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) {
         match &expr.kind {
             ExprKind::Membership {
@@ -1879,6 +2087,38 @@ impl<'a> AnalysisBuilder<'a> {
                 self.visit_expr(condition, scope);
                 self.visit_expr(else_expr, scope);
             }
+            ExprKind::Comprehension { output, clauses } => {
+                let mut comprehension_scope = scope.clone();
+                let checked_clause_types = self
+                    .comprehension_info(expr)
+                    .map(|info| {
+                        info.clauses
+                            .iter()
+                            .map(|clause| clause.binding_type.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                for (clause_index, clause) in clauses.iter().enumerate() {
+                    self.visit_expr(&clause.iterable, &comprehension_scope);
+                    let binding_ty = checked_clause_types
+                        .get(clause_index)
+                        .cloned()
+                        .or_else(|| {
+                            self.infer_iterable_binding_type(&clause.iterable, &comprehension_scope)
+                        })
+                        .unwrap_or(Type::Unit);
+                    self.bind_target_value_exact(
+                        &clause.target,
+                        &binding_ty,
+                        "local",
+                        &mut comprehension_scope,
+                    );
+                    for filter in &clause.filters {
+                        self.visit_expr(filter, &comprehension_scope);
+                    }
+                }
+                self.visit_comprehension_output(output, &comprehension_scope);
+            }
             ExprKind::Lambda { params, body } => {
                 let mut lambda_scope = scope.clone();
                 if let Some(contracts) = self.closure_info(expr).map(|info| info.params.clone()) {
@@ -1932,6 +2172,22 @@ impl<'a> AnalysisBuilder<'a> {
             | ExprKind::Float(_)
             | ExprKind::Bool(_)
             | ExprKind::String(_) => {}
+        }
+    }
+
+    fn visit_comprehension_output(
+        &mut self,
+        output: &ComprehensionOutput,
+        scope: &BTreeMap<String, BindingInfo>,
+    ) {
+        match output {
+            ComprehensionOutput::List(value) | ComprehensionOutput::Set(value) => {
+                self.visit_expr(value, scope);
+            }
+            ComprehensionOutput::Map { key, value } => {
+                self.visit_expr(key, scope);
+                self.visit_expr(value, scope);
+            }
         }
     }
 
@@ -3075,6 +3331,46 @@ impl<'a> AnalysisBuilder<'a> {
                         .unwrap_or(Type::named("Unknown")),
                 ],
             )),
+            ExprKind::Comprehension { output, clauses } => {
+                if let Some(info) = self.comprehension_info(expr) {
+                    return Some(info.result_type.clone());
+                }
+                let mut comprehension_scope = scope.clone();
+                for clause in clauses {
+                    let binding_ty = self
+                        .infer_iterable_binding_type(&clause.iterable, &comprehension_scope)
+                        .unwrap_or(Type::Unit);
+                    self.insert_scope_target_exact(
+                        &clause.target,
+                        &binding_ty,
+                        "local",
+                        &mut comprehension_scope,
+                    );
+                }
+                match output {
+                    ComprehensionOutput::List(value) => Some(Type::Named(
+                        "Vec".to_string(),
+                        vec![self
+                            .infer_expr_type(value, &comprehension_scope)
+                            .unwrap_or(Type::named("Unknown"))],
+                    )),
+                    ComprehensionOutput::Set(value) => Some(Type::Named(
+                        "Set".to_string(),
+                        vec![self
+                            .infer_expr_type(value, &comprehension_scope)
+                            .unwrap_or(Type::named("Unknown"))],
+                    )),
+                    ComprehensionOutput::Map { key, value } => Some(Type::Named(
+                        "Map".to_string(),
+                        vec![
+                            self.infer_expr_type(key, &comprehension_scope)
+                                .unwrap_or(Type::named("Unknown")),
+                            self.infer_expr_type(value, &comprehension_scope)
+                                .unwrap_or(Type::named("Unknown")),
+                        ],
+                    )),
+                }
+            }
             ExprKind::FString(_) => Some(Type::named("String")),
             ExprKind::Specialize { expr, type_args } => match &expr.kind {
                 ExprKind::Name(name)
@@ -3549,11 +3845,41 @@ impl<'a> AnalysisBuilder<'a> {
             return Some(Type::named("int32"));
         }
 
+        if let ExprKind::Call { callee, args } = &iterable.kind {
+            if let ExprKind::Name(name) = &callee.kind {
+                let builtin_loop_form = !self.program.functions.contains_key(name)
+                    && !self.program.classes.contains_key(name)
+                    && !self.program.enums.contains_key(name);
+                if builtin_loop_form && name == "enumerate" && args.len() == 1 {
+                    let element_ty = self.infer_lockstep_element_type(&args[0].value, scope)?;
+                    return Some(Type::Tuple(vec![Type::named("int64"), element_ty]));
+                }
+                if builtin_loop_form && name == "zip" && args.len() == 2 {
+                    return Some(Type::Tuple(
+                        args.iter()
+                            .map(|arg| self.infer_lockstep_element_type(&arg.value, scope))
+                            .collect::<Option<Vec<_>>>()?,
+                    ));
+                }
+            }
+        }
+
         let iterable_ty = self.infer_expr_type(iterable, scope)?;
         match base_type_name(&iterable_ty) {
             "Queue" | "Vec" | "Set" => iterable_ty.type_arguments().first().cloned(),
             _ => None,
         }
+    }
+
+    fn infer_lockstep_element_type(
+        &self,
+        iterable: &Expr,
+        scope: &BTreeMap<String, BindingInfo>,
+    ) -> Option<Type> {
+        let iterable_ty = self.infer_expr_type(iterable, scope)?;
+        matches!(base_type_name(&iterable_ty), "Vec" | "Set")
+            .then(|| iterable_ty.type_arguments().first().cloned())
+            .flatten()
     }
 
     #[cfg(test)]
@@ -3674,6 +4000,36 @@ impl<'a> AnalysisBuilder<'a> {
             (crate::ast::BindingTarget::Tuple { elements, .. }, Type::Tuple(element_types)) => {
                 for (element, element_ty) in elements.iter().zip(element_types) {
                     self.insert_scope_target(element, element_ty, line, kind, scope);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn insert_scope_target_exact(
+        &self,
+        target: &crate::ast::BindingTarget,
+        ty: &Type,
+        kind: &str,
+        scope: &mut BTreeMap<String, BindingInfo>,
+    ) {
+        match (target, ty) {
+            (crate::ast::BindingTarget::Name { name, span }, ty) => {
+                let definition =
+                    range_from_span_with_path(*span, name.len(), self.current_source_path());
+                scope.insert(
+                    name.clone(),
+                    BindingInfo {
+                        ty: ty.clone(),
+                        trait_bounds: Vec::new(),
+                        definition,
+                        hover: format_value_hover(kind, name, ty),
+                    },
+                );
+            }
+            (crate::ast::BindingTarget::Tuple { elements, .. }, Type::Tuple(element_types)) => {
+                for (element, element_ty) in elements.iter().zip(element_types) {
+                    self.insert_scope_target_exact(element, element_ty, kind, scope);
                 }
             }
             _ => {}
@@ -4067,10 +4423,43 @@ fn base_type_name(ty: &Type) -> &str {
     }
 }
 
+fn expression_start_span(expr: &Expr) -> Span {
+    let leftmost_child = match &expr.kind {
+        ExprKind::Membership { value, .. } => Some(value.as_ref()),
+        ExprKind::CompareChain { first, .. } => Some(first.as_ref()),
+        ExprKind::Member { object, .. }
+        | ExprKind::Specialize { expr: object, .. }
+        | ExprKind::Cast { expr: object, .. }
+        | ExprKind::Try(object)
+        | ExprKind::Group(object)
+        | ExprKind::Unary { expr: object, .. } => Some(object.as_ref()),
+        ExprKind::Call { callee, .. } => Some(callee.as_ref()),
+        ExprKind::Binary { left, .. } => Some(left.as_ref()),
+        ExprKind::Conditional { then_expr, .. } => Some(then_expr.as_ref()),
+        ExprKind::Index { object, .. } => Some(object.as_ref()),
+        _ => None,
+    };
+    leftmost_child
+        .map(|child| span_min(expr.span, expression_start_span(child)))
+        .unwrap_or(expr.span)
+}
+
+fn span_min(left: Span, right: Span) -> Span {
+    if (right.line, right.column) < (left.line, left.column) {
+        right
+    } else {
+        left
+    }
+}
+
 fn expression_contains_position(expr: &Expr, line: usize, character: usize) -> bool {
     let starts_before_position =
         expr.span.line < line || (expr.span.line == line && expr.span.column <= character + 1);
     starts_before_position && line <= expression_end_line(expr)
+}
+
+fn position_is_before_span(line: usize, character: usize, span: Span) -> bool {
+    line < span.line || (line == span.line && character + 1 < span.column)
 }
 
 fn expression_end_line(expr: &Expr) -> usize {
@@ -4118,6 +4507,23 @@ fn expression_end_line(expr: &Expr) -> usize {
             .iter()
             .map(|entry| expression_end_line(&entry.key).max(expression_end_line(&entry.value)))
             .fold(expr.span.line, usize::max),
+        ExprKind::Comprehension { output, clauses } => {
+            let output_end = match output {
+                ComprehensionOutput::List(value) | ComprehensionOutput::Set(value) => {
+                    expression_end_line(value)
+                }
+                ComprehensionOutput::Map { key, value } => {
+                    expression_end_line(key).max(expression_end_line(value))
+                }
+            };
+            clauses.iter().fold(output_end, |end, clause| {
+                clause
+                    .filters
+                    .iter()
+                    .map(expression_end_line)
+                    .fold(end.max(expression_end_line(&clause.iterable)), usize::max)
+            })
+        }
         ExprKind::Index { object, index } => {
             expression_end_line(object).max(expression_end_line(index))
         }

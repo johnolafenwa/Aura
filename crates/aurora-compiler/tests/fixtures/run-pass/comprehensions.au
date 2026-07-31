@@ -1,0 +1,55 @@
+def key(value: int64) -> int64:
+    print(f"key {value}")
+    return value
+
+def mapped(value: int64) -> int64:
+    print(f"value {value}")
+    return value * 10
+
+def main():
+    numbers: Vec[int64] = [1, 2, 3]
+
+    doubled: Vec[int64] = [value * 2 for value in numbers if value != 2]
+    print(doubled[0])
+    print(doubled[1])
+
+    nested: Vec[int64] = [
+        left * 10 + right
+        for left in [1, 2]
+        for right in [3, 4]
+        if right != 3
+    ]
+    print(nested[0])
+    print(nested[1])
+
+    parity: Set[int64] = {value % 2 for value in [1, 2, 3, 4]}
+    print(parity.len())
+    print(parity.contains(0))
+    print(parity.contains(1))
+
+    replacements: Map[int64, int64] = {
+        key(value): mapped(value)
+        for value in [1, 1]
+    }
+    print(replacements.len())
+    print(replacements[1])
+
+    indexed: Vec[int64] = [
+        index + value
+        for index, value in enumerate(numbers)
+    ]
+    print(indexed[0])
+    print(indexed[2])
+
+    sums: Vec[int64] = [
+        left + right
+        for left, right in zip([1, 2], [10, 20, 30])
+    ]
+    print(sums[0])
+    print(sums[1])
+
+    jobs = Queue[int64]()
+    jobs.put(7)
+    jobs.close()
+    received: Vec[int64] = [job * 2 for job in jobs]
+    print(received[0])

@@ -1,12 +1,12 @@
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BindingTarget,
-    BreakStmt, ClassDecl, CompareLink, CompareOp, ContinueStmt, DestructureStmt, EnumDecl,
-    EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind, ExprStmt, ExternFunctionDecl,
-    ExternOpaqueClassDecl, FieldDecl, ForStmt, FormatPart, FunctionDecl, FunctionTypeParam,
-    IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, Item, LambdaParam, LiteralPattern,
-    LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode,
-    Pattern, ReceiverKind, ReturnStmt, Stmt, TraitDecl, TuplePattern, TypeRef, TypeRefKind,
-    UnaryOp, VariantPattern, WhileStmt, WithStmt,
+    BreakStmt, ClassDecl, CompareLink, CompareOp, ComprehensionClause, ComprehensionOutput,
+    ContinueStmt, DestructureStmt, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind,
+    ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl, FieldDecl, ForStmt, FormatPart,
+    FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, Item,
+    LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm,
+    MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, ReturnStmt, Stmt, TraitDecl,
+    TuplePattern, TypeRef, TypeRefKind, UnaryOp, VariantPattern, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -2110,6 +2110,9 @@ impl Parser {
                 }
 
                 let first = self.parse_non_tuple_expr()?;
+                if self.at_simple(&TokenKind::KwFor) {
+                    return Err(self.generator_expression_error());
+                }
                 if self.eat_simple(&TokenKind::Comma).is_none() {
                     self.expect_simple(TokenKind::RParen)?;
                     return Ok(Expr {
@@ -2145,20 +2148,32 @@ impl Parser {
                 })
             }
             TokenKind::LBracket => {
-                let mut elements = Vec::new();
-                if !self.at_simple(&TokenKind::RBracket) {
-                    loop {
-                        elements.push(self.parse_expr()?);
-                        if self.at_simple(&TokenKind::KwFor) {
-                            return Err(Diagnostic::coded_at(
-                                "AU2005",
-                                self.current_span(),
-                                "comprehensions are not available yet; use an explicit loop today",
-                            ));
-                        }
-                        if self.eat_simple(&TokenKind::Comma).is_none() {
-                            break;
-                        }
+                if self.at_simple(&TokenKind::RBracket) {
+                    self.bump();
+                    return Ok(Expr {
+                        kind: ExprKind::List(Vec::new()),
+                        span: token.span,
+                    });
+                }
+
+                let first = self.parse_expr()?;
+                if self.at_simple(&TokenKind::KwFor) {
+                    let clauses = self.parse_comprehension_clauses(&TokenKind::RBracket)?;
+                    self.expect_simple(TokenKind::RBracket)?;
+                    return Ok(Expr {
+                        kind: ExprKind::Comprehension {
+                            output: ComprehensionOutput::List(Box::new(first)),
+                            clauses,
+                        },
+                        span: token.span,
+                    });
+                }
+
+                let mut elements = vec![first];
+                while self.eat_simple(&TokenKind::Comma).is_some() {
+                    elements.push(self.parse_expr()?);
+                    if self.at_simple(&TokenKind::KwFor) {
+                        return Err(self.mixed_comprehension_literal_error());
                     }
                 }
                 self.expect_simple(TokenKind::RBracket)?;
@@ -2178,9 +2193,24 @@ impl Parser {
 
                 let first = self.parse_expr()?;
                 if self.eat_simple(&TokenKind::Colon).is_none() {
+                    if self.at_simple(&TokenKind::KwFor) {
+                        let clauses = self.parse_comprehension_clauses(&TokenKind::RBrace)?;
+                        self.expect_simple(TokenKind::RBrace)?;
+                        return Ok(Expr {
+                            kind: ExprKind::Comprehension {
+                                output: ComprehensionOutput::Set(Box::new(first)),
+                                clauses,
+                            },
+                            span: token.span,
+                        });
+                    }
+
                     let mut elements = vec![first];
                     while self.eat_simple(&TokenKind::Comma).is_some() {
                         elements.push(self.parse_expr()?);
+                        if self.at_simple(&TokenKind::KwFor) {
+                            return Err(self.mixed_comprehension_literal_error());
+                        }
                     }
                     self.expect_simple(TokenKind::RBrace)?;
                     return Ok(Expr {
@@ -2189,14 +2219,31 @@ impl Parser {
                     });
                 }
 
-                let mut entries = Vec::new();
                 let value = self.parse_expr()?;
-                entries.push(MapEntryExpr { key: first, value });
+                if self.at_simple(&TokenKind::KwFor) {
+                    let clauses = self.parse_comprehension_clauses(&TokenKind::RBrace)?;
+                    self.expect_simple(TokenKind::RBrace)?;
+                    return Ok(Expr {
+                        kind: ExprKind::Comprehension {
+                            output: ComprehensionOutput::Map {
+                                key: Box::new(first),
+                                value: Box::new(value),
+                            },
+                            clauses,
+                        },
+                        span: token.span,
+                    });
+                }
+
+                let mut entries = vec![MapEntryExpr { key: first, value }];
                 while self.eat_simple(&TokenKind::Comma).is_some() {
                     let key = self.parse_expr()?;
                     self.expect_simple(TokenKind::Colon)?;
                     let value = self.parse_expr()?;
                     entries.push(MapEntryExpr { key, value });
+                    if self.at_simple(&TokenKind::KwFor) {
+                        return Err(self.mixed_comprehension_literal_error());
+                    }
                 }
                 self.expect_simple(TokenKind::RBrace)?;
                 Ok(Expr {
@@ -2221,6 +2268,125 @@ impl Parser {
                 format!("unexpected token in expression: {:?}", other),
             )),
         }
+    }
+
+    fn parse_comprehension_clauses(
+        &mut self,
+        closing: &TokenKind,
+    ) -> Result<Vec<ComprehensionClause>> {
+        let mut clauses = Vec::new();
+        let mut chain_len = 0usize;
+
+        while let Some(for_token) = self.eat_simple(&TokenKind::KwFor) {
+            chain_len += 1;
+            self.check_expression_chain_limit(chain_len)?;
+            if self.at_simple(&TokenKind::KwMut) || self.at_simple(&TokenKind::KwOwn) {
+                return Err(self.comprehension_capability_error());
+            }
+            if self.at_simple(&TokenKind::KwIn) {
+                return Err(parse_error(
+                    self.current_span(),
+                    "expected a binding target after `for` in comprehension",
+                ));
+            }
+
+            let target = self.parse_binding_target_sequence(false)?;
+            self.reject_duplicate_binding_names(&target)?;
+            if self.eat_simple(&TokenKind::KwIn).is_none() {
+                return Err(parse_error(
+                    self.current_span(),
+                    "expected `in` after comprehension target",
+                ));
+            }
+            if self.at_simple(&TokenKind::KwMut) || self.at_simple(&TokenKind::KwOwn) {
+                return Err(self.comprehension_capability_error());
+            }
+            if self.at_comprehension_component_boundary(closing) {
+                return Err(parse_error(
+                    self.current_span(),
+                    "expected an iterable expression after `in` in comprehension",
+                ));
+            }
+
+            let iterable = self.parse_comprehension_component()?;
+            let mut filters = Vec::new();
+            while self.eat_simple(&TokenKind::KwIf).is_some() {
+                chain_len += 1;
+                self.check_expression_chain_limit(chain_len)?;
+                if self.at_comprehension_component_boundary(closing) {
+                    return Err(parse_error(
+                        self.current_span(),
+                        "expected a filter expression after `if` in comprehension",
+                    ));
+                }
+                filters.push(self.parse_comprehension_component()?);
+            }
+
+            clauses.push(ComprehensionClause {
+                target,
+                iterable,
+                filters,
+                span: for_token.span,
+            });
+        }
+
+        if self.at_simple(&TokenKind::Comma) {
+            if self.peek_kind(1).is_some_and(|kind| kind == closing) {
+                return Err(parse_error(
+                    self.current_span(),
+                    "comprehensions do not allow trailing commas",
+                ));
+            }
+            return Err(self.mixed_comprehension_literal_error());
+        }
+        if !self.at_simple(closing) {
+            return Err(parse_error(
+                self.current_span(),
+                "expected `for`, `if`, or the end of the comprehension",
+            ));
+        }
+
+        Ok(clauses)
+    }
+
+    /// Clause iterables and filters stop before a comprehension-level `if`.
+    /// A conditional expression remains available when explicitly grouped.
+    fn parse_comprehension_component(&mut self) -> Result<Expr> {
+        if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "lambda") {
+            self.parse_lambda()
+        } else {
+            self.parse_or()
+        }
+    }
+
+    fn at_comprehension_component_boundary(&self, closing: &TokenKind) -> bool {
+        self.at_simple(closing)
+            || self.at_simple(&TokenKind::Comma)
+            || self.at_simple(&TokenKind::KwFor)
+            || self.at_simple(&TokenKind::KwIf)
+            || self.at_eof()
+    }
+
+    fn comprehension_capability_error(&self) -> Diagnostic {
+        parse_error(
+            self.current_span(),
+            "comprehensions use bare iteration; remove `mut` or `own` and write `for name in values`",
+        )
+    }
+
+    fn mixed_comprehension_literal_error(&self) -> Diagnostic {
+        parse_error(
+            self.current_span(),
+            "cannot mix literal entries with a comprehension; remove the comma-separated literal entries or use an explicit loop",
+        )
+    }
+
+    fn generator_expression_error(&self) -> Diagnostic {
+        Diagnostic::coded_at(
+            "AU2005",
+            self.current_span(),
+            "generator expressions are unavailable; use an eager owned list comprehension or an explicit loop",
+        )
     }
 
     fn parse_args(&mut self) -> Result<Vec<Argument>> {
@@ -2264,6 +2430,9 @@ impl Parser {
                 }
             };
 
+            if self.at_simple(&TokenKind::KwFor) {
+                return Err(self.generator_expression_error());
+            }
             args.push(argument);
             if self.eat_simple(&TokenKind::Comma).is_none() {
                 break;
@@ -3147,6 +3316,26 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
                 offset_expr_span(&mut entry.value, line, column_offset);
             }
         }
+        ExprKind::Comprehension { output, clauses } => {
+            match output {
+                ComprehensionOutput::List(element) | ComprehensionOutput::Set(element) => {
+                    offset_expr_span(element, line, column_offset);
+                }
+                ComprehensionOutput::Map { key, value } => {
+                    offset_expr_span(key, line, column_offset);
+                    offset_expr_span(value, line, column_offset);
+                }
+            }
+            for clause in clauses {
+                clause.span.line = line;
+                clause.span.column += column_offset;
+                offset_binding_target_span(&mut clause.target, line, column_offset);
+                offset_expr_span(&mut clause.iterable, line, column_offset);
+                for filter in &mut clause.filters {
+                    offset_expr_span(filter, line, column_offset);
+                }
+            }
+        }
         ExprKind::Call { callee, args } => {
             offset_expr_span(callee, line, column_offset);
             for argument in args {
@@ -3191,6 +3380,22 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
                 if let FormatPart::Expr(inner) = part {
                     offset_expr_span(inner, line, column_offset);
                 }
+            }
+        }
+    }
+}
+
+fn offset_binding_target_span(target: &mut BindingTarget, line: usize, column_offset: usize) {
+    match target {
+        BindingTarget::Name { span, .. } => {
+            span.line = line;
+            span.column += column_offset;
+        }
+        BindingTarget::Tuple { elements, span } => {
+            span.line = line;
+            span.column += column_offset;
+            for element in elements {
+                offset_binding_target_span(element, line, column_offset);
             }
         }
     }

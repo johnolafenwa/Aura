@@ -4870,6 +4870,128 @@ fn run_backend_selector_matches_across_mir_direct_and_auto() {
 }
 
 #[test]
+fn run_backends_match_eager_comprehension_behavior() {
+    let source = include_str!("../../aurora-compiler/tests/fixtures/run-pass/comprehensions.au");
+    let expected =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/comprehensions.stdout");
+    let (_temp, source_path) = write_temp_source("aurora-comprehension-parity", source);
+
+    for backend in ["mir", "direct"] {
+        let output = Command::new(aura_bin())
+            .args(["run", "--backend", backend])
+            .arg(&source_path)
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("failed to run comprehension fixture with {backend}: {error}")
+            });
+        assert!(
+            output.status.success(),
+            "{backend} comprehension run failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            expected,
+            "{backend} comprehension output diverged"
+        );
+    }
+}
+
+#[test]
+fn run_backends_match_full_comprehension_runtime_matrix() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/comprehension_runtime_matrix.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/comprehension_runtime_matrix.stdout"
+    );
+    let (_temp, source_path) = write_temp_source("aurora-comprehension-runtime-matrix", source);
+
+    for backend in ["mir", "direct"] {
+        let output = Command::new(aura_bin())
+            .args(["run", "--backend", backend])
+            .arg(&source_path)
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("failed to run comprehension runtime matrix with {backend}: {error}")
+            });
+        assert!(
+            output.status.success(),
+            "{backend} comprehension runtime matrix failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            expected,
+            "{backend} comprehension runtime matrix output diverged"
+        );
+    }
+}
+
+#[test]
+fn run_backends_lower_comprehensions_in_function_and_field_defaults() {
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/comprehension_defaults.au");
+    let expected =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/comprehension_defaults.stdout");
+    let (_temp, source_path) = write_temp_source("aurora-comprehension-defaults", source);
+
+    for backend in ["mir", "direct"] {
+        let output = Command::new(aura_bin())
+            .args(["run", "--backend", backend])
+            .arg(&source_path)
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("failed to run comprehension defaults with {backend}: {error}")
+            });
+        assert!(
+            output.status.success(),
+            "{backend} comprehension defaults run failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            expected,
+            "{backend} comprehension defaults output diverged"
+        );
+    }
+}
+
+#[test]
+fn run_backends_drop_partial_comprehension_before_propagating_trap() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-fail/comprehension_partial_result_trap.au"
+    );
+    let (_temp, source_path) =
+        write_temp_source("aurora-comprehension-partial-result-trap", source);
+
+    for backend in ["mir", "direct"] {
+        let output = Command::new(aura_bin())
+            .args(["run", "--backend", backend])
+            .arg(&source_path)
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("failed to run trapping comprehension with {backend}: {error}")
+            });
+        assert!(
+            !output.status.success(),
+            "{backend} trapping comprehension should fail"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "build 1\nbuild 2\nclose outer\n",
+            "{backend} must preserve eager progress and unwind the surrounding resource"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("vector index `0` is out of bounds for length `0`"),
+            "{backend} should preserve the body trap, stderr was:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
 fn compile_commands_accept_membership_and_comparison_chains() {
     let (temp, source_path) = write_temp_source(
         "aurora-membership-and-chains",

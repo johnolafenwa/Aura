@@ -1,0 +1,3 @@
+def main():
+    values = [1, 2, 3]
+    changed = [value for value in mut values]

@@ -1,0 +1,6 @@
+def take(value: own String) -> int64:
+    return 1
+
+def main():
+    token = "once"
+    values = [take(token) for value in range(0, 2)]

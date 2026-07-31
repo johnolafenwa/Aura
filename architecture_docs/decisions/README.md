@@ -45,3 +45,4 @@ test locations that must prove completion.
 36. [ADR-0036: Native structured runtime frames](0036-native-structured-runtime-frames.md) — Accepted at the Batch 4 checkpoint
 37. [ADR-0037: Expression closures and value capture](0037-expression-closures-and-value-capture.md) — Accepted at the Batch 6 opening checkpoint
 38. [ADR-0038: Place-based loans and views](0038-place-based-loans-and-views.md) — Accepted design for 0.3; unimplemented and not authorized in the 0.2 cycle
+39. [ADR-0039: Comprehensions](0039-comprehensions.md) — Accepted for Aurora 0.2 in Batch 6, Phase 7.1

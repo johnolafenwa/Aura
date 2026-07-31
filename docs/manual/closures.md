@@ -157,6 +157,29 @@ qualifying closure into `TaskGroup.start`, `start_soon`, or an explicit-stack
 variant transfers the complete environment to child-owned storage. A
 non-Transfer leaf retains the ordinary `AU3008` boundary explanation.
 
+### Comprehension Interaction
+
+Comprehensions do not change closure capture. A lambda enclosing a
+comprehension captures outer names used by iterable, filter, and output
+expressions, while comprehension targets are local bindings in the lambda body
+and are not captures.
+
+A lambda expression reached inside a comprehension is created at that runtime
+position. It may snapshot a Copy target, and it may move a Queue-received owned
+target when the surrounding use permits one consuming closure. A shared
+non-Copy Vec/Set target is a capability into the source and cannot be captured;
+pass an explicit clone to a named helper or arrange another owned value outside
+the comprehension when independent storage is required. Capture environments
+remain read-only.
+
+The ordinary storage boundary also remains. A capturing closure cannot itself
+be inserted as a list, set, or map comprehension result because collection
+storage erases its environment/call-kind metadata. It may be used immediately
+at a compiler-known callback or direct-call site inside an iterable, filter,
+key, value, or element expression. Such creation happens only when preceding
+clauses and filters reach it, and repeatable callback sites still reject a
+consuming closure.
+
 ## Diagnostics
 
 `AU1101` reports malformed lambda parameter or body syntax. `AU2002` reports a
@@ -188,7 +211,7 @@ diagnostics.
 Closures are expression-only and contextually typed. They do not support
 statement bodies, inline parameter types, defaults, generics, capture lists,
 implicit reference capture, mutable captured state, method values, trait
-objects, FFI callbacks, asynchronous syntax, or comprehensions. In-loan
+objects, FFI callbacks, or asynchronous syntax. In-loan
 capture is designed by accepted ADR-0038 for Aurora 0.3 but is not implemented
 or authorized in the 0.2 cycle.
 
@@ -211,4 +234,5 @@ Expression closures and by-value capture are implemented under Accepted ADR-0037
 (`architecture_docs/decisions/0037-expression-closures-and-value-capture.md`)
 after ratification at the Batch 6 opening checkpoint. Capture-free function
 values remain governed by [Functions](/manual/functions), and task-boundary
-Transfer remains governed by Accepted ADR-0033.
+Transfer remains governed by Accepted ADR-0033. Comprehensions preserve this
+contract under Accepted ADR-0039 rather than adding a capture exception.

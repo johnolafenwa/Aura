@@ -4902,6 +4902,185 @@ test("compiler bridge exposes contextual lambda scope, hover, definitions, and c
   }
 });
 
+test("compiler bridge exposes progressively scoped comprehension intelligence", async () => {
+  const tempRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "aurora-lsp-comprehension-scope-")
+  );
+  const sourceLines = [
+    "def collect_lengths(groups: Vec[Vec[String]]) -> Vec[int64]:",
+    "    lengths = [",
+    "        entry.len()",
+    "        for group in groups",
+    "        if group.len() > 0",
+    "        for entry in group",
+    "        if entry.contains(\"a\")",
+    "    ]",
+    "    print(lengths)",
+    "    return lengths",
+    ""
+  ];
+  const source = sourceLines.join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+
+    const outputEntryStart = sourceLines[2].indexOf("entry");
+    const entryTargetStart = sourceLines[5].indexOf("entry");
+    const entryHover = compilerHoverAtPosition(analysis, 2, outputEntryStart + 1);
+    assert.deepEqual(entryHover, {
+      value: "```aurora\nlocal entry: String\n```",
+      range: {
+        start: { line: 2, character: outputEntryStart },
+        end: { line: 2, character: outputEntryStart + "entry".length }
+      }
+    });
+    assert.deepEqual(
+      compilerDefinitionAtPosition(mainUri, analysis, 2, outputEntryStart + 1)?.range,
+      {
+        start: { line: 5, character: entryTargetStart },
+        end: { line: 5, character: entryTargetStart + "entry".length }
+      },
+      "the output occurrence must navigate to the target after `for`, not to itself"
+    );
+
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover === "```aurora\nbinding lengths: Vec[int64]\n```"
+      ),
+      "the eager owned comprehension result should retain its checked collection type"
+    );
+
+    const completionNamesAt = async (line, character, trigger = null) => {
+      const completions = await completeWithCompiler(
+        mainUri,
+        source,
+        line,
+        character,
+        trigger
+      );
+      assert.ok(completions);
+      return new Set(completions.map((item) => item.name));
+    };
+
+    const outputMembers = await completionNamesAt(
+      2,
+      sourceLines[2].indexOf(".") + 1,
+      "."
+    );
+    assert.ok(outputMembers.has("len"));
+    assert.ok(outputMembers.has("contains"));
+
+    const outerFilter = await completionNamesAt(
+      4,
+      sourceLines[4].indexOf("group") + 2
+    );
+    assert.ok(outerFilter.has("group"));
+    assert.equal(outerFilter.has("entry"), false);
+
+    const innerIterable = await completionNamesAt(
+      5,
+      sourceLines[5].lastIndexOf("group") + 2
+    );
+    assert.ok(innerIterable.has("group"));
+    assert.equal(innerIterable.has("entry"), false);
+
+    const innerFilter = await completionNamesAt(
+      6,
+      sourceLines[6].indexOf("entry") + 2
+    );
+    assert.ok(innerFilter.has("group"));
+    assert.ok(innerFilter.has("entry"));
+
+    const afterComprehension = await completionNamesAt(8, sourceLines[8].length);
+    assert.equal(afterComprehension.has("group"), false);
+    assert.equal(afterComprehension.has("entry"), false);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge preserves incomplete comprehension diagnostics without stale intelligence", async () => {
+  const tempRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "aurora-lsp-incomplete-comprehension-")
+  );
+  const cases = [
+    {
+      name: "iterable",
+      line: "    result = [value for value in ]",
+      message: "expected an iterable expression after `in` in comprehension",
+      startCharacter: 33
+    },
+    {
+      name: "filter",
+      line: "    result = [value for value in values if ]",
+      message: "expected a filter expression after `if` in comprehension",
+      startCharacter: 43
+    }
+  ];
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    for (const edit of cases) {
+      const sourceLines = [
+        "def collect(values: Vec[int64]) -> Vec[int64]:",
+        edit.line,
+        "    return result",
+        ""
+      ];
+      const source = sourceLines.join("\n");
+      const uri = `file://${path.join(tempRoot, `${edit.name}.au`)}`;
+      const analysis = await analyzeWithCompiler(uri, source);
+
+      assert.ok(analysis);
+      assert.equal(analysis.diagnostics.length, 1);
+      assert.deepEqual(
+        {
+          code: analysis.diagnostics[0].code,
+          message: analysis.diagnostics[0].message,
+          line: analysis.diagnostics[0].line,
+          startCharacter: analysis.diagnostics[0].start_character,
+          endCharacter: analysis.diagnostics[0].end_character
+        },
+        {
+          code: "AU1101",
+          message: edit.message,
+          line: 1,
+          startCharacter: edit.startCharacter,
+          endCharacter: edit.startCharacter + 1
+        }
+      );
+      assert.deepEqual(analysis.occurrences, []);
+      assert.equal(
+        compilerHoverAtPosition(analysis, 0, sourceLines[0].indexOf("values") + 1),
+        null,
+        "a parse-incomplete expression must not leak stale checked hover metadata"
+      );
+
+      const completions = await completeWithCompiler(
+        uri,
+        source,
+        1,
+        sourceLines[1].indexOf("]"),
+        null
+      );
+      assert.equal(
+        completions,
+        null,
+        "a rejected compiler completion must select the server's lexical recovery path"
+      );
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge preserves closure capture ownership diagnostics and guidance", async () => {
   const tempRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "aurora-lsp-lambda-diagnostics-")

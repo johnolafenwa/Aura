@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
 ## Batch 6 of 6 (active)
 
@@ -46,7 +46,60 @@ Last updated: 2026-07-30
   Clippy, and hygiene. Compiler coverage is 80,466/83,652 lines (96.191364%),
   5,345/5,512 functions (96.970247%), and 117,334/123,989 regions
   (94.632588%); LSP coverage is 100%. No synthetic coverage test or exclusion
-  was added. Phase 7 comprehension work is now active.
+  was added.
+
+  Phase 7.1 comprehension implementation is integrated but not yet complete
+  pending the broad gates. The parser and AST accept eager list, set, and map
+  comprehensions with progressive nested clauses, filters, recursive tuple
+  targets, and multiline layout; rejected capability modifiers, generators,
+  mixed literals, malformed clauses, and trailing commas have teaching
+  diagnostics. Static semantics infer or contextually check `Vec`, `Set`, and
+  `Map` results, require exact-Boolean filters, preserve progressive
+  no-shadowing/non-leaking scope, and apply bare-loop ownership to Range,
+  Vec, Set, Queue, enumerate, and zip. Owner-qualified semantic metadata
+  records the result type plus each clause's binding type and Queue
+  receive-ownership status. MIR lowering allocates one fresh owned result,
+  reuses the statement-loop machinery for nested clauses, branches filters in
+  execution order, and performs the ordinary Vec append, Set insertion, or
+  key-before-value Map replacement operation. The direct backend consumes the
+  same MIR contract, and dedicated runtime parity covers eager ordering,
+  nesting, deduplication, replacement, Queue receive, and `try` cleanup.
+  Compiler analysis, the language server, and the bundled extension expose
+  checked result types and progressively scoped completion, hover, and exact
+  target definitions without leaking targets after the expression.
+
+  Integration exposed an imported-module defect: MIR correctly looked for
+  comprehension metadata in the defining module namespace, but namespace
+  export omitted that metadata. Export now carries owner-qualified
+  comprehension records and qualifies nominal result and clause-binding
+  types; an imported public-helper regression runs as `2\n6` on both
+  backends. ADR-0039, the normative Manual, Learn/tutorial material, indexes,
+  maintained example, editor guidance, and source-hash reference inventory
+  are updated with the same eager owned contract.
+
+  The final independent audit found a second metadata defect before commit:
+  accepted comprehensions in function-parameter and class-field defaults
+  passed checking but panicked during MIR lowering. Failing semantic and
+  MIR/direct regressions now pin both positions. Field-default metadata is
+  retained, hidden default lowerers carry the lexical owner, and lookup
+  resolves the owner-qualified record in the defining module.
+
+  Focused verification is green: 14/14 comprehension compiler unit tests,
+  60/60 parser tests plus parse fixtures and the retired Python hint,
+  check-pass/check-fail fixtures, imported nominal-metadata MIR and dual-
+  backend runtime regressions, both main and `try` runtime fixtures on MIR and
+  direct, the dedicated three-test CLI parity matrix, 87/87 analysis tests,
+  99/99 LSP tests at 100% coverage, 17/17 extension tests, reference integrity
+  (36 pages, 258 blocks, 9 reference tests, 59 integrity tests, and all 683
+  migration manifests), the docs build, and formatting. The unrestricted
+  pre-audit compiler-library replay passed 1,401/1,401 and the process
+  integration suite passed 5/5; the new default-expression semantic,
+  run-pass-fixture, and MIR/direct regressions are green.
+
+  Remaining before Phase 7.1 can be marked complete and committed: finish the
+  independent audit matrix, run warning-denied Clippy, the forced-backend
+  matrix, exact clean full CI, and frozen coverage. There is no current
+  blocker. Phase 7.1 remains active.
 - Work note: `work/2026-07-30-batch6-phase7-release.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;

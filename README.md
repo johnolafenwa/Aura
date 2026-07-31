@@ -79,6 +79,9 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/collections/vec_algorithms.au`
   - execute stable natural/key sorting plus eager, source-retaining
     `Vec.map(...)` and `Vec.filter(...)`
+- `cargo run -p aura -- run examples/collections/comprehensions.au`
+  - execute eager owned list, set, and map comprehensions with filters and
+    nested outer-major clauses
 - `cargo run -p aura -- run examples/collections/map_basics.au`
   - execute `Map[K, V]` literals, `items()` / `entries()`, `extend(...)`, and the maintained map method surface
 - `cargo run -p aura -- run examples/collections/set_basics.au`

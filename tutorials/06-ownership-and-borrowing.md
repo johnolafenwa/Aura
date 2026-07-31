@@ -545,6 +545,26 @@ This requires the collection binding to be `mut`.
 **Default recommendation:** Use bare `for x in collection` for reads, `own` to
 consume, and `mut` to update.
 
+### Comprehensions use the bare form
+
+A comprehension is the eager expression counterpart of nested bare loops:
+
+```python
+names = ["Ada", "Grace"]
+lengths = [name.len() for name in names]
+copies = [name.clone() for name in names]
+```
+
+The result collection is newly owned, while a Vec or Set clause shares and
+freezes its source. `name.len()` only reads the shared `String`. Storing the
+non-copy `String` itself requires the explicit `.clone()` shown in `copies`;
+the compiler never inserts that clone.
+
+Comprehension clauses have no `mut` or `own` modifier. Use a statement loop for
+mutable or consuming collection traversal. Queue preserves its bare-loop
+exception: each received item arrives owned and may move directly into the
+eager result. Every target disappears after the closing delimiter.
+
 ## Borrowing In Match
 
 Pattern matching follows the same ownership rules. Bare `match` shares the

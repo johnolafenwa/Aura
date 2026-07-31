@@ -1,0 +1,5 @@
+import random
+
+def main():
+    generators = [random.Rng(seed=1)]
+    copied = [generator for generator in generators]

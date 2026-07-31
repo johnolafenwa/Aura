@@ -435,6 +435,29 @@ pub struct LambdaParam {
     pub span: Span,
 }
 
+/// The value produced for each successful pass through a comprehension.
+///
+/// Keeping the collection shape on the output makes list, set, and map
+/// comprehensions one expression family while preserving the two expressions
+/// evaluated for every map entry.
+#[derive(Clone, Debug, Serialize)]
+pub enum ComprehensionOutput {
+    List(Box<Expr>),
+    Set(Box<Expr>),
+    Map { key: Box<Expr>, value: Box<Expr> },
+}
+
+/// One left-to-right `for target in iterable` clause and its following
+/// filters. Comprehensions deliberately carry no capability selector: Phase 7
+/// gives them the same selector-free semantics as a bare `for`.
+#[derive(Clone, Debug, Serialize)]
+pub struct ComprehensionClause {
+    pub target: BindingTarget,
+    pub iterable: Expr,
+    pub filters: Vec<Expr>,
+    pub span: Span,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub enum ExprKind {
     Name(String),
@@ -451,6 +474,10 @@ pub enum ExprKind {
     List(Vec<Expr>),
     Set(Vec<Expr>),
     Map(Vec<MapEntryExpr>),
+    Comprehension {
+        output: ComprehensionOutput,
+        clauses: Vec<ComprehensionClause>,
+    },
     Unary {
         op: UnaryOp,
         expr: Box<Expr>,

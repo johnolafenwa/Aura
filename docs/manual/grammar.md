@@ -635,7 +635,10 @@ primary-expression
     | parenthesized-expression
     | list-literal
     | brace-literal
-    | explicit-set-literal ;
+    | explicit-set-literal
+    | list-comprehension
+    | set-comprehension
+    | map-comprehension ;
 
 list-literal
     = "[", [ expression, { ",", expression } ], "]" ;
@@ -648,6 +651,29 @@ brace-literal
 
 explicit-set-literal
     = "Set", "{", [ expression, { ",", expression } ], "}" ;
+
+list-comprehension
+    = "[", expression, comprehension-clauses, "]" ;
+
+set-comprehension
+    = "{", expression, comprehension-clauses, "}" ;
+
+map-comprehension
+    = "{", expression, ":", expression,
+      comprehension-clauses, "}" ;
+
+comprehension-clauses
+    = comprehension-for,
+      { comprehension-if | comprehension-for } ;
+
+comprehension-for
+    = "for", loop-target, "in", comprehension-component ;
+
+comprehension-if
+    = "if", comprehension-component ;
+
+comprehension-component
+    = lambda-expression | or-expression ;
 
 parenthesized-expression
     = "(", expression, ")"
@@ -672,6 +698,19 @@ rejected. A nonempty brace literal is a set when its first element is not
 followed by `:`, otherwise it is a map. `{}` parses as an empty map but may be
 contextually typed as an empty `Set[T]`; `Set{}` is the unambiguous empty-set
 form.
+
+A comprehension has one or more `for` clauses. A clause may be followed by
+zero or more `if` filters before another `for` clause. Clause targets use
+`loop-target`, including recursive tuple targets, but the iterable position
+has no `mut` or `own` modifier: comprehension clauses always use the bare-loop
+contract. The non-conditional `or-expression` alternative keeps a following
+comprehension `if` distinct from a conditional expression; use parentheses when
+an iterable or filter itself needs a conditional expression. A lambda remains
+syntactically admissible as a component and is then subject to the ordinary
+iterable or exact-Boolean static rule. The result expression, or the map key
+and value expressions, may be any expression. A comma after comprehension
+clauses, or a mixture of comma-separated literal entries and clauses, is
+invalid. Generator expressions are not part of this grammar.
 
 ## Explicit Specialization
 
@@ -726,6 +765,7 @@ The implementation rejects source that exceeds the maintained parser complexity 
 
 - nested expressions, prefix forms, parentheses, types, patterns, and statements are limited to 128 parser levels
 - binary-operator and postfix chains reject the 128th chained operation
+- one comprehension rejects a 128th combined `for` clause or `if` filter
 - f-string interpolation brace nesting is limited to 128
 
 These are implementation limits of Aurora 0.1 and therefore observable parts of the current reference. A future implementation may raise them but must continue to reject excessive input cleanly.
@@ -737,12 +777,13 @@ The grammar intentionally excludes:
 - semicolons and multiple statements on one physical line
 - backslash line continuation
 - multiline ordinary strings and f-strings
-- local item declarations, comprehensions, decorators, and attributes
+- local item declarations, decorators, and attributes
 - wildcard/aliased/relative import syntax
 - ordinary trailing commas other than the required singleton-tuple comma
 - match guards, alternative patterns, and collection patterns
 - call-site capability annotations
 - exception statements, `raise`, and `yield`
+- generator expressions and generator functions
 - detached `spawn`, statement-form `select`, and proposal-only concurrency
   syntax; the maintained `select(source, ...)` is an ordinary call expression
 

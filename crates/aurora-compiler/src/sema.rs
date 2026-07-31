@@ -6,10 +6,10 @@ use std::rc::Rc;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, CompareLink, EnumDecl, Expr, ExprKind,
-    FunctionDecl, ImplDecl, Item, LambdaParam, LiteralPattern, LiteralPatternKind, MatchExprArm,
-    MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp,
-    VariantPattern, WithStmt,
+    Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, CompareLink, ComprehensionClause,
+    ComprehensionOutput, EnumDecl, Expr, ExprKind, FunctionDecl, ImplDecl, Item, LambdaParam,
+    LiteralPattern, LiteralPatternKind, MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern,
+    ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp, VariantPattern, WithStmt,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
@@ -43,12 +43,20 @@ pub struct Program {
     /// The key carries the defining module and callable owner so identical
     /// source positions in different files or bodies cannot collide.
     pub closures: BTreeMap<ClosureId, ClosureInfo>,
+    /// Checked result and clause-binding types for comprehensions defined by
+    /// this module. MIR lowering consumes these rather than reimplementing
+    /// progressively scoped iterable inference.
+    pub comprehensions: BTreeMap<ComprehensionId, ComprehensionInfo>,
     pub top_level_stmts: Vec<Stmt>,
 }
 
 impl Program {
     pub fn closure_info(&self, id: &ClosureId) -> Option<&ClosureInfo> {
         self.closures.get(id)
+    }
+
+    pub fn comprehension_info(&self, id: &ComprehensionId) -> Option<&ComprehensionInfo> {
+        self.comprehensions.get(id)
     }
 }
 
@@ -330,6 +338,8 @@ pub struct ModuleNamespace {
     pub imported_modules: BTreeMap<String, ModuleNamespace>,
     /// Closure metadata exported with this module's callable bodies.
     pub closures: BTreeMap<ClosureId, ClosureInfo>,
+    /// Comprehension metadata exported with this module's callable bodies.
+    pub comprehensions: BTreeMap<ComprehensionId, ComprehensionInfo>,
 }
 
 #[derive(Clone, Debug)]
@@ -419,6 +429,41 @@ impl ClosureId {
             column: span.column,
         }
     }
+}
+
+/// Stable semantic identity for one comprehension expression.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct ComprehensionId {
+    pub module_name: String,
+    pub owner: ClosureOwner,
+    pub line: usize,
+    pub column: usize,
+}
+
+impl ComprehensionId {
+    pub fn new(module_name: &str, owner: ClosureOwner, span: crate::diag::Span) -> Self {
+        Self {
+            module_name: module_name.to_string(),
+            owner,
+            line: span.line,
+            column: span.column,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ComprehensionClauseInfo {
+    pub binding_type: Type,
+    /// Queue iteration receives an owned payload. Other bare comprehension
+    /// sources yield copy values or shared collection elements.
+    pub receive_owned: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ComprehensionInfo {
+    pub id: ComprehensionId,
+    pub result_type: Type,
+    pub clauses: Vec<ComprehensionClauseInfo>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -2068,6 +2113,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             }
         }
     }
+    let field_default_comprehensions = default_checker.comprehension_infos.borrow().clone();
 
     let mut functions = imported_functions.clone();
     for item in &module.items {
@@ -2462,6 +2508,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         module_registry: context.module_registry,
         canonical_type_names: canonical_type_names.clone(),
         closures: BTreeMap::new(),
+        comprehensions: field_default_comprehensions.clone(),
         top_level_stmts: module.top_level_stmts.clone(),
     };
 
@@ -2511,6 +2558,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             trait_method_obligations,
             impl_method_obligations,
             closure_infos,
+            comprehension_infos,
         ) = {
             let checker = FunctionChecker::new(
                 &program.module_name,
@@ -2527,6 +2575,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             )
             .with_ffi(&program.extern_functions, &program.opaque_handles);
             let closure_infos = checker.closure_infos.clone();
+            let comprehension_infos = checker.comprehension_infos.clone();
             let mut function_obligations = BTreeMap::<String, BTreeSet<String>>::new();
             let mut class_method_obligations = BTreeMap::<CallableKey, BTreeSet<String>>::new();
             let mut trait_method_obligations = BTreeMap::<CallableKey, BTreeSet<String>>::new();
@@ -2617,12 +2666,14 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             }
 
             let closure_infos = closure_infos.borrow().clone();
+            let comprehension_infos = comprehension_infos.borrow().clone();
             (
                 function_obligations,
                 class_method_obligations,
                 trait_method_obligations,
                 impl_method_obligations,
                 closure_infos,
+                comprehension_infos,
             )
         };
 
@@ -2762,6 +2813,8 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         }
         if !changed {
             program.closures = closure_infos;
+            program.comprehensions = field_default_comprehensions.clone();
+            program.comprehensions.extend(comprehension_infos);
             // An explicit impl may honor a trait clone-safety contract, but it
             // may not silently strengthen it: bound-based callers can enforce
             // only requirements declared by the trait method itself.
@@ -2814,6 +2867,9 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
     program
         .closures
         .extend(top_level_checker.closure_infos.borrow().clone());
+    program
+        .comprehensions
+        .extend(top_level_checker.comprehension_infos.borrow().clone());
 
     Ok(program)
 }
@@ -3598,6 +3654,31 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
             default_argument_references_param(&entry.key, param_names)
                 .or_else(|| default_argument_references_param(&entry.value, param_names))
         }),
+        ExprKind::Comprehension { output, clauses } => {
+            let mut visible = param_names.to_vec();
+            for clause in clauses {
+                if let Some(name) = default_argument_references_param(&clause.iterable, &visible) {
+                    return Some(name);
+                }
+                let mut bound = BTreeSet::new();
+                collect_binding_target_names(&clause.target, &mut bound);
+                visible.retain(|name| !bound.contains(name));
+                for filter in &clause.filters {
+                    if let Some(name) = default_argument_references_param(filter, &visible) {
+                        return Some(name);
+                    }
+                }
+            }
+            match output {
+                ComprehensionOutput::List(value) | ComprehensionOutput::Set(value) => {
+                    default_argument_references_param(value, &visible)
+                }
+                ComprehensionOutput::Map { key, value } => {
+                    default_argument_references_param(key, &visible)
+                        .or_else(|| default_argument_references_param(value, &visible))
+                }
+            }
+        }
         ExprKind::FString(parts) => parts.iter().find_map(|part| match part {
             crate::ast::FormatPart::Literal(_) => None,
             crate::ast::FormatPart::Expr(expr) => {
@@ -3649,6 +3730,19 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
                 .cloned()
                 .collect::<Vec<_>>();
             default_argument_references_param(body, &visible)
+        }
+    }
+}
+
+fn collect_binding_target_names(target: &crate::ast::BindingTarget, names: &mut BTreeSet<String>) {
+    match target {
+        crate::ast::BindingTarget::Name { name, .. } => {
+            names.insert(name.clone());
+        }
+        crate::ast::BindingTarget::Tuple { elements, .. } => {
+            for element in elements {
+                collect_binding_target_names(element, names);
+            }
         }
     }
 }
@@ -5053,6 +5147,7 @@ struct FunctionChecker<'a> {
     expr_result_entries: Rc<RefCell<HashMap<usize, ExprResultEntry>>>,
     closure_owner: ClosureOwner,
     closure_infos: Rc<RefCell<BTreeMap<ClosureId, ClosureInfo>>>,
+    comprehension_infos: Rc<RefCell<BTreeMap<ComprehensionId, ComprehensionInfo>>>,
 }
 
 #[derive(Clone)]
@@ -6832,6 +6927,7 @@ impl<'a> FunctionChecker<'a> {
             expr_result_entries: Rc::new(RefCell::new(HashMap::new())),
             closure_owner: ClosureOwner::TopLevel,
             closure_infos: Rc::new(RefCell::new(BTreeMap::new())),
+            comprehension_infos: Rc::new(RefCell::new(BTreeMap::new())),
         }
     }
 
@@ -6870,6 +6966,7 @@ impl<'a> FunctionChecker<'a> {
             expr_result_entries: self.expr_result_entries.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
+            comprehension_infos: self.comprehension_infos.clone(),
         }
     }
 
@@ -6902,6 +6999,7 @@ impl<'a> FunctionChecker<'a> {
             expr_result_entries: self.expr_result_entries.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
+            comprehension_infos: self.comprehension_infos.clone(),
         }
     }
 
@@ -6930,6 +7028,7 @@ impl<'a> FunctionChecker<'a> {
             expr_result_entries: self.expr_result_entries.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
+            comprehension_infos: self.comprehension_infos.clone(),
         }
     }
 
@@ -6958,6 +7057,7 @@ impl<'a> FunctionChecker<'a> {
             expr_result_entries: self.expr_result_entries.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
+            comprehension_infos: self.comprehension_infos.clone(),
         }
     }
 
@@ -8347,6 +8447,308 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
+    /// Establish one comprehension clause with the exact same iterable and
+    /// target rules as an ordinary bare `for` loop. The returned scope keeps
+    /// every place-backed source frozen through all following filters,
+    /// clauses, and output evaluation.
+    fn bind_comprehension_clause(
+        &self,
+        clause: &ComprehensionClause,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<(HashMap<String, LocalBinding>, ComprehensionClauseInfo)> {
+        let (binding_type, binding_passing, receive_owned, sources) = if let Some(form) =
+            self.loop_form(&clause.iterable)?
+        {
+            let mut element_types = Vec::with_capacity(form.iterables.len() + 1);
+            if form.kind == LoopFormKind::Enumerate {
+                element_types.push(Type::named("int64"));
+            }
+            let mut any_non_copy = false;
+            for iterable in &form.iterables {
+                let iterable_ty = self.type_of_expr(iterable, locals)?;
+                let Some(element_ty) = lockstep_element_type(&iterable_ty) else {
+                    return Err(Diagnostic::coded_at(
+                            "AU2002",
+                            iterable.span,
+                            format!(
+                                "`{}` requires a `Vec[T]` or `Set[T]` iterable, found `{}`",
+                                form.name, iterable_ty
+                            ),
+                        )
+                        .with_help(
+                            "these comprehension forms read collections by position; use a plain clause for a `Range` or `Queue[T]`",
+                        ));
+                };
+                any_non_copy = any_non_copy || !self.is_copy_type(&element_ty);
+                element_types.push(element_ty);
+            }
+            (
+                Type::Tuple(element_types),
+                if any_non_copy {
+                    ReceiverKind::Borrow
+                } else {
+                    ReceiverKind::Value
+                },
+                false,
+                form.iterables,
+            )
+        } else {
+            let iterable_ty = self.type_of_expr(&clause.iterable, locals)?;
+            let (binding_type, binding_passing, receive_owned) = match &iterable_ty {
+                    Type::Named(name, _) if name == "Range" => {
+                        (Type::named("int32"), ReceiverKind::Value, false)
+                    }
+                    Type::Named(name, args) if name == "Queue" && args.len() == 1 => {
+                        (args[0].clone(), ReceiverKind::Value, true)
+                    }
+                    Type::Named(name, args)
+                        if matches!(name.as_str(), "Vec" | "Set") && args.len() == 1 =>
+                    {
+                        let element_ty = args[0].clone();
+                        let passing = if self.is_copy_type(&element_ty) {
+                            ReceiverKind::Value
+                        } else {
+                            ReceiverKind::Borrow
+                        };
+                        (element_ty, passing, false)
+                    }
+                    _ => {
+                        return Err(Diagnostic::coded_at(
+                            "AU2002",
+                            clause.iterable.span,
+                            format!(
+                                "comprehension iteration requires a `Range`, `Queue[T]`, `Vec[T]`, or `Set[T]` iterable, found `{iterable_ty}`"
+                            ),
+                        ))
+                    }
+                };
+            (
+                binding_type,
+                binding_passing,
+                receive_owned,
+                vec![&clause.iterable],
+            )
+        };
+
+        let mut clause_locals = locals.clone();
+        if !receive_owned {
+            for source in sources {
+                if let Some(place) = self.borrow_call_place(source) {
+                    let root = place.root.clone();
+                    if let Some(binding) = clause_locals.get_mut(&root) {
+                        if place.is_root() {
+                            binding.assignable = false;
+                            binding.mutable_place = false;
+                            if binding.passing == ReceiverKind::Value {
+                                binding.passing = ReceiverKind::Borrow;
+                                binding.borrow_origin = Some(root);
+                            }
+                        }
+                        binding.frozen_places.insert(place, source.span);
+                    }
+                }
+            }
+        }
+        self.bind_target(
+            &clause.target,
+            &binding_type,
+            binding_passing,
+            false,
+            &mut clause_locals,
+            "comprehension",
+        )?;
+        Ok((
+            clause_locals,
+            ComprehensionClauseInfo {
+                binding_type,
+                receive_owned,
+            },
+        ))
+    }
+
+    fn type_comprehension_clauses(
+        &self,
+        output: &ComprehensionOutput,
+        clauses: &[ComprehensionClause],
+        clause_index: usize,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected_output: &[Type],
+        clause_infos: &mut Vec<ComprehensionClauseInfo>,
+    ) -> Result<Vec<Type>> {
+        let clause = clauses.get(clause_index).ok_or_else(|| {
+            Diagnostic::new("internal error: comprehension has no iteration clause")
+        })?;
+        // Evaluation of this iterable happens before entering its own repeated
+        // body. In a nested clause it is still part of the surrounding
+        // clause's body, so the outer loop-carried-move check sees it.
+        let (mut body_locals, clause_info) = self.bind_comprehension_clause(clause, locals)?;
+        let loop_baseline = locals.clone();
+        clause_infos.push(clause_info);
+
+        for filter in &clause.filters {
+            let filter_ty =
+                self.type_of_expr_hint(filter, &mut body_locals, Some(&Type::named("bool")))?;
+            if filter_ty != Type::named("bool") {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    filter.span,
+                    format!("comprehension filter must have type `bool`, found `{filter_ty}`"),
+                ));
+            }
+            self.consume_value_expr(filter, &mut body_locals)?;
+        }
+
+        let result_types = if clause_index + 1 < clauses.len() {
+            self.type_comprehension_clauses(
+                output,
+                clauses,
+                clause_index + 1,
+                &mut body_locals,
+                expected_output,
+                clause_infos,
+            )?
+        } else {
+            let mut check_output = |value: &Expr,
+                                    expected: Option<&Type>,
+                                    label: &str|
+             -> Result<Type> {
+                // A comprehension always stores each produced value into a
+                // fresh owned collection. This transfer happens even when the
+                // collection itself is immediately observed through shared
+                // access.
+                let actual = match self.type_expr_consuming_result(
+                    value,
+                    &mut body_locals,
+                    expected,
+                ) {
+                    Ok(actual) => actual,
+                    Err(mut diagnostic)
+                        if diagnostic.code == "AU3002"
+                            && diagnostic.message.starts_with("cannot move") =>
+                    {
+                        let clone_supported = !diagnostic.edits.is_empty();
+                        diagnostic.help.clear();
+                        diagnostic.help.push(if clone_supported {
+                                "comprehensions store owned values; call `.clone()` on this shared value, or use an explicit consuming loop when the source should be transferred"
+                                    .to_string()
+                            } else {
+                                "comprehensions store owned values and cannot transfer this shared non-cloneable value; receive an owned value from a `Queue`, or use an explicit consuming loop"
+                                    .to_string()
+                            });
+                        return Err(diagnostic);
+                    }
+                    Err(diagnostic) => return Err(diagnostic),
+                };
+                if type_contains_closure_value(&actual) {
+                    return Err(Diagnostic::coded_at(
+                            "AU2002",
+                            value.span,
+                            "capturing closures cannot be stored in collection literals in this language version",
+                        )
+                        .with_help(
+                            "keep the closure in an immutable local and call it directly, or use a named function or capture-free lambda",
+                        ));
+                }
+                if let Some(expected) = expected {
+                    if actual != *expected {
+                        return Err(Diagnostic::coded_at(
+                            "AU2002",
+                            value.span,
+                            format!("{label} has type `{actual}`, expected `{expected}`"),
+                        ));
+                    }
+                    Ok(merge_type_callable_contracts(expected, &actual))
+                } else {
+                    Ok(actual)
+                }
+            };
+            match output {
+                ComprehensionOutput::List(value) => vec![check_output(
+                    value,
+                    expected_output.first(),
+                    "list comprehension result",
+                )?],
+                ComprehensionOutput::Set(value) => vec![check_output(
+                    value,
+                    expected_output.first(),
+                    "set comprehension result",
+                )?],
+                ComprehensionOutput::Map { key, value } => vec![
+                    check_output(key, expected_output.first(), "map comprehension key")?,
+                    check_output(value, expected_output.get(1), "map comprehension value")?,
+                ],
+            }
+        };
+
+        self.reject_loop_carried_moves(&loop_baseline, &body_locals, "comprehension", clause.span)?;
+        self.merge_control_flow_moves(locals, &[&loop_baseline, &body_locals]);
+        Ok(result_types)
+    }
+
+    fn type_of_comprehension(
+        &self,
+        output: &ComprehensionOutput,
+        clauses: &[ComprehensionClause],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+    ) -> Result<Type> {
+        let expected_output = match (output, expected) {
+            (ComprehensionOutput::List(_), Some(Type::Named(name, args)))
+                if name == "Vec" && args.len() == 1 =>
+            {
+                args.clone()
+            }
+            (ComprehensionOutput::Set(_), Some(Type::Named(name, args)))
+                if name == "Set" && args.len() == 1 =>
+            {
+                args.clone()
+            }
+            (ComprehensionOutput::Map { .. }, Some(Type::Named(name, args)))
+                if name == "Map" && args.len() == 2 =>
+            {
+                args.clone()
+            }
+            _ => Vec::new(),
+        };
+        let mut clause_infos = Vec::with_capacity(clauses.len());
+        let output_types = self.type_comprehension_clauses(
+            output,
+            clauses,
+            0,
+            locals,
+            &expected_output,
+            &mut clause_infos,
+        )?;
+        let result_type = match output {
+            ComprehensionOutput::List(_) => Type::Named(
+                "Vec".to_string(),
+                vec![erase_type_callable_contracts(&output_types[0])],
+            ),
+            ComprehensionOutput::Set(_) => Type::Named(
+                "Set".to_string(),
+                vec![erase_type_callable_contracts(&output_types[0])],
+            ),
+            ComprehensionOutput::Map { .. } => Type::Named(
+                "Map".to_string(),
+                vec![
+                    erase_type_callable_contracts(&output_types[0]),
+                    erase_type_callable_contracts(&output_types[1]),
+                ],
+            ),
+        };
+        let id = ComprehensionId::new(self.module_name, self.closure_owner.clone(), span);
+        self.comprehension_infos.borrow_mut().insert(
+            id.clone(),
+            ComprehensionInfo {
+                id,
+                result_type: result_type.clone(),
+                clauses: clause_infos,
+            },
+        );
+        Ok(result_type)
+    }
+
     fn bind_target(
         &self,
         target: &crate::ast::BindingTarget,
@@ -9678,6 +10080,9 @@ impl<'a> FunctionChecker<'a> {
                     ],
                 ))
             }
+            ExprKind::Comprehension { output, clauses } => {
+                self.type_of_comprehension(output, clauses, expr.span, locals, expected)
+            }
             ExprKind::Conditional {
                 then_expr,
                 condition,
@@ -9932,6 +10337,50 @@ impl<'a> FunctionChecker<'a> {
                 for entry in entries {
                     Self::collect_lambda_capture_uses(&entry.key, bound, seen, captures);
                     Self::collect_lambda_capture_uses(&entry.value, bound, seen, captures);
+                }
+            }
+            ExprKind::Comprehension { output, clauses } => {
+                let mut comprehension_bound = bound.clone();
+                for clause in clauses {
+                    Self::collect_lambda_capture_uses(
+                        &clause.iterable,
+                        &comprehension_bound,
+                        seen,
+                        captures,
+                    );
+                    collect_binding_target_names(&clause.target, &mut comprehension_bound);
+                    for filter in &clause.filters {
+                        Self::collect_lambda_capture_uses(
+                            filter,
+                            &comprehension_bound,
+                            seen,
+                            captures,
+                        );
+                    }
+                }
+                match output {
+                    ComprehensionOutput::List(value) | ComprehensionOutput::Set(value) => {
+                        Self::collect_lambda_capture_uses(
+                            value,
+                            &comprehension_bound,
+                            seen,
+                            captures,
+                        );
+                    }
+                    ComprehensionOutput::Map { key, value } => {
+                        Self::collect_lambda_capture_uses(
+                            key,
+                            &comprehension_bound,
+                            seen,
+                            captures,
+                        );
+                        Self::collect_lambda_capture_uses(
+                            value,
+                            &comprehension_bound,
+                            seen,
+                            captures,
+                        );
+                    }
                 }
             }
             ExprKind::FString(parts) => {
@@ -10420,6 +10869,7 @@ impl<'a> FunctionChecker<'a> {
                     | ExprKind::List(_)
                     | ExprKind::Set(_)
                     | ExprKind::Map(_)
+                    | ExprKind::Comprehension { .. }
                     | ExprKind::Conditional { .. }
                     | ExprKind::Match { .. }
                     | ExprKind::Try(_)
@@ -10790,6 +11240,9 @@ impl<'a> FunctionChecker<'a> {
                         erase_type_callable_contracts(&value_ty),
                     ],
                 ))
+            }
+            ExprKind::Comprehension { output, clauses } => {
+                self.type_of_comprehension(output, clauses, expr.span, locals, expected)
             }
             ExprKind::Conditional {
                 then_expr,
@@ -19089,6 +19542,29 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(())
             }
+            ExprKind::Comprehension { output, clauses } => {
+                for clause in clauses {
+                    self.collect_result_place_accesses(
+                        &clause.iterable,
+                        locals,
+                        passing,
+                        label,
+                        places,
+                    )?;
+                    for filter in &clause.filters {
+                        self.collect_result_place_accesses(filter, locals, passing, label, places)?;
+                    }
+                }
+                match output {
+                    ComprehensionOutput::List(value) | ComprehensionOutput::Set(value) => {
+                        self.collect_result_place_accesses(value, locals, passing, label, places)
+                    }
+                    ComprehensionOutput::Map { key, value } => {
+                        self.collect_result_place_accesses(key, locals, passing, label, places)?;
+                        self.collect_result_place_accesses(value, locals, passing, label, places)
+                    }
+                }
+            }
             ExprKind::Conditional {
                 then_expr,
                 else_expr,
@@ -19229,6 +19705,28 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(())
             }
+            ExprKind::Comprehension { output, clauses } => {
+                for clause in clauses {
+                    self.collect_expr_call_places(
+                        &clause.iterable,
+                        locals,
+                        places,
+                        include_consumed,
+                    )?;
+                    for filter in &clause.filters {
+                        self.collect_expr_call_places(filter, locals, places, include_consumed)?;
+                    }
+                }
+                match output {
+                    ComprehensionOutput::List(value) | ComprehensionOutput::Set(value) => {
+                        self.collect_expr_call_places(value, locals, places, include_consumed)
+                    }
+                    ComprehensionOutput::Map { key, value } => {
+                        self.collect_expr_call_places(key, locals, places, include_consumed)?;
+                        self.collect_expr_call_places(value, locals, places, include_consumed)
+                    }
+                }
+            }
             ExprKind::FString(parts) => {
                 for part in parts {
                     if let crate::ast::FormatPart::Expr(value) = part {
@@ -19323,6 +19821,23 @@ impl<'a> FunctionChecker<'a> {
                 for entry in entries {
                     self.collect_expr_place_reads(&entry.key, locals, label, places);
                     self.collect_expr_place_reads(&entry.value, locals, label, places);
+                }
+            }
+            ExprKind::Comprehension { output, clauses } => {
+                for clause in clauses {
+                    self.collect_expr_place_reads(&clause.iterable, locals, label, places);
+                    for filter in &clause.filters {
+                        self.collect_expr_place_reads(filter, locals, label, places);
+                    }
+                }
+                match output {
+                    ComprehensionOutput::List(value) | ComprehensionOutput::Set(value) => {
+                        self.collect_expr_place_reads(value, locals, label, places);
+                    }
+                    ComprehensionOutput::Map { key, value } => {
+                        self.collect_expr_place_reads(key, locals, label, places);
+                        self.collect_expr_place_reads(value, locals, label, places);
+                    }
                 }
             }
             ExprKind::FString(parts) => {

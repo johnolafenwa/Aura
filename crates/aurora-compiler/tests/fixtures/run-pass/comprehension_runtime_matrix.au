@@ -1,0 +1,66 @@
+def first_filter(value: int64) -> bool:
+    print(f"first {value}")
+    return value != 2
+
+def second_filter(value: int64) -> bool:
+    print(f"second {value}")
+    return value == 3
+
+def select_inner(value: int64) -> Vec[int64]:
+    print(f"inner {value}")
+    return [value, value + 10]
+
+def mutate_key(key: mut int64) -> int64:
+    print(f"value sees {key}")
+    key += 10
+    return key
+
+def main():
+    filtered: Vec[int64] = [
+        value
+        for value in [1, 2, 3]
+        if first_filter(value)
+        if second_filter(value)
+    ]
+    print(filtered)
+
+    selected: Vec[int64] = [
+        outer + inner
+        for outer in [1, 2, 3]
+        if outer != 2
+        for inner in select_inner(outer)
+    ]
+    print(selected)
+
+    mut key_place: int64 = 5
+    ordered: Map[int64, int64] = {
+        key_place: mutate_key(key_place)
+        for _once in [0]
+    }
+    print(key_place)
+    print(ordered[5])
+
+    messages = Queue[String]()
+    messages.put("received")
+    messages.close()
+    received: Vec[String] = [message for message in messages]
+    print(received)
+
+    rows: Vec[(int64, (int64, int64))] = [
+        (1, (2, 3)),
+        (4, (5, 6))
+    ]
+    recursive: Vec[int64] = [
+        left + middle + right
+        for left, (middle, right) in rows
+    ]
+    print(recursive)
+
+    closures = Queue[String]()
+    closures.put("captured")
+    closures.close()
+    invoked: Vec[String] = [
+        (lambda: message)()
+        for message in closures
+    ]
+    print(invoked)

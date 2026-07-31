@@ -43,6 +43,9 @@ Except for short-circuit boolean operators and control-flow constructs, subexpre
 - every supplied call or constructor argument is evaluated in call-site source order
 - a lambda copies or moves every by-value capture when the lambda expression
   is evaluated, before any later sibling expression
+- a comprehension allocates its result, then evaluates clause iterables and
+  filters in nested outer-major order before evaluating its textually leading
+  output; a map output evaluates its key before its value
 
 Evaluating a copy place captures its copied value at that point. A non-copy
 place selected as a binary left operand, index base, method receiver, or
@@ -244,11 +247,39 @@ collection into a loop-private source once at entry and yields owned elements;
 reinitializing the consumed source binding in the body does not switch or
 truncate the active iteration. That one-time source selection is accepted
 under ADR-0017 and does not alter ADR-0006's ownership modes. `mut` iteration
-retain the collection as allowed by the static rules. Range iteration yields `int32` values from
-`start` inclusive to `end` exclusive; its currently accepted modifiers do not
-change behavior and remain a tracked language-design follow-up.
+over a mutable Vec grants exclusive element access with writeback and retains
+the collection; mutable Set iteration is rejected. Range iteration yields
+independent `int32` values from `start` inclusive to `end` exclusive. Explicit
+`mut` and `own` Range modifiers are rejected with `AU3004` because there is no
+place access or ownership transfer to modify; use the bare form.
 
 Queue iteration receives items until the queue closes, cancellation is observed, registered producers complete cleanly with no more items, or an unread sibling-task failure ends the surrounding group. It is a scheduler operation rather than iteration over a snapshot. Each item arrives already owned by the loop binding; explicit `own` and `mut` modifiers are rejected because neither the received value nor the copyable Queue handle has a place-iteration ownership mode to modify. Under accepted ADR-0017, the bare form evaluates and copies its Queue handle once at loop entry. This does not freeze the source binding: rebinding that variable in the body is allowed, but later iterations continue receiving through the captured handle. ADR-0006's ownership carve-out is otherwise unchanged.
+
+### Comprehensions
+
+A list, set, or map comprehension creates a fresh empty owned result and
+executes its clauses like nested bare loops. The first source is selected once.
+For each selected item, filters execute left to right and stop that item at the
+first `false`. Each inner source is selected once for every combination that
+survives the earlier filters. The traversal is outer-major: the complete inner
+traversal for one outer item finishes before the next outer item begins.
+
+At an innermost surviving combination, the list/set element or map key/value
+is evaluated and inserted. The output is written first in source but executes
+last. A map captures its key before evaluating its value. Set deduplication and
+Map equal-key replacement use their literal/storage contracts.
+
+Every clause inherits the selected bare-loop behavior above. Vec/Set sources
+remain shared and frozen through downstream filters, sources, and output.
+Range targets are copy `int32`. `enumerate` and `zip` retain their lockstep
+rules. Queue copies its handle for the clause and yields each received item
+owned; a Queue comprehension ends only when ordinary Queue iteration ends.
+
+Insertion owns its output. Copy values copy; owned non-Copy values move; a
+shared non-Copy Vec/Set element needs an explicit clone-safe clone. Each
+reached lambda creation uses ADR-0037. A trap or `try` propagation destroys the
+partial result and all active temporary sources exactly once before continuing
+the ordinary failure or early-return path.
 
 ## Pattern Matching
 

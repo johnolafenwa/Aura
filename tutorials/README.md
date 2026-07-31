@@ -60,7 +60,8 @@ The current tutorial set covers:
   semantics, copy types, and the exclusivity rule for mutable borrows
 - owned `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals,
   storing APIs, bare-shared/`own` iteration, mutable Vec iteration, stable
-  sorting, and eager callback-powered `map`/`filter`
+  sorting, eager callback-powered `map`/`filter`, and eager owned list/set/map
+  comprehensions with filters and nested clauses
 - enums with exhaustive `match`
 - user-defined generic classes, enums, and functions
 - trait declarations, trait impls, and bounded generic calls

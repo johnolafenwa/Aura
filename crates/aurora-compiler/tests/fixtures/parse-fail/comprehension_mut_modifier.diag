@@ -1,0 +1,5 @@
+error[AU1101]: comprehensions use bare iteration; remove `mut` or `own` and write `for name in values`
+ --> crates/aurora-compiler/tests/fixtures/parse-fail/comprehension_mut_modifier.au:3:35
+  |
+3 |     changed = [value for value in mut values]
+  |                                   ^

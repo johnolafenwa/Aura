@@ -1,0 +1,6 @@
+filter 1
+filter 2
+filter stopped
+output 1
+output 2
+output stopped

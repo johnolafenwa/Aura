@@ -1,0 +1,25 @@
+def main():
+    values = [1, 2, 3, 4]
+
+    squares = [value * value for value in values]
+    even_squares = [value * value for value in values if value % 2 == 0]
+    unique_remainders = {value % 3 for value in values}
+    labels = {value: value * 10 for value in values if value >= 3}
+    pairs = [
+        left * 10 + right
+        for left in values if left < 3
+        for right in values if right < 3
+    ]
+
+    assert squares == [1, 4, 9, 16]
+    assert even_squares == [4, 16]
+    assert 0 in unique_remainders
+    assert 1 in unique_remainders
+    assert 2 in unique_remainders
+    assert labels == {3: 30, 4: 40}
+    assert pairs == [11, 12, 21, 22]
+
+    print(squares)
+    print(even_squares)
+    print(labels)
+    print(pairs)

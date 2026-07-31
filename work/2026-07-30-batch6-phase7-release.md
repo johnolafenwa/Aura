@@ -91,7 +91,84 @@ B6.0 is active in strict-order entry closure:
   `130a78d5f09982b58918b2454254b41edb194187829d69878fbdf9e714e5da36`.
   No synthetic coverage test or exclusion was added; one unreachable
   structural closure branch was replaced by its explicit 0.2 non-structural
-  case. Phase 7 comprehension work is now active.
+  case.
+
+Phase 7.1 comprehension implementation is integrated but remains active until
+the broad gates pass:
+
+- The parser and AST accept eager list, set, and map comprehensions with one
+  or more progressive `for` clauses, left-to-right filters, recursive tuple
+  targets, and multiline layout. Capability modifiers, generator
+  expressions, mixed literal/comprehension forms, malformed clauses, and
+  trailing commas are rejected with maintained diagnostics.
+- Static semantics infer or contextually check `Vec[T]`, `Set[T]`, and
+  `Map[K, V]`, require every filter to be exactly `bool`, introduce targets
+  progressively under the ordinary no-shadowing rule, and prevent target
+  leakage. Range, Vec, Set, Queue, enumerate, and zip clauses reuse bare-loop
+  typing and ownership; Vec/Set traversal stays shared and frozen while Queue
+  receive produces an owned item. Output insertion is an owned storage
+  boundary with no implicit clone. Owner-qualified `ComprehensionInfo`
+  metadata records the result type, every clause binding type, and the Queue
+  receive-owned distinction for lowering and analysis.
+- MIR allocates one fresh typed collection, lowers clauses as nested existing
+  bare loops, branches filters in execution order, and emits ordinary Vec
+  append, Set insert, or key-before-value Map update operations. Later equal
+  map keys replace earlier values and duplicate set values collapse. Runtime
+  traps and `try` propagation use the existing partial-result cleanup path.
+  The direct backend shares this MIR contract, and maintained runtime fixtures
+  pin both-backend output parity.
+- Compiler analysis, the language server, and the bundled extension provide
+  the checked collection result type, progressively scoped completion and
+  hover, exact tuple-target definitions, output member completion, and
+  post-expression non-leakage.
+- ADR-0039 records the binding Aurora 0.2 contract. The normative Manual,
+  Learn and tutorial tracks, root/example/editor indexes, maintained
+  `examples/collections/comprehensions.au`, and source-hash reference
+  inventory are synchronized.
+
+An integration regression exposed one imported-module metadata defect. MIR
+lowering already selects the defining module namespace, but namespace export
+did not include the new comprehension map. Public imported functions could
+therefore reach lowering without their checked result and clause-binding
+types. Namespace export now carries owner-qualified comprehension records and
+qualifies nominal result and binding types; the
+`comprehension_imported_metadata` fixture proves that imported public helpers
+run as `2\n6` on both MIR and direct.
+
+The final independent audit found another lowering-metadata defect before the
+feature commit. Comprehensions in accepted function-parameter defaults and
+class-field defaults passed semantic checking but panicked when either backend
+lowered them. Test-first semantic, run-pass, and dual-backend regressions now
+pin both positions. Field-default metadata is retained and merged into the
+checked program; hidden default-function lowerers carry the exact lexical
+owner; generated lambdas inherit that metadata context; and field defaults
+select the defining module's top-level metadata.
+
+Focused verification completed so far:
+
+- 14/14 comprehension-focused compiler unit tests
+- 60/60 parser tests, parse fixtures, and the Python-comprehension acceptance
+  hint
+- comprehension check-pass and check-fail fixtures
+- imported nominal-metadata MIR regression plus `2\n6` MIR/direct fixture
+- main comprehension, full runtime-matrix, `try`-propagation, and partial-trap
+  fixtures with identical MIR/direct behavior across the three focused CLI
+  parity tests
+- 87/87 compiler-analysis tests
+- 99/99 language-server tests at 100% statements, branches, functions, and
+  lines
+- 17/17 extension tests
+- reference integrity: 36 pages, 258 executable blocks, 9 reference tests,
+  59 integrity tests, and all 683 migration manifests
+- documentation build and Rust formatting
+- the unrestricted pre-audit compiler-library replay at 1,401/1,401 and the
+  process integration suite at 5/5
+- the new default-expression semantic regression, run-pass fixture, and
+  MIR/direct CLI regression after the audit fix
+
+Before Phase 7.1 is complete or committed, finish the independent audit
+matrix, run warning-denied Clippy, then pass the forced-backend matrix, exact
+clean full CI, and frozen compiler coverage. There is no current blocker.
 
 ## Authorized sequence
 

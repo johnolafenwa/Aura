@@ -74,6 +74,52 @@ source. Reinitializing the consumed source binding in the body cannot switch or
 truncate the active iteration. Accepted ADR-0017 records this one-time
 source-selection rule without changing ADR-0006's loop ownership modes.
 
+## Comprehensions
+
+Comprehensions eagerly build fresh owned collections:
+
+    squares = [value * value for value in values]
+    even = {value for value in values if value % 2 == 0}
+    labels = {value: str(value) for value in values}
+
+List comprehensions produce `Vec[T]`, set comprehensions produce `Set[T]`, and
+map comprehensions produce `Map[K, V]`. At least one `for` clause is required.
+Filters and later clauses may follow:
+
+    pairs = [
+        left * 10 + right
+        for left in values if left < 3
+        for right in values if right < 3
+    ]
+
+Evaluation is outer-major. The first iterable is evaluated once. For each
+outer item, filters run left to right; each later iterable is evaluated once
+for every surviving combination of earlier targets. At the innermost
+surviving combination, the element expression runs and its result moves or
+copies into the result. Although the output expression is written first, it
+does not run until all clauses and filters that guard it have succeeded. A map
+evaluates and captures its key before its value. Equal set elements deduplicate
+and later equal map keys replace values under the ordinary collection rules.
+
+Every comprehension clause uses the same bare iteration contract as a
+statement loop. Vec and Set sources are shared and frozen, Range produces copy
+`int32` values, and `enumerate(...)` and `zip(...)` keep their compiler-known
+bare-loop behavior. Queue keeps its receive carve-out: the handle is copied
+for the active clause and each received item arrives owned. There is no
+`mut` or `own` comprehension-clause spelling.
+
+Result storage is owned. A copy element copies into it; an owned non-Copy value
+moves. A non-Copy element reached through a shared Vec or Set source must use
+an explicit `.clone()` when clone-safe:
+
+    names_copy = [name.clone() for name in names]
+
+Aurora never inserts a hidden clone. A Queue-received item is already owned and
+may move directly into the result. Comprehension targets are local to the
+expression and do not leak afterwards. See
+[Expressions](/manual/expressions#comprehensions) for clause order and
+[Closures](/manual/closures) for lambdas evaluated inside clauses.
+
 ## Vec[T]
 
 `Vec[T]` stores values in insertion order and indexes them with `int32`.
@@ -288,8 +334,9 @@ owned replacement. `map` owns the callback-produced result values. `filter`
 clones accepted source elements into its fresh result and therefore has the
 same clone-safety boundary as other clone-producing collection operations.
 
-This executable example demonstrates eager transformation, filtering, natural
-ordering, keyed ordering, and source retention:
+This executable example demonstrates eager callback and comprehension
+transformation, filtering, natural ordering, keyed ordering, source retention,
+set deduplication, and nested outer-major order:
 
 ```aurora
 def doubled(value: int32) -> int32:
@@ -312,11 +359,29 @@ def main():
     mut descending = values.clone()
     descending.sort_by(descending_key)
 
+    squares = [value * value for value in values]
+    even_squares = [value * value for value in values if value % 2 == 0]
+    remainders = {value % 3 for value in values}
+    labels = {value: value * 10 for value in values if value >= 3}
+    pairs = [
+        left * 10 + right
+        for left in values if left < 3
+        for right in values if right < 3
+    ]
+
+    assert 0 in remainders
+    assert 1 in remainders
+    assert 2 in remainders
+
     print(mapped)
     print(filtered)
     print(ascending)
     print(descending)
     print(values)
+    print(squares)
+    print(even_squares)
+    print(labels)
+    print(pairs)
 ```
 
 ## Choosing The Right Collection
@@ -330,8 +395,9 @@ Use `Set[T]` when the question is "have I seen this before?"
 ## Grammar
 
 The normative productions for list, map, set, and empty collection literals;
-generic collection types; indexing; indexed assignment; method calls; and
-loop ownership modifiers are in [Grammar](/manual/grammar). The first colon in
+list/set/map comprehensions; generic collection types; indexing; indexed
+assignment; method calls; and loop ownership modifiers are in
+[Grammar](/manual/grammar). The first colon in
 a nonempty brace literal selects map syntax. `{}` is grammatically a map but
 may type as an empty `Set[T]` under an expected set type. `Set{...}` is the
 explicit set-literal form, and `Set[T]()` is the typed constructor form.
@@ -345,7 +411,8 @@ type `int32`; Map indexes and lookup keys have exact type `K`. Mutating and
 retaining APIs use the owned positions shown in the tables above, and every
 mutating method or indexed assignment requires a mutable collection place.
 Bare Vec/Set iteration borrows the collection, `own` consumes it, and `mut` is
-supported only for a mutable Vec place. A
+supported only for a mutable Vec place. Comprehension clauses admit only the
+bare iteration form. A
 direct Map read requires copy `V`; a cloned non-copy read uses `get` only when
 `V` is clone-safe, while `remove` transfers any `V`. Simple
 indexed assignment accepts any Vec element or Map value type and owns the
@@ -366,6 +433,14 @@ are rejected with `AU2002`.
 The bare callback parameters are logical shared capabilities even when `T` is
 copy. A callback with a `mut` or `own` parameter is a different function type
 and is rejected with `AU2002`.
+
+A list/set comprehension element expression must have exactly the output
+element type. A map comprehension key and value must have exactly `K` and `V`.
+An expected collection type contextually types these expressions; without one,
+their inferred types select the invariant result specialization. Every filter
+has exactly type `bool`. Each clause source must satisfy the same iterable rule
+as a statement bare loop. Targets are progressively scoped, cannot shadow
+visible names or earlier targets, and do not enter the enclosing scope.
 
 ## Runtime Semantics
 
@@ -389,6 +464,12 @@ their eager results in visit order. Natural and keyed sorts are stable.
 trap during key computation propagates unchanged and leaves the receiver
 unchanged.
 
+A comprehension creates one fresh output collection and executes its clauses
+as nested loops. It is eager rather than resumable or lazy. Nested clauses are
+outer-major, filters run left to right and short-circuit the current
+combination, and map keys evaluate before values. A trap or `try` propagation
+cleans up the partial result.
+
 ## Ownership And Evaluation Order
 
 Collection literals, storing methods, and simple Map indexed assignment own
@@ -408,18 +489,33 @@ order. Algorithm callbacks receive shared element access. `map` moves each
 callback result into the returned vector; `filter` retains the source and
 clones each accepted element into the result.
 
+Comprehension iterable, filter, key, value, and element expressions retain
+ADR-0016 sequencing. Every reached inner source is selected once for that
+surviving outer combination. Active shared collection sources stay frozen
+through downstream filters, clauses, and output insertion. Output insertion is
+an owned position and follows ordinary Copy, move, explicit-clone, and
+loop-carried-move rules.
+
 ## Diagnostics
 
-`AU1101` reports malformed literal, index, method-call, or loop syntax.
+`AU1101` reports malformed literal, index, method-call, loop, or comprehension
+syntax. A `mut`/`own` clause reports:
+
+    comprehensions use bare iteration; remove `mut` or `own` and write `for name in values`
+
+`AU2005` rejects a generator expression, including a parenthesized form or a
+generator-shaped call argument, with:
+
+    generator expressions are unavailable; use an eager owned list comprehension or an explicit loop
+
 `AU2001` reports unknown collection types and members. `AU2002` covers literal
 element/key/value mismatch, missing empty-literal context, generic arity,
 index/key type mismatch, method argument type mismatch, and a collection
 callback whose parameter capability or return type does not match the exact
 shared callback contract, or an unavailable natural or key ordering. `AU2004`
-reports
-invalid constructor or method argument binding. `AU2005` supplies the focused
-Python-migration guidance for `len(...)`, `.append(...)`, `in`, and
-comprehensions. `AU2999` covers unsupported collection methods, non-indexable
+reports invalid constructor or method argument binding. Other `AU2005` cases
+supply focused Python-migration guidance for `len(...)`, `.append(...)`, and
+`in`. `AU2999` covers unsupported collection methods, non-indexable
 values, and remaining static collection rejections. `AU3001` reports use after moving a
 stored value, indexed-assignment key, or consuming collection. `AU3002`
 reports mutation/move while a collection or element is borrowed and invalid
@@ -435,20 +531,25 @@ removal are typed values, not diagnostics.
 
 ## Backend Support
 
-Vec, Map, and Set literals, equality, cloning, iteration, indexing, mutation,
-eager callback algorithms, stable sorting, and the complete method tables
+Vec, Map, and Set literals, comprehensions, equality, cloning, iteration,
+indexing, mutation, eager callback algorithms, stable sorting, and the
+complete method tables
 above are implemented for MIR execution and direct native generation. Both
 backends use the same static collection types
 and are parity-tested for duplicate-key replacement, key-before-value effects,
-indexed reads and writes, missing-key traps, and maintained observable
-behavior. Compiler analysis and the LSP consume those same builtin signatures.
+comprehension order and ownership, indexed reads and writes, missing-key traps,
+and maintained observable behavior. Compiler analysis and the LSP consume
+those same types, binding scopes, and builtin signatures.
 
 ## Limits And Implementation-Defined Behavior
 
 Mutable Set iteration and direct Map iteration are unavailable; iterate the
 owned Vec snapshots returned by Map methods. Arbitrary user-defined iterables,
-comprehensions, and trailing commas are unavailable; collection literals may
-span physical lines through their own delimiters. The slice surface is
+generator expressions, comprehension source modifiers, and trailing commas
+are unavailable; collection literals and comprehensions may span physical
+lines through their own delimiters. A Queue comprehension is eager and
+continues receiving until the ordinary Queue-iteration termination condition;
+use an explicit loop for early exit or bounded streaming. The slice surface is
 reserved for Phase 7 and is not accepted in
 Aurora 0.1. Set iteration and rendering currently follow an insertion-oriented
 representation, but Set order is not a promised API contract; algorithms MUST
@@ -460,8 +561,9 @@ implementation-defined permission for backend divergence.
 
 ## Status
 
-Vec, Map, and Set typing, literals, constructors, equality, cloning, Vec/Set
-iteration modes, negative Vec indexing, and the documented method surfaces,
+Vec, Map, and Set typing, literals, eager owned comprehensions, constructors,
+equality, cloning, Vec/Set iteration modes, negative Vec indexing, and the
+documented method surfaces,
 including callable-powered Vec algorithms, are implemented for the post-Phase
 1.5 surface. The duplicate-key, direct-read,
 simple-assignment, and compound-assignment Map rules are implemented under
@@ -473,6 +575,8 @@ simple-assignment, and compound-assignment Map rules are implemented under
 `crates/aurora-compiler/tests/fixtures/check-fail/map_compound_assignment_noncopy_value_rejected.au`,
 and
 `crates/aurora-compiler/tests/fixtures/run-fail/map_index_missing_key.au`.
-Mutable Set iteration, direct Map iteration, general iterable protocols,
-and comprehensions are unavailable. Collection slicing is reserved for the
-Phase 7 slice work.
+Comprehensions are Accepted under ADR-0039 and pinned by the focused
+comprehension fixture family and `examples/collections/comprehensions.au`.
+Mutable Set iteration, direct Map iteration, general iterable protocols, and
+generator expressions remain unavailable. Collection slicing is reserved for
+the Phase 7 slice work.

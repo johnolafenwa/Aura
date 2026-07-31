@@ -861,6 +861,31 @@ if rg -n 'blocking pool uses 2 through 8 host threads|no 0\.1 configuration or q
   exit 1
 fi
 
+# Phase 7.1: Accepted ADR-0039 keeps eager comprehensions synchronized across
+# grammar, semantics, diagnostics, maintained examples, and teaching material.
+test -s architecture_docs/decisions/0039-comprehensions.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0039-comprehensions.md
+grep -Fq '0039-comprehensions.md) — Accepted for Aurora 0.2 in Batch 6, Phase 7.1' architecture_docs/decisions/README.md
+grep -Fq 'list-comprehension' docs/manual/grammar.md
+grep -Fq 'comprehension-clauses' docs/manual/grammar.md
+grep -Fq 'Evaluation is outer-major.' docs/manual/collections.md
+grep -Fq 'Although the output expression is written first' docs/manual/collections.md
+grep -Fq 'Queue keeps its receive carve-out' docs/manual/collections.md
+grep -Fq 'No comprehension target is visible after the closing' docs/manual/names-and-scopes.md
+grep -Fq 'A map comprehension key and value must have exactly `K` and `V`.' docs/manual/collections.md
+grep -Fq 'A map captures its key before evaluating its value.' docs/manual/execution-model.md
+grep -Fq 'generator expressions are unavailable; use an eager owned list comprehension or an explicit loop' docs/manual/diagnostics.md
+grep -Fq 'comprehensions use bare iteration; remove `mut` or `own` and write `for name in values`' docs/manual/diagnostics.md
+grep -Fq 'Accepted ADR-0039 eager owned comprehensions' docs/manual/conformance.md
+test -s examples/collections/comprehensions.au
+grep -Fq 'for left in values if left < 3' examples/collections/comprehensions.au
+grep -Fq '`comprehensions.au`' examples/README.md
+grep -Fq 'examples/collections/comprehensions.au' README.md
+grep -Fq 'examples/collections/comprehensions.au' tutorials/02-bindings-and-types.md
+grep -Fq 'examples/collections/comprehensions.au' tutorials/04-control-flow.md
+grep -Fq 'Comprehensions use the bare form' tutorials/06-ownership-and-borrowing.md
+grep -Fq 'comprehensions with filters and nested clauses' tutorials/README.md
+
 python3 scripts/test_reference_integrity.py
 python3 scripts/reference_integrity.py
 python3 scripts/test_capability_migrate.py

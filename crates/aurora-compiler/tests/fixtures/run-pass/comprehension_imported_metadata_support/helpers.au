@@ -1,0 +1,8 @@
+public class Boxed:
+    value: int64
+
+public def boxed(values: Vec[int64]) -> Vec[Boxed]:
+    return [Boxed(value=value * 2) for value in values]
+
+public def unboxed(values: Vec[Boxed]) -> Vec[int64]:
+    return [value.value for value in values]

@@ -1347,6 +1347,23 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
                 (id.clone(), qualified)
             })
             .collect(),
+        comprehensions: program
+            .comprehensions
+            .iter()
+            .map(|(id, info)| {
+                let mut qualified = info.clone();
+                qualified.result_type = qualify_export_type(program, &qualified.result_type);
+                qualified.clauses = qualified
+                    .clauses
+                    .iter()
+                    .map(|clause| sema::ComprehensionClauseInfo {
+                        binding_type: qualify_export_type(program, &clause.binding_type),
+                        receive_owned: clause.receive_owned,
+                    })
+                    .collect();
+                (id.clone(), qualified)
+            })
+            .collect(),
     };
 
     for item in &program.module.items {
@@ -1436,6 +1453,7 @@ fn insert_namespace_import(
             all_traits: BTreeMap::new(),
             imported_modules: BTreeMap::new(),
             closures: BTreeMap::new(),
+            comprehensions: BTreeMap::new(),
         })
     });
     let ImportedBinding::Module(root_namespace) = root else {
@@ -1477,6 +1495,7 @@ fn insert_namespace_import(
                 all_traits: BTreeMap::new(),
                 imported_modules: BTreeMap::new(),
                 closures: BTreeMap::new(),
+                comprehensions: BTreeMap::new(),
             });
     }
     let last = path[path.len() - 1].clone();

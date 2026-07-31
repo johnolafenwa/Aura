@@ -245,6 +245,41 @@ If you define your own `enumerate` or `zip` function, yours wins.
 
 See [examples/control_flow/enumerate_and_zip.au](../examples/control_flow/enumerate_and_zip.au).
 
+## Comprehensions
+
+Comprehensions package nested bare loops and filters into an eager collection
+expression:
+
+```python
+values = [1, 2, 3, 4]
+even_squares = [value * value for value in values if value % 2 == 0]
+pairs = [
+    left * 10 + right
+    for left in values if left < 3
+    for right in values if right < 3
+]
+```
+
+The output expression is written first, but the first iterable runs first.
+Filters run left to right and nested clauses are outer-major, so `pairs` is
+`[11, 12, 21, 22]`. A map comprehension evaluates its key before its value:
+
+```python
+labels = {value: value * 10 for value in values if value >= 3}
+```
+
+Every clause uses the bare-loop contract. Vec and Set sources are shared,
+Range yields copy values, `enumerate`/`zip` keep their loop behavior, and
+Queue receives owned items through its existing carve-out. Comprehension
+targets do not leak outside the expression.
+
+There is no `mut`/`own` clause spelling and no lazy generator expression. Use
+an explicit loop when you need mutation, `break`, `continue`, or incremental
+stream processing.
+
+See
+[examples/collections/comprehensions.au](../examples/collections/comprehensions.au).
+
 ## Current Limits
 
 The current compiler supports `for` over:

@@ -204,6 +204,59 @@ for value in values:
 
 `mut` iteration requires a mutable binding.
 
+## Comprehensions: Transform And Filter
+
+Use a comprehension when a transformation is easier to read as one eager
+expression:
+
+```python
+scores = [1, 2, 3, 4]
+squares = [score * score for score in scores]
+even_squares = [score * score for score in scores if score % 2 == 0]
+```
+
+The result is a fresh owned `Vec`, not a lazy iterator or view. The source
+remains available because every clause uses bare shared iteration. Set and map
+results use braces:
+
+```python
+remainders = {score % 3 for score in scores}
+labels = {score: f"score-{score}" for score in scores}
+```
+
+Multiple clauses are nested in outer-major order:
+
+```python
+pairs = [
+    left * 10 + right
+    for left in scores if left < 3
+    for right in scores if right < 3
+]
+# [11, 12, 21, 22]
+```
+
+Read this as nested bare `for` loops. The first source is selected once,
+filters run left to right, and each inner source is selected for every
+surviving outer item. The output is written first but runs only after its
+clauses and filters. In a map comprehension, the key runs before the value.
+
+Comprehension targets exist only inside the expression. Output storage owns
+its values, so a non-copy item borrowed from a Vec needs an explicit clone:
+
+```python
+names = ["Ada", "Grace"]
+copied_names = [name.clone() for name in names]
+```
+
+There is no `mut` or `own` clause form. Queue clauses keep the ordinary Queue
+exception: each receive item arrives owned even though the syntax is bare.
+Parenthesized generator expressions remain unavailable; choose an eager
+comprehension or an explicit loop when you need control over incremental work.
+
+See
+[`examples/collections/comprehensions.au`](../../examples/collections/comprehensions.au)
+for list, set, map, filter, and nested-clause examples.
+
 ## `Map[K, V]`: Lookup Tables
 
 A map associates keys of type `K` with values of type `V`:

@@ -20,6 +20,10 @@ Current compiler-backed analysis covers:
 - go-to-definition
 - contextual lambda parameter scope, captured-name navigation, callable hover,
   and closure ownership diagnostics
+- progressively scoped comprehension targets, including hover, exact
+  go-to-definition, nested-clause completion, and owned result-type inference
+- incomplete comprehension clauses and filters retain exact `AU1101`
+  diagnostics, broad recovery completions, and safe empty hover responses
 - extern C and opaque-handle symbols, hover, definitions, completions, and
   package-authorization diagnostics
 

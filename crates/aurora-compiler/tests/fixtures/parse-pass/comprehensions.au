@@ -1,0 +1,20 @@
+def main():
+    values = [1, 2, 3]
+    pairs = [(1, 2), (3, 4)]
+    doubled = [value * 2 for value in values]
+    selected = {
+        value
+        for value in values
+        if value > 0
+        if value < 10
+    }
+    indexed = {
+        left: right
+        for (left, right) in pairs
+    }
+    nested = [
+        left + right
+        for left in values
+        for right in values
+        if left != right
+    ]

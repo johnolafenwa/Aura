@@ -1,0 +1,5 @@
+error[AU2001]: unknown name `value`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/comprehension_target_does_not_leak.au:3:11
+  |
+3 |     print(value)
+  |           ^

@@ -1,0 +1,7 @@
+error[AU3002]: lambda cannot capture shared value `name` by value
+ --> crates/aurora-compiler/tests/fixtures/check-fail/comprehension_shared_target_capture.au:3:27
+  |
+3 |     callbacks = [(lambda: name)() for name in names]
+  |                           ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/comprehension_shared_target_capture.au:3:39: shared value `name` is declared here
+  = help: clone `name` into an owned local before creating the lambda, or declare the enclosing parameter as `own String`

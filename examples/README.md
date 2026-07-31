@@ -142,6 +142,14 @@ printed-output order unless they explicitly coordinate that order.
 
 ### `collections/`
 
+- `comprehensions.au`
+  - eager owned list, set, and map comprehensions with filters, nested
+    outer-major clauses, target-local scope, and ordinary bare-loop ownership
+  - prints:
+    - `[1, 4, 9, 16]`
+    - `[4, 16]`
+    - `{3: 30, 4: 40}`
+    - `[11, 12, 21, 22]`
 - `vec_basics.au`
   - list literals, indexed reads, `Vec[T]` methods, and indexed mutation through `set(...)`
   - prints:

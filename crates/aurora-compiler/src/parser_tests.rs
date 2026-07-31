@@ -921,6 +921,199 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
 }
 
 #[test]
+fn comprehensions_parse_list_set_map_nested_filters_targets_and_multiline_forms() {
+    for source in [
+        "[value * 2 for value in values]",
+        "{value for value in values if value > 0 if value < 10}",
+        "{key: value for key, value in entries}",
+        "[left + right for left in lefts for right in rights if left != right]",
+        "[\n    left + right\n    for (left, right) in pairs\n    if left > 0\n]",
+        "[value if choose_left else fallback for value in values]",
+        "[value for value in (primary if ready else fallback)]",
+    ] {
+        parse_expression(source)
+            .unwrap_or_else(|error| panic!("{source} should parse as a comprehension: {error}"));
+    }
+
+    let nested = parse_expression(
+        "[left + right for left in lefts for right in rights if left != right if right > 0]",
+    )
+    .expect("nested comprehension should parse");
+    assert!(matches!(
+        nested.kind,
+        ExprKind::Comprehension {
+            output: ComprehensionOutput::List(_),
+            ref clauses,
+        } if clauses.len() == 2
+            && clauses[0].filters.is_empty()
+            && clauses[1].filters.len() == 2
+            && matches!(
+                clauses[0].target,
+                BindingTarget::Name { ref name, .. } if name == "left"
+            )
+            && matches!(
+                clauses[1].target,
+                BindingTarget::Name { ref name, .. } if name == "right"
+            )
+    ));
+
+    let set =
+        parse_expression("{value for value in values}").expect("set comprehension should parse");
+    assert!(matches!(
+        set.kind,
+        ExprKind::Comprehension {
+            output: ComprehensionOutput::Set(_),
+            ref clauses,
+        } if clauses.len() == 1
+    ));
+
+    let map = parse_expression("{key: value for (key, value) in entries}")
+        .expect("map comprehension with a tuple target should parse");
+    assert!(matches!(
+        map.kind,
+        ExprKind::Comprehension {
+            output: ComprehensionOutput::Map { .. },
+            ref clauses,
+        } if matches!(
+            clauses.as_slice(),
+            [ComprehensionClause {
+                target: BindingTarget::Tuple { elements, .. },
+                ..
+            }] if elements.len() == 2
+        )
+    ));
+}
+
+#[test]
+fn comprehensions_reject_capability_modifiers_and_generator_expressions_with_guidance() {
+    for source in [
+        "[value for value in mut values]",
+        "[value for value in own values]",
+        "[value for mut value in values]",
+        "[value for own value in values]",
+    ] {
+        let error = parse_expression(source)
+            .expect_err("comprehension capability modifiers should be rejected");
+        assert_eq!(error.code, "AU1101");
+        assert!(
+            error.message.contains("comprehensions use bare iteration"),
+            "unexpected diagnostic for {source}: {}",
+            error.message
+        );
+    }
+
+    for source in [
+        "(value for value in values)",
+        "consume(value for value in values)",
+    ] {
+        let generator = parse_expression(source)
+            .expect_err("generator expressions remain outside the supported language");
+        assert_eq!(generator.code, "AU2005");
+        assert_eq!(
+            generator.message,
+            "generator expressions are unavailable; use an eager owned list comprehension or an explicit loop"
+        );
+    }
+}
+
+#[test]
+fn comprehensions_reject_mixed_literals_trailing_commas_and_malformed_clauses_precisely() {
+    for source in [
+        "[first, value for value in values]",
+        "{first, value for value in values}",
+        "{\"first\": 1, key: value for key, value in entries}",
+        "[value for value in values, other]",
+        "{value for value in values, other}",
+        "{key: value for key, value in entries, \"other\": 1}",
+    ] {
+        let error = parse_expression(source)
+            .expect_err("literal elements and comprehension clauses cannot be mixed");
+        assert!(
+            error
+                .message
+                .contains("cannot mix literal entries with a comprehension"),
+            "unexpected diagnostic for {source}: {}",
+            error.message
+        );
+    }
+
+    for source in [
+        "[value for value in values,]",
+        "{value for value in values,}",
+        "{key: value for key, value in entries,}",
+    ] {
+        let error =
+            parse_expression(source).expect_err("a comprehension cannot have a trailing comma");
+        assert!(
+            error
+                .message
+                .contains("comprehensions do not allow trailing commas"),
+            "unexpected diagnostic for {source}: {}",
+            error.message
+        );
+    }
+
+    for (source, expected) in [
+        (
+            "[value for in values]",
+            "expected a binding target after `for`",
+        ),
+        (
+            "[value for value values]",
+            "expected `in` after comprehension target",
+        ),
+        (
+            "[value for value in]",
+            "expected an iterable expression after `in`",
+        ),
+        (
+            "[value for value in values if]",
+            "expected a filter expression after `if`",
+        ),
+    ] {
+        let error =
+            parse_expression(source).expect_err("malformed comprehension should be rejected");
+        assert!(
+            error.message.contains(expected),
+            "unexpected diagnostic for {source}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn comprehension_clause_and_filter_chains_obey_the_expression_complexity_limit() {
+    let mut supported = String::from("[value");
+    for index in 0..127 {
+        supported.push_str(&format!(" for value{index} in values"));
+    }
+    supported.push(']');
+    parse_expression(&supported).expect("127 comprehension clauses should remain supported");
+
+    let mut excessive = String::from("[value");
+    for index in 0..128 {
+        excessive.push_str(&format!(" for value{index} in values"));
+    }
+    excessive.push(']');
+    let error =
+        parse_expression(&excessive).expect_err("128 comprehension clauses should hit the limit");
+    assert!(error
+        .message
+        .contains("expression chain exceeds the supported recursion limit of 128"));
+
+    let mut excessive_filters = String::from("[value for value in values");
+    for _ in 0..127 {
+        excessive_filters.push_str(" if ready");
+    }
+    excessive_filters.push(']');
+    let error = parse_expression(&excessive_filters)
+        .expect_err("clauses and filters should share one complexity budget");
+    assert!(error
+        .message
+        .contains("expression chain exceeds the supported recursion limit of 128"));
+}
+
+#[test]
 fn conditional_expressions_are_low_precedence_and_right_associative() {
     let expression = parse_expression("a or b if c else d if e else f or g")
         .expect("conditional expression should parse");
@@ -2230,6 +2423,29 @@ fn offset_helpers_cover_fstring_expression_parts() {
     let (_, specialized_args) = named_type_ref(&type_args[0]).expect("named Box type");
     assert_eq!(specialized_args[0].span.line, 9);
     assert!(specialized_args[0].span.column >= type_args[0].span.column);
+
+    let mut comprehension =
+        parse_expression("f\"values={[value for value in values if value > 0]}\"")
+            .expect("comprehension inside f-string interpolation should parse");
+    offset_expr_span(&mut comprehension, 11, 7);
+    let ExprKind::FString(parts) = &comprehension.kind else {
+        panic!("expected f-string expression");
+    };
+    let FormatPart::Expr(inner) = &parts[1] else {
+        panic!("expected comprehension interpolation");
+    };
+    let ExprKind::Comprehension { output, clauses } = &inner.kind else {
+        panic!("expected comprehension inside interpolation");
+    };
+    assert!(matches!(output, ComprehensionOutput::List(_)));
+    assert_eq!(clauses[0].span.line, 11);
+    assert!(clauses[0].span.column >= 7);
+    assert!(matches!(
+        clauses[0].target,
+        BindingTarget::Name { span, .. } if span.line == 11 && span.column >= 7
+    ));
+    assert_eq!(clauses[0].iterable.span.line, 11);
+    assert_eq!(clauses[0].filters[0].span.line, 11);
 
     let mut type_ref = TypeRef::named(
         "Box",

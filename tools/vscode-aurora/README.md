@@ -37,6 +37,10 @@ Current completion scope is intentionally lightweight. The language server under
 - function parameters and simple local bindings
 - contextually typed lambda parameters and captured outer locals
 - method `self`, enum match payload bindings, and `for` loop bindings
+- comprehension targets in filters, nested iterables, and output expressions,
+  with exact target navigation and no leakage after the comprehension
+- incomplete comprehension clauses and filters keep teaching diagnostics and
+  broad completions available without stale hover metadata or server failures
 - constructor-style type inference such as `p = Point(...)`
 - basic builtin helpers such as `range` and `float64.sqrt`
 

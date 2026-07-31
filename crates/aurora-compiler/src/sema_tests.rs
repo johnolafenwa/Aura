@@ -42,6 +42,7 @@ fn public_ffi_handle_namespace(module_name: &str) -> ModuleNamespace {
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
         closures: BTreeMap::new(),
+        comprehensions: BTreeMap::new(),
     }
 }
 
@@ -71,6 +72,7 @@ fn public_ffi_function_namespace(module_name: &str) -> ModuleNamespace {
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
         closures: BTreeMap::new(),
+        comprehensions: BTreeMap::new(),
     }
 }
 
@@ -1055,6 +1057,7 @@ fn ffi_extern_metadata_supports_from_and_qualified_import_calls() {
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
         closures: BTreeMap::new(),
+        comprehensions: BTreeMap::new(),
     };
 
     let qualified = crate::parse_source(
@@ -1120,6 +1123,7 @@ fn ffi_qualified_imports_do_not_expose_private_extern_declarations() {
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
         closures: BTreeMap::new(),
+        comprehensions: BTreeMap::new(),
     };
     let source = crate::parse_source(
         "import ffi_api\n\ndef main():\n    value: int64 = ffi_api.hidden(7)\n",
@@ -1171,6 +1175,7 @@ fn ffi_qualified_imports_do_not_expose_private_opaque_handles() {
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
         closures: BTreeMap::new(),
+        comprehensions: BTreeMap::new(),
     };
     let source =
         crate::parse_source("import ffi_api\n\ndef inspect(value: ffi_api.Hidden):\n    pass\n")
@@ -5752,6 +5757,7 @@ fn namespace(path: &str) -> ModuleNamespace {
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
         closures: BTreeMap::new(),
+        comprehensions: BTreeMap::new(),
     }
 }
 
@@ -18000,6 +18006,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
         all_traits: BTreeMap::from([("RemoteShow".to_string(), remote_trait.clone())]),
         imported_modules: BTreeMap::new(),
         closures: BTreeMap::new(),
+        comprehensions: BTreeMap::new(),
     };
     let context = ModuleContext {
         module_name: "<main>".to_string(),
@@ -22081,6 +22088,7 @@ fn imported_module_functions_are_first_class_values() {
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
         closures: BTreeMap::new(),
+        comprehensions: BTreeMap::new(),
     };
     let module = crate::parser::parse(
         "def main():\n    callback = tools.remote_fn\n    result: int32 = callback(1)\n",
@@ -22129,6 +22137,7 @@ fn nested_imported_module_functions_are_first_class_values() {
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
         closures: BTreeMap::new(),
+        comprehensions: BTreeMap::new(),
     };
     let support = ModuleNamespace {
         name: "function_value_imported_support".to_string(),
@@ -22150,6 +22159,7 @@ fn nested_imported_module_functions_are_first_class_values() {
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
         closures: BTreeMap::new(),
+        comprehensions: BTreeMap::new(),
     };
     let module = crate::parser::parse(
         "def main():\n    callback = function_value_imported_support.helpers.triple\n    result: int32 = callback(4)\n",
@@ -22599,6 +22609,7 @@ fn imported_generic_function_values_specialize_as_values_and_task_targets() {
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
         closures: BTreeMap::new(),
+        comprehensions: BTreeMap::new(),
     };
     let module = crate::parser::parse(
         r#"
@@ -24051,4 +24062,368 @@ def main():
         help.contains("capturing closures cannot be stored in fields")
             && help.contains("named function or a capture-free lambda")
     }));
+}
+
+#[test]
+fn comprehensions_share_bare_loop_types_and_export_progressive_metadata() {
+    let program = crate::check_source(
+        r#"
+def main():
+    numbers: Vec[int32] = [1, 2, 3]
+    names = ["a", "b"]
+    doubled: Vec[int32] = [value * 2 for value in numbers if value > 0]
+    unique: Set[int32] = {value for value in numbers}
+    lookup: Map[int64, String] = {index: name.clone() for index, name in enumerate(names)}
+    pairs: Vec[int32] = [left + right for left, right in zip(numbers, numbers)]
+    nested: Vec[int32] = [outer * 10 + inner for outer in range(0, 2) for inner in range(0, outer)]
+    jobs = Queue[String]()
+    received: Vec[String] = [job for job in jobs]
+"#,
+    )
+    .expect("every ordinary bare-loop source should work in a comprehension");
+
+    assert_eq!(program.comprehensions.len(), 6);
+    let result_types = program
+        .comprehensions
+        .values()
+        .map(|info| info.result_type.clone())
+        .collect::<Vec<_>>();
+    assert!(result_types.contains(&Type::Named("Vec".to_string(), vec![Type::named("int32")])));
+    assert!(result_types.contains(&Type::Named("Set".to_string(), vec![Type::named("int32")])));
+    assert!(result_types.contains(&Type::Named(
+        "Map".to_string(),
+        vec![Type::named("int64"), Type::named("String")]
+    )));
+    let nested = program
+        .comprehensions
+        .values()
+        .find(|info| info.clauses.len() == 2)
+        .expect("nested comprehension metadata");
+    assert_eq!(
+        nested
+            .clauses
+            .iter()
+            .map(|clause| clause.binding_type.clone())
+            .collect::<Vec<_>>(),
+        vec![Type::named("int32"), Type::named("int32")]
+    );
+    let queue = program
+        .comprehensions
+        .values()
+        .find(|info| info.clauses.iter().any(|clause| clause.receive_owned))
+        .expect("Queue receive-owned metadata");
+    assert_eq!(queue.clauses[0].binding_type, Type::named("String"));
+}
+
+#[test]
+fn comprehension_filters_targets_and_contextual_results_are_checked_exactly() {
+    let wrong_filter =
+        crate::check_source("def main():\n    values = [value for value in range(0, 2) if 1]\n")
+            .expect_err("comprehension filters require exact bool");
+    assert_eq!(wrong_filter.code, "AU2002");
+    assert_eq!(
+        wrong_filter.message,
+        "comprehension filter must have type `bool`, found `int64`"
+    );
+
+    let shadow = crate::check_source(
+        "def main():\n    value = 1\n    values = [value for value in range(0, 2)]\n",
+    )
+    .expect_err("comprehension targets must not shadow visible names");
+    assert_eq!(
+        shadow.message,
+        "comprehension binding `value` would shadow an existing name"
+    );
+
+    let leak = crate::check_source(
+        "def main():\n    values = [value for value in range(0, 2)]\n    print(value)\n",
+    )
+    .expect_err("comprehension targets must not leak");
+    assert_eq!(leak.message, "unknown name `value`");
+
+    crate::check_source("def main():\n    values: Vec[int32] = [1 for value in range(0, 2)]\n")
+        .expect("result expressions should receive their collection annotation as context");
+}
+
+#[test]
+fn comprehension_ownership_freezes_sources_and_never_hides_clones_or_repeated_moves() {
+    let borrowed_element = crate::check_source(
+        r#"
+def main():
+    values = ["one"]
+    copied = [value for value in values]
+"#,
+    )
+    .expect_err("shared non-copy elements need an explicit clone");
+    assert!(
+        borrowed_element.message.contains("cannot move")
+            && borrowed_element.message.contains("borrowed")
+            && borrowed_element.message.contains("value"),
+        "{borrowed_element:?}"
+    );
+
+    let shared_result = crate::check_source(
+        r#"
+def observe(values: Vec[String]):
+    pass
+
+def main():
+    names = ["one"]
+    observe([name for name in names])
+"#,
+    )
+    .expect_err("a shared observer must not turn comprehension output into a hidden borrow");
+    assert!(
+        shared_result.message.contains("cannot move")
+            && shared_result.message.contains("borrowed")
+            && shared_result.message.contains("name"),
+        "{shared_result:?}"
+    );
+
+    crate::check_source(
+        r#"
+def main():
+    values = ["one"]
+    copied: Vec[String] = [value.clone() for value in values]
+"#,
+    )
+    .expect("an explicit clone should produce owned output");
+
+    let frozen = crate::check_source(
+        r#"
+def main():
+    mut values = [1]
+    changed = [values.push(value) for value in values]
+"#,
+    )
+    .expect_err("an active source stays frozen through output evaluation");
+    assert!(
+        frozen.message.contains("cannot mutate")
+            && frozen.message.contains("borrowed for iteration"),
+        "{frozen:?}"
+    );
+
+    let token_move = crate::check_source(
+        r#"
+def take(value: own String) -> int64:
+    return 1
+
+def main():
+    token = "once"
+    values = [take(token) for value in range(0, 2)]
+"#,
+    )
+    .expect_err("an outer value cannot be moved by a repeated comprehension body");
+    assert_eq!(
+        token_move.message,
+        "`comprehension` loop body moves `token` and may execute more than once"
+    );
+
+    let partial_move = crate::check_source(
+        r#"
+class Pair:
+    left: String
+    right: String
+
+def take(value: own String) -> int64:
+    return 1
+
+def main():
+    pair = Pair(left="left", right="right")
+    values = [take(pair.left) for value in range(0, 2)]
+"#,
+    )
+    .expect_err("a repeated comprehension body cannot partially move an outer value");
+    assert_eq!(
+        partial_move.message,
+        "`comprehension` loop body partially moves `pair` and may execute more than once"
+    );
+}
+
+#[test]
+fn comprehension_owned_storage_diagnostics_distinguish_cloneable_and_noncloneable_values() {
+    let cloneable = crate::check_source(
+        r#"
+def main():
+    values = ["one"]
+    copied = [value for value in values]
+"#,
+    )
+    .expect_err("a comprehension cannot silently clone a shared String element");
+    assert_eq!(cloneable.code, "AU3002");
+    assert!(cloneable.message.contains("cannot move"), "{cloneable:?}");
+    assert_eq!(
+        cloneable.help,
+        vec![
+            "comprehensions store owned values; call `.clone()` on this shared value, or use an explicit consuming loop when the source should be transferred"
+                .to_string()
+        ]
+    );
+    assert!(
+        !cloneable.edits.is_empty(),
+        "clone-safe shared output should retain its machine-applicable clone edit"
+    );
+
+    let noncloneable = crate::check_source(
+        r#"
+import random
+
+def main():
+    generators = [random.Rng(seed=1)]
+    copied = [generator for generator in generators]
+"#,
+    )
+    .expect_err("a comprehension cannot transfer a shared move-only element");
+    assert_eq!(noncloneable.code, "AU3002");
+    assert!(
+        noncloneable.message.contains("cannot move"),
+        "{noncloneable:?}"
+    );
+    assert_eq!(
+        noncloneable.help,
+        vec![
+            "comprehensions store owned values and cannot transfer this shared non-cloneable value; receive an owned value from a `Queue`, or use an explicit consuming loop"
+                .to_string()
+        ]
+    );
+    assert!(
+        noncloneable.edits.is_empty(),
+        "a non-cloneable output must not offer an unavailable `.clone()` edit"
+    );
+}
+
+#[test]
+fn comprehension_lambda_capture_scopes_follow_adr_0037() {
+    let program = crate::check_source(
+        r#"
+def main():
+    values = [1, 2]
+    build: def() -> Vec[int64] = lambda: [value + 1 for value in values]
+    immediate: Vec[int32] = [(lambda: value)() for value in range(0, 2)]
+"#,
+    )
+    .expect("targets stay local while surrounding lambda sources are captured");
+    let build = program
+        .closures
+        .values()
+        .find(|closure| {
+            closure
+                .captures
+                .iter()
+                .any(|capture| capture.name == "values")
+        })
+        .expect("enclosing lambda captures the iterable");
+    assert_eq!(
+        build
+            .captures
+            .iter()
+            .map(|capture| capture.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["values"]
+    );
+
+    let stored = crate::check_source(
+        "def main():\n    callbacks = [lambda: value for value in range(0, 2)]\n",
+    )
+    .expect_err("capturing closures cannot be stored as comprehension results");
+    assert_eq!(stored.code, "AU2002");
+    assert_eq!(
+        stored.message,
+        "capturing closures cannot be stored in collection literals in this language version"
+    );
+
+    for source in [
+        "def main():\n    callbacks = {lambda: value for value in range(0, 2)}\n",
+        "def main():\n    callbacks = {(lambda: value): value for value in range(0, 2)}\n",
+        "def main():\n    callbacks = {value: lambda: value for value in range(0, 2)}\n",
+    ] {
+        let diagnostic = crate::check_source(source)
+            .expect_err("set elements and both map positions share closure-storage constraints");
+        assert_eq!(diagnostic.code, "AU2002");
+        assert_eq!(
+            diagnostic.message,
+            "capturing closures cannot be stored in collection literals in this language version"
+        );
+    }
+
+    let shared_target = crate::check_source(
+        r#"
+def main():
+    names = ["one"]
+    callbacks = [(lambda: name)() for name in names]
+"#,
+    )
+    .expect_err("ADR-0037 rejects capture of a shared non-Copy comprehension target");
+    assert_eq!(shared_target.code, "AU3002");
+    assert_eq!(
+        shared_target.message,
+        "lambda cannot capture shared value `name` by value"
+    );
+    assert!(shared_target.help.iter().any(|help| {
+        help.contains("clone `name` into an owned local")
+            && help.contains("declare the enclosing parameter as `own String`")
+    }));
+}
+
+#[test]
+fn comprehension_walkers_cover_default_parameter_references_and_bad_iterables() {
+    let default = crate::check_source(
+        r#"
+def collect(values: Vec[int64], copied: Vec[int64] = [value for value in values]):
+    pass
+
+def main():
+    pass
+"#,
+    )
+    .expect_err("a comprehension default must not hide a parameter dependency");
+    assert!(
+        default.message.contains("default")
+            && default.message.contains("values")
+            && default.message.contains("parameter"),
+        "{default:?}"
+    );
+
+    let unsupported = crate::check_source("def main():\n    values = [value for value in true]\n")
+        .expect_err("non-iterable comprehension sources must be rejected");
+    assert_eq!(unsupported.code, "AU2002");
+    assert_eq!(
+        unsupported.message,
+        "comprehension iteration requires a `Range`, `Queue[T]`, `Vec[T]`, or `Set[T]` iterable, found `bool`"
+    );
+}
+
+#[test]
+fn comprehensions_in_function_and_field_defaults_retain_lowering_metadata() {
+    let program = crate::check_source(
+        r#"
+class Bucket:
+    values: Vec[int64] = [value * 2 for value in [2, 4]]
+
+def selected(values: own Vec[int64] = [value * 2 for value in [1, 2, 3]]) -> Vec[int64]:
+    return values
+
+def main():
+    print(selected())
+    print(Bucket().values)
+"#,
+    )
+    .expect("comprehensions are valid in accepted default-expression positions");
+
+    assert!(
+        program.comprehensions.values().any(|info| {
+            matches!(
+                &info.id.owner,
+                ClosureOwner::Function(name) if name == "selected"
+            )
+        }),
+        "the function default needs owner-qualified metadata"
+    );
+    assert!(
+        program
+            .comprehensions
+            .values()
+            .any(|info| info.id.owner == ClosureOwner::TopLevel),
+        "the early field-default checker needs to export its metadata"
+    );
 }

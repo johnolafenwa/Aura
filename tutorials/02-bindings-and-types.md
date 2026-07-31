@@ -332,6 +332,33 @@ consumes the set.
 
 See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
 
+## Owned Comprehension Results
+
+List, set, and map comprehensions build fresh owned collections:
+
+```python
+values = [1, 2, 3, 4]
+squares = [value * value for value in values]
+even = {value for value in values if value % 2 == 0}
+labels = {value: str(value) for value in values}
+```
+
+Each clause uses the same bare-loop rules as `for value in values:`. A Vec or
+Set target is shared, so storing a non-copy target in the new collection needs
+an explicit clone:
+
+```python
+names = ["Ada", "Grace"]
+names_copy = [name.clone() for name in names]
+```
+
+Aurora does not silently clone. Queue is the existing exception: a bare Queue
+clause receives each item already owned, so that item may move directly into
+the result. The result collection is always owned and eager.
+
+See
+[examples/collections/comprehensions.au](../examples/collections/comprehensions.au).
+
 ## Literal Defaults
 
 Summary of literal type rules:

@@ -48,6 +48,34 @@ key's first insertion position.
 
 An empty collection literal has no self-contained element type and therefore requires an expected `Vec[T]`, `Set[T]`, or `Map[K, V]` type. `{}` is grammatically a map literal but may be interpreted as an empty `Set[T]` when its expected type is `Set[T]`.
 
+### Comprehensions
+
+A list comprehension has type `Vec[T]`, a set comprehension has type `Set[T]`,
+and a map comprehension has type `Map[K, V]`. An expected collection
+specialization flows into the element, key, and value expressions before
+inference. Otherwise those output expressions determine `T`, `K`, and `V`
+under the ordinary exact-type and contextual-literal rules. A filter must have
+exactly type `bool`.
+
+Clauses are checked in runtime order. A clause iterable is checked before its
+target enters scope. The target receives the same type and ownership
+provenance as an ordinary bare `for` target, then becomes visible to that
+clause's filters, later clauses, and the output. Targets cannot shadow visible
+names or earlier targets and do not escape the expression.
+
+Every clause reuses the statement bare-loop iterable classification. Vec and
+Set provide shared elements, Range provides copy `int32`, the compiler-known
+`enumerate` and `zip` forms retain their contracts, and Queue receives owned
+items through its existing carve-out. `mut` and `own` clause modifiers are not
+part of the syntax.
+
+Output storage owns its inserted value. A copy value is copied and an owned
+non-Copy value moves. A shared non-Copy target cannot be inserted without an
+explicit clone-safe `.clone()` route. Queue targets already own their received
+items. Move checking treats each clause as potentially repeated, retains every
+active source borrow through downstream clauses and output evaluation, and
+rejects loop-carried full or partial moves from outer places.
+
 ### Lambdas
 
 A lambda with parameters requires an expected structural function type. That
@@ -355,6 +383,14 @@ is safe.
 `return` is valid only in a function or method. Its value must equal the declared return type; an omitted value has type `None`.
 
 `break` and `continue` are valid only inside `for` or `while`. A loop-local binding does not escape. Moving a non-copy outer value for the first time inside a repeatable loop is rejected unless the checker can prove the path does not create an invalid next iteration.
+
+A comprehension is expression control flow, not a statement loop: `break`,
+`continue`, and `return` cannot appear in its clauses or output. Each filter
+checks one conditional path. Later clauses and output effects apply only on the
+path where every preceding filter is true, and resulting ownership state is
+merged conservatively. `try` remains an expression and may propagate from a
+reached source, filter, key, value, or element after cleaning up the partial
+result.
 
 An `if`, statement match, match expression, or conditional expression checks
 branches independently and merges move/partial-move state conservatively

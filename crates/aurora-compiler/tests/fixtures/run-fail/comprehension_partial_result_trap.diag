@@ -1,0 +1,6 @@
+error[AU4003]: vector index `0` is out of bounds for length `0`
+ --> crates/aurora-compiler/tests/fixtures/run-fail/comprehension_partial_result_trap.au:11:28
+   |
+11 |         impossible = empty[0]
+   |                            ^
+  = note: Aurora call chain (innermost first): build_value at 7:1 -> main at 15:1

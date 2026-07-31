@@ -1,0 +1,2 @@
+def main():
+    callbacks = {value: lambda: value for value in range(0, 2)}

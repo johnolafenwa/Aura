@@ -1,0 +1,39 @@
+def keep(value: int64) -> Result[bool, String]:
+    print(f"filter {value}")
+    if value == 2:
+        return Result.Err("filter stopped")
+    return Result.Ok(true)
+
+def produce(value: int64) -> Result[String, String]:
+    print(f"output {value}")
+    if value == 2:
+        return Result.Err("output stopped")
+    return Result.Ok(f"owned {value}")
+
+def collect_filter() -> Result[Vec[int64], String]:
+    values: Vec[int64] = [
+        value
+        for value in [1, 2, 3]
+        if try keep(value)
+    ]
+    return Result.Ok(values)
+
+def collect_output() -> Result[Vec[String], String]:
+    values: Vec[String] = [
+        try produce(value)
+        for value in [1, 2, 3]
+    ]
+    return Result.Ok(values)
+
+def main():
+    match own collect_filter():
+        case Result.Ok(values):
+            print(values.len())
+        case Result.Err(message):
+            print(message)
+
+    match own collect_output():
+        case Result.Ok(values):
+            print(values.len())
+        case Result.Err(message):
+            print(message)

@@ -1,0 +1,7 @@
+error[AU3002]: cannot move borrowed value `generator`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/comprehension_noncloneable_owned_storage.au:5:15
+  |
+5 |     copied = [generator for generator in generators]
+  |               ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/comprehension_noncloneable_owned_storage.au:5:29: value is borrowed here
+  = help: comprehensions store owned values and cannot transfer this shared non-cloneable value; receive an owned value from a `Queue`, or use an explicit consuming loop

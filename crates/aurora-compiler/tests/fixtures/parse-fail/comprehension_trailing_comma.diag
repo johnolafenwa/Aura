@@ -1,0 +1,5 @@
+error[AU1101]: comprehensions do not allow trailing commas
+ --> crates/aurora-compiler/tests/fixtures/parse-fail/comprehension_trailing_comma.au:3:45
+  |
+3 |     doubled = [value * 2 for value in values,]
+  |                                             ^

@@ -23,7 +23,7 @@ use crate::sema::{
     ClassInfo, EnumInfo, EnumVariantInfo, FieldInfo, FunctionSignature, MethodInfo, TraitBound,
     Type,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 use std::thread;
@@ -49,6 +49,7 @@ fn analysis_resolves_canonical_enums_from_the_module_registry() {
             path: "json".to_string(),
             source_path: None,
             closures: Default::default(),
+            comprehensions: Default::default(),
             modules: Default::default(),
             functions: Default::default(),
             extern_functions: Default::default(),
@@ -1648,6 +1649,232 @@ fn compiler_completion_uses_nested_scopes_for_methods_match_for_and_trait_bounds
 }
 
 #[test]
+fn comprehension_analysis_uses_execution_scope_and_exact_target_spans() {
+    let source = [
+        "def collect_lengths(groups: Vec[Vec[String]]) -> Vec[int64]:",
+        "    lengths = [",
+        "        entry.len()",
+        "        for group in groups",
+        "        if group.len() > 0",
+        "        for entry in group",
+        "        if entry.contains(\"a\")",
+        "    ]",
+        "    print(lengths)",
+        "    return lengths",
+        "",
+    ]
+    .join("\n");
+
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+
+    let group_target = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| {
+            occurrence.line == 3
+                && occurrence.start_character == 12
+                && occurrence.end_character == 17
+        })
+        .expect("the outer comprehension target should have an exact definition occurrence");
+    assert_eq!(
+        group_target.hover,
+        "```aurora\nlocal group: Vec[String]\n```"
+    );
+    assert_eq!(
+        group_target.definition.as_ref(),
+        Some(&super::AnalysisRange {
+            file_path: None,
+            line: 3,
+            start_character: 12,
+            end_character: 17,
+        })
+    );
+
+    let entry_target = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| {
+            occurrence.line == 5
+                && occurrence.start_character == 12
+                && occurrence.end_character == 17
+        })
+        .expect("the inner comprehension target should have an exact definition occurrence");
+    assert_eq!(entry_target.hover, "```aurora\nlocal entry: String\n```");
+    assert_eq!(
+        entry_target.definition.as_ref(),
+        Some(&super::AnalysisRange {
+            file_path: None,
+            line: 5,
+            start_character: 12,
+            end_character: 17,
+        })
+    );
+
+    let output_entry = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| {
+            occurrence.line == 2
+                && occurrence.start_character == 8
+                && occurrence.end_character == 13
+        })
+        .expect("the output expression should see the inner target");
+    assert_eq!(output_entry.definition, entry_target.definition);
+
+    let occurrence_index = |line, start_character| {
+        analysis
+            .occurrences
+            .iter()
+            .position(|occurrence| {
+                occurrence.line == line && occurrence.start_character == start_character
+            })
+            .unwrap_or_else(|| panic!("missing occurrence at {line}:{start_character}"))
+    };
+    let execution_order = [
+        occurrence_index(3, 21), // outer iterable: groups
+        occurrence_index(3, 12), // outer target: group
+        occurrence_index(4, 11), // outer filter: group
+        occurrence_index(5, 21), // inner iterable: group
+        occurrence_index(5, 12), // inner target: entry
+        occurrence_index(6, 11), // inner filter: entry
+        occurrence_index(2, 8),  // output: entry
+    ];
+    assert!(
+        execution_order.windows(2).all(|pair| pair[0] < pair[1]),
+        "analysis occurrences must follow comprehension execution order: {execution_order:?}"
+    );
+
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover == "```aurora\nbinding lengths: Vec[int64]\n```"));
+
+    let completion_names = |line: usize, character: usize, trigger| {
+        complete_source(&source, line, character, trigger)
+            .expect("comprehension completion should succeed")
+            .into_iter()
+            .map(|completion| completion.name)
+            .collect::<BTreeSet<_>>()
+    };
+    let output_members = completion_names(2, 14, Some('.'));
+    assert!(output_members.contains("len"));
+    assert!(output_members.contains("contains"));
+
+    let outer_filter = completion_names(4, 16, None);
+    assert!(outer_filter.contains("group"));
+    assert!(!outer_filter.contains("entry"));
+
+    let inner_iterable = completion_names(5, 26, None);
+    assert!(inner_iterable.contains("group"));
+    assert!(!inner_iterable.contains("entry"));
+
+    let inner_filter = completion_names(6, 16, None);
+    assert!(inner_filter.contains("group"));
+    assert!(inner_filter.contains("entry"));
+
+    let after_comprehension = completion_names(8, 17, None);
+    assert!(!after_comprehension.contains("group"));
+    assert!(!after_comprehension.contains("entry"));
+}
+
+#[test]
+fn comprehension_analysis_infers_every_builtin_iterable_target_and_result_shape() {
+    let source = r#"def inspect(
+    names: Vec[String],
+    tags: Set[String],
+    left: Vec[int32],
+    right: Vec[int32],
+    jobs: Queue[String]
+):
+    indexed = [name.len() + index for index, name in enumerate(names)]
+    paired = [number + delta for number, delta in zip(left, right)]
+    ranged = [number for number in range(0, 3)]
+    tagged = {tag.len() for tag in tags}
+    received = {item.clone(): item.len() for item in jobs}
+"#;
+
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    for expected_hover in [
+        "local index: int64",
+        "local name: String",
+        "local number: int32",
+        "local delta: int32",
+        "local tag: String",
+        "local item: String",
+        "binding indexed: Vec[int64]",
+        "binding paired: Vec[int32]",
+        "binding ranged: Vec[int32]",
+        "binding tagged: Set[int64]",
+        "binding received: Map[String, int64]",
+    ] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected_hover)),
+            "missing comprehension hover `{expected_hover}` in {:?}",
+            analysis.occurrences
+        );
+    }
+}
+
+#[test]
+fn comprehension_scope_composes_with_contextual_lambda_scope() {
+    let source = [
+        "def apply(values: Vec[int32]) -> Vec[int32]:",
+        "    results = [values.map(lambda delta: item + delta).len() as int32 for item in values]",
+        "    return results",
+        "",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+
+    let item_use = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 1 && occurrence.start_character == 40)
+        .expect("the lambda body should resolve its comprehension-target capture");
+    assert!(item_use.hover.contains("local item: int32"));
+    assert_eq!(
+        item_use.definition.as_ref().map(|range| (
+            range.line,
+            range.start_character,
+            range.end_character
+        )),
+        Some((1, 73, 77))
+    );
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover == "```aurora\nbinding results: Vec[int32]\n```"));
+
+    let body_character = source.lines().nth(1).unwrap().find("item +").unwrap() + 2;
+    let completions = complete_source(&source, 1, body_character, None)
+        .expect("completion inside a comprehension lambda should succeed");
+    let names = completions
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect::<BTreeSet<_>>();
+    assert!(names.contains("item"));
+    assert!(names.contains("delta"));
+}
+
+#[test]
 fn analysis_recovery_helpers_cover_member_error_paths() {
     let source = [
         "class Counter:",
@@ -2123,6 +2350,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         path: "pkg.tools".to_string(),
         source_path: None,
         closures: Default::default(),
+        comprehensions: Default::default(),
         modules: Default::default(),
         functions: remote_program.functions.clone(),
         extern_functions: BTreeMap::new(),
@@ -2146,6 +2374,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             path: "pkg.tools.inner".to_string(),
             source_path: None,
             closures: Default::default(),
+            comprehensions: Default::default(),
             modules: Default::default(),
             functions: Default::default(),
             extern_functions: Default::default(),
@@ -2170,6 +2399,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             path: "pkg".to_string(),
             source_path: None,
             closures: Default::default(),
+            comprehensions: Default::default(),
             modules: std::collections::BTreeMap::from([(
                 "tools".to_string(),
                 tools_namespace.clone(),
@@ -3108,6 +3338,7 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
             path: "pkg".to_string(),
             source_path: None,
             closures: Default::default(),
+            comprehensions: Default::default(),
             modules: std::collections::BTreeMap::from([(
                 "types".to_string(),
                 crate::sema::ModuleNamespace {
@@ -3115,6 +3346,7 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
                     path: "pkg.types".to_string(),
                     source_path: None,
                     closures: Default::default(),
+                    comprehensions: Default::default(),
                     modules: Default::default(),
                     functions: Default::default(),
                     extern_functions: Default::default(),
@@ -3329,6 +3561,7 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
         path: "pkg.tools".to_string(),
         source_path: None,
         closures: Default::default(),
+        comprehensions: Default::default(),
         modules: Default::default(),
         functions: remote_program.functions.clone(),
         extern_functions: BTreeMap::new(),
@@ -3352,6 +3585,7 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
             path: "pkg".to_string(),
             source_path: None,
             closures: Default::default(),
+            comprehensions: Default::default(),
             modules: std::collections::BTreeMap::from([(
                 "tools".to_string(),
                 tools_namespace.clone(),

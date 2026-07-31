@@ -1100,6 +1100,77 @@ def zip_loop(left: Vec[int64], right: Vec[int64]):
 }
 
 #[test]
+fn comprehensions_lower_to_owned_collection_literals_nested_loops_and_insertion_calls() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def build(
+    numbers: Vec[int64],
+    other: Vec[int64]
+) -> Map[int64, int64]:
+    list_values: Vec[int64] = [
+        left + right
+        for left in numbers
+        for right in other
+        if left != right
+    ]
+    unique: Set[int64] = {value for value in list_values}
+    return {value: value * 2 for value in unique}
+"#,
+    )
+    .expect("checked comprehensions should lower through ordinary collection and loop MIR");
+    let build = module
+        .functions
+        .iter()
+        .find(|function| function.name == "build")
+        .expect("build should lower");
+
+    let mut vec_literals = 0;
+    let mut set_literals = 0;
+    let mut map_literals = 0;
+    let mut push_calls = 0;
+    let mut insert_calls = 0;
+    let mut map_set_calls = 0;
+    let mut safepoints = 0;
+    for block in &build.blocks {
+        for instruction in &block.instructions {
+            match instruction {
+                Instruction::Safepoint => safepoints += 1,
+                Instruction::Assign { value, .. } => match value {
+                    Rvalue::VecLiteral { .. } => vec_literals += 1,
+                    Rvalue::SetLiteral { .. } => set_literals += 1,
+                    Rvalue::MapLiteral { .. } => map_literals += 1,
+                    Rvalue::Call {
+                        callee: CallTarget::Member { field, .. },
+                        ..
+                    } if field == "push" => push_calls += 1,
+                    Rvalue::Call {
+                        callee: CallTarget::Member { field, .. },
+                        ..
+                    } if field == "insert" => insert_calls += 1,
+                    Rvalue::Call {
+                        callee: CallTarget::Member { field, .. },
+                        ..
+                    } if field == INTERNAL_MAP_SET_INDEX_FIELD => map_set_calls += 1,
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+
+    assert_eq!(vec_literals, 1, "list comprehension allocates one result");
+    assert_eq!(set_literals, 1, "set comprehension allocates one result");
+    assert_eq!(map_literals, 1, "map comprehension allocates one result");
+    assert_eq!(push_calls, 1, "list output appends once at its leaf");
+    assert_eq!(insert_calls, 1, "set output inserts once at its leaf");
+    assert_eq!(map_set_calls, 1, "map output assigns once at its leaf");
+    assert_eq!(
+        safepoints, 4,
+        "two nested list clauses plus one set and one map clause retain loop safepoints"
+    );
+}
+
+#[test]
 fn mutable_vec_writeback_precedes_its_single_safepoint_latch() {
     let module = crate::lower_source_to_mir(
         r#"
@@ -3069,6 +3140,7 @@ fn namespace_from_program(name: &str, path: &str, program: &Program) -> ModuleNa
         all_traits: program.traits.clone(),
         imported_modules: program.imported_modules.clone(),
         closures: program.closures.clone(),
+        comprehensions: program.comprehensions.clone(),
     }
 }
 
@@ -3151,6 +3223,7 @@ def generic_helper[T](value: own T) -> T:
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
         closures: BTreeMap::new(),
+        comprehensions: BTreeMap::new(),
     };
     pkg.imported_modules
         .insert("helpers".to_string(), helpers.clone());
@@ -3177,6 +3250,7 @@ def generic_helper[T](value: own T) -> T:
         all_traits: program.traits.clone(),
         imported_modules: BTreeMap::from([("pkg".to_string(), pkg.clone())]),
         closures: program.closures.clone(),
+        comprehensions: program.comprehensions.clone(),
     };
     current
         .all_classes
@@ -3486,6 +3560,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         all_traits: BTreeMap::new(),
         imported_modules: BTreeMap::new(),
         closures: BTreeMap::new(),
+        comprehensions: BTreeMap::new(),
     };
     imported_only_root.imported_modules.insert(
         "helpers".to_string(),
@@ -6954,6 +7029,49 @@ fn imported_lambdas_resolve_owner_qualified_metadata_and_lifted_function_ids() {
         lifted_names[0], lifted_names[1],
         "equal source spans in different modules must never alias one lifted closure"
     );
+}
+
+#[test]
+fn imported_comprehensions_resolve_owner_qualified_result_metadata() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/run-pass/comprehension_imported_metadata.au");
+    let program =
+        crate::check_path(&path).expect("the imported comprehension project should type-check");
+    let namespace = program
+        .module_registry
+        .get("comprehension_imported_metadata_support.helpers")
+        .expect("the imported helper namespace should be exported");
+    let boxed_type = Type::named("comprehension_imported_metadata_support.helpers.Boxed");
+    assert!(namespace.comprehensions.values().any(|info| {
+        info.result_type == Type::Named("Vec".to_string(), vec![boxed_type.clone()])
+    }));
+    assert!(namespace.comprehensions.values().any(|info| {
+        info.clauses
+            .iter()
+            .any(|clause| clause.binding_type == boxed_type)
+    }));
+
+    let module = crate::mir::lower(&program);
+    let helper = module
+        .functions
+        .iter()
+        .find(|function| function.name == "comprehension_imported_metadata_support.helpers::boxed")
+        .expect("imported comprehension helper should lower");
+    assert!(helper
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| matches!(
+            instruction,
+            Instruction::Assign {
+                value: Rvalue::VecLiteral { element_type, .. },
+                ..
+            } if *element_type == boxed_type
+        )));
+
+    let output = crate::run_mir(&module)
+        .expect("an imported function should retain its checked comprehension metadata");
+    assert_eq!(output.stdout, "2\n6\n");
 }
 
 #[test]

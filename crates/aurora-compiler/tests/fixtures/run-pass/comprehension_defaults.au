@@ -1,0 +1,11 @@
+class Bucket:
+    values: Vec[int64] = [value * 2 for value in [2, 4]]
+
+def selected(values: own Vec[int64] = [value * 2 for value in [1, 2, 3]]) -> Vec[int64]:
+    return values
+
+def main():
+    print(selected())
+
+    bucket = Bucket()
+    print(bucket.values)

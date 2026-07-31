@@ -100,11 +100,40 @@ caller's storage rather than an owned value and cannot be captured. Lambda
 parameters and captured outer names retain hover and definition identity in
 compiler analysis. See [Closures](/manual/closures).
 
+## Comprehension Scope
+
+A comprehension establishes one nested expression scope. Clause targets enter
+that scope progressively in runtime order even though the output expression is
+written before them:
+
+    pairs = [
+        (left, right)
+        for left in values
+        for right in values if right > left
+    ]
+
+The iterable expression of a clause cannot see that clause's own target. Once
+bound, the target is visible in the clause's filters, every later iterable and
+filter, and the output key/value or element expression. An earlier target is
+therefore visible while selecting an inner iterable.
+
+Targets use the ordinary `loop-target` grammar and no-shadowing rule. A target
+cannot reuse a local already visible outside the comprehension or an earlier
+clause target. Tuple target leaves enter together after the source item is
+selected. No comprehension target is visible after the closing `]` or `}`.
+
+A lambda enclosing a comprehension captures names used by source, filter, and
+output expressions under ADR-0037, but it does not capture comprehension
+targets: those are local to the lambda body. A lambda created inside a
+comprehension may capture a currently bound target only when ADR-0037 permits
+that by-value capture.
+
 ## No-Shadowing Rules
 
 Aurora deliberately rejects several ambiguous forms of shadowing:
 
 - a `for` binding cannot reuse a visible name
+- a comprehension target cannot reuse a visible name or an earlier clause target
 - a `with` binding cannot reuse a visible name
 - a match payload binding cannot reuse a visible name
 - a second `mut name = ...` cannot redeclare `name`
@@ -178,8 +207,8 @@ Imported modules contribute declarations, not executable initialization: their t
 
 Identifier spelling is defined by [Lexical Structure](/manual/lexical-structure).
 The binding positions are module declarations and imports, function and lambda
-parameters, receivers, simple-name assignments, `for` and `with` targets,
-match payloads, and generic parameter lists in the
+parameters, receivers, simple-name assignments, statement-`for`,
+comprehension-clause, and `with` targets, match payloads, and generic parameter lists in the
 [Grammar](/manual/grammar). Member access uses a dot-separated syntactic path;
 it does not add dynamic lookup syntax.
 
@@ -208,9 +237,15 @@ expression. Initializers are evaluated before a new local enters scope. Block
 and pattern scopes are entered only for the selected runtime path; ownership
 state from continuing paths is merged conservatively by the checker.
 
+Comprehension clause scopes enter progressively. A target is established only
+after its iterable value is selected and only for the current item. Filters
+and inner clauses that are not reached establish no bindings. The complete
+scope is discarded with the expression.
+
 ## Diagnostics
 
-`AU2001` reports unknown, unavailable, or unresolved names. `AU2002` covers
+`AU2001` reports unknown, unavailable, or unresolved names, including a
+comprehension target used outside its expression. `AU2002` covers
 type-name arity and related expected-type failures. `AU2999` covers duplicate,
 reserved, private, ambiguous, or otherwise invalid name/scope declarations not
 assigned a narrower code. Reads of places invalidated after resolution use
@@ -227,7 +262,8 @@ hover, definitions, and diagnostics use that same resolution result.
 
 ## Limits And Implementation-Defined Behavior
 
-Local declarations cannot shadow visible locals in the positions listed above;
+Local declarations and comprehension targets cannot shadow visible locals in
+the positions listed above;
 items cannot be nested in function suites; wildcard or relative-dot imports and
 import aliases are unavailable; and imported top-level execution is absent.
 Package filesystem mapping is specified by [Packages](/manual/packages), not
@@ -236,7 +272,8 @@ left to implementation-defined name lookup.
 ## Status
 
 Static lexical scope, module imports, visibility, generic/type namespaces,
-member lookup, and the documented entry-module top-level scope are implemented.
+member lookup, comprehension scopes, and the documented entry-module top-level
+scope are implemented.
 Dynamic names, reflection-based lookup, nested items, import side effects,
 wildcard imports, and user-selectable shadowing are unavailable. No future
 name-resolution form is implied by an identifier that happens to lex today.

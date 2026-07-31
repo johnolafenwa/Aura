@@ -1,0 +1,7 @@
+import comprehension_imported_metadata_support.helpers
+
+def main():
+    boxes = comprehension_imported_metadata_support.helpers.boxed([1, 2, 3])
+    values = comprehension_imported_metadata_support.helpers.unboxed(boxes)
+    print(values[0])
+    print(values[2])
