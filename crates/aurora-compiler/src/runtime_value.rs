@@ -1697,6 +1697,83 @@ impl PartialEq for TupleValue {
     }
 }
 
+enum ArrayCloneCleanupFrame {
+    Values(std::vec::IntoIter<Value>),
+    Map {
+        entries: std::vec::IntoIter<(Value, Value)>,
+        pending_value: Option<Value>,
+    },
+    Fields(std::collections::btree_map::IntoValues<String, Value>),
+}
+
+impl ArrayCloneCleanupFrame {
+    fn next_value(&mut self) -> Option<Value> {
+        match self {
+            Self::Values(values) => values.next(),
+            Self::Map {
+                entries,
+                pending_value,
+            } => {
+                if let Some(value) = pending_value.take() {
+                    return Some(value);
+                }
+                let (key, value) = entries.next()?;
+                *pending_value = Some(value);
+                Some(key)
+            }
+            Self::Fields(fields) => fields.next(),
+        }
+    }
+}
+
+fn drop_array_containing_value_iteratively(value: Value, frames: &mut Vec<ArrayCloneCleanupFrame>) {
+    assert!(
+        frames.is_empty(),
+        "Array clone cleanup frames must be reusable between owned roots"
+    );
+    let mut next = Some(value);
+    loop {
+        if let Some(value) = next.take() {
+            let frame = match value {
+                Value::Tuple(TupleValue { elements, .. })
+                | Value::Vec(VecValue { elements, .. })
+                | Value::Set(SetValue { elements, .. }) => {
+                    Some(ArrayCloneCleanupFrame::Values(elements.into_iter()))
+                }
+                Value::Map(MapValue { entries, .. }) => Some(ArrayCloneCleanupFrame::Map {
+                    entries: entries.into_iter(),
+                    pending_value: None,
+                }),
+                Value::Instance(InstanceValue { fields, .. }) => {
+                    Some(ArrayCloneCleanupFrame::Fields(fields.into_values()))
+                }
+                Value::EnumVariant(EnumVariantValue { payloads, .. }) => {
+                    Some(ArrayCloneCleanupFrame::Values(payloads.into_iter()))
+                }
+                _ => None,
+            };
+            if let Some(mut frame) = frame {
+                next = frame.next_value();
+                if next.is_some() {
+                    assert!(
+                        frames.len() < frames.capacity(),
+                        "Array clone cleanup depth must be reserved before traversal"
+                    );
+                    frames.push(frame);
+                }
+            }
+        } else {
+            let Some(frame) = frames.last_mut() else {
+                return;
+            };
+            next = frame.next_value();
+            if next.is_none() {
+                frames.pop();
+            }
+        }
+    }
+}
+
 pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
     enum CloneFrame<'a> {
         Tuple {
@@ -1740,26 +1817,105 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
         },
     }
 
-    fn push_frame<'a>(frames: &mut Vec<CloneFrame<'a>>, frame: CloneFrame<'a>) -> Result<()> {
-        if frames.len() == frames.capacity() {
-            frames.try_reserve(1).map_err(|_| {
-                array_allocation_error(
-                    "Array-containing value clone traversal",
-                    frames.len().saturating_add(1),
-                )
-            })?;
+    fn drop_frame_values(frame: CloneFrame<'_>, cleanup_frames: &mut Vec<ArrayCloneCleanupFrame>) {
+        match frame {
+            CloneFrame::Tuple { elements, .. }
+            | CloneFrame::Vec { elements, .. }
+            | CloneFrame::Set { elements, .. }
+            | CloneFrame::EnumVariant {
+                payloads: elements, ..
+            } => {
+                for value in elements {
+                    drop_array_containing_value_iteratively(value, cleanup_frames);
+                }
+            }
+            CloneFrame::MapKey { entries, .. } => {
+                for (key, value) in entries {
+                    drop_array_containing_value_iteratively(key, cleanup_frames);
+                    drop_array_containing_value_iteratively(value, cleanup_frames);
+                }
+            }
+            CloneFrame::MapValue {
+                entries,
+                pending_key,
+                ..
+            } => {
+                drop_array_containing_value_iteratively(pending_key, cleanup_frames);
+                for (key, value) in entries {
+                    drop_array_containing_value_iteratively(key, cleanup_frames);
+                    drop_array_containing_value_iteratively(value, cleanup_frames);
+                }
+            }
+            CloneFrame::Instance { fields, .. } => {
+                for value in fields.into_values() {
+                    drop_array_containing_value_iteratively(value, cleanup_frames);
+                }
+            }
         }
-        frames.push(frame);
-        Ok(())
     }
 
-    let mut frames = Vec::new();
+    struct CloneState<'a> {
+        frames: Vec<CloneFrame<'a>>,
+        cleanup_frames: Vec<ArrayCloneCleanupFrame>,
+        pending_frame: Option<CloneFrame<'a>>,
+        completed: Option<Value>,
+    }
+
+    impl<'a> CloneState<'a> {
+        fn push_frame(&mut self, frame: CloneFrame<'a>) -> Result<()> {
+            debug_assert!(self.pending_frame.is_none());
+            self.pending_frame = Some(frame);
+            let required_depth = self.frames.len().saturating_add(1);
+            if self.cleanup_frames.capacity() < required_depth {
+                self.cleanup_frames
+                    .try_reserve(required_depth - self.cleanup_frames.len())
+                    .map_err(|_| {
+                        array_allocation_error(
+                            "Array-containing value clone cleanup traversal",
+                            required_depth,
+                        )
+                    })?;
+            }
+            if self.frames.capacity() < required_depth {
+                self.frames.try_reserve(1).map_err(|_| {
+                    array_allocation_error("Array-containing value clone traversal", required_depth)
+                })?;
+            }
+            self.frames.push(
+                self.pending_frame
+                    .take()
+                    .expect("a reserved clone frame remains pending"),
+            );
+            Ok(())
+        }
+    }
+
+    impl Drop for CloneState<'_> {
+        fn drop(&mut self) {
+            if let Some(value) = self.completed.take() {
+                drop_array_containing_value_iteratively(value, &mut self.cleanup_frames);
+            }
+            if let Some(frame) = self.pending_frame.take() {
+                drop_frame_values(frame, &mut self.cleanup_frames);
+            }
+            while let Some(frame) = self.frames.pop() {
+                drop_frame_values(frame, &mut self.cleanup_frames);
+            }
+            debug_assert!(self.cleanup_frames.is_empty());
+        }
+    }
+
+    let mut state = CloneState {
+        frames: Vec::new(),
+        cleanup_frames: Vec::new(),
+        pending_frame: None,
+        completed: None,
+    };
     let mut next = Some(value);
-    let mut completed = None;
 
     loop {
         if let Some(value) = next.take() {
-            completed = match value {
+            state.completed = match value {
                 Value::Array(array) => Some(Value::Array(array.try_clone()?)),
                 Value::Tuple(tuple) => {
                     let mut element_types = try_array_buffer(
@@ -1775,15 +1931,12 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                             elements,
                         }))
                     } else {
-                        push_frame(
-                            &mut frames,
-                            CloneFrame::Tuple {
-                                tuple,
-                                next_index: 1,
-                                element_types,
-                                elements,
-                            },
-                        )?;
+                        state.push_frame(CloneFrame::Tuple {
+                            tuple,
+                            next_index: 1,
+                            element_types,
+                            elements,
+                        })?;
                         next = Some(&tuple.elements[0]);
                         None
                     }
@@ -1797,14 +1950,11 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                             elements,
                         }))
                     } else {
-                        push_frame(
-                            &mut frames,
-                            CloneFrame::Vec {
-                                vector,
-                                next_index: 1,
-                                elements,
-                            },
-                        )?;
+                        state.push_frame(CloneFrame::Vec {
+                            vector,
+                            next_index: 1,
+                            elements,
+                        })?;
                         next = Some(&vector.elements[0]);
                         None
                     }
@@ -1818,14 +1968,11 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                             elements,
                         }))
                     } else {
-                        push_frame(
-                            &mut frames,
-                            CloneFrame::Set {
-                                set,
-                                next_index: 1,
-                                elements,
-                            },
-                        )?;
+                        state.push_frame(CloneFrame::Set {
+                            set,
+                            next_index: 1,
+                            elements,
+                        })?;
                         next = Some(&set.elements[0]);
                         None
                     }
@@ -1833,15 +1980,12 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                 Value::Map(map) => {
                     let entries = try_array_buffer(map.entries.len(), "Array-containing Map copy")?;
                     if let Some((key, pending_value)) = map.entries.first() {
-                        push_frame(
-                            &mut frames,
-                            CloneFrame::MapKey {
-                                map,
-                                next_index: 1,
-                                entries,
-                                pending_value,
-                            },
-                        )?;
+                        state.push_frame(CloneFrame::MapKey {
+                            map,
+                            next_index: 1,
+                            entries,
+                            pending_value,
+                        })?;
                         next = Some(key);
                         None
                     } else {
@@ -1855,15 +1999,12 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                 Value::Instance(instance) => {
                     let mut remaining = instance.fields.iter();
                     if let Some((name, field_value)) = remaining.next() {
-                        push_frame(
-                            &mut frames,
-                            CloneFrame::Instance {
-                                instance,
-                                remaining,
-                                fields: BTreeMap::new(),
-                                pending_name: name.clone(),
-                            },
-                        )?;
+                        state.push_frame(CloneFrame::Instance {
+                            instance,
+                            remaining,
+                            fields: BTreeMap::new(),
+                            pending_name: name.clone(),
+                        })?;
                         next = Some(field_value);
                         None
                     } else {
@@ -1885,14 +2026,11 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                             payloads,
                         }))
                     } else {
-                        push_frame(
-                            &mut frames,
-                            CloneFrame::EnumVariant {
-                                variant,
-                                next_index: 1,
-                                payloads,
-                            },
-                        )?;
+                        state.push_frame(CloneFrame::EnumVariant {
+                            variant,
+                            next_index: 1,
+                            payloads,
+                        })?;
                         next = Some(&variant.payloads[0]);
                         None
                     }
@@ -1900,10 +2038,12 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                 value => Some(value.clone()),
             };
         } else {
-            let frame = frames
+            let frame = state
+                .frames
                 .pop()
                 .expect("an incomplete Array-containing value clone has a parent frame");
-            let cloned = completed
+            let cloned = state
+                .completed
                 .take()
                 .expect("an Array-containing value clone frame receives one completed child");
             match frame {
@@ -1916,18 +2056,15 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     elements.push(cloned);
                     if let Some(element) = tuple.elements.get(next_index) {
                         next_index += 1;
-                        push_frame(
-                            &mut frames,
-                            CloneFrame::Tuple {
-                                tuple,
-                                next_index,
-                                element_types,
-                                elements,
-                            },
-                        )?;
+                        state.push_frame(CloneFrame::Tuple {
+                            tuple,
+                            next_index,
+                            element_types,
+                            elements,
+                        })?;
                         next = Some(element);
                     } else {
-                        completed = Some(Value::Tuple(TupleValue {
+                        state.completed = Some(Value::Tuple(TupleValue {
                             element_types,
                             elements,
                         }));
@@ -1941,17 +2078,14 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     elements.push(cloned);
                     if let Some(element) = vector.elements.get(next_index) {
                         next_index += 1;
-                        push_frame(
-                            &mut frames,
-                            CloneFrame::Vec {
-                                vector,
-                                next_index,
-                                elements,
-                            },
-                        )?;
+                        state.push_frame(CloneFrame::Vec {
+                            vector,
+                            next_index,
+                            elements,
+                        })?;
                         next = Some(element);
                     } else {
-                        completed = Some(Value::Vec(VecValue {
+                        state.completed = Some(Value::Vec(VecValue {
                             element_type: vector.element_type.clone(),
                             elements,
                         }));
@@ -1965,17 +2099,14 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     elements.push(cloned);
                     if let Some(element) = set.elements.get(next_index) {
                         next_index += 1;
-                        push_frame(
-                            &mut frames,
-                            CloneFrame::Set {
-                                set,
-                                next_index,
-                                elements,
-                            },
-                        )?;
+                        state.push_frame(CloneFrame::Set {
+                            set,
+                            next_index,
+                            elements,
+                        })?;
                         next = Some(element);
                     } else {
-                        completed = Some(Value::Set(SetValue {
+                        state.completed = Some(Value::Set(SetValue {
                             element_type: set.element_type.clone(),
                             elements,
                         }));
@@ -1987,15 +2118,12 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     entries,
                     pending_value,
                 } => {
-                    push_frame(
-                        &mut frames,
-                        CloneFrame::MapValue {
-                            map,
-                            next_index,
-                            entries,
-                            pending_key: cloned,
-                        },
-                    )?;
+                    state.push_frame(CloneFrame::MapValue {
+                        map,
+                        next_index,
+                        entries,
+                        pending_key: cloned,
+                    })?;
                     next = Some(pending_value);
                 }
                 CloneFrame::MapValue {
@@ -2007,18 +2135,15 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     entries.push((pending_key, cloned));
                     if let Some((key, pending_value)) = map.entries.get(next_index) {
                         next_index += 1;
-                        push_frame(
-                            &mut frames,
-                            CloneFrame::MapKey {
-                                map,
-                                next_index,
-                                entries,
-                                pending_value,
-                            },
-                        )?;
+                        state.push_frame(CloneFrame::MapKey {
+                            map,
+                            next_index,
+                            entries,
+                            pending_value,
+                        })?;
                         next = Some(key);
                     } else {
-                        completed = Some(Value::Map(MapValue {
+                        state.completed = Some(Value::Map(MapValue {
                             key_type: map.key_type.clone(),
                             value_type: map.value_type.clone(),
                             entries,
@@ -2033,18 +2158,15 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                 } => {
                     fields.insert(pending_name, cloned);
                     if let Some((name, field_value)) = remaining.next() {
-                        push_frame(
-                            &mut frames,
-                            CloneFrame::Instance {
-                                instance,
-                                remaining,
-                                fields,
-                                pending_name: name.clone(),
-                            },
-                        )?;
+                        state.push_frame(CloneFrame::Instance {
+                            instance,
+                            remaining,
+                            fields,
+                            pending_name: name.clone(),
+                        })?;
                         next = Some(field_value);
                     } else {
-                        completed = Some(Value::Instance(InstanceValue {
+                        state.completed = Some(Value::Instance(InstanceValue {
                             class_name: instance.class_name.clone(),
                             fields,
                         }));
@@ -2058,17 +2180,14 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     payloads.push(cloned);
                     if let Some(payload) = variant.payloads.get(next_index) {
                         next_index += 1;
-                        push_frame(
-                            &mut frames,
-                            CloneFrame::EnumVariant {
-                                variant,
-                                next_index,
-                                payloads,
-                            },
-                        )?;
+                        state.push_frame(CloneFrame::EnumVariant {
+                            variant,
+                            next_index,
+                            payloads,
+                        })?;
                         next = Some(payload);
                     } else {
-                        completed = Some(Value::EnumVariant(EnumVariantValue {
+                        state.completed = Some(Value::EnumVariant(EnumVariantValue {
                             enum_name: variant.enum_name.clone(),
                             variant_name: variant.variant_name.clone(),
                             payloads,
@@ -2078,8 +2197,10 @@ pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
             }
         }
 
-        if next.is_none() && frames.is_empty() {
-            return Ok(completed
+        if next.is_none() && state.frames.is_empty() {
+            return Ok(state
+                .completed
+                .take()
                 .expect("an Array-containing value clone completes before its frame stack"));
         }
     }

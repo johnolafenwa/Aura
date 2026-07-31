@@ -266,113 +266,438 @@ fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
 }
 
 #[test]
-fn array_containing_language_copies_are_recursive_independent_and_fallible() {
-    fn source_array() -> Value {
+fn array_containing_language_copies_preserve_reachable_structure_and_independence() {
+    fn source_array(values: &[i32]) -> Value {
         Value::Array(
             ArrayValue::new(
-                vec![2].into_boxed_slice(),
-                ArrayStorage::Int32(vec![4, 9].into_boxed_slice()),
+                vec![values.len()].into_boxed_slice(),
+                ArrayStorage::Int32(values.to_vec().into_boxed_slice()),
             )
             .unwrap(),
         )
     }
 
-    fn nested_array(value: &Value) -> &ArrayValue {
-        match value {
-            Value::Array(array) => array,
-            Value::Vec(vector) => nested_array(&vector.elements[0]),
-            Value::Set(set) => nested_array(&set.elements[0]),
-            Value::Tuple(tuple) => nested_array(&tuple.elements[0]),
-            Value::Map(map) => nested_array(&map.entries[0].1),
-            Value::Instance(instance) => nested_array(
-                instance
-                    .fields
-                    .values()
-                    .next()
-                    .expect("test instance should have one field"),
-            ),
-            Value::EnumVariant(variant) => nested_array(&variant.payloads[0]),
-            other => panic!("expected an Array-containing value, found {other:?}"),
+    fn nested_arrays(value: &Value) -> Vec<&ArrayValue> {
+        let mut pending = vec![value];
+        let mut arrays = Vec::new();
+        while let Some(value) = pending.pop() {
+            match value {
+                Value::Array(array) => arrays.push(array),
+                Value::Vec(vector) => pending.extend(vector.elements.iter().rev()),
+                Value::Tuple(tuple) => pending.extend(tuple.elements.iter().rev()),
+                Value::Map(map) => {
+                    pending.extend(map.entries.iter().rev().map(|(_, value)| value));
+                }
+                Value::Instance(instance) => pending.extend(instance.fields.values().rev()),
+                Value::EnumVariant(variant) => pending.extend(variant.payloads.iter().rev()),
+                _ => {}
+            }
         }
+        arrays
     }
 
     let array_type = Type::Named("Array".to_string(), vec![Type::named("int32")]);
-    let cases = [
+    let cases = vec![
         Value::Vec(VecValue {
             element_type: array_type.clone(),
-            elements: vec![source_array()],
+            elements: vec![source_array(&[4, 9]), source_array(&[1, 7])],
         }),
         Value::Tuple(TupleValue {
-            element_types: vec![array_type.clone()],
-            elements: vec![source_array()],
+            element_types: vec![
+                Type::named("String"),
+                array_type.clone(),
+                Type::named("int32"),
+            ],
+            elements: vec![
+                Value::String("before".to_string()),
+                source_array(&[2, 5]),
+                Value::Int(IntegerValue::from_i32(8)),
+            ],
         }),
         Value::Map(MapValue {
             key_type: Type::named("String"),
             value_type: array_type.clone(),
-            entries: vec![(Value::String("values".to_string()), source_array())],
-        }),
-        Value::Set(SetValue {
-            element_type: array_type.clone(),
-            elements: vec![source_array()],
-        }),
-        Value::Map(MapValue {
-            key_type: array_type.clone(),
-            value_type: array_type.clone(),
-            entries: vec![(source_array(), source_array())],
+            entries: vec![
+                (Value::String("second".to_string()), source_array(&[6, 3])),
+                (Value::String("first".to_string()), source_array(&[5, 2])),
+            ],
         }),
         Value::Instance(InstanceValue {
             class_name: "ArrayBox".to_string(),
-            fields: BTreeMap::from([("values".to_string(), source_array())]),
+            fields: BTreeMap::from([
+                ("left".to_string(), source_array(&[11, 13])),
+                ("right".to_string(), source_array(&[17, 19])),
+            ]),
         }),
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Option".to_string(),
             variant_name: "Some".to_string(),
-            payloads: vec![source_array()],
+            payloads: vec![source_array(&[23, 29])],
         }),
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Result".to_string(),
             variant_name: "Ok".to_string(),
-            payloads: vec![source_array()],
+            payloads: vec![source_array(&[31, 37])],
+        }),
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "TaggedArray".to_string(),
+            variant_name: "Tagged".to_string(),
+            payloads: vec![
+                Value::String("before".to_string()),
+                source_array(&[41, 43]),
+                Value::Int(IntegerValue::from_i32(47)),
+            ],
         }),
     ];
 
     for source in cases {
-        let copy = super::try_clone_array_containing_value(&source)
+        let mut copy = super::try_clone_array_containing_value(&source)
             .expect("reachable Array-containing language containers should clone recursively");
-        assert_ne!(
-            nested_array(&source).shape.as_ptr(),
-            nested_array(&copy).shape.as_ptr()
+        assert_eq!(
+            copy, source,
+            "copying must preserve container metadata, child order, and scalar values"
         );
-        let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(copy_storage)) =
-            (&nested_array(&source).storage, &nested_array(&copy).storage)
-        else {
-            panic!("test arrays should retain int32 storage");
-        };
-        assert_ne!(source_storage.as_ptr(), copy_storage.as_ptr());
 
-        let error = super::with_array_allocation_budget(0, || {
-            super::try_clone_array_containing_value(&source)
+        let source_arrays = nested_arrays(&source);
+        let copy_arrays = nested_arrays(&copy);
+        assert_eq!(source_arrays.len(), copy_arrays.len());
+        assert!(
+            !source_arrays.is_empty(),
+            "every case should contain at least one reachable Array"
+        );
+        for (source_array, copy_array) in source_arrays.into_iter().zip(copy_arrays) {
+            assert_ne!(source_array.shape.as_ptr(), copy_array.shape.as_ptr());
+            let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(copy_storage)) =
+                (&source_array.storage, &copy_array.storage)
+            else {
+                panic!("test arrays should retain int32 storage");
+            };
+            assert_ne!(source_storage.as_ptr(), copy_storage.as_ptr());
+        }
+
+        if let Value::Vec(vector) = &mut copy {
+            let Value::Array(array) = &mut vector.elements[0] else {
+                panic!("the first Vec element should remain an Array");
+            };
+            array
+                .set(&[0], Value::Int(IntegerValue::from_i32(101)))
+                .expect("the copied nested Array should remain mutable");
+            let Value::Vec(source_vector) = &source else {
+                unreachable!("the copy retained the source Vec variant");
+            };
+            let Value::Array(source_array) = &source_vector.elements[0] else {
+                unreachable!("the source Vec contains an Array");
+            };
+            assert_eq!(
+                source_array.get(&[0]).unwrap(),
+                Value::Int(IntegerValue::from_i32(4)),
+                "mutating a copied child Array must not alter its source"
+            );
+        }
+    }
+}
+
+#[test]
+fn array_containing_language_copies_preserve_empty_containers() {
+    let array_type = Type::Named("Array".to_string(), vec![Type::named("int32")]);
+    let empty_values = vec![
+        Value::Vec(VecValue {
+            element_type: array_type.clone(),
+            elements: Vec::new(),
+        }),
+        Value::Tuple(TupleValue {
+            element_types: Vec::new(),
+            elements: Vec::new(),
+        }),
+        Value::Set(SetValue {
+            element_type: Type::named("String"),
+            elements: Vec::new(),
+        }),
+        Value::Map(MapValue {
+            key_type: Type::named("String"),
+            value_type: array_type,
+            entries: Vec::new(),
+        }),
+        Value::Instance(InstanceValue {
+            class_name: "EmptyArrayBox".to_string(),
+            fields: BTreeMap::new(),
+        }),
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "Option".to_string(),
+            variant_name: "None".to_string(),
+            payloads: Vec::new(),
+        }),
+    ];
+
+    for source in empty_values {
+        let copy = super::try_clone_array_containing_value(&source)
+            .expect("empty reachable containers should copy successfully");
+        assert_eq!(
+            copy, source,
+            "empty copies must retain their runtime type metadata and variant identity"
+        );
+    }
+}
+
+#[test]
+fn array_aware_language_copy_preserves_reachable_scalar_set_order() {
+    let source = Value::Set(SetValue {
+        element_type: Type::named("String"),
+        elements: vec![
+            Value::String("third".to_string()),
+            Value::String("first".to_string()),
+            Value::String("second".to_string()),
+        ],
+    });
+
+    let copy = super::try_clone_array_containing_value(&source)
+        .expect("a source-reachable scalar Set should copy successfully");
+    let Value::Set(copy) = copy else {
+        panic!("copying a Set must retain its runtime variant");
+    };
+    assert_eq!(copy.element_type, Type::named("String"));
+    assert_eq!(
+        copy.elements,
+        vec![
+            Value::String("third".to_string()),
+            Value::String("first".to_string()),
+            Value::String("second".to_string()),
+        ],
+        "Set storage order must remain stable while rebuilding a copy"
+    );
+}
+
+#[test]
+fn array_containing_language_copy_reports_outer_shape_and_storage_allocation_failures() {
+    let array_type = Type::Named("Array".to_string(), vec![Type::named("int32")]);
+    let vector = Value::Vec(VecValue {
+        element_type: array_type,
+        elements: vec![Value::Array(
+            ArrayValue::new(
+                vec![2].into_boxed_slice(),
+                ArrayStorage::Int32(vec![4, 9].into_boxed_slice()),
+            )
+            .unwrap(),
+        )],
+    });
+
+    let expected_failures = [
+        (
+            0,
+            "Array-containing Vec copy could not allocate storage for 1 array elements",
+        ),
+        (
+            1,
+            "Array shape could not allocate storage for 1 array elements",
+        ),
+        (
+            2,
+            "Array.clone could not allocate storage for 2 array elements",
+        ),
+    ];
+    for (successful_allocations, expected_message) in expected_failures {
+        let error = super::with_array_allocation_budget(successful_allocations, || {
+            super::try_clone_array_containing_value(&vector)
         })
-        .expect_err("container allocation failures should be recoverable");
+        .expect_err("every Array-bearing copy allocation stage must fail recoverably");
         assert_eq!(error.code, "AU4005");
+        assert_eq!(error.message, expected_message);
     }
 
-    let vector = VecValue {
-        element_type: array_type,
-        elements: vec![source_array()],
+    let Value::Vec(source_vector) = &vector else {
+        unreachable!("the source is a Vec");
     };
-    let slice = super::slice_vec_owned(&vector, None, None)
-        .expect("Vec[Array[T]] slices should deep-copy Array elements");
+    let slice = super::with_array_allocation_budget(3, || {
+        super::slice_vec_owned(source_vector, None, None)
+    })
+    .expect("a sufficient allocation budget should produce an owned Vec slice");
+    let (Value::Array(source_array), Value::Array(slice_array)) =
+        (&source_vector.elements[0], &slice.elements[0])
+    else {
+        panic!("Vec[Array[T]] slices should retain their element values");
+    };
+    let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(slice_storage)) =
+        (&source_array.storage, &slice_array.storage)
+    else {
+        panic!("test arrays should retain int32 storage");
+    };
     assert_ne!(
-        nested_array(&vector.elements[0]).shape.as_ptr(),
-        nested_array(&slice.elements[0]).shape.as_ptr()
+        source_storage.as_ptr(),
+        slice_storage.as_ptr(),
+        "a successful Vec slice must own its nested Array storage"
     );
-    let nested_error =
-        super::with_array_allocation_budget(1, || super::slice_vec_owned(&vector, None, None))
-            .expect_err(
-                "a nested Array allocation failure after Vec reservation must return AU4005",
+}
+
+#[test]
+fn deeply_recursive_reachable_array_copy_completes_on_a_512_kib_stack() {
+    const DEPTH: usize = 4_096;
+    const TEST_STACK_BYTES: usize = 512 * 1024;
+
+    std::thread::Builder::new()
+        .name("deep-array-copy".to_string())
+        .stack_size(TEST_STACK_BYTES)
+        .spawn(|| {
+            let mut source = Value::EnumVariant(EnumVariantValue {
+                enum_name: "Option".to_string(),
+                variant_name: "None".to_string(),
+                payloads: Vec::new(),
+            });
+            for value in (0..DEPTH).rev() {
+                source = Value::EnumVariant(EnumVariantValue {
+                    enum_name: "Option".to_string(),
+                    variant_name: "Some".to_string(),
+                    payloads: vec![Value::Instance(InstanceValue {
+                        class_name: "ArrayNode".to_string(),
+                        fields: BTreeMap::from([
+                            ("next".to_string(), source),
+                            (
+                                "values".to_string(),
+                                Value::Array(
+                                    ArrayValue::new(
+                                        vec![1].into_boxed_slice(),
+                                        ArrayStorage::Int32(vec![value as i32].into_boxed_slice()),
+                                    )
+                                    .unwrap(),
+                                ),
+                            ),
+                        ]),
+                    })],
+                });
+            }
+
+            let source = std::mem::ManuallyDrop::new(source);
+            let copy = std::mem::ManuallyDrop::new(
+                super::try_clone_array_containing_value(&source)
+                    .expect("recursive indirect class values should clone without recursion"),
             );
-    assert_eq!(nested_error.code, "AU4005");
+            let mut source_cursor: &Value = &source;
+            let mut copy_cursor: &Value = &copy;
+            for expected in 0..DEPTH {
+                let (Value::EnumVariant(source_option), Value::EnumVariant(copy_option)) =
+                    (source_cursor, copy_cursor)
+                else {
+                    panic!("each recursive link should remain an Option");
+                };
+                assert_eq!(source_option.variant_name, "Some");
+                assert_eq!(copy_option.variant_name, "Some");
+                let (Value::Instance(source_node), Value::Instance(copy_node)) =
+                    (&source_option.payloads[0], &copy_option.payloads[0])
+                else {
+                    panic!("each present Option should retain its ArrayNode");
+                };
+                let (Some(Value::Array(source_array)), Some(Value::Array(copy_array))) = (
+                    source_node.fields.get("values"),
+                    copy_node.fields.get("values"),
+                ) else {
+                    panic!("each ArrayNode should retain its values field");
+                };
+                assert_eq!(
+                    copy_array.get(&[0]).unwrap(),
+                    Value::Int(IntegerValue::from_i32(expected as i32)),
+                    "deep copies must preserve every node's payload order"
+                );
+                let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(copy_storage)) =
+                    (&source_array.storage, &copy_array.storage)
+                else {
+                    panic!("test arrays should retain int32 storage");
+                };
+                assert_ne!(
+                    source_storage.as_ptr(),
+                    copy_storage.as_ptr(),
+                    "every deeply nested Array must own independent storage"
+                );
+                source_cursor = source_node
+                    .fields
+                    .get("next")
+                    .expect("each ArrayNode should retain its next field");
+                copy_cursor = copy_node
+                    .fields
+                    .get("next")
+                    .expect("each copied ArrayNode should retain its next field");
+            }
+
+            for cursor in [source_cursor, copy_cursor] {
+                let Value::EnumVariant(option) = cursor else {
+                    panic!("the recursive chain should terminate with Option.None");
+                };
+                assert_eq!(option.variant_name, "None");
+                assert!(option.payloads.is_empty());
+            }
+        })
+        .expect("the fixed-stack clone test thread should start")
+        .join()
+        .expect("deep iterative clone should not overflow a 512 KiB stack");
+}
+
+#[test]
+fn array_clone_failure_drops_a_completed_deep_sibling_on_a_small_stack() {
+    const HELPER_ENV: &str = "AURORA_ARRAY_CLONE_FAILURE_DROP_HELPER";
+    const DEPTH: usize = 20_000;
+
+    if std::env::var_os(HELPER_ENV).is_some() {
+        thread::Builder::new()
+            .name("aurora-array-clone-failure-drop".to_string())
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let mut deep_sibling = Value::Unit;
+                for _ in 0..DEPTH {
+                    deep_sibling = Value::EnumVariant(EnumVariantValue {
+                        enum_name: "CloneFailureProbe".to_string(),
+                        variant_name: "Next".to_string(),
+                        payloads: vec![deep_sibling],
+                    });
+                }
+                let source = Value::EnumVariant(EnumVariantValue {
+                    enum_name: "CloneFailureProbe".to_string(),
+                    variant_name: "Pair".to_string(),
+                    payloads: vec![
+                        deep_sibling,
+                        Value::Array(
+                            ArrayValue::new(
+                                vec![1].into_boxed_slice(),
+                                ArrayStorage::Int32(vec![7].into_boxed_slice()),
+                            )
+                            .unwrap(),
+                        ),
+                    ],
+                });
+
+                let error = super::with_array_allocation_budget(DEPTH + 1, || {
+                    super::try_clone_array_containing_value(&source)
+                })
+                .expect_err(
+                    "the Array sibling should fail after the earlier deep sibling was rebuilt",
+                );
+                assert_eq!(error.code, "AU4005");
+
+                // The clone-state destructor asserts every cleanup push fits its fallibly
+                // pre-reserved stack. The source is retained because this regression exercises
+                // that no-allocation cleanup, not Rust's recursive drop for the fixture.
+                std::mem::forget(source);
+            })
+            .expect("small-stack clone-failure helper should spawn")
+            .join()
+            .expect("clone failure must clean partial deep values without overflowing");
+        return;
+    }
+
+    let output = std::process::Command::new(
+        std::env::current_exe().expect("current test binary should exist"),
+    )
+    .arg("--exact")
+    .arg(
+        "runtime_value::tests::array_clone_failure_drops_a_completed_deep_sibling_on_a_small_stack",
+    )
+    .arg("--nocapture")
+    .env(HELPER_ENV, "1")
+    .output()
+    .expect("clone-failure helper process should run");
+
+    assert!(
+        output.status.success(),
+        "clone-failure cleanup must be stack bounded and use only pre-reserved storage; child stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
