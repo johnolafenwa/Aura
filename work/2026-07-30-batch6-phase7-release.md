@@ -492,8 +492,48 @@ Focused cache and integer CLI regressions, formatting, reference integrity,
 docs build, the exact production Clippy gate, and scoped diff hygiene pass.
 The detailed corpus and lane evidence is in
 `work/2026-07-31-batch6-fresh-eyes-corpus.md` and
-`work/fresh-eyes-corpus/`. Part 3 now proceeds to the consolidated
-post-reboot performance story.
+`work/fresh-eyes-corpus/`.
+
+## Part 3 consolidated performance
+
+The consolidated release harness is committed at `18c45ac`. Its test-first
+suite has 23 tests covering process-group cleanup, exact protocols, statistics,
+compiler and CPython qualification, quiet-host classification, environment
+scrubbing, source-identity rechecks, and atomic SHA-linked reports. Together
+with the maintained scalable-runtime and Array suites, all 54 + 10 + 23
+benchmark-harness tests pass.
+
+The contractual run completed from clean detached commit `18c45ac` on the
+post-reboot Mac14,9 M2 Pro host. It used Xcode CPython 3.9.6, one excluded
+warmup, exactly 11 rotating pairs, a fresh locked release compiler, empty
+before-build/before-timing/after-timing competing-process inventories, and
+unchanged inputs after timing.
+
+Primary medians were:
+
+- naive `fib(30)`: Aurora `93.875250 ms`, CPython `158.491666 ms`;
+- create/join/verify 10,000 tasks: Aurora `101.743042 ms`, CPython
+  `51.950667 ms`;
+- 20-client TCP fan-out: Aurora `104.505375 ms`, CPython `108.605459 ms`;
+- 16-cycle retrying HTTP worker: Aurora `429.291292 ms`, CPython
+  `520.447791 ms`; and
+- whole-process V6: Aurora `int32` `36.620333 ms`, Aurora `int64`
+  `13.724042 ms`, CPython integer `321.096625 ms`.
+
+The separately qualified Phase 7.3 Array rows remain `1.142461 ms` Aurora
+versus `0.251602 ms` NumPy for one-million-element `float64` add and
+`1.150392 ms` versus `0.174065 ms` for sum. The complete methodology,
+hardware, caveats, ratios, runtime continuity evidence, and all hashes are in
+`work/2026-07-31-batch6-consolidated-benchmarks.md`.
+
+The new raw/summary reports are
+`/private/tmp/aurora-b6-release-performance-raw.json` and
+`/private/tmp/aurora-b6-release-performance-summary.json`, SHA-256
+`06cc1223630b1063c8a6806bf590449d6121a3be8d33e8dc1b0ffd17cee93ccb`
+and
+`4490e0d169d9a031ae57f04ade772d22169189f71a949356234f529d40e56236`.
+They are contractual and contain no non-contractual reason. Part 3 now
+proceeds to the claims and positioning audit.
 
 ## Authorized sequence
 

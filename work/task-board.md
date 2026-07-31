@@ -304,11 +304,28 @@ Last updated: 2026-07-31
   Focused CLI regressions, reference integrity, docs, formatting, the exact
   production Clippy gate, and scoped diff hygiene pass.
 
-  Current stage: run the consolidated post-reboot performance suite for
-  fib(30), the V6 loops, 10,000 tasks, TCP fan-out, retrying worker, and Array
-  operations against CPython/NumPy. There is no current blocker.
-- Work notes: `work/2026-07-30-batch6-phase7-release.md` and
-  `work/2026-07-31-batch6-fresh-eyes-corpus.md`.
+  The consolidated performance harness is committed at `18c45ac`; all 54
+  scalable-runtime, 10 Array, and 23 release-performance harness tests pass.
+  Its clean detached post-reboot run is contractual with 11/11 pairs, empty
+  quiet-host inventories, unchanged inputs after timing, and Xcode CPython
+  3.9.6 on the Mac14,9 M2 Pro host. Primary medians are `93.875250 ms` versus
+  `158.491666 ms` for naive `fib(30)`, `101.743042 ms` versus `51.950667 ms`
+  for 10,000 tasks, `104.505375 ms` versus `108.605459 ms` for 20-client TCP
+  fan-out, `429.291292 ms` versus `520.447791 ms` for the retrying worker,
+  and whole-process V6 `36.620333 ms` / `13.724042 ms` versus CPython
+  `321.096625 ms`. Separately qualified one-million-element `float64` Array
+  medians remain Aurora/NumPy `1.142461/0.251602 ms` for add and
+  `1.150392/0.174065 ms` for sum. The new raw/summary SHA-256 values are
+  `06cc1223…` / `4490e0d1…`.
+
+  Current stage: complete the claims audit, positioning page, README hero,
+  0.2.0 version/changelog/manual synchronization, and safe non-publishing
+  packaging workflow. The supported-platform archive run remains dependent
+  on making the final source ref available to its Linux and Intel macOS
+  runners; nothing will be pushed or published in this batch.
+- Work notes: `work/2026-07-30-batch6-phase7-release.md`,
+  `work/2026-07-31-batch6-fresh-eyes-corpus.md`, and
+  `work/2026-07-31-batch6-consolidated-benchmarks.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;
   post-reboot provenance for release performance; user-owned
