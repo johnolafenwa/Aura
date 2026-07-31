@@ -83,7 +83,7 @@ Several other spellings are lexed as ordinary identifiers and become special onl
 print("ready") # A trailing comment.
 ```
 
-Aurora 0.1 has no block comments.
+Aurora 0.2 has no block comments.
 
 ## Spaces, Tabs, And Indentation
 
@@ -170,7 +170,7 @@ cannot cross a physical newline.
 
 ## Punctuation And Operators
 
-Aurora 0.1 recognizes:
+Aurora 0.2 recognizes:
 
 ```text
 ( ) [ ] { } : , . ?
@@ -180,7 +180,7 @@ Aurora 0.1 recognizes:
 ```
 
 There is no semicolon. Multiple statements cannot share one physical line.
-Aurora 0.1 also has no exponentiation, unary `+`, bitwise operators, assignment
+Aurora 0.2 also has no exponentiation, unary `+`, bitwise operators, assignment
 expressions or a lambda arrow; lambdas use `lambda parameters: expression`. The lexer
 chooses the longest operator spelling, so `//=` is one token rather than `//`
 followed by `=`.
@@ -270,7 +270,7 @@ Both delimiters produce a `String` and support the same escapes:
 
 Unknown escapes, invalid Unicode scalars, missing hexadecimal digits, and
 missing or mismatched closing quotes are lexical errors. Triple-quoted, raw,
-and byte-string literals are not part of Aurora 0.1. A one-character literal
+and byte-string literals are not part of Aurora 0.2. A one-character literal
 such as `'x'` is a `String`, not a distinct character type.
 
 A string literal has type `String`. See [Types](/manual/types) for ownership and [Execution Model](/manual/execution-model#evaluation-order) for expression evaluation order.
@@ -289,14 +289,14 @@ Interpolations may contain indexing, calls, nested braces used by expressions,
 and either form of ordinary string literal, including braces inside those
 strings. Empty or syntactically invalid interpolations are rejected.
 
-Use two consecutive opening braces for a literal opening brace. Two consecutive closing braces decode to one literal closing brace; Aurora 0.1 also treats a lone closing brace outside an interpolation as literal text:
+Use two consecutive opening braces for a literal opening brace. Two consecutive closing braces decode to one literal closing brace; Aurora 0.2 also treats a lone closing brace outside an interpolation as literal text:
 
 ```python
 print(f"{{name}} = {name}")
 ```
 
 F-strings support the same escapes as ordinary strings. F-strings themselves
-remain double-quoted: `f'...'` is not Aurora 0.1 syntax. They do not support
+remain double-quoted: `f'...'` is not Aurora 0.2 syntax. They do not support
 conversion flags such as `!r` or a format-specifier mini-language.
 Interpolations are evaluated from left to right and the result is an owned
 `String`.

@@ -4,7 +4,7 @@ Statements introduce and update bindings, control execution, or evaluate an expr
 
 ## Statements, Items, And Suites
 
-Aurora 0.1 statements are:
+Aurora 0.2 statements are:
 
 - binding and assignment
 - expression statements
@@ -207,7 +207,7 @@ while attempts < 3:
     attempts += 1
 ```
 
-The condition must have type `bool`. A false first condition executes the body zero times. Aurora 0.1 has no loop `else` clause.
+The condition must have type `bool`. A false first condition executes the body zero times. Aurora 0.2 has no loop `else` clause.
 
 Moving a non-copy outer value for the first time inside a repeatable loop is rejected when it could make a later iteration invalid. Reinitialize the place on every continuing path or restructure ownership explicitly.
 
@@ -255,7 +255,7 @@ owned leaves; and bare Queue iteration receives an owned item and gives owned
 leaves. `mut` iteration with a tuple target is rejected because the
 minimal tuple surface has no recursive element writeback.
 
-`for value in mut set:` is not supported in Aurora 0.1. Queue iteration
+`for value in mut set:` is not supported in Aurora 0.2. Queue iteration
 receives values rather than traversing places: each item arrives owned and the
 queue handle is a copy value. Consequently `own` and `mut` are rejected for
 Queue iteration; use the bare form. That form evaluates
@@ -427,7 +427,7 @@ message = "hello"
 print(message)
 ```
 
-Those statements execute in their stored source order. Alternatively, the entry module may define a local `main`. It cannot combine executable top-level statements with a local `main`. Imported module top-level statements do not execute as import side effects in Aurora 0.1.
+Those statements execute in their stored source order. Alternatively, the entry module may define a local `main`. It cannot combine executable top-level statements with a local `main`. Imported module top-level statements do not execute as import side effects in Aurora 0.2.
 
 The accepted `main` signatures and process exit behavior are defined in [Functions](/manual/functions#main) and [Execution Model](/manual/execution-model#entry-module-execution).
 

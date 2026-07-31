@@ -94,7 +94,7 @@ A user enum is copyable when every payload type declared by every variant is sta
 
 `Option[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` follow the
 same payload-copy rule. `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`,
-and `WaitAll[T]` remain move outcome types in Aurora 0.1 even for copy
+and `WaitAll[T]` remain move outcome types in Aurora 0.2 even for copy
 payloads. An unconstrained generic payload is not assumed copyable. See
 [Types](/manual/types#copy-and-move-categories).
 
@@ -147,7 +147,7 @@ Expression arms may also use the inline grammar `case Pattern: expression`; stat
 
 ## Pattern Forms
 
-At the top level of a match arm, Aurora 0.1 supports:
+At the top level of a match arm, Aurora 0.2 supports:
 
 - an enum variant pattern for an enum scrutinee
 - a recursively nested fixed-arity tuple pattern for a tuple scrutinee
@@ -255,7 +255,7 @@ match code:
 
 The literal must have the scrutinee's exact scalar type after contextual literal checking. Duplicate literals and arms after a covering wildcard are unreachable and rejected.
 
-Boolean matching is exhaustive when both `true` and `false` are covered. Integer, floating-point, and string domains are open-ended and therefore require a final wildcard. Classes, collections, resources, and arbitrary other values are not match scrutinee types in Aurora 0.1.
+Boolean matching is exhaustive when both `true` and `false` are covered. Integer, floating-point, and string domains are open-ended and therefore require a final wildcard. Classes, collections, resources, and arbitrary other values are not match scrutinee types in Aurora 0.2.
 
 ## Builtin Enum Shapes
 
@@ -358,7 +358,7 @@ diagnostics.
 
 ## Limits And Implementation-Defined Behavior
 
-Aurora 0.1 has no match guards, or-patterns, range/rest patterns, named-payload
+Aurora 0.2 has no match guards, or-patterns, range/rest patterns, named-payload
 patterns, class/collection destructuring, top-level catch-all binding pattern,
 arbitrary predicate pattern, Duration/f-string pattern, or inline suite for
 statement matches. Expression arms contain exactly one expression.

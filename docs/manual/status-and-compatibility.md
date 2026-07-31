@@ -1,6 +1,6 @@
 # Status And Compatibility
 
-Aurora 0.1 is an advanced technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments; it is not yet a production systems-language release or a security boundary for untrusted programs.
+Aurora 0.2 is an advanced technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments; it is not yet a production systems-language release or a security boundary for untrusted programs.
 
 ## Canonical Contract
 
@@ -15,7 +15,7 @@ The Manual and executable suite are expected to agree. A divergence is a
 project defect, not an alternate language rule. The historical proposal is
 design history. Features mentioned only there—including `Channel`,
 statement-form `select`, detached spawn, attributes, and registry
-publishing—are not part of Aurora 0.1. Accepted ADR-0034 instead adds the
+publishing—are not part of Aurora 0.2. Accepted ADR-0034 instead adds the
 ordinary builtin call `select(source, ...)`; it adds no statement syntax.
 That addition reserves both the builtin function name `select` and builtin
 enum name `SelectOutcome`; existing user declarations with either name must
@@ -95,7 +95,7 @@ The four dtypes are `int32`, `int64`, `float32`, and `float64`; every value
 owns a rank-at-least-one row-major CPU buffer. The accepted surface includes
 three constructors, multidimensional scalar indexing, first-axis owned
 slices, mutation, mapping, reductions, exact-shape/scalar kernels, and
-explicit wrapping/saturating integer arithmetic. It adds no broadcasting,
+explicit wrapping/saturating integer arithmetic. It adds no array-shape broadcasting,
 mixed promotion, views, shape transformations, equality, autograd, or
 accelerator placement. `mean()` returns `float64` for every dtype; integer
 Array `/` remains rejected under ADR-0002.
@@ -104,7 +104,7 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 
 ## Stability Policy
 
-The ratified correctness-recovery and Phase 1.5 semantic re-defaults are the final pre-reference language changes for 0.1. Outside explicitly recorded ADR decisions, syntax expansion is frozen for the hardening cycle. Work in this cycle prioritizes correctness, native-runtime safety, editor responsiveness, and an honest control-plane surface. APIs may still change while 0.1 remains untagged.
+The ratified correctness-recovery and Phase 1.5 semantic re-defaults established the reference baseline that the 0.2 capability migration and later Accepted ADRs extend. Outside explicitly recorded ADR decisions, syntax expansion is frozen for the technical-preview release. Work in this cycle prioritizes correctness, native-runtime safety, editor responsiveness, and an honest control-plane surface. APIs may still change while 0.2 remains a technical preview.
 
 The post-Phase-1.5 Manual is reference-frozen. Every later semantic change,
 including a compatible extension, requires an ADR and must update the normative
@@ -116,13 +116,13 @@ Compiler coverage is held at the current non-regression floor rather than being 
 
 Seeded randomness has an additional observable-data promise: the algorithm,
 seed mapping, integer and floating mappings, and shuffle order documented in
-[Randomness Module](/manual/randomness) remain stable throughout Aurora 0.1.x.
+[Randomness Module](/manual/randomness) remain stable throughout Aurora 0.2.x.
 A later compatibility series may change them only with an explicit decision
 and new conformance vectors. OS-secure outputs are intentionally not stable.
 
 ## Maintained Concurrency Surface
 
-Aurora 0.1 uses structured concurrency:
+Aurora 0.2 uses structured concurrency:
 
 - `TaskGroup()` owns child tasks inside `with`
 - `TaskGroup.start(...)` returns a `Task[T]`

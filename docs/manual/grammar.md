@@ -1,6 +1,6 @@
 # Grammar
 
-This chapter defines the complete source grammar of Aurora 0.1. The grammar is normative after lexical token formation. Static restrictions—types, visibility, ownership, exhaustiveness, valid receivers, and API-specific rules—are defined by [Static Semantics](/manual/static-semantics).
+This chapter defines the complete source grammar of Aurora 0.2. The grammar is normative after lexical token formation. Static restrictions—types, visibility, ownership, exhaustiveness, valid receivers, and API-specific rules—are defined by [Static Semantics](/manual/static-semantics).
 
 ## Notation
 
@@ -83,12 +83,12 @@ accept the same escapes:
 
 An invalid scalar, unknown escape, missing digit, or missing or mismatched
 closing quote is a lexical error. Triple-quoted, raw, and byte-string literals
-are not part of Aurora 0.1. There is no separate character-literal token.
+are not part of Aurora 0.2. There is no separate character-literal token.
 
 `FSTRING` begins with `f"` and ends at the matching double quote.
 `{ expression }` interpolates an ordinary Aurora expression. Two opening braces insert one
 literal opening brace, and two closing braces insert one literal closing brace.
-A lone closing brace outside an interpolation is also literal in Aurora 0.1.
+A lone closing brace outside an interpolation is also literal in Aurora 0.2.
 Interpolations may contain nested braces and ordinary single- or double-quoted
 strings; braces inside those strings do not change interpolation depth. Empty
 or invalid interpolations are rejected. Single-quoted f-strings, conversion
@@ -127,7 +127,7 @@ kind. A delimited expression-form `match` is a layout island: its header and
 arms retain the layout tokens required by the match productions even though an
 outer delimiter remains open.
 
-Backslash continuation is not part of Aurora 0.1. Ordinary strings and
+Backslash continuation is not part of Aurora 0.2. Ordinary strings and
 f-strings remain single-line, and existing comma-separated forms do not gain a
 trailing comma.
 
@@ -537,7 +537,7 @@ From lowest to highest precedence:
 | 2 | `or` | left |
 | 3 | `and` | left |
 | 4 | prefix `not` | right |
-| 5 | `==`, `!=`, `<`, `<=`, `>`, `>=` | non-associative in 0.1 |
+| 5 | `==`, `!=`, `<`, `<=`, `>`, `>=` | non-associative in 0.2 |
 | 6 | `+`, `-` | left |
 | 7 | `*`, `/`, `//`, `%` | left |
 | 8 | prefix `match`, `try`, unary `-` | right/prefix |
@@ -786,9 +786,9 @@ The implementation rejects source that exceeds the maintained parser complexity 
 - one comprehension rejects a 128th combined `for` clause or `if` filter
 - f-string interpolation brace nesting is limited to 128
 
-These are implementation limits of Aurora 0.1 and therefore observable parts of the current reference. A future implementation may raise them but must continue to reject excessive input cleanly.
+These are implementation limits of Aurora 0.2 and therefore observable parts of the current reference. A future implementation may raise them but must continue to reject excessive input cleanly.
 
-## Syntax Not In Aurora 0.1
+## Syntax Not In Aurora 0.2
 
 The grammar intentionally excludes:
 

@@ -321,6 +321,6 @@ normative [Closures](../docs/manual/closures.md) page.
 ## Current Limits
 
 - return values are always owned; first-class loan or view return values are
-  not part of Aurora 0.1
+  not part of Aurora 0.2
 - clone-based non-copy returns require the returned type to be clone-safe
 - method values and multi-statement closure bodies are not part of this stage

@@ -126,7 +126,7 @@ Binding is deterministic:
 
 Positional arguments cannot follow a named argument. Parameter and argument
 lists may span physical lines while their parentheses remain open, but they do
-not accept trailing commas in Aurora 0.1.
+not accept trailing commas in Aurora 0.2.
 
 ## Default Arguments
 

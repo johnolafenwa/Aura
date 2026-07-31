@@ -48,3 +48,16 @@ th:first-child {
 code {
   font-variant-ligatures: none;
 }
+
+.aurora-release-stamp {
+  display: grid;
+  gap: 4px;
+  margin: 20px 0 24px;
+  padding: 12px 16px;
+  border-left: 3px solid var(--vp-c-brand-1);
+  background: var(--vp-c-brand-soft);
+}
+
+.aurora-release-stamp span {
+  overflow-wrap: anywhere;
+}

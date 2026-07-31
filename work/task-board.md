@@ -318,11 +318,31 @@ Last updated: 2026-07-31
   `1.150392/0.174065 ms` for sum. The new raw/summary SHA-256 values are
   `06cc1223…` / `4490e0d1…`.
 
-  Current stage: complete the claims audit, positioning page, README hero,
-  0.2.0 version/changelog/manual synchronization, and safe non-publishing
-  packaging workflow. The supported-platform archive run remains dependent
-  on making the final source ref available to its Linux and Intel macOS
-  runners; nothing will be pushed or published in this batch.
+  The claims and positioning audit is complete. The root README and new
+  `docs/positioning.md` use the evidence-bounded agent-control-plane wedge,
+  distinguish ownership determinism from scheduling, remove the unsupported
+  Rust-equivalence claim, and publish only the qualified post-reboot
+  measurements. All product manifests and locks now report `0.2.0`;
+  maintained Manual, Learn, tutorial, support, and changelog release wording
+  is synchronized; and rendered Manual pages carry the release version plus
+  an injected exact implementation commit.
+
+  Release packaging is prepared but not published. Manual dispatch defaults
+  to build-only, separates source from release identity, validates archive
+  names, and refuses `publish=true` unless the release tag resolves to the
+  checked-out source commit. Packaged CLI smoke runs from copied release
+  examples outside the checkout with Cargo unavailable, a fresh isolated
+  native cache, exact `aura 0.2.0`, basic-output, and retry-worker-output
+  checks, bounded owned process groups, and descendant cleanup. Nine focused
+  release-packaging tests plus the metadata and release-stamp suites pass.
+
+  Current stage: commit the release-preparation tree, run final compiler
+  coverage and the one-time downward-truncated re-ratchet, execute exact clean
+  full CI, create and verify only the local `v0.2.0-preview` tag, build the
+  locally available release artifacts, and write the final report. The
+  Linux-x64 and Intel-macOS runner products cannot be produced locally from
+  the still-unpushed source ref and will not be claimed as built; nothing will
+  be pushed or published in this batch.
 - Work notes: `work/2026-07-30-batch6-phase7-release.md`,
   `work/2026-07-31-batch6-fresh-eyes-corpus.md`, and
   `work/2026-07-31-batch6-consolidated-benchmarks.md`.

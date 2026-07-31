@@ -453,7 +453,7 @@ that are propagated through calls and discharged after specialization.
 
 A copy use duplicates a value and a move transfers it. Shared and mutable
 borrows are statically enforced access contracts rather than first-class
-runtime reference values in Aurora 0.1. Mutable borrowed calls and Vec
+runtime reference values in Aurora 0.2. Mutable borrowed calls and Vec
 iteration write through the original place; `match mut` reconstructs
 and writes back on every arm exit. Simple Map indexed assignment accepts and
 owns any value type; direct compound indexed assignment requires a copy `Vec`
@@ -488,7 +488,7 @@ applicable user-defined operator traits for root and projected targets. A copy
 target is captured before the right operand. A non-copy root or projected
 target remains borrowed across that operand, so overlapping mutable borrow or
 consumption is `AU3002`. A non-copy `Vec` element or `Map` value cannot be a
-direct compound target because Aurora 0.1 has no indexed-place identity and
+direct compound target because Aurora 0.2 has no indexed-place identity and
 writeback model; Aurora rejects the operation instead of cloning or
 destructively moving the stored value.
 

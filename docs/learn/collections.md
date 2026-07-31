@@ -492,9 +492,9 @@ slice such as `matrix[0:1]` is a fresh owned copy, not a view.
 
 Arithmetic is deliberately strict: Array/Array operations require identical
 shapes and dtypes, scalar operations require the same dtype, and integer
-Arrays do not support `/`. There is no broadcasting, reshape, transpose,
-mixed-dtype promotion, view, step, or slice-assignment surface in this first
-maintained layer.
+Arrays do not support `/`. There is no array-shape broadcasting, reshape,
+transpose, mixed-dtype promotion, view, step, or slice-assignment surface in
+this first maintained layer.
 
 See
 [`examples/numbers/numeric_arrays.au`](../../examples/numbers/numeric_arrays.au)

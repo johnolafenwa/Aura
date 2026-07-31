@@ -245,7 +245,7 @@ terminate the process; no backend can make such a declaration safe.
 
 FFI v0, its package opt-in and root dependency report, bodyless
 `extern "C"` functions, opaque handles, fixed-width scalars, pointer-length
-views, and Unix process-global lookup are implemented in Aurora 0.1.
+views, and Unix process-global lookup are implemented in Aurora 0.2.
 
 Callbacks, raw pointers, variadics, returned views, nullable handles, explicit
 library loading/link configuration, and foreign aggregate layout are reserved

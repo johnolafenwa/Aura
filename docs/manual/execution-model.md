@@ -4,7 +4,7 @@ Aurora source is statically checked, lowered, and executed with deterministic si
 
 ## Maintained Execution Paths
 
-Aurora 0.1 maintains one checked source language and two runtime representations:
+Aurora 0.2 maintains one checked source language and two runtime representations:
 
 - `aura run` lowers the entry package to MIR and executes it in the MIR runtime.
 - native direct builds lower MIR-compatible program structure to native code linked with the direct runtime.
@@ -26,7 +26,7 @@ After successful checking, an entry module runs in one of two modes:
 1. If it has executable top-level statements, those statements execute in their stored source order. The file cannot also declare a local `main`.
 2. Otherwise, a local `main()` is called when present. It returns `None` or `int32`.
 
-An imported function named `main` is not an entrypoint. Imported module top-level statements do not execute as import side effects in Aurora 0.1.
+An imported function named `main` is not an entrypoint. Imported module top-level statements do not execute as import side effects in Aurora 0.2.
 
 For `aura run`, a returned `int32` is passed to the host process as the requested exit status; `None` means success. A built native program follows the same entry result contract.
 
@@ -483,7 +483,7 @@ owners, and no resource mutex remains held across the worker wait. Reactor
 readiness, absolute deadlines, and cancellation remain scheduler-side
 concerns. This protocol-step pool is lazily initialized and shared by every
 lightweight scheduler. Its workers intentionally live until process exit;
-Aurora 0.1 has no protocol-pool shutdown or join surface. The non-Unix
+Aurora 0.2 has no protocol-pool shutdown or join surface. The non-Unix
 WebSocket fallback retains its compatibility path. Resolver, listener-bind,
 and file reads use the generic blocking-I/O pool.
 `AURORA_BLOCKING_WORKERS=<positive integer>` selects its exact worker count
@@ -512,7 +512,7 @@ waits for admission without value-table access, then holds read access only
 long enough to copy the source and releases it before submission and
 completion waiting. The legacy `json.is_valid` and `json.parse_string_map`
 helpers remain bounded caller-side compatibility operations and do not use
-this service. Codec workers are process-lifetime and have no Aurora 0.1
+this service. Codec workers are process-lifetime and have no Aurora 0.2
 shutdown or configuration surface.
 
 `Queue[T]` is a copy handle to shared runtime state. Under Accepted
@@ -611,7 +611,7 @@ Process cancellation and close operations signal/terminate according to the proc
 
 ## Runtime Limits
 
-The maintained resource size, header, frame, timeout, and platform limits are normative for Aurora 0.1 and are collected in [Current Limits](/manual/current-limits). An implementation MUST reject or return a typed error when a limit is exceeded; it must not allocate without bound or hang indefinitely where the API supplies a deadline.
+The maintained resource size, header, frame, timeout, and platform limits are normative for Aurora 0.2 and are collected in [Current Limits](/manual/current-limits). An implementation MUST reject or return a typed error when a limit is exceeded; it must not allocate without bound or hang indefinitely where the API supplies a deadline.
 
 ## Determinism
 
@@ -627,7 +627,7 @@ Pure expression evaluation, ordinary control flow, and collection operations are
 
 An explicitly seeded `random.Rng` is deterministic rather than part of that
 list: its xoshiro256** sequence, integer/float mapping, and shuffle order are
-fixed for Aurora 0.1.x and specified in [Randomness Module](/manual/randomness).
+fixed for Aurora 0.2.x and specified in [Randomness Module](/manual/randomness).
 Secure random calls are external effects and never draw from that stream.
 Aurora converts host effects into typed values and ordering primitives where
 practical, but does not pretend the host environment is deterministic.

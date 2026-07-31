@@ -15,7 +15,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Return values are always owned. Copy results are ordinary copies; a non-copy
   result must be constructed, cloned when clone-safe, moved from owned input,
   or produced by an owner operation. First-class loan or view returns are not
-  part of Aurora 0.1, and current syntax reserves no future contract for them.
+  part of Aurora 0.2, and current syntax reserves no future contract for them.
 - Empty list, map, and set literals need an expected collection type.
 - Class field defaults cannot call user-defined functions in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `String(...)` is not a constructor; use string literals and string methods.
@@ -74,8 +74,9 @@ This page documents known current limits of the Aurora compiler and runtime.
   clone-safe, repeatably observable elements.
 - Numeric `Array[T]` is CPU-only, contiguous, row-major, and specialized only
   by `int32`, `int64`, `float32`, or `float64`. Shape is runtime metadata and
-  rank is at least one; zero dimensions are allowed. There is no broadcasting,
-  mixed promotion, equality, views, reshape, transpose, matrix multiplication,
+  rank is at least one; zero dimensions are allowed. Same-dtype scalar
+  broadcast is implemented, but there is no array-shape broadcasting, mixed
+  promotion, equality, views, reshape, transpose, matrix multiplication,
   multidimensional or step slicing, slice assignment, autograd, accelerator
   placement, distributed storage, or foreign-buffer aliasing. First-axis
   slices are fresh owned copies. Maintained NumPy comparisons are exact
@@ -175,7 +176,7 @@ This page documents known current limits of the Aurora compiler and runtime.
   metadata or the root runtime. The Phase 5.9 passing observation was
   compression- and reclaim-dependent, not a robust capacity guarantee.
 - The ratified benchmark escape hatch retains the 100,000-sleeper result as
-  evidence without turning it into a product claim. Aurora 0.1's maintained
+  evidence without turning it into a product claim. Aurora 0.2's maintained
   scale claim is limited to the contractual 10,000-sleeper bound plus the
   timer, idle, starvation, and multicore controls. All pass at Phase 5.10:
   the standalone timers had a 6 ms worst arm span and 1 ms p99 overshoot,
@@ -193,11 +194,11 @@ This page documents known current limits of the Aurora compiler and runtime.
   state before cancellation or reactor waiting resumes. The non-Unix
   WebSocket fallback does not use this Phase 5.4 service. The pool is
   process-global, lazily initialized, shared by all lightweight schedulers,
-  and intentionally process-lifetime; it has no 0.1 runtime shutdown or join
+  and intentionally process-lifetime; it has no 0.2 runtime shutdown or join
   API. File reads, resolver work, and listener binding remain on the generic
   blocking-I/O pool; TLS asset bytes are read there before PEM parsing and
   rustls construction run on protocol workers.
-- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aurora 0.1 has no chunked file-read API.
+- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aurora 0.2 has no chunked file-read API.
 - Process-pipe and captured-output reads plus TCP, Unix, and TLS whole/bounded reads remain capped at 64 MiB. TLS certificate, private-key, and CA-file loading uses the same independent 64 MiB ceiling. A bounded byte count of zero is invalid.
 - UDP receives accept `max_bytes` from 1 through 65,535.
 - Incoming HTTP parsing accepts at most 64 headers and 16 MiB of wire data per message, including the start line, headers, transfer framing, trailers, and body. Outbound HTTP writers have no separate size cap. The high-level map header model cannot preserve repeated equal field names losslessly.
@@ -222,7 +223,7 @@ This page documents known current limits of the Aurora compiler and runtime.
   lightweight tasks park through the scheduler. Once admitted, synchronous
   parse defers cancellation until codec completion. Runtime materialization,
   JSON-aware clone/render, and dumping use iterative traversals. The service is
-  process-lifetime and has no 0.1 sizing or shutdown API. The legacy
+  process-lifetime and has no 0.2 sizing or shutdown API. The legacy
   `json.is_valid` and `json.parse_string_map` helpers retain their bounded
   caller-side compatibility paths and do not use that service; legacy JSON
   string-map and TOML helpers remain restricted to typed
@@ -263,7 +264,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 - TLS APIs require PEM certificate/key assets.
 - Package support has local path and git dependencies, but no registry publish/install flow.
 - `fs.read_dir` silently skips an individual directory entry that fails after the directory itself was opened.
-- High-level HTTP header conversion may expose duplicate equal map keys when the wire message repeats a header name; repeated headers are not a lossless 0.1 contract.
+- High-level HTTP header conversion may expose duplicate equal map keys when the wire message repeats a header name; repeated headers are not a lossless 0.2 contract.
 - Accepted ADR-0033 rejects non-Transfer task captures, task results, and
   Queue payloads with `AU3008`. Every other non-repeatable transferable task
   result has one statically enforced observation right: direct result methods
@@ -300,6 +301,9 @@ This page documents known current limits of the Aurora compiler and runtime.
 - The default `--backend auto` first tries direct emission and may package an embedded-MIR launcher when direct emission is unavailable. Use `--backend direct` when fallback is unacceptable.
 - Editor tooling uses a persistent compiler service. If that process is unavailable, recovery is lexical only and intentionally has no semantic diagnostics or member inference.
 - `aura fmt` currently normalizes line endings, trailing whitespace, and final newlines; it is not yet a syntax-reflowing formatter.
-- `aura test` treats each selected `.au` file as an executable test program and succeeds when execution succeeds with a zero integer `main` result; function-level test discovery is not implemented.
+- `aura test` discovers each parameterless `def test_*()` function as a
+  separate result and retains file-level execution for files with no such
+  function. Discovery is name-prefix based; annotations, parameterized tests,
+  and fixture/teardown protocols are not implemented.
 - A timed-out `aura test` stops waiting but cannot terminate its worker thread; the timed-out program may continue host side effects until the process exits.
-- Recursive `aura fmt` and `aura test` traversal follows directory symlinks without cycle detection in 0.1.
+- Recursive `aura fmt` and `aura test` traversal follows directory symlinks without cycle detection in 0.2.

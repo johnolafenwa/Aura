@@ -100,7 +100,7 @@ program with the same diagnostic.
 
 ## Limits And Implementation-Defined Behavior
 
-Aurora 0.1 has no assertion-stripping mode, optimization flag, environment
+Aurora 0.2 has no assertion-stripping mode, optimization flag, environment
 switch, or backend option. Every accepted assertion executes in every build.
 Message contents are not reformatted or augmented, although the surrounding
 human diagnostic renderer adds its normal `error[AU4001]` prefix and source
@@ -111,7 +111,7 @@ catchable exception. Use `Result` for recoverable validation.
 
 ## Status
 
-Both assertion forms are implemented in Aurora 0.1. Their exact sequencing,
+Both assertion forms are implemented in Aurora 0.2. Their exact sequencing,
 diagnostic, cleanup, top-level, and no-strip behavior is accepted under
 ADR-0024. Exception statements, `raise`, and catchable assertion failures are
-not part of Aurora 0.1.
+not part of Aurora 0.2.

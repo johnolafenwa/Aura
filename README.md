@@ -1,10 +1,39 @@
 # Aurora
 
-Aurora is a systems programming language designed to have Python-like simplicity, the memory safety of Rust, and lightweight structured concurrency.
+Aurora is a statically typed, compiled language for agent control planes. Its
+wedge is Python-shaped source with deterministic ownership, structured
+concurrency, and typed failure across files, processes, networking, retries,
+and supervision.
 
-The goal is to build a systems programming language that is easy to learn and very effective for building agents and ML infrastructure.
+Deterministic ownership means that shared access, exclusive mutation, transfer,
+and scope cleanup follow language rules. It does **not** mean deterministic task
+scheduling: concurrent completion and output order are deliberately unspecified.
 
-Aurora 0.1 is an advanced technical preview, not a production release. The canonical implemented contract begins with the normative [Language Specification](docs/manual/language-specification.md), [complete grammar](docs/manual/grammar.md), and Manual; the original language proposal is historical design material. Supported hosts and pinned tools are listed in [SUPPORTED_PLATFORMS.md](SUPPORTED_PLATFORMS.md).
+Aurora 0.2.0 is a technical preview, not a production release. Read
+[Why Aurora](docs/positioning.md) for the measured positioning against adjacent
+languages. The canonical implemented contract begins with the normative
+[Language Specification](docs/manual/language-specification.md),
+[complete grammar](docs/manual/grammar.md), and Manual; the original language
+proposal is historical design material. Supported hosts and pinned tools are
+listed in [SUPPORTED_PLATFORMS.md](SUPPORTED_PLATFORMS.md).
+
+## Measured snapshot, not a general performance claim
+
+On one post-reboot Mac14,9 (M2 Pro, 10 cores, 16 GiB), the release benchmark
+recorded these protocol-window medians against CPython 3.9.6. Lower is faster;
+the ratio is Aurora divided by CPython.
+
+| exact workload | Aurora | CPython | Aurora / CPython |
+| --- | ---: | ---: | ---: |
+| naive recursive `fib(30)` | 93.875250 ms | 158.491666 ms | 0.592304 |
+| create and join 10,000 tasks | 101.743042 ms | 51.950667 ms | 1.958455 |
+| 20-client delayed loopback TCP fan-out | 104.505375 ms | 108.605459 ms | 0.962248 |
+| 16-cycle retrying HTTP worker | 429.291292 ms | 520.447791 ms | 0.824850 |
+
+These are exact-workload observations, not portable speed promises. The
+[positioning and methodology](docs/positioning.md#measured-snapshot) records
+the hardware, reboot, commit, evidence hashes, integer-loop measurements,
+numeric-Array comparison, and workload caveats.
 
 ## Monorepo layout
 
@@ -278,7 +307,9 @@ GitHub Actions:
 - `.github/workflows/docs.yml`
   - builds the VitePress book and deploys it to GitHub Pages from `main`
 - `.github/workflows/release.yml`
-  - builds Linux and macOS CLI archives, packages the VS Code extension and docs, and publishes them to GitHub Releases for `v*` tags or manual release runs
+  - builds Linux and macOS CLI archives, packages the VS Code extension and
+    docs, and publishes them for pushed `v*` tags; manual runs are build-only
+    by default and require an explicit publish opt-in
 
 Current `build` status:
 

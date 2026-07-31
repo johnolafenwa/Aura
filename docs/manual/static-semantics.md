@@ -6,7 +6,7 @@ This chapter states the cross-cutting rules. The declaration-specific chapters p
 
 ## Types And Type Equality
 
-Aurora 0.1 primarily uses nominal types with invariant generic arguments. Two
+Aurora 0.2 primarily uses nominal types with invariant generic arguments. Two
 nominal types match when their canonical names and recursively all type
 arguments are equal. Tuple types are structural: two tuple types match exactly
 when their arity and every corresponding element type match recursively. There
@@ -180,7 +180,7 @@ Arithmetic and ordering operators may otherwise resolve through the
 corresponding `Add`, `Sub`, `Mul`, `Div`, `FloorDiv`, `Mod`, or `Ord` trait
 method. Builtin numeric and Duration rules take precedence over operator-trait
 dispatch. Builtin equality does not dispatch through an operator trait in
-Aurora 0.1.
+Aurora 0.2.
 
 Tuple `==` and `!=` require operands with the same static tuple type. They
 apply builtin equality recursively to corresponding element types and produce
@@ -394,7 +394,7 @@ For a concrete receiver, the checker chooses the unique applicable implementatio
 
 For a type parameter, available methods and operators come from its declared bounds. If multiple bounds expose an indistinguishable method, the access is ambiguous unless the language can resolve one unique contract.
 
-Trait and implementation methods cannot declare default ordinary parameters in Aurora 0.1. Trait default method bodies are permitted; a signature-only trait method has no body after its terminating newline.
+Trait and implementation methods cannot declare default ordinary parameters in Aurora 0.2. Trait default method bodies are permitted; a signature-only trait method has no body after its terminating newline.
 
 A clone-producing operation over unresolved generic types infers clone-safety
 obligations on the contributing declared parameters. Calls propagate those

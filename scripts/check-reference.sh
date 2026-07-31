@@ -218,7 +218,7 @@ grep -Fq '| `random.Rng.next_int` | `next_int(lo: int64, hi: int64) -> int64`' d
 grep -Fq 'result = rotl(s1 * 5, 7) * 9' docs/manual/randomness.md
 grep -Fq 'threshold = 2^64 mod span' docs/manual/randomness.md
 grep -Fq 'secure_bytes(0)' docs/manual/randomness.md
-grep -Fq 'stable throughout the Aurora 0.1.x' docs/manual/randomness.md
+grep -Fq 'stable throughout the Aurora 0.2.x' docs/manual/randomness.md
 grep -Fq '3321214725393783201' docs/manual/randomness.md
 grep -Fq 'The no-clone rule is transitive.' docs/manual/randomness.md
 grep -Fq '`AU3007` rejects an operation that would duplicate non-cloneable state.' docs/manual/diagnostics.md
@@ -1014,3 +1014,5 @@ python3 scripts/test_reference_integrity.py
 python3 scripts/reference_integrity.py
 python3 scripts/test_capability_migrate.py
 python3 scripts/capability_migrate.py check
+python3 -m unittest scripts/test_release_metadata.py
+node --test docs/.vitepress/release-metadata.test.mjs

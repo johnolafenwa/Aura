@@ -152,7 +152,7 @@ The JSON result is an array of `{ "name": String, "kind": String, "detail": Stri
 
 ## Machine-Readable And Inspection Formats
 
-`ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aurora 0.1. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
+`ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aurora 0.2. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
 
 `aura lsp` is a persistent JSON-lines compiler service. Each input line is an object with an optional `id`, `method`, `path`, and `source`. Supported requests are:
 
@@ -332,7 +332,7 @@ Filesystem path interpretation, process exit-code width, executable format, link
 
 ## Status
 
-The commands and contracts documented as maintained on this page are implemented in Aurora 0.1 and covered by CLI, compiler, LSP, extension, backend-parity, and repository-gate tests. `analyze`, `complete`, and diagnostic schema version `1` are maintained tooling contracts; internal AST and MIR layouts are intentionally unstable.
+The commands and contracts documented as maintained on this page are implemented in Aurora 0.2 and covered by CLI, compiler, LSP, extension, backend-parity, and repository-gate tests. `analyze`, `complete`, and diagnostic schema version `1` are maintained tooling contracts; internal AST and MIR layouts are intentionally unstable.
 
 A package registry, publishing and installation workflow, Windows support, a
 configurable formatter, and annotation-based test discovery are unavailable.

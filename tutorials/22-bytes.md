@@ -148,7 +148,7 @@ allocation failure traps with `AU4005`. A codec never returns a partial
 successful value.
 
 The optional `encoding` parameter is reserved but not implemented. These are
-the complete 0.1 conversion calls:
+the complete 0.2 conversion calls:
 
 - `text.to_bytes()`
 - `String.from_bytes(payload)`

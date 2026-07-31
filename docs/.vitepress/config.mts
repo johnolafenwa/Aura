@@ -1,12 +1,21 @@
 import { defineConfig } from 'vitepress'
+import { AURORA_RELEASE, resolveImplementationCommit } from './release-metadata.mjs'
 
 const base = process.env.VITEPRESS_BASE ?? '/'
+const implementationCommit = resolveImplementationCommit()
 
 export default defineConfig({
   title: 'Aurora',
   description: 'The guide and reference manual for the Aurora programming language.',
   lang: 'en-US',
   base,
+  vite: {
+    define: {
+      __AURORA_RELEASE_VERSION__: JSON.stringify(AURORA_RELEASE.version),
+      __AURORA_RELEASE_CHANNEL__: JSON.stringify(AURORA_RELEASE.channel),
+      __AURORA_IMPLEMENTATION_COMMIT__: JSON.stringify(implementationCommit)
+    }
+  },
   head: [['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}aurora-mark.svg` }]],
   cleanUrls: true,
   srcExclude: ['aurora_language_proposal.md', 'ml_systems_support_plan.md', 'testing_strategy.md'],
@@ -23,6 +32,7 @@ export default defineConfig({
     nav: [
       { text: 'Learn', link: '/learn/' },
       { text: 'Manual', link: '/manual/' },
+      { text: 'Why Aurora', link: '/positioning' },
       { text: 'Examples', link: '/learn/case-studies/log-analyzer' },
       { text: 'GitHub', link: 'https://github.com/johnolafenwa/Aurora' }
     ],
@@ -103,6 +113,7 @@ export default defineConfig({
           text: 'Aurora Book',
           items: [
             { text: 'Home', link: '/' },
+            { text: 'Why Aurora', link: '/positioning' },
             { text: 'Learn', link: '/learn/' },
             { text: 'Manual', link: '/manual/' }
           ]
@@ -116,7 +127,7 @@ export default defineConfig({
       { icon: 'github', link: 'https://github.com/johnolafenwa/Aurora' }
     ],
     footer: {
-      message: 'Generated from the current Aurora repository surface.',
+      message: `Aurora ${AURORA_RELEASE.version} ${AURORA_RELEASE.channel}. Implementation baseline: ${implementationCommit}.`,
       copyright: 'Aurora documentation.'
     }
   }

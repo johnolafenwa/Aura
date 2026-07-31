@@ -298,16 +298,16 @@ ordering relationship exists between secure calls, tasks, backends, processes,
 or hosts.
 
 The deterministic algorithm and seeded results are not
-implementation-defined: they are stable throughout the Aurora 0.1.x series as
+implementation-defined: they are stable throughout the Aurora 0.2.x series as
 fixed above. They remain unsuitable for cryptography regardless of seed
 secrecy.
 
 ## Status
 
 The constructor, deterministic methods, secure functions, move-only ownership,
-backend parity, and documented diagnostics are maintained Aurora 0.1 surface.
+backend parity, and documented diagnostics are maintained Aurora 0.2 surface.
 The exact algorithm, mapping, compatibility window, identity/rendering policy,
 and secure-failure boundary are accepted under ADR-0020.
 
 No other random distributions, secure floating function, global generator,
-derived sampling trait, or `random.Error` type is part of Aurora 0.1.
+derived sampling trait, or `random.Error` type is part of Aurora 0.2.

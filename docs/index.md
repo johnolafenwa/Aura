@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: Aurora
-  text: A language for programs that own their resources.
-  tagline: Explicit ownership, structured concurrency, and system APIs that return their failures instead of hiding them.
+  text: A Python-shaped language for agent control planes.
+  tagline: Deterministic ownership, structured concurrency, and typed failure from files and processes through networking and retries.
   image:
     src: /aurora-mark.svg
     alt: Aurora language mark
@@ -15,19 +15,29 @@ hero:
     - theme: alt
       text: Open The Manual
       link: /manual/
+    - theme: alt
+      text: Why Aurora
+      link: /positioning
 
 features:
-  - title: Ownership You Can Read
-    details: Every value has an owner. Bare parameters grant shared access; explicit own parameters transfer ownership. The compiler tracks this at every call boundary, and the runtime honours it without a garbage collector.
+  - title: Deterministic Ownership
+    details: Bare parameters grant shared access, mut grants exclusive mutation, and own transfers a value. Cleanup follows the owning scope; this lifecycle contract is separate from task scheduling order.
   - title: Concurrency With A Scope
     details: Child work lives inside a TaskGroup. Leaving the scope waits for the children. Queues carry values between tasks. Cancellation is a signal the scope observes, not an exception that lands anywhere.
-  - title: APIs That Tell The Truth
-    details: Files, subprocesses, sockets, and supervisors return structured results. Failure is part of the type. Cleanup is part of the with block. Timeouts are arguments, not afterthoughts.
+  - title: Typed Failure For Control Planes
+    details: Files, subprocesses, sockets, retries, and supervisors return structured results. Failure is part of the type. Cleanup is part of the with block. Timeouts are arguments, not afterthoughts.
 ---
 
 ## What Aurora Is
 
 Aurora is a compiled language for programs that manage resources on purpose: files, subprocesses, sockets, worker tasks, and the data that moves between them. It is statically typed, has no garbage collector, and carries its ownership and concurrency rules into ordinary application code rather than hiding them behind convention.
+
+That combination is Aurora's current wedge: deterministic ownership,
+structured concurrency, and typed failure for agent control planes. It is not a
+claim that task schedules are deterministic, nor a claim to beat another
+language in general. [Why Aurora](/positioning) compares the 0.2 technical
+preview with Mojo, Nim, Go, and free-threaded Python 3.13+, and publishes the
+exact measured workloads behind the performance snapshot.
 
 Three commitments shape every page of this book:
 
@@ -39,6 +49,23 @@ The maintained data surface also includes contiguous numeric `Array[T]`
 values for `int32`, `int64`, `float32`, and `float64`. Their shapes are
 explicit, arithmetic is same-dtype and exact-shape, and slices are owned
 copies. See [Numeric Arrays](/manual/numeric-arrays).
+
+## Measured Snapshot
+
+On one post-reboot Mac14,9 (M2 Pro, 10 cores, 16 GiB), Aurora's release
+benchmark recorded these protocol-window medians against CPython 3.9.6. Lower
+is faster; the ratio is Aurora divided by CPython.
+
+| exact workload | Aurora | CPython | Aurora / CPython |
+| --- | ---: | ---: | ---: |
+| naive recursive `fib(30)` | 93.875250 ms | 158.491666 ms | 0.592304 |
+| create and join 10,000 tasks | 101.743042 ms | 51.950667 ms | 1.958455 |
+| 20-client delayed loopback TCP fan-out | 104.505375 ms | 108.605459 ms | 0.962248 |
+| 16-cycle retrying HTTP worker | 429.291292 ms | 520.447791 ms | 0.824850 |
+
+These are exact-workload observations, not portable performance promises or a
+release gate. See [Why Aurora](/positioning#measured-snapshot) for methodology,
+provenance, integer-loop results, numeric-Array measurements, and limitations.
 
 ## A First Program
 
@@ -56,7 +83,11 @@ for job in jobs:
     print(render(job))
 ```
 
-A few things are already in play. The class holds values that live together. The function `render` explicitly borrows its job because it only needs to read. Bare vector iteration is shared, so the jobs are still there afterwards. The call `render(job)` passes the borrow form the signature asks for; nothing extra is needed at the call site.
+A few things are already in play. The class holds values that live together.
+The bare `job: Job` parameter gives `render` implicit shared access because it
+only needs to read. Bare vector iteration is also shared, so the jobs are still
+there afterwards. The call `render(job)` satisfies that shared parameter
+convention; nothing extra is needed at the call site.
 
 These are the ideas the Learn track builds on.
 

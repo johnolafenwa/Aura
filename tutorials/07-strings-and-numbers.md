@@ -120,7 +120,7 @@ print(squares.mean())  # 7.5
 Array/Array arithmetic requires the same dtype and exact shape. Scalar
 arithmetic requires exactly `T`; scalar operands work on either side of
 `+`, `-`, and `*`. `/` is available only for floating Arrays. There is no
-implicit dtype promotion or broadcasting.
+implicit dtype promotion or array-shape broadcasting.
 
 `sum`, `min`, and `max` return `T`; `mean` always returns `float64`.
 Floating `sum`, `min`, and `max` proceed left-to-right in row-major order

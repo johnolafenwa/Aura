@@ -314,7 +314,7 @@ with group = TaskGroup():
 
 Cancellation is not an exception that lands at arbitrary points in the code. It is a request that tasks observe at well-defined boundaries. That makes cancelled code easy to reason about — and easy to test.
 
-Aurora 0.1 runs task bodies on cooperative pinned workers on both maintained
+Aurora 0.2 runs task bodies on cooperative pinned workers on both maintained
 backends. The runtime uses the available parallelism reported by the host by
 default; provisional
 `AURORA_WORKERS=<positive integer>` selects an explicit count. A task receives
@@ -349,7 +349,7 @@ ordinary application tasks no longer need to reserve enough coroutine stack
 for the deepest maintained third-party protocol frame.
 
 The protocol-step pool starts lazily and lives until the Aurora process exits;
-there is no 0.1 shutdown or join call. File reads, resolver work, and listener
+there is no 0.2 shutdown or join call. File reads, resolver work, and listener
 binding continue through the generic blocking-I/O pool. For TLS assets, that
 generic pool reads the bytes and the protocol workers perform PEM parsing and
 rustls construction.
@@ -410,7 +410,7 @@ Good Aurora concurrency tends to look the same across programs:
 - task results inspected through `TaskResult`, `wait_any`, or `wait_all`
 - long CPU loops that check `cancelled()` when cancellation matters and use
   explicit yields when a particular chunk boundary should schedule siblings
-- no detached background work; Aurora 0.1 exposes no detached task form
+- no detached background work; Aurora 0.2 exposes no detached task form
 
 If you can say, for each child task, which scope created it and which scope waits for it, the program is usually on the right track.
 

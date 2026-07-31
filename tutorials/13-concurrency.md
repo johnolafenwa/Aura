@@ -366,7 +366,7 @@ If the current `with TaskGroup()` scope is iterating a `Queue[T]` from that scop
 
 Cancellation is cooperative. Aurora does not forcibly kill tasks.
 
-Aurora 0.1 runs task bodies on cooperative pinned scheduler workers on both
+Aurora 0.2 runs task bodies on cooperative pinned scheduler workers on both
 maintained backends. The default worker count is the available parallelism
 reported by the host;
 the provisional `AURORA_WORKERS=<positive integer>` environment override
@@ -422,7 +422,7 @@ evidence but makes no “100,000 tasks in 1.5 GiB” promise. This is not a hard
 contractual report passes the four-worker scaling gate at a `1.039673x` paired
 median wall-time ratio with `396.73%` median four-task process CPU.
 
-The protocol service starts lazily and lives until process exit; Aurora 0.1
+The protocol service starts lazily and lives until process exit; Aurora 0.2
 does not expose a shutdown or join operation for it. File reads, resolver work,
 and listener binding use the generic blocking-I/O pool. TLS asset bytes are
 read there before PEM parsing and rustls construction run on protocol workers.

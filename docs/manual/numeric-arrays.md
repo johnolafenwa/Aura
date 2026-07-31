@@ -38,8 +38,8 @@ The supported `dtype` names are exactly `int32`, `int64`, `float32`, and
 One-colon slicing selects a first-axis range. The complete syntax remains
 defined by [Grammar](/manual/grammar).
 
-There is no Array literal, dtype value, rank annotation, broadcast syntax,
-view syntax, step slice, or multidimensional slice tuple.
+There is no Array literal, dtype value, rank annotation, array-shape broadcast
+syntax, view syntax, step slice, or multidimensional slice tuple.
 
 ## Typing Rules
 
@@ -90,7 +90,7 @@ Array and one scalar of exactly `T`, in either order. They return a fresh
 `Array[T]`. `/` has those forms only for floating Arrays. Integer Array `/`
 is rejected with `AU2003`, as required by ADR-0002.
 
-There is no broadcasting or mixed promotion. An `Array[int32]` and
+There is no array-shape broadcasting or mixed promotion. An `Array[int32]` and
 `Array[int64]` do not combine, and a bound scalar is never implicitly widened
 or narrowed for an Array operation.
 
@@ -201,8 +201,8 @@ diagnostics. The bundled extension uses that compiler-owned semantic surface.
 ## Limits And Implementation-Defined Behavior
 
 Aurora 0.2 Arrays are CPU-only, contiguous, row-major, and rank-at-least-one.
-They have no broadcasting, mixed promotion, views, reshape, transpose,
-matrix multiplication, equality, ordering, multidimensional slicing, step
+They have no array-shape broadcasting, mixed promotion, views, reshape,
+transpose, matrix multiplication, equality, ordering, multidimensional slicing, step
 slices, slice assignment, autograd, device placement, distributed storage, or
 foreign-buffer aliasing.
 

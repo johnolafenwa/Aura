@@ -6,29 +6,82 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Release tag to publish, such as v1.0.0'
+      source_ref:
+        description: 'Commit, branch, or tag to build'
         required: true
+        type: string
+      release_tag:
+        description: 'Release identity used in artifact names, such as v0.2.0-preview'
+        required: true
+        type: string
+      publish:
+        description: 'Publish a GitHub Release after all artifacts pass (manual opt-in)'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
+  release_identity:
+    name: Resolve immutable release source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      implementation_commit: ${{ steps.source.outputs.implementation_commit }}
+
+    steps:
+      - name: Checkout requested source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
+
+      - name: Validate release identity
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid release tag: $RELEASE_TAG" >&2
+            exit 2
+          fi
+
+      - name: Resolve immutable source commit
+        id: source
+        shell: bash
+        run: echo "implementation_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Confirm publish tag identifies built source
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          git fetch --force --no-tags origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          source_commit="$(git rev-parse HEAD)"
+          tag_commit="$(git rev-parse "$RELEASE_TAG^{commit}")"
+          if [[ "$source_commit" != "$tag_commit" ]]; then
+            echo "refusing to publish: source commit $source_commit does not match $RELEASE_TAG commit $tag_commit" >&2
+            exit 2
+          fi
+
   cli:
     name: CLI (${{ matrix.name }})
+    needs: release_identity
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: linux-x64
             os: ubuntu-24.04
-            archive: aurora-${{ inputs.tag || github.ref_name }}-x86_64-unknown-linux-gnu
+            archive: aurora-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}-x86_64-unknown-linux-gnu
           - name: macos-x64
             os: macos-15-intel
-            archive: aurora-${{ inputs.tag || github.ref_name }}-x86_64-apple-darwin
+            archive: aurora-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}-x86_64-apple-darwin
           - name: macos-arm64
             os: macos-15
-            archive: aurora-${{ inputs.tag || github.ref_name }}-aarch64-apple-darwin
+            archive: aurora-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}-aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
 
@@ -36,7 +89,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.release_identity.outputs.implementation_commit }}
+
+      - name: Validate release identity
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid release tag: $RELEASE_TAG" >&2
+            exit 2
+          fi
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
@@ -48,11 +111,15 @@ jobs:
 
       - name: Package CLI
         shell: bash
-        run: scripts/package-cli.sh "${{ matrix.archive }}"
+        env:
+          ARCHIVE_NAME: ${{ matrix.archive }}
+        run: scripts/package-cli.sh "$ARCHIVE_NAME"
 
       - name: Smoke test packaged CLI outside the source tree
         shell: bash
-        run: scripts/smoke-cli-archive.sh "${{ matrix.archive }}.tar.gz"
+        env:
+          ARCHIVE_NAME: ${{ matrix.archive }}
+        run: scripts/smoke-cli-archive.sh "$ARCHIVE_NAME.tar.gz"
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -63,6 +130,7 @@ jobs:
 
   tools:
     name: VS Code extension and docs
+    needs: release_identity
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -70,7 +138,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.release_identity.outputs.implementation_commit }}
+
+      - name: Validate release identity
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid release tag: $RELEASE_TAG" >&2
+            exit 2
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -81,17 +159,25 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Resolve documentation implementation commit
+        id: release-metadata
+        shell: bash
+        run: echo "implementation_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Package VS Code extension
         run: npm run package:extension
 
       - name: Build docs
         env:
           VITEPRESS_BASE: /Aurora/
+          AURORA_DOCS_COMMIT: ${{ steps.release-metadata.outputs.implementation_commit }}
         run: npm run docs:build
 
       - name: Package docs
         shell: bash
-        run: tar -czf aurora-docs-${{ inputs.tag || github.ref_name }}.tar.gz -C docs/.vitepress/dist .
+        env:
+          DOCS_ARCHIVE_NAME: aurora-docs-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}.tar.gz
+        run: tar -czf "$DOCS_ARCHIVE_NAME" -C docs/.vitepress/dist .
 
       - name: Upload VS Code extension
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -104,12 +190,13 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: aurora-docs
-          path: aurora-docs-${{ inputs.tag || github.ref_name }}.tar.gz
+          path: aurora-docs-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}.tar.gz
           if-no-files-found: error
 
   publish:
     name: Publish GitHub Release
-    needs: [cli, tools]
+    needs: [release_identity, cli, tools]
+    if: ${{ github.event_name == 'push' || inputs.publish }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
@@ -126,6 +213,7 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ needs.release_identity.outputs.implementation_commit }}
           generate_release_notes: true
           files: release-assets/*

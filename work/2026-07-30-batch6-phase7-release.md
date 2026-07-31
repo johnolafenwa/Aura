@@ -535,6 +535,56 @@ and
 They are contractual and contain no non-contractual reason. Part 3 now
 proceeds to the claims and positioning audit.
 
+## Part 4 claims, version, and release preparation
+
+The maintained claims inventory is complete across 228 matched statements.
+The release-facing result is recorded in
+`work/2026-07-31-batch6-claims-positioning.md` and the new
+`docs/positioning.md`. The root README and documentation landing page now
+describe Aurora as a Python-inspired compiled language for agent and systems
+control planes, centered on compiler-checked ownership, scoped task
+concurrency, and typed control-plane failures. The unsupported “memory safety
+of Rust” comparison is removed. Ownership determinism is explicitly scoped to
+move, sharing, and cleanup behavior rather than task scheduling, and every
+performance row identifies its exact workload and retained evidence.
+
+The product release version is consistently `0.2.0` in the Cargo workspace,
+Cargo locks, root npm package and lock, language server, and VS Code extension.
+The preview qualifier remains in prose and the planned
+`v0.2.0-preview` tag. `CHANGELOG.md` now separates breaking changes,
+migration, language additions, runtime and concurrency, callables, FFI,
+tooling, Arrays, diagnostics, and known limits. Maintained Manual, Learn,
+tutorial, supported-platform, and install text now names the 0.2 release while
+illustrative application-package `0.1.0` values remain unchanged. Rendered
+Manual pages carry `Aurora 0.2.0 technical preview` and resolve the exact
+implementation commit from `AURORA_DOCS_COMMIT`, then `GITHUB_SHA`, then a
+clean local HEAD; a dirty checkout is labelled honestly instead of claiming
+its committed HEAD.
+
+Release packaging is safe for local or later runner-only proof without
+publication:
+
+- workflow dispatch requires separate `source_ref` and `release_tag` inputs
+  and defaults `publish` to false;
+- a preflight job resolves the selected source once to an immutable commit;
+- manual `publish=true` fetches the named tag and rejects publication unless
+  that tag resolves to the exact checked-out source commit;
+- pushed version tags retain the intended automatic publication path;
+- release identities and archive names use strict allow-list validation;
+- CLI archives include both release-owned smoke examples, the executable,
+  compiler runtime archive, linker manifest, READMEs, and license; and
+- installed smoke extracts outside the checkout, makes Cargo unavailable,
+  starts with an absent isolated native cache, runs both direct examples from
+  copied packaged sources, checks exact output and `aura 0.2.0`, and owns and
+  cleans each process group.
+
+The nine release-packaging tests, four release-metadata tests, six dynamic
+stamp tests, Bash syntax checks, Cargo metadata/version checks, and scoped
+diff hygiene are green. Reference, documentation, LSP, extension, VSIX, and
+exact CLI-version gates are included in the final focused replay before the
+release-preparation commit. No archive has been published, and the local tag
+has not yet been created.
+
 ## Authorized sequence
 
 1. Close B6.0-a through B6.0-d and commit the gated entry result.

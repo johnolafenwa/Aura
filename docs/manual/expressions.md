@@ -213,7 +213,7 @@ Built-in arithmetic supports equal integer types or equal floating-point types. 
 maintained numeric dtypes. A same-dtype scalar may appear on either side.
 Floating Arrays also support `/`; integer Array `/` remains the same
 `AU2003` static error as scalar integer `/`. Every result is a fresh Array.
-There is no broadcasting or mixed promotion. See
+There is no array-shape broadcasting or mixed promotion. See
 [Numeric Arrays](/manual/numeric-arrays).
 
 For tuple operands, `==` and `!=` require exactly the same static tuple type.
@@ -241,7 +241,7 @@ Arithmetic and ordering may resolve through the corresponding operator trait.
 For non-numeric user types, `/` requests `Div.div`; `//` requests
 `FloorDiv.floor_div` when neither a builtin numeric rule nor the builtin
 `Duration // int64` rule applies. Builtin equality does not use an equality
-operator trait in Aurora 0.1.
+operator trait in Aurora 0.2.
 
 Tuple `<`, `<=`, `>`, and `>=` are static errors. Aurora has no lexicographic
 tuple ordering, and an `Ord` implementation cannot add one to a structural

@@ -109,7 +109,7 @@ one containing `random.Rng` is rejected with `AU3007`.
 
 A signature-only trait method has no inferred obligation. An explicit `impl`
 may satisfy the trait contract but may not strengthen it by adding hidden
-generic clone-producing behavior. Aurora 0.1 has no written clone-safety bound,
+generic clone-producing behavior. Aurora 0.2 has no written clone-safety bound,
 so put that behavior in a default trait body when it is part of the intended
 contract.
 

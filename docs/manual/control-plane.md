@@ -1,6 +1,6 @@
 # Control-Plane Modules
 
-Aurora 0.1 includes a small, typed host/control-plane surface intended for service launchers, workers, evaluation harnesses, and agent infrastructure. These modules behave the same through `aura run` and direct native binaries.
+Aurora 0.2 includes a small, typed host/control-plane surface intended for service launchers, workers, evaluation harnesses, and agent infrastructure. These modules behave the same through `aura run` and direct native binaries.
 
 ## System And Path
 
@@ -68,7 +68,7 @@ class/enum schemas and generated codecs remain future work.
 
 ## Network Boundary
 
-The HTTP client accepts `http://` and certificate-validated `https://` URLs using the platform-independent Web PKI root set. HTTP request and response bodies support content length, connection-close framing, and chunked transfer encoding. The 0.1 parser keeps a 16 MiB incoming wire-message limit, accepts at most 64 headers, and rejects conflicting framing headers. Its `Map[String, String]` header boundary cannot represent repeated equal header names losslessly.
+The HTTP client accepts `http://` and certificate-validated `https://` URLs using the platform-independent Web PKI root set. HTTP request and response bodies support content length, connection-close framing, and chunked transfer encoding. The 0.2 parser keeps a 16 MiB incoming wire-message limit, accepts at most 64 headers, and rejects conflicting framing headers. Its `Map[String, String]` header boundary cannot represent repeated equal header names losslessly.
 
 For custom certificate authorities and TLS servers, use the lower-level `net.tls_connect*` and `net.tls_listen` APIs documented in [Network Module](/manual/network).
 
@@ -248,7 +248,7 @@ status-specific retry policy or jitter must express it explicitly. Its
 
 The system, path, JSON, TOML, logging, trace-event, metrics, retry, and
 summarized HTTP contracts on this page are implemented and maintained in
-Aurora 0.1. Recursive JSON gap-fill semantics are accepted under ADR-0021. The
+Aurora 0.2. Recursive JSON gap-fill semantics are accepted under ADR-0021. The
 summarized fixed HTTP cap is Accepted under ADR-0018.
 
 Nested TOML data models, derived codecs, telemetry exporters, metric labels,

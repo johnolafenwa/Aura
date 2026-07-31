@@ -7,12 +7,18 @@ if [[ $# -ne 1 ]]; then
 fi
 
 archive_name="$1"
+if [[ ! "$archive_name" =~ ^aurora-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?-(x86_64-unknown-linux-gnu|x86_64-apple-darwin|aarch64-apple-darwin)$ ]]; then
+  echo "invalid release archive name: $archive_name" >&2
+  exit 2
+fi
 archive_root="release/$archive_name"
 native_static_libs="$(cargo rustc -q -p aurora-compiler --lib --release --locked -- --print native-static-libs 2>&1 >/dev/null)"
 rm -rf "$archive_root"
-mkdir -p "$archive_root/bin" "$archive_root/lib/aurora"
+mkdir -p "$archive_root/bin" "$archive_root/lib/aurora" "$archive_root/examples/agents"
 cp target/release/aura "$archive_root/bin/aura"
 cp target/release/libaurora_compiler.a "$archive_root/lib/aurora/libaurora_compiler.a"
+cp examples/basic_addition.au "$archive_root/examples/basic_addition.au"
+cp examples/agents/retrying_network_worker.au "$archive_root/examples/agents/retrying_network_worker.au"
 
 NATIVE_STATIC_LIBS="$native_static_libs" \
   ARCHIVE_ROOT="$archive_root" \

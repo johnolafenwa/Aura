@@ -228,7 +228,7 @@ class Resource:
         print("closing " + self.name)
 ```
 
-The method must be named `close`, use `mut self`, take no ordinary parameters, and return `None`. Generic user resource classes are not supported by `with` in Aurora 0.1.
+The method must be named `close`, use `mut self`, take no ordinary parameters, and return `None`. Generic user resource classes are not supported by `with` in Aurora 0.2.
 
 ```python
 with resource = Resource(name="db"):
@@ -315,7 +315,7 @@ resolution and signatures.
 
 ## Limits And Implementation-Defined Behavior
 
-Aurora 0.1 has no class inheritance, overloads, property syntax, custom
+Aurora 0.2 has no class inheritance, overloads, property syntax, custom
 constructor hook, or general destructor hook. Generic user classes cannot be
 managed directly by `with`. A class field default cannot call a user-defined
 function in the current compiler; compute that value before construction and

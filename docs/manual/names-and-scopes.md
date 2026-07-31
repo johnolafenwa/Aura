@@ -70,7 +70,7 @@ A function body begins with bindings for its ordinary parameters. A method body 
 
 Parameter names, `self`, local bindings, loop bindings, `with` bindings, and pattern bindings occupy the function's value namespace. A use is valid only after the binding has been introduced on the current control-flow path.
 
-Aurora 0.1 does not support local function, class, enum, or trait declarations. Items are module-level or members of their permitted enclosing declaration.
+Aurora 0.2 does not support local function, class, enum, or trait declarations. Items are module-level or members of their permitted enclosing declaration.
 
 ## Local Bindings
 
@@ -201,7 +201,7 @@ Builtin enum types such as `Option`, `Result`, `QueueReceive`, and `process.Erro
 
 An entry module may contain executable top-level statements instead of a local `main`. Those statements share one top-level local environment and execute in source order after checking.
 
-Imported modules contribute declarations, not executable initialization: their top-level statements are checked as source but are not run as import side effects in Aurora 0.1. Reusable modules should therefore keep executable work inside public functions. This boundary may be tightened in a later release, but programs MUST NOT depend on imported top-level side effects today.
+Imported modules contribute declarations, not executable initialization: their top-level statements are checked as source but are not run as import side effects in Aurora 0.2. Reusable modules should therefore keep executable work inside public functions. This boundary may be tightened in a later release, but programs MUST NOT depend on imported top-level side effects today.
 
 ## Grammar
 

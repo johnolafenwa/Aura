@@ -1,6 +1,6 @@
 # Language Specification
 
-This Manual is the normative specification of the implemented Aurora 0.1 language. It defines the source language, static rules, ownership model, execution behavior, maintained runtime APIs, package model, and tool contracts that a conforming implementation must provide.
+This Manual is the normative specification of the implemented Aurora 0.2 language. It defines the source language, static rules, ownership model, execution behavior, maintained runtime APIs, package model, and tool contracts that a conforming implementation must provide.
 
 The specification describes the language that exists in this repository. It does not promote ideas from the historical proposal into the language merely because they were once discussed.
 
@@ -31,9 +31,13 @@ Ordinary present-tense statements are normative when they describe accepted synt
 
 ## Specification Version
 
-This reference describes Aurora 0.1 as implemented by the repository containing it. Aurora 0.1 is an advanced technical preview, so source and API compatibility may still change before a tagged stable release. Any behavior change MUST update the relevant reference page, conformance tests, examples, tutorials, and work record in the same pass.
+This reference describes Aurora 0.2 as implemented by the repository containing it. Aurora 0.2 is an advanced technical preview, so source and API compatibility may still change before a tagged stable release. Any behavior change MUST update the relevant reference page, conformance tests, examples, tutorials, and work record in the same pass.
 
-The repository commit identifies the precise revision of the specification. A future tagged release should additionally stamp the rendered Manual with the language version and commit identifier.
+The repository commit identifies the precise revision of the specification.
+The rendered Manual is stamped with source version 0.2.0 (technical preview)
+and its implementation baseline commit. Release builds supply that commit
+without writing a self-referential hash into this source page; see the
+[Manual overview](/manual/) for the exact precedence and local fallback.
 
 ## Authority And Conformance
 
@@ -92,7 +96,7 @@ A failure in phases 1–4 is a compile-time diagnostic. A checked program may st
 
 **Clone-safety obligation**
 : An inferred callable requirement that a substituted type must not duplicate
-  non-cloneable state through a clone-producing operation. Aurora 0.1 protects
+  non-cloneable state through a clone-producing operation. Aurora 0.2 protects
   `random.Rng` state under this contract.
 
 **Borrow**
@@ -104,9 +108,10 @@ A failure in phases 1–4 is a compile-time diagnostic. A checked program may st
   constructor, assignment, return, and maintained storing APIs.
 
 **Default parameter mode**
-: The unmodified `value: T` spelling. It resolves at the declaration to value
-  passing for a copy type and shared borrowing for a non-copy or unresolved
-  generic type; that resolution is stable after generic specialization.
+: The unmodified `value: T` spelling. Shared access for every type is the
+  source contract;
+  an implementation may pass copy bits directly without changing that source
+  contract. The shared mode remains stable after generic specialization.
 
 **Resource**
 : A runtime-backed value with an explicit `close()` contract and, where documented, lexical cleanup through `with`.
