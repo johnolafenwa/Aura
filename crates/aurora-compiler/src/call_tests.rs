@@ -379,6 +379,9 @@ fn associated_call_metadata_covers_duration_constructors_and_string_byte_decodin
             BuiltinAssociatedFunction::DurationSeconds,
             BuiltinAssociatedFunction::DurationMinutes,
             BuiltinAssociatedFunction::StringFromBytes,
+            BuiltinAssociatedFunction::ArrayZeros,
+            BuiltinAssociatedFunction::ArrayFull,
+            BuiltinAssociatedFunction::ArrayFromVec,
         ]
     );
     for (name, constructor) in [

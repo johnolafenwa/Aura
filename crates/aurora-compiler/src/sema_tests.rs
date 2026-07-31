@@ -2289,7 +2289,7 @@ fn d4_string_indexing_remains_rejected() {
     .expect_err("Aurora 0.1 does not define integer String indexing");
     assert_eq!(
         error.message,
-        "cannot index non-vector-or-map value `String`"
+        "cannot index non-Array, vector, or map value `String`"
     );
 }
 
@@ -7616,7 +7616,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         )
         .expect_err("non-indexable values should fail")
         .message
-        .contains("cannot index non-vector-or-map value"));
+        .contains("cannot index non-Array, vector, or map value"));
 
     let missing_specialized_variant = checker
         .type_of_expr(
@@ -7822,7 +7822,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
         )
         .expect_err("non-indexable assignment targets should fail")
         .message
-        .contains("cannot index non-vector-or-map value"));
+        .contains("cannot index non-Array, vector, or map value"));
 
     let mut locals = HashMap::from([(
         "nums".to_string(),
@@ -23467,7 +23467,7 @@ fn owned_slices_reject_unsupported_bases_and_string_scalar_indexing_remains_unav
         assert!(
             rejected
                 .message
-                .contains("owned slicing is available only for `Vec[T]` and `String`"),
+                .contains("owned slicing is available only for `Array[T]`, `Vec[T]`, and `String`"),
             "{source}: {rejected:?}"
         );
     }
