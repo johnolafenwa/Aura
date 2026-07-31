@@ -1698,83 +1698,391 @@ impl PartialEq for TupleValue {
 }
 
 pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
-    Ok(match value {
-        Value::Array(array) => Value::Array(array.try_clone()?),
-        Value::Tuple(tuple) => {
-            let mut element_types = try_array_buffer(
-                tuple.element_types.len(),
-                "Array-containing tuple type copy",
-            )?;
-            element_types.extend(tuple.element_types.iter().cloned());
-            let mut elements =
-                try_array_buffer(tuple.elements.len(), "Array-containing tuple copy")?;
-            for element in &tuple.elements {
-                elements.push(try_clone_array_containing_value(element)?);
-            }
-            Value::Tuple(TupleValue {
-                element_types,
-                elements,
-            })
+    enum CloneFrame<'a> {
+        Tuple {
+            tuple: &'a TupleValue,
+            next_index: usize,
+            element_types: Vec<Type>,
+            elements: Vec<Value>,
+        },
+        Vec {
+            vector: &'a VecValue,
+            next_index: usize,
+            elements: Vec<Value>,
+        },
+        Set {
+            set: &'a SetValue,
+            next_index: usize,
+            elements: Vec<Value>,
+        },
+        MapKey {
+            map: &'a MapValue,
+            next_index: usize,
+            entries: Vec<(Value, Value)>,
+            pending_value: &'a Value,
+        },
+        MapValue {
+            map: &'a MapValue,
+            next_index: usize,
+            entries: Vec<(Value, Value)>,
+            pending_key: Value,
+        },
+        Instance {
+            instance: &'a InstanceValue,
+            remaining: std::collections::btree_map::Iter<'a, String, Value>,
+            fields: BTreeMap<String, Value>,
+            pending_name: String,
+        },
+        EnumVariant {
+            variant: &'a EnumVariantValue,
+            next_index: usize,
+            payloads: Vec<Value>,
+        },
+    }
+
+    fn push_frame<'a>(frames: &mut Vec<CloneFrame<'a>>, frame: CloneFrame<'a>) -> Result<()> {
+        if frames.len() == frames.capacity() {
+            frames.try_reserve(1).map_err(|_| {
+                array_allocation_error(
+                    "Array-containing value clone traversal",
+                    frames.len().saturating_add(1),
+                )
+            })?;
         }
-        Value::Vec(vector) => {
-            let mut elements =
-                try_array_buffer(vector.elements.len(), "Array-containing Vec copy")?;
-            for element in &vector.elements {
-                elements.push(try_clone_array_containing_value(element)?);
+        frames.push(frame);
+        Ok(())
+    }
+
+    let mut frames = Vec::new();
+    let mut next = Some(value);
+    let mut completed = None;
+
+    loop {
+        if let Some(value) = next.take() {
+            completed = match value {
+                Value::Array(array) => Some(Value::Array(array.try_clone()?)),
+                Value::Tuple(tuple) => {
+                    let mut element_types = try_array_buffer(
+                        tuple.element_types.len(),
+                        "Array-containing tuple type copy",
+                    )?;
+                    element_types.extend(tuple.element_types.iter().cloned());
+                    let elements =
+                        try_array_buffer(tuple.elements.len(), "Array-containing tuple copy")?;
+                    if tuple.elements.is_empty() {
+                        Some(Value::Tuple(TupleValue {
+                            element_types,
+                            elements,
+                        }))
+                    } else {
+                        push_frame(
+                            &mut frames,
+                            CloneFrame::Tuple {
+                                tuple,
+                                next_index: 1,
+                                element_types,
+                                elements,
+                            },
+                        )?;
+                        next = Some(&tuple.elements[0]);
+                        None
+                    }
+                }
+                Value::Vec(vector) => {
+                    let elements =
+                        try_array_buffer(vector.elements.len(), "Array-containing Vec copy")?;
+                    if vector.elements.is_empty() {
+                        Some(Value::Vec(VecValue {
+                            element_type: vector.element_type.clone(),
+                            elements,
+                        }))
+                    } else {
+                        push_frame(
+                            &mut frames,
+                            CloneFrame::Vec {
+                                vector,
+                                next_index: 1,
+                                elements,
+                            },
+                        )?;
+                        next = Some(&vector.elements[0]);
+                        None
+                    }
+                }
+                Value::Set(set) => {
+                    let elements =
+                        try_array_buffer(set.elements.len(), "Array-containing Set copy")?;
+                    if set.elements.is_empty() {
+                        Some(Value::Set(SetValue {
+                            element_type: set.element_type.clone(),
+                            elements,
+                        }))
+                    } else {
+                        push_frame(
+                            &mut frames,
+                            CloneFrame::Set {
+                                set,
+                                next_index: 1,
+                                elements,
+                            },
+                        )?;
+                        next = Some(&set.elements[0]);
+                        None
+                    }
+                }
+                Value::Map(map) => {
+                    let entries = try_array_buffer(map.entries.len(), "Array-containing Map copy")?;
+                    if let Some((key, pending_value)) = map.entries.first() {
+                        push_frame(
+                            &mut frames,
+                            CloneFrame::MapKey {
+                                map,
+                                next_index: 1,
+                                entries,
+                                pending_value,
+                            },
+                        )?;
+                        next = Some(key);
+                        None
+                    } else {
+                        Some(Value::Map(MapValue {
+                            key_type: map.key_type.clone(),
+                            value_type: map.value_type.clone(),
+                            entries,
+                        }))
+                    }
+                }
+                Value::Instance(instance) => {
+                    let mut remaining = instance.fields.iter();
+                    if let Some((name, field_value)) = remaining.next() {
+                        push_frame(
+                            &mut frames,
+                            CloneFrame::Instance {
+                                instance,
+                                remaining,
+                                fields: BTreeMap::new(),
+                                pending_name: name.clone(),
+                            },
+                        )?;
+                        next = Some(field_value);
+                        None
+                    } else {
+                        Some(Value::Instance(InstanceValue {
+                            class_name: instance.class_name.clone(),
+                            fields: BTreeMap::new(),
+                        }))
+                    }
+                }
+                Value::EnumVariant(variant) => {
+                    let payloads = try_array_buffer(
+                        variant.payloads.len(),
+                        "Array-containing enum payload copy",
+                    )?;
+                    if variant.payloads.is_empty() {
+                        Some(Value::EnumVariant(EnumVariantValue {
+                            enum_name: variant.enum_name.clone(),
+                            variant_name: variant.variant_name.clone(),
+                            payloads,
+                        }))
+                    } else {
+                        push_frame(
+                            &mut frames,
+                            CloneFrame::EnumVariant {
+                                variant,
+                                next_index: 1,
+                                payloads,
+                            },
+                        )?;
+                        next = Some(&variant.payloads[0]);
+                        None
+                    }
+                }
+                value => Some(value.clone()),
+            };
+        } else {
+            let frame = frames
+                .pop()
+                .expect("an incomplete Array-containing value clone has a parent frame");
+            let cloned = completed
+                .take()
+                .expect("an Array-containing value clone frame receives one completed child");
+            match frame {
+                CloneFrame::Tuple {
+                    tuple,
+                    mut next_index,
+                    element_types,
+                    mut elements,
+                } => {
+                    elements.push(cloned);
+                    if let Some(element) = tuple.elements.get(next_index) {
+                        next_index += 1;
+                        push_frame(
+                            &mut frames,
+                            CloneFrame::Tuple {
+                                tuple,
+                                next_index,
+                                element_types,
+                                elements,
+                            },
+                        )?;
+                        next = Some(element);
+                    } else {
+                        completed = Some(Value::Tuple(TupleValue {
+                            element_types,
+                            elements,
+                        }));
+                    }
+                }
+                CloneFrame::Vec {
+                    vector,
+                    mut next_index,
+                    mut elements,
+                } => {
+                    elements.push(cloned);
+                    if let Some(element) = vector.elements.get(next_index) {
+                        next_index += 1;
+                        push_frame(
+                            &mut frames,
+                            CloneFrame::Vec {
+                                vector,
+                                next_index,
+                                elements,
+                            },
+                        )?;
+                        next = Some(element);
+                    } else {
+                        completed = Some(Value::Vec(VecValue {
+                            element_type: vector.element_type.clone(),
+                            elements,
+                        }));
+                    }
+                }
+                CloneFrame::Set {
+                    set,
+                    mut next_index,
+                    mut elements,
+                } => {
+                    elements.push(cloned);
+                    if let Some(element) = set.elements.get(next_index) {
+                        next_index += 1;
+                        push_frame(
+                            &mut frames,
+                            CloneFrame::Set {
+                                set,
+                                next_index,
+                                elements,
+                            },
+                        )?;
+                        next = Some(element);
+                    } else {
+                        completed = Some(Value::Set(SetValue {
+                            element_type: set.element_type.clone(),
+                            elements,
+                        }));
+                    }
+                }
+                CloneFrame::MapKey {
+                    map,
+                    next_index,
+                    entries,
+                    pending_value,
+                } => {
+                    push_frame(
+                        &mut frames,
+                        CloneFrame::MapValue {
+                            map,
+                            next_index,
+                            entries,
+                            pending_key: cloned,
+                        },
+                    )?;
+                    next = Some(pending_value);
+                }
+                CloneFrame::MapValue {
+                    map,
+                    mut next_index,
+                    mut entries,
+                    pending_key,
+                } => {
+                    entries.push((pending_key, cloned));
+                    if let Some((key, pending_value)) = map.entries.get(next_index) {
+                        next_index += 1;
+                        push_frame(
+                            &mut frames,
+                            CloneFrame::MapKey {
+                                map,
+                                next_index,
+                                entries,
+                                pending_value,
+                            },
+                        )?;
+                        next = Some(key);
+                    } else {
+                        completed = Some(Value::Map(MapValue {
+                            key_type: map.key_type.clone(),
+                            value_type: map.value_type.clone(),
+                            entries,
+                        }));
+                    }
+                }
+                CloneFrame::Instance {
+                    instance,
+                    mut remaining,
+                    mut fields,
+                    pending_name,
+                } => {
+                    fields.insert(pending_name, cloned);
+                    if let Some((name, field_value)) = remaining.next() {
+                        push_frame(
+                            &mut frames,
+                            CloneFrame::Instance {
+                                instance,
+                                remaining,
+                                fields,
+                                pending_name: name.clone(),
+                            },
+                        )?;
+                        next = Some(field_value);
+                    } else {
+                        completed = Some(Value::Instance(InstanceValue {
+                            class_name: instance.class_name.clone(),
+                            fields,
+                        }));
+                    }
+                }
+                CloneFrame::EnumVariant {
+                    variant,
+                    mut next_index,
+                    mut payloads,
+                } => {
+                    payloads.push(cloned);
+                    if let Some(payload) = variant.payloads.get(next_index) {
+                        next_index += 1;
+                        push_frame(
+                            &mut frames,
+                            CloneFrame::EnumVariant {
+                                variant,
+                                next_index,
+                                payloads,
+                            },
+                        )?;
+                        next = Some(payload);
+                    } else {
+                        completed = Some(Value::EnumVariant(EnumVariantValue {
+                            enum_name: variant.enum_name.clone(),
+                            variant_name: variant.variant_name.clone(),
+                            payloads,
+                        }));
+                    }
+                }
             }
-            Value::Vec(VecValue {
-                element_type: vector.element_type.clone(),
-                elements,
-            })
         }
-        Value::Set(set) => {
-            let mut elements = try_array_buffer(set.elements.len(), "Array-containing Set copy")?;
-            for element in &set.elements {
-                elements.push(try_clone_array_containing_value(element)?);
-            }
-            Value::Set(SetValue {
-                element_type: set.element_type.clone(),
-                elements,
-            })
+
+        if next.is_none() && frames.is_empty() {
+            return Ok(completed
+                .expect("an Array-containing value clone completes before its frame stack"));
         }
-        Value::Map(map) => {
-            let mut entries = try_array_buffer(map.entries.len(), "Array-containing Map copy")?;
-            for (key, value) in &map.entries {
-                entries.push((
-                    try_clone_array_containing_value(key)?,
-                    try_clone_array_containing_value(value)?,
-                ));
-            }
-            Value::Map(MapValue {
-                key_type: map.key_type.clone(),
-                value_type: map.value_type.clone(),
-                entries,
-            })
-        }
-        Value::Instance(instance) => {
-            let mut fields = BTreeMap::new();
-            for (name, value) in &instance.fields {
-                fields.insert(name.clone(), try_clone_array_containing_value(value)?);
-            }
-            Value::Instance(InstanceValue {
-                class_name: instance.class_name.clone(),
-                fields,
-            })
-        }
-        Value::EnumVariant(variant) => {
-            let mut payloads =
-                try_array_buffer(variant.payloads.len(), "Array-containing enum payload copy")?;
-            for payload in &variant.payloads {
-                payloads.push(try_clone_array_containing_value(payload)?);
-            }
-            Value::EnumVariant(EnumVariantValue {
-                enum_name: variant.enum_name.clone(),
-                variant_name: variant.variant_name.clone(),
-                payloads,
-            })
-        }
-        value => value.clone(),
-    })
+    }
 }
 
 #[derive(Clone, Debug)]
