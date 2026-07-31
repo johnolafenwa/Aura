@@ -343,13 +343,17 @@ Last updated: 2026-07-31
   (94.614208%). Only the frozen 94.62% region floor was red. Per the standing
   coverage-only rule, grouped and tuple lambda-type diagnostics plus the
   generic treatment of slice and literal lambda bodies now pin observable
-  parser behavior. A retained instrumented proof covers eight more regions,
-  bringing the candidate tree to 126,862/134,075 regions (94.620175%) without
-  a synthetic test or exclusion. The exact fresh full replay is next.
+  parser behavior. The exact clean replay at `b2fdfdc` covers eight more
+  regions and passes all 334 CLI tests, 1,498 compiler-library tests, and
+  every integration target at 86,655/90,002 lines (96.28119375124997%),
+  5,706/5,870 functions (97.206132879046%), and 126,862/134,075 regions
+  (94.62017527503264%). Its log/JSON SHA-256 values are
+  `61bb557e…`/`9c199436…`. No synthetic test or exclusion was added. The
+  single final downward-truncated re-ratchet is now
+  `96.28/97.20/94.62`.
 
-  Current stage: commit the behavior-focused coverage closure, rerun exact
-  final compiler coverage, apply the one-time downward-truncated re-ratchet,
-  execute exact clean full CI, create and verify only the local
+  Current stage: commit the one-time final re-ratchet, execute exact clean
+  full CI, create and verify only the local
   `v0.2.0-preview` tag, build the locally available release artifacts, and
   write the final report. The
   Linux-x64 and Intel-macOS runner products cannot be produced locally from

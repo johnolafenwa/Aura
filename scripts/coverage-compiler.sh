@@ -26,8 +26,8 @@ report_args=(
 )
 if [[ "${1:-}" == "--check" ]]; then
   report_args+=(
-    --fail-under-lines 96.18
-    --fail-under-functions 96.97
+    --fail-under-lines 96.28
+    --fail-under-functions 97.20
     --fail-under-regions 94.62
   )
 fi

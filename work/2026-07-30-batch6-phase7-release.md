@@ -585,6 +585,26 @@ exact CLI-version gates are included in the final focused replay before the
 release-preparation commit. No archive has been published, and the local tag
 has not yet been created.
 
+## Final compiler coverage
+
+The release-preparation tree is committed at `b6230af`. Its first exact
+coverage replay was behavior-green but covered only 126,854/134,075 regions
+(94.614208%), below the frozen 94.62% region floor. Under the standing
+coverage-only rule, commit `b2fdfdc` adds grouped/tuple lambda-type teaching
+diagnostics and pins the ordinary syntax-error treatment of slice and literal
+lambda bodies followed by an extra colon.
+
+The definitive clean full-access replay passes 334 CLI tests, 1,498
+compiler-library tests, and every integration target. Exact compiler coverage
+is 86,655/90,002 lines (96.28119375124997%), 5,706/5,870 functions
+(97.206132879046%), and 126,862/134,075 regions (94.62017527503264%). The
+retained log and JSON SHA-256 values are
+`61bb557eba8aeadba5350594d7e63253af293d422411c915a7419942a99b5657`
+and
+`9c199436f07f5c33f98f66fa0e3453bcd099b0ed840f691d7691308bac9e122d`.
+No synthetic coverage test or exclusion was added. The one-time final
+downward-truncated re-ratchet is `96.28/97.20/94.62`.
+
 ## Authorized sequence
 
 1. Close B6.0-a through B6.0-d and commit the gated entry result.
