@@ -1,0 +1,4 @@
+def main():
+    left = Array[float64].zeros(shape=[1])
+    right = Array[float64].zeros(shape=[1])
+    print(left == right)

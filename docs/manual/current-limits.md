@@ -72,6 +72,14 @@ This page documents known current limits of the Aurora compiler and runtime.
   sliceable types, zero-copy views, String integer indexing, grapheme slicing,
   and Python-style endpoint clamping are unavailable. Vec slicing requires
   clone-safe, repeatably observable elements.
+- Numeric `Array[T]` is CPU-only, contiguous, row-major, and specialized only
+  by `int32`, `int64`, `float32`, or `float64`. Shape is runtime metadata and
+  rank is at least one; zero dimensions are allowed. There is no broadcasting,
+  mixed promotion, equality, views, reshape, transpose, matrix multiplication,
+  multidimensional or step slicing, slice assignment, autograd, accelerator
+  placement, distributed storage, or foreign-buffer aliasing. First-axis
+  slices are fresh owned copies. Maintained NumPy comparisons are exact
+  post-reboot measurements, not portable speed or compatibility claims.
 - FFI v0 is package-only and requires `[package] allow_ffi = true`; a root
   package also reports every reachable FFI-enabled dependency under exact
   `[ffi] dependencies`. Calls resolve already-loaded process-global symbols

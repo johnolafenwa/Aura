@@ -119,6 +119,33 @@ fn is_builtin_unary_operator(op: UnaryOp, ty: &Type) -> bool {
 }
 
 fn is_builtin_binary_operator(op: BinaryOp, left_ty: &Type, right_ty: &Type) -> bool {
+    fn array_element(ty: &Type) -> Option<&Type> {
+        match ty {
+            Type::Named(name, arguments) if name == "Array" && arguments.len() == 1 => {
+                arguments.first()
+            }
+            _ => None,
+        }
+    }
+    let left_array_element = array_element(left_ty);
+    let right_array_element = array_element(right_ty);
+    if matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+    ) {
+        let compatible = match (left_array_element, right_array_element) {
+            (Some(left), Some(right)) => left_ty == right_ty && left == right,
+            (Some(element), None) => element == right_ty,
+            (None, Some(element)) => left_ty == element,
+            (None, None) => false,
+        };
+        if compatible {
+            return op != BinaryOp::Div
+                || left_array_element
+                    .or(right_array_element)
+                    .is_some_and(is_float_type);
+        }
+    }
     let duration = Type::named("Duration");
     let int64 = Type::named("int64");
     if match op {
@@ -2345,6 +2372,12 @@ impl<'a> Lowerer<'a> {
                     Some(Type::named("int32")),
                     Some(args[0].clone()),
                 ),
+                Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => (
+                    INTERNAL_VEC_INDEX_FIELD.to_string(),
+                    INTERNAL_VEC_SET_INDEX_FIELD.to_string(),
+                    Some(array_coordinate_type(index)),
+                    Some(args[0].clone()),
+                ),
                 _ => (
                     INTERNAL_VEC_INDEX_FIELD.to_string(),
                     INTERNAL_VEC_SET_INDEX_FIELD.to_string(),
@@ -4560,10 +4593,17 @@ impl<'a> Lowerer<'a> {
                     return Operand::Place(temp);
                 }
                 let temp = self.new_temp_for_expr(expr);
+                let object_type = self.infer_expr_type(object);
                 let lowered_object = self.lower_expr_at_sequence_point(object, None);
-                let lowered_index = self.lower_expr_at_sequence_point(index, None);
+                let index_type = matches!(
+                    object_type,
+                    Some(Type::Named(ref name, ref args))
+                        if name == "Array" && args.len() == 1
+                )
+                .then(|| array_coordinate_type(index));
+                let lowered_index = self.lower_expr_at_sequence_point(index, index_type.as_ref());
                 let receiver_place = self.render_place_expr_option(object);
-                let field = match self.infer_expr_type(object) {
+                let field = match object_type {
                     Some(Type::Named(name, args)) if name == "Map" && args.len() == 2 => {
                         INTERNAL_MAP_INDEX_FIELD.to_string()
                     }
@@ -5843,6 +5883,16 @@ impl<'a> Lowerer<'a> {
             });
             return Operand::Place(temp);
         }
+        if let Some(expected) = expected {
+            if let Some(value) = self.lower_collection_literal_with_type(expr, expected) {
+                let temp = self.new_typed_temp(expected.clone());
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value,
+                });
+                return Operand::Place(temp);
+            }
+        }
         match &expr.kind {
             ExprKind::Group(inner) => self.lower_expr_with_expected(inner, expected),
             ExprKind::Tuple(elements) => match expected {
@@ -6977,26 +7027,66 @@ impl<'a> Lowerer<'a> {
                             let ordered_args = associated.bind_args(args, callee.span).expect(
                                 "checked builtin associated call should bind during MIR lowering",
                             );
-                            let argument = ordered_args[0]
-                                .expect("builtin associated functions require one argument");
-                            let expected = match associated {
+                            let array_element_type = self
+                                .infer_expr_type(expr)
+                                .or_else(|| expected.cloned())
+                                .and_then(|ty| match ty {
+                                    Type::Named(name, mut arguments)
+                                        if name == "Array" && arguments.len() == 1 =>
+                                    {
+                                        arguments.pop()
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or_else(|| Type::named("Unknown"));
+                            let expected_types = match associated {
                                 BuiltinAssociatedFunction::DurationMilliseconds
                                 | BuiltinAssociatedFunction::DurationSeconds
                                 | BuiltinAssociatedFunction::DurationMinutes => {
-                                    Type::named("int64")
+                                    vec![Type::named("int64")]
                                 }
                                 BuiltinAssociatedFunction::StringFromBytes => {
-                                    Type::Named("Vec".to_string(), vec![Type::named("uint8")])
+                                    vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])]
                                 }
+                                BuiltinAssociatedFunction::ArrayZeros => {
+                                    vec![Type::Named("Vec".to_string(), vec![Type::named("int64")])]
+                                }
+                                BuiltinAssociatedFunction::ArrayFull => vec![
+                                    Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+                                    array_element_type,
+                                ],
+                                BuiltinAssociatedFunction::ArrayFromVec => vec![
+                                    Type::Named("Vec".to_string(), vec![array_element_type]),
+                                    Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+                                ],
                             };
-                            let passing = associated
-                                .argument_passing(0)
-                                .expect("builtin associated argument should declare passing");
-                            let value = self.lower_expr_for_passing(
-                                &argument.value,
-                                Some(&expected),
-                                passing,
-                            );
+                            let mut lowered_by_param = vec![None::<MirArg>; ordered_args.len()];
+                            for argument in args {
+                                let index = ordered_args
+                                    .iter()
+                                    .position(|bound| {
+                                        matches!(
+                                            bound,
+                                            Some(bound) if std::ptr::eq(*bound, argument)
+                                        )
+                                    })
+                                    .expect(
+                                        "bound associated argument should retain its declaration slot",
+                                    );
+                                let passing = associated
+                                    .argument_passing(index)
+                                    .expect("builtin associated argument should declare passing");
+                                let value = self.lower_expr_for_passing(
+                                    &argument.value,
+                                    expected_types.get(index),
+                                    passing,
+                                );
+                                lowered_by_param[index] = Some(MirArg {
+                                    name: argument.name.clone(),
+                                    value,
+                                    writeback_place: None,
+                                });
+                            }
                             self.emit(Instruction::Assign {
                                 target: temp.clone(),
                                 value: Rvalue::Call {
@@ -7005,11 +7095,14 @@ impl<'a> Lowerer<'a> {
                                         associated.owner_name(),
                                         associated.name()
                                     )),
-                                    args: vec![MirArg {
-                                        name: argument.name.clone(),
-                                        value,
-                                        writeback_place: None,
-                                    }],
+                                    args: lowered_by_param
+                                        .into_iter()
+                                        .map(|argument| {
+                                            argument.expect(
+                                                "checked associated call fills every argument",
+                                            )
+                                        })
+                                        .collect(),
                                 },
                             });
                             return Operand::Place(temp);
@@ -7840,7 +7933,37 @@ impl<'a> Lowerer<'a> {
                     let passing = builtin_member
                         .argument_passing(index)
                         .expect("fixed builtin argument should declare a passing mode");
-                    let expected = self.infer_expr_type(&argument.value);
+                    let expected = if class_name == "Array" && class_args.len() == 1 {
+                        match (builtin_member, index) {
+                            (BuiltinMember::ArrayGet | BuiltinMember::ArraySet, 0) => {
+                                Some(Type::Named("Vec".to_string(), vec![Type::named("int32")]))
+                            }
+                            (BuiltinMember::ArraySet, 1) | (BuiltinMember::ArrayFill, 0) => {
+                                Some(class_args[0].clone())
+                            }
+                            (
+                                BuiltinMember::ArrayWrappingAdd
+                                | BuiltinMember::ArrayWrappingSub
+                                | BuiltinMember::ArrayWrappingMul
+                                | BuiltinMember::ArraySaturatingAdd
+                                | BuiltinMember::ArraySaturatingSub
+                                | BuiltinMember::ArraySaturatingMul,
+                                0,
+                            ) => self
+                                .infer_expr_type(&argument.value)
+                                .filter(|ty| {
+                                    matches!(
+                                        ty,
+                                        Type::Named(name, args)
+                                            if name == "Array" && args.len() == 1
+                                    )
+                                })
+                                .or_else(|| Some(class_args[0].clone())),
+                            _ => self.infer_expr_type(&argument.value),
+                        }
+                    } else {
+                        self.infer_expr_type(&argument.value)
+                    };
                     let value =
                         self.lower_expr_for_passing(&argument.value, expected.as_ref(), passing);
                     let writeback_place = (passing == ReceiverKind::BorrowMut)
@@ -8635,6 +8758,33 @@ impl<'a> Lowerer<'a> {
                             }
                         }
                         let receiver_type = receiver_type?;
+                        if let Type::Named(name, arguments) = &receiver_type {
+                            if let Some(associated) =
+                                BuiltinAssociatedFunction::resolve(name, field)
+                            {
+                                match associated {
+                                    BuiltinAssociatedFunction::ArrayZeros
+                                    | BuiltinAssociatedFunction::ArrayFull
+                                    | BuiltinAssociatedFunction::ArrayFromVec
+                                        if arguments.len() == 1 =>
+                                    {
+                                        return Some(receiver_type.clone());
+                                    }
+                                    BuiltinAssociatedFunction::DurationMilliseconds
+                                    | BuiltinAssociatedFunction::DurationSeconds
+                                    | BuiltinAssociatedFunction::DurationMinutes => {
+                                        return Some(Type::named("Duration"));
+                                    }
+                                    BuiltinAssociatedFunction::StringFromBytes => {
+                                        return Some(Type::Named(
+                                            "Result".to_string(),
+                                            vec![Type::named("String"), Type::named("bytes.Error")],
+                                        ));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
                         if let Some(enum_ty) = self.builtin_enum_variant_type(&receiver_type, field)
                         {
                             return Some(enum_ty);
@@ -8720,6 +8870,23 @@ impl<'a> Lowerer<'a> {
                                         }
                                     }
                                     _ => {}
+                                }
+                            }
+                            if name == "Array" && receiver_args.len() == 1 && field == "map" {
+                                let callback = BuiltinMember::ArrayMap
+                                    .bind_args(args, callee.span)
+                                    .ok()
+                                    .and_then(|ordered| ordered[0]);
+                                if let Some(
+                                    Type::Function { return_type, .. }
+                                    | Type::Closure { return_type, .. },
+                                ) = callback
+                                    .and_then(|argument| self.infer_expr_type(&argument.value))
+                                {
+                                    return Some(Type::Named(
+                                        "Array".to_string(),
+                                        vec![*return_type],
+                                    ));
                                 }
                             }
                         }
@@ -8826,6 +8993,9 @@ impl<'a> Lowerer<'a> {
                     }
                     Type::Named(name, args) if name == "Map" && args.len() == 2 => {
                         Some(args[1].clone())
+                    }
+                    Type::Named(name, args) if name == "Array" && args.len() == 1 => {
+                        Some(args[0].clone())
                     }
                     _ => None,
                 }
@@ -9413,6 +9583,25 @@ impl<'a> Lowerer<'a> {
             return Some(Type::named("String"));
         }
         match (name.as_str(), field) {
+            ("Array", "shape") => Some(Type::Named("Vec".to_string(), vec![Type::named("int64")])),
+            ("Array", "len") => Some(Type::named("int64")),
+            ("Array", "clone")
+            | ("Array", "wrapping_add")
+            | ("Array", "wrapping_sub")
+            | ("Array", "wrapping_mul")
+            | ("Array", "saturating_add")
+            | ("Array", "saturating_sub")
+            | ("Array", "saturating_mul") => Some(Type::Named("Array".to_string(), args.clone())),
+            ("Array", "get") | ("Array", "set") => Some(Type::Named(
+                "Option".to_string(),
+                vec![args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"))],
+            )),
+            ("Array", "fill") => Some(Type::Unit),
+            ("Array", "sum") | ("Array", "min") | ("Array", "max") => args.first().cloned(),
+            ("Array", "mean") => Some(Type::named("float64")),
             ("String", "len" | "byte_len") => Some(Type::named("int64")),
             ("String", "contains") | ("String", "starts_with") | ("String", "ends_with") => {
                 Some(Type::named("bool"))
@@ -10015,6 +10204,14 @@ fn tuple_constant_index(expr: &Expr) -> Option<usize> {
         ExprKind::Int(value) => usize::try_from(*value).ok(),
         ExprKind::Group(inner) => tuple_constant_index(inner),
         _ => None,
+    }
+}
+
+fn array_coordinate_type(expr: &Expr) -> Type {
+    match &expr.kind {
+        ExprKind::Tuple(elements) => Type::Tuple(vec![Type::named("int32"); elements.len()]),
+        ExprKind::Group(inner) => array_coordinate_type(inner),
+        _ => Type::named("int32"),
     }
 }
 

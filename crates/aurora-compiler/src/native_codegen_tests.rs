@@ -55,6 +55,104 @@ fn scalar_kind_for_tests(ty: &Type) -> Option<ScalarKind> {
 }
 
 #[test]
+fn direct_array_surface_relocates_only_to_dedicated_native_array_kernels() {
+    let source = r#"
+def double(value: int32) -> float64:
+    return value.to_float() * 2.0
+
+def main():
+    mut values = Array[int32].from_vec(values=[1, 2, 3, 4], shape=[2, 2])
+    copied = values.clone()
+    values.set(index=[0, 1], value=9)
+    values.fill(value=2)
+    item = values[0, 1]
+    values[0, 1] = item
+    rows = values[:1]
+    added = values + copied
+    scaled = 3 - values
+    wrapped = values.wrapping_add(rhs=copied)
+    saturated = values.saturating_mul(rhs=2)
+    mapped = values.map(double)
+    shape = values.shape()
+    count = values.len()
+    total = values.sum()
+    minimum = values.min()
+    maximum = values.max()
+    average = values.mean()
+    print(rows)
+    print(added)
+    print(scaled)
+    print(wrapped)
+    print(saturated)
+    print(mapped)
+    print(shape)
+    print(count)
+    print(total)
+    print(minimum)
+    print(maximum)
+    print(average)
+"#;
+    let mir = lower_source_to_mir(source).expect("Array surface should lower to MIR");
+    let object = emit_host_object(&mir).expect("Array surface should emit direct native code");
+    let referenced = object_referenced_symbols(&object);
+    for required in [
+        "aurora_direct_array_from_vec",
+        "aurora_direct_array_clone",
+        "aurora_direct_array_shape",
+        "aurora_direct_array_len",
+        "aurora_direct_array_set_in_place",
+        "aurora_direct_array_fill_in_place",
+        "aurora_direct_array_index",
+        "aurora_direct_array_set_index_in_place",
+        "aurora_direct_array_slice",
+        "aurora_direct_array_binary",
+        "aurora_direct_array_map",
+        "aurora_direct_array_reduce",
+    ] {
+        assert!(
+            referenced.iter().any(|symbol| symbol.contains(required)),
+            "Array lowering should reference `{required}`: {referenced:?}"
+        );
+    }
+    assert!(
+        referenced
+            .iter()
+            .all(|symbol| !symbol.contains("aurora_direct_binary_value_at")),
+        "Array operators must not fall back to the generic boxed binary helper: {referenced:?}"
+    );
+}
+
+#[test]
+fn direct_fixed_width_integer_methods_relocate_to_the_width_arithmetic_kernel() {
+    let source = r#"
+def main():
+    signed: int32 = 2147483647
+    signed_rhs: int32 = 2
+    unsigned: uint8 = 255
+    unsigned_rhs: uint8 = 1
+    print(signed.wrapping_add(signed_rhs))
+    print(signed.wrapping_sub(signed_rhs))
+    print(signed.wrapping_mul(signed_rhs))
+    print(signed.saturating_add(signed_rhs))
+    print(signed.saturating_sub(signed_rhs))
+    print(signed.saturating_mul(signed_rhs))
+    print(unsigned.wrapping_add(unsigned_rhs))
+    print(unsigned.saturating_sub(unsigned_rhs))
+"#;
+    let mir = lower_source_to_mir(source).expect("fixed-width methods should lower to MIR");
+    let object =
+        emit_host_object(&mir).expect("fixed-width methods should emit direct native code");
+    let referenced = object_referenced_symbols(&object);
+
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_integer_width_binary")),
+        "fixed-width methods should reference the typed width-arithmetic kernel: {referenced:?}"
+    );
+}
+
+#[test]
 fn tuple_native_ownership_gates_separate_public_projection_from_private_destructuring() {
     assert!(validate_tuple_projection_operand(&Operand::Place("pair".to_string())).is_ok());
     let public_move = validate_tuple_projection_operand(&Operand::MovePlace("pair".to_string()))

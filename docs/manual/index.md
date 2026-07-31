@@ -44,6 +44,9 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 - [Collections](/manual/collections): `Vec[T]`, `Map[K, V]`, `Set[T]`,
   literals, eager owned comprehensions and slices, iteration, mutation, and
   eager callable-powered Vec algorithms.
+- [Numeric Arrays](/manual/numeric-arrays): contiguous row-major `Array[T]`,
+  four numeric dtypes, first-axis owned slices, reductions, native kernels,
+  and explicit checked/wrapping/saturating integer arithmetic.
 - [Bytes, Text Codecs, And SHA-256](/manual/bytes): `Vec[uint8]`, strict UTF-8 conversion, canonical hex/base64, typed data errors, and raw SHA-256.
 - [JSON Module](/manual/json): recursive JSON values, typed parse errors, exact number classification, deterministic dumping, and resource limits.
 - [Randomness Module](/manual/randomness): deterministic seeded streams, exact sequence compatibility, unbiased ranges, in-place shuffle, and OS-secure integers and bytes.

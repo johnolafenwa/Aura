@@ -90,6 +90,16 @@ clone-safety and task-repeatability rules, while String produces a fresh valid
 UTF-8 value. String integer indexing, steps, slice assignment, and views remain
 unavailable; this feature does not implement ADR-0038.
 
+Phase 7.3 adds global contiguous `Array[T]` values under Accepted ADR-0041.
+The four dtypes are `int32`, `int64`, `float32`, and `float64`; every value
+owns a rank-at-least-one row-major CPU buffer. The accepted surface includes
+three constructors, multidimensional scalar indexing, first-axis owned
+slices, mutation, mapping, reductions, exact-shape/scalar kernels, and
+explicit wrapping/saturating integer arithmetic. It adds no broadcasting,
+mixed promotion, views, shape transformations, equality, autograd, or
+accelerator placement. `mean()` returns `float64` for every dtype; integer
+Array `/` remains rejected under ADR-0002.
+
 See [Language Specification](/manual/language-specification) and [Conformance](/manual/conformance).
 
 ## Stability Policy

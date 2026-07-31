@@ -57,8 +57,8 @@ The chapters are ordered so that each idea has a practical reason to exist befor
 2. [The First Program](/learn/small-programs) — bindings, functions, control flow, and small decisions made with `match`.
 3. [Shaping Data](/learn/data-modeling) — classes, enums, methods, and the patterns that keep domain data honest.
 4. [Working With Collections](/learn/collections) — `Vec[T]`, `Map[K, V]`,
-   `Set[T]`, eager owned comprehensions, and owned Vec/String slices on real
-   text and counting problems.
+   `Set[T]`, eager owned comprehensions, owned Vec/String slices, and fixed
+   shape numeric `Array[T]` values.
 5. [Values, Moves, And Borrows](/learn/ownership-and-borrowing) — the ownership model, explained through the programs that benefit from it.
 6. [Results, Options, And `try`](/learn/results-and-options) — how Aurora represents recoverable failure without hiding control flow.
 7. [Organizing Code](/learn/modules-and-packages) — splitting a program into files, packages, and workspaces.
@@ -81,6 +81,7 @@ Each Learn chapter ends by pointing at the matching Manual section. When a rule 
 - [Types](/manual/types)
 - [Ownership And Borrowing](/manual/ownership-and-borrowing)
 - [Collections](/manual/collections)
+- [Numeric Arrays](/manual/numeric-arrays)
 - [Concurrency](/manual/concurrency)
 - [Process Module](/manual/process)
 - [Foreign Function Interface (FFI) v0](/manual/ffi)

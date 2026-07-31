@@ -241,6 +241,7 @@ on different pinned workers.
 | `Vec[T]` | Owned ordered collection. |
 | `Map[K, V]` | Owned key/value map. |
 | `Set[T]` | Owned set of unique values. |
+| `Array[T]` | Owned contiguous row-major numeric array; `T` is exactly `int32`, `int64`, `float32`, or `float64`. |
 | `MapEntry[K, V]` | Entry value returned by `Map.items()` and `Map.entries()`. |
 | `Queue[T]` | Scheduler-aware typed queue handle. |
 | `Task[T]` | Transferable task-result handle; conditionally Copy under Accepted ADR-0033. |
@@ -250,6 +251,13 @@ on different pinned workers.
 | `SelectOutcome[Q, T]` | Typed `select(...)` outcome for Queue payload `Q` and Task result `T`; an absent source category uses `None`. |
 | `WaitAny[T]` | `wait_any(...)` outcome. |
 | `WaitAll[T]` | `wait_all(...)` outcome. |
+
+`Array[T]` has runtime rank and `Vec[int64]` shape metadata rather than
+shape-level static type arguments. Every Array has rank at least one, may
+contain zero-length dimensions, and owns its contiguous CPU buffer. It is
+non-Copy, explicitly cloneable, and structurally `Transfer`; a Task result
+containing an Array retains the ordinary single-consumer observation right. See
+[Numeric Arrays](/manual/numeric-arrays).
 
 ## Resource And Module Types
 

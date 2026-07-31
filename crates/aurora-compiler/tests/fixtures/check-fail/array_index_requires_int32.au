@@ -1,0 +1,4 @@
+def main():
+    values = Array[int32].zeros(shape=[1])
+    index: int64 = 0
+    print(values[index])

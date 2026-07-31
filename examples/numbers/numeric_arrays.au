@@ -1,0 +1,31 @@
+def double(value: int32) -> int32:
+    return value * 2
+
+
+def main() -> int32:
+    source: Vec[int32] = [1, 2, 3, 4]
+    matrix = Array[int32].from_vec(source, [2, 2])
+    added = matrix + 10
+    doubled = added.map(double)
+    first_row = doubled[0:1]
+
+    mut edited = matrix.clone()
+    match edited.set([0, 1], 20):
+        case Option.Some(previous):
+            print(previous)
+        case Option.None:
+            print(-1)
+
+    wrapped = matrix.wrapping_add(2147483647)
+    saturated = matrix.saturating_add(2147483647)
+    ratios = Array[float64].full([2, 2], 8.0) / 2.0
+
+    print(source)
+    print(matrix.shape())
+    print(edited[0, 1])
+    print(first_row.sum())
+    print(doubled.mean())
+    print(wrapped[0, 0])
+    print(saturated[0, 0])
+    print(ratios.sum())
+    return 0

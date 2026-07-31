@@ -161,23 +161,19 @@ Aurora should gain a small maintained dense-array surface for ordinary numeric d
 
 Without a local numeric layer, even trivial preprocessing and postprocessing steps become Python RPC calls or subprocess invocations. That is unnecessary friction for batching, masking, normalization, statistics, and other common ML systems glue code.
 
-### Minimum model
+### Maintained first model
 
-- dense numeric arrays
-- CPU first
-- contiguous storage first
-- dtypes such as `bool`, `int32`, `int64`, `float32`, and `float64`
-- shape metadata for one-dimensional and multi-dimensional arrays
+Phase 7.3 establishes the global `Array[T]` surface for exactly `int32`,
+`int64`, `float32`, and `float64`. It has rank-at-least-one shape metadata,
+contiguous row-major CPU storage, exact-shape same-dtype elementwise kernels,
+first-axis owned-copy slicing, mapping, and basic reductions.
 
-The exact public type names are open design work, but the intended capability is a host-side array surface, not a full training framework.
+### Follow-on operations
 
-### Required operations
-
-- elementwise arithmetic
 - broadcasting where shapes are compatible
-- slicing and views
+- views
 - reshape and transpose
-- reductions such as `sum`, `mean`, `max`, and `argmax`
+- reductions beyond the maintained `sum`, `mean`, `min`, and `max`
 - matrix multiply for ordinary CPU-side data work
 
 ### Language/compiler changes
@@ -444,13 +440,17 @@ Success criteria:
 
 ## Phase 2: Host-Side Array / Tensor-Lite Layer
 
+Status: first contiguous numeric Array subset complete in Phase 7.3; broader
+tensor-lite operations remain future work.
+
 Primary goal: let Aurora perform useful local numeric data-processing work directly.
 
 Deliverables:
 
-- dense host-side arrays with a small maintained dtype set
-- elementwise arithmetic and broadcasting
-- slicing, reshape, transpose, and reductions
+- implemented: dense host-side `Array[T]` values with four maintained dtypes
+- implemented: exact-shape arithmetic, first-axis owned slices, and basic
+  reductions
+- planned: broadcasting, reshape, transpose, additional reductions, and views
 - matrix multiply for local CPU-side transforms
 - examples for preprocessing, postprocessing, and evaluation helpers
 

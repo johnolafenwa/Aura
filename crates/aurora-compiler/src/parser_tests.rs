@@ -2080,6 +2080,43 @@ fn parser_helpers_cover_specialization_and_format_parts() {
 }
 
 #[test]
+fn array_coordinate_assignment_preserves_a_tuple_index_target() {
+    let module = parse("def main():\n    values[0, 1] = 7\n")
+        .expect("comma-separated Array coordinate assignment should parse");
+    let Item::Function(function) = &module.items[0] else {
+        panic!("expected main function");
+    };
+    let Stmt::Assign(assign) = &function.body[0] else {
+        panic!("expected indexed assignment");
+    };
+    let AssignTarget::Index { index, .. } = &assign.target else {
+        panic!("expected index assignment target");
+    };
+    let ExprKind::Tuple(coordinates) = &index.kind else {
+        panic!("Array coordinates should remain a tuple index");
+    };
+    assert_eq!(coordinates.len(), 2);
+
+    let single = parse("def main():\n    values[0] = 7\n")
+        .expect("ordinary one-coordinate assignment should remain valid");
+    let Item::Function(single_function) = &single.items[0] else {
+        panic!("expected main function");
+    };
+    let Stmt::Assign(single_assign) = &single_function.body[0] else {
+        panic!("expected indexed assignment");
+    };
+    let AssignTarget::Index { index, .. } = &single_assign.target else {
+        panic!("expected one-coordinate index target");
+    };
+    assert!(matches!(index.kind, ExprKind::Int(0)));
+
+    assert!(parse("def main():\n    values[0,] = 7\n").is_err());
+    let mixed = parse("def main():\n    values[0, 1:] = 7\n")
+        .expect_err("mixed coordinate/slice assignment must stay rejected");
+    assert!(mixed.message.contains("slice assignment is unavailable"));
+}
+
+#[test]
 fn phase72_parser_preserves_owned_slice_forms_and_colon_spans() {
     for (source, has_start, has_end, colon_column) in [
         ("values[1:3]", true, true, 9),

@@ -1,0 +1,56 @@
+def observe(value: int32) -> float64:
+    print(value)
+    return value.to_float() * 2.0
+
+
+def main() -> int32:
+    source: Vec[int32] = [1, 2, 3, 4]
+    mut matrix = Array[int32].from_vec(source, [2, 2])
+    print(matrix.get([-3, 0]))
+    print(matrix.get([0]))
+    print(matrix.set([0, 1], 7))
+    matrix[0, 1] = 6
+    print(matrix[0, 1])
+    print(matrix[-1, -1])
+    print(matrix.clone())
+    print(source)
+    print(matrix[:1])
+    print(matrix + 2)
+    print(10 - matrix)
+    print(matrix.wrapping_add(2147483647))
+    print(matrix.saturating_mul(2147483647))
+    print(matrix.map(observe))
+    print(matrix.shape())
+    print(matrix.len())
+    print(matrix.sum())
+    print(matrix.min())
+    print(matrix.max())
+    print(matrix.mean())
+
+    float_source: Vec[float32] = [16777216.0, 1.0, -16777216.0]
+    floats = Array[float32].from_vec(float_source, [3])
+    print(floats[-1])
+    print(floats.sum())
+    print(floats.mean())
+
+    maximum_i32: int32 = 2147483647
+    minimum_i32: int32 = -2147483648
+    one_i32: int32 = 1
+    two_i32: int32 = 2
+    print(maximum_i32.wrapping_add(one_i32))
+    print(minimum_i32.wrapping_sub(one_i32))
+    print(maximum_i32.wrapping_mul(two_i32))
+    print(maximum_i32.saturating_add(one_i32))
+    print(minimum_i32.saturating_sub(one_i32))
+    print(maximum_i32.saturating_mul(two_i32))
+
+    zero_u8: uint8 = 0
+    one_u8: uint8 = 1
+    maximum_u8: uint8 = 255
+    print(maximum_u8.wrapping_add(one_u8))
+    print(zero_u8.wrapping_sub(one_u8))
+    print(maximum_u8.wrapping_mul(maximum_u8))
+    print(maximum_u8.saturating_add(one_u8))
+    print(zero_u8.saturating_sub(one_u8))
+    print(maximum_u8.saturating_mul(maximum_u8))
+    return 0

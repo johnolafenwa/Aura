@@ -14,11 +14,11 @@ use crate::mir::{
 };
 use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
-    ChannelValue, EnumVariantValue, FfiHandleValue, FileValue, HttpListenerValue,
-    HttpResponseValue, InstanceValue, MapValue, ProcessChildValue, ProcessCompletedValue,
-    ProcessStdioConfig, ProcessSupervisorValue, RangeValue, SetValue, TcpListenerValue,
-    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
-    Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    ArrayStorage, ArrayValue, ChannelValue, EnumVariantValue, FfiHandleValue, FileValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, ProcessChildValue,
+    ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue, RangeValue, SetValue,
+    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue,
+    UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::Type;
 use rcgen::generate_simple_self_signed;
@@ -69,6 +69,384 @@ fn lower_ffi_runtime_source(source: &str) -> MirModule {
     let program = crate::check_module_with_builtin_imports(module)
         .expect("FFI runtime source should type check");
     crate::mir::lower(&program)
+}
+
+#[test]
+fn mir_arrays_execute_dense_members_kernels_and_row_major_callbacks() {
+    let source = r#"
+def double(value: int32) -> float64:
+    print(value)
+    return value.to_float() * 2.0
+
+def main():
+    source: Vec[int32] = [1, 2, 3, 4]
+    mut values = Array[int32].from_vec(values=source, shape=[2, 2])
+    copied = values.clone()
+    print(values.shape())
+    print(values.len())
+    print(values.get(index=[-3, 0]))
+    print(values.get(index=[0]))
+    print(values.get(index=[-1, -1]))
+    print(values.set(index=[0, 1], value=7))
+    values[0, 1] = 6
+    print(values[0, 1])
+    print(values[-1, -1])
+    print(values[:1])
+    print(values + copied)
+    print(10 - values)
+    print(values.wrapping_add(rhs=2147483647))
+    print(values.saturating_mul(rhs=2147483647))
+    print(values.map(f=double))
+    print(values.sum())
+    print(values.min())
+    print(values.max())
+    print(values.mean())
+"#;
+    let output = crate::run_source(source)
+        .expect("the complete Array surface should execute through the MIR interpreter");
+    assert_eq!(
+        output.stdout,
+        "\
+[2, 2]\n\
+4\n\
+Option.None\n\
+Option.None\n\
+Option.Some(4)\n\
+Option.Some(2)\n\
+6\n\
+4\n\
+Array[int32](shape=[1, 2], values=[1, 6])\n\
+Array[int32](shape=[2, 2], values=[2, 8, 6, 8])\n\
+Array[int32](shape=[2, 2], values=[9, 4, 7, 6])\n\
+Array[int32](shape=[2, 2], values=[-2147483648, -2147483643, -2147483646, -2147483645])\n\
+Array[int32](shape=[2, 2], values=[2147483647, 2147483647, 2147483647, 2147483647])\n\
+1\n\
+6\n\
+3\n\
+4\n\
+Array[float64](shape=[2, 2], values=[2.0, 12.0, 6.0, 8.0])\n\
+14\n\
+1\n\
+6\n\
+3.5\n"
+    );
+    assert_eq!(output.value, Value::Unit);
+}
+
+#[test]
+fn mir_array_place_operations_borrow_storage_and_mutate_in_place() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def keep(value: int32) -> int32:
+    return value
+
+def main():
+    pass
+"#,
+    )
+    .expect("Array borrow regression callback should lower");
+    let mut runtime = MirRuntime::new(
+        module,
+        Arc::new(Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    let mut env = Env::default();
+    env.define_typed(
+        "values",
+        Type::Named("Array".to_string(), vec![Type::named("int32")]),
+        Value::Array(
+            ArrayValue::new(
+                vec![4].into_boxed_slice(),
+                ArrayStorage::Int32(vec![1, 2, 3, 4].into_boxed_slice()),
+            )
+            .unwrap(),
+        ),
+    );
+    let member = |field: &str| CallTarget::Member {
+        object: Operand::Place("values".to_string()),
+        field: field.to_string(),
+        receiver_place: Some("values".to_string()),
+    };
+
+    for (field, args) in [
+        ("shape", Vec::new()),
+        ("get", vec![mir_arg(Some("index"), Operand::Int(0))]),
+        (
+            "__index",
+            vec![
+                mir_arg(None, Operand::Int(0)),
+                mir_arg(None, Operand::Int(1)),
+                mir_arg(None, Operand::Int(1)),
+            ],
+        ),
+        ("sum", Vec::new()),
+        ("min", Vec::new()),
+        ("max", Vec::new()),
+        ("mean", Vec::new()),
+        ("wrapping_add", vec![mir_arg(Some("rhs"), Operand::Int(1))]),
+        (
+            "wrapping_add",
+            vec![mir_arg(Some("rhs"), Operand::Place("values".to_string()))],
+        ),
+        (
+            "saturating_mul",
+            vec![mir_arg(Some("rhs"), Operand::Int(2))],
+        ),
+    ] {
+        let clone_count = super::mir_array_place_clone_count();
+        runtime
+            .evaluate_call(&member(field), &args, &mut env)
+            .unwrap_or_else(|error| panic!("Array.{field} should execute: {error}"));
+        assert_eq!(
+            super::mir_array_place_clone_count(),
+            clone_count,
+            "shared Array.{field} must not deep-clone its receiver"
+        );
+    }
+
+    let clone_count = super::mir_array_place_clone_count();
+    let mapped = runtime
+        .evaluate_call(
+            &member("map"),
+            &[mir_arg(
+                Some("f"),
+                test_function_operand("keep", vec![Type::named("int32")], Type::named("int32")),
+            )],
+            &mut env,
+        )
+        .expect("Array.map should execute while borrowing its source storage");
+    assert_eq!(
+        mapped,
+        Value::Array(
+            ArrayValue::new(
+                vec![4].into_boxed_slice(),
+                ArrayStorage::Int32(vec![1, 2, 3, 4].into_boxed_slice()),
+            )
+            .unwrap()
+        )
+    );
+    assert_eq!(
+        super::mir_array_place_clone_count(),
+        clone_count,
+        "Array.map must borrow the source and read one scalar at a time"
+    );
+
+    for field in ["clone", "shape"] {
+        let clone_count = super::mir_array_place_clone_count();
+        let result = crate::runtime_value::with_array_allocation_budget(0, || {
+            runtime.evaluate_call(&member(field), &[], &mut env)
+        });
+        let error = match result {
+            Err(error) => error,
+            Ok(value) => {
+                panic!(
+                    "Array.{field} should report an injected allocation failure, found {value:?}"
+                )
+            }
+        };
+        assert_eq!(error.code, "AU4005");
+        assert_eq!(
+            super::mir_array_place_clone_count(),
+            clone_count,
+            "Array.{field} must borrow its source before fallible result allocation"
+        );
+    }
+
+    for (label, left, right) in [
+        (
+            "same-place array addition",
+            Operand::Place("values".to_string()),
+            Operand::Place("values".to_string()),
+        ),
+        (
+            "array-scalar addition",
+            Operand::Place("values".to_string()),
+            Operand::Int(1),
+        ),
+        (
+            "scalar-array addition",
+            Operand::Int(1),
+            Operand::Place("values".to_string()),
+        ),
+    ] {
+        let clone_count = super::mir_array_place_clone_count();
+        runtime
+            .evaluate_rvalue(
+                &Rvalue::Binary {
+                    op: crate::ast::BinaryOp::Add,
+                    left,
+                    right,
+                    span: Span::new(1, 1),
+                },
+                &mut env,
+            )
+            .unwrap_or_else(|error| panic!("{label} should execute: {error}"));
+        assert_eq!(
+            super::mir_array_place_clone_count(),
+            clone_count,
+            "{label} must borrow retained Array operands"
+        );
+    }
+
+    let source_allocation = match env.place_ref("values").unwrap() {
+        Value::Array(ArrayValue {
+            storage: ArrayStorage::Int32(values),
+            ..
+        }) => values.as_ptr(),
+        other => panic!("expected int32 Array, found {other:?}"),
+    };
+    for (field, args) in [
+        (
+            "set",
+            vec![
+                mir_arg(Some("index"), Operand::Int(0)),
+                mir_arg(Some("value"), Operand::Int(9)),
+            ],
+        ),
+        ("fill", vec![mir_arg(Some("value"), Operand::Int(6))]),
+        (
+            "__set_index",
+            vec![
+                mir_arg(None, Operand::Int(1)),
+                mir_arg(None, Operand::Int(8)),
+                mir_arg(None, Operand::Int(1)),
+                mir_arg(None, Operand::Int(1)),
+            ],
+        ),
+    ] {
+        let clone_count = super::mir_array_place_clone_count();
+        runtime
+            .evaluate_call(&member(field), &args, &mut env)
+            .unwrap_or_else(|error| panic!("Array.{field} should execute: {error}"));
+        assert_eq!(
+            super::mir_array_place_clone_count(),
+            clone_count,
+            "mutable Array.{field} must not clone its receiver before writeback"
+        );
+        match env.place_ref("values").unwrap() {
+            Value::Array(ArrayValue {
+                storage: ArrayStorage::Int32(values),
+                ..
+            }) => assert_eq!(
+                values.as_ptr(),
+                source_allocation,
+                "Array.{field} must mutate the existing storage allocation"
+            ),
+            other => panic!("expected int32 Array, found {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn mir_array_containing_vec_and_map_copies_are_independent() {
+    let output = crate::run_source(
+        r#"
+def first(values: Vec[Array[int32]]) -> Array[int32]:
+    match own values.get(0):
+        case Option.Some(value):
+            return value
+        case Option.None:
+            return Array[int32].zeros([1])
+
+def named(values: Map[String, Array[int32]]) -> Array[int32]:
+    match own values.get("values"):
+        case Option.Some(value):
+            return value
+        case Option.None:
+            return Array[int32].zeros([1])
+
+def main():
+    source_values: Vec[int32] = [1, 2]
+    source = Array[int32].from_vec(source_values, [2])
+
+    nested: Vec[Array[int32]] = [source.clone()]
+    copied = nested.clone()
+    mut copied_array = first(copied)
+    copied_array[0] = 9
+    print(first(nested))
+    print(copied_array)
+
+    sliced = nested[:]
+    mut sliced_array = first(sliced)
+    sliced_array[0] = 8
+    print(first(nested))
+    print(sliced_array)
+
+    lookup: Map[String, Array[int32]] = {"values": source.clone()}
+    mut mapped_array = named(lookup)
+    mapped_array[0] = 7
+    print(named(lookup))
+    print(mapped_array)
+"#,
+    )
+    .expect("Array-containing Vec and Map copies should execute");
+    assert_eq!(
+        output.stdout,
+        "\
+Array[int32](shape=[2], values=[1, 2])\n\
+Array[int32](shape=[2], values=[9, 2])\n\
+Array[int32](shape=[2], values=[1, 2])\n\
+Array[int32](shape=[2], values=[8, 2])\n\
+Array[int32](shape=[2], values=[1, 2])\n\
+Array[int32](shape=[2], values=[7, 2])\n"
+    );
+}
+
+#[test]
+fn mir_nested_array_clone_allocation_failure_is_au4005_and_preserves_source() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "nested",
+        Type::Named(
+            "Vec".to_string(),
+            vec![Type::Named("Array".to_string(), vec![Type::named("int32")])],
+        ),
+        Value::Vec(VecValue {
+            element_type: Type::Named("Array".to_string(), vec![Type::named("int32")]),
+            elements: vec![Value::Array(
+                ArrayValue::new(
+                    vec![2].into_boxed_slice(),
+                    ArrayStorage::Int32(vec![1, 2].into_boxed_slice()),
+                )
+                .unwrap(),
+            )],
+        }),
+    );
+    let source_storage = match env.place_ref("nested").unwrap() {
+        Value::Vec(vector) => match &vector.elements[0] {
+            Value::Array(ArrayValue {
+                storage: ArrayStorage::Int32(values),
+                ..
+            }) => values.as_ptr(),
+            other => panic!("expected nested Array, found {other:?}"),
+        },
+        other => panic!("expected Vec[Array[int32]], found {other:?}"),
+    };
+
+    let error = crate::runtime_value::with_array_allocation_budget(1, || {
+        runtime.evaluate_call(
+            &CallTarget::Member {
+                object: Operand::Place("nested".to_string()),
+                field: "clone".to_string(),
+                receiver_place: Some("nested".to_string()),
+            },
+            &[],
+            &mut env,
+        )
+    })
+    .expect_err("nested Array allocation failure should trap");
+    assert_eq!(error.code, "AU4005");
+    match env.place_ref("nested").unwrap() {
+        Value::Vec(vector) => match &vector.elements[0] {
+            Value::Array(ArrayValue {
+                storage: ArrayStorage::Int32(values),
+                ..
+            }) => assert_eq!(values.as_ptr(), source_storage),
+            other => panic!("expected nested Array, found {other:?}"),
+        },
+        other => panic!("expected Vec[Array[int32]], found {other:?}"),
+    }
 }
 
 #[test]

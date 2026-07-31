@@ -1,0 +1,4 @@
+def main():
+    left: int32 = 1
+    right: int64 = 2
+    print(left.wrapping_add(rhs=right))

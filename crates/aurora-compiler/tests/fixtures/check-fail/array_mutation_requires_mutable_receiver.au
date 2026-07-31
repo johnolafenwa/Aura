@@ -1,0 +1,3 @@
+def main():
+    values = Array[int32].zeros(shape=[1])
+    values.fill(value=1)

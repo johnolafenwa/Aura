@@ -21,6 +21,9 @@ Current features:
 - `extern "C" def` and `extern "C" opaque class` highlighting and snippets,
   with compiler-owned symbols, hover, definitions, completions, and
   diagnostics
+- global numeric `Array[T]` constructor/member completion, hover types,
+  multidimensional indexing, first-axis slices, and compiler-owned
+  dtype/shape diagnostics
 
 The language intelligence comes from the in-repo `aurora-language-server`
 package. The extension bundles its JavaScript LSP transport and that transport
@@ -43,6 +46,8 @@ Current completion scope is intentionally lightweight. The language server under
   broad completions available without stale hover metadata or server failures
 - owned Vec/String slice result types, endpoint hover/navigation, and exact
   compiler diagnostics for bounds typing, reserved steps, and slice assignment
+- numeric `Array[T]` constructors, methods, operator result types, and
+  multidimensional index/slice analysis from the compiler
 - constructor-style type inference such as `p = Point(...)`
 - basic builtin helpers such as `range` and `float64.sqrt`
 

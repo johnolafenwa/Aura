@@ -25,7 +25,7 @@ backend-parity contract is indexed separately in [Assertions](/manual/assertions
 | `parse_int32` | `parse_int32(text: String) -> Result[int32, String]` | Parses a signed 32-bit integer. |
 | `parse_int64` | `parse_int64(text: String) -> Result[int64, String]` | Parses a signed 64-bit integer. |
 | `parse_float64` | `parse_float64(text: String) -> Result[float64, String]` | Parses a 64-bit float. |
-| `len` | `len(value: String\|Vec[T]\|Map[K, V]\|Set[T]) -> int64` | Delegates to the value's own `len()` member with the same `int64` type and value. |
+| `len` | `len(value: String\|Vec[T]\|Map[K, V]\|Set[T]\|Array[T]) -> int64` | Delegates to the value's own `len()` member with the same `int64` type and value. |
 | `str` | `str(value) -> String` | Renders `value` exactly as `print` and f-string interpolation render it. |
 
 ## Foreign Declarations
@@ -52,6 +52,8 @@ backend rules are in [FFI v0](/manual/ffi).
 | --- | --- | --- |
 | `float64.sqrt` | `sqrt() -> float64` | Square root of the receiver. |
 | integer `.to_float` | `to_float() -> float64` | Converts any integer type with IEEE-754 round-to-nearest, ties-to-even; may round. |
+| integer wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | Same-type fixed-width two's-complement modular arithmetic. |
+| integer saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | Same-type arithmetic clamped to the declared width. |
 | scalar `.to_string` | `to_string() -> String` | Supported on `bool`, integer types, `float32`, and `float64`. |
 | `Duration.ms` | `Duration.ms(value: int64) -> Duration` | Exact signed millisecond constructor. |
 | `Duration.seconds` | `Duration.seconds(value: int64) -> Duration` | Exact signed second constructor. |
@@ -79,6 +81,31 @@ Duration operators are `Duration + Duration`, `Duration - Duration`,
 `Duration * int64`, `int64 * Duration`, and `Duration // int64`, all returning
 `Duration`, plus equality and all four ordering comparisons between Duration
 values. Arithmetic is checked on signed i128 nanoseconds.
+
+## Numeric Arrays
+
+`T` and `U` below are each exactly one of `int32`, `int64`, `float32`, or
+`float64`. See [Numeric Arrays](/manual/numeric-arrays) for shape, ownership,
+diagnostic, and backend contracts.
+
+| API | Signature | Contract |
+| --- | --- | --- |
+| `Array[T].zeros` | `zeros(shape: Vec[int64]) -> Array[T]` | Fresh rank-at-least-one row-major zero buffer. |
+| `Array[T].full` | `full(shape: Vec[int64], value: T) -> Array[T]` | Fresh buffer filled with `value`. |
+| `Array[T].from_vec` | `from_vec(values: Vec[T], shape: Vec[int64]) -> Array[T]` | Copies the shared Vec into exact row-major shape. |
+| `Array.shape` | `shape() -> Vec[int64]` | Owned shape snapshot. |
+| `Array.len` | `len() -> int64` | Total element count. |
+| `Array.clone` | `clone() -> Array[T]` | Explicit fresh full-buffer copy. |
+| `Array.get` | `get(index: Vec[int32]) -> Option[T]` | Optional coordinate read. |
+| `Array.set` | `set(index: Vec[int32], value: T) -> Option[T]` | Mutable replacement; returns old scalar or traps on invalid coordinate/rank. |
+| `Array.fill` | `fill(value: T) -> None` | Mutable row-major fill. |
+| `Array.map` | `map[U](f: def(T) -> U) -> Array[U]` | Eager row-major repeatable callback. |
+| `Array.sum` | `sum() -> T` | Deterministic dtype reduction; empty returns zero. |
+| `Array.min` | `min() -> T` | Minimum; empty is `AU4007`. |
+| `Array.max` | `max() -> T` | Maximum; empty is `AU4007`. |
+| `Array.mean` | `mean() -> float64` | `float64` accumulation/result; empty is `AU4007`. |
+| integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is same-shape Array or same-dtype scalar; fresh Array result. |
+| integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is same-shape Array or same-dtype scalar; fresh Array result. |
 
 ## Randomness
 

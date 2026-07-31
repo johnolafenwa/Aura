@@ -48,11 +48,12 @@ use crate::runtime_value::{
     spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
-    task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
-    wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
-    wait_for_runtime_scheduler, yield_now_with_runtime_scheduler, CancellationContext,
-    ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue, FfiHandleValue,
-    FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, InstanceValue,
+    task_result_timed_out, try_array_buffer, wait_all_cancelled, wait_all_error, wait_all_ready,
+    wait_all_timed_out, wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
+    wait_for_runtime_scheduler, yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType,
+    ArrayReduction, ArrayValue, CancellationContext, ChannelValue, ClosureCaptureValue,
+    ClosureEnvironment, EnumVariantValue, FfiHandleValue, FileValue, FunctionValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode,
     LightweightTaskFailureSignal, MapValue, ProcessChildValue, ProcessChildWaitStatus,
     ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
     RecvValueResult, RngValue, RuntimeSchedulerWakeReason, SendValueError, SetValue,
@@ -1245,6 +1246,10 @@ fn embedded_runtime_type_name(value: &Value) -> Option<String> {
         Value::Vec(vector) => Some(canonical_runtime_type_name(&Type::Named(
             "Vec".to_string(),
             vec![vector.element_type.clone()],
+        ))),
+        Value::Array(array) => Some(canonical_runtime_type_name(&Type::Named(
+            "Array".to_string(),
+            vec![array.element_type()],
         ))),
         Value::Set(set) => Some(canonical_runtime_type_name(&Type::Named(
             "Set".to_string(),
@@ -3036,6 +3041,9 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::String(_) => "String".to_string(),
         Value::Tuple(_) => "tuple".to_string(),
         Value::Vec(_) => "Vec".to_string(),
+        Value::Array(array) => {
+            format!("Array[{}]", array.dtype().runtime_type_name())
+        }
         Value::Set(_) => "Set".to_string(),
         Value::Map(_) => "Map".to_string(),
         Value::Duration(_) => "Duration".to_string(),
@@ -3084,6 +3092,7 @@ fn inferred_collection_type(value: &Value) -> Type {
         Value::Float(_) => Type::named("float64"),
         Value::Tuple(tuple) => Type::Tuple(tuple.element_types.clone()),
         Value::Vec(vector) => Type::Named("Vec".to_string(), vec![vector.element_type.clone()]),
+        Value::Array(array) => Type::Named("Array".to_string(), vec![array.element_type()]),
         Value::Set(set) => Type::Named("Set".to_string(), vec![set.element_type.clone()]),
         Value::Map(map) => Type::Named(
             "Map".to_string(),
@@ -4994,6 +5003,499 @@ pub extern "C-unwind" fn aurora_direct_vec_set_index_in_place(
     })
 }
 
+fn with_array<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&ArrayValue) -> T) -> T {
+    unsafe {
+        with_value(ptr, |value| match value {
+            Value::Array(array) => read(array),
+            other => runtime_error(format!(
+                "expected `Array`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    }
+}
+
+fn with_array_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut ArrayValue) -> T) -> T {
+    unsafe {
+        value_mut(ptr, |value| match value {
+            Value::Array(array) => write(array),
+            other => runtime_error(format!(
+                "expected `Array`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    }
+}
+
+fn direct_array_result<T>(result: std::result::Result<T, Diagnostic>, line: i64, column: i64) -> T {
+    result.unwrap_or_else(|mut error| {
+        if error.span.is_none() {
+            error.span = runtime_span(line, column);
+        }
+        runtime_diagnostic_error(error)
+    })
+}
+
+fn direct_array_dtype(code: i64) -> std::result::Result<ArrayDType, Diagnostic> {
+    ArrayDType::from_code(code).ok_or_else(|| {
+        Diagnostic::coded(
+            "AU4001",
+            format!("direct Array ABI received invalid dtype code `{code}`"),
+        )
+    })
+}
+
+fn direct_array_operation(code: i64) -> std::result::Result<ArrayBinaryOp, Diagnostic> {
+    ArrayBinaryOp::from_code(code).ok_or_else(|| {
+        Diagnostic::coded(
+            "AU4001",
+            format!("direct Array ABI received invalid binary operation code `{code}`"),
+        )
+    })
+}
+
+fn direct_array_arithmetic_mode(
+    code: i64,
+) -> std::result::Result<IntegerArithmeticMode, Diagnostic> {
+    IntegerArithmeticMode::from_code(code).ok_or_else(|| {
+        Diagnostic::coded(
+            "AU4001",
+            format!("direct Array ABI received invalid arithmetic mode code `{code}`"),
+        )
+    })
+}
+
+fn direct_array_reduction(code: i64) -> std::result::Result<ArrayReduction, Diagnostic> {
+    ArrayReduction::from_code(code).ok_or_else(|| {
+        Diagnostic::coded(
+            "AU4001",
+            format!("direct Array ABI received invalid reduction code `{code}`"),
+        )
+    })
+}
+
+fn direct_array_shape(shape: *mut OpaqueValue) -> std::result::Result<Box<[usize]>, Diagnostic> {
+    with_vector(shape, |shape| {
+        if shape.element_type != Type::named("int64") {
+            return Err(Diagnostic::coded(
+                "AU4007",
+                format!(
+                    "array shape requires `Vec[int64]`, found `Vec[{}]`",
+                    shape.element_type
+                ),
+            ));
+        }
+        shape
+            .elements
+            .iter()
+            .enumerate()
+            .map(|(axis, dimension)| {
+                let Value::Int(dimension) = dimension else {
+                    return Err(Diagnostic::coded(
+                        "AU4007",
+                        format!("array shape axis {axis} is not an int64 value"),
+                    ));
+                };
+                if dimension.runtime_kind() != Some(IntegerKind::Int64) {
+                    return Err(Diagnostic::coded(
+                        "AU4007",
+                        format!("array shape axis {axis} is not an int64 value"),
+                    ));
+                }
+                let dimension = dimension.as_i128().ok_or_else(|| {
+                    Diagnostic::coded(
+                        "AU4007",
+                        format!("array shape axis {axis} is outside the signed dimension range"),
+                    )
+                })?;
+                usize::try_from(dimension).map_err(|_| {
+                    Diagnostic::coded(
+                        "AU4007",
+                        format!("Array shape axis {axis} cannot be negative, found {dimension}"),
+                    )
+                })
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map(Vec::into_boxed_slice)
+    })
+}
+
+fn direct_array_coordinates(
+    coordinates: *mut OpaqueValue,
+) -> std::result::Result<Box<[i32]>, Diagnostic> {
+    unsafe {
+        with_value(coordinates, |coordinates| {
+            let (element_types_are_int32, elements): (bool, &[Value]) = match coordinates {
+                Value::Int(coordinate) => {
+                    if coordinate.runtime_kind() != Some(IntegerKind::Int32) {
+                        return Err(Diagnostic::coded(
+                            "AU4007",
+                            "array coordinates require int32 values",
+                        ));
+                    }
+                    return coordinate
+                        .as_i128()
+                        .and_then(|value| i32::try_from(value).ok())
+                        .map(|value| vec![value].into_boxed_slice())
+                        .ok_or_else(|| {
+                            Diagnostic::coded(
+                                "AU4007",
+                                "array coordinate on axis 0 does not fit int32",
+                            )
+                        });
+                }
+                Value::Vec(coordinates) => (
+                    coordinates.element_type == Type::named("int32"),
+                    &coordinates.elements,
+                ),
+                Value::Tuple(coordinates) => (
+                    coordinates
+                        .element_types
+                        .iter()
+                        .all(|ty| *ty == Type::named("int32")),
+                    &coordinates.elements,
+                ),
+                other => {
+                    return Err(Diagnostic::coded(
+                        "AU4007",
+                        format!(
+                            "array coordinates require `Vec[int32]` or an int32 tuple, found `{}`",
+                            value_type_name(other)
+                        ),
+                    ))
+                }
+            };
+            if !element_types_are_int32 {
+                return Err(Diagnostic::coded(
+                    "AU4007",
+                    "array coordinates require int32 values",
+                ));
+            }
+            elements
+                .iter()
+                .enumerate()
+                .map(|(axis, coordinate)| {
+                    let Value::Int(coordinate) = coordinate else {
+                        return Err(Diagnostic::coded(
+                            "AU4007",
+                            format!("array coordinate on axis {axis} is not an int32 value"),
+                        ));
+                    };
+                    if coordinate.runtime_kind() != Some(IntegerKind::Int32) {
+                        return Err(Diagnostic::coded(
+                            "AU4007",
+                            format!("array coordinate on axis {axis} is not an int32 value"),
+                        ));
+                    }
+                    coordinate
+                        .as_i128()
+                        .and_then(|value| i32::try_from(value).ok())
+                        .ok_or_else(|| {
+                            Diagnostic::coded(
+                                "AU4007",
+                                format!("array coordinate on axis {axis} does not fit int32"),
+                            )
+                        })
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map(Vec::into_boxed_slice)
+        })
+    }
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_zeros(
+    dtype: i64,
+    shape: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let dtype = direct_array_result(direct_array_dtype(dtype), line, column);
+        let shape = direct_array_result(direct_array_shape(shape), line, column);
+        let array = direct_array_result(ArrayValue::zeros(dtype, shape), line, column);
+        boxed_value(Value::Array(array))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_full(
+    dtype: i64,
+    shape: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let dtype = direct_array_result(direct_array_dtype(dtype), line, column);
+        let shape = direct_array_result(direct_array_shape(shape), line, column);
+        let array = unsafe {
+            with_value(value, |value| {
+                direct_array_result(ArrayValue::full(dtype, shape, value), line, column)
+            })
+        };
+        boxed_value(Value::Array(array))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_from_vec(
+    dtype: i64,
+    values: *mut OpaqueValue,
+    shape: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let dtype = direct_array_result(direct_array_dtype(dtype), line, column);
+        let shape = direct_array_result(direct_array_shape(shape), line, column);
+        let array = with_vector(values, |values| {
+            if values.element_type != Type::named(dtype.runtime_type_name()) {
+                return Err(Diagnostic::coded(
+                    "AU4007",
+                    format!(
+                        "Array[{}].from_vec requires `Vec[{}]`, found `Vec[{}]`",
+                        dtype.runtime_type_name(),
+                        dtype.runtime_type_name(),
+                        values.element_type
+                    ),
+                ));
+            }
+            ArrayValue::from_vec(values, Some(&shape))
+        });
+        boxed_value(Value::Array(direct_array_result(array, line, column)))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_clone(
+    array: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let cloned = with_array(array, ArrayValue::try_clone);
+        boxed_value(Value::Array(direct_array_result(cloned, line, column)))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_shape(array: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let shape = with_array(array, ArrayValue::shape_value);
+        boxed_value(direct_array_result(shape, 0, 0))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_len(array: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| {
+        i64::try_from(with_array(array, ArrayValue::len))
+            .unwrap_or_else(|_| runtime_error("array length does not fit in int64"))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_get(
+    array: *mut OpaqueValue,
+    coordinates: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let coordinates = direct_array_result(direct_array_coordinates(coordinates), line, column);
+        let value = with_array(array, |array| array.get_optional(&coordinates));
+        match direct_array_result(value, line, column) {
+            Some(value) => boxed_value(option_some(value)),
+            None => boxed_value(option_none()),
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_set_in_place(
+    array: *mut OpaqueValue,
+    coordinates: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let coordinates = direct_array_result(direct_array_coordinates(coordinates), line, column);
+        let value = unsafe { value_ref(value) };
+        let previous = with_array_mut(array, |array| array.set(&coordinates, value));
+        boxed_value(option_some(direct_array_result(previous, line, column)))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_fill_in_place(
+    array: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let value = unsafe { value_ref(value) };
+        let result = with_array_mut(array, |array| array.fill(value));
+        direct_array_result(result, line, column);
+        boxed_value(Value::Unit)
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_index(
+    array: *mut OpaqueValue,
+    coordinates: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let coordinates = direct_array_result(direct_array_coordinates(coordinates), line, column);
+        let value = with_array(array, |array| array.get(&coordinates));
+        boxed_value(direct_array_result(value, line, column))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_set_index_in_place(
+    array: *mut OpaqueValue,
+    coordinates: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let coordinates = direct_array_result(direct_array_coordinates(coordinates), line, column);
+        let value = unsafe { value_ref(value) };
+        let result = with_array_mut(array, |array| array.set(&coordinates, value));
+        let _ = direct_array_result(result, line, column);
+        boxed_value(Value::Unit)
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_slice(
+    array: *mut OpaqueValue,
+    start: i64,
+    has_start: i64,
+    end: i64,
+    has_end: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let slice = with_array(array, |array| {
+            array.slice_first_axis(
+                (has_start != 0).then_some(i128::from(start)),
+                (has_end != 0).then_some(i128::from(end)),
+            )
+        });
+        boxed_value(Value::Array(direct_array_result(slice, line, column)))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_binary(
+    left: *mut OpaqueValue,
+    right: *mut OpaqueValue,
+    scalar_left: i64,
+    operation: i64,
+    arithmetic_mode: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let operation = direct_array_result(direct_array_operation(operation), line, column);
+        let arithmetic_mode =
+            direct_array_result(direct_array_arithmetic_mode(arithmetic_mode), line, column);
+        let evaluate = |left_value: &Value, right_value: &Value| {
+            match (left_value, right_value) {
+                (Value::Array(left), Value::Array(right)) if scalar_left == 0 => {
+                    left.binary(right, operation, arithmetic_mode)
+                }
+                (Value::Array(array), scalar) if scalar_left == 0 => {
+                    array.scalar_binary(scalar, false, operation, arithmetic_mode)
+                }
+                (scalar, Value::Array(array)) if scalar_left != 0 => {
+                    array.scalar_binary(scalar, true, operation, arithmetic_mode)
+                }
+                (left, right) => Err(Diagnostic::coded(
+                    "AU4001",
+                    format!(
+                        "direct Array ABI received inconsistent operands `{}` and `{}` with scalar-left flag `{scalar_left}`",
+                        value_type_name(left),
+                        value_type_name(right)
+                    ),
+                )),
+            }
+        };
+        let result = unsafe {
+            if left == right {
+                with_value(left, |value| evaluate(value, value))
+            } else {
+                with_value(left, |left_value| {
+                    with_value(right, |right_value| evaluate(left_value, right_value))
+                })
+            }
+        };
+        boxed_value(Value::Array(direct_array_result(result, line, column)))
+    })
+}
+
+fn direct_array_map_result_buffer(len: usize, line: i64, column: i64) -> Vec<Value> {
+    direct_array_result(try_array_buffer(len, "Array.map result"), line, column)
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_map(
+    array: *mut OpaqueValue,
+    function: *mut OpaqueValue,
+    result_dtype: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result_dtype = direct_array_result(direct_array_dtype(result_dtype), line, column);
+        let (shape, source_len) = with_array(array, |array| {
+            let mut shape = direct_array_result(
+                try_array_buffer(array.shape.len(), "Array.map shape"),
+                line,
+                column,
+            );
+            shape.extend_from_slice(&array.shape);
+            (shape.into_boxed_slice(), array.len())
+        });
+        let mut mapped = direct_array_map_result_buffer(source_len, line, column);
+        for index in 0..source_len {
+            let source_value = with_array(array, |array| array.value_at_flat(index));
+            let mut arguments = [boxed_value(source_value) as i64];
+            let result = aurora_direct_function_call(function, arguments.as_mut_ptr(), 1);
+            mapped.push(unsafe { consume_owned_value(result) });
+        }
+        let array = ArrayValue::from_values(
+            &Type::named(result_dtype.runtime_type_name()),
+            shape,
+            mapped,
+        );
+        boxed_value(Value::Array(direct_array_result(array, line, column)))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_array_reduce(
+    array: *mut OpaqueValue,
+    reduction: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let reduction = direct_array_result(direct_array_reduction(reduction), line, column);
+        let result = with_array(array, |array| array.reduce(reduction));
+        boxed_value(direct_array_result(result, line, column))
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_empty() -> *mut OpaqueValue {
     task_runtime_boundary(|| {
@@ -5451,6 +5953,82 @@ pub extern "C-unwind" fn aurora_direct_integer_to_float(value: *mut OpaqueValue)
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_integer_width_binary(
+    left: *mut OpaqueValue,
+    right: *mut OpaqueValue,
+    operation: i64,
+    arithmetic_mode: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let operation_name = direct_array_result(
+            match operation {
+                0 => Ok("add"),
+                1 => Ok("sub"),
+                2 => Ok("mul"),
+                other => Err(Diagnostic::coded(
+                    "AU4001",
+                    format!(
+                        "direct integer width-arithmetic ABI received invalid operation code `{other}`"
+                    ),
+                )),
+            },
+            line,
+            column,
+        );
+        let mode_name = direct_array_result(
+            match arithmetic_mode {
+                1 => Ok("wrapping"),
+                2 => Ok("saturating"),
+                other => Err(Diagnostic::coded(
+                    "AU4001",
+                    format!(
+                        "direct integer width-arithmetic ABI received invalid mode code `{other}`"
+                    ),
+                )),
+            },
+            line,
+            column,
+        );
+        let read_integer = |value: *mut OpaqueValue, label: &str| unsafe {
+            with_value(value, |value| {
+                match value {
+                Value::Int(value) => Ok(*value),
+                other => Err(Diagnostic::coded(
+                    "AU4001",
+                    format!(
+                        "direct integer width-arithmetic ABI expected an integer {label} operand, found `{}`",
+                        value_type_name(other)
+                    ),
+                )),
+            }
+            })
+        };
+        let left = direct_array_result(read_integer(left, "left"), line, column);
+        let right = direct_array_result(read_integer(right, "right"), line, column);
+        let result = match (arithmetic_mode, operation) {
+            (1, 0) => left.wrapping_add(right),
+            (1, 1) => left.wrapping_sub(right),
+            (1, 2) => left.wrapping_mul(right),
+            (2, 0) => left.saturating_add(right),
+            (2, 1) => left.saturating_sub(right),
+            (2, 2) => left.saturating_mul(right),
+            _ => unreachable!("operation and mode codes were validated"),
+        }
+        .ok_or_else(|| {
+            Diagnostic::coded(
+                "AU4001",
+                format!(
+                    "`{mode_name}_{operation_name}` expects matching fixed-width integer operands"
+                ),
+            )
+        });
+        boxed_value(Value::Int(direct_array_result(result, line, column)))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unbox_u64(value: *mut OpaqueValue) -> u64 {
     task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::Int(value) => match value.as_i128().and_then(|value| u64::try_from(value).ok()) {
@@ -5832,6 +6410,10 @@ pub extern "C-unwind" fn aurora_direct_value_type_matches(
                     || Type::Tuple(tuple.element_types.clone()).to_string() == expected
             }
             Value::Vec(_) => expected == "Vec",
+            Value::Array(array) => {
+                expected == "Array"
+                    || expected == format!("Array[{}]", array.dtype().runtime_type_name())
+            }
             Value::Set(_) => expected == "Set",
             Value::Map(_) => expected == "Map",
             Value::Channel(_) => expected == "Queue",

@@ -667,6 +667,99 @@ def main():
 }
 
 #[test]
+fn array_analysis_infers_results_and_exposes_constructor_and_member_completions() {
+    let source = r#"
+def widen(value: int32) -> float64:
+    return value.to_float()
+
+def main():
+    values = Array[int32].zeros(shape=[2, 2])
+    mapped = values.map[float64](f=widen)
+    average = values.mean()
+    item = values[0, 1]
+    rows = values[:1]
+    print(mapped)
+    print(average)
+    print(item)
+    print(rows)
+"#;
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    for expected_hover in [
+        "binding values: Array[int32]",
+        "binding mapped: Array[float64]",
+        "binding average: float64",
+        "binding item: int32",
+        "binding rows: Array[int32]",
+    ] {
+        assert!(
+            output
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected_hover)),
+            "missing hover `{expected_hover}` in {:?}",
+            output.occurrences
+        );
+    }
+
+    let constructor_source =
+        "def main():\n    values = Array[int32].zeros(shape=[1])\n    Array[int32].\n";
+    let constructors = complete_source(constructor_source, 2, 17, Some('.'))
+        .expect("Array associated completion should recover");
+    for name in ["zeros", "full", "from_vec"] {
+        assert!(
+            constructors.iter().any(|item| item.name == name),
+            "missing Array constructor completion `{name}`"
+        );
+    }
+
+    let member_source = "def main():\n    values = Array[int32].zeros(shape=[1])\n    values.\n";
+    let members = complete_source(member_source, 2, 11, Some('.'))
+        .expect("Array member completion should recover");
+    for name in [
+        "shape",
+        "len",
+        "clone",
+        "get",
+        "set",
+        "fill",
+        "map",
+        "sum",
+        "min",
+        "max",
+        "mean",
+        "wrapping_add",
+        "saturating_mul",
+    ] {
+        assert!(
+            members.iter().any(|item| item.name == name),
+            "missing Array member completion `{name}`"
+        );
+    }
+    let float_members = builtin_member_completions(&Type::Named(
+        "Array".to_string(),
+        vec![Type::named("float64")],
+    ));
+    assert!(!float_members.iter().any(|item| {
+        matches!(
+            item.name.as_str(),
+            "wrapping_add"
+                | "wrapping_sub"
+                | "wrapping_mul"
+                | "saturating_add"
+                | "saturating_sub"
+                | "saturating_mul"
+        )
+    }));
+
+    let top_level = complete_source("def main():\n    pass\n", 0, 0, None)
+        .expect("top-level Array completion should succeed");
+    assert!(top_level
+        .iter()
+        .any(|item| item.name == "Array" && item.kind == "class"));
+}
+
+#[test]
 fn machine_readable_analysis_covers_symbols_and_occurrences() {
     let source = include_str!("../../../examples/point.au");
     let analysis = analyze_source(source);
@@ -5424,6 +5517,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
             param_passings: vec![ReceiverKind::Value],
             return_type: Type::Unit,
             rng_clone_safe_type_params: Default::default(),
+            array_equality_safe_type_params: Default::default(),
         },
         type_param_bounds: Default::default(),
     };

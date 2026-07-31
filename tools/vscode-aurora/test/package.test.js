@@ -235,6 +235,7 @@ test("syntax grammar tracks maintained builtin types", () => {
     "Map",
     "MapEntry",
     "Set",
+    "Array",
     "process.Child",
     "fs.File",
     "net.TcpStream"

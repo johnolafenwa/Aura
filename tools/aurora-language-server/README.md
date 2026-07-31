@@ -29,6 +29,9 @@ Current compiler-backed analysis covers:
   names inside base and endpoint expressions
 - incomplete or reserved slice forms preserve the compiler's exact `AU2005`
   step/assignment guidance without JavaScript-side reinterpretation
+- global numeric `Array[T]` constructors, members, multidimensional indexing,
+  first-axis slices, operator result types, and exact compiler-owned
+  dtype/shape diagnostics
 - extern C and opaque-handle symbols, hover, definitions, completions, and
   package-authorization diagnostics
 

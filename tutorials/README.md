@@ -64,6 +64,10 @@ The current tutorial set covers:
   comprehensions with filters and nested clauses, plus owned Vec/String slices
   with omitted endpoints, negative normalization, loud bounds, and
   Unicode-scalar String positions
+- owned contiguous numeric `Array[T]` values for the four maintained dtypes,
+  with exact shapes, row-major multidimensional indexing, first-axis copy
+  slices, same-dtype arithmetic, explicit wrapping/saturating integer modes,
+  mapping, and deterministic reductions
 - enums with exhaustive `match`
 - user-defined generic classes, enums, and functions
 - trait declarations, trait impls, and bounded generic calls

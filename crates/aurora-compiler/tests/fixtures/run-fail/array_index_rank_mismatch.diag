@@ -1,0 +1,6 @@
+error[AU4007]: array rank 2 requires 2 coordinates, found 1
+ --> crates/aurora-compiler/tests/fixtures/run-fail/array_index_rank_mismatch.au:4:18
+  |
+4 |     print(values[0])
+  |                  ^
+  = note: Aurora call chain (innermost first): main at 1:1

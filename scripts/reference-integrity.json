@@ -100,6 +100,9 @@
     "docs/manual/network.md": {
       "kind": "feature"
     },
+    "docs/manual/numeric-arrays.md": {
+      "kind": "feature"
+    },
     "docs/manual/ownership-and-borrowing.md": {
       "kind": "feature"
     },
@@ -543,7 +546,7 @@
       "reason": "Member-access catalog: point and Status are declarations supplied by surrounding examples."
     },
     "docs/manual/expressions.md#aurora-12": {
-      "sha256": "9f6ecc2bb0aa67e7c846712bbd048fd230dc24e6bc55fc1e2fe81a2f6a1ff07b",
+      "sha256": "131eeafe8169927ede8727c56d472f49b7fa3ad83b23da760b89024e1d9a1d20",
       "mode": "illustrative",
       "reason": "Indexing catalog: values and counts are placeholder collections."
     },
@@ -967,7 +970,7 @@
       "reason": "Normative match-statement-and-pattern EBNF fragment interpreted by the grammar prose, not Aurora source."
     },
     "docs/manual/grammar.md#ebnf-13": {
-      "sha256": "8e4f4d145c58d6a45c4b5e1d8d8a773e0c95fbfb65d28c824fc798c1cc21e468",
+      "sha256": "7646e6d30347786b9124e96769a6b43c375872e964d9dd126dc48b281908e08c",
       "mode": "illustrative",
       "reason": "Normative EBNF expression grammar, not an executable Aurora program."
     },
@@ -1167,6 +1170,17 @@
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
+    },
+    "docs/manual/numeric-arrays.md#aurora-1": {
+      "sha256": "1775f6aa3bb993372837e7e264fca1b8a33829b814b95ae8ca7a2b6046bd919c",
+      "mode": "run",
+      "stdout": "[2, 2]\n3.5\n4.0\n3.0\n",
+      "stderr": ""
+    },
+    "docs/manual/numeric-arrays.md#text-1": {
+      "sha256": "08346fd1ca1efe9cf5f3fc909b8d8acfc3dd8936ce2186054e8f730ea413d0fb",
+      "mode": "illustrative",
+      "reason": "Compact grammar sketch; the normative aggregate grammar lives in grammar.md."
     },
     "docs/manual/ownership-and-borrowing.md#aurora-1": {
       "sha256": "10f12af6ac5288d67c0eb0f302ad6f44b2ced2285022af4eb7c186fb84c3fc50",

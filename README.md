@@ -140,6 +140,10 @@ Current compiler workflow:
   - execute explicit numeric casts with `expr as Type`
 - `cargo run -p aura -- run examples/numbers/numeric_builtins.au`
   - execute the maintained builtin numeric helper surface `abs(...)`, `min(...)`, `max(...)`, `sqrt(...)`, and `float64.sqrt()`
+- `cargo run -p aura -- run examples/numbers/numeric_arrays.au`
+  - execute contiguous row-major `Array[T]` construction, multidimensional
+    indexing, mutation, first-axis owned slicing, mapping, reductions,
+    exact-shape/scalar kernels, and explicit wrapping/saturating integer modes
 - `cargo run -p aura -- run examples/strings/string_methods.au`
   - execute single-quoted strings, `int64` Unicode-scalar `len()`, `int64`
     UTF-8 `byte_len()`, and the maintained `String` method surface including

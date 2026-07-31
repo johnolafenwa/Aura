@@ -235,8 +235,28 @@ Last updated: 2026-07-31
   exclusion was added.
 
   Phase 7.2 is signed off. Phase 7.3 contiguous arrays, arithmetic modes,
-  kernels, and measured post-reboot NumPy comparisons is the active stage.
-  There is no current blocker.
+  native kernels, editor/reference material, and the controlled benchmark
+  harness are implemented on the working tree. The converged focused proof
+  passes 29 Array tests, 2 scalar integer-mode tests, all 9 fixture categories,
+  4 forced MIR/direct Array matrices, fixed-width parity, 2 exported native
+  ABI tests covering all four dtypes, 10 benchmark-harness tests, 10
+  reference-integrity tests, the complete reference gate, 101 LSP tests, 19
+  extension tests, and the docs build.
+
+  Two independent audits found and closed shared-operand Array snapshots,
+  infallible Array and nested-container copies, wrong-rank `get` behavior,
+  incomplete dtype/shape/native coverage, `from_vec` diagnostic precedence,
+  recursive equality containment (including generics and trait dispatch),
+  the incomplete diagnostic registry, and benchmark provenance/quiet-host
+  classification gaps. The root rerun also removed one obsolete
+  source-unreachable `Set[Array]` runtime test after the recursive equality
+  rule correctly rejected it. `cargo clean` removed 72.3 GiB of disposable
+  build artifacts before the final focused rebuild.
+
+  Phase 7.3 remains active until the implementation checkpoint is committed,
+  the 11-pair post-reboot Mac14,9 NumPy comparison is recorded, release
+  disassembly is inspected without an unsupported SIMD claim, and exact clean
+  full CI passes. There is no current implementation blocker.
 - Work note: `work/2026-07-30-batch6-phase7-release.md`.
 - Standing rules: strict B6.0 then Phase 7 sequence; test-first changes;
   reference pages land with each feature; behavior-focused coverage only;

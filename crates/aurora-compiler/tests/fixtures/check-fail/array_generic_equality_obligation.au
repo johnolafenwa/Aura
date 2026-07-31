@@ -1,0 +1,7 @@
+def equal[T](left: T, right: T) -> bool:
+    return left == right
+
+def main():
+    left = Array[int32].zeros([1])
+    right = Array[int32].zeros([1])
+    print(equal[Array[int32]](left, right))

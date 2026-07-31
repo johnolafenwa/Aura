@@ -219,6 +219,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         band: "runtime",
         title: "invalid runtime configuration",
     },
+    DiagnosticCodeInfo {
+        code: "AU4007",
+        band: "runtime",
+        title: "array shape or reduction violation",
+    },
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -1,0 +1,4 @@
+def main():
+    values: Vec[int64] = [1, 2]
+    array = Array[int32].from_vec(values=values, shape=[2])
+    print(array)

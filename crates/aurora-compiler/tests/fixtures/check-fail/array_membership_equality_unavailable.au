@@ -1,0 +1,4 @@
+def main():
+    needle = Array[int32].zeros([1])
+    values: Vec[Array[int32]] = [needle.clone()]
+    print(needle in values)

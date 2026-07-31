@@ -1,0 +1,3 @@
+def main():
+    values = Array[float64].full([2], 4.0)
+    print(values / 0.0)

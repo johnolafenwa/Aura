@@ -47,3 +47,15 @@ All notable user-facing changes will be recorded here. Aurora has not made its f
   enforcement, and MIR/direct parity. Slice steps, slice assignment, String
   integer indexing, and views remain unavailable; the step and assignment
   diagnostics include explicit migration guidance.
+- Added global contiguous row-major `Array[T]` for `int32`, `int64`,
+  `float32`, and `float64`, with runtime shapes, constructors,
+  multidimensional scalar indexing, mutable fill/replacement, first-axis
+  owned slices, mapping, reductions, exact-shape/scalar native kernels, and
+  explicit checked/wrapping/saturating integer modes. `mean()` returns
+  `float64` for every dtype; integer `/`, broadcasting, mixed promotion,
+  equality, views, shape transformations, autograd, and accelerators remain
+  unavailable.
+- Added a tested 11-pair, single-thread release-evidence harness for exact
+  one-million-element `float64` add and sum comparisons with NumPy. It retains
+  raw and hash-linked summary artifacts and defines no performance gate or
+  portable NumPy-performance claim.

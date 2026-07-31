@@ -106,6 +106,7 @@ Aurora provides three owned collection types and several runtime types:
 | `Vec[T]` | Ordered, growable list |
 | `Map[K, V]` | Key-value map |
 | `Set[T]` | Unordered collection of unique values |
+| `Array[T]` | Fixed-shape contiguous numeric array; `T` is `int32`, `int64`, `float32`, or `float64` |
 | `Option[T]` | A value that may or may not be present |
 | `Result[T, E]` | Success or failure |
 | `Queue[T]` | Typed queue for concurrency |
@@ -113,6 +114,22 @@ Aurora provides three owned collection types and several runtime types:
 | `TaskGroup` | Structured task scope |
 
 `Option[T]` and `Result[T, E]` are covered in [10-results-and-options.md](10-results-and-options.md). Queues and tasks are covered in [13-concurrency.md](13-concurrency.md).
+
+`Array[T]` is an owned non-Copy value with a fixed rank-at-least-one shape.
+Construct it explicitly rather than with a literal:
+
+```python
+source: Vec[float64] = [1.0, 2.0, 3.0, 4.0]
+matrix = Array[float64].from_vec(source, [2, 2])
+zeros = Array[int32].zeros([3, 4])
+filled = Array[float32].full([2, 2], 0.5)
+```
+
+`from_vec` copies the scalar elements, so `source` remains usable. Assignment
+of an Array transfers ownership, while `.clone()` returns an independent
+Array. All four maintained Array specializations satisfy `Transfer`. See
+[examples/numbers/numeric_arrays.au](../examples/numbers/numeric_arrays.au)
+and the [Numeric Arrays Manual](../docs/manual/numeric-arrays.md).
 
 ## `Vec[T]` And List Literals
 

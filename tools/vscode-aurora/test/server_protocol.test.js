@@ -699,3 +699,95 @@ test("bundled language server recovers safely while comprehension clauses are in
     "incomplete comprehension editor requests must not crash the bundled server"
   );
 });
+
+test("bundled language server preserves numeric Array hover completion and diagnostics", async (t) => {
+  const serverPath = process.env.AURORA_EXTENSION_SERVER_PATH
+    ? path.resolve(process.env.AURORA_EXTENSION_SERVER_PATH)
+    : path.resolve(__dirname, "..", "dist", "server.js");
+  assert.equal(fs.existsSync(serverPath), true, `language server bundle not found: ${serverPath}`);
+
+  const client = startLanguageServer(serverPath);
+  t.after(() => client.dispose());
+  const repoRoot = path.resolve(__dirname, "../../..");
+  const repoUri = `file://${repoRoot}`;
+  const initialize = await client.request("initialize", {
+    processId: null,
+    rootUri: repoUri,
+    capabilities: {},
+    workspaceFolders: [{ uri: repoUri, name: "Aurora" }]
+  });
+  assert.equal(initialize.error, undefined, JSON.stringify(initialize.error));
+  client.notify("initialized", {});
+
+  const lines = [
+    "def summarize() -> float64:",
+    "    values = Array[float64].full([2, 2], 4.0)",
+    "    copied = values[0:1]",
+    "    print(copied.sum())",
+    "    return copied.mean()",
+    ""
+  ];
+  const uri = `file://${path.join(repoRoot, "numeric-array-protocol.au")}`;
+  const initialDiagnostics = client.waitForNotification(
+    "textDocument/publishDiagnostics",
+    (message) => message.params?.uri === uri
+  );
+  client.notify("textDocument/didOpen", {
+    textDocument: {
+      uri,
+      languageId: "aurora",
+      version: 1,
+      text: lines.join("\n")
+    }
+  });
+  assert.deepEqual((await initialDiagnostics).params.diagnostics, []);
+
+  const hover = await client.request("textDocument/hover", {
+    textDocument: { uri },
+    position: { line: 3, character: lines[3].indexOf("copied") + 1 }
+  });
+  assert.equal(hover.error, undefined, JSON.stringify(hover.error));
+  assert.equal(
+    hover.result?.contents?.value,
+    "```aurora\nbinding copied: Array[float64]\n```"
+  );
+
+  const dot = lines[3].indexOf(".sum");
+  const completion = await client.request("textDocument/completion", {
+    textDocument: { uri },
+    position: { line: 3, character: dot + 1 },
+    context: { triggerKind: 2, triggerCharacter: "." }
+  });
+  assert.equal(completion.error, undefined, JSON.stringify(completion.error));
+  const labels = new Set(completion.result.map((item) => item.label));
+  for (const expected of ["shape", "len", "sum", "mean", "map", "fill"]) {
+    assert.ok(labels.has(expected), `Array completion should include ${expected}`);
+  }
+
+  const rejectedLines = [
+    "def reject():",
+    "    values = Array[int32].full([2], 4)",
+    "    print(values / 2)",
+    ""
+  ];
+  const rejectedDiagnostics = client.waitForNotification(
+    "textDocument/publishDiagnostics",
+    (message) =>
+      message.params?.uri === uri &&
+      message.params?.diagnostics?.some((item) => item.code === "AU2003")
+  );
+  client.notify("textDocument/didChange", {
+    textDocument: { uri, version: 2 },
+    contentChanges: [{ text: rejectedLines.join("\n") }]
+  });
+  const diagnostic = (await rejectedDiagnostics).params.diagnostics.find(
+    (item) => item.code === "AU2003"
+  );
+  assert.equal(diagnostic.message, "integer Array `/` is not supported");
+  assert.equal(diagnostic.source, "aurora-compiler");
+  assert.doesNotMatch(
+    client.stderr(),
+    /Cannot read properties|TypeError|UnhandledPromiseRejection/,
+    "numeric Array editor requests must not crash the bundled server"
+  );
+});

@@ -1,0 +1,5 @@
+error[AU2002]: Array indices must have type `int32`, found `int64`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/array_index_requires_int32.au:4:18
+  |
+4 |     print(values[index])
+  |                  ^

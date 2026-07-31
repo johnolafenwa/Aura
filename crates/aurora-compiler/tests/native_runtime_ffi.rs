@@ -149,6 +149,104 @@ unsafe fn int_value(value: i64) -> *mut OpaqueValue {
     aurora_direct_box_i64(value)
 }
 
+unsafe fn int32_value(value: i32) -> *mut OpaqueValue {
+    aurora_direct_box_i32(i64::from(value))
+}
+
+unsafe fn int64_vec(values: &[i64]) -> *mut OpaqueValue {
+    let vector = aurora_direct_vec_empty();
+    for value in values {
+        unsafe {
+            release(aurora_direct_vec_push_in_place(vector, int_value(*value)));
+        }
+    }
+    vector
+}
+
+unsafe fn int32_vec(values: &[i32]) -> *mut OpaqueValue {
+    let vector = aurora_direct_vec_empty();
+    for value in values {
+        unsafe {
+            release(aurora_direct_vec_push_in_place(vector, int32_value(*value)));
+        }
+    }
+    vector
+}
+
+unsafe fn int32_array(values: &[i32], shape: &[i64]) -> *mut OpaqueValue {
+    let values = unsafe { int32_vec(values) };
+    let shape = unsafe { int64_vec(shape) };
+    let array = aurora_direct_array_from_vec(0, values, shape, 1, 1);
+    unsafe {
+        release(values);
+        release(shape);
+    }
+    array
+}
+
+unsafe fn int64_array(values: &[i64], shape: &[i64]) -> *mut OpaqueValue {
+    let values = unsafe { int64_vec(values) };
+    let shape = unsafe { int64_vec(shape) };
+    let array = aurora_direct_array_from_vec(1, values, shape, 1, 1);
+    unsafe {
+        release(values);
+        release(shape);
+    }
+    array
+}
+
+unsafe fn float_array(
+    dtype: i64,
+    runtime_type: &str,
+    values: &[i64],
+    shape: &[i64],
+) -> *mut OpaqueValue {
+    let vector = aurora_direct_vec_empty();
+    for value in values {
+        unsafe {
+            release(aurora_direct_vec_push_in_place(
+                vector,
+                float_value(*value, runtime_type),
+            ));
+        }
+    }
+    let vector_type = format!("Vec[{runtime_type}]");
+    aurora_direct_tag_value_type(vector, vector_type.as_ptr(), vector_type.len());
+    let shape = unsafe { int64_vec(shape) };
+    let array = aurora_direct_array_from_vec(dtype, vector, shape, 1, 1);
+    unsafe {
+        release(vector);
+        release(shape);
+    }
+    array
+}
+
+unsafe extern "C-unwind" fn coverage_array_double_thunk(
+    args: *const i64,
+    count: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(count, 1);
+    let argument = unsafe { *args } as *mut OpaqueValue;
+    let value = aurora_direct_unbox_i64(argument);
+    unsafe {
+        release(argument);
+        int32_value(i32::try_from(value * 2).expect("coverage callback result fits int32"))
+    }
+}
+
+unsafe extern "C-unwind" fn coverage_array_half_float64_thunk(
+    args: *const i64,
+    count: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(count, 1);
+    let argument = unsafe { *args } as *mut OpaqueValue;
+    let value = aurora_direct_unbox_f64(argument);
+    unsafe {
+        release(argument);
+    }
+    aurora_direct_box_f64(value / 2.0)
+}
+
 unsafe fn bool_value(value: bool) -> *mut OpaqueValue {
     aurora_direct_box_bool(i64::from(value))
 }
@@ -841,6 +939,308 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         assert_eq!(expect_i64(deadline_index), 0);
 
         aurora_direct_sleep_ms(0);
+    }
+}
+
+#[test]
+fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_library_copy() {
+    unsafe {
+        let shape = int64_vec(&[2, 2]);
+        let zeros = aurora_direct_array_zeros(0, shape, 2, 3);
+        assert_eq!(
+            cloned_value(zeros).render(),
+            "Array[int32](shape=[2, 2], values=[0, 0, 0, 0])"
+        );
+        release(zeros);
+
+        let seven = int32_value(7);
+        let full = aurora_direct_array_full(0, shape, seven, 2, 3);
+        assert_eq!(
+            cloned_value(full).render(),
+            "Array[int32](shape=[2, 2], values=[7, 7, 7, 7])"
+        );
+        release(full);
+        release(seven);
+        release(shape);
+
+        let source = int32_array(&[1, 2, 3, 4], &[2, 2]);
+        assert_eq!(aurora_direct_array_len(source), 4);
+        let shape = aurora_direct_array_shape(source);
+        assert_eq!(cloned_value(shape).render(), "[2, 2]");
+        release(shape);
+
+        let vector = int32_array(&[5, 6, 7], &[3]);
+        let scalar_coordinate = int32_value(-1);
+        assert_eq!(
+            expect_i64(aurora_direct_array_index(vector, scalar_coordinate, 3, 4,)),
+            7
+        );
+        release(scalar_coordinate);
+        release(vector);
+
+        let coordinates = int32_vec(&[0, 1]);
+        assert_eq!(
+            expect_i64(expect_option_some_payload(aurora_direct_array_get(
+                source,
+                coordinates,
+                4,
+                5,
+            ))),
+            2
+        );
+        release(coordinates);
+
+        let working = int32_array(&[1, 2, 3, 4], &[2, 2]);
+        let coordinates = int32_vec(&[0, 1]);
+        let nine = int32_value(9);
+        assert_eq!(
+            expect_i64(expect_option_some_payload(
+                aurora_direct_array_set_in_place(working, coordinates, nine, 4, 5,)
+            )),
+            2
+        );
+        release(coordinates);
+        release(nine);
+        let negative_coordinates = int32_vec(&[-1, -1]);
+        assert_eq!(
+            expect_i64(aurora_direct_array_index(
+                working,
+                negative_coordinates,
+                5,
+                6,
+            )),
+            4
+        );
+        release(negative_coordinates);
+        let coordinates = int32_vec(&[1, 0]);
+        let eleven = int32_value(11);
+        release(aurora_direct_array_set_index_in_place(
+            working,
+            coordinates,
+            eleven,
+            5,
+            6,
+        ));
+        release(coordinates);
+        release(eleven);
+        let fill = int32_value(-3);
+        release(aurora_direct_array_fill_in_place(working, fill, 6, 7));
+        assert_eq!(
+            cloned_value(working).render(),
+            "Array[int32](shape=[2, 2], values=[-3, -3, -3, -3])"
+        );
+        release(fill);
+        release(working);
+
+        let tail = aurora_direct_array_slice(source, -1, 1, 0, 0, 7, 8);
+        assert_eq!(
+            cloned_value(tail).render(),
+            "Array[int32](shape=[1, 2], values=[3, 4])"
+        );
+        release(tail);
+
+        let other = int32_array(&[10, 20, 30, 40], &[2, 2]);
+        let added = aurora_direct_array_binary(source, other, 0, 0, 0, 8, 9);
+        assert_eq!(
+            cloned_value(added).render(),
+            "Array[int32](shape=[2, 2], values=[11, 22, 33, 44])"
+        );
+        release(added);
+        let scalar = int32_value(2);
+        let scaled = aurora_direct_array_binary(source, scalar, 0, 2, 0, 8, 9);
+        assert_eq!(
+            cloned_value(scaled).render(),
+            "Array[int32](shape=[2, 2], values=[2, 4, 6, 8])"
+        );
+        release(scaled);
+        release(scalar);
+        let scalar = int32_value(10);
+        let scalar_left = aurora_direct_array_binary(scalar, source, 1, 1, 0, 8, 9);
+        assert_eq!(
+            cloned_value(scalar_left).render(),
+            "Array[int32](shape=[2, 2], values=[9, 8, 7, 6])"
+        );
+        release(scalar_left);
+        release(scalar);
+        release(other);
+
+        let limits = int32_array(&[i32::MAX, i32::MIN], &[2]);
+        let one = int32_value(1);
+        let wrapped = aurora_direct_array_binary(limits, one, 0, 0, 1, 9, 10);
+        assert_eq!(
+            cloned_value(wrapped).render(),
+            "Array[int32](shape=[2], values=[-2147483648, -2147483647])"
+        );
+        release(wrapped);
+        let saturated = aurora_direct_array_binary(limits, one, 0, 0, 2, 9, 10);
+        assert_eq!(
+            cloned_value(saturated).render(),
+            "Array[int32](shape=[2], values=[2147483647, -2147483647])"
+        );
+        release(saturated);
+        release(one);
+        release(limits);
+
+        let callback_type = Type::Function {
+            params: vec![FunctionParamContract {
+                name: "value".to_string(),
+                ty: Type::named("int32"),
+                passing: ReceiverKind::Borrow,
+                has_default: false,
+                default_erased: false,
+            }],
+            return_type: Box::new(Type::named("int32")),
+        };
+        let callback_type =
+            serde_json::to_vec(&callback_type).expect("callback type should serialize");
+        let callback = aurora_direct_function_value(
+            coverage_array_double_thunk as *const () as usize as i64,
+            1,
+            b"double".as_ptr(),
+            "double".len(),
+            callback_type.as_ptr(),
+            callback_type.len(),
+            b"/workspace/array.au".as_ptr(),
+            "/workspace/array.au".len(),
+            1,
+            1,
+        );
+        let mapped = aurora_direct_array_map(source, callback, 0, 10, 11);
+        assert_eq!(
+            cloned_value(mapped).render(),
+            "Array[int32](shape=[2, 2], values=[2, 4, 6, 8])"
+        );
+        release(mapped);
+        release(callback);
+
+        assert_eq!(
+            expect_i64(aurora_direct_array_reduce(source, 0, 11, 12)),
+            10
+        );
+        assert_eq!(expect_i64(aurora_direct_array_reduce(source, 1, 11, 12)), 1);
+        assert_eq!(expect_i64(aurora_direct_array_reduce(source, 2, 11, 12)), 4);
+        let mean = aurora_direct_array_reduce(source, 3, 11, 12);
+        assert_eq!(cloned_value(mean), Value::Float(2.5));
+        release(mean);
+        release(source);
+
+        let maximum = int32_value(i32::MAX);
+        let one = int32_value(1);
+        let wrapped = aurora_direct_integer_width_binary(maximum, one, 0, 1, 12, 13);
+        assert_eq!(expect_i64(wrapped), i64::from(i32::MIN));
+        let saturated = aurora_direct_integer_width_binary(maximum, one, 0, 2, 12, 13);
+        assert_eq!(expect_i64(saturated), i64::from(i32::MAX));
+        release(one);
+        release(maximum);
+    }
+}
+
+#[test]
+fn direct_runtime_exported_array_kernels_cover_int64_float32_and_float64() {
+    unsafe {
+        let shape = int64_vec(&[2]);
+        let int64_zeros = aurora_direct_array_zeros(1, shape, 20, 21);
+        assert_eq!(
+            cloned_value(int64_zeros).render(),
+            "Array[int64](shape=[2], values=[0, 0])"
+        );
+        release(int64_zeros);
+
+        let float32_two = float_value(2, "float32");
+        let float32_full = aurora_direct_array_full(2, shape, float32_two, 20, 21);
+        assert_eq!(
+            cloned_value(float32_full).render(),
+            "Array[float32](shape=[2], values=[2.0, 2.0])"
+        );
+        release(float32_full);
+        release(float32_two);
+        release(shape);
+
+        let int64_values = int64_array(&[5_000_000_000, 6_000_000_000], &[2]);
+        let int64_rhs = int64_array(&[2, 3], &[2]);
+        let int64_added = aurora_direct_array_binary(int64_values, int64_rhs, 0, 0, 0, 21, 22);
+        assert_eq!(
+            cloned_value(int64_added).render(),
+            "Array[int64](shape=[2], values=[5000000002, 6000000003])"
+        );
+        release(int64_added);
+        release(int64_rhs);
+        let int64_clone = aurora_direct_array_clone(int64_values, 21, 22);
+        assert_eq!(
+            cloned_value(int64_clone).render(),
+            "Array[int64](shape=[2], values=[5000000000, 6000000000])"
+        );
+        release(int64_clone);
+        assert_eq!(
+            expect_i64(aurora_direct_array_reduce(int64_values, 0, 21, 22)),
+            11_000_000_000
+        );
+        let int64_mean = aurora_direct_array_reduce(int64_values, 3, 21, 22);
+        assert_eq!(cloned_value(int64_mean), Value::Float(5_500_000_000.0));
+        release(int64_mean);
+        release(int64_values);
+
+        let float32_values = float_array(2, "float32", &[3, 5], &[2]);
+        let float32_scalar = float_value(2, "float32");
+        let float32_divided =
+            aurora_direct_array_binary(float32_values, float32_scalar, 0, 3, 0, 22, 23);
+        assert_eq!(
+            cloned_value(float32_divided).render(),
+            "Array[float32](shape=[2], values=[1.5, 2.5])"
+        );
+        release(float32_divided);
+        release(float32_scalar);
+        let float32_sum = aurora_direct_array_reduce(float32_values, 0, 22, 23);
+        assert_eq!(cloned_value(float32_sum), Value::Float(8.0));
+        release(float32_sum);
+        release(float32_values);
+
+        let float64_values = float_array(3, "float64", &[4, 8], &[2]);
+        let float64_scalar = float_value(16, "float64");
+        let float64_scalar_left =
+            aurora_direct_array_binary(float64_scalar, float64_values, 1, 3, 0, 23, 24);
+        assert_eq!(
+            cloned_value(float64_scalar_left).render(),
+            "Array[float64](shape=[2], values=[4.0, 2.0])"
+        );
+        release(float64_scalar_left);
+        release(float64_scalar);
+
+        let callback_type = Type::Function {
+            params: vec![FunctionParamContract {
+                name: "value".to_string(),
+                ty: Type::named("float64"),
+                passing: ReceiverKind::Borrow,
+                has_default: false,
+                default_erased: false,
+            }],
+            return_type: Box::new(Type::named("float64")),
+        };
+        let callback_type =
+            serde_json::to_vec(&callback_type).expect("callback type should serialize");
+        let callback = aurora_direct_function_value(
+            coverage_array_half_float64_thunk as *const () as usize as i64,
+            1,
+            b"half".as_ptr(),
+            "half".len(),
+            callback_type.as_ptr(),
+            callback_type.len(),
+            b"/workspace/array_dtypes.au".as_ptr(),
+            "/workspace/array_dtypes.au".len(),
+            1,
+            1,
+        );
+        let mapped = aurora_direct_array_map(float64_values, callback, 3, 24, 25);
+        assert_eq!(
+            cloned_value(mapped).render(),
+            "Array[float64](shape=[2], values=[2.0, 4.0])"
+        );
+        release(mapped);
+        release(callback);
+        let float64_mean = aurora_direct_array_reduce(float64_values, 3, 24, 25);
+        assert_eq!(cloned_value(float64_mean), Value::Float(6.0));
+        release(float64_mean);
+        release(float64_values);
     }
 }
 

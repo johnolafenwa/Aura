@@ -135,6 +135,16 @@ enum IntegerSign {
     Positive,
 }
 
+#[derive(Copy, Clone)]
+enum WidthArithmetic {
+    WrappingAdd,
+    WrappingSub,
+    WrappingMul,
+    SaturatingAdd,
+    SaturatingSub,
+    SaturatingMul,
+}
+
 impl PartialEq for IntegerValue {
     fn eq(&self, other: &Self) -> bool {
         Ord::cmp(self, other) == Ordering::Equal
@@ -488,6 +498,85 @@ impl IntegerValue {
         };
         Self::from_sign_and_magnitude(right_sign, magnitude)?
             .with_optional_runtime_kind(runtime_kind)
+    }
+
+    pub fn wrapping_add(self, rhs: Self) -> Option<Self> {
+        self.width_arithmetic(rhs, WidthArithmetic::WrappingAdd)
+    }
+
+    pub fn wrapping_sub(self, rhs: Self) -> Option<Self> {
+        self.width_arithmetic(rhs, WidthArithmetic::WrappingSub)
+    }
+
+    pub fn wrapping_mul(self, rhs: Self) -> Option<Self> {
+        self.width_arithmetic(rhs, WidthArithmetic::WrappingMul)
+    }
+
+    pub fn saturating_add(self, rhs: Self) -> Option<Self> {
+        self.width_arithmetic(rhs, WidthArithmetic::SaturatingAdd)
+    }
+
+    pub fn saturating_sub(self, rhs: Self) -> Option<Self> {
+        self.width_arithmetic(rhs, WidthArithmetic::SaturatingSub)
+    }
+
+    pub fn saturating_mul(self, rhs: Self) -> Option<Self> {
+        self.width_arithmetic(rhs, WidthArithmetic::SaturatingMul)
+    }
+
+    fn width_arithmetic(self, rhs: Self, operation: WidthArithmetic) -> Option<Self> {
+        let kind = self.common_runtime_kind(rhs)?;
+        macro_rules! signed {
+            ($native:ty) => {{
+                let left = <$native>::try_from(self.as_i128()?).ok()?;
+                let right = <$native>::try_from(rhs.as_i128()?).ok()?;
+                let result = match operation {
+                    WidthArithmetic::WrappingAdd => left.wrapping_add(right),
+                    WidthArithmetic::WrappingSub => left.wrapping_sub(right),
+                    WidthArithmetic::WrappingMul => left.wrapping_mul(right),
+                    WidthArithmetic::SaturatingAdd => left.saturating_add(right),
+                    WidthArithmetic::SaturatingSub => left.saturating_sub(right),
+                    WidthArithmetic::SaturatingMul => left.saturating_mul(right),
+                };
+                Self::from_typed_signed(result as i128, kind)
+            }};
+        }
+        macro_rules! unsigned {
+            ($native:ty) => {{
+                let left = <$native>::try_from(self.as_nonnegative_u128()?).ok()?;
+                let right = <$native>::try_from(rhs.as_nonnegative_u128()?).ok()?;
+                let result = match operation {
+                    WidthArithmetic::WrappingAdd => left.wrapping_add(right),
+                    WidthArithmetic::WrappingSub => left.wrapping_sub(right),
+                    WidthArithmetic::WrappingMul => left.wrapping_mul(right),
+                    WidthArithmetic::SaturatingAdd => left.saturating_add(right),
+                    WidthArithmetic::SaturatingSub => left.saturating_sub(right),
+                    WidthArithmetic::SaturatingMul => left.saturating_mul(right),
+                };
+                Self::from_typed_unsigned(result as u128, kind)
+            }};
+        }
+        match kind {
+            IntegerKind::Int8 => signed!(i8),
+            IntegerKind::Int16 => signed!(i16),
+            IntegerKind::Int32 => signed!(i32),
+            IntegerKind::Int64 => signed!(i64),
+            IntegerKind::Int128 => signed!(i128),
+            IntegerKind::IntSize => signed!(isize),
+            IntegerKind::Uint8 => unsigned!(u8),
+            IntegerKind::Uint16 => unsigned!(u16),
+            IntegerKind::Uint32 => unsigned!(u32),
+            IntegerKind::Uint64 => unsigned!(u64),
+            IntegerKind::Uint128 => unsigned!(u128),
+            IntegerKind::UintSize => unsigned!(usize),
+        }
+    }
+
+    fn as_nonnegative_u128(self) -> Option<u128> {
+        match self.representation {
+            IntegerRepresentation::Signed(value) => u128::try_from(value).ok(),
+            IntegerRepresentation::Unsigned(value) => Some(value),
+        }
     }
 
     fn combine_signed_magnitudes(

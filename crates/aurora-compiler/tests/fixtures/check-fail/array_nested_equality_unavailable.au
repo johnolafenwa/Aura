@@ -1,0 +1,4 @@
+def main():
+    left: Vec[Array[int32]] = [Array[int32].zeros([1])]
+    right: Vec[Array[int32]] = [Array[int32].zeros([1])]
+    print(left == right)

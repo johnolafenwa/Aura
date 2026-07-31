@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import stat
 import tempfile
 import textwrap
@@ -27,6 +28,28 @@ REQUIRED_SECTIONS = (
 
 
 class ReferenceIntegrityTests(unittest.TestCase):
+    def test_cli_tooling_registry_matches_the_complete_diagnostic_code_table(
+        self,
+    ) -> None:
+        root = Path(__file__).resolve().parent.parent
+        diagnostics = (root / "docs/manual/diagnostics.md").read_text(
+            encoding="utf-8"
+        )
+        cli = (root / "docs/manual/cli-and-tooling.md").read_text(encoding="utf-8")
+        canonical_table = diagnostics.split("| Band |", 1)[1].split("\n\n", 1)[0]
+        cli_registry = cli.split(
+            "Compiler-backed commands can surface the complete append-only registry.",
+            1,
+        )[1].split(
+            "The structured schema is defined in [Diagnostics](/manual/diagnostics).",
+            1,
+        )[0]
+
+        self.assertEqual(
+            set(re.findall(r"\bAU\d{4}\b", cli_registry)),
+            set(re.findall(r"\bAU\d{4}\b", canonical_table)),
+        )
+
     def test_default_cli_resolution_rebuilds_before_using_existing_binary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

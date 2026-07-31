@@ -1,0 +1,5 @@
+error[AU2002]: `Array.full` expects `int32` for `value`, found `int64`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/array_full_requires_matching_value.au:3:42
+  |
+3 |     array = Array[int32].full(shape=[1], value=value)
+  |                                          ^

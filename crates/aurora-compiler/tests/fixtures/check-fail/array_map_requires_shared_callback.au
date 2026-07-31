@@ -1,0 +1,7 @@
+def mutate(value: mut int32) -> int32:
+    return value
+
+def main():
+    values = Array[int32].zeros(shape=[1])
+    mapped = values.map[int32](f=mutate)
+    print(mapped)

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'echo "reference check failed: $BASH_COMMAND" >&2' ERR
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
@@ -14,6 +15,7 @@ required_pages=(
   tuples
   bytes
   json
+  numeric-arrays
   randomness
   diagnostics
   conformance
@@ -40,6 +42,7 @@ grep -Fq 'postfix-expression' docs/manual/grammar.md
 grep -Fq 'left-to-right' docs/manual/execution-model.md
 grep -Fq 'compiler fixtures' docs/manual/conformance.md
 grep -Fq 'MUST' docs/manual/language-specification.md
+grep -Fq '`AU4006` means invalid runtime configuration; and `AU4007` means a numeric Array shape or reduction violation.' docs/manual/cli-and-tooling.md
 grep -Fq '`int` is an alias for `int64`' docs/manual/types.md
 grep -Fq 'contracts remain `int32`, including `main()` exit statuses' docs/manual/types.md
 grep -Fq 'otherwise the literal defaults to `int64`' docs/manual/lexical-structure.md
@@ -946,6 +949,64 @@ if rg -n 'slicing waits for Phase 7|slice surface is reserved for Phase 7|Collec
   docs/learn \
   tutorials; then
   echo "maintained reference still describes implemented owned slicing as future work" >&2
+  exit 1
+fi
+
+# Phase 7.3: Accepted ADR-0041 keeps the exact contiguous numeric Array and
+# explicit integer arithmetic-mode contract synchronized with the maintained
+# reference, teaching track, editor regression surface, example, and benchmark
+# evidence protocol.
+test -s architecture_docs/decisions/0041-contiguous-numeric-arrays.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0041-contiguous-numeric-arrays.md
+grep -Fq '0041-contiguous-numeric-arrays.md) — Accepted for Aurora 0.2 in Batch 6, Phase 7.3' architecture_docs/decisions/README.md
+grep -Fq 'array [ expression { , expression } ]' docs/manual/numeric-arrays.md
+grep -Fq 'copies its scalar elements, and leaves the' docs/manual/numeric-arrays.md
+grep -Fq 'shared source Vec usable' docs/manual/numeric-arrays.md
+grep -Fq 'method `set`, direct indexed read, and direct indexed assignment' docs/manual/numeric-arrays.md
+grep -Fq '`Some(old_value)` on success and traps on an invalid coordinate or rank.' docs/manual/expressions.md
+grep -Fq 'Floating reductions visit elements' docs/manual/numeric-arrays.md
+grep -Fq 'left to right with deterministic dtype rounding and propagate NaN.' docs/manual/numeric-arrays.md
+grep -Fq '`Array[T]` is non-Copy and cloneable.' docs/manual/numeric-arrays.md
+grep -Fq 'always structurally `Transfer`' docs/manual/numeric-arrays.md
+grep -Fq '`AU4005` reports shape-product/element-count overflow and allocation failure.' docs/manual/numeric-arrays.md
+grep -Fq '`AU4002` reports checked integer Array arithmetic overflow.' docs/manual/numeric-arrays.md
+grep -Fq '`AU4004` reports floating Array division when any divisor is zero.' docs/manual/numeric-arrays.md
+grep -Fq '`AU4007` (`numeric array shape or reduction violation`) reports:' docs/manual/numeric-arrays.md
+grep -Fq 'Accepted ADR-0041 contiguous numeric Arrays and explicit integer modes' docs/manual/conformance.md
+grep -Fq '`AU4002` checked Array overflow and `AU4004` floating Array zero-divisor failures' docs/manual/conformance.md
+grep -Fq 'error[AU4002]: array addition overflowed at flat index 0' \
+  crates/aurora-compiler/tests/fixtures/run-fail/array_checked_overflow.diag
+grep -Fq 'error[AU4004]: array division has a zero divisor at flat index 0' \
+  crates/aurora-compiler/tests/fixtures/run-fail/array_division_by_zero.diag
+grep -Fq 'Phase 7.3 adds global contiguous `Array[T]` values under Accepted ADR-0041.' docs/manual/status-and-compatibility.md
+test -s examples/numbers/numeric_arrays.au
+grep -Fq 'Array[int32].from_vec' examples/numbers/numeric_arrays.au
+grep -Fq '`numeric_arrays.au`' examples/README.md
+grep -Fq 'examples/numbers/numeric_arrays.au' README.md
+grep -Fq 'examples/numbers/numeric_arrays.au' tutorials/02-bindings-and-types.md
+grep -Fq 'owned contiguous numeric `Array[T]` values' tutorials/README.md
+grep -Fq 'compiler bridge exposes the global numeric Array surface and result types' tools/aurora-language-server/test/compiler_bridge.test.js
+grep -Fq 'bundled language server preserves numeric Array hover completion and diagnostics' tools/vscode-aurora/test/server_protocol.test.js
+grep -Fq 'names.includes("Array")' tools/aurora-language-server/test/recovery.test.js
+grep -Fq '"Array",' tools/vscode-aurora/test/package.test.js
+test -s benchmarks/numeric_arrays/README.md
+test -s benchmarks/numeric_arrays/numpy_reference.py
+test -s benchmarks/numeric_arrays/float64_add.au
+test -s benchmarks/numeric_arrays/float64_sum.au
+test -s scripts/bench-numeric-arrays.py
+test -s scripts/test_bench_numeric_arrays.py
+grep -Fq '"bench:numeric-arrays"' package.json
+grep -Fq '"test:bench-numeric-arrays"' package.json
+grep -Fq 'performance gate and not a general claim' benchmarks/numeric_arrays/README.md
+grep -Fq '`scripts/benchmark_process.py`, which owns process-group launch,' benchmarks/numeric_arrays/README.md
+grep -Fq 'process that remains at or above 50% CPU in two snapshots 0.25 seconds apart,' benchmarks/numeric_arrays/README.md
+python3 -m unittest scripts/test_bench_numeric_arrays.py
+
+if rg -n '\bSIMD\b' \
+  architecture_docs/decisions/0041-contiguous-numeric-arrays.md \
+  docs/manual/numeric-arrays.md \
+  benchmarks/numeric_arrays/README.md; then
+  echo "Phase 7.3 docs claim an unratified SIMD implementation detail" >&2
   exit 1
 fi
 

@@ -39,6 +39,7 @@ const KEYWORDS = [
 ];
 
 const BUILTINS = [
+  "Array",
   "Map",
   "Option",
   "Queue",

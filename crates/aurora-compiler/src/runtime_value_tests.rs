@@ -19,17 +19,579 @@ use super::{
     validate_requested_read_size, validate_retry_runtime_policy, wait_all_cancelled,
     wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
     wait_any_ready, wait_any_timed_out, wait_condvar, wait_for_runtime_scheduler,
-    wait_timeout_condvar, BlockingIoPool, CancellationContext, ChannelValue, ClosureCaptureValue,
-    ClosureEnvironment, EnumVariantValue, FfiHandleValue, FileValue, FunctionValue,
-    HttpListenerValue, HttpResponseValue, LightweightTaskFailureSignal, MapValue,
-    ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
-    ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus,
-    RangeValue, ReactorSubscription, RecvValueResult, RngValue, SetValue, TaskCancelledSignal,
-    TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
-    TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue,
-    WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
+    wait_timeout_condvar, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayStorage, ArrayValue,
+    BlockingIoPool, CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment,
+    EnumVariantValue, FfiHandleValue, FileValue, FunctionValue, HttpListenerValue,
+    HttpResponseValue, InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal,
+    MapValue, ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus,
+    ProcessCompletedValue, ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue,
+    ProcessSupervisorWaitStatus, RangeValue, ReactorSubscription, RecvValueResult, RngValue,
+    SetValue, TaskCancelledSignal, TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus,
+    TcpListenerValue, TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue,
+    Value, VecValue, WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
+
+#[test]
+fn dense_arrays_validate_shape_storage_and_deep_clone() {
+    let array = ArrayValue::new(
+        vec![2, 2].into_boxed_slice(),
+        ArrayStorage::Int32(vec![1, 2, 3, 4].into_boxed_slice()),
+    )
+    .expect("matching row-major shape and storage should be accepted");
+    assert_eq!(array.dtype(), ArrayDType::Int32);
+    assert_eq!(array.element_type(), Type::named("int32"));
+    assert_eq!(array.rank(), 2);
+    assert_eq!(array.len(), 4);
+    assert_eq!(
+        Value::Array(array.clone()).render(),
+        "Array[int32](shape=[2, 2], values=[1, 2, 3, 4])"
+    );
+
+    let cloned = array.clone();
+    let (ArrayStorage::Int32(source), ArrayStorage::Int32(copy)) =
+        (&array.storage, &cloned.storage)
+    else {
+        panic!("test arrays should retain int32 storage");
+    };
+    assert_ne!(
+        source.as_ptr(),
+        copy.as_ptr(),
+        "array clones must own independent contiguous buffers"
+    );
+    assert_eq!(array, cloned);
+
+    let fallible_clone = array
+        .try_clone()
+        .expect("explicit Array clones should use fallible storage copies");
+    let (ArrayStorage::Int32(source), ArrayStorage::Int32(copy)) =
+        (&array.storage, &fallible_clone.storage)
+    else {
+        panic!("test arrays should retain int32 storage");
+    };
+    assert_ne!(source.as_ptr(), copy.as_ptr());
+    assert_ne!(array.shape.as_ptr(), fallible_clone.shape.as_ptr());
+
+    for allocation_budget in [0, 1] {
+        let clone_error =
+            super::with_array_allocation_budget(allocation_budget, || array.try_clone())
+                .expect_err("shape and storage allocation failures must remain recoverable");
+        assert_eq!(clone_error.code, "AU4005");
+    }
+    let shape_error = super::with_array_allocation_budget(0, || array.shape_value())
+        .expect_err("shape materialization allocation failures must remain recoverable");
+    assert_eq!(shape_error.code, "AU4005");
+
+    let rank_error = ArrayValue::new(
+        Vec::new().into_boxed_slice(),
+        ArrayStorage::Float64(vec![1.0].into_boxed_slice()),
+    )
+    .expect_err("rank-zero arrays are outside the Phase 7.3 surface");
+    assert_eq!(rank_error.code, "AU4007");
+
+    let shape_error = ArrayValue::new(
+        vec![2, 3].into_boxed_slice(),
+        ArrayStorage::Int64(vec![1, 2].into_boxed_slice()),
+    )
+    .expect_err("shape products must exactly match storage");
+    assert_eq!(shape_error.code, "AU4007");
+
+    let product_error = ArrayValue::new(
+        vec![usize::MAX, 2].into_boxed_slice(),
+        ArrayStorage::Float32(Vec::new().into_boxed_slice()),
+    )
+    .expect_err("shape products must be checked");
+    assert_eq!(product_error.code, "AU4005");
+
+    ArrayValue::new(
+        vec![i64::MAX as usize, 2, 0].into_boxed_slice(),
+        ArrayStorage::Float32(Vec::new().into_boxed_slice()),
+    )
+    .expect("a zero dimension makes the checked row-major product zero regardless of axis order");
+
+    let dimension_error = ArrayValue::new(
+        vec![i64::MAX as usize + 1, 0].into_boxed_slice(),
+        ArrayStorage::Float32(Vec::new().into_boxed_slice()),
+    )
+    .expect_err("every public shape dimension must fit the int64 shape surface");
+    assert_eq!(dimension_error.code, "AU4005");
+
+    let allocation_error = ArrayValue::zeros(
+        ArrayDType::Float64,
+        vec![i64::MAX as usize].into_boxed_slice(),
+    )
+    .expect_err("impossible host capacities must return AU4005 without attempting an OOM");
+    assert_eq!(allocation_error.code, "AU4005");
+}
+
+#[test]
+fn dense_arrays_copy_vec_inputs_normalize_coordinates_and_slice_the_first_axis() {
+    let source = VecValue {
+        element_type: Type::named("int32"),
+        elements: (0..6)
+            .map(|value| Value::Int(IntegerValue::from_i32(value)))
+            .collect(),
+    };
+    let array = ArrayValue::from_vec(&source, Some(&[2, 3]))
+        .expect("typed Vec input should copy into dense storage");
+    assert_eq!(
+        array
+            .get(&[0, -1])
+            .expect("negative coordinate should normalize once"),
+        Value::Int(IntegerValue::from_i32(2))
+    );
+    assert_eq!(
+        array
+            .get(&[-1, 0])
+            .expect("negative first-axis coordinate should work"),
+        Value::Int(IntegerValue::from_i32(3))
+    );
+    let coordinate_error = array
+        .get(&[-3, 0])
+        .expect_err("coordinates below -len must not clamp");
+    assert_eq!(coordinate_error.code, "AU4003");
+    assert_eq!(
+        array
+            .get_optional(&[-3, 0])
+            .expect("optional lookup should retain a valid-rank query"),
+        None,
+        "Array.get maps coordinate bounds errors to None"
+    );
+    let rank_error = array
+        .get(&[0])
+        .expect_err("coordinate count must equal rank");
+    assert_eq!(rank_error.code, "AU4007");
+    assert_eq!(
+        array
+            .get_optional(&[0])
+            .expect("Array.get must map a rank mismatch to an absent optional value"),
+        None
+    );
+    let mut rejected_update = array.clone();
+    assert_eq!(
+        rejected_update
+            .set(&[-3, 0], Value::Int(IntegerValue::from_i32(9)))
+            .expect_err("Array.set must trap rather than clamp invalid coordinates")
+            .code,
+        "AU4003"
+    );
+    assert_eq!(
+        rejected_update, array,
+        "a failed Array.set must not expose a partial mutation"
+    );
+
+    let tail = array
+        .slice_first_axis(Some(-1), None)
+        .expect("first-axis slices should normalize like Vec slices");
+    assert_eq!(tail.shape.as_ref(), &[1, 3]);
+    assert_eq!(
+        tail,
+        ArrayValue::new(
+            vec![1, 3].into_boxed_slice(),
+            ArrayStorage::Int32(vec![3, 4, 5].into_boxed_slice()),
+        )
+        .unwrap()
+    );
+    let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(tail_storage)) =
+        (&array.storage, &tail.storage)
+    else {
+        panic!("test arrays should retain int32 storage");
+    };
+    assert_ne!(source_storage.as_ptr(), tail_storage.as_ptr());
+
+    let mut updated = array.clone();
+    let previous = updated
+        .set(&[0, 1], Value::Int(IntegerValue::from_i32(20)))
+        .expect("set should retain dtype and return the previous scalar");
+    assert_eq!(previous, Value::Int(IntegerValue::from_i32(1)));
+    updated
+        .fill(Value::Int(IntegerValue::from_i32(-4)))
+        .expect("fill should update every scalar without changing shape");
+    assert_eq!(
+        updated,
+        ArrayValue::new(
+            vec![2, 3].into_boxed_slice(),
+            ArrayStorage::Int32(vec![-4; 6].into_boxed_slice()),
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        source.elements[1],
+        Value::Int(IntegerValue::from_i32(1)),
+        "constructing and mutating an Array must not alter its Vec source"
+    );
+}
+
+#[test]
+fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
+    let malformed_source = VecValue {
+        element_type: Type::named("int32"),
+        elements: vec![Value::Int(IntegerValue::from_i64(7))],
+    };
+
+    let rank_error = super::with_array_allocation_budget(0, || {
+        ArrayValue::from_vec(&malformed_source, Some(&[]))
+    })
+    .expect_err("rank-zero from_vec shapes must fail before any allocation");
+    assert_eq!(rank_error.code, "AU4007");
+    assert_eq!(rank_error.message, "array rank must be at least one");
+
+    let count_error = super::with_array_allocation_budget(0, || {
+        ArrayValue::from_vec(&malformed_source, Some(&[2]))
+    })
+    .expect_err("shape/count mismatches must precede allocation and element conversion");
+    assert_eq!(count_error.code, "AU4007");
+    assert_eq!(
+        count_error.message,
+        "array shape [2] requires 2 values, but storage contains 1"
+    );
+
+    let valid_allocation_error = super::with_array_allocation_budget(0, || {
+        ArrayValue::from_vec(&malformed_source, Some(&[1]))
+    })
+    .expect_err("a valid shape should proceed to fallible allocation");
+    assert_eq!(valid_allocation_error.code, "AU4005");
+    assert_eq!(
+        valid_allocation_error.message,
+        "Array.from_vec shape could not allocate storage for 1 array elements"
+    );
+
+    let conversion_error = ArrayValue::from_vec(&malformed_source, Some(&[1]))
+        .expect_err("valid shapes should proceed to exact-dtype element conversion");
+    assert_eq!(conversion_error.code, "AU4007");
+    assert_eq!(
+        conversion_error.message,
+        "array int32 storage requires int32 scalar at flat index 0, found 7"
+    );
+}
+
+#[test]
+fn array_containing_language_copies_are_recursive_independent_and_fallible() {
+    fn source_array() -> Value {
+        Value::Array(
+            ArrayValue::new(
+                vec![2].into_boxed_slice(),
+                ArrayStorage::Int32(vec![4, 9].into_boxed_slice()),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn nested_array(value: &Value) -> &ArrayValue {
+        match value {
+            Value::Array(array) => array,
+            Value::Vec(vector) => nested_array(&vector.elements[0]),
+            Value::Set(set) => nested_array(&set.elements[0]),
+            Value::Tuple(tuple) => nested_array(&tuple.elements[0]),
+            Value::Map(map) => nested_array(&map.entries[0].1),
+            Value::Instance(instance) => nested_array(
+                instance
+                    .fields
+                    .values()
+                    .next()
+                    .expect("test instance should have one field"),
+            ),
+            Value::EnumVariant(variant) => nested_array(&variant.payloads[0]),
+            other => panic!("expected an Array-containing value, found {other:?}"),
+        }
+    }
+
+    let array_type = Type::Named("Array".to_string(), vec![Type::named("int32")]);
+    let cases = [
+        Value::Vec(VecValue {
+            element_type: array_type.clone(),
+            elements: vec![source_array()],
+        }),
+        Value::Tuple(TupleValue {
+            element_types: vec![array_type.clone()],
+            elements: vec![source_array()],
+        }),
+        Value::Map(MapValue {
+            key_type: Type::named("String"),
+            value_type: array_type.clone(),
+            entries: vec![(Value::String("values".to_string()), source_array())],
+        }),
+        Value::Set(SetValue {
+            element_type: array_type.clone(),
+            elements: vec![source_array()],
+        }),
+        Value::Map(MapValue {
+            key_type: array_type.clone(),
+            value_type: array_type.clone(),
+            entries: vec![(source_array(), source_array())],
+        }),
+        Value::Instance(InstanceValue {
+            class_name: "ArrayBox".to_string(),
+            fields: BTreeMap::from([("values".to_string(), source_array())]),
+        }),
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "Option".to_string(),
+            variant_name: "Some".to_string(),
+            payloads: vec![source_array()],
+        }),
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "Result".to_string(),
+            variant_name: "Ok".to_string(),
+            payloads: vec![source_array()],
+        }),
+    ];
+
+    for source in cases {
+        let copy = super::try_clone_array_containing_value(&source)
+            .expect("reachable Array-containing language containers should clone recursively");
+        assert_ne!(
+            nested_array(&source).shape.as_ptr(),
+            nested_array(&copy).shape.as_ptr()
+        );
+        let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(copy_storage)) =
+            (&nested_array(&source).storage, &nested_array(&copy).storage)
+        else {
+            panic!("test arrays should retain int32 storage");
+        };
+        assert_ne!(source_storage.as_ptr(), copy_storage.as_ptr());
+
+        let error = super::with_array_allocation_budget(0, || {
+            super::try_clone_array_containing_value(&source)
+        })
+        .expect_err("container allocation failures should be recoverable");
+        assert_eq!(error.code, "AU4005");
+    }
+
+    let vector = VecValue {
+        element_type: array_type,
+        elements: vec![source_array()],
+    };
+    let slice = super::slice_vec_owned(&vector, None, None)
+        .expect("Vec[Array[T]] slices should deep-copy Array elements");
+    assert_ne!(
+        nested_array(&vector.elements[0]).shape.as_ptr(),
+        nested_array(&slice.elements[0]).shape.as_ptr()
+    );
+    let nested_error =
+        super::with_array_allocation_budget(1, || super::slice_vec_owned(&vector, None, None))
+            .expect_err(
+                "a nested Array allocation failure after Vec reservation must return AU4005",
+            );
+    assert_eq!(nested_error.code, "AU4005");
+}
+
+#[test]
+fn dense_array_kernels_cover_checked_arithmetic_broadcast_and_modes() {
+    let left = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Int32(vec![i32::MAX, -2].into_boxed_slice()),
+    )
+    .unwrap();
+    let right = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Int32(vec![1, 3].into_boxed_slice()),
+    )
+    .unwrap();
+    let overflow = left
+        .binary(&right, ArrayBinaryOp::Add, IntegerArithmeticMode::Checked)
+        .expect_err("checked integer kernels must trap before exposing output");
+    assert_eq!(overflow.code, "AU4002");
+    assert!(overflow.message.contains("flat index 0"));
+
+    assert_eq!(
+        left.binary(&right, ArrayBinaryOp::Add, IntegerArithmeticMode::Wrapping)
+            .unwrap(),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Int32(vec![i32::MIN, 1].into_boxed_slice()),
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        left.binary(
+            &right,
+            ArrayBinaryOp::Add,
+            IntegerArithmeticMode::Saturating
+        )
+        .unwrap(),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Int32(vec![i32::MAX, 1].into_boxed_slice()),
+        )
+        .unwrap()
+    );
+
+    let floats = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Float32(vec![2.0, 4.0].into_boxed_slice()),
+    )
+    .unwrap();
+    assert_eq!(
+        floats
+            .scalar_binary(
+                &Value::Float(2.0),
+                false,
+                ArrayBinaryOp::Div,
+                IntegerArithmeticMode::Checked,
+            )
+            .unwrap(),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Float32(vec![1.0, 2.0].into_boxed_slice()),
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        floats
+            .scalar_binary(
+                &Value::Float(8.0),
+                true,
+                ArrayBinaryOp::Sub,
+                IntegerArithmeticMode::Checked,
+            )
+            .unwrap(),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Float32(vec![6.0, 4.0].into_boxed_slice()),
+        )
+        .unwrap()
+    );
+    let zero = floats
+        .scalar_binary(
+            &Value::Float(0.0),
+            false,
+            ArrayBinaryOp::Div,
+            IntegerArithmeticMode::Checked,
+        )
+        .expect_err("float division by zero must retain scalar diagnostics");
+    assert_eq!(zero.code, "AU4004");
+
+    let invalid_mode = floats
+        .scalar_binary(
+            &Value::Float(1.0),
+            false,
+            ArrayBinaryOp::Add,
+            IntegerArithmeticMode::Wrapping,
+        )
+        .expect_err("defensive runtime mode validation should reject wrapping floats");
+    assert_eq!(invalid_mode.code, "AU4001");
+
+    let invalid_division = left
+        .scalar_binary(
+            &Value::Int(IntegerValue::from_i32(1)),
+            false,
+            ArrayBinaryOp::Div,
+            IntegerArithmeticMode::Checked,
+        )
+        .expect_err("defensive runtime operation validation should reject integer division");
+    assert_eq!(invalid_division.code, "AU4001");
+
+    let shape_error = left
+        .binary(
+            &ArrayValue::new(
+                vec![1, 2].into_boxed_slice(),
+                ArrayStorage::Int32(vec![1, 2].into_boxed_slice()),
+            )
+            .unwrap(),
+            ArrayBinaryOp::Sub,
+            IntegerArithmeticMode::Checked,
+        )
+        .expect_err("equal lengths do not make unequal shapes broadcast-compatible");
+    assert_eq!(shape_error.code, "AU4007");
+}
+
+#[test]
+fn dense_array_reductions_define_empty_and_dtype_behavior() {
+    let ints = ArrayValue::new(
+        vec![2, 2].into_boxed_slice(),
+        ArrayStorage::Int64(vec![4, -2, 7, 1].into_boxed_slice()),
+    )
+    .unwrap();
+    assert_eq!(
+        ints.reduce(ArrayReduction::Sum).unwrap(),
+        Value::Int(IntegerValue::from_i64(10))
+    );
+    assert_eq!(
+        ints.reduce(ArrayReduction::Min).unwrap(),
+        Value::Int(IntegerValue::from_i64(-2))
+    );
+    assert_eq!(
+        ints.reduce(ArrayReduction::Max).unwrap(),
+        Value::Int(IntegerValue::from_i64(7))
+    );
+    assert_eq!(
+        ints.reduce(ArrayReduction::Mean).unwrap(),
+        Value::Float(2.5)
+    );
+
+    let empty = ArrayValue::new(
+        vec![0].into_boxed_slice(),
+        ArrayStorage::Int32(Vec::new().into_boxed_slice()),
+    )
+    .unwrap();
+    assert_eq!(
+        empty.reduce(ArrayReduction::Sum).unwrap(),
+        Value::Int(IntegerValue::from_i32(0))
+    );
+    for reduction in [
+        ArrayReduction::Min,
+        ArrayReduction::Max,
+        ArrayReduction::Mean,
+    ] {
+        let error = empty
+            .reduce(reduction)
+            .expect_err("empty non-identity reductions must be rejected");
+        assert_eq!(error.code, "AU4007");
+    }
+
+    let overflow = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Int32(vec![i32::MAX, 1].into_boxed_slice()),
+    )
+    .unwrap()
+    .reduce(ArrayReduction::Sum)
+    .expect_err("integer sum must retain checked arithmetic");
+    assert_eq!(overflow.code, "AU4002");
+    assert!(overflow.message.contains("flat index 1"));
+
+    let wide_mean = ArrayValue::new(
+        vec![2].into_boxed_slice(),
+        ArrayStorage::Int32(vec![i32::MAX, i32::MAX].into_boxed_slice()),
+    )
+    .unwrap();
+    assert_eq!(
+        wide_mean.reduce(ArrayReduction::Mean).unwrap(),
+        Value::Float(i32::MAX as f64),
+        "mean must accumulate independently in f64 instead of overflowing a same-dtype sum"
+    );
+
+    let rounded_sum = ArrayValue::new(
+        vec![3].into_boxed_slice(),
+        ArrayStorage::Float32(vec![16_777_216.0, 1.0, -16_777_216.0].into_boxed_slice()),
+    )
+    .unwrap();
+    assert_eq!(
+        rounded_sum.reduce(ArrayReduction::Sum).unwrap(),
+        Value::Float(0.0),
+        "float32 sum must preserve left-to-right float32 rounding"
+    );
+
+    for storage in [
+        ArrayStorage::Float32(vec![1.0, f32::NAN, -2.0].into_boxed_slice()),
+        ArrayStorage::Float64(vec![1.0, f64::NAN, -2.0].into_boxed_slice()),
+    ] {
+        let array = ArrayValue::new(vec![3].into_boxed_slice(), storage).unwrap();
+        for reduction in [
+            ArrayReduction::Sum,
+            ArrayReduction::Min,
+            ArrayReduction::Max,
+            ArrayReduction::Mean,
+        ] {
+            let Value::Float(result) = array.reduce(reduction).unwrap() else {
+                panic!("floating reductions must return floating scalars");
+            };
+            assert!(
+                result.is_nan(),
+                "{reduction:?} must propagate NaN explicitly"
+            );
+        }
+    }
+}
 
 #[test]
 fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() {

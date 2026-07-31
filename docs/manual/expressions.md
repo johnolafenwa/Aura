@@ -209,6 +209,13 @@ Built-in arithmetic supports equal integer types or equal floating-point types. 
 | `<`, `<=`, `>`, `>=` | `bool` for equal numeric types or two Duration values |
 | `in`, `not in` | `bool` for a supported container |
 
+`Array[T]` adds exact-shape elementwise `+`, `-`, and `*` for the four
+maintained numeric dtypes. A same-dtype scalar may appear on either side.
+Floating Arrays also support `/`; integer Array `/` remains the same
+`AU2003` static error as scalar integer `/`. Every result is a fresh Array.
+There is no broadcasting or mixed promotion. See
+[Numeric Arrays](/manual/numeric-arrays).
+
 For tuple operands, `==` and `!=` require exactly the same static tuple type.
 They compare corresponding element values from left to right using ordinary
 equality, recursively for nested tuples. The comparison reads both complete
@@ -255,6 +262,12 @@ rounded = left.to_float() # 9007199254740992.0
 
 Use this method when rounding into the floating domain is intentional. An explicit integer `as float32` or `as float64` cast has the stricter exactness contract below.
 
+Every scalar integer type also provides exact-width `wrapping_add`,
+`wrapping_sub`, `wrapping_mul`, `saturating_add`, `saturating_sub`, and
+`saturating_mul`. `Array[int32]` and `Array[int64]` provide the same named
+operations with a same-dtype scalar or exact-shape Array right operand.
+Ordinary `+`, `-`, and `*` remain checked.
+
 Duration arithmetic operates on the exact signed nanosecond representation.
 Addition, subtraction, and multiplication are checked. `Duration // int64`
 rounds the signed nanosecond quotient toward negative infinity; a zero divisor
@@ -270,9 +283,8 @@ remember that negative values are not valid host waits.
 
 `len(value)` delegates to the value's own `len()` member and produces `int64`.
 Every type that provides `len()` is accepted — `String`, `Vec[T]`, `Map[K, V]`,
-and `Set[T]` in Aurora 0.1 — and a value without that member is rejected with
-`AU2002`. `String.len()`, `Vec[T].len()`, `Map[K, V].len()`, and
-`Set[T].len()` also produce `int64`, so `len(value)` and `value.len()` have the
+`Set[T]`, and `Array[T]` — and a value without that member is rejected with
+`AU2002`. Their `len()` members also produce `int64`, so `len(value)` and `value.len()` have the
 same static type and value. `String.byte_len()` likewise produces `int64`, but
 counts UTF-8 bytes rather than the Unicode scalar values counted by
 `String.len()`. Neither `len` spelling changes ownership, because `len()`
@@ -463,11 +475,13 @@ Visibility and resolution are static. Missing or private members are compile-tim
 
 ## Indexing
 
-`base[index]` evaluates the base, then the index. Direct indexing supports vectors and maps under the maintained static rules:
+`base[index]` evaluates the base, then the index. Direct indexing supports
+vectors, maps, and numeric Arrays under the maintained static rules:
 
 ```python
 values[0]
 counts["ready"]
+matrix[1, 2]
 ```
 
 Vector indices have exactly type `int32`. Non-negative indexes are zero-based;
@@ -481,6 +495,13 @@ only when the map value type is copyable. For a non-copy value, use `get(key)`
 for an explicit cloned optional read only when the value type is clone-safe;
 use `remove(key)` to transfer any stored value, including one that contains
 `random.Rng`. A missing key in a direct read is a runtime `AU4003` lookup violation.
+
+An `Array[T]` index has one exact `int32` coordinate per runtime axis.
+Coordinates evaluate left to right and negative values normalize once against
+their own axis. A direct out-of-range coordinate is `AU4003`; a direct
+coordinate-count/rank mismatch is `AU4007`. `get(Vec[int32])` returns `None`
+for an invalid coordinate or rank. Mutable `set(Vec[int32], value)` returns
+`Some(old_value)` on success and traps on an invalid coordinate or rank.
 
 A direct vector read of a copy element returns the value. Moving a non-copy
 vector element by direct indexing is restricted; use `get(index)` when the
@@ -497,14 +518,15 @@ Exact UTF-8 conversion is available through `text.to_bytes()` and
 ## Slicing
 
 `base[start:end]` selects the half-open range from start inclusive to end
-exclusive. Slicing is defined only for `Vec[T]` and `String`, and always
-returns a fresh owned value of the same type:
+exclusive. Slicing is defined for `Vec[T]`, `String`, and `Array[T]`, and
+always returns a fresh owned value of the same type:
 
     middle = values[1:3]
     prefix = values[:2]
     suffix = values[-2:]
     all_values = values[:]
     scalars = "A🎉Z"[1:2]
+    first_rows = matrix[0:2]
 
 An omitted start means zero and an omitted end means the source length. Equal
 endpoints produce an empty result. Every written endpoint has exactly type
@@ -535,7 +557,13 @@ Integer `string[index]` remains unavailable.
 The base, written start, and written end are evaluated once from left to right.
 The selected non-Copy base remains retained through endpoint evaluation, so an
 endpoint may read it but cannot mutate or consume the overlapping source.
-Neither a Vec nor String slice is a place or a view.
+No Vec, String, or Array slice is a place or a view.
+
+An Array slice applies the range only to axis zero, copies complete rows, and
+retains all later dimensions. Its first result dimension is `end - start`.
+It follows the same exact-`int32`, one-time-negative-normalization,
+no-clamping, `AU4003`, owned-copy, no-step, and no-assignment rules. It is not
+a multidimensional slice or view.
 
 A second colon is reserved for future step syntax. `value[start:end:step]` and
 `value[::]` report `AU2005` with `slice steps are unavailable; use an explicit

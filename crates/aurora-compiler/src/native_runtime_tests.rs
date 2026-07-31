@@ -15,14 +15,14 @@ use crate::diag::{
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
-    run_lightweight_root_task, spawn_lightweight_task, CancellationContext, ChannelValue,
-    ClosureCaptureValue, ClosureEnvironment, EnumVariantValue, FileValue, FunctionValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, LightweightTaskFailureSignal, MapValue,
-    ModuleNamespaceValue, ProcessChildValue, ProcessCompletedValue, ProcessStdioConfig,
-    ProcessSupervisorValue, RangeValue, RngValue, SetValue, TaskCancelledSignal, TaskGroupValue,
-    TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
-    TupleValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
-    VecValue, WebSocketListenerValue, WebSocketValue,
+    run_lightweight_root_task, spawn_lightweight_task, ArrayStorage, ArrayValue,
+    CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
+    FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, InstanceValue,
+    LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
+    ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue, RangeValue, RngValue,
+    SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
+    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{FunctionParamContract, Type};
 #[cfg(unix)]
@@ -51,6 +51,309 @@ fn float_value(value: f64) -> *mut OpaqueValue {
 
 fn bool_value(value: bool) -> *mut OpaqueValue {
     super::aurora_direct_box_bool(i64::from(value))
+}
+
+fn integer_vector(kind: IntegerKind, values: &[i64]) -> *mut OpaqueValue {
+    boxed_value(Value::Vec(VecValue {
+        element_type: Type::named(kind.runtime_type_name()),
+        elements: values
+            .iter()
+            .map(|value| {
+                Value::Int(
+                    IntegerValue::from_typed_signed(i128::from(*value), kind)
+                        .expect("test vector element should fit"),
+                )
+            })
+            .collect(),
+    }))
+}
+
+unsafe extern "C-unwind" fn direct_array_double_thunk(
+    args: *const i64,
+    len: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(len, 1);
+    let argument = unsafe { *args } as *mut OpaqueValue;
+    let doubled = match unsafe { value_ref(argument) } {
+        Value::Int(value) => {
+            value
+                .as_i128()
+                .expect("array callback should receive a signed integer")
+                * 2
+        }
+        other => panic!("array callback expected an integer, found {other:?}"),
+    };
+    unsafe {
+        release_value(argument);
+    }
+    boxed_value(Value::Int(
+        IntegerValue::from_typed_signed(doubled, IntegerKind::Int32)
+            .expect("doubled test value should fit int32"),
+    ))
+}
+
+#[test]
+fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
+    let shape = integer_vector(IntegerKind::Int64, &[2, 2]);
+    let values = integer_vector(IntegerKind::Int32, &[1, 2, 3, 4]);
+    let array = super::aurora_direct_array_from_vec(0, values, shape, 3, 5);
+    assert_eq!(super::aurora_direct_array_len(array), 4);
+
+    let shape_value = super::aurora_direct_array_shape(array);
+    assert_eq!(
+        unsafe { take_value(shape_value) },
+        Value::Vec(VecValue {
+            element_type: Type::named("int64"),
+            elements: vec![
+                Value::Int(IntegerValue::from_i64(2)),
+                Value::Int(IntegerValue::from_i64(2)),
+            ],
+        })
+    );
+
+    let index = integer_vector(IntegerKind::Int32, &[0, -1]);
+    let indexed = super::aurora_direct_array_index(array, index, 7, 9);
+    assert_eq!(
+        unsafe { take_value(indexed) },
+        Value::Int(IntegerValue::from_i32(2))
+    );
+
+    let vector_shape = integer_vector(IntegerKind::Int64, &[4]);
+    let vector_values = integer_vector(IntegerKind::Int32, &[5, 6, 7, 8]);
+    let vector = super::aurora_direct_array_from_vec(0, vector_values, vector_shape, 7, 9);
+    let scalar_index = super::aurora_direct_box_i32(-1);
+    let scalar_indexed = super::aurora_direct_array_index(vector, scalar_index, 7, 9);
+    assert_eq!(
+        unsafe { take_value(scalar_indexed) },
+        Value::Int(IntegerValue::from_i32(8)),
+        "rank-one Array indexing lowers its single coordinate as a scalar int32"
+    );
+
+    let clone_count = super::direct_value_clone_count();
+    let scalar = super::aurora_direct_box_i32(10);
+    let added = super::aurora_direct_array_binary(array, scalar, 0, 0, 0, 11, 13);
+    assert_eq!(
+        super::direct_value_clone_count(),
+        clone_count,
+        "typed array arithmetic must borrow opaque operands instead of cloning dense buffers"
+    );
+    let self_added = super::aurora_direct_array_binary(array, array, 0, 0, 0, 11, 13);
+    assert_eq!(
+        unsafe { take_value(self_added) },
+        Value::Array(
+            ArrayValue::new(
+                vec![2, 2].into_boxed_slice(),
+                ArrayStorage::Int32(vec![2, 4, 6, 8].into_boxed_slice()),
+            )
+            .unwrap()
+        ),
+        "the same Array handle must be readable as both operands without recursive lock failure"
+    );
+    let left_scalar = super::aurora_direct_box_i32(10);
+    let scalar_minus_array = super::aurora_direct_array_binary(left_scalar, array, 1, 1, 0, 11, 13);
+    assert_eq!(
+        unsafe { take_value(scalar_minus_array) },
+        Value::Array(
+            ArrayValue::new(
+                vec![2, 2].into_boxed_slice(),
+                ArrayStorage::Int32(vec![9, 8, 7, 6].into_boxed_slice()),
+            )
+            .unwrap()
+        ),
+        "scalar-left subtraction must preserve operand order through the native ABI"
+    );
+    assert_eq!(
+        unsafe { take_value(added) },
+        Value::Array(
+            ArrayValue::new(
+                vec![2, 2].into_boxed_slice(),
+                ArrayStorage::Int32(vec![11, 12, 13, 14].into_boxed_slice()),
+            )
+            .unwrap()
+        )
+    );
+
+    let sum = super::aurora_direct_array_reduce(array, 0, 15, 17);
+    assert_eq!(
+        unsafe { take_value(sum) },
+        Value::Int(IntegerValue::from_i32(10))
+    );
+
+    let signature = Type::Function {
+        params: vec![FunctionParamContract {
+            name: "value".to_string(),
+            ty: Type::named("int32"),
+            passing: ReceiverKind::Value,
+            has_default: false,
+            default_erased: false,
+        }],
+        return_type: Box::new(Type::named("int32")),
+    };
+    let callback = boxed_value(Value::Function(Box::new(FunctionValue {
+        name: "double".to_string(),
+        signature,
+        source_path: Some("/workspace/array.au".to_string()),
+        entry_span: Span::new(1, 1),
+        direct_thunk: Some(direct_array_double_thunk as *const () as usize as i64),
+        direct_default_binder: Some(1),
+        closure_environment: None,
+    })));
+    let mapped = super::aurora_direct_array_map(array, callback, 0, 19, 21);
+    assert_eq!(
+        unsafe { take_value(mapped) },
+        Value::Array(
+            ArrayValue::new(
+                vec![2, 2].into_boxed_slice(),
+                ArrayStorage::Int32(vec![2, 4, 6, 8].into_boxed_slice()),
+            )
+            .unwrap()
+        )
+    );
+
+    for value in [
+        shape,
+        values,
+        array,
+        shape_value,
+        index,
+        indexed,
+        vector_shape,
+        vector_values,
+        vector,
+        scalar_index,
+        scalar_indexed,
+        scalar,
+        added,
+        self_added,
+        left_scalar,
+        scalar_minus_array,
+        sum,
+        callback,
+        mapped,
+    ] {
+        unsafe {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
+fn direct_array_kernel_failures_preserve_codes_and_source_spans() {
+    let shape = integer_vector(IntegerKind::Int64, &[2]);
+    let left_values = integer_vector(IntegerKind::Int32, &[1, 2]);
+    let left = super::aurora_direct_array_from_vec(0, left_values, shape, 1, 1);
+    let other_shape = integer_vector(IntegerKind::Int64, &[1, 2]);
+    let right_values = integer_vector(IntegerKind::Int32, &[1, 2]);
+    let right = super::aurora_direct_array_from_vec(0, right_values, other_shape, 1, 1);
+
+    let left_address = left as usize;
+    let right_address = right as usize;
+    let diagnostic = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_array_binary(
+                left_address as *mut OpaqueValue,
+                right_address as *mut OpaqueValue,
+                0,
+                1,
+                0,
+                23,
+                29,
+            );
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("mismatched Array shapes should fail the direct task");
+    assert_eq!(diagnostic.code, "AU4007");
+    assert_eq!(diagnostic.span, Some(Span::new(23, 29)));
+
+    for value in [shape, left_values, left, other_shape, right_values, right] {
+        unsafe {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
+fn direct_array_map_allocation_failure_is_au4005_with_source_span() {
+    let diagnostic = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::direct_array_map_result_buffer(usize::MAX, 31, 37);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("an impossible Array.map result allocation should trap");
+
+    assert_eq!(diagnostic.code, "AU4005");
+    assert_eq!(diagnostic.span, Some(Span::new(31, 37)));
+    assert!(
+        diagnostic
+            .message
+            .contains("Array.map result could not allocate storage"),
+        "unexpected allocation diagnostic: {}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn direct_array_clone_uses_fallible_storage_copy_and_preserves_span() {
+    let shape = integer_vector(IntegerKind::Int64, &[2]);
+    let values = integer_vector(IntegerKind::Int64, &[5, 6]);
+    let array = super::aurora_direct_array_from_vec(1, values, shape, 1, 1);
+    let cloned = super::aurora_direct_array_clone(array, 41, 43);
+    assert_eq!(
+        unsafe { take_value(cloned) },
+        unsafe { take_value(array) },
+        "the direct clone kernel must preserve Array dtype, shape, and values"
+    );
+    let source_storage = super::with_array(array, |array| match &array.storage {
+        ArrayStorage::Int64(values) => values.as_ptr(),
+        other => panic!("expected int64 source storage, found {other:?}"),
+    });
+    let cloned_storage = super::with_array(cloned, |array| match &array.storage {
+        ArrayStorage::Int64(values) => values.as_ptr(),
+        other => panic!("expected int64 cloned storage, found {other:?}"),
+    });
+    assert_ne!(
+        source_storage, cloned_storage,
+        "explicit Array.clone must own an independent contiguous buffer"
+    );
+
+    let array_address = array as usize;
+    let diagnostic = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            crate::runtime_value::with_array_allocation_budget(0, || {
+                let _ = super::aurora_direct_array_clone(array_address as *mut OpaqueValue, 41, 43);
+            });
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("injected direct Array.clone allocation failure should trap");
+    assert_eq!(diagnostic.code, "AU4005");
+    assert_eq!(diagnostic.span, Some(Span::new(41, 43)));
+    assert!(diagnostic
+        .message
+        .contains("Array shape could not allocate"));
+
+    let shape_diagnostic = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            crate::runtime_value::with_array_allocation_budget(0, || {
+                let _ = super::aurora_direct_array_shape(array_address as *mut OpaqueValue);
+            });
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("injected direct Array.shape allocation failure should trap");
+    assert_eq!(shape_diagnostic.code, "AU4005");
+    assert_eq!(shape_diagnostic.span, None);
+    assert!(shape_diagnostic
+        .message
+        .contains("Array.shape result could not allocate"));
+
+    for value in [shape, values, array, cloned] {
+        unsafe {
+            release_value(value);
+        }
+    }
 }
 
 fn direct_ffi_spec(

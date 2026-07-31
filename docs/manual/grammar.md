@@ -598,7 +598,7 @@ postfix-expression
       | numeric-cast-suffix } ;
 
 index-suffix
-    = "[", expression, "]"
+    = "[", expression, { ",", expression }, "]"
     | "[", [ expression ], ":", [ expression ], "]" ;
 member-suffix = ".", identifier ;
 call-suffix   = "(", [ argument, { ",", argument } ], ")" ;
@@ -623,11 +623,16 @@ operand evaluated at most once. `not a == b` means `not (a == b)`, because
 prefix `not` binds looser than the comparison level, while `a not in b` is one
 comparison operator. Casts bind more tightly than arithmetic.
 
+Comma-separated index expressions are accepted only for `Array[T]`, where
+one exact `int32` coordinate is required per runtime axis. Other indexable
+types retain one index expression.
+
 The one-colon bracket forms are owned slices. Each endpoint is optional, so
 `value[start:end]`, `value[:end]`, `value[start:]`, and `value[:]` all use the
-second `index-suffix` alternative. A second colon is reserved step syntax and
-is rejected with `AU2005`; it is not part of the accepted grammar. A slice
-suffix is an expression only and cannot be an assignment target.
+second `index-suffix` alternative. On `Array[T]`, the range copies the first
+axis. A second colon is reserved step syntax and is rejected with `AU2005`; it
+is not part of the accepted grammar. A slice suffix is an expression only and
+cannot be an assignment target.
 
 ## Primary Expressions And Literals
 

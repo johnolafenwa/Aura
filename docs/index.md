@@ -35,6 +35,11 @@ Three commitments shape every page of this book:
 2. **Failure has a type.** Operations that a caller might handle return `Result`, `Option`, or a small set of outcome enums. Control flow over failure is visible in the program, not buried in hidden exception paths.
 3. **Concurrency has a scope.** A `TaskGroup` owns its child tasks. The block that created the group is the block that waits for them, cancels them, and accounts for their results.
 
+The maintained data surface also includes contiguous numeric `Array[T]`
+values for `int32`, `int64`, `float32`, and `float64`. Their shapes are
+explicit, arithmetic is same-dtype and exact-shape, and slices are owned
+copies. See [Numeric Arrays](/manual/numeric-arrays).
+
 ## A First Program
 
 ```python

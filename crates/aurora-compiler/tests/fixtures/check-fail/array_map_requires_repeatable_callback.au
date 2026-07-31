@@ -1,0 +1,8 @@
+def take(value: own String) -> int32:
+    return 1
+
+def main():
+    token = "once"
+    values = Array[int32].zeros(shape=[1])
+    mapped = values.map[int32](f=lambda value: value + take(token))
+    print(mapped)

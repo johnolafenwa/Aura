@@ -233,6 +233,95 @@ fn checked_arithmetic_preserves_common_width_and_exposes_out_of_width_results_fo
 }
 
 #[test]
+fn wrapping_integer_arithmetic_preserves_declared_width_and_wraps_at_both_bounds() {
+    let one_i32 = IntegerValue::from_i32(1);
+    let two_i32 = IntegerValue::from_i32(2);
+    assert_eq!(
+        IntegerValue::from_i32(i32::MAX).wrapping_add(one_i32),
+        Some(IntegerValue::from_i32(i32::MIN))
+    );
+    assert_eq!(
+        IntegerValue::from_i32(i32::MIN).wrapping_sub(one_i32),
+        Some(IntegerValue::from_i32(i32::MAX))
+    );
+    assert_eq!(
+        IntegerValue::from_i32(i32::MAX).wrapping_mul(two_i32),
+        Some(IntegerValue::from_i32(-2))
+    );
+    assert_eq!(
+        IntegerValue::from_i64(i64::MAX).wrapping_add(IntegerValue::from_i64(1)),
+        Some(IntegerValue::from_i64(i64::MIN))
+    );
+    assert_eq!(
+        IntegerValue::from_typed_unsigned(u8::MAX as u128, IntegerKind::Uint8)
+            .unwrap()
+            .wrapping_add(IntegerValue::from_typed_unsigned(1, IntegerKind::Uint8).unwrap()),
+        Some(IntegerValue::from_typed_unsigned(0, IntegerKind::Uint8).unwrap())
+    );
+    assert_eq!(
+        IntegerValue::from_typed_signed(i128::MAX, IntegerKind::Int128)
+            .unwrap()
+            .wrapping_add(IntegerValue::from_typed_signed(1, IntegerKind::Int128).unwrap()),
+        Some(IntegerValue::from_typed_signed(i128::MIN, IntegerKind::Int128).unwrap())
+    );
+
+    assert_eq!(
+        one_i32.wrapping_add(IntegerValue::from_i64(1)),
+        None,
+        "mixed runtime widths must not silently choose a wrapping modulus"
+    );
+    assert_eq!(
+        IntegerValue::from_literal(1).wrapping_add(IntegerValue::from_literal(2)),
+        None,
+        "untyped literal values have no wrapping width"
+    );
+}
+
+#[test]
+fn saturating_integer_arithmetic_clamps_to_the_declared_bounds() {
+    let one_i32 = IntegerValue::from_i32(1);
+    let two_i32 = IntegerValue::from_i32(2);
+    assert_eq!(
+        IntegerValue::from_i32(i32::MAX).saturating_add(one_i32),
+        Some(IntegerValue::from_i32(i32::MAX))
+    );
+    assert_eq!(
+        IntegerValue::from_i32(i32::MIN).saturating_sub(one_i32),
+        Some(IntegerValue::from_i32(i32::MIN))
+    );
+    assert_eq!(
+        IntegerValue::from_i32(i32::MAX).saturating_mul(two_i32),
+        Some(IntegerValue::from_i32(i32::MAX))
+    );
+    assert_eq!(
+        IntegerValue::from_i64(i64::MIN).saturating_mul(IntegerValue::from_i64(-1)),
+        Some(IntegerValue::from_i64(i64::MAX))
+    );
+    assert_eq!(
+        IntegerValue::from_typed_unsigned(0, IntegerKind::Uint8)
+            .unwrap()
+            .saturating_sub(IntegerValue::from_typed_unsigned(1, IntegerKind::Uint8).unwrap()),
+        Some(IntegerValue::from_typed_unsigned(0, IntegerKind::Uint8).unwrap())
+    );
+    assert_eq!(
+        IntegerValue::from_typed_unsigned(u128::MAX, IntegerKind::Uint128)
+            .unwrap()
+            .saturating_add(IntegerValue::from_typed_unsigned(1, IntegerKind::Uint128).unwrap()),
+        Some(IntegerValue::from_typed_unsigned(u128::MAX, IntegerKind::Uint128).unwrap())
+    );
+
+    assert_eq!(
+        one_i32.saturating_mul(IntegerValue::from_i64(1)),
+        None,
+        "mixed runtime widths must not silently choose saturation bounds"
+    );
+    assert_eq!(
+        IntegerValue::from_literal(1).saturating_add(IntegerValue::from_literal(2)),
+        None
+    );
+}
+
+#[test]
 fn d3_negative_literal_default_is_int64_and_does_not_widen_implicitly() {
     assert_eq!(
         minimal_signed_type_for_negative_literal(7),

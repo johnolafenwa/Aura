@@ -47,3 +47,4 @@ test locations that must prove completion.
 38. [ADR-0038: Place-based loans and views](0038-place-based-loans-and-views.md) — Accepted design for 0.3; unimplemented and not authorized in the 0.2 cycle
 39. [ADR-0039: Comprehensions](0039-comprehensions.md) — Accepted for Aurora 0.2 in Batch 6, Phase 7.1
 40. [ADR-0040: Owned Vec and String slices](0040-owned-vec-and-string-slices.md) — Accepted for Aurora 0.2 in Batch 6, Phase 7.2
+41. [ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](0041-contiguous-numeric-arrays.md) — Accepted for Aurora 0.2 in Batch 6, Phase 7.3

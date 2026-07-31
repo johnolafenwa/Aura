@@ -468,6 +468,114 @@ fn associated_call_metadata_covers_duration_constructors_and_string_byte_decodin
 }
 
 #[test]
+fn array_call_metadata_pins_constructors_members_and_integer_modes() {
+    for (function, name, detail, argument_names) in [
+        (
+            BuiltinAssociatedFunction::ArrayZeros,
+            "zeros",
+            "zeros(shape: Vec[int64]) -> Array[T]",
+            &["shape"][..],
+        ),
+        (
+            BuiltinAssociatedFunction::ArrayFull,
+            "full",
+            "full(shape: Vec[int64], value: T) -> Array[T]",
+            &["shape", "value"][..],
+        ),
+        (
+            BuiltinAssociatedFunction::ArrayFromVec,
+            "from_vec",
+            "from_vec(values: Vec[T], shape: Vec[int64]) -> Array[T]",
+            &["values", "shape"][..],
+        ),
+    ] {
+        assert_eq!(
+            BuiltinAssociatedFunction::resolve("Array", name),
+            Some(function)
+        );
+        assert_eq!(function.owner_name(), "Array");
+        assert_eq!(function.name(), name);
+        assert_eq!(function.detail(), detail);
+        let arguments = argument_names
+            .iter()
+            .map(|name| dummy_arg(Some(name)))
+            .collect::<Vec<_>>();
+        let bound = function
+            .bind_args(&arguments, Span::new(1, 1))
+            .expect("Array associated call should bind named arguments");
+        assert_eq!(bound.len(), argument_names.len());
+        for (index, name) in argument_names.iter().enumerate() {
+            assert_eq!(function.argument_name(index), Some(*name));
+            assert_eq!(function.argument_passing(index), Some(ReceiverKind::Borrow));
+        }
+    }
+
+    for (member, receiver, name, detail) in [
+        (
+            BuiltinMember::ArrayShape,
+            "Array",
+            "shape",
+            "shape() -> Vec[int64]",
+        ),
+        (
+            BuiltinMember::ArrayGet,
+            "Array",
+            "get",
+            "get(index: Vec[int32]) -> Option[T]",
+        ),
+        (
+            BuiltinMember::ArraySet,
+            "Array",
+            "set",
+            "set(index: Vec[int32], value: T) -> Option[T]",
+        ),
+        (
+            BuiltinMember::ArrayMean,
+            "Array",
+            "mean",
+            "mean() -> float64",
+        ),
+        (
+            BuiltinMember::IntegerWrappingAdd,
+            "int32",
+            "wrapping_add",
+            "wrapping_add(rhs: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerSaturatingMul,
+            "int64",
+            "saturating_mul",
+            "saturating_mul(rhs: Self) -> Self",
+        ),
+    ] {
+        assert_eq!(BuiltinMember::resolve(receiver, name), Some(member));
+        assert_eq!(member.name(), name);
+        assert_eq!(member.detail(), detail);
+    }
+
+    assert_eq!(
+        BuiltinMember::ArraySet.receiver_passing(),
+        ReceiverKind::BorrowMut
+    );
+    assert_eq!(
+        BuiltinMember::ArrayFill.receiver_passing(),
+        ReceiverKind::BorrowMut
+    );
+    assert_eq!(
+        BuiltinMember::ArrayWrappingAdd.detail(),
+        "wrapping_add(rhs: Array[T] | T) -> Array[T]"
+    );
+    assert_eq!(
+        BuiltinMember::ArrayMap.detail(),
+        "map[U](f: def(T) -> U) -> Array[U]"
+    );
+    assert_eq!(
+        BuiltinMember::ArraySaturatingMul.detail(),
+        "saturating_mul(rhs: Array[T] | T) -> Array[T]"
+    );
+}
+
+#[test]
 fn builtin_function_call_shapes_expose_bare_shared_argument_metadata() {
     for (builtin, positions) in [
         (BuiltinFunction::Range, &[0, 1][..]),

@@ -219,8 +219,9 @@ no lasting type or value refinement.
 
 ### Indexing, Slicing, And Members
 
-Direct indexing supports `Vec[T]` with exactly an `int32` index and `Map[K, V]`
-with exactly `K`. For a vector, a negative index `i` is normalized once as
+Direct indexing supports `Vec[T]` with exactly an `int32` index, `Map[K, V]`
+with exactly `K`, and `Array[T]` with one exact `int32` coordinate per runtime
+axis. For a vector, a negative index `i` is normalized once as
 `len + i` before the existing bounds check; this applies equally to direct
 reads and writes and to `get`, `set`, `remove`, both `swap` indexes, and
 `insert`. An index that remains invalid is not clamped. Direct access and
@@ -238,8 +239,8 @@ uses `AU3006` because its initial read has the same ownership problem. A missing
 in a direct read is runtime diagnostic `AU4003`. Integer indexing is not
 defined for `String`.
 
-A slice suffix is defined only on `Vec[T]` and `String`. It returns a fresh
-owned value of the same source type. Each written endpoint has exactly type
+A slice suffix is defined on `Vec[T]`, `String`, and `Array[T]`. It returns a
+fresh owned value of the same source type. Each written endpoint has exactly type
 `int32`, with ordinary contextual integer-literal typing and no implicit
 narrowing of an already-bound `int64`. An omitted endpoint contributes no
 expression. After one `len + i` normalization for each negative written
@@ -254,6 +255,21 @@ the inferred obligation to specialization. String slicing counts Unicode
 scalar values and returns `String`. A slice is not a place and cannot be the
 target of assignment or mutable access. Step syntax and slice assignment are
 reserved `AU2005` migration diagnostics rather than accepted static forms.
+
+`Array[T]` is specialized only by `int32`, `int64`, `float32`, or `float64`.
+Its constructors require exact `Vec[int64]` shape metadata. Array slicing
+uses the same one-colon grammar and endpoint rules but copies only a first-axis
+range, retaining the remaining runtime dimensions. Array/Array arithmetic
+requires identical `T`; runtime shape equality is checked with `AU4007`.
+Scalar arithmetic requires exactly `T`, with no mixed promotion or
+broadcasting. Integer Array `/` is `AU2003`.
+
+Array `map[U]` requires exact repeatable `def(T) -> U` and restricts `U` to
+the four Array dtypes. `sum`, `min`, and `max` return `T`; `mean` returns
+`float64` for all dtypes. Mutable `set`, `fill`, and indexed assignment
+require a mutable Array place. Array `get` converts an invalid coordinate or
+runtime-rank mismatch to `None`; `set` traps for either failure and returns
+the replaced scalar in `Some` only after a valid update.
 
 Member access must resolve to a visible field, method, enum variant, module item, or maintained builtin member. Calling a receiver method also validates whether the receiver is consumed, shared-borrowed, or mutable-borrowed.
 

@@ -1,0 +1,5 @@
+error[AU2002]: Array arithmetic requires matching dtypes, found `Array[int32]` and `Array[int64]`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/array_mixed_dtype_arithmetic.au:4:11
+  |
+4 |     print(left + right)
+  |           ^

@@ -1,0 +1,23 @@
+def widen(value: int32) -> float64:
+    return value.to_float()
+
+def main():
+    mut values = Array[int32].from_vec(values=[1, 2, 3, 4], shape=[2, 2])
+    zeros = Array[float64].zeros(shape=[2, 2])
+    small = Array[float32].zeros(shape=[2, 2])
+    full = Array[int64].full(shape=[2, 2], value=7)
+    values[0, 1] = values[1, 0]
+    first = values[0]
+    last = values[-1, -1]
+    prefix = values[:1]
+    suffix = values[1:]
+    middle = values[0:1]
+    copied = values[:]
+    mapped = values.map[float64](f=widen)
+    print(zeros.mean())
+    print(small.mean())
+    print(full.sum())
+    print(first)
+    print(last)
+    print(prefix.len() + suffix.len() + middle.len() + copied.len())
+    print(mapped.max())

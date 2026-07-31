@@ -1,0 +1,47 @@
+import io
+
+
+def read_control(expected: String) -> bool:
+    match io.read_line():
+        case Result.Ok(Option.Some(line)):
+            return line == expected
+        case Result.Ok(Option.None):
+            return false
+        case Result.Err(_):
+            return false
+
+
+def flush_stdout() -> bool:
+    match io.flush():
+        case Result.Ok(_):
+            return true
+        case Result.Err(_):
+            return false
+
+
+def main() -> int32:
+    element_count: int64 = 1000000
+    iterations: int64 = 512
+    left = Array[float64].full([element_count], 1.25)
+    right = Array[float64].full([element_count], 2.75)
+    warmup = left + right
+    if warmup[0] != 4.0:
+        return 3
+
+    print("READY numeric-arrays add 1000000 512")
+    if not flush_stdout():
+        return 4
+    if not read_control("GO numeric-arrays add"):
+        return 5
+
+    mut checksum: float64 = 0.0
+    mut iteration: int64 = 0
+    while iteration < iterations:
+        result = left + right
+        checksum += result[0]
+        iteration += 1
+
+    print(f"DONE numeric-arrays add 512 {checksum}")
+    if not flush_stdout():
+        return 6
+    return 0

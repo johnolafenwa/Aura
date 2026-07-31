@@ -216,6 +216,7 @@ fn function_info(
             param_passings,
             return_type: lower_type_ref(&return_type),
             rng_clone_safe_type_params: BTreeSet::new(),
+            array_equality_safe_type_params: BTreeSet::new(),
         },
         type_param_bounds: BTreeMap::new(),
     }
@@ -259,6 +260,7 @@ fn generic_function_info(
             param_passings,
             return_type: lower_generic_type_ref(&return_type, &type_param_set),
             rng_clone_safe_type_params: BTreeSet::new(),
+            array_equality_safe_type_params: BTreeSet::new(),
         },
         type_param_bounds: BTreeMap::new(),
     }

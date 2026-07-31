@@ -258,6 +258,28 @@ const DURATION_VALUE_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "value", ReceiverKind::Borrow)];
 const STRING_FROM_BYTES_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "bytes", ReceiverKind::Borrow)];
+const ARRAY_SHAPE_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "shape", ReceiverKind::Borrow)];
+const ARRAY_FULL_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "shape", ReceiverKind::Borrow),
+    builtin_param!(required, "value", ReceiverKind::Borrow),
+];
+const ARRAY_FROM_VEC_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "values", ReceiverKind::Borrow),
+    builtin_param!(required, "shape", ReceiverKind::Borrow),
+];
+const ARRAY_INDEX_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "index", ReceiverKind::Borrow)];
+const ARRAY_SET_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "index", ReceiverKind::Borrow),
+    builtin_param!(required, "value", ReceiverKind::Borrow),
+];
+const ARRAY_VALUE_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "value", ReceiverKind::Borrow)];
+const ARRAY_CALLBACK_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "f", ReceiverKind::Borrow)];
+const ARITHMETIC_RHS_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "rhs", ReceiverKind::Borrow)];
 const FILE_WRITE_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "text", ReceiverKind::Borrow)];
 const FILE_WRITE_BYTES_PARAMS: [BuiltinParam; 1] =
@@ -627,6 +649,9 @@ pub enum BuiltinAssociatedFunction {
     DurationSeconds,
     DurationMinutes,
     StringFromBytes,
+    ArrayZeros,
+    ArrayFull,
+    ArrayFromVec,
 }
 
 pub const ALL_BUILTIN_ASSOCIATED_FUNCTIONS: &[BuiltinAssociatedFunction] = &[
@@ -634,6 +659,9 @@ pub const ALL_BUILTIN_ASSOCIATED_FUNCTIONS: &[BuiltinAssociatedFunction] = &[
     BuiltinAssociatedFunction::DurationSeconds,
     BuiltinAssociatedFunction::DurationMinutes,
     BuiltinAssociatedFunction::StringFromBytes,
+    BuiltinAssociatedFunction::ArrayZeros,
+    BuiltinAssociatedFunction::ArrayFull,
+    BuiltinAssociatedFunction::ArrayFromVec,
 ];
 
 impl BuiltinAssociatedFunction {
@@ -643,6 +671,9 @@ impl BuiltinAssociatedFunction {
             ("Duration", "seconds") => Some(Self::DurationSeconds),
             ("Duration", "minutes") => Some(Self::DurationMinutes),
             ("String", "from_bytes") => Some(Self::StringFromBytes),
+            ("Array", "zeros") => Some(Self::ArrayZeros),
+            ("Array", "full") => Some(Self::ArrayFull),
+            ("Array", "from_vec") => Some(Self::ArrayFromVec),
             _ => None,
         }
     }
@@ -653,6 +684,7 @@ impl BuiltinAssociatedFunction {
                 "Duration"
             }
             Self::StringFromBytes => "String",
+            Self::ArrayZeros | Self::ArrayFull | Self::ArrayFromVec => "Array",
         }
     }
 
@@ -662,6 +694,9 @@ impl BuiltinAssociatedFunction {
             Self::DurationSeconds => "seconds",
             Self::DurationMinutes => "minutes",
             Self::StringFromBytes => "from_bytes",
+            Self::ArrayZeros => "zeros",
+            Self::ArrayFull => "full",
+            Self::ArrayFromVec => "from_vec",
         }
     }
 
@@ -671,6 +706,9 @@ impl BuiltinAssociatedFunction {
             Self::DurationSeconds => "seconds(value: int64) -> Duration",
             Self::DurationMinutes => "minutes(value: int64) -> Duration",
             Self::StringFromBytes => "from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]",
+            Self::ArrayZeros => "zeros(shape: Vec[int64]) -> Array[T]",
+            Self::ArrayFull => "full(shape: Vec[int64], value: T) -> Array[T]",
+            Self::ArrayFromVec => "from_vec(values: Vec[T], shape: Vec[int64]) -> Array[T]",
         }
     }
 
@@ -687,6 +725,15 @@ impl BuiltinAssociatedFunction {
             }
             Self::StringFromBytes => {
                 "Strictly decodes UTF-8 bytes, returning `bytes.Error.InvalidUtf8` at the first invalid byte."
+            }
+            Self::ArrayZeros => {
+                "Constructs a numeric Array filled with zeros using the requested shape."
+            }
+            Self::ArrayFull => {
+                "Constructs a numeric Array filled with one value using the requested shape."
+            }
+            Self::ArrayFromVec => {
+                "Copies numeric vector values into an Array with the requested shape."
             }
         }
     }
@@ -726,6 +773,15 @@ impl BuiltinAssociatedFunction {
                 &STRING_FROM_BYTES_PARAMS,
                 CallConvention::PositionalOrNamed,
             ),
+            Self::ArrayZeros => {
+                BuiltinCallShape::fixed(&ARRAY_SHAPE_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::ArrayFull => {
+                BuiltinCallShape::fixed(&ARRAY_FULL_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::ArrayFromVec => {
+                BuiltinCallShape::fixed(&ARRAY_FROM_VEC_PARAMS, CallConvention::PositionalOrNamed)
+            }
         }
     }
 }
@@ -805,6 +861,12 @@ impl BuiltinClassConstructor {
 pub enum BuiltinMember {
     FloatSqrt,
     IntegerToFloat,
+    IntegerWrappingAdd,
+    IntegerWrappingSub,
+    IntegerWrappingMul,
+    IntegerSaturatingAdd,
+    IntegerSaturatingSub,
+    IntegerSaturatingMul,
     DurationToMilliseconds,
     DurationToSeconds,
     StringLen,
@@ -822,6 +884,23 @@ pub enum BuiltinMember {
     StringJoin,
     StringToBytes,
     ScalarToString,
+    ArrayShape,
+    ArrayLen,
+    ArrayClone,
+    ArrayGet,
+    ArraySet,
+    ArrayFill,
+    ArrayMap,
+    ArraySum,
+    ArrayMin,
+    ArrayMax,
+    ArrayMean,
+    ArrayWrappingAdd,
+    ArrayWrappingSub,
+    ArrayWrappingMul,
+    ArraySaturatingAdd,
+    ArraySaturatingSub,
+    ArraySaturatingMul,
     VecLen,
     VecIsEmpty,
     VecClone,
@@ -991,6 +1070,78 @@ impl BuiltinMember {
             | ("uint64", "to_float")
             | ("uint128", "to_float")
             | ("uintsize", "to_float") => Some(Self::IntegerToFloat),
+            ("int8", "wrapping_add")
+            | ("int16", "wrapping_add")
+            | ("int32", "wrapping_add")
+            | ("int64", "wrapping_add")
+            | ("int128", "wrapping_add")
+            | ("intsize", "wrapping_add")
+            | ("uint8", "wrapping_add")
+            | ("uint16", "wrapping_add")
+            | ("uint32", "wrapping_add")
+            | ("uint64", "wrapping_add")
+            | ("uint128", "wrapping_add")
+            | ("uintsize", "wrapping_add") => Some(Self::IntegerWrappingAdd),
+            ("int8", "wrapping_sub")
+            | ("int16", "wrapping_sub")
+            | ("int32", "wrapping_sub")
+            | ("int64", "wrapping_sub")
+            | ("int128", "wrapping_sub")
+            | ("intsize", "wrapping_sub")
+            | ("uint8", "wrapping_sub")
+            | ("uint16", "wrapping_sub")
+            | ("uint32", "wrapping_sub")
+            | ("uint64", "wrapping_sub")
+            | ("uint128", "wrapping_sub")
+            | ("uintsize", "wrapping_sub") => Some(Self::IntegerWrappingSub),
+            ("int8", "wrapping_mul")
+            | ("int16", "wrapping_mul")
+            | ("int32", "wrapping_mul")
+            | ("int64", "wrapping_mul")
+            | ("int128", "wrapping_mul")
+            | ("intsize", "wrapping_mul")
+            | ("uint8", "wrapping_mul")
+            | ("uint16", "wrapping_mul")
+            | ("uint32", "wrapping_mul")
+            | ("uint64", "wrapping_mul")
+            | ("uint128", "wrapping_mul")
+            | ("uintsize", "wrapping_mul") => Some(Self::IntegerWrappingMul),
+            ("int8", "saturating_add")
+            | ("int16", "saturating_add")
+            | ("int32", "saturating_add")
+            | ("int64", "saturating_add")
+            | ("int128", "saturating_add")
+            | ("intsize", "saturating_add")
+            | ("uint8", "saturating_add")
+            | ("uint16", "saturating_add")
+            | ("uint32", "saturating_add")
+            | ("uint64", "saturating_add")
+            | ("uint128", "saturating_add")
+            | ("uintsize", "saturating_add") => Some(Self::IntegerSaturatingAdd),
+            ("int8", "saturating_sub")
+            | ("int16", "saturating_sub")
+            | ("int32", "saturating_sub")
+            | ("int64", "saturating_sub")
+            | ("int128", "saturating_sub")
+            | ("intsize", "saturating_sub")
+            | ("uint8", "saturating_sub")
+            | ("uint16", "saturating_sub")
+            | ("uint32", "saturating_sub")
+            | ("uint64", "saturating_sub")
+            | ("uint128", "saturating_sub")
+            | ("uintsize", "saturating_sub") => Some(Self::IntegerSaturatingSub),
+            ("int8", "saturating_mul")
+            | ("int16", "saturating_mul")
+            | ("int32", "saturating_mul")
+            | ("int64", "saturating_mul")
+            | ("int128", "saturating_mul")
+            | ("intsize", "saturating_mul")
+            | ("uint8", "saturating_mul")
+            | ("uint16", "saturating_mul")
+            | ("uint32", "saturating_mul")
+            | ("uint64", "saturating_mul")
+            | ("uint128", "saturating_mul")
+            | ("uintsize", "saturating_mul") => Some(Self::IntegerSaturatingMul),
             ("Duration", "to_ms") => Some(Self::DurationToMilliseconds),
             ("Duration", "to_seconds") => Some(Self::DurationToSeconds),
             ("bool", "to_string") => Some(Self::ScalarToString),
@@ -1008,6 +1159,23 @@ impl BuiltinMember {
             | ("uintsize", "to_string")
             | ("float32", "to_string")
             | ("float64", "to_string") => Some(Self::ScalarToString),
+            ("Array", "shape") => Some(Self::ArrayShape),
+            ("Array", "len") => Some(Self::ArrayLen),
+            ("Array", "clone") => Some(Self::ArrayClone),
+            ("Array", "get") => Some(Self::ArrayGet),
+            ("Array", "set") => Some(Self::ArraySet),
+            ("Array", "fill") => Some(Self::ArrayFill),
+            ("Array", "map") => Some(Self::ArrayMap),
+            ("Array", "sum") => Some(Self::ArraySum),
+            ("Array", "min") => Some(Self::ArrayMin),
+            ("Array", "max") => Some(Self::ArrayMax),
+            ("Array", "mean") => Some(Self::ArrayMean),
+            ("Array", "wrapping_add") => Some(Self::ArrayWrappingAdd),
+            ("Array", "wrapping_sub") => Some(Self::ArrayWrappingSub),
+            ("Array", "wrapping_mul") => Some(Self::ArrayWrappingMul),
+            ("Array", "saturating_add") => Some(Self::ArraySaturatingAdd),
+            ("Array", "saturating_sub") => Some(Self::ArraySaturatingSub),
+            ("Array", "saturating_mul") => Some(Self::ArraySaturatingMul),
             ("Vec", "len") => Some(Self::VecLen),
             ("Vec", "is_empty") => Some(Self::VecIsEmpty),
             ("Vec", "clone") => Some(Self::VecClone),
@@ -1181,6 +1349,12 @@ impl BuiltinMember {
         match self {
             Self::FloatSqrt => "sqrt",
             Self::IntegerToFloat => "to_float",
+            Self::IntegerWrappingAdd | Self::ArrayWrappingAdd => "wrapping_add",
+            Self::IntegerWrappingSub | Self::ArrayWrappingSub => "wrapping_sub",
+            Self::IntegerWrappingMul | Self::ArrayWrappingMul => "wrapping_mul",
+            Self::IntegerSaturatingAdd | Self::ArraySaturatingAdd => "saturating_add",
+            Self::IntegerSaturatingSub | Self::ArraySaturatingSub => "saturating_sub",
+            Self::IntegerSaturatingMul | Self::ArraySaturatingMul => "saturating_mul",
             Self::DurationToMilliseconds => "to_ms",
             Self::DurationToSeconds => "to_seconds",
             Self::ScalarToString => "to_string",
@@ -1198,6 +1372,17 @@ impl BuiltinMember {
             Self::StringTrim => "trim",
             Self::StringJoin => "join",
             Self::StringToBytes => "to_bytes",
+            Self::ArrayShape => "shape",
+            Self::ArrayLen => "len",
+            Self::ArrayClone => "clone",
+            Self::ArrayGet => "get",
+            Self::ArraySet => "set",
+            Self::ArrayFill => "fill",
+            Self::ArrayMap => "map",
+            Self::ArraySum => "sum",
+            Self::ArrayMin => "min",
+            Self::ArrayMax => "max",
+            Self::ArrayMean => "mean",
             Self::VecLen => "len",
             Self::VecIsEmpty => "is_empty",
             Self::VecClone | Self::MapClone | Self::StringClone => "clone",
@@ -1354,6 +1539,12 @@ impl BuiltinMember {
         match self {
             Self::FloatSqrt => "sqrt() -> float64",
             Self::IntegerToFloat => "to_float() -> float64",
+            Self::IntegerWrappingAdd => "wrapping_add(rhs: Self) -> Self",
+            Self::IntegerWrappingSub => "wrapping_sub(rhs: Self) -> Self",
+            Self::IntegerWrappingMul => "wrapping_mul(rhs: Self) -> Self",
+            Self::IntegerSaturatingAdd => "saturating_add(rhs: Self) -> Self",
+            Self::IntegerSaturatingSub => "saturating_sub(rhs: Self) -> Self",
+            Self::IntegerSaturatingMul => "saturating_mul(rhs: Self) -> Self",
             Self::DurationToMilliseconds => "to_ms() -> float64",
             Self::DurationToSeconds => "to_seconds() -> float64",
             Self::ScalarToString => "to_string() -> String",
@@ -1371,6 +1562,23 @@ impl BuiltinMember {
             Self::StringTrim => "trim() -> String",
             Self::StringJoin => "join(parts: Vec[String]) -> String",
             Self::StringToBytes => "to_bytes() -> Vec[uint8]",
+            Self::ArrayShape => "shape() -> Vec[int64]",
+            Self::ArrayLen => "len() -> int64",
+            Self::ArrayClone => "clone() -> Array[T]",
+            Self::ArrayGet => "get(index: Vec[int32]) -> Option[T]",
+            Self::ArraySet => "set(index: Vec[int32], value: T) -> Option[T]",
+            Self::ArrayFill => "fill(value: T) -> None",
+            Self::ArrayMap => "map[U](f: def(T) -> U) -> Array[U]",
+            Self::ArraySum => "sum() -> T",
+            Self::ArrayMin => "min() -> T",
+            Self::ArrayMax => "max() -> T",
+            Self::ArrayMean => "mean() -> float64",
+            Self::ArrayWrappingAdd => "wrapping_add(rhs: Array[T] | T) -> Array[T]",
+            Self::ArrayWrappingSub => "wrapping_sub(rhs: Array[T] | T) -> Array[T]",
+            Self::ArrayWrappingMul => "wrapping_mul(rhs: Array[T] | T) -> Array[T]",
+            Self::ArraySaturatingAdd => "saturating_add(rhs: Array[T] | T) -> Array[T]",
+            Self::ArraySaturatingSub => "saturating_sub(rhs: Array[T] | T) -> Array[T]",
+            Self::ArraySaturatingMul => "saturating_mul(rhs: Array[T] | T) -> Array[T]",
             Self::VecLen => "len() -> int64",
             Self::VecIsEmpty => "is_empty() -> bool",
             Self::VecClone => "clone() -> Vec[T]",
@@ -1567,6 +1775,16 @@ impl BuiltinMember {
             Self::IntegerToFloat => {
                 "Converts an integer to the nearest `float64` value; large values may round."
             }
+            Self::IntegerWrappingAdd
+            | Self::IntegerWrappingSub
+            | Self::IntegerWrappingMul => {
+                "Performs fixed-width integer arithmetic with two's-complement wrapping."
+            }
+            Self::IntegerSaturatingAdd
+            | Self::IntegerSaturatingSub
+            | Self::IntegerSaturatingMul => {
+                "Performs fixed-width integer arithmetic clamped to the receiver type's range."
+            }
             Self::DurationToMilliseconds => {
                 "Converts the Duration to the nearest representable number of milliseconds as `float64`."
             }
@@ -1609,6 +1827,33 @@ impl BuiltinMember {
             }
             Self::StringToBytes => {
                 "Returns a fresh `Vec[uint8]` containing the string's exact UTF-8 encoding."
+            }
+            Self::ArrayShape => "Returns a fresh vector containing every Array dimension.",
+            Self::ArrayLen => "Returns the total number of scalar elements in the Array.",
+            Self::ArrayClone => "Creates an independent copy of the Array.",
+            Self::ArrayGet => {
+                "Returns the scalar at an exact-rank coordinate, or `Option.None` when out of bounds."
+            }
+            Self::ArraySet => {
+                "Replaces the scalar at an exact-rank coordinate and returns the previous value."
+            }
+            Self::ArrayFill => "Replaces every scalar in the Array with `value`.",
+            Self::ArrayMap => {
+                "Calls a repeatable shared callback for every scalar and returns a new numeric Array."
+            }
+            Self::ArraySum => "Returns the sum of all Array elements.",
+            Self::ArrayMin => "Returns the minimum Array element.",
+            Self::ArrayMax => "Returns the maximum Array element.",
+            Self::ArrayMean => "Returns the arithmetic mean as `float64`.",
+            Self::ArrayWrappingAdd
+            | Self::ArrayWrappingSub
+            | Self::ArrayWrappingMul => {
+                "Performs elementwise integer Array arithmetic with two's-complement wrapping."
+            }
+            Self::ArraySaturatingAdd
+            | Self::ArraySaturatingSub
+            | Self::ArraySaturatingMul => {
+                "Performs elementwise integer Array arithmetic clamped to the dtype range."
             }
             Self::VecLen => "Returns the current number of elements in the vector.",
             Self::VecIsEmpty => "Returns true when the vector contains no elements.",
@@ -1841,6 +2086,13 @@ impl BuiltinMember {
             | Self::StringToUpper
             | Self::StringTrim
             | Self::StringToBytes
+            | Self::ArrayShape
+            | Self::ArrayLen
+            | Self::ArrayClone
+            | Self::ArraySum
+            | Self::ArrayMin
+            | Self::ArrayMax
+            | Self::ArrayMean
             | Self::VecLen
             | Self::VecIsEmpty
             | Self::VecClone
@@ -1927,6 +2179,32 @@ impl BuiltinMember {
             }
             Self::RngShuffle => {
                 BuiltinCallShape::fixed(&RNG_SHUFFLE_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::IntegerWrappingAdd
+            | Self::IntegerWrappingSub
+            | Self::IntegerWrappingMul
+            | Self::IntegerSaturatingAdd
+            | Self::IntegerSaturatingSub
+            | Self::IntegerSaturatingMul
+            | Self::ArrayWrappingAdd
+            | Self::ArrayWrappingSub
+            | Self::ArrayWrappingMul
+            | Self::ArraySaturatingAdd
+            | Self::ArraySaturatingSub
+            | Self::ArraySaturatingMul => {
+                BuiltinCallShape::fixed(&ARITHMETIC_RHS_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::ArrayGet => {
+                BuiltinCallShape::fixed(&ARRAY_INDEX_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::ArraySet => {
+                BuiltinCallShape::fixed(&ARRAY_SET_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::ArrayFill => {
+                BuiltinCallShape::fixed(&ARRAY_VALUE_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::ArrayMap => {
+                BuiltinCallShape::fixed(&ARRAY_CALLBACK_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::TcpListenerAccept
             | Self::TcpStreamReadAll
@@ -2103,6 +2381,8 @@ impl BuiltinMember {
         if matches!(
             self,
             Self::VecPush
+                | Self::ArraySet
+                | Self::ArrayFill
                 | Self::VecPop
                 | Self::VecSet
                 | Self::VecRemove

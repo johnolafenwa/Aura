@@ -1,0 +1,4 @@
+def main():
+    left = Array[int32].zeros(shape=[1])
+    right = Array[int64].zeros(shape=[1])
+    print(left + right)

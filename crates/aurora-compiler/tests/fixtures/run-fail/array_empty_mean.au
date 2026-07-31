@@ -1,0 +1,2 @@
+def main():
+    print(Array[int32].zeros([0]).mean())

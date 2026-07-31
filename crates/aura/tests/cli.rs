@@ -5086,6 +5086,302 @@ fn owned_slice_au4003_traps_match_forced_mir_and_direct_backends() {
 }
 
 #[test]
+fn numeric_array_matrix_matches_forced_mir_and_direct_backends() {
+    let source = include_str!("../../aurora-compiler/tests/fixtures/run-pass/array_runtime.au");
+    let expected =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/array_runtime.stdout");
+    assert_run_and_direct_source_stdout("aurora-numeric-array-matrix", source, expected);
+
+    let rank_one_source = [
+        "def main() -> int32:",
+        "    source: Vec[int32] = [4, 5, 6]",
+        "    mut values = Array[int32].from_vec(source, [3])",
+        "    print(values[-1])",
+        "    values[0] = 9",
+        "    print(values[0])",
+        "    return 0",
+    ]
+    .join("\n");
+    assert_run_and_direct_source_stdout(
+        "aurora-numeric-array-rank-one-index",
+        &rank_one_source,
+        "6\n9\n",
+    );
+}
+
+#[test]
+fn numeric_array_all_dtypes_match_forced_mir_and_direct_backends() {
+    let source = r#"
+def main() -> int32:
+    i32_zeros = Array[int32].zeros([2])
+    i32_full = Array[int32].full([2], 3)
+    i32_source: Vec[int32] = [1, 2]
+    i32_values = Array[int32].from_vec(i32_source, [2])
+    print(i32_zeros)
+    print(i32_full)
+    print(i32_values)
+    print(i32_values + i32_full)
+    print(i32_values * 2)
+    print(i32_values.sum())
+    print(i32_values.min())
+    print(i32_values.max())
+    print(i32_values.mean())
+
+    i64_zeros = Array[int64].zeros([2])
+    i64_full = Array[int64].full([2], 2)
+    i64_source: Vec[int64] = [5000000000, 6000000000]
+    i64_values = Array[int64].from_vec(i64_source, [2])
+    print(i64_zeros)
+    print(i64_full)
+    print(i64_values)
+    print(i64_values + i64_full)
+    print(7000000000 - i64_values)
+    print(i64_values.sum())
+    print(i64_values.min())
+    print(i64_values.max())
+    print(i64_values.mean())
+    mut i64_clone = i64_values.clone()
+    i64_clone[0] = 9
+    print(i64_values[0])
+    print(i64_clone[0])
+
+    f32_zeros = Array[float32].zeros([2])
+    f32_full = Array[float32].full([2], 0.5)
+    f32_source: Vec[float32] = [1.5, 2.5]
+    f32_values = Array[float32].from_vec(f32_source, [2])
+    print(f32_zeros)
+    print(f32_full)
+    print(f32_values)
+    print(f32_values + f32_full)
+    print(2.0 * f32_values)
+    print(f32_values.sum())
+    print(f32_values.min())
+    print(f32_values.max())
+    print(f32_values.mean())
+
+    f64_zeros = Array[float64].zeros([2])
+    f64_full = Array[float64].full([2], 2.0)
+    f64_source: Vec[float64] = [4.0, 8.0]
+    f64_values = Array[float64].from_vec(f64_source, [2])
+    print(f64_zeros)
+    print(f64_full)
+    print(f64_values)
+    print(f64_values / f64_full)
+    print(16.0 / f64_values)
+    print(f64_values.sum())
+    print(f64_values.min())
+    print(f64_values.max())
+    print(f64_values.mean())
+    return 0
+"#;
+    let expected = concat!(
+        "Array[int32](shape=[2], values=[0, 0])\n",
+        "Array[int32](shape=[2], values=[3, 3])\n",
+        "Array[int32](shape=[2], values=[1, 2])\n",
+        "Array[int32](shape=[2], values=[4, 5])\n",
+        "Array[int32](shape=[2], values=[2, 4])\n",
+        "3\n1\n2\n1.5\n",
+        "Array[int64](shape=[2], values=[0, 0])\n",
+        "Array[int64](shape=[2], values=[2, 2])\n",
+        "Array[int64](shape=[2], values=[5000000000, 6000000000])\n",
+        "Array[int64](shape=[2], values=[5000000002, 6000000002])\n",
+        "Array[int64](shape=[2], values=[2000000000, 1000000000])\n",
+        "11000000000\n5000000000\n6000000000\n5500000000.0\n",
+        "5000000000\n9\n",
+        "Array[float32](shape=[2], values=[0.0, 0.0])\n",
+        "Array[float32](shape=[2], values=[0.5, 0.5])\n",
+        "Array[float32](shape=[2], values=[1.5, 2.5])\n",
+        "Array[float32](shape=[2], values=[2.0, 3.0])\n",
+        "Array[float32](shape=[2], values=[3.0, 5.0])\n",
+        "4.0\n1.5\n2.5\n2.0\n",
+        "Array[float64](shape=[2], values=[0.0, 0.0])\n",
+        "Array[float64](shape=[2], values=[2.0, 2.0])\n",
+        "Array[float64](shape=[2], values=[4.0, 8.0])\n",
+        "Array[float64](shape=[2], values=[2.0, 4.0])\n",
+        "Array[float64](shape=[2], values=[4.0, 2.0])\n",
+        "12.0\n4.0\n8.0\n6.0\n",
+    );
+
+    assert_mir_and_direct_source_stdout_with_timeout_and_workers(
+        "aurora-array-all-dtypes",
+        source,
+        std::time::Duration::from_secs(60),
+        expected,
+        1,
+    );
+}
+
+#[test]
+fn numeric_array_invalid_shapes_match_forced_mir_and_direct_backends() {
+    let cases = [
+        (
+            "rank zero",
+            "def main():\n    print(Array[int64].zeros([]))\n",
+            "array rank must be at least one",
+        ),
+        (
+            "negative dimension",
+            "def main():\n    print(Array[float64].full([-1], 2.0))\n",
+            "Array shape axis 0 cannot be negative",
+        ),
+    ];
+
+    for (label, source, expected_message) in cases {
+        let (temp, source_path) =
+            write_temp_source(&format!("aurora-array-invalid-shape-{label}"), source);
+        let mir = Command::new(aura_bin())
+            .args(["run", "--backend", "mir"])
+            .arg(&source_path)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run Array {label} trap on MIR: {error}"));
+        assert_eq!(
+            mir.status.code(),
+            Some(1),
+            "Array {label} should exit 1 on MIR; stderr was:\n{}",
+            String::from_utf8_lossy(&mir.stderr)
+        );
+
+        let output_path = temp.path().join("out");
+        let direct_build = Command::new(aura_bin())
+            .args(["build", "--backend", "direct", "-o"])
+            .arg(&output_path)
+            .arg(&source_path)
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("failed to build Array {label} trap on direct: {error}")
+            });
+        assert!(
+            direct_build.status.success(),
+            "Array {label} should build on direct; stderr was:\n{}",
+            String::from_utf8_lossy(&direct_build.stderr)
+        );
+        let direct = generated_binary(&output_path)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run Array {label} direct trap: {error}"));
+        assert_eq!(
+            direct.status.code(),
+            Some(1),
+            "Array {label} should exit 1 on direct; stderr was:\n{}",
+            String::from_utf8_lossy(&direct.stderr)
+        );
+        assert_eq!(mir.stdout, direct.stdout, "Array {label} stdout diverged");
+        assert_eq!(
+            mir.stderr, direct.stderr,
+            "Array {label} AU4007 diagnostic, span, and frame must match"
+        );
+        let stderr = String::from_utf8_lossy(&mir.stderr);
+        assert!(stderr.contains("error[AU4007]"), "{stderr}");
+        assert!(stderr.contains(expected_message), "{stderr}");
+    }
+}
+
+#[test]
+fn fixed_width_integer_methods_match_forced_mir_and_direct_backends() {
+    let source = [
+        "def main() -> int32:",
+        "    signed_max = 127 as int8",
+        "    signed_min = (-128) as int8",
+        "    signed_one = 1 as int8",
+        "    signed_two = 2 as int8",
+        "    print(signed_max.wrapping_add(signed_one))",
+        "    print(signed_min.wrapping_sub(signed_one))",
+        "    print(signed_max.wrapping_mul(signed_two))",
+        "    print(signed_max.saturating_add(signed_one))",
+        "    print(signed_min.saturating_sub(signed_one))",
+        "    print(signed_max.saturating_mul(signed_two))",
+        "    unsigned_max = 255 as uint8",
+        "    unsigned_zero = 0 as uint8",
+        "    unsigned_one = 1 as uint8",
+        "    unsigned_two = 2 as uint8",
+        "    print(unsigned_max.wrapping_add(unsigned_one))",
+        "    print(unsigned_zero.wrapping_sub(unsigned_one))",
+        "    print(unsigned_max.wrapping_mul(unsigned_two))",
+        "    print(unsigned_max.saturating_add(unsigned_one))",
+        "    print(unsigned_zero.saturating_sub(unsigned_one))",
+        "    print(unsigned_max.saturating_mul(unsigned_two))",
+        "    return 0",
+    ]
+    .join("\n");
+    assert_run_and_direct_source_stdout(
+        "aurora-fixed-width-integer-methods",
+        &source,
+        "-128\n127\n-2\n127\n-128\n127\n0\n255\n254\n255\n0\n255\n",
+    );
+}
+
+#[test]
+fn numeric_array_traps_match_forced_mir_and_direct_backends() {
+    let root = repo_root();
+    let cases = [
+        (
+            "checked overflow",
+            "crates/aurora-compiler/tests/fixtures/run-fail/array_checked_overflow.au",
+            "error[AU4002]",
+        ),
+        (
+            "set out of bounds",
+            "crates/aurora-compiler/tests/fixtures/run-fail/array_set_out_of_bounds.au",
+            "error[AU4003]",
+        ),
+    ];
+
+    for (label, fixture, expected_code) in cases {
+        let mir = Command::new(aura_bin())
+            .current_dir(&root)
+            .args(["run", "--backend", "mir", fixture])
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run Array {label} trap on MIR: {error}"));
+        assert_eq!(
+            mir.status.code(),
+            Some(1),
+            "Array {label} should exit 1 on MIR; stderr was:\n{}",
+            String::from_utf8_lossy(&mir.stderr)
+        );
+
+        let output_dir = TempDir::new("aurora-array-trap-direct");
+        let output_path = output_dir.path().join("out");
+        let direct_build = Command::new(aura_bin())
+            .current_dir(&root)
+            .args(["build", "--backend", "direct", "-o"])
+            .arg(&output_path)
+            .arg(fixture)
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("failed to build Array {label} trap on direct: {error}")
+            });
+        assert!(
+            direct_build.status.success(),
+            "Array {label} should build on direct; stderr was:\n{}",
+            String::from_utf8_lossy(&direct_build.stderr)
+        );
+
+        let direct = generated_binary(&output_path)
+            .current_dir(&root)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run Array {label} direct trap: {error}"));
+        assert_eq!(
+            direct.status.code(),
+            Some(1),
+            "Array {label} should exit 1 on direct; stderr was:\n{}",
+            String::from_utf8_lossy(&direct.stderr)
+        );
+        assert_eq!(
+            mir.stdout, direct.stdout,
+            "Array {label} stdout must match on MIR and direct"
+        );
+        assert_eq!(
+            mir.stderr, direct.stderr,
+            "Array {label} code, message, source span, and call frame must be byte-identical"
+        );
+        assert!(
+            String::from_utf8_lossy(&mir.stderr).contains(expected_code),
+            "Array {label} should retain {expected_code}; stderr was:\n{}",
+            String::from_utf8_lossy(&mir.stderr)
+        );
+    }
+}
+
+#[test]
 fn run_backends_drop_partial_comprehension_before_propagating_trap() {
     let source = include_str!(
         "../../aurora-compiler/tests/fixtures/run-fail/comprehension_partial_result_trap.au"

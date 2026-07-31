@@ -363,6 +363,55 @@ Phase 7.3 contiguous arrays, scalar and array integer wrapping/saturating
 operations, native kernels, and measured post-reboot NumPy comparisons is now
 active. There is no current blocker.
 
+## Phase 7.3 implementation convergence
+
+The working tree now implements the accepted `Array[T]` surface for
+`int32`, `int64`, `float32`, and `float64`, scalar and Array wrapping and
+saturating integer arithmetic, the MIR and direct native paths, editor
+intelligence, the normative reference, examples, and the controlled
+float64/NumPy benchmark protocol.
+
+Two independent audits found and closed the remaining semantic and evidence
+gaps before checkpoint:
+
+- MIR shared Array operations now borrow storage rather than taking hidden
+  deep snapshots; mutation preserves the receiver allocation.
+- explicit and recursively nested language-visible Array copies allocate
+  fallibly and report `AU4005`.
+- `get` returns `None` for a wrong-rank coordinate, while direct indexing and
+  `set` retain `AU4007`.
+- all four dtypes, `int64`, rank-zero and negative shapes, explicit clone
+  independence, and the exported direct ABI have maintained coverage.
+- `Array.from_vec` validates shape and element count before allocation, so
+  invalid input retains `AU4007` precedence under allocation pressure.
+- Array equality is unavailable recursively through collections, tuples,
+  nominal values, membership and key/deduplication operations, including
+  inferred generic function, method, trait-default, impl, and trait-dispatch
+  obligations.
+- the complete diagnostic registry, Array-specific `AU4002`/`AU4004`
+  documentation, benchmark-helper hash, and two-snapshot quiet-host
+  classification are now guarded.
+
+The converged focused proof passes 29 Array tests, 2 scalar integer-mode
+tests, all 9 fixture categories, 4 forced MIR/direct Array matrices,
+fixed-width parity, 2 exported native ABI tests covering all four dtypes, 10
+benchmark-harness tests, 10 reference-integrity tests, the complete reference
+gate, 101 LSP tests, 19 extension tests, syntax checks, warning-denied
+production Clippy, formatting, scoped diff hygiene, and the docs build. A
+stale runtime regression that attempted to construct source-unreachable
+`Set[Array]` and `Map[Array, ...]` values was narrowed to the reachable
+Vec/Map-value copy paths.
+
+Build hygiene was enforced before the converged rebuild: `cargo clean`
+removed 72.3 GiB of disposable artifacts. The modified
+`personal/file_ops.au` and untracked ADR-0022 draft remain untouched and
+outside Batch 6.
+
+The remaining Phase 7.3 work is the implementation checkpoint commit, the
+controlled 11-pair post-reboot benchmark from a clean detached checkout,
+release disassembly inspection, measured-results documentation, and exact
+clean full CI.
+
 ## Authorized sequence
 
 1. Close B6.0-a through B6.0-d and commit the gated entry result.

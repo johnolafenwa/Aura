@@ -162,6 +162,18 @@ Arithmetic is checked under the selected concrete numeric type.
 - Duration addition, subtraction, and multiplication operate on signed 128-bit nanoseconds and reject overflow with `AU4002`
 - `Duration // int64` returns a Duration whose signed nanosecond count is the mathematical quotient rounded toward negative infinity; a zero divisor is `AU4004` and the signed-minimum divided by `-1` is `AU4002`
 - string `+` creates a new concatenated `String`
+- numeric Array `+`, `-`, and `*` traverse exact-shape row-major buffers and
+  return fresh owned storage; float Arrays also support `/`
+- ordinary integer scalar and Array arithmetic remains checked; the explicit
+  `wrapping_*` methods use fixed-width modular arithmetic and `saturating_*`
+  methods clamp to the declared width
+- Array rank-zero/negative-dimension construction, `from_vec` count mismatch,
+  exact-shape/rank mismatch, and empty reductions use `AU4007`;
+  shape-product/element-count overflow and allocation failure use `AU4005`;
+  direct coordinate and first-axis-slice bounds failures use `AU4003`
+- floating Array reductions visit row-major elements left to right with
+  deterministic dtype rounding and NaN propagation; `mean` accumulates in
+  `float64`, and no reassociation or vectorized reduction order is promised
 
 Trait-backed operators invoke the selected trait implementation method with
 ordinary receiver, argument, move, borrow, and runtime-error behavior. `/` may

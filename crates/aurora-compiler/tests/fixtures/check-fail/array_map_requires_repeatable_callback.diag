@@ -1,0 +1,6 @@
+error[AU2002]: `Array.map` callback must be repeatable, found `consuming closure def(int32) -> int32`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/array_map_requires_repeatable_callback.au:7:32
+  |
+7 |     mapped = values.map[int32](f=lambda value: value + take(token))
+  |                                ^
+  = help: clone or precompute the consumed capture outside the lambda, or use a named function that does not consume closure state

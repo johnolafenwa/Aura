@@ -1,0 +1,91 @@
+def widen(value: int32) -> float64:
+    return value.to_float()
+
+def main():
+    mut values = Array[int32].from_vec(values=[1, 2, 3, 4], shape=[2, 2])
+    zeros: Array[float64] = Array[float64].zeros(shape=[2, 2])
+    small: Array[float32] = Array[float32].zeros(shape=[2, 2])
+    full: Array[int64] = Array[int64].full(shape=[2, 2], value=7)
+    shape: Vec[int64] = values.shape()
+    count: int64 = values.len()
+    copied: Array[int32] = values.clone()
+    maybe: Option[int32] = values.get(index=[0, 1])
+    old: Option[int32] = values.set(index=[0, 1], value=9)
+    values.fill(value=0)
+    item: int32 = values[0, 1]
+    first: int32 = values[0]
+    last: int32 = values[-1, -1]
+    values[0, 1] = item
+    prefix: Array[int32] = values[:1]
+    suffix: Array[int32] = values[1:]
+    middle: Array[int32] = values[0:1]
+    rows: Array[int32] = values[:]
+    arrays: Array[int32] = values + copied
+    arrays_sub: Array[int32] = values - copied
+    arrays_mul: Array[int32] = values * copied
+    add_right: Array[int32] = values + 2
+    add_left: Array[int32] = 2 + values
+    sub_right: Array[int32] = values - 2
+    scalar_right: Array[int32] = values * 2
+    scalar_left: Array[int32] = 2 - values
+    mul_left: Array[int32] = 2 * values
+    quotient: Array[float64] = zeros / 2.0
+    mapped: Array[float64] = values.map[float64](f=widen)
+    total: int32 = values.sum()
+    minimum: int32 = values.min()
+    maximum: int32 = values.max()
+    average: float64 = values.mean()
+    wrapped: Array[int32] = values.wrapping_add(rhs=1)
+    wrapped_sub: Array[int32] = values.wrapping_sub(rhs=copied)
+    wrapped_mul: Array[int32] = values.wrapping_mul(rhs=2)
+    saturated_add: Array[int32] = values.saturating_add(rhs=copied)
+    saturated_sub: Array[int32] = values.saturating_sub(rhs=1)
+    saturated: Array[int32] = values.saturating_mul(rhs=copied)
+    scalar: int32 = 7
+    wrapped_scalar_add: int32 = scalar.wrapping_add(rhs=9)
+    wrapped_scalar: int32 = scalar.wrapping_sub(rhs=9)
+    wrapped_scalar_mul: int32 = scalar.wrapping_mul(rhs=9)
+    saturated_scalar: int32 = scalar.saturating_add(rhs=9)
+    saturated_scalar_sub: int32 = scalar.saturating_sub(rhs=9)
+    saturated_scalar_mul: int32 = scalar.saturating_mul(rhs=9)
+    queue = Queue[Array[int32]]()
+    print(shape)
+    print(count)
+    print(maybe)
+    print(old)
+    print(small)
+    print(first)
+    print(last)
+    print(prefix)
+    print(suffix)
+    print(middle)
+    print(rows)
+    print(arrays)
+    print(arrays_sub)
+    print(arrays_mul)
+    print(add_right)
+    print(add_left)
+    print(sub_right)
+    print(scalar_right)
+    print(scalar_left)
+    print(mul_left)
+    print(quotient)
+    print(mapped)
+    print(total)
+    print(minimum)
+    print(maximum)
+    print(average)
+    print(wrapped)
+    print(wrapped_sub)
+    print(wrapped_mul)
+    print(saturated_add)
+    print(saturated_sub)
+    print(saturated)
+    print(wrapped_scalar)
+    print(wrapped_scalar_add)
+    print(wrapped_scalar_mul)
+    print(saturated_scalar)
+    print(saturated_scalar_sub)
+    print(saturated_scalar_mul)
+    print(full)
+    print(queue)

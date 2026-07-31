@@ -1,0 +1,7 @@
+def consume(value: own Array[int32]):
+    print(value)
+
+def main():
+    values = Array[int32].zeros(shape=[1])
+    consume(values)
+    print(values)

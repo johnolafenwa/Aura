@@ -1,0 +1,6 @@
+error[AU3003]: method `fill` requires a mutable receiver
+ --> crates/aurora-compiler/tests/fixtures/check-fail/array_mutation_requires_mutable_receiver.au:3:12
+  |
+3 |     values.fill(value=1)
+  |            ^
+  = help: declare the receiver place with `mut` before calling a mutating method

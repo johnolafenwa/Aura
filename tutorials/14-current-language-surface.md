@@ -89,6 +89,7 @@ Builtin generic or runtime-facing types currently accepted:
 - `Vec[T]`
 - `Map[K, V]`
 - `Set[T]`
+- `Array[T]`, where `T` is exactly `int32`, `int64`, `float32`, or `float64`
 - `MapEntry[K, V]`
 - `Task[T]`
 - `TaskGroup`
@@ -177,7 +178,7 @@ Aurora uses an ownership model with no garbage collector. See [06-ownership-and-
 Copy types (all numeric types, `bool`, `Duration`, and `Queue[T]`) are
 duplicated on assignment. `Task[T]` is copyable only when `T` is copyable, a
 `Queue[...]` handle, or a recursively repeatable `Task[...]` handle. Move
-types (`String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `random.Rng`, `TaskGroup`,
+types (`String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `Array[T]`, `random.Rng`, `TaskGroup`,
 opaque FFI handles, ordinary user-defined classes, and `Task[T]` for a
 non-repeatable `T`) transfer
 ownership on assignment.
@@ -271,8 +272,12 @@ The current compiler supports these expression forms:
   contract (including Queue's receive-owned item carve-out)
 - member access with `.`
 - indexing with `expr[index]`
+- numeric Array indexing with comma-separated exact-`int32` coordinates such
+  as `matrix[row, column]`, including indexed assignment
 - owned Vec/String slicing with `expr[start:end]`, `expr[:end]`,
   `expr[start:]`, and `expr[:]`
+- owned first-axis Array slicing with the same one-colon forms; the result is
+  a fresh Array rather than a view
 - function and method calls
 - explicit type arguments on call targets such as `Box[int32](...)` and `Result[int32, String].Ok(...)`
 - enum and built-in enum variant construction
@@ -323,6 +328,21 @@ in `0..=len`, and start must not exceed end. Invalid bounds trap with `AU4003`
 rather than clamping. String positions count Unicode scalar values and require
 an O(n) scan. Integer String indexing, step syntax, slice assignment, and
 views remain unavailable.
+
+Numeric `Array[T]` values have rank at least one, may contain zero-sized
+dimensions, and use contiguous row-major storage. The constructors are
+`zeros(shape)`, `full(shape, value)`, and `from_vec(values, shape)`;
+`from_vec` copies its shared Vec input. Members include `shape`, `len`,
+`clone`, `get`, mutable `set`, mutable `fill`, `map[U]`, `sum`, `min`, `max`,
+and `mean`. Array/Array arithmetic uses exact shapes and dtypes; same-dtype
+scalar arithmetic supports either operand order for `+`, `-`, and `*`, while
+`/` is float-only. Integer Arrays expose wrapping and saturating add, subtract,
+and multiply methods.
+
+There is no Array broadcasting, mixed-dtype promotion, equality, reshape,
+transpose, view, step, slice assignment, or accelerator placement. Empty
+`min`, `max`, and `mean` trap with `AU4007`; coordinate and slice bounds use
+`AU4003`; shape-product overflow and allocation failure use `AU4005`.
 
 ## Methods
 

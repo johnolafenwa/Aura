@@ -2721,10 +2721,28 @@ impl Parser {
                 if self.at_simple(&TokenKind::Colon) {
                     return Err(self.slice_assignment_error());
                 }
-                let index = self.parse_expr()?;
+                let first = self.parse_expr()?;
                 if self.at_simple(&TokenKind::Colon) {
                     return Err(self.slice_assignment_error());
                 }
+                let index = if self.eat_simple(&TokenKind::Comma).is_some() {
+                    let mut elements = vec![first];
+                    loop {
+                        elements.push(self.parse_expr()?);
+                        if self.at_simple(&TokenKind::Colon) {
+                            return Err(self.slice_assignment_error());
+                        }
+                        if self.eat_simple(&TokenKind::Comma).is_none() {
+                            break;
+                        }
+                    }
+                    Expr {
+                        span,
+                        kind: ExprKind::Tuple(elements),
+                    }
+                } else {
+                    first
+                };
                 self.expect_simple(TokenKind::RBracket)?;
                 let object = assign_target_to_expr(target, span);
                 target = AssignTarget::Index {

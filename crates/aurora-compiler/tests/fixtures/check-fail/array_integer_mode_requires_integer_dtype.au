@@ -1,0 +1,3 @@
+def main():
+    values = Array[float32].zeros(shape=[1])
+    print(values.saturating_add(rhs=1.0))

@@ -48,17 +48,19 @@ use crate::runtime_value::{
     spawn_lightweight_task_with_result_repeatability_registered,
     spawn_lightweight_task_with_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
-    task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
-    wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
-    wait_for_runtime_scheduler, yield_now_with_runtime_scheduler, CancellationContext,
-    ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue, FfiHandleValue,
-    FileValue, FunctionValue, HttpExchangeValue, HttpListenerValue, HttpResponseValue,
-    InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
-    ProcessPipeValue, ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus,
-    RangeValue, RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError,
-    SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
-    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
-    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    task_result_timed_out, try_array_buffer, try_clone_array_containing_value, wait_all_cancelled,
+    wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
+    wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
+    yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
+    CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
+    FfiHandleValue, FileValue, FunctionValue, HttpExchangeValue, HttpListenerValue,
+    HttpResponseValue, InstanceValue, IntegerArithmeticMode, MapValue, ProcessChildValue,
+    ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue, ProcessRestartPolicy,
+    ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue,
+    RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskCancelledSignal,
+    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
+    TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue,
+    UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
     NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
 };
 use crate::sema::{substitute_type, Type};
@@ -668,6 +670,10 @@ enum RvalueOutcome {
     Return(Value),
 }
 
+fn try_clone_mir_value(value: &Value) -> Result<Value> {
+    try_clone_array_containing_value(value)
+}
+
 #[derive(Default)]
 struct Env {
     values: HashMap<String, Value>,
@@ -677,11 +683,17 @@ struct Env {
 #[cfg(test)]
 std::thread_local! {
     static MIR_VALUE_CLONE_COUNT: Cell<usize> = const { Cell::new(0) };
+    static MIR_ARRAY_PLACE_CLONE_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
 #[cfg(test)]
 fn mir_value_clone_count() -> usize {
     MIR_VALUE_CLONE_COUNT.with(Cell::get)
+}
+
+#[cfg(test)]
+fn mir_array_place_clone_count() -> usize {
+    MIR_ARRAY_PLACE_CLONE_COUNT.with(Cell::get)
 }
 
 impl Env {
@@ -726,8 +738,8 @@ impl Env {
                 field, place
             )));
         };
-        match instance.fields.get(field).cloned() {
-            Some(value) => Ok(value),
+        match instance.fields.get(field) {
+            Some(value) => try_clone_mir_value(value),
             None => Err(Diagnostic::new(format!(
                 "class `{}` has no field `{}` in MIR place `{}`",
                 instance.class_name, field, place
@@ -770,7 +782,12 @@ impl Env {
     fn read_place(&self, place: &str) -> Result<Value> {
         #[cfg(test)]
         MIR_VALUE_CLONE_COUNT.with(|count| count.set(count.get() + 1));
-        self.place_ref(place).cloned()
+        let value = self.place_ref(place)?;
+        #[cfg(test)]
+        if matches!(value, Value::Array(_)) {
+            MIR_ARRAY_PLACE_CLONE_COUNT.with(|count| count.set(count.get() + 1));
+        }
+        try_clone_mir_value(value)
     }
 
     fn take_place(&mut self, place: &str) -> Result<Value> {
@@ -789,6 +806,18 @@ impl Env {
             .get_mut(root)
             .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?;
         take_nested_place(value, rest, place)
+    }
+
+    fn place_mut(&mut self, place: &str) -> Result<&mut Value> {
+        let segments = split_place_segments(place)?;
+        let (root, rest) = segments
+            .split_first()
+            .expect("split_place_segments rejects empty MIR places");
+        let value = self
+            .values
+            .get_mut(root)
+            .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{place}`")))?;
+        nested_place_mut(value, rest, place)
     }
 
     fn take_variant_payload(&mut self, place: &str, index: usize) -> Result<Value> {
@@ -822,11 +851,15 @@ impl Env {
                 "cannot project a tuple element from non-tuple MIR place `{place}`"
             )));
         };
-        tuple.elements.get(index).cloned().ok_or_else(|| {
-            Diagnostic::new(format!(
-                "tuple MIR place `{place}` has no element at index {index}"
-            ))
-        })
+        tuple
+            .elements
+            .get(index)
+            .ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "tuple MIR place `{place}` has no element at index {index}"
+                ))
+            })
+            .and_then(try_clone_mir_value)
     }
 
     fn take_tuple_element(&mut self, place: &str, index: usize) -> Result<Value> {
@@ -868,17 +901,15 @@ impl Env {
             return Ok(());
         }
 
-        let mut root_value = match self.values.get(root).cloned() {
-            Some(value) => value,
-            None => return Err(Diagnostic::new(format!("unknown MIR place `{}`", place))),
-        };
+        let root_value = self
+            .values
+            .get_mut(root)
+            .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{place}`")))?;
         let rest_refs = rest
             .iter()
             .map(|segment| segment.as_str())
             .collect::<Vec<_>>();
-        write_nested_place(&mut root_value, &rest_refs, value, place)?;
-        self.values.insert((*root).to_string(), root_value);
-        Ok(())
+        write_nested_place(root_value, &rest_refs, value, place)
     }
 
     fn place_type(&self, place: &str) -> Option<&Type> {
@@ -887,6 +918,26 @@ impl Env {
 
     fn set_place_type(&mut self, place: &str, ty: Type) {
         self.types.insert(place.to_string(), ty);
+    }
+}
+
+fn array_place_ref<'a>(env: &'a Env, place: &str) -> Result<&'a ArrayValue> {
+    match env.place_ref(place)? {
+        Value::Array(array) => Ok(array),
+        other => Err(Diagnostic::new(format!(
+            "MIR place `{place}` no longer contains an Array, found `{}`",
+            other.render()
+        ))),
+    }
+}
+
+fn array_place_mut<'a>(env: &'a mut Env, place: &str) -> Result<&'a mut ArrayValue> {
+    match env.place_mut(place)? {
+        Value::Array(array) => Ok(array),
+        other => Err(Diagnostic::new(format!(
+            "MIR place `{place}` no longer contains an Array, found `{}`",
+            other.render()
+        ))),
     }
 }
 
@@ -1039,6 +1090,15 @@ fn borrow_mir_operand<'a>(operand: &'a Operand, env: &'a Env) -> Result<MirBorro
     })
 }
 
+fn mir_operand_is_array(operand: &Operand, env: &Env) -> Result<bool> {
+    match operand {
+        Operand::Place(place) | Operand::MovePlace(place) => {
+            Ok(matches!(env.place_ref(place)?, Value::Array(_)))
+        }
+        _ => Ok(false),
+    }
+}
+
 fn borrow_mir_string<'a>(operand: &'a Operand, env: &'a Env, call: &str) -> Result<&'a str> {
     match operand {
         Operand::Place(place) => match env.place_ref(place)? {
@@ -1074,6 +1134,7 @@ fn evaluate_borrowed_length_member(
         (Value::String(text), "len") => text.chars().count(),
         (Value::String(text), "byte_len") => text.len(),
         (Value::Vec(vector), "len") => vector.elements.len(),
+        (Value::Array(array), "len") => array.len(),
         (Value::Map(map), "len") => map.entries.len(),
         (Value::Set(set), "len") => set.elements.len(),
         _ => return None,
@@ -1753,6 +1814,9 @@ impl MirRuntime {
                 "Vec".to_string(),
                 vec![vector.element_type.clone()],
             )),
+            Value::Array(array) => {
+                Some(Type::Named("Array".to_string(), vec![array.element_type()]))
+            }
             Value::Set(set) => Some(Type::Named(
                 "Set".to_string(),
                 vec![set.element_type.clone()],
@@ -2812,6 +2876,16 @@ impl MirRuntime {
                 right,
                 span,
             } => {
+                if mir_operand_is_array(left, env)? || mir_operand_is_array(right, env)? {
+                    let left = borrow_mir_operand(left, env)?;
+                    let right = borrow_mir_operand(right, env)?;
+                    return Ok(RvalueOutcome::Value(self.eval_array_binary(
+                        *op,
+                        left.as_value(),
+                        right.as_value(),
+                        Some(*span),
+                    )?));
+                }
                 let left = self.evaluate_operand(left, env)?;
                 let right = self.evaluate_operand(right, env)?;
                 Ok(RvalueOutcome::Value(self.eval_binary(
@@ -2970,14 +3044,14 @@ impl MirRuntime {
                 Operand::Place(place) => Ok(RvalueOutcome::Value(env.read_member(place, field)?)),
                 _ => {
                     let object = self.evaluate_operand(object, env)?;
-                    let Value::Instance(instance) = object else {
+                    let Value::Instance(mut instance) = object else {
                         return Err(Diagnostic::new(format!(
                             "cannot access field `{}` on non-instance value `{}`",
                             field,
                             object.render()
                         )));
                     };
-                    let value = instance.fields.get(field).cloned().ok_or_else(|| {
+                    let value = instance.fields.remove(field).ok_or_else(|| {
                         Diagnostic::new(format!(
                             "class `{}` has no field `{}`",
                             instance.class_name, field
@@ -3153,6 +3227,77 @@ impl MirRuntime {
 
                 if let Some((type_name, member_name)) = name
                     .split_once('.')
+                    .filter(|(type_name, _)| *type_name == "Array")
+                {
+                    if let Some(constructor) =
+                        BuiltinAssociatedFunction::resolve(type_name, member_name)
+                    {
+                        let element_type = expected_return_type
+                            .and_then(|ty| match ty {
+                                Type::Named(name, arguments)
+                                    if name == "Array" && arguments.len() == 1 =>
+                                {
+                                    arguments.first()
+                                }
+                                _ => None,
+                            })
+                            .ok_or_else(|| {
+                                Diagnostic::coded(
+                                    "AU4001",
+                                    format!(
+                                        "`Array.{}` reached MIR execution without an Array[T] result type",
+                                        constructor.name()
+                                    ),
+                                )
+                            })?;
+                        let dtype = ArrayDType::from_type(element_type).ok_or_else(|| {
+                            Diagnostic::coded(
+                                "AU4001",
+                                format!(
+                                    "`Array.{}` reached MIR execution with unsupported element type `{element_type}`",
+                                    constructor.name()
+                                ),
+                            )
+                        })?;
+                        let values = evaluate_named_args(args, env)?;
+                        let array = match constructor {
+                            BuiltinAssociatedFunction::ArrayZeros => {
+                                let bound = bind_builtin_args(&["shape"], values)?;
+                                let shape = array_shape_from_runtime(&bound[0].value)?;
+                                ArrayValue::zeros(dtype, shape)?
+                            }
+                            BuiltinAssociatedFunction::ArrayFull => {
+                                let bound = bind_builtin_args(&["shape", "value"], values)?;
+                                let shape = array_shape_from_runtime(&bound[0].value)?;
+                                ArrayValue::full(dtype, shape, &bound[1].value)?
+                            }
+                            BuiltinAssociatedFunction::ArrayFromVec => {
+                                let bound = bind_builtin_args(&["values", "shape"], values)?;
+                                let Value::Vec(vector) = &bound[0].value else {
+                                    return Err(Diagnostic::coded(
+                                        "AU4001",
+                                        "`Array.from_vec` expects `Vec[T]` values",
+                                    ));
+                                };
+                                if ArrayDType::from_type(&vector.element_type) != Some(dtype) {
+                                    return Err(Diagnostic::coded(
+                                        "AU4001",
+                                        "`Array.from_vec` element type does not match its Array result",
+                                    ));
+                                }
+                                let shape = array_shape_from_runtime(&bound[1].value)?;
+                                ArrayValue::from_vec(vector, Some(&shape))?
+                            }
+                            _ => unreachable!(
+                                "an Array associated-function name resolves only Array constructors"
+                            ),
+                        };
+                        return Ok(Value::Array(array));
+                    }
+                }
+
+                if let Some((type_name, member_name)) = name
+                    .split_once('.')
                     .filter(|(type_name, _)| *type_name == "Duration")
                 {
                     if let Some(constructor) =
@@ -3186,6 +3331,11 @@ impl MirRuntime {
                             BuiltinAssociatedFunction::DurationMinutes => NANOS_PER_MINUTE,
                             BuiltinAssociatedFunction::StringFromBytes => {
                                 unreachable!("String.from_bytes is not a Duration constructor")
+                            }
+                            BuiltinAssociatedFunction::ArrayZeros
+                            | BuiltinAssociatedFunction::ArrayFull
+                            | BuiltinAssociatedFunction::ArrayFromVec => {
+                                unreachable!("Array constructors are not Duration constructors")
                             }
                         };
                         return value
@@ -3547,6 +3697,9 @@ impl MirRuntime {
                             Value::Vec(vector) => {
                                 slice_vec_owned(vector, start, end).map(Value::Vec)
                             }
+                            Value::Array(array) => {
+                                array.slice_first_axis(start, end).map(Value::Array)
+                            }
                             Value::String(text) => {
                                 slice_string_owned(text, start, end).map(Value::String)
                             }
@@ -3561,6 +3714,18 @@ impl MirRuntime {
                             error.span = Some(span);
                             error
                         });
+                    }
+                }
+
+                if let Operand::Place(place) = object {
+                    if matches!(env.place_ref(place)?, Value::Array(_)) {
+                        return self.evaluate_array_place_method(
+                            place,
+                            field,
+                            receiver_place.as_deref(),
+                            args,
+                            env,
+                        );
                     }
                 }
 
@@ -3599,6 +3764,9 @@ impl MirRuntime {
                     return match receiver {
                         Value::Vec(vector) => {
                             self.evaluate_vec_method(vector, field, None, args, env)
+                        }
+                        Value::Array(array) => {
+                            self.evaluate_array_method(array, field, None, args, env)
                         }
                         Value::String(text) => self.evaluate_string_method(text, field, args, env),
                         other => Err(Diagnostic::new(format!(
@@ -3640,21 +3808,46 @@ impl MirRuntime {
                     }
                 }
 
+                let mut receiver = match receiver {
+                    Value::Array(array) => {
+                        return self.evaluate_array_method(
+                            array,
+                            field,
+                            receiver_place.as_deref(),
+                            args,
+                            env,
+                        )
+                    }
+                    Value::Vec(vector) => {
+                        return self.evaluate_vec_method(
+                            vector,
+                            field,
+                            receiver_place.as_deref(),
+                            args,
+                            env,
+                        )
+                    }
+                    Value::Map(map) => {
+                        return self.evaluate_map_method(
+                            map,
+                            field,
+                            receiver_place.as_deref(),
+                            args,
+                            env,
+                        )
+                    }
+                    Value::Set(set) => {
+                        return self.evaluate_set_method(
+                            set,
+                            field,
+                            receiver_place.as_deref(),
+                            args,
+                            env,
+                        )
+                    }
+                    receiver => receiver,
+                };
                 match &receiver {
-                    Value::Vec(vector) => self.evaluate_vec_method(
-                        vector.clone(),
-                        field,
-                        receiver_place.as_deref(),
-                        args,
-                        env,
-                    ),
-                    Value::Map(map) => self.evaluate_map_method(
-                        map.clone(),
-                        field,
-                        receiver_place.as_deref(),
-                        args,
-                        env,
-                    ),
                     Value::Float(value) if field == "sqrt" => {
                         if !args.is_empty() {
                             return Err(Diagnostic::new("`sqrt` does not take arguments"));
@@ -3672,6 +3865,41 @@ impl MirRuntime {
                             return Err(Diagnostic::new("`to_float` does not take arguments"));
                         }
                         Ok(Value::Float(value.to_f64()))
+                    }
+                    Value::Int(value)
+                        if matches!(
+                            field.as_str(),
+                            "wrapping_add"
+                                | "wrapping_sub"
+                                | "wrapping_mul"
+                                | "saturating_add"
+                                | "saturating_sub"
+                                | "saturating_mul"
+                        ) =>
+                    {
+                        let values = evaluate_named_args(args, env)?;
+                        let bound = bind_builtin_args(&["rhs"], values)?;
+                        let Value::Int(rhs) = bound[0].value else {
+                            return Err(Diagnostic::coded(
+                                "AU4001",
+                                format!("`{field}` expects a matching integer operand"),
+                            ));
+                        };
+                        let result = match field.as_str() {
+                            "wrapping_add" => value.wrapping_add(rhs),
+                            "wrapping_sub" => value.wrapping_sub(rhs),
+                            "wrapping_mul" => value.wrapping_mul(rhs),
+                            "saturating_add" => value.saturating_add(rhs),
+                            "saturating_sub" => value.saturating_sub(rhs),
+                            "saturating_mul" => value.saturating_mul(rhs),
+                            _ => unreachable!(),
+                        };
+                        result.map(Value::Int).ok_or_else(|| {
+                            Diagnostic::coded(
+                                "AU4001",
+                                format!("`{field}` expects matching fixed-width integer operands"),
+                            )
+                        })
                     }
                     Value::Float(value) if field == "to_string" => {
                         if !args.is_empty() {
@@ -3701,13 +3929,6 @@ impl MirRuntime {
                     Value::String(value) => {
                         self.evaluate_string_method(value.clone(), field, args, env)
                     }
-                    Value::Set(set) => self.evaluate_set_method(
-                        set.clone(),
-                        field,
-                        receiver_place.as_deref(),
-                        args,
-                        env,
-                    ),
                     Value::Channel(channel) => {
                         self.evaluate_channel_method(channel.clone(), field, args, env)
                     }
@@ -3821,7 +4042,7 @@ impl MirRuntime {
                             Some(if method.receiver == Some(MirReceiverKind::Value) {
                                 std::mem::replace(&mut receiver, Value::Unit)
                             } else {
-                                receiver.clone()
+                                try_clone_mir_value(&receiver)?
                             }),
                             evaluated_args,
                             expected_return_type,
@@ -3876,7 +4097,7 @@ impl MirRuntime {
                                     Some(if method.receiver == Some(MirReceiverKind::Value) {
                                         std::mem::replace(&mut receiver, Value::Unit)
                                     } else {
-                                        receiver.clone()
+                                        try_clone_mir_value(&receiver)?
                                     }),
                                     evaluated_args,
                                     expected_return_type,
@@ -4027,6 +4248,22 @@ impl MirRuntime {
                 function_value.render()
             )));
         };
+        let evaluated_args = evaluate_named_args(args, env)?;
+        self.evaluate_function_value_with_args(
+            *function_value,
+            evaluated_args,
+            expected_return_type,
+            env,
+        )
+    }
+
+    fn evaluate_function_value_with_args(
+        &mut self,
+        function_value: FunctionValue,
+        mut evaluated_args: Vec<EvaluatedMirArg>,
+        expected_return_type: Option<&Type>,
+        env: &mut Env,
+    ) -> Result<Value> {
         let function = self
             .functions
             .get(&function_value.name)
@@ -4034,7 +4271,6 @@ impl MirRuntime {
             .ok_or_else(|| {
                 Diagnostic::new(format!("unknown MIR function `{}`", function_value.name))
             })?;
-        let mut evaluated_args = evaluate_named_args(args, env)?;
         if let Some(closure) = &function_value.closure_environment {
             let captures = closure.arguments(&function_value.name)?;
             let mut combined = Vec::with_capacity(captures.len() + evaluated_args.len());
@@ -4509,6 +4745,410 @@ impl MirRuntime {
         }
     }
 
+    fn evaluate_array_place_method(
+        &mut self,
+        object_place: &str,
+        field: &str,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<Value> {
+        match field {
+            "shape" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`shape` does not take arguments"));
+                }
+                array_place_ref(env, object_place)?.shape_value()
+            }
+            "len" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`len` does not take arguments"));
+                }
+                Ok(Value::Int(IntegerValue::from_i64(
+                    i64::try_from(array_place_ref(env, object_place)?.len())
+                        .expect("validated Array element counts fit the int64 surface"),
+                )))
+            }
+            "clone" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`clone` does not take arguments"));
+                }
+                array_place_ref(env, object_place)?
+                    .try_clone()
+                    .map(Value::Array)
+            }
+            "get" | "__index_option" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["index"], values)?;
+                let coordinates = array_coordinates_from_runtime(&bound[0].value)?;
+                Ok(array_place_ref(env, object_place)?
+                    .get_optional(&coordinates)?
+                    .map(option_some)
+                    .unwrap_or_else(option_none))
+            }
+            "__index" => {
+                let values = evaluate_named_args(args, env)?;
+                if values.len() != 3 {
+                    return Err(Diagnostic::new(
+                        "internal Array indexing requires coordinates, line, and column operands",
+                    ));
+                }
+                let coordinates = array_coordinates_from_runtime(&values[0].value)?;
+                let line = self.mir_index_from_value(values[1].value.clone())?;
+                let column = self.mir_index_from_value(values[2].value.clone())?;
+                array_place_ref(env, object_place)?
+                    .get(&coordinates)
+                    .map_err(|mut error| {
+                        error.span = Some(Span::new(line, column));
+                        error
+                    })
+            }
+            "__slice" => {
+                let values = evaluate_named_args(args, env)?;
+                let (start, end, span) = self.mir_slice_args(values)?;
+                array_place_ref(env, object_place)?
+                    .slice_first_axis(start, end)
+                    .map(Value::Array)
+                    .map_err(|mut error| {
+                        error.span = Some(span);
+                        error
+                    })
+            }
+            "set" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["index", "value"], values)?;
+                let coordinates = array_coordinates_from_runtime(&bound[0].value)?;
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`set` requires a mutable Array place"));
+                };
+                let previous =
+                    array_place_mut(env, place)?.set(&coordinates, bound[1].value.clone())?;
+                Ok(option_some(previous))
+            }
+            "__set_index" => {
+                let values = evaluate_named_args(args, env)?;
+                if values.len() != 4 {
+                    return Err(Diagnostic::new(
+                        "internal Array indexed assignment requires coordinates, value, line, and column operands",
+                    ));
+                }
+                let coordinates = array_coordinates_from_runtime(&values[0].value)?;
+                let line = self.mir_index_from_value(values[2].value.clone())?;
+                let column = self.mir_index_from_value(values[3].value.clone())?;
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new(
+                        "indexed assignment requires a mutable Array place",
+                    ));
+                };
+                array_place_mut(env, place)?
+                    .set(&coordinates, values[1].value.clone())
+                    .map_err(|mut error| {
+                        error.span = Some(Span::new(line, column));
+                        error
+                    })?;
+                Ok(Value::Unit)
+            }
+            "fill" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["value"], values)?;
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`fill` requires a mutable Array place"));
+                };
+                array_place_mut(env, place)?.fill(bound[0].value.clone())?;
+                Ok(Value::Unit)
+            }
+            "map" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["f"], values)?;
+                let Value::Function(callback) = &bound[0].value else {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "`Array.map` expects a function value",
+                    ));
+                };
+                let output_type = match &callback.signature {
+                    Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
+                        return_type.as_ref().clone()
+                    }
+                    _ => {
+                        return Err(Diagnostic::coded(
+                            "AU4001",
+                            "`Array.map` callback has malformed runtime type metadata",
+                        ))
+                    }
+                };
+                if ArrayDType::from_type(&output_type).is_none() {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        format!(
+                            "`Array.map` callback returns unsupported Array element type `{output_type}`"
+                        ),
+                    ));
+                }
+                let (input_type, len, shape) = {
+                    let array = array_place_ref(env, object_place)?;
+                    (array.element_type(), array.len(), array.try_shape()?)
+                };
+                let mut mapped = try_array_buffer(len, "Array.map result")?;
+                for index in 0..len {
+                    let element = array_place_ref(env, object_place)?.value_at_flat(index);
+                    mapped.push(self.evaluate_function_value_with_args(
+                        callback.as_ref().clone(),
+                        vec![EvaluatedMirArg {
+                            name: None,
+                            value: element,
+                            ty: Some(input_type.clone()),
+                            writeback_place: None,
+                        }],
+                        Some(&output_type),
+                        env,
+                    )?);
+                }
+                ArrayValue::from_values(&output_type, shape, mapped).map(Value::Array)
+            }
+            "sum" | "min" | "max" | "mean" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new(format!(
+                        "`{field}` does not take arguments"
+                    )));
+                }
+                let reduction = match field {
+                    "sum" => ArrayReduction::Sum,
+                    "min" => ArrayReduction::Min,
+                    "max" => ArrayReduction::Max,
+                    "mean" => ArrayReduction::Mean,
+                    _ => unreachable!(),
+                };
+                array_place_ref(env, object_place)?.reduce(reduction)
+            }
+            "wrapping_add" | "wrapping_sub" | "wrapping_mul" | "saturating_add"
+            | "saturating_sub" | "saturating_mul" => {
+                let bound = bind_mir_arg_refs(&["rhs"], args)?;
+                let rhs = borrow_mir_operand(&bound[0].value, env)?;
+                let operation = match field {
+                    "wrapping_add" | "saturating_add" => ArrayBinaryOp::Add,
+                    "wrapping_sub" | "saturating_sub" => ArrayBinaryOp::Sub,
+                    "wrapping_mul" | "saturating_mul" => ArrayBinaryOp::Mul,
+                    _ => unreachable!(),
+                };
+                let mode = if field.starts_with("wrapping_") {
+                    IntegerArithmeticMode::Wrapping
+                } else {
+                    IntegerArithmeticMode::Saturating
+                };
+                let array = array_place_ref(env, object_place)?;
+                let result = match rhs.as_value() {
+                    Value::Array(right) => array.binary(right, operation, mode),
+                    scalar => array.scalar_binary(scalar, false, operation, mode),
+                }?;
+                Ok(Value::Array(result))
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported Array method `{field}`"
+            ))),
+        }
+    }
+
+    fn evaluate_array_method(
+        &mut self,
+        array: ArrayValue,
+        field: &str,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<Value> {
+        match field {
+            "shape" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`shape` does not take arguments"));
+                }
+                array.shape_value()
+            }
+            "len" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`len` does not take arguments"));
+                }
+                Ok(Value::Int(IntegerValue::from_i64(
+                    i64::try_from(array.len())
+                        .expect("validated Array element counts fit the int64 surface"),
+                )))
+            }
+            "clone" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`clone` does not take arguments"));
+                }
+                Ok(Value::Array(array))
+            }
+            "get" | "__index_option" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["index"], values)?;
+                let coordinates = array_coordinates_from_runtime(&bound[0].value)?;
+                Ok(array
+                    .get_optional(&coordinates)?
+                    .map(option_some)
+                    .unwrap_or_else(option_none))
+            }
+            "__index" => {
+                let values = evaluate_named_args(args, env)?;
+                if values.len() != 3 {
+                    return Err(Diagnostic::new(
+                        "internal Array indexing requires coordinates, line, and column operands",
+                    ));
+                }
+                let coordinates = array_coordinates_from_runtime(&values[0].value)?;
+                let line = self.mir_index_from_value(values[1].value.clone())?;
+                let column = self.mir_index_from_value(values[2].value.clone())?;
+                array.get(&coordinates).map_err(|mut error| {
+                    error.span = Some(Span::new(line, column));
+                    error
+                })
+            }
+            "__slice" => {
+                let values = evaluate_named_args(args, env)?;
+                let (start, end, span) = self.mir_slice_args(values)?;
+                array
+                    .slice_first_axis(start, end)
+                    .map(Value::Array)
+                    .map_err(|mut error| {
+                        error.span = Some(span);
+                        error
+                    })
+            }
+            "set" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["index", "value"], values)?;
+                let coordinates = array_coordinates_from_runtime(&bound[0].value)?;
+                let mut updated = array;
+                let previous = updated.set(&coordinates, bound[1].value.clone())?;
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`set` requires a mutable Array place"));
+                };
+                env.write_place(place, Value::Array(updated))?;
+                Ok(option_some(previous))
+            }
+            "__set_index" => {
+                let values = evaluate_named_args(args, env)?;
+                if values.len() != 4 {
+                    return Err(Diagnostic::new(
+                        "internal Array indexed assignment requires coordinates, value, line, and column operands",
+                    ));
+                }
+                let coordinates = array_coordinates_from_runtime(&values[0].value)?;
+                let line = self.mir_index_from_value(values[2].value.clone())?;
+                let column = self.mir_index_from_value(values[3].value.clone())?;
+                let mut updated = array;
+                updated
+                    .set(&coordinates, values[1].value.clone())
+                    .map_err(|mut error| {
+                        error.span = Some(Span::new(line, column));
+                        error
+                    })?;
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new(
+                        "indexed assignment requires a mutable Array place",
+                    ));
+                };
+                env.write_place(place, Value::Array(updated))?;
+                Ok(Value::Unit)
+            }
+            "fill" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["value"], values)?;
+                let mut updated = array;
+                updated.fill(bound[0].value.clone())?;
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`fill` requires a mutable Array place"));
+                };
+                env.write_place(place, Value::Array(updated))?;
+                Ok(Value::Unit)
+            }
+            "map" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["f"], values)?;
+                let Value::Function(callback) = &bound[0].value else {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "`Array.map` expects a function value",
+                    ));
+                };
+                let output_type = match &callback.signature {
+                    Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
+                        return_type.as_ref().clone()
+                    }
+                    _ => {
+                        return Err(Diagnostic::coded(
+                            "AU4001",
+                            "`Array.map` callback has malformed runtime type metadata",
+                        ))
+                    }
+                };
+                if ArrayDType::from_type(&output_type).is_none() {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        format!(
+                            "`Array.map` callback returns unsupported Array element type `{output_type}`"
+                        ),
+                    ));
+                }
+                let input_type = array.element_type();
+                let mut mapped = try_array_buffer(array.len(), "Array.map result")?;
+                for index in 0..array.len() {
+                    mapped.push(self.evaluate_function_value_with_args(
+                        callback.as_ref().clone(),
+                        vec![EvaluatedMirArg {
+                            name: None,
+                            value: array.value_at_flat(index),
+                            ty: Some(input_type.clone()),
+                            writeback_place: None,
+                        }],
+                        Some(&output_type),
+                        env,
+                    )?);
+                }
+                ArrayValue::from_values(&output_type, array.try_shape()?, mapped).map(Value::Array)
+            }
+            "sum" | "min" | "max" | "mean" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new(format!(
+                        "`{field}` does not take arguments"
+                    )));
+                }
+                let reduction = match field {
+                    "sum" => ArrayReduction::Sum,
+                    "min" => ArrayReduction::Min,
+                    "max" => ArrayReduction::Max,
+                    "mean" => ArrayReduction::Mean,
+                    _ => unreachable!(),
+                };
+                array.reduce(reduction)
+            }
+            "wrapping_add" | "wrapping_sub" | "wrapping_mul" | "saturating_add"
+            | "saturating_sub" | "saturating_mul" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["rhs"], values)?;
+                let operation = match field {
+                    "wrapping_add" | "saturating_add" => ArrayBinaryOp::Add,
+                    "wrapping_sub" | "saturating_sub" => ArrayBinaryOp::Sub,
+                    "wrapping_mul" | "saturating_mul" => ArrayBinaryOp::Mul,
+                    _ => unreachable!(),
+                };
+                let mode = if field.starts_with("wrapping_") {
+                    IntegerArithmeticMode::Wrapping
+                } else {
+                    IntegerArithmeticMode::Saturating
+                };
+                let result = match &bound[0].value {
+                    Value::Array(right) => array.binary(right, operation, mode),
+                    scalar => array.scalar_binary(scalar, false, operation, mode),
+                }?;
+                Ok(Value::Array(result))
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported Array method `{field}`"
+            ))),
+        }
+    }
+
     fn evaluate_vec_method(
         &mut self,
         vector: VecValue,
@@ -4572,11 +5212,10 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["index"], values)?;
                 let (_, index) =
                     self.mir_vec_index_from_value(bound[0].value.clone(), vector.elements.len())?;
-                Ok(index
-                    .and_then(|index| vector.elements.get(index))
-                    .cloned()
-                    .map(option_some)
-                    .unwrap_or_else(option_none))
+                match index.and_then(|index| vector.elements.get(index)) {
+                    Some(value) => try_clone_mir_value(value).map(option_some),
+                    None => Ok(option_none()),
+                }
             }
             "__take_index_option" => {
                 let values = evaluate_named_args(args, env)?;
@@ -4606,9 +5245,8 @@ impl MirRuntime {
                 let column = self.mir_index_from_value(values[2].value.clone())?;
                 let (supplied_index, index) =
                     self.mir_vec_index_from_value(values[0].value.clone(), vector.elements.len())?;
-                index
+                let value = index
                     .and_then(|index| vector.elements.get(index))
-                    .cloned()
                     .ok_or_else(|| {
                         Diagnostic::at(
                             crate::diag::Span::new(line, column),
@@ -4618,7 +5256,8 @@ impl MirRuntime {
                                 vector.elements.len()
                             ),
                         )
-                    })
+                    })?;
+                try_clone_mir_value(value)
             }
             "__slice" => {
                 let values = evaluate_named_args(args, env)?;
@@ -4860,12 +5499,14 @@ impl MirRuntime {
             "get" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["key"], values)?;
-                Ok(map
+                match map
                     .entries
                     .iter()
                     .find(|(candidate_key, _)| *candidate_key == bound[0].value)
-                    .map(|(_, value)| option_some(value.clone()))
-                    .unwrap_or_else(option_none))
+                {
+                    Some((_, value)) => try_clone_mir_value(value).map(option_some),
+                    None => Ok(option_none()),
+                }
             }
             "__index" => {
                 let values = evaluate_named_args(args, env)?;
@@ -4877,17 +5518,19 @@ impl MirRuntime {
                 let key = values[0].value.clone();
                 let line = self.mir_index_from_value(values[1].value.clone())?;
                 let column = self.mir_index_from_value(values[2].value.clone())?;
-                map.entries
+                let value = map
+                    .entries
                     .iter()
                     .find(|(candidate_key, _)| *candidate_key == key)
-                    .map(|(_, value)| value.clone())
+                    .map(|(_, value)| value)
                     .ok_or_else(|| {
                         Diagnostic::coded_at(
                             "AU4003",
                             crate::diag::Span::new(line, column),
                             format!("map key `{}` was not present", key.render()),
                         )
-                    })
+                    })?;
+                try_clone_mir_value(value)
             }
             "set" => {
                 let values = evaluate_named_args(args, env)?;
@@ -4972,18 +5615,28 @@ impl MirRuntime {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`keys` does not take arguments"));
                 }
+                let mut elements =
+                    try_array_buffer(map.entries.len(), "Array-containing Map key copy")?;
+                for (key, _) in &map.entries {
+                    elements.push(try_clone_mir_value(key)?);
+                }
                 Ok(Value::Vec(VecValue {
                     element_type: map.key_type.clone(),
-                    elements: map.entries.iter().map(|(key, _)| key.clone()).collect(),
+                    elements,
                 }))
             }
             "values" => {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`values` does not take arguments"));
                 }
+                let mut elements =
+                    try_array_buffer(map.entries.len(), "Array-containing Map value copy")?;
+                for (_, value) in &map.entries {
+                    elements.push(try_clone_mir_value(value)?);
+                }
                 Ok(Value::Vec(VecValue {
                     element_type: map.value_type.clone(),
-                    elements: map.entries.iter().map(|(_, value)| value.clone()).collect(),
+                    elements,
                 }))
             }
             "items" | "entries" => {
@@ -4993,24 +5646,23 @@ impl MirRuntime {
                         field
                     )));
                 }
+                let mut elements =
+                    try_array_buffer(map.entries.len(), "Array-containing Map entry copy")?;
+                for (key, value) in &map.entries {
+                    elements.push(Value::Instance(InstanceValue {
+                        class_name: "MapEntry".to_string(),
+                        fields: BTreeMap::from([
+                            ("key".to_string(), try_clone_mir_value(key)?),
+                            ("value".to_string(), try_clone_mir_value(value)?),
+                        ]),
+                    }));
+                }
                 Ok(Value::Vec(VecValue {
                     element_type: Type::Named(
                         "MapEntry".to_string(),
                         vec![map.key_type.clone(), map.value_type.clone()],
                     ),
-                    elements: map
-                        .entries
-                        .iter()
-                        .map(|(key, value)| {
-                            Value::Instance(InstanceValue {
-                                class_name: "MapEntry".to_string(),
-                                fields: BTreeMap::from([
-                                    ("key".to_string(), key.clone()),
-                                    ("value".to_string(), value.clone()),
-                                ]),
-                            })
-                        })
-                        .collect(),
+                    elements,
                 }))
             }
             "clear" => {
@@ -5316,12 +5968,10 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["index"], values)?;
                 let index = self.mir_index_from_value(bound[0].value.clone())?;
-                Ok(set
-                    .elements
-                    .get(index)
-                    .cloned()
-                    .map(option_some)
-                    .unwrap_or_else(option_none))
+                match set.elements.get(index) {
+                    Some(value) => try_clone_mir_value(value).map(option_some),
+                    None => Ok(option_none()),
+                }
             }
             "__take_index_option" => {
                 let values = evaluate_named_args(args, env)?;
@@ -7440,6 +8090,46 @@ impl MirRuntime {
         }
     }
 
+    fn eval_array_binary(
+        &self,
+        op: crate::ast::BinaryOp,
+        left: &Value,
+        right: &Value,
+        span: Option<crate::diag::Span>,
+    ) -> Result<Value> {
+        use crate::ast::BinaryOp;
+
+        let operation = match op {
+            BinaryOp::Add => ArrayBinaryOp::Add,
+            BinaryOp::Sub => ArrayBinaryOp::Sub,
+            BinaryOp::Mul => ArrayBinaryOp::Mul,
+            BinaryOp::Div => ArrayBinaryOp::Div,
+            _ => {
+                return Err(with_optional_diagnostic_span(
+                    Diagnostic::new("MIR Array binary expressions require `+`, `-`, `*`, or `/`"),
+                    span,
+                ))
+            }
+        };
+        let result = match (left, right) {
+            (Value::Array(left), Value::Array(right)) => {
+                left.binary(right, operation, IntegerArithmeticMode::Checked)
+            }
+            (Value::Array(array), scalar @ (Value::Int(_) | Value::Float(_))) => {
+                array.scalar_binary(scalar, false, operation, IntegerArithmeticMode::Checked)
+            }
+            (scalar @ (Value::Int(_) | Value::Float(_)), Value::Array(array)) => {
+                array.scalar_binary(scalar, true, operation, IntegerArithmeticMode::Checked)
+            }
+            _ => Err(Diagnostic::new(
+                "MIR Array binary expressions require matching arrays or an exact-dtype scalar",
+            )),
+        };
+        result
+            .map(Value::Array)
+            .map_err(|error| with_optional_diagnostic_span(error, span))
+    }
+
     fn eval_binary(
         &self,
         op: crate::ast::BinaryOp,
@@ -7470,6 +8160,28 @@ impl MirRuntime {
             BinaryOp::Eq => Ok(Value::Bool(left == right)),
             BinaryOp::NotEq => Ok(Value::Bool(left != right)),
             BinaryOp::Add => match (left, right) {
+                (Value::Array(left), Value::Array(right)) => left
+                    .binary(&right, ArrayBinaryOp::Add, IntegerArithmeticMode::Checked)
+                    .map(Value::Array)
+                    .map_err(|error| with_optional_diagnostic_span(error, span)),
+                (Value::Array(array), scalar @ (Value::Int(_) | Value::Float(_))) => array
+                    .scalar_binary(
+                        &scalar,
+                        false,
+                        ArrayBinaryOp::Add,
+                        IntegerArithmeticMode::Checked,
+                    )
+                    .map(Value::Array)
+                    .map_err(|error| with_optional_diagnostic_span(error, span)),
+                (scalar @ (Value::Int(_) | Value::Float(_)), Value::Array(array)) => array
+                    .scalar_binary(
+                        &scalar,
+                        true,
+                        ArrayBinaryOp::Add,
+                        IntegerArithmeticMode::Checked,
+                    )
+                    .map(Value::Array)
+                    .map_err(|error| with_optional_diagnostic_span(error, span)),
                 (Value::Int(left), Value::Int(right)) => match left.checked_add(right) {
                     Some(value) => Ok(Value::Int(value)),
                     None => Err(match span {
@@ -7488,6 +8200,28 @@ impl MirRuntime {
                 )),
             },
             BinaryOp::Sub => match (left, right) {
+                (Value::Array(left), Value::Array(right)) => left
+                    .binary(&right, ArrayBinaryOp::Sub, IntegerArithmeticMode::Checked)
+                    .map(Value::Array)
+                    .map_err(|error| with_optional_diagnostic_span(error, span)),
+                (Value::Array(array), scalar @ (Value::Int(_) | Value::Float(_))) => array
+                    .scalar_binary(
+                        &scalar,
+                        false,
+                        ArrayBinaryOp::Sub,
+                        IntegerArithmeticMode::Checked,
+                    )
+                    .map(Value::Array)
+                    .map_err(|error| with_optional_diagnostic_span(error, span)),
+                (scalar @ (Value::Int(_) | Value::Float(_)), Value::Array(array)) => array
+                    .scalar_binary(
+                        &scalar,
+                        true,
+                        ArrayBinaryOp::Sub,
+                        IntegerArithmeticMode::Checked,
+                    )
+                    .map(Value::Array)
+                    .map_err(|error| with_optional_diagnostic_span(error, span)),
                 (Value::Int(left), Value::Int(right)) => match left.checked_sub(right) {
                     Some(value) => Ok(Value::Int(value)),
                     None => Err(match span {
@@ -7505,6 +8239,28 @@ impl MirRuntime {
                 )),
             },
             BinaryOp::Mul => match (left, right) {
+                (Value::Array(left), Value::Array(right)) => left
+                    .binary(&right, ArrayBinaryOp::Mul, IntegerArithmeticMode::Checked)
+                    .map(Value::Array)
+                    .map_err(|error| with_optional_diagnostic_span(error, span)),
+                (Value::Array(array), scalar @ (Value::Int(_) | Value::Float(_))) => array
+                    .scalar_binary(
+                        &scalar,
+                        false,
+                        ArrayBinaryOp::Mul,
+                        IntegerArithmeticMode::Checked,
+                    )
+                    .map(Value::Array)
+                    .map_err(|error| with_optional_diagnostic_span(error, span)),
+                (scalar @ (Value::Int(_) | Value::Float(_)), Value::Array(array)) => array
+                    .scalar_binary(
+                        &scalar,
+                        true,
+                        ArrayBinaryOp::Mul,
+                        IntegerArithmeticMode::Checked,
+                    )
+                    .map(Value::Array)
+                    .map_err(|error| with_optional_diagnostic_span(error, span)),
                 (Value::Int(left), Value::Int(right)) => match left.checked_mul(right) {
                     Some(value) => Ok(Value::Int(value)),
                     None => Err(match span {
@@ -7528,6 +8284,28 @@ impl MirRuntime {
                 )),
             },
             BinaryOp::Div => match (left, right) {
+                (Value::Array(left), Value::Array(right)) => left
+                    .binary(&right, ArrayBinaryOp::Div, IntegerArithmeticMode::Checked)
+                    .map(Value::Array)
+                    .map_err(|error| with_optional_diagnostic_span(error, span)),
+                (Value::Array(array), scalar @ (Value::Int(_) | Value::Float(_))) => array
+                    .scalar_binary(
+                        &scalar,
+                        false,
+                        ArrayBinaryOp::Div,
+                        IntegerArithmeticMode::Checked,
+                    )
+                    .map(Value::Array)
+                    .map_err(|error| with_optional_diagnostic_span(error, span)),
+                (scalar @ (Value::Int(_) | Value::Float(_)), Value::Array(array)) => array
+                    .scalar_binary(
+                        &scalar,
+                        true,
+                        ArrayBinaryOp::Div,
+                        IntegerArithmeticMode::Checked,
+                    )
+                    .map(Value::Array)
+                    .map_err(|error| with_optional_diagnostic_span(error, span)),
                 (Value::Int(_left), Value::Int(right)) if right.is_zero() => Err(match span {
                     Some(span) => Diagnostic::at(span, "division by zero"),
                     None => Diagnostic::new("division by zero"),
@@ -7600,6 +8378,13 @@ impl MirRuntime {
             BinaryOp::GreaterEq => eval_ordering(BinaryOp::GreaterEq, left, right),
         }
     }
+}
+
+fn with_optional_diagnostic_span(mut diagnostic: Diagnostic, span: Option<Span>) -> Diagnostic {
+    if diagnostic.span.is_none() {
+        diagnostic.span = span;
+    }
+    diagnostic
 }
 
 fn runtime_deadline_after_timeout(timeout: Option<StdDuration>) -> Result<Option<Instant>> {
@@ -7865,6 +8650,106 @@ fn ffi_runtime_diagnostic(symbol: &str, error: FfiError) -> Diagnostic {
         "AU4005"
     };
     Diagnostic::coded(code, format!("FFI call to `{symbol}` failed: {error}"))
+}
+
+fn array_shape_from_runtime(value: &Value) -> Result<Box<[usize]>> {
+    let Value::Vec(vector) = value else {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            "Array shape must be a `Vec[int64]`",
+        ));
+    };
+    if vector.element_type != Type::named("int64") {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            "Array shape must be a `Vec[int64]`",
+        ));
+    }
+    vector
+        .elements
+        .iter()
+        .enumerate()
+        .map(|(axis, value)| {
+            let Value::Int(value) = value else {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!("Array shape axis {axis} is not an int64"),
+                ));
+            };
+            if !matches!(value.runtime_kind(), None | Some(IntegerKind::Int64)) {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!("Array shape axis {axis} is not an int64"),
+                ));
+            }
+            let dimension = value
+                .as_i128()
+                .expect("int64 runtime values always fit i128");
+            usize::try_from(dimension).map_err(|_| {
+                Diagnostic::coded(
+                    "AU4007",
+                    format!("Array shape axis {axis} cannot be negative, found {dimension}"),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Vec::into_boxed_slice)
+}
+
+fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i32]>> {
+    fn coordinate(value: &Value, axis: usize) -> Result<i32> {
+        let Value::Int(value) = value else {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                format!("Array coordinate axis {axis} is not an int32"),
+            ));
+        };
+        if !matches!(value.runtime_kind(), None | Some(IntegerKind::Int32)) {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                format!("Array coordinate axis {axis} is not an int32"),
+            ));
+        }
+        i32::try_from(
+            value
+                .as_i128()
+                .expect("int32 runtime values always fit i128"),
+        )
+        .map_err(|_| {
+            Diagnostic::coded(
+                "AU4001",
+                format!("Array coordinate axis {axis} is not an int32"),
+            )
+        })
+    }
+
+    let (elements, types): (&[Value], Option<&[Type]>) = match value {
+        Value::Vec(vector) if vector.element_type == Type::named("int32") => {
+            (&vector.elements, None)
+        }
+        Value::Tuple(tuple) => (&tuple.elements, Some(&tuple.element_types)),
+        Value::Int(_) => return coordinate(value, 0).map(|value| vec![value].into_boxed_slice()),
+        _ => {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                "Array coordinates must be int32 scalars, a tuple of int32 values, or `Vec[int32]`",
+            ))
+        }
+    };
+    if types.is_some_and(|types| {
+        types.len() != elements.len() || types.iter().any(|ty| *ty != Type::named("int32"))
+    }) {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            "Array coordinate tuples must contain only int32 values",
+        ));
+    }
+    elements
+        .iter()
+        .enumerate()
+        .map(|(axis, value)| coordinate(value, axis))
+        .collect::<Result<Vec<_>>>()
+        .map(Vec::into_boxed_slice)
 }
 
 fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMirArg>> {

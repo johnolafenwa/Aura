@@ -5293,3 +5293,137 @@ test("compiler bridge preserves closure capture ownership diagnostics and guidan
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("compiler bridge exposes the global numeric Array surface and result types", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-numeric-arrays-"));
+  const sourceLines = [
+    "def widen(value: int32) -> float64:",
+    "    return value.to_float()",
+    "",
+    "def transform() -> float64:",
+    "    left = Array[int32].from_vec([1, 2, 3, 4], [2, 2])",
+    "    right = Array[int32].full([2, 2], 5)",
+    "    combined = left.wrapping_add(right)",
+    "    scaled = combined * 2",
+    "    item = scaled[0, 1]",
+    "    maybe_item = scaled.get([0, 1])",
+    "    dimensions = scaled.shape()",
+    "    length = scaled.len()",
+    "    first_row = scaled[0:1]",
+    "    mapped = scaled.map[float64](widen)",
+    "    mut writable = scaled.clone()",
+    "    replaced = writable.set([0, 1], 9)",
+    "    total = scaled.sum()",
+    "    match replaced:",
+    "        case Option.Some(previous):",
+    "            print(previous)",
+    "        case Option.None:",
+    "            print(-1)",
+    "    wrapped_scalar = scaled.wrapping_add(2147483647)",
+    "    saturated_scalar = scaled.saturating_add(2147483647)",
+    "    float_values = Array[float64].full([2], 4.0) / 2.0",
+    "    average = mapped.mean()",
+    "    return average",
+    ""
+  ];
+  const source = sourceLines.join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+
+    for (const expected of [
+      "binding left: Array[int32]",
+      "binding combined: Array[int32]",
+      "binding scaled: Array[int32]",
+      "binding item: int32",
+      "binding maybe_item: Option[int32]",
+      "binding dimensions: Vec[int64]",
+      "binding length: int64",
+      "binding first_row: Array[int32]",
+      "binding mapped: Array[float64]",
+      "binding writable: Array[int32]",
+      "binding replaced: Option[int32]",
+      "binding total: int32",
+      "binding float_values: Array[float64]",
+      "binding average: float64"
+    ]) {
+      assert.ok(
+        analysis.occurrences.some(
+          (occurrence) => occurrence.hover === `\`\`\`aurora\n${expected}\n\`\`\``
+        ),
+        `missing checked Array hover: ${expected}`
+      );
+    }
+
+    const memberLine = "    scaled.";
+    const memberSource = [
+      "def inspect():",
+      "    scaled = Array[int32].zeros([2, 2])",
+      memberLine,
+      ""
+    ].join("\n");
+    const memberItems = await completeWithCompiler(
+      mainUri,
+      memberSource,
+      2,
+      memberLine.length,
+      "."
+    );
+    const memberNames = new Set(memberItems.map((item) => item.name));
+    for (const expected of [
+      "shape",
+      "len",
+      "clone",
+      "get",
+      "set",
+      "fill",
+      "map",
+      "sum",
+      "min",
+      "max",
+      "mean",
+      "wrapping_add",
+      "wrapping_sub",
+      "wrapping_mul",
+      "saturating_add",
+      "saturating_sub",
+      "saturating_mul"
+    ]) {
+      assert.ok(memberNames.has(expected), `Array completion should include ${expected}`);
+    }
+
+    const staticLine = "    Array[float64].";
+    const staticSource = ["def construct():", staticLine, ""].join("\n");
+    const staticItems = await completeWithCompiler(
+      mainUri,
+      staticSource,
+      1,
+      staticLine.length,
+      "."
+    );
+    const staticNames = new Set(staticItems.map((item) => item.name));
+    assert.deepEqual(
+      [...staticNames].filter((name) => ["zeros", "full", "from_vec"].includes(name)).sort(),
+      ["from_vec", "full", "zeros"]
+    );
+
+    const rejected = await analyzeWithCompiler(
+      `file://${path.join(tempRoot, "integer-division.au")}`,
+      [
+        "def reject():",
+        "    values = Array[int64].full([2], 4)",
+        "    print(values / 2)",
+        ""
+      ].join("\n")
+    );
+    assert.equal(rejected.diagnostics.length, 1);
+    assert.equal(rejected.diagnostics[0].code, "AU2003");
+    assert.equal(rejected.diagnostics[0].message, "integer Array `/` is not supported");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});

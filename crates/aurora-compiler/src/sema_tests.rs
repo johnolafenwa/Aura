@@ -77,6 +77,472 @@ fn public_ffi_function_namespace(module_name: &str) -> ModuleNamespace {
 }
 
 #[test]
+fn array_surface_type_checks_constructors_members_operators_and_transfer() {
+    crate::check_source(
+        r#"
+def main():
+    mut values = Array[int32].from_vec(values=[1, 2, 3, 4], shape=[2, 2])
+    zeros: Array[float64] = Array[float64].zeros(shape=[2, 2])
+    full = Array[int64].full(shape=[2, 2], value=7)
+
+    shape: Vec[int64] = values.shape()
+    count: int64 = values.len()
+    copied: Array[int32] = values.clone()
+    maybe: Option[int32] = values.get(index=[0, 1])
+    old: Option[int32] = values.set(index=[0, 1], value=9)
+    values.fill(value=0)
+    item: int32 = values[0, 1]
+    values[0, 1] = item
+    rows: Array[int32] = values[:1]
+
+    arrays: Array[int32] = values + copied
+    right_scalar: Array[int32] = values * 2
+    left_scalar: Array[int32] = 2 - values
+    quotient: Array[float64] = zeros / 2.0
+    mapped: Array[float64] = values.map[float64](f=lambda value: value.to_float())
+    total: int32 = values.sum()
+    minimum: int32 = values.min()
+    maximum: int32 = values.max()
+    average: float64 = values.mean()
+
+    wrapped: Array[int32] = values.wrapping_add(rhs=1)
+    saturated: Array[int32] = values.saturating_mul(rhs=copied)
+    scalar: int32 = 7
+    wrapped_scalar: int32 = scalar.wrapping_sub(rhs=9)
+    saturated_scalar: int32 = scalar.saturating_add(rhs=9)
+
+    queue = Queue[Array[int32]]()
+    print(shape)
+    print(count)
+    print(full)
+    print(arrays)
+    print(right_scalar)
+    print(left_scalar)
+    print(quotient)
+    print(mapped)
+    print(total)
+    print(minimum)
+    print(maximum)
+    print(average)
+    print(wrapped)
+    print(saturated)
+    print(wrapped_scalar)
+    print(saturated_scalar)
+    print(queue)
+"#,
+    )
+    .expect("the complete compiler-facing Array surface should type-check");
+}
+
+#[test]
+fn array_surface_rejects_invalid_dtypes_mixed_arithmetic_and_invalid_members() {
+    for (source, code, message) in [
+        (
+            "def main():\n    value: Array[String] = Array[String].zeros(shape=[1])\n",
+            "AU2002",
+            "Array dtype must be one of",
+        ),
+        (
+            "def main():\n    left = Array[int32].zeros(shape=[1])\n    right = Array[int64].zeros(shape=[1])\n    print(left + right)\n",
+            "AU2002",
+            "Array arithmetic requires matching dtypes",
+        ),
+        (
+            "def main():\n    values = Array[int32].zeros(shape=[1])\n    print(values / 2)\n",
+            "AU2003",
+            "integer Array `/` is not supported",
+        ),
+        (
+            "def main():\n    left = Array[float64].zeros(shape=[1])\n    right = Array[float64].zeros(shape=[1])\n    print(left == right)\n",
+            "AU2003",
+            "Array equality is not supported",
+        ),
+        (
+            "def main():\n    values = Array[int32].zeros(shape=[1])\n    mapped = values.map(lambda value: value > 0)\n    print(mapped)\n",
+            "AU2002",
+            "Array.map callback must return",
+        ),
+        (
+            "def main():\n    values = Array[int32].zeros(shape=[1])\n    mapped = values.map[int64](f=lambda value: value.to_float())\n    print(mapped)\n",
+            "AU2002",
+            "Array.map type argument `int64` does not match callback result `float64`",
+        ),
+        (
+            "def main():\n    values = Array[int32].zeros(shape=[1])\n    index: int64 = 0\n    print(values[index])\n",
+            "AU2002",
+            "Array indices must have type `int32`",
+        ),
+        (
+            "def main():\n    values = Array[int32].zeros(shape=[1])\n    values.fill(value=1)\n",
+            "AU3003",
+            "mutable receiver",
+        ),
+        (
+            "def main():\n    values = Array[int32].zeros(shape=[1])\n    other = Array[int64].zeros(shape=[1])\n    print(values.wrapping_add(rhs=other))\n",
+            "AU2002",
+            "expects `Array[int32]` or `int32`",
+        ),
+    ] {
+        let diagnostic = crate::check_source(source).expect_err(message);
+        assert_eq!(diagnostic.code, code, "{source}\n{diagnostic:?}");
+        assert!(
+            diagnostic.message.contains(message),
+            "{source}\nexpected `{message}` in `{}`",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn array_constructor_remains_a_global_type_inside_binary_expressions() {
+    crate::check_source(
+        r#"
+def main():
+    ints = Array[int32].zeros([1])
+    floats = Array[float64].full([2, 2], 8.0) / 2.0
+    print(ints)
+    print(floats)
+"#,
+    )
+    .expect("Array constructors of another dtype must stay visible inside binary expressions");
+}
+
+#[test]
+fn array_containment_recursively_disables_structural_equality() {
+    let cases = [
+        (
+            "Vec value",
+            "Vec[Array[int32]]",
+            r#"
+def main():
+    left: Vec[Array[int32]] = [Array[int32].zeros([1])]
+    right: Vec[Array[int32]] = [Array[int32].zeros([1])]
+    print(left == right)
+"#,
+        ),
+        (
+            "Map value",
+            "Map[String, Array[int32]]",
+            r#"
+def main():
+    left: Map[String, Array[int32]] = {"values": Array[int32].zeros([1])}
+    right: Map[String, Array[int32]] = {"values": Array[int32].zeros([1])}
+    print(left != right)
+"#,
+        ),
+        (
+            "tuple element",
+            "(Array[int32], int64)",
+            r#"
+def main():
+    left = (Array[int32].zeros([1]), 1)
+    right = (Array[int32].zeros([1]), 1)
+    print(left == right)
+"#,
+        ),
+        (
+            "Option payload",
+            "Option[Array[int32]]",
+            r#"
+def main():
+    left: Option[Array[int32]] = Option.Some(Array[int32].zeros([1]))
+    right: Option[Array[int32]] = Option.Some(Array[int32].zeros([1]))
+    print(left == right)
+"#,
+        ),
+        (
+            "Result payload",
+            "Result[Array[int32], String]",
+            r#"
+def main():
+    left: Result[Array[int32], String] = Result.Ok(Array[int32].zeros([1]))
+    right: Result[Array[int32], String] = Result.Ok(Array[int32].zeros([1]))
+    print(left != right)
+"#,
+        ),
+        (
+            "class field",
+            "Batch",
+            r#"
+class Batch:
+    values: Array[int32]
+
+def main():
+    left = Batch(values=Array[int32].zeros([1]))
+    right = Batch(values=Array[int32].zeros([1]))
+    print(left == right)
+"#,
+        ),
+        (
+            "enum payload",
+            "Payload",
+            r#"
+enum Payload:
+    Batch(Array[int32])
+
+def main():
+    left: Payload = Payload.Batch(Array[int32].zeros([1]))
+    right: Payload = Payload.Batch(Array[int32].zeros([1]))
+    print(left != right)
+"#,
+        ),
+    ];
+
+    for (shape, compared_type, source) in cases {
+        let diagnostic =
+            crate::check_source(source).expect_err("nested Arrays must disable equality");
+        assert_eq!(diagnostic.code, "AU2003", "{shape}: {diagnostic:?}");
+        assert_eq!(
+            diagnostic.message,
+            format!(
+                "cannot compare `{compared_type}` because it contains `Array[int32]`, whose equality is unavailable"
+            ),
+            "{shape}"
+        );
+        assert_eq!(
+            diagnostic.help,
+            vec![
+                "compare Array elements explicitly, or compare a chosen scalar summary such as shape, length, or a reduction result"
+                    .to_string()
+            ],
+            "{shape}"
+        );
+    }
+}
+
+#[test]
+fn array_containment_disables_membership_and_key_deduplication() {
+    let cases = [
+        (
+            "membership operator",
+            r#"
+def main():
+    needle = Array[int32].zeros([1])
+    values: Vec[Array[int32]] = [needle.clone()]
+    print(needle in values)
+"#,
+            "cannot test membership for `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
+        ),
+        (
+            "Vec.contains",
+            r#"
+def main():
+    needle = Array[int32].zeros([1])
+    values: Vec[Array[int32]] = [needle.clone()]
+    print(values.contains(needle))
+"#,
+            "cannot use `Vec.contains` with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
+        ),
+        (
+            "Set constructor",
+            r#"
+def main():
+    values = Set[Array[int32]]()
+    print(values)
+"#,
+            "cannot use `Array[int32]` as a Set element because it contains `Array[int32]`, whose equality is unavailable",
+        ),
+        (
+            "Set literal",
+            r#"
+def main():
+    values = {Array[int32].zeros([1])}
+    print(values)
+"#,
+            "cannot use `Array[int32]` as a Set element because it contains `Array[int32]`, whose equality is unavailable",
+        ),
+        (
+            "Map constructor",
+            r#"
+def main():
+    values = Map[Array[int32], int64]()
+    print(values)
+"#,
+            "cannot use `Array[int32]` as a Map key because it contains `Array[int32]`, whose equality is unavailable",
+        ),
+        (
+            "Map literal",
+            r#"
+def main():
+    values = {Array[int32].zeros([1]): 1}
+    print(values)
+"#,
+            "cannot use `Array[int32]` as a Map key because it contains `Array[int32]`, whose equality is unavailable",
+        ),
+        (
+            "Set comprehension",
+            r#"
+def main():
+    source: Vec[Array[int32]] = [Array[int32].zeros([1])]
+    values = {value.clone() for value in source}
+    print(values)
+"#,
+            "cannot use `Array[int32]` as a Set element because it contains `Array[int32]`, whose equality is unavailable",
+        ),
+        (
+            "Map comprehension",
+            r#"
+def main():
+    source: Vec[Array[int32]] = [Array[int32].zeros([1])]
+    values = {value.clone(): 1 for value in source}
+    print(values)
+"#,
+            "cannot use `Array[int32]` as a Map key because it contains `Array[int32]`, whose equality is unavailable",
+        ),
+        (
+            "Map key use",
+            r#"
+def contains(values: Map[Array[int32], int64], key: Array[int32]) -> bool:
+    return values.contains_key(key)
+
+def main():
+    pass
+"#,
+            "cannot use `Map.contains_key` with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
+        ),
+        (
+            "Set element use",
+            r#"
+def contains(values: Set[Array[int32]], value: Array[int32]) -> bool:
+    return values.contains(value)
+
+def main():
+    pass
+"#,
+            "cannot use `Set.contains` with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
+        ),
+    ];
+
+    for (shape, source, expected_message) in cases {
+        let diagnostic =
+            crate::check_source(source).expect_err("Array comparison must not hide in collections");
+        assert_eq!(diagnostic.code, "AU2003", "{shape}: {diagnostic:?}");
+        assert_eq!(diagnostic.message, expected_message, "{shape}");
+        assert_eq!(
+            diagnostic.help,
+            vec![
+                "compare Array elements explicitly, or compare a chosen scalar summary such as shape, length, or a reduction result"
+                    .to_string()
+            ],
+            "{shape}"
+        );
+    }
+}
+
+#[test]
+fn equality_and_membership_remain_available_for_array_free_values() {
+    crate::check_source(
+        r#"
+class Pair:
+    values: Vec[int32]
+
+enum MaybePair:
+    Missing
+    Present(Pair)
+
+def main():
+    left = MaybePair.Present(Pair(values=[1, 2]))
+    right = MaybePair.Present(Pair(values=[1, 2]))
+    equal: bool = left == right
+    numbers: Vec[(int32, String)] = [(1, "one")]
+    present: bool = (1, "one") in numbers
+    keys: Set[(int32, String)] = {(1, "one")}
+    lookup: Map[(int32, String), bool] = {(1, "one"): true}
+    print(equal)
+    print(present)
+    print(keys)
+    print(lookup)
+"#,
+    )
+    .expect("recursive eligibility checks must preserve equality for Array-free values");
+}
+
+#[test]
+fn generic_equality_rejects_array_substitutions_without_rejecting_eligible_ones() {
+    let diagnostic = crate::check_source(
+        r#"
+def equal[T](left: T, right: T) -> bool:
+    return left == right
+
+def main():
+    left = Array[int32].zeros([1])
+    right = Array[int32].zeros([1])
+    print(equal[Array[int32]](left, right))
+"#,
+    )
+    .expect_err("a generic equality operation must retain its equality-eligibility obligation");
+    assert_eq!(diagnostic.code, "AU2003", "{diagnostic:?}");
+    assert_eq!(
+        diagnostic.message,
+        "cannot use function `equal` with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable"
+    );
+
+    crate::check_source(
+        r#"
+def equal[T](left: T, right: T) -> bool:
+    return left == right
+
+def main():
+    print(equal[float64](1.0, 1.0))
+"#,
+    )
+    .expect("generic equality must remain available for eligible substitutions");
+}
+
+#[test]
+fn generic_method_and_trait_dispatch_propagate_array_equality_obligations() {
+    let class_method = crate::check_source(
+        r#"
+class Box[T]:
+    value: T
+
+    def equal(self, other: T) -> bool:
+        return self.value == other
+
+def main():
+    value = Array[int32].zeros([1])
+    box: Box[Array[int32]] = Box(value=value.clone())
+    print(box.equal(value))
+"#,
+    )
+    .expect_err("class-specialized method equality must reject Array");
+    assert_eq!(class_method.code, "AU2003", "{class_method:?}");
+    assert_eq!(
+        class_method.message,
+        "cannot use method `equal` with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable"
+    );
+
+    let trait_dispatch = crate::check_source(
+        r#"
+trait Equaler[T]:
+    def equal(self, left: T, right: T) -> bool:
+        return left == right
+
+class Matcher[T]:
+    pass
+
+impl[T] Equaler[T] for Matcher[T]:
+    pass
+
+def compare[T](matcher: Matcher[T], left: T, right: T) -> bool:
+    return matcher.equal(left, right)
+
+def main():
+    matcher = Matcher[Array[int32]]()
+    left = Array[int32].zeros([1])
+    right = Array[int32].zeros([1])
+    print(compare[Array[int32]](matcher, left, right))
+"#,
+    )
+    .expect_err("trait-dispatched generic equality must propagate to its caller");
+    assert_eq!(trait_dispatch.code, "AU2003", "{trait_dispatch:?}");
+    assert_eq!(
+        trait_dispatch.message,
+        "cannot use function `compare` with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable"
+    );
+}
+
+#[test]
 fn ffi_v0_accepts_fixed_width_scalar_signatures_and_the_int64_alias() {
     let source = r#"
 extern "C" def scalars(a: bool, b: int8, c: int16, d: int32, e: int64, f: int, g: uint8, h: uint16, i: uint32, j: uint64, k: float32, l: float64) -> None
@@ -5628,6 +6094,7 @@ fn function_signature(params: Vec<Type>, return_type: Type) -> FunctionSignature
         param_passings,
         return_type,
         rng_clone_safe_type_params: BTreeSet::new(),
+        array_equality_safe_type_params: BTreeSet::new(),
     }
 }
 
@@ -16912,6 +17379,7 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
                 param_passings: vec![ReceiverKind::BorrowMut, ReceiverKind::BorrowMut],
                 return_type: Type::Unit,
                 rng_clone_safe_type_params: BTreeSet::new(),
+                array_equality_safe_type_params: BTreeSet::new(),
             },
             type_param_bounds: BTreeMap::new(),
         },
@@ -17800,6 +18268,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             &Type::TypeParam("T".to_string()),
             &BTreeMap::new(),
             &BTreeSet::new(),
+            &BTreeSet::new(),
             &[],
             span,
             &mut HashMap::new(),
@@ -17820,6 +18289,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             &[],
             &Type::TypeParam("T".to_string()),
             &BTreeMap::new(),
+            &BTreeSet::new(),
             &BTreeSet::new(),
             &[],
             span,
@@ -22586,6 +23056,7 @@ fn imported_generic_function_values_specialize_as_values_and_task_targets() {
             param_passings: vec![ReceiverKind::Value],
             return_type: Type::TypeParam("T".to_string()),
             rng_clone_safe_type_params: BTreeSet::new(),
+            array_equality_safe_type_params: BTreeSet::new(),
         },
         type_param_bounds: BTreeMap::new(),
     };

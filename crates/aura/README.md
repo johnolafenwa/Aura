@@ -47,6 +47,7 @@ After the release build completes, run the binary directly:
 ./target/release/aura run examples/basics/numbers.au
 ./target/release/aura run examples/numbers/numeric_casts.au
 ./target/release/aura run examples/numbers/numeric_builtins.au
+./target/release/aura run examples/numbers/numeric_arrays.au
 ./target/release/aura run examples/strings/string_methods.au
 ./target/release/aura run examples/strings/string_parsing_and_formatting.au
 ./target/release/aura run examples/io/read_text_file.au

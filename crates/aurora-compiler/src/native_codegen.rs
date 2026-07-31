@@ -94,6 +94,69 @@ impl ScalarKind {
     }
 }
 
+fn direct_array_dtype_code(ty: &Type) -> std::result::Result<i64, String> {
+    match ty {
+        Type::Named(name, arguments) if arguments.is_empty() => match name.as_str() {
+            "int32" => Ok(0),
+            "int64" => Ok(1),
+            "float32" => Ok(2),
+            "float64" => Ok(3),
+            _ => Err(format!(
+                "direct backend does not support Array dtype `{ty}`"
+            )),
+        },
+        _ => Err(format!(
+            "direct backend does not support Array dtype `{ty}`"
+        )),
+    }
+}
+
+fn direct_array_binary_opcode(op: BinaryOp) -> std::result::Result<i64, String> {
+    match op {
+        BinaryOp::Add => Ok(0),
+        BinaryOp::Sub => Ok(1),
+        BinaryOp::Mul => Ok(2),
+        BinaryOp::Div => Ok(3),
+        other => Err(format!(
+            "direct backend does not support Array binary operation `{other:?}`"
+        )),
+    }
+}
+
+fn direct_array_element_type(ty: &DirectType) -> Option<&Type> {
+    match ty {
+        DirectType::Opaque(Type::Named(name, arguments))
+            if name == "Array" && arguments.len() == 1 =>
+        {
+            arguments.first()
+        }
+        _ => None,
+    }
+}
+
+fn is_fixed_width_integer_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Named(name, args)
+            if args.is_empty()
+                && matches!(
+                    name.as_str(),
+                    "int8"
+                        | "int16"
+                        | "int32"
+                        | "int64"
+                        | "int128"
+                        | "intsize"
+                        | "uint8"
+                        | "uint16"
+                        | "uint32"
+                        | "uint64"
+                        | "uint128"
+                        | "uintsize"
+                )
+    )
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i64)]
 enum WideIntegerKind {
@@ -385,6 +448,21 @@ struct NativeCodegen<'a> {
     vec_index_option: FuncId,
     vec_take_index_in_place: FuncId,
     vec_set_index_in_place: FuncId,
+    array_zeros: FuncId,
+    array_full: FuncId,
+    array_from_vec: FuncId,
+    array_clone: FuncId,
+    array_shape: FuncId,
+    array_len: FuncId,
+    array_get: FuncId,
+    array_set_in_place: FuncId,
+    array_fill_in_place: FuncId,
+    array_index: FuncId,
+    array_set_index_in_place: FuncId,
+    array_slice: FuncId,
+    array_binary: FuncId,
+    array_map: FuncId,
+    array_reduce: FuncId,
     map_empty: FuncId,
     map_len: FuncId,
     map_is_empty: FuncId,
@@ -414,6 +492,7 @@ struct NativeCodegen<'a> {
     unbox_i64: FuncId,
     unbox_int64: FuncId,
     integer_to_float: FuncId,
+    integer_width_binary: FuncId,
     unbox_u64: FuncId,
     unbox_f64: FuncId,
     unbox_bool: FuncId,
@@ -875,6 +954,21 @@ impl<'a> NativeCodegen<'a> {
             vec_index_option => ("aurora_direct_vec_index_option", [types::I64, types::I64], Some(types::I64)),
             vec_take_index_in_place => ("aurora_direct_vec_take_index_in_place", [types::I64, types::I64], Some(types::I64)),
             vec_set_index_in_place => ("aurora_direct_vec_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            array_zeros => ("aurora_direct_array_zeros", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            array_full => ("aurora_direct_array_full", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            array_from_vec => ("aurora_direct_array_from_vec", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            array_clone => ("aurora_direct_array_clone", [types::I64, types::I64, types::I64], Some(types::I64)),
+            array_shape => ("aurora_direct_array_shape", [types::I64], Some(types::I64)),
+            array_len => ("aurora_direct_array_len", [types::I64], Some(types::I64)),
+            array_get => ("aurora_direct_array_get", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            array_set_in_place => ("aurora_direct_array_set_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            array_fill_in_place => ("aurora_direct_array_fill_in_place", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            array_index => ("aurora_direct_array_index", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            array_set_index_in_place => ("aurora_direct_array_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            array_slice => ("aurora_direct_array_slice", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            array_binary => ("aurora_direct_array_binary", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            array_map => ("aurora_direct_array_map", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            array_reduce => ("aurora_direct_array_reduce", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             map_empty => ("aurora_direct_map_empty", [], Some(types::I64)),
             map_len => ("aurora_direct_map_len", [types::I64], Some(types::I64)),
             map_is_empty => ("aurora_direct_map_is_empty", [types::I64], Some(types::I64)),
@@ -904,6 +998,7 @@ impl<'a> NativeCodegen<'a> {
             unbox_i64 => ("aurora_direct_unbox_i64", [types::I64], Some(types::I64)),
             unbox_int64 => ("aurora_direct_unbox_int64", [types::I64], Some(types::I64)),
             integer_to_float => ("aurora_direct_integer_to_float", [types::I64], Some(types::F64)),
+            integer_width_binary => ("aurora_direct_integer_width_binary", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             unbox_u64 => ("aurora_direct_unbox_u64", [types::I64], Some(types::I64)),
             unbox_f64 => ("aurora_direct_unbox_f64", [types::I64], Some(types::F64)),
             unbox_bool => ("aurora_direct_unbox_bool", [types::I64], Some(types::I64)),
@@ -1290,6 +1385,21 @@ impl<'a> NativeCodegen<'a> {
             vec_index_option,
             vec_take_index_in_place,
             vec_set_index_in_place,
+            array_zeros,
+            array_full,
+            array_from_vec,
+            array_clone,
+            array_shape,
+            array_len,
+            array_get,
+            array_set_in_place,
+            array_fill_in_place,
+            array_index,
+            array_set_index_in_place,
+            array_slice,
+            array_binary,
+            array_map,
+            array_reduce,
             map_empty,
             map_len,
             map_is_empty,
@@ -1319,6 +1429,7 @@ impl<'a> NativeCodegen<'a> {
             unbox_i64,
             unbox_int64,
             integer_to_float,
+            integer_width_binary,
             unbox_u64,
             unbox_f64,
             unbox_bool,
@@ -2048,6 +2159,51 @@ impl<'a> NativeCodegen<'a> {
         let vec_set_index_in_place = self
             .object
             .declare_func_in_func(self.vec_set_index_in_place, builder.func);
+        let array_zeros = self
+            .object
+            .declare_func_in_func(self.array_zeros, builder.func);
+        let array_full = self
+            .object
+            .declare_func_in_func(self.array_full, builder.func);
+        let array_from_vec = self
+            .object
+            .declare_func_in_func(self.array_from_vec, builder.func);
+        let array_clone = self
+            .object
+            .declare_func_in_func(self.array_clone, builder.func);
+        let array_shape = self
+            .object
+            .declare_func_in_func(self.array_shape, builder.func);
+        let array_len = self
+            .object
+            .declare_func_in_func(self.array_len, builder.func);
+        let array_get = self
+            .object
+            .declare_func_in_func(self.array_get, builder.func);
+        let array_set_in_place = self
+            .object
+            .declare_func_in_func(self.array_set_in_place, builder.func);
+        let array_fill_in_place = self
+            .object
+            .declare_func_in_func(self.array_fill_in_place, builder.func);
+        let array_index = self
+            .object
+            .declare_func_in_func(self.array_index, builder.func);
+        let array_set_index_in_place = self
+            .object
+            .declare_func_in_func(self.array_set_index_in_place, builder.func);
+        let array_slice = self
+            .object
+            .declare_func_in_func(self.array_slice, builder.func);
+        let array_binary = self
+            .object
+            .declare_func_in_func(self.array_binary, builder.func);
+        let array_map = self
+            .object
+            .declare_func_in_func(self.array_map, builder.func);
+        let array_reduce = self
+            .object
+            .declare_func_in_func(self.array_reduce, builder.func);
         let map_empty = self
             .object
             .declare_func_in_func(self.map_empty, builder.func);
@@ -2129,6 +2285,9 @@ impl<'a> NativeCodegen<'a> {
         let integer_to_float = self
             .object
             .declare_func_in_func(self.integer_to_float, builder.func);
+        let integer_width_binary = self
+            .object
+            .declare_func_in_func(self.integer_width_binary, builder.func);
         let unbox_u64 = self
             .object
             .declare_func_in_func(self.unbox_u64, builder.func);
@@ -2852,6 +3011,21 @@ impl<'a> NativeCodegen<'a> {
             vec_index_option,
             vec_take_index_in_place,
             vec_set_index_in_place,
+            array_zeros,
+            array_full,
+            array_from_vec,
+            array_clone,
+            array_shape,
+            array_len,
+            array_get,
+            array_set_in_place,
+            array_fill_in_place,
+            array_index,
+            array_set_index_in_place,
+            array_slice,
+            array_binary,
+            array_map,
+            array_reduce,
             map_empty,
             map_len,
             map_is_empty,
@@ -2881,6 +3055,7 @@ impl<'a> NativeCodegen<'a> {
             unbox_i64,
             unbox_int64,
             integer_to_float,
+            integer_width_binary,
             unbox_u64,
             unbox_f64,
             unbox_bool,
@@ -3665,6 +3840,21 @@ struct FunctionCompiler<'a> {
     vec_index_option: cranelift_codegen::ir::FuncRef,
     vec_take_index_in_place: cranelift_codegen::ir::FuncRef,
     vec_set_index_in_place: cranelift_codegen::ir::FuncRef,
+    array_zeros: cranelift_codegen::ir::FuncRef,
+    array_full: cranelift_codegen::ir::FuncRef,
+    array_from_vec: cranelift_codegen::ir::FuncRef,
+    array_clone: cranelift_codegen::ir::FuncRef,
+    array_shape: cranelift_codegen::ir::FuncRef,
+    array_len: cranelift_codegen::ir::FuncRef,
+    array_get: cranelift_codegen::ir::FuncRef,
+    array_set_in_place: cranelift_codegen::ir::FuncRef,
+    array_fill_in_place: cranelift_codegen::ir::FuncRef,
+    array_index: cranelift_codegen::ir::FuncRef,
+    array_set_index_in_place: cranelift_codegen::ir::FuncRef,
+    array_slice: cranelift_codegen::ir::FuncRef,
+    array_binary: cranelift_codegen::ir::FuncRef,
+    array_map: cranelift_codegen::ir::FuncRef,
+    array_reduce: cranelift_codegen::ir::FuncRef,
     map_empty: cranelift_codegen::ir::FuncRef,
     map_len: cranelift_codegen::ir::FuncRef,
     map_is_empty: cranelift_codegen::ir::FuncRef,
@@ -3694,6 +3884,7 @@ struct FunctionCompiler<'a> {
     unbox_i64: cranelift_codegen::ir::FuncRef,
     unbox_int64: cranelift_codegen::ir::FuncRef,
     integer_to_float: cranelift_codegen::ir::FuncRef,
+    integer_width_binary: cranelift_codegen::ir::FuncRef,
     unbox_u64: cranelift_codegen::ir::FuncRef,
     unbox_f64: cranelift_codegen::ir::FuncRef,
     unbox_bool: cranelift_codegen::ir::FuncRef,
@@ -4730,6 +4921,54 @@ impl<'a> FunctionCompiler<'a> {
         right: ValueRef,
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
+        let left_array_element = direct_array_element_type(&left.ty).cloned();
+        let right_array_element = direct_array_element_type(&right.ty).cloned();
+        if left_array_element.is_some() || right_array_element.is_some() {
+            let array_ty = if left_array_element.is_some() {
+                direct_type_to_type(&left.ty)
+            } else {
+                direct_type_to_type(&right.ty)
+            };
+            let element_type = left_array_element
+                .as_ref()
+                .or(right_array_element.as_ref())
+                .expect("Array operation has an Array dtype");
+            let element_direct =
+                ensure_direct_type(element_type, &self.classes, "Array scalar operand")?;
+            let scalar_left = i64::from(left_array_element.is_none());
+            let left = if left_array_element.is_some() {
+                left
+            } else {
+                self.coerce_value_at(left, &element_direct, span)?
+            };
+            let right = if right_array_element.is_some() {
+                right
+            } else {
+                self.coerce_value_at(right, &element_direct, span)?
+            };
+            let left = self.ensure_opaque(left)?;
+            let right = self.ensure_opaque(right)?;
+            let scalar_left = self.builder.ins().iconst(types::I64, scalar_left);
+            let operation = self
+                .builder
+                .ins()
+                .iconst(types::I64, direct_array_binary_opcode(op)?);
+            let checked_mode = self.builder.ins().iconst(types::I64, 0);
+            let (line, column) = self.span_values(span);
+            let inst = self.builder.ins().call(
+                self.array_binary,
+                &[
+                    left.values[0],
+                    right.values[0],
+                    scalar_left,
+                    operation,
+                    checked_mode,
+                    line,
+                    column,
+                ],
+            );
+            return Ok(self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), array_ty));
+        }
         if matches!(left.ty, DirectType::Opaque(_)) || matches!(right.ty, DirectType::Opaque(_)) {
             let left = self.ensure_opaque(left)?;
             let right = self.ensure_opaque(right)?;
@@ -5603,6 +5842,83 @@ impl<'a> FunctionCompiler<'a> {
             ));
         }
         if let Some(associated) = name
+            .strip_prefix("Array.")
+            .and_then(|field| BuiltinAssociatedFunction::resolve("Array", field))
+        {
+            let array_ty = match target {
+                Some(DirectType::Opaque(ty @ Type::Named(owner, arguments)))
+                    if owner == "Array" && arguments.len() == 1 =>
+                {
+                    ty.clone()
+                }
+                other => {
+                    return Err(format!(
+                        "direct backend requires an Array result type for `{name}`, found {}",
+                        other
+                            .map(render_direct_type)
+                            .unwrap_or_else(|| "no target type".to_string())
+                    ))
+                }
+            };
+            let Type::Named(_, element_types) = &array_ty else {
+                unreachable!("validated Array type must be nominal")
+            };
+            let element_type = element_types
+                .first()
+                .expect("validated Array type has one dtype");
+            let dtype = self
+                .builder
+                .ins()
+                .iconst(types::I64, direct_array_dtype_code(element_type)?);
+            let zero = self.builder.ins().iconst(types::I64, 0);
+            let shape_ty =
+                DirectType::Opaque(Type::Named("Vec".to_string(), vec![Type::named("int64")]));
+            let inst = match associated {
+                BuiltinAssociatedFunction::ArrayZeros => {
+                    let ordered = ordered_named_args(&["shape"], args)?;
+                    let shape = self.load_operand_for_target(&ordered[0].value, &shape_ty)?;
+                    let shape = self.ensure_opaque(shape)?;
+                    self.builder
+                        .ins()
+                        .call(self.array_zeros, &[dtype, shape.values[0], zero, zero])
+                }
+                BuiltinAssociatedFunction::ArrayFull => {
+                    let ordered = ordered_named_args(&["shape", "value"], args)?;
+                    let shape = self.load_operand_for_target(&ordered[0].value, &shape_ty)?;
+                    let shape = self.ensure_opaque(shape)?;
+                    let element_direct =
+                        ensure_direct_type(element_type, &self.classes, "Array dtype")?;
+                    let value =
+                        self.load_operand_as_opaque_direct(&ordered[1].value, &element_direct)?;
+                    self.builder.ins().call(
+                        self.array_full,
+                        &[dtype, shape.values[0], value.values[0], zero, zero],
+                    )
+                }
+                BuiltinAssociatedFunction::ArrayFromVec => {
+                    let ordered = ordered_named_args(&["values", "shape"], args)?;
+                    let values_ty = DirectType::Opaque(Type::Named(
+                        "Vec".to_string(),
+                        vec![element_type.clone()],
+                    ));
+                    let values = self.load_operand_for_target(&ordered[0].value, &values_ty)?;
+                    let values = self.ensure_opaque(values)?;
+                    let shape = self.load_operand_for_target(&ordered[1].value, &shape_ty)?;
+                    let shape = self.ensure_opaque(shape)?;
+                    self.builder.ins().call(
+                        self.array_from_vec,
+                        &[dtype, values.values[0], shape.values[0], zero, zero],
+                    )
+                }
+                _ => {
+                    return Err(format!(
+                        "direct backend received non-Array associated function `{name}`"
+                    ))
+                }
+            };
+            return Ok(self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), array_ty));
+        }
+        if let Some(associated) = name
             .strip_prefix("Duration.")
             .and_then(|field| BuiltinAssociatedFunction::resolve("Duration", field))
         {
@@ -5627,6 +5943,11 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 BuiltinAssociatedFunction::StringFromBytes => {
                     unreachable!("String.from_bytes is not a Duration constructor")
+                }
+                BuiltinAssociatedFunction::ArrayZeros
+                | BuiltinAssociatedFunction::ArrayFull
+                | BuiltinAssociatedFunction::ArrayFromVec => {
+                    unreachable!("Array constructors are not Duration constructors")
                 }
             };
             let unit_nanoseconds = self
@@ -6724,6 +7045,46 @@ impl<'a> FunctionCompiler<'a> {
                 ty: object.ty,
             });
         }
+        if object.ty.scalar_kind().is_some()
+            && matches!(field, "add" | "sub" | "mul" | "div")
+            && args.len() == 1
+        {
+            let right = self.load_operand(&args[0].value)?;
+            if let Some(element_type) = direct_array_element_type(&right.ty).cloned() {
+                let element_direct =
+                    ensure_direct_type(&element_type, &self.classes, "Array scalar operand")?;
+                let left = self.coerce_value(object, &element_direct)?;
+                let left = self.ensure_opaque(left)?;
+                let array_ty = direct_type_to_type(&right.ty);
+                let right = self.ensure_opaque(right)?;
+                let scalar_left = self.builder.ins().iconst(types::I64, 1);
+                let operation_code = match field {
+                    "add" => 0,
+                    "sub" => 1,
+                    "mul" => 2,
+                    "div" => 3,
+                    _ => unreachable!(),
+                };
+                let operation = self.builder.ins().iconst(types::I64, operation_code);
+                let checked_mode = self.builder.ins().iconst(types::I64, 0);
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let inst = self.builder.ins().call(
+                    self.array_binary,
+                    &[
+                        left.values[0],
+                        right.values[0],
+                        scalar_left,
+                        operation,
+                        checked_mode,
+                        zero,
+                        zero,
+                    ],
+                );
+                return Ok(
+                    self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), array_ty)
+                );
+            }
+        }
 
         match object.ty.clone() {
             DirectType::PlainClass(class_ty) => self.compile_class_member_call(
@@ -6747,6 +7108,50 @@ impl<'a> FunctionCompiler<'a> {
                 self.compile_opaque_member_call(&ty, object, field, receiver_place, args)
             }
             DirectType::Scalar(_) => {
+                if matches!(object.ty.scalar_kind(), Some(kind) if kind.is_integer())
+                    && matches!(
+                        field,
+                        "wrapping_add"
+                            | "wrapping_sub"
+                            | "wrapping_mul"
+                            | "saturating_add"
+                            | "saturating_sub"
+                            | "saturating_mul"
+                    )
+                {
+                    let [argument] = ordered_named_args(&["rhs"], args)?[..] else {
+                        unreachable!("integer width arithmetic binds exactly one argument")
+                    };
+                    let target = object.ty.clone();
+                    let left = self.ensure_opaque(object)?;
+                    let right = self.load_operand_as_opaque_direct(&argument.value, &target)?;
+                    let operation = match field {
+                        "wrapping_add" | "saturating_add" => 0,
+                        "wrapping_sub" | "saturating_sub" => 1,
+                        "wrapping_mul" | "saturating_mul" => 2,
+                        _ => unreachable!(),
+                    };
+                    let arithmetic_mode = if field.starts_with("wrapping_") { 1 } else { 2 };
+                    let operation = self.builder.ins().iconst(types::I64, operation);
+                    let arithmetic_mode = self.builder.ins().iconst(types::I64, arithmetic_mode);
+                    let zero = self.builder.ins().iconst(types::I64, 0);
+                    let inst = self.builder.ins().call(
+                        self.integer_width_binary,
+                        &[
+                            left.values[0],
+                            right.values[0],
+                            operation,
+                            arithmetic_mode,
+                            zero,
+                            zero,
+                        ],
+                    );
+                    let result = self.owned_opaque_result(
+                        self.builder.inst_results(inst).to_vec(),
+                        direct_type_to_type(&target),
+                    );
+                    return self.coerce_value(result, &target);
+                }
                 if field == "to_float"
                     && matches!(object.ty.scalar_kind(), Some(kind) if kind.is_integer())
                 {
@@ -8512,31 +8917,53 @@ impl<'a> FunctionCompiler<'a> {
                 );
             }
         }
-        if field == "to_float"
+        if is_fixed_width_integer_type(object_ty)
             && matches!(
-                object_ty,
-                Type::Named(name, args)
-                    if args.is_empty()
-                        && matches!(
-                            name.as_str(),
-                            "int8"
-                                | "int16"
-                                | "int32"
-                                | "int64"
-                                | "int128"
-                                | "intsize"
-                                | "uint8"
-                                | "uint16"
-                                | "uint32"
-                                | "uint64"
-                                | "uint128"
-                                | "uintsize"
-                        )
+                field,
+                "wrapping_add"
+                    | "wrapping_sub"
+                    | "wrapping_mul"
+                    | "saturating_add"
+                    | "saturating_sub"
+                    | "saturating_mul"
             )
         {
+            let [argument] = ordered_named_args(&["rhs"], args)?[..] else {
+                unreachable!("integer width arithmetic binds exactly one argument")
+            };
+            let target = ensure_direct_type(object_ty, &self.classes, "integer receiver")?;
+            let left = self.ensure_opaque(object)?;
+            let right = self.load_operand_as_opaque_direct(&argument.value, &target)?;
+            let operation = match field {
+                "wrapping_add" | "saturating_add" => 0,
+                "wrapping_sub" | "saturating_sub" => 1,
+                "wrapping_mul" | "saturating_mul" => 2,
+                _ => unreachable!(),
+            };
+            let arithmetic_mode = if field.starts_with("wrapping_") { 1 } else { 2 };
+            let operation = self.builder.ins().iconst(types::I64, operation);
+            let arithmetic_mode = self.builder.ins().iconst(types::I64, arithmetic_mode);
+            let zero = self.builder.ins().iconst(types::I64, 0);
+            let inst = self.builder.ins().call(
+                self.integer_width_binary,
+                &[
+                    left.values[0],
+                    right.values[0],
+                    operation,
+                    arithmetic_mode,
+                    zero,
+                    zero,
+                ],
+            );
+            let result = self
+                .owned_opaque_result(self.builder.inst_results(inst).to_vec(), object_ty.clone());
+            return self.coerce_value(result, &target);
+        }
+        if field == "to_float" && is_fixed_width_integer_type(object_ty) {
             if !args.is_empty() {
                 return Err(DIRECT_TO_FLOAT_ARITY_ERROR.to_string());
             }
+            let object = self.ensure_opaque(object)?;
             let inst = self
                 .builder
                 .ins()
@@ -8567,6 +8994,18 @@ impl<'a> FunctionCompiler<'a> {
                 return Err("direct backend expected `clone()` to take no arguments".to_string());
             }
             let object = self.ensure_opaque(object)?;
+            if matches!(object_ty, Type::Named(name, arguments) if name == "Array" && arguments.len() == 1)
+            {
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let inst = self
+                    .builder
+                    .ins()
+                    .call(self.array_clone, &[object.values[0], zero, zero]);
+                return Ok(self.owned_opaque_result(
+                    self.builder.inst_results(inst).to_vec(),
+                    object_ty.clone(),
+                ));
+            }
             let inst = self
                 .builder
                 .ins()
@@ -8895,6 +9334,331 @@ impl<'a> FunctionCompiler<'a> {
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
                         name, field
+                    )),
+                };
+            }
+            if name == "Array" {
+                let object = self.ensure_opaque(object)?;
+                let element_ty = class_args
+                    .first()
+                    .cloned()
+                    .ok_or("direct backend expected Array to carry one dtype".to_string())?;
+                let element_direct_ty =
+                    ensure_direct_type(&element_ty, &self.classes, "Array dtype")?;
+                let array_ty = Type::Named("Array".to_string(), vec![element_ty.clone()]);
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                return match field {
+                    "__slice" => {
+                        let [start_arg, has_start_arg, end_arg, has_end_arg, line_arg, column_arg] =
+                            args
+                        else {
+                            return Err(
+                                "direct backend expected internal Array slicing to receive start, start presence, end, end presence, line, and column"
+                                    .to_string(),
+                            );
+                        };
+                        let start = self.load_operand_with_integer_hint(
+                            &start_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let start =
+                            self.coerce_value(start, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let has_start = self.load_operand(&has_start_arg.value)?;
+                        let has_start =
+                            self.coerce_value(has_start, &DirectType::Scalar(ScalarKind::Bool))?;
+                        let end = self.load_operand_with_integer_hint(
+                            &end_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let end = self.coerce_value(end, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let has_end = self.load_operand(&has_end_arg.value)?;
+                        let has_end =
+                            self.coerce_value(has_end, &DirectType::Scalar(ScalarKind::Bool))?;
+                        let line = self.load_operand_with_integer_hint(
+                            &line_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let line =
+                            self.coerce_value(line, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let column = self.load_operand_with_integer_hint(
+                            &column_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let column =
+                            self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let inst = self.builder.ins().call(
+                            self.array_slice,
+                            &[
+                                object.values[0],
+                                start.values[0],
+                                has_start.values[0],
+                                end.values[0],
+                                has_end.values[0],
+                                line.values[0],
+                                column.values[0],
+                            ],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            array_ty,
+                        ))
+                    }
+                    "shape" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `Array.shape()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.array_shape, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+                        ))
+                    }
+                    "len" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `Array.len()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self.builder.ins().call(self.array_len, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Int64),
+                        })
+                    }
+                    "get" => {
+                        let ordered = ordered_named_args(&["index"], args)?;
+                        let coordinates = self.load_operand(&ordered[0].value)?;
+                        let coordinates = self.ensure_opaque(coordinates)?;
+                        let inst = self.builder.ins().call(
+                            self.array_get,
+                            &[object.values[0], coordinates.values[0], zero, zero],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named("Option".to_string(), vec![element_ty]),
+                        ))
+                    }
+                    "set" => {
+                        let ordered = ordered_named_args(&["index", "value"], args)?;
+                        let coordinates = self.load_operand(&ordered[0].value)?;
+                        let coordinates = self.ensure_opaque(coordinates)?;
+                        let value = self
+                            .load_operand_as_opaque_direct(&ordered[1].value, &element_direct_ty)?;
+                        let inst = self.builder.ins().call(
+                            self.array_set_in_place,
+                            &[
+                                object.values[0],
+                                coordinates.values[0],
+                                value.values[0],
+                                zero,
+                                zero,
+                            ],
+                        );
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named("Option".to_string(), vec![element_ty]),
+                        ))
+                    }
+                    "fill" => {
+                        let ordered = ordered_named_args(&["value"], args)?;
+                        let value = self
+                            .load_operand_as_opaque_direct(&ordered[0].value, &element_direct_ty)?;
+                        let inst = self.builder.ins().call(
+                            self.array_fill_in_place,
+                            &[object.values[0], value.values[0], zero, zero],
+                        );
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(unit_value(&mut self.builder))
+                    }
+                    "__index" => {
+                        let [coordinate_arg, line_arg, column_arg] = args else {
+                            return Err(
+                                "direct backend expected internal Array indexing to receive coordinates, line, and column"
+                                    .to_string(),
+                            );
+                        };
+                        let coordinates = self.load_operand(&coordinate_arg.value)?;
+                        let coordinates = self.ensure_opaque(coordinates)?;
+                        let line = self.load_operand_with_integer_hint(
+                            &line_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let line =
+                            self.coerce_value(line, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let column = self.load_operand_with_integer_hint(
+                            &column_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let column =
+                            self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let inst = self.builder.ins().call(
+                            self.array_index,
+                            &[
+                                object.values[0],
+                                coordinates.values[0],
+                                line.values[0],
+                                column.values[0],
+                            ],
+                        );
+                        let result = self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            element_ty,
+                        );
+                        self.coerce_value(result, &element_direct_ty)
+                    }
+                    "__set_index" => {
+                        let [coordinate_arg, value_arg, line_arg, column_arg] = args else {
+                            return Err(
+                                "direct backend expected internal Array indexed assignment to receive coordinates, value, line, and column"
+                                    .to_string(),
+                            );
+                        };
+                        let coordinates = self.load_operand(&coordinate_arg.value)?;
+                        let coordinates = self.ensure_opaque(coordinates)?;
+                        let value = self
+                            .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
+                        let line = self.load_operand_with_integer_hint(
+                            &line_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let line =
+                            self.coerce_value(line, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let column = self.load_operand_with_integer_hint(
+                            &column_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
+                        let column =
+                            self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let inst = self.builder.ins().call(
+                            self.array_set_index_in_place,
+                            &[
+                                object.values[0],
+                                coordinates.values[0],
+                                value.values[0],
+                                line.values[0],
+                                column.values[0],
+                            ],
+                        );
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(unit_value(&mut self.builder))
+                    }
+                    "map" => {
+                        let ordered = ordered_named_args(&["f"], args)?;
+                        let callback = self.load_operand(&ordered[0].value)?;
+                        let callback_type = direct_type_to_type(&callback.ty);
+                        let result_type = match callback_type {
+                            Type::Function { return_type, .. }
+                            | Type::Closure { return_type, .. } => *return_type,
+                            other => {
+                                return Err(format!(
+                                    "direct backend expected `Array.map` callback, found `{other}`"
+                                ))
+                            }
+                        };
+                        let result_dtype = self
+                            .builder
+                            .ins()
+                            .iconst(types::I64, direct_array_dtype_code(&result_type)?);
+                        let callback = self.ensure_opaque(callback)?;
+                        let inst = self.builder.ins().call(
+                            self.array_map,
+                            &[
+                                object.values[0],
+                                callback.values[0],
+                                result_dtype,
+                                zero,
+                                zero,
+                            ],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named("Array".to_string(), vec![result_type]),
+                        ))
+                    }
+                    "sum" | "min" | "max" | "mean" => {
+                        if !args.is_empty() {
+                            return Err(format!(
+                                "direct backend expected `Array.{field}()` to take no arguments"
+                            ));
+                        }
+                        let reduction_code = match field {
+                            "sum" => 0,
+                            "min" => 1,
+                            "max" => 2,
+                            "mean" => 3,
+                            _ => unreachable!(),
+                        };
+                        let reduction = self.builder.ins().iconst(types::I64, reduction_code);
+                        let inst = self.builder.ins().call(
+                            self.array_reduce,
+                            &[object.values[0], reduction, zero, zero],
+                        );
+                        let target = if field == "mean" {
+                            DirectType::Scalar(ScalarKind::Float64)
+                        } else {
+                            element_direct_ty
+                        };
+                        let boxed = self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            direct_type_to_type(&target),
+                        );
+                        self.coerce_value(boxed, &target)
+                    }
+                    "wrapping_add" | "wrapping_sub" | "wrapping_mul" | "saturating_add"
+                    | "saturating_sub" | "saturating_mul" => {
+                        let ordered = ordered_named_args(&["rhs"], args)?;
+                        let rhs = self.load_operand(&ordered[0].value)?;
+                        let rhs = if direct_array_element_type(&rhs.ty).is_some() {
+                            rhs
+                        } else {
+                            self.coerce_value(rhs, &element_direct_ty)?
+                        };
+                        let rhs = self.ensure_opaque(rhs)?;
+                        let operation_code = match field {
+                            "wrapping_add" | "saturating_add" => 0,
+                            "wrapping_sub" | "saturating_sub" => 1,
+                            "wrapping_mul" | "saturating_mul" => 2,
+                            _ => unreachable!(),
+                        };
+                        let arithmetic_mode = if field.starts_with("wrapping_") { 1 } else { 2 };
+                        let operation = self.builder.ins().iconst(types::I64, operation_code);
+                        let arithmetic_mode =
+                            self.builder.ins().iconst(types::I64, arithmetic_mode);
+                        let inst = self.builder.ins().call(
+                            self.array_binary,
+                            &[
+                                object.values[0],
+                                rhs.values[0],
+                                zero,
+                                operation,
+                                arithmetic_mode,
+                                zero,
+                                zero,
+                            ],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            array_ty,
+                        ))
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `Array.{field}`"
                     )),
                 };
             }
@@ -13968,6 +14732,30 @@ fn infer_rvalue_type(
                 {
                     return Some(DirectType::Scalar(ScalarKind::Float64));
                 }
+                if matches!(object_ty.scalar_kind(), Some(kind) if kind.is_integer())
+                    && matches!(
+                        field.as_str(),
+                        "wrapping_add"
+                            | "wrapping_sub"
+                            | "wrapping_mul"
+                            | "saturating_add"
+                            | "saturating_sub"
+                            | "saturating_mul"
+                    )
+                {
+                    return Some(object_ty);
+                }
+                if object_ty.scalar_kind().is_some()
+                    && matches!(field.as_str(), "add" | "sub" | "mul" | "div")
+                {
+                    if let Some(array_ty) = args.first().and_then(|argument| {
+                        infer_operand_type(&argument.value, variable_types, classes)
+                    }) {
+                        if direct_array_element_type(&array_ty).is_some() {
+                            return Some(array_ty);
+                        }
+                    }
+                }
                 match object_ty {
                     DirectType::PlainClass(class_ty) => {
                         let method = find_method(classes.get(&class_ty.class_name), field)?;
@@ -14100,25 +14888,22 @@ fn builtin_opaque_member_return_type(
     {
         return Some(DirectType::Scalar(ScalarKind::Float64));
     }
+    if args.is_empty() && field == "to_float" && is_fixed_width_integer_type(object_ty) {
+        return Some(DirectType::Scalar(ScalarKind::Float64));
+    }
     if args.is_empty()
-        && field == "to_float"
+        && is_fixed_width_integer_type(object_ty)
         && matches!(
-            name.as_str(),
-            "int8"
-                | "int16"
-                | "int32"
-                | "int64"
-                | "int128"
-                | "intsize"
-                | "uint8"
-                | "uint16"
-                | "uint32"
-                | "uint64"
-                | "uint128"
-                | "uintsize"
+            field,
+            "wrapping_add"
+                | "wrapping_sub"
+                | "wrapping_mul"
+                | "saturating_add"
+                | "saturating_sub"
+                | "saturating_mul"
         )
     {
-        return Some(DirectType::Scalar(ScalarKind::Float64));
+        return direct_type(object_ty, classes);
     }
     if args.is_empty()
         && field == "to_string"
@@ -14170,6 +14955,38 @@ fn builtin_opaque_member_return_type(
         ("String", "strip_prefix") | ("String", "strip_suffix") => Some(DirectType::Opaque(
             Type::Named("Option".to_string(), vec![Type::named("String")]),
         )),
+        ("Array", "shape") => Some(DirectType::Opaque(Type::Named(
+            "Vec".to_string(),
+            vec![Type::named("int64")],
+        ))),
+        ("Array", "len") => Some(DirectType::Scalar(ScalarKind::Int64)),
+        ("Array", "clone")
+        | ("Array", "__slice")
+        | ("Array", "wrapping_add")
+        | ("Array", "wrapping_sub")
+        | ("Array", "wrapping_mul")
+        | ("Array", "saturating_add")
+        | ("Array", "saturating_sub")
+        | ("Array", "saturating_mul") => Some(DirectType::Opaque(Type::Named(
+            "Array".to_string(),
+            args.clone(),
+        ))),
+        ("Array", "get") | ("Array", "set") => direct_type(
+            &Type::Named(
+                "Option".to_string(),
+                vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
+            ),
+            classes,
+        ),
+        ("Array", "fill") | ("Array", "__set_index") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("Array", "__index") | ("Array", "sum") | ("Array", "min") | ("Array", "max") => {
+            direct_type(args.first().unwrap_or(&Type::named("Unknown")), classes)
+        }
+        ("Array", "mean") => Some(DirectType::Scalar(ScalarKind::Float64)),
+        ("Array", "map") => Some(DirectType::Opaque(Type::Named(
+            "Array".to_string(),
+            vec![Type::named("Unknown")],
+        ))),
         ("Vec", "len") => direct_type(&Type::named("int64"), classes),
         ("Vec", "is_empty") => Some(DirectType::Scalar(ScalarKind::Bool)),
         ("Vec", "clone") => Some(DirectType::Opaque(Type::Named(

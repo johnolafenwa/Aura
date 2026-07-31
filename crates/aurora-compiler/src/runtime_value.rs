@@ -263,6 +263,7 @@ pub enum Value {
     String(String),
     Tuple(TupleValue),
     Vec(VecValue),
+    Array(ArrayValue),
     Set(SetValue),
     Map(MapValue),
     Duration(i128),
@@ -391,10 +392,19 @@ impl ClosureEnvironment {
                 ))
             });
         }
-        Ok(captures
+        let captures = captures
             .as_ref()
-            .expect("repeatable closure environments remain initialized")
-            .clone())
+            .expect("repeatable closure environments remain initialized");
+        let mut copied =
+            try_array_buffer(captures.len(), "Array-containing closure environment copy")?;
+        for capture in captures {
+            copied.push(ClosureCaptureValue {
+                name: capture.name.clone(),
+                ty: capture.ty.clone(),
+                value: try_clone_array_containing_value(&capture.value)?,
+            });
+        }
+        Ok(copied)
     }
 }
 
@@ -463,6 +473,1147 @@ pub struct VecValue {
     pub elements: Vec<Value>,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(i64)]
+pub enum ArrayDType {
+    Int32 = 0,
+    Int64 = 1,
+    Float32 = 2,
+    Float64 = 3,
+}
+
+impl ArrayDType {
+    pub const fn from_code(code: i64) -> Option<Self> {
+        match code {
+            0 => Some(Self::Int32),
+            1 => Some(Self::Int64),
+            2 => Some(Self::Float32),
+            3 => Some(Self::Float64),
+            _ => None,
+        }
+    }
+
+    pub const fn runtime_type_name(self) -> &'static str {
+        match self {
+            Self::Int32 => "int32",
+            Self::Int64 => "int64",
+            Self::Float32 => "float32",
+            Self::Float64 => "float64",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ArrayStorage {
+    Int32(Box<[i32]>),
+    Int64(Box<[i64]>),
+    Float32(Box<[f32]>),
+    Float64(Box<[f64]>),
+}
+
+impl ArrayStorage {
+    pub const fn dtype(&self) -> ArrayDType {
+        match self {
+            Self::Int32(_) => ArrayDType::Int32,
+            Self::Int64(_) => ArrayDType::Int64,
+            Self::Float32(_) => ArrayDType::Float32,
+            Self::Float64(_) => ArrayDType::Float64,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Int32(values) => values.len(),
+            Self::Int64(values) => values.len(),
+            Self::Float32(values) => values.len(),
+            Self::Float64(values) => values.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArrayValue {
+    pub shape: Box<[usize]>,
+    pub storage: ArrayStorage,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(i64)]
+pub enum ArrayBinaryOp {
+    Add = 0,
+    Sub = 1,
+    Mul = 2,
+    Div = 3,
+}
+
+impl ArrayBinaryOp {
+    pub const fn from_code(code: i64) -> Option<Self> {
+        match code {
+            0 => Some(Self::Add),
+            1 => Some(Self::Sub),
+            2 => Some(Self::Mul),
+            3 => Some(Self::Div),
+            _ => None,
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Add => "addition",
+            Self::Sub => "subtraction",
+            Self::Mul => "multiplication",
+            Self::Div => "division",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(i64)]
+pub enum IntegerArithmeticMode {
+    Checked = 0,
+    Wrapping = 1,
+    Saturating = 2,
+}
+
+impl IntegerArithmeticMode {
+    pub const fn from_code(code: i64) -> Option<Self> {
+        match code {
+            0 => Some(Self::Checked),
+            1 => Some(Self::Wrapping),
+            2 => Some(Self::Saturating),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(i64)]
+pub enum ArrayReduction {
+    Sum = 0,
+    Min = 1,
+    Max = 2,
+    Mean = 3,
+}
+
+impl ArrayReduction {
+    pub const fn from_code(code: i64) -> Option<Self> {
+        match code {
+            0 => Some(Self::Sum),
+            1 => Some(Self::Min),
+            2 => Some(Self::Max),
+            3 => Some(Self::Mean),
+            _ => None,
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Sum => "sum",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Mean => "mean",
+        }
+    }
+}
+
+impl ArrayValue {
+    pub fn new(shape: Box<[usize]>, storage: ArrayStorage) -> Result<Self> {
+        if shape.is_empty() {
+            return Err(Diagnostic::coded(
+                "AU4007",
+                "array rank must be at least one",
+            ));
+        }
+        let element_count = checked_array_element_count(&shape)?;
+        if element_count != storage.len() {
+            return Err(Diagnostic::coded(
+                "AU4007",
+                format!(
+                    "array shape {:?} requires {element_count} values, but storage contains {}",
+                    shape,
+                    storage.len()
+                ),
+            ));
+        }
+        Ok(Self { shape, storage })
+    }
+
+    pub fn from_vec(vector: &VecValue, shape: Option<&[usize]>) -> Result<Self> {
+        let dtype = ArrayDType::from_type(&vector.element_type).ok_or_else(|| {
+            Diagnostic::coded(
+                "AU4007",
+                format!(
+                    "Array values require int32, int64, float32, or float64 elements, found `{}`",
+                    vector.element_type
+                ),
+            )
+        })?;
+        let default_shape = [vector.elements.len()];
+        let shape = shape.unwrap_or(&default_shape);
+        let element_count = checked_array_shape(shape)?;
+        if element_count != vector.elements.len() {
+            return Err(Diagnostic::coded(
+                "AU4007",
+                format!(
+                    "array shape {shape:?} requires {element_count} values, but storage contains {}",
+                    vector.elements.len()
+                ),
+            ));
+        }
+        let shape = try_copy_array_storage(shape, "Array.from_vec shape")?;
+        Self::from_vec_with_shape(vector, dtype, shape)
+    }
+
+    fn from_vec_with_shape(
+        vector: &VecValue,
+        dtype: ArrayDType,
+        shape: Box<[usize]>,
+    ) -> Result<Self> {
+        let storage = match dtype {
+            ArrayDType::Int32 => ArrayStorage::Int32(try_collect_array_storage(
+                vector.elements.len(),
+                "Array.from_vec",
+                |index| array_int32_scalar(&vector.elements[index], index),
+            )?),
+            ArrayDType::Int64 => ArrayStorage::Int64(try_collect_array_storage(
+                vector.elements.len(),
+                "Array.from_vec",
+                |index| array_int64_scalar(&vector.elements[index], index),
+            )?),
+            ArrayDType::Float32 => ArrayStorage::Float32(try_collect_array_storage(
+                vector.elements.len(),
+                "Array.from_vec",
+                |index| array_float32_scalar(&vector.elements[index], index),
+            )?),
+            ArrayDType::Float64 => ArrayStorage::Float64(try_collect_array_storage(
+                vector.elements.len(),
+                "Array.from_vec",
+                |index| array_float64_scalar(&vector.elements[index], index),
+            )?),
+        };
+        Self::new(shape, storage)
+    }
+
+    pub fn from_values(
+        element_type: &Type,
+        shape: Box<[usize]>,
+        elements: Vec<Value>,
+    ) -> Result<Self> {
+        let vector = VecValue {
+            element_type: element_type.clone(),
+            elements,
+        };
+        let dtype = ArrayDType::from_type(element_type).ok_or_else(|| {
+            Diagnostic::coded(
+                "AU4007",
+                format!(
+                    "Array values require int32, int64, float32, or float64 elements, found `{element_type}`"
+                ),
+            )
+        })?;
+        Self::from_vec_with_shape(&vector, dtype, shape)
+    }
+
+    pub fn zeros(dtype: ArrayDType, shape: Box<[usize]>) -> Result<Self> {
+        let len = checked_array_shape(&shape)?;
+        let storage = match dtype {
+            ArrayDType::Int32 => {
+                ArrayStorage::Int32(try_filled_array_storage(len, 0, "Array.zeros")?)
+            }
+            ArrayDType::Int64 => {
+                ArrayStorage::Int64(try_filled_array_storage(len, 0, "Array.zeros")?)
+            }
+            ArrayDType::Float32 => {
+                ArrayStorage::Float32(try_filled_array_storage(len, 0.0, "Array.zeros")?)
+            }
+            ArrayDType::Float64 => {
+                ArrayStorage::Float64(try_filled_array_storage(len, 0.0, "Array.zeros")?)
+            }
+        };
+        Self::new(shape, storage)
+    }
+
+    pub fn full(dtype: ArrayDType, shape: Box<[usize]>, value: &Value) -> Result<Self> {
+        let mut array = Self::zeros(dtype, shape)?;
+        array.fill(value.clone())?;
+        Ok(array)
+    }
+
+    pub const fn dtype(&self) -> ArrayDType {
+        self.storage.dtype()
+    }
+
+    pub fn element_type(&self) -> Type {
+        Type::named(self.dtype().runtime_type_name())
+    }
+
+    pub fn rank(&self) -> usize {
+        self.shape.len()
+    }
+
+    pub fn len(&self) -> usize {
+        self.storage.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.storage.is_empty()
+    }
+
+    pub fn try_shape(&self) -> Result<Box<[usize]>> {
+        try_copy_array_storage(&self.shape, "Array shape")
+    }
+
+    pub fn try_clone(&self) -> Result<Self> {
+        let shape = self.try_shape()?;
+        let storage = match &self.storage {
+            ArrayStorage::Int32(values) => {
+                ArrayStorage::Int32(try_copy_array_storage(values, "Array.clone")?)
+            }
+            ArrayStorage::Int64(values) => {
+                ArrayStorage::Int64(try_copy_array_storage(values, "Array.clone")?)
+            }
+            ArrayStorage::Float32(values) => {
+                ArrayStorage::Float32(try_copy_array_storage(values, "Array.clone")?)
+            }
+            ArrayStorage::Float64(values) => {
+                ArrayStorage::Float64(try_copy_array_storage(values, "Array.clone")?)
+            }
+        };
+        Self::new(shape, storage)
+    }
+
+    pub fn shape_value(&self) -> Result<Value> {
+        let mut elements = try_array_buffer(self.rank(), "Array.shape result")?;
+        elements.extend(self.shape.iter().map(|dimension| {
+            Value::Int(IntegerValue::from_i64(
+                i64::try_from(*dimension).expect("live array dimensions fit the Aurora int64 ABI"),
+            ))
+        }));
+        Ok(Value::Vec(VecValue {
+            element_type: Type::named("int64"),
+            elements,
+        }))
+    }
+
+    pub fn value_at_flat(&self, index: usize) -> Value {
+        match &self.storage {
+            ArrayStorage::Int32(values) => Value::Int(IntegerValue::from_i32(values[index])),
+            ArrayStorage::Int64(values) => Value::Int(IntegerValue::from_i64(values[index])),
+            ArrayStorage::Float32(values) => Value::Float(values[index] as f64),
+            ArrayStorage::Float64(values) => Value::Float(values[index]),
+        }
+    }
+
+    pub fn get(&self, coordinates: &[i32]) -> Result<Value> {
+        Ok(self.value_at_flat(self.flat_index(coordinates)?))
+    }
+
+    pub fn get_optional(&self, coordinates: &[i32]) -> Result<Option<Value>> {
+        if coordinates.len() != self.rank() {
+            return Ok(None);
+        }
+        match self.flat_index(coordinates) {
+            Ok(index) => Ok(Some(self.value_at_flat(index))),
+            Err(error) if error.code == "AU4003" => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn set(&mut self, coordinates: &[i32], value: Value) -> Result<Value> {
+        let index = self.flat_index(coordinates)?;
+        self.set_flat(index, value)
+    }
+
+    fn set_flat(&mut self, index: usize, value: Value) -> Result<Value> {
+        let previous = self.value_at_flat(index);
+        match &mut self.storage {
+            ArrayStorage::Int32(values) => values[index] = array_int32_scalar(&value, index)?,
+            ArrayStorage::Int64(values) => values[index] = array_int64_scalar(&value, index)?,
+            ArrayStorage::Float32(values) => values[index] = array_float32_scalar(&value, index)?,
+            ArrayStorage::Float64(values) => values[index] = array_float64_scalar(&value, index)?,
+        }
+        Ok(previous)
+    }
+
+    pub fn fill(&mut self, value: Value) -> Result<()> {
+        match &mut self.storage {
+            ArrayStorage::Int32(values) => values.fill(array_int32_scalar(&value, 0)?),
+            ArrayStorage::Int64(values) => values.fill(array_int64_scalar(&value, 0)?),
+            ArrayStorage::Float32(values) => values.fill(array_float32_scalar(&value, 0)?),
+            ArrayStorage::Float64(values) => values.fill(array_float64_scalar(&value, 0)?),
+        }
+        Ok(())
+    }
+
+    pub fn slice_first_axis(&self, start: Option<i128>, end: Option<i128>) -> Result<Self> {
+        let first_dimension = self.shape[0];
+        let (start, end) = normalize_slice_bounds(start, end, first_dimension)?;
+        let block_len = checked_array_element_count(&self.shape[1..])?;
+        let value_start = start.checked_mul(block_len).ok_or_else(|| {
+            Diagnostic::coded(
+                "AU4005",
+                "array slice offset overflowed host allocation bounds",
+            )
+        })?;
+        let value_end = end.checked_mul(block_len).ok_or_else(|| {
+            Diagnostic::coded(
+                "AU4005",
+                "array slice offset overflowed host allocation bounds",
+            )
+        })?;
+        let mut shape = self.try_shape()?;
+        shape[0] = end - start;
+        let storage = match &self.storage {
+            ArrayStorage::Int32(values) => ArrayStorage::Int32(try_copy_array_storage(
+                &values[value_start..value_end],
+                "array slice",
+            )?),
+            ArrayStorage::Int64(values) => ArrayStorage::Int64(try_copy_array_storage(
+                &values[value_start..value_end],
+                "array slice",
+            )?),
+            ArrayStorage::Float32(values) => ArrayStorage::Float32(try_copy_array_storage(
+                &values[value_start..value_end],
+                "array slice",
+            )?),
+            ArrayStorage::Float64(values) => ArrayStorage::Float64(try_copy_array_storage(
+                &values[value_start..value_end],
+                "array slice",
+            )?),
+        };
+        Self::new(shape, storage)
+    }
+
+    pub fn binary(
+        &self,
+        other: &Self,
+        operation: ArrayBinaryOp,
+        mode: IntegerArithmeticMode,
+    ) -> Result<Self> {
+        if self.shape != other.shape || self.dtype() != other.dtype() {
+            return Err(Diagnostic::coded(
+                "AU4007",
+                format!(
+                    "array operands require the same shape and dtype, found {:?} {} and {:?} {}",
+                    self.shape,
+                    self.dtype().runtime_type_name(),
+                    other.shape,
+                    other.dtype().runtime_type_name()
+                ),
+            ));
+        }
+        let shape = self.try_shape()?;
+        let storage = match (&self.storage, &other.storage) {
+            (ArrayStorage::Int32(left), ArrayStorage::Int32(right)) => ArrayStorage::Int32(
+                array_integer_binary(left, right, operation, mode, IntegerValue::from_i32)?
+                    .into_boxed_slice(),
+            ),
+            (ArrayStorage::Int64(left), ArrayStorage::Int64(right)) => ArrayStorage::Int64(
+                array_integer_binary(left, right, operation, mode, IntegerValue::from_i64)?
+                    .into_boxed_slice(),
+            ),
+            (ArrayStorage::Float32(left), ArrayStorage::Float32(right)) => ArrayStorage::Float32(
+                array_float32_binary(left, right, operation, mode)?.into_boxed_slice(),
+            ),
+            (ArrayStorage::Float64(left), ArrayStorage::Float64(right)) => ArrayStorage::Float64(
+                array_float64_binary(left, right, operation, mode)?.into_boxed_slice(),
+            ),
+            _ => unreachable!("matching array dtypes imply matching storage variants"),
+        };
+        Self::new(shape, storage)
+    }
+
+    pub fn scalar_binary(
+        &self,
+        scalar: &Value,
+        scalar_left: bool,
+        operation: ArrayBinaryOp,
+        mode: IntegerArithmeticMode,
+    ) -> Result<Self> {
+        let shape = self.try_shape()?;
+        let storage = match &self.storage {
+            ArrayStorage::Int32(values) => {
+                let scalar = array_int32_scalar(scalar, 0)?;
+                ArrayStorage::Int32(
+                    array_integer_scalar_binary(
+                        values,
+                        scalar,
+                        scalar_left,
+                        operation,
+                        mode,
+                        IntegerValue::from_i32,
+                    )?
+                    .into_boxed_slice(),
+                )
+            }
+            ArrayStorage::Int64(values) => {
+                let scalar = array_int64_scalar(scalar, 0)?;
+                ArrayStorage::Int64(
+                    array_integer_scalar_binary(
+                        values,
+                        scalar,
+                        scalar_left,
+                        operation,
+                        mode,
+                        IntegerValue::from_i64,
+                    )?
+                    .into_boxed_slice(),
+                )
+            }
+            ArrayStorage::Float32(values) => {
+                let scalar = array_float32_scalar(scalar, 0)?;
+                ArrayStorage::Float32(
+                    array_float32_scalar_binary(values, scalar, scalar_left, operation, mode)?
+                        .into_boxed_slice(),
+                )
+            }
+            ArrayStorage::Float64(values) => {
+                let scalar = array_float64_scalar(scalar, 0)?;
+                ArrayStorage::Float64(
+                    array_float64_scalar_binary(values, scalar, scalar_left, operation, mode)?
+                        .into_boxed_slice(),
+                )
+            }
+        };
+        Self::new(shape, storage)
+    }
+
+    pub fn reduce(&self, reduction: ArrayReduction) -> Result<Value> {
+        if self.is_empty() {
+            return match (reduction, self.dtype()) {
+                (ArrayReduction::Sum, ArrayDType::Int32) => {
+                    Ok(Value::Int(IntegerValue::from_i32(0)))
+                }
+                (ArrayReduction::Sum, ArrayDType::Int64) => {
+                    Ok(Value::Int(IntegerValue::from_i64(0)))
+                }
+                (ArrayReduction::Sum, _) => Ok(Value::Float(0.0)),
+                _ => Err(Diagnostic::coded(
+                    "AU4007",
+                    format!(
+                        "cannot compute array {} over an empty array",
+                        reduction.name()
+                    ),
+                )),
+            };
+        }
+        match &self.storage {
+            ArrayStorage::Int32(values) => reduce_int32_array(values, reduction),
+            ArrayStorage::Int64(values) => reduce_int64_array(values, reduction),
+            ArrayStorage::Float32(values) => reduce_float32_array(values, reduction),
+            ArrayStorage::Float64(values) => reduce_float64_array(values, reduction),
+        }
+    }
+
+    pub fn render(&self) -> String {
+        let values = match &self.storage {
+            ArrayStorage::Int32(values) => {
+                values.iter().map(ToString::to_string).collect::<Vec<_>>()
+            }
+            ArrayStorage::Int64(values) => {
+                values.iter().map(ToString::to_string).collect::<Vec<_>>()
+            }
+            ArrayStorage::Float32(values) => {
+                values.iter().map(|value| render_float32(*value)).collect()
+            }
+            ArrayStorage::Float64(values) => {
+                values.iter().map(|value| render_float(*value)).collect()
+            }
+        };
+        format!(
+            "Array[{}](shape={:?}, values=[{}])",
+            self.dtype().runtime_type_name(),
+            self.shape,
+            values.join(", ")
+        )
+    }
+
+    fn flat_index(&self, coordinates: &[i32]) -> Result<usize> {
+        if coordinates.len() != self.rank() {
+            return Err(Diagnostic::coded(
+                "AU4007",
+                format!(
+                    "array rank {} requires {} coordinates, found {}",
+                    self.rank(),
+                    self.rank(),
+                    coordinates.len()
+                ),
+            ));
+        }
+        let mut flat_index = 0_usize;
+        for (axis, (&coordinate, &dimension)) in
+            coordinates.iter().zip(self.shape.iter()).enumerate()
+        {
+            let dimension_i128 = dimension as i128;
+            let coordinate_i128 = coordinate as i128;
+            let normalized = if coordinate_i128 < 0 {
+                coordinate_i128 + dimension_i128
+            } else {
+                coordinate_i128
+            };
+            if !(0..dimension_i128).contains(&normalized) {
+                return Err(Diagnostic::coded(
+                    "AU4003",
+                    format!(
+                        "array coordinate {coordinate} on axis {axis} normalizes to {normalized}, outside 0..{dimension}"
+                    ),
+                ));
+            }
+            flat_index = flat_index
+                .checked_mul(dimension)
+                .and_then(|index| index.checked_add(normalized as usize))
+                .expect("validated array shapes and coordinates produce valid row-major offsets");
+        }
+        Ok(flat_index)
+    }
+}
+
+impl ArrayDType {
+    pub fn from_type(ty: &Type) -> Option<Self> {
+        match ty {
+            Type::Named(name, arguments) if arguments.is_empty() => match name.as_str() {
+                "int32" => Some(Self::Int32),
+                "int64" => Some(Self::Int64),
+                "float32" => Some(Self::Float32),
+                "float64" => Some(Self::Float64),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
+fn checked_array_shape(shape: &[usize]) -> Result<usize> {
+    if shape.is_empty() {
+        return Err(Diagnostic::coded(
+            "AU4007",
+            "array rank must be at least one",
+        ));
+    }
+    checked_array_element_count(shape)
+}
+
+fn checked_array_element_count(shape: &[usize]) -> Result<usize> {
+    for dimension in shape {
+        if *dimension > i64::MAX as usize {
+            return Err(Diagnostic::coded(
+                "AU4005",
+                format!("array dimension {dimension} exceeds the Aurora int64 shape limit"),
+            ));
+        }
+    }
+    if shape.contains(&0) {
+        return Ok(0);
+    }
+    let mut count = 1_usize;
+    for dimension in shape {
+        count = count.checked_mul(*dimension).ok_or_else(|| {
+            Diagnostic::coded(
+                "AU4005",
+                format!("array shape product overflows host allocation bounds: {shape:?}"),
+            )
+        })?;
+    }
+    Ok(count)
+}
+
+fn array_allocation_error(label: &str, len: usize) -> Diagnostic {
+    Diagnostic::coded(
+        "AU4005",
+        format!("{label} could not allocate storage for {len} array elements"),
+    )
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static ARRAY_ALLOCATION_BUDGET: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+struct ArrayAllocationBudgetGuard(Option<usize>);
+
+#[cfg(test)]
+impl Drop for ArrayAllocationBudgetGuard {
+    fn drop(&mut self) {
+        ARRAY_ALLOCATION_BUDGET.with(|budget| budget.set(self.0));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn with_array_allocation_budget<T>(
+    successful_allocations: usize,
+    operation: impl FnOnce() -> T,
+) -> T {
+    let previous =
+        ARRAY_ALLOCATION_BUDGET.with(|budget| budget.replace(Some(successful_allocations)));
+    let _guard = ArrayAllocationBudgetGuard(previous);
+    operation()
+}
+
+pub(crate) fn try_array_buffer<T>(len: usize, label: &str) -> Result<Vec<T>> {
+    #[cfg(test)]
+    {
+        let injected_failure = ARRAY_ALLOCATION_BUDGET.with(|budget| match budget.get() {
+            Some(0) => true,
+            Some(remaining) => {
+                budget.set(Some(remaining - 1));
+                false
+            }
+            None => false,
+        });
+        if injected_failure {
+            return Err(array_allocation_error(label, len));
+        }
+    }
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(len)
+        .map_err(|_| array_allocation_error(label, len))?;
+    Ok(values)
+}
+
+fn try_filled_array_storage<T: Clone>(len: usize, value: T, label: &str) -> Result<Box<[T]>> {
+    let mut values = try_array_buffer(len, label)?;
+    values.resize(len, value);
+    Ok(values.into_boxed_slice())
+}
+
+fn try_copy_array_storage<T: Copy>(values: &[T], label: &str) -> Result<Box<[T]>> {
+    let mut copy = try_array_buffer(values.len(), label)?;
+    copy.extend_from_slice(values);
+    Ok(copy.into_boxed_slice())
+}
+
+fn try_collect_array_storage<T>(
+    len: usize,
+    label: &str,
+    mut value_at: impl FnMut(usize) -> Result<T>,
+) -> Result<Box<[T]>> {
+    let mut values = try_array_buffer(len, label)?;
+    for index in 0..len {
+        values.push(value_at(index)?);
+    }
+    Ok(values.into_boxed_slice())
+}
+
+fn array_dtype_error(expected: ArrayDType, value: &Value, index: usize) -> Diagnostic {
+    Diagnostic::coded(
+        "AU4007",
+        format!(
+            "array {} storage requires {} scalar at flat index {index}, found {}",
+            expected.runtime_type_name(),
+            expected.runtime_type_name(),
+            value.render(),
+        ),
+    )
+}
+
+fn array_int32_scalar(value: &Value, index: usize) -> Result<i32> {
+    let Value::Int(value) = value else {
+        return Err(array_dtype_error(ArrayDType::Int32, value, index));
+    };
+    if !matches!(value.runtime_kind(), None | Some(IntegerKind::Int32)) {
+        return Err(array_dtype_error(
+            ArrayDType::Int32,
+            &Value::Int(*value),
+            index,
+        ));
+    }
+    value
+        .as_i128()
+        .and_then(|value| i32::try_from(value).ok())
+        .ok_or_else(|| array_dtype_error(ArrayDType::Int32, &Value::Int(*value), index))
+}
+
+fn array_int64_scalar(value: &Value, index: usize) -> Result<i64> {
+    let Value::Int(value) = value else {
+        return Err(array_dtype_error(ArrayDType::Int64, value, index));
+    };
+    if !matches!(value.runtime_kind(), None | Some(IntegerKind::Int64)) {
+        return Err(array_dtype_error(
+            ArrayDType::Int64,
+            &Value::Int(*value),
+            index,
+        ));
+    }
+    value
+        .as_i128()
+        .and_then(|value| i64::try_from(value).ok())
+        .ok_or_else(|| array_dtype_error(ArrayDType::Int64, &Value::Int(*value), index))
+}
+
+fn array_float32_scalar(value: &Value, index: usize) -> Result<f32> {
+    match value {
+        Value::Float(value) => Ok(*value as f32),
+        _ => Err(array_dtype_error(ArrayDType::Float32, value, index)),
+    }
+}
+
+fn array_float64_scalar(value: &Value, index: usize) -> Result<f64> {
+    match value {
+        Value::Float(value) => Ok(*value),
+        _ => Err(array_dtype_error(ArrayDType::Float64, value, index)),
+    }
+}
+
+fn array_arithmetic_error(
+    code: &'static str,
+    operation: ArrayBinaryOp,
+    index: usize,
+    detail: &'static str,
+) -> Diagnostic {
+    Diagnostic::coded(
+        code,
+        format!("array {} {detail} at flat index {index}", operation.name()),
+    )
+}
+
+fn apply_integer_array_operation(
+    left: IntegerValue,
+    right: IntegerValue,
+    operation: ArrayBinaryOp,
+    mode: IntegerArithmeticMode,
+    index: usize,
+) -> Result<IntegerValue> {
+    if operation == ArrayBinaryOp::Div {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            "array division is supported only for float32 and float64",
+        ));
+    }
+    let result = match (mode, operation) {
+        (IntegerArithmeticMode::Checked, ArrayBinaryOp::Add) => left.checked_add(right),
+        (IntegerArithmeticMode::Checked, ArrayBinaryOp::Sub) => left.checked_sub(right),
+        (IntegerArithmeticMode::Checked, ArrayBinaryOp::Mul) => left.checked_mul(right),
+        (IntegerArithmeticMode::Wrapping, ArrayBinaryOp::Add) => left.wrapping_add(right),
+        (IntegerArithmeticMode::Wrapping, ArrayBinaryOp::Sub) => left.wrapping_sub(right),
+        (IntegerArithmeticMode::Wrapping, ArrayBinaryOp::Mul) => left.wrapping_mul(right),
+        (IntegerArithmeticMode::Saturating, ArrayBinaryOp::Add) => left.saturating_add(right),
+        (IntegerArithmeticMode::Saturating, ArrayBinaryOp::Sub) => left.saturating_sub(right),
+        (IntegerArithmeticMode::Saturating, ArrayBinaryOp::Mul) => left.saturating_mul(right),
+        (_, ArrayBinaryOp::Div) => unreachable!("integer division was rejected above"),
+    };
+    result
+        .filter(|result| result.runtime_kind() == left.runtime_kind())
+        .ok_or_else(|| array_arithmetic_error("AU4002", operation, index, "overflowed"))
+}
+
+fn array_integer_binary<T>(
+    left: &[T],
+    right: &[T],
+    operation: ArrayBinaryOp,
+    mode: IntegerArithmeticMode,
+    to_integer: impl Fn(T) -> IntegerValue,
+) -> Result<Vec<T>>
+where
+    T: Copy + TryFrom<i128>,
+{
+    let mut output = try_array_buffer(left.len(), "array arithmetic result")?;
+    for (index, (&left, &right)) in left.iter().zip(right).enumerate() {
+        let result = apply_integer_array_operation(
+            to_integer(left),
+            to_integer(right),
+            operation,
+            mode,
+            index,
+        )?;
+        output.push(
+            T::try_from(
+                result
+                    .as_i128()
+                    .expect("int32 and int64 array results fit i128"),
+            )
+            .map_err(|_| array_arithmetic_error("AU4002", operation, index, "overflowed"))?,
+        );
+    }
+    Ok(output)
+}
+
+fn array_integer_scalar_binary<T>(
+    values: &[T],
+    scalar: T,
+    scalar_left: bool,
+    operation: ArrayBinaryOp,
+    mode: IntegerArithmeticMode,
+    to_integer: impl Fn(T) -> IntegerValue,
+) -> Result<Vec<T>>
+where
+    T: Copy + TryFrom<i128>,
+{
+    let mut output = try_array_buffer(values.len(), "array arithmetic result")?;
+    for (index, &value) in values.iter().enumerate() {
+        let (left, right) = if scalar_left {
+            (to_integer(scalar), to_integer(value))
+        } else {
+            (to_integer(value), to_integer(scalar))
+        };
+        let result = apply_integer_array_operation(left, right, operation, mode, index)?;
+        output.push(
+            T::try_from(
+                result
+                    .as_i128()
+                    .expect("int32 and int64 array results fit i128"),
+            )
+            .map_err(|_| array_arithmetic_error("AU4002", operation, index, "overflowed"))?,
+        );
+    }
+    Ok(output)
+}
+
+fn validate_float_array_mode(mode: IntegerArithmeticMode) -> Result<()> {
+    if mode != IntegerArithmeticMode::Checked {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            "wrapping and saturating modes are supported only for integer arrays",
+        ));
+    }
+    Ok(())
+}
+
+fn apply_float32_array_operation(
+    left: f32,
+    right: f32,
+    operation: ArrayBinaryOp,
+    index: usize,
+) -> Result<f32> {
+    if operation == ArrayBinaryOp::Div && right == 0.0 {
+        return Err(array_arithmetic_error(
+            "AU4004",
+            operation,
+            index,
+            "has a zero divisor",
+        ));
+    }
+    Ok(match operation {
+        ArrayBinaryOp::Add => left + right,
+        ArrayBinaryOp::Sub => left - right,
+        ArrayBinaryOp::Mul => left * right,
+        ArrayBinaryOp::Div => left / right,
+    })
+}
+
+fn apply_float64_array_operation(
+    left: f64,
+    right: f64,
+    operation: ArrayBinaryOp,
+    index: usize,
+) -> Result<f64> {
+    if operation == ArrayBinaryOp::Div && right == 0.0 {
+        return Err(array_arithmetic_error(
+            "AU4004",
+            operation,
+            index,
+            "has a zero divisor",
+        ));
+    }
+    Ok(match operation {
+        ArrayBinaryOp::Add => left + right,
+        ArrayBinaryOp::Sub => left - right,
+        ArrayBinaryOp::Mul => left * right,
+        ArrayBinaryOp::Div => left / right,
+    })
+}
+
+fn array_float32_binary(
+    left: &[f32],
+    right: &[f32],
+    operation: ArrayBinaryOp,
+    mode: IntegerArithmeticMode,
+) -> Result<Vec<f32>> {
+    validate_float_array_mode(mode)?;
+    let mut output = try_array_buffer(left.len(), "array arithmetic result")?;
+    for (index, (&left, &right)) in left.iter().zip(right).enumerate() {
+        output.push(apply_float32_array_operation(
+            left, right, operation, index,
+        )?);
+    }
+    Ok(output)
+}
+
+fn array_float64_binary(
+    left: &[f64],
+    right: &[f64],
+    operation: ArrayBinaryOp,
+    mode: IntegerArithmeticMode,
+) -> Result<Vec<f64>> {
+    validate_float_array_mode(mode)?;
+    let mut output = try_array_buffer(left.len(), "array arithmetic result")?;
+    for (index, (&left, &right)) in left.iter().zip(right).enumerate() {
+        output.push(apply_float64_array_operation(
+            left, right, operation, index,
+        )?);
+    }
+    Ok(output)
+}
+
+fn array_float32_scalar_binary(
+    values: &[f32],
+    scalar: f32,
+    scalar_left: bool,
+    operation: ArrayBinaryOp,
+    mode: IntegerArithmeticMode,
+) -> Result<Vec<f32>> {
+    validate_float_array_mode(mode)?;
+    let mut output = try_array_buffer(values.len(), "array arithmetic result")?;
+    for (index, &value) in values.iter().enumerate() {
+        let (left, right) = if scalar_left {
+            (scalar, value)
+        } else {
+            (value, scalar)
+        };
+        output.push(apply_float32_array_operation(
+            left, right, operation, index,
+        )?);
+    }
+    Ok(output)
+}
+
+fn array_float64_scalar_binary(
+    values: &[f64],
+    scalar: f64,
+    scalar_left: bool,
+    operation: ArrayBinaryOp,
+    mode: IntegerArithmeticMode,
+) -> Result<Vec<f64>> {
+    validate_float_array_mode(mode)?;
+    let mut output = try_array_buffer(values.len(), "array arithmetic result")?;
+    for (index, &value) in values.iter().enumerate() {
+        let (left, right) = if scalar_left {
+            (scalar, value)
+        } else {
+            (value, scalar)
+        };
+        output.push(apply_float64_array_operation(
+            left, right, operation, index,
+        )?);
+    }
+    Ok(output)
+}
+
+fn reduce_int32_array(values: &[i32], reduction: ArrayReduction) -> Result<Value> {
+    match reduction {
+        ArrayReduction::Sum => {
+            let mut sum = IntegerValue::from_i32(0);
+            for (index, value) in values.iter().copied().enumerate() {
+                sum = apply_integer_array_operation(
+                    sum,
+                    IntegerValue::from_i32(value),
+                    ArrayBinaryOp::Add,
+                    IntegerArithmeticMode::Checked,
+                    index,
+                )?;
+            }
+            Ok(Value::Int(sum))
+        }
+        ArrayReduction::Min => Ok(Value::Int(IntegerValue::from_i32(
+            *values.iter().min().expect("empty arrays were rejected"),
+        ))),
+        ArrayReduction::Max => Ok(Value::Int(IntegerValue::from_i32(
+            *values.iter().max().expect("empty arrays were rejected"),
+        ))),
+        ArrayReduction::Mean => {
+            let sum = values
+                .iter()
+                .fold(0.0_f64, |sum, value| sum + *value as f64);
+            Ok(Value::Float(sum / values.len() as f64))
+        }
+    }
+}
+
+fn reduce_int64_array(values: &[i64], reduction: ArrayReduction) -> Result<Value> {
+    match reduction {
+        ArrayReduction::Sum => {
+            let mut sum = IntegerValue::from_i64(0);
+            for (index, value) in values.iter().copied().enumerate() {
+                sum = apply_integer_array_operation(
+                    sum,
+                    IntegerValue::from_i64(value),
+                    ArrayBinaryOp::Add,
+                    IntegerArithmeticMode::Checked,
+                    index,
+                )?;
+            }
+            Ok(Value::Int(sum))
+        }
+        ArrayReduction::Min => Ok(Value::Int(IntegerValue::from_i64(
+            *values.iter().min().expect("empty arrays were rejected"),
+        ))),
+        ArrayReduction::Max => Ok(Value::Int(IntegerValue::from_i64(
+            *values.iter().max().expect("empty arrays were rejected"),
+        ))),
+        ArrayReduction::Mean => {
+            let sum = values
+                .iter()
+                .fold(0.0_f64, |sum, value| sum + *value as f64);
+            Ok(Value::Float(sum / values.len() as f64))
+        }
+    }
+}
+
+fn reduce_float32_array(values: &[f32], reduction: ArrayReduction) -> Result<Value> {
+    if values.iter().any(|value| value.is_nan()) {
+        return Ok(Value::Float(f64::NAN));
+    }
+    match reduction {
+        ArrayReduction::Sum => Ok(Value::Float(
+            values.iter().fold(0.0_f32, |sum, value| sum + *value) as f64,
+        )),
+        ArrayReduction::Min => Ok(Value::Float(
+            values
+                .iter()
+                .copied()
+                .reduce(f32::min)
+                .expect("empty arrays were rejected") as f64,
+        )),
+        ArrayReduction::Max => Ok(Value::Float(
+            values
+                .iter()
+                .copied()
+                .reduce(f32::max)
+                .expect("empty arrays were rejected") as f64,
+        )),
+        ArrayReduction::Mean => {
+            let sum = values
+                .iter()
+                .fold(0.0_f64, |sum, value| sum + *value as f64);
+            Ok(Value::Float(sum / values.len() as f64))
+        }
+    }
+}
+
+fn reduce_float64_array(values: &[f64], reduction: ArrayReduction) -> Result<Value> {
+    if values.iter().any(|value| value.is_nan()) {
+        return Ok(Value::Float(f64::NAN));
+    }
+    match reduction {
+        ArrayReduction::Sum => Ok(Value::Float(
+            values.iter().fold(0.0_f64, |sum, value| sum + *value),
+        )),
+        ArrayReduction::Min => Ok(Value::Float(
+            values
+                .iter()
+                .copied()
+                .reduce(f64::min)
+                .expect("empty arrays were rejected"),
+        )),
+        ArrayReduction::Max => Ok(Value::Float(
+            values
+                .iter()
+                .copied()
+                .reduce(f64::max)
+                .expect("empty arrays were rejected"),
+        )),
+        ArrayReduction::Mean => {
+            let sum = values.iter().fold(0.0_f64, |sum, value| sum + *value);
+            Ok(Value::Float(sum / values.len() as f64))
+        }
+    }
+}
+
 fn normalize_slice_endpoint(
     supplied: Option<i128>,
     default: i128,
@@ -514,9 +1665,13 @@ pub(crate) fn slice_vec_owned(
     end: Option<i128>,
 ) -> Result<VecValue> {
     let (start, end) = normalize_slice_bounds(start, end, vector.elements.len())?;
+    let mut elements = try_array_buffer(end - start, "Array-containing Vec slice")?;
+    for value in &vector.elements[start..end] {
+        elements.push(try_clone_array_containing_value(value)?);
+    }
     Ok(VecValue {
         element_type: vector.element_type.clone(),
-        elements: vector.elements[start..end].to_vec(),
+        elements,
     })
 }
 
@@ -540,6 +1695,86 @@ impl PartialEq for TupleValue {
     fn eq(&self, other: &Self) -> bool {
         self.elements == other.elements
     }
+}
+
+pub(crate) fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
+    Ok(match value {
+        Value::Array(array) => Value::Array(array.try_clone()?),
+        Value::Tuple(tuple) => {
+            let mut element_types = try_array_buffer(
+                tuple.element_types.len(),
+                "Array-containing tuple type copy",
+            )?;
+            element_types.extend(tuple.element_types.iter().cloned());
+            let mut elements =
+                try_array_buffer(tuple.elements.len(), "Array-containing tuple copy")?;
+            for element in &tuple.elements {
+                elements.push(try_clone_array_containing_value(element)?);
+            }
+            Value::Tuple(TupleValue {
+                element_types,
+                elements,
+            })
+        }
+        Value::Vec(vector) => {
+            let mut elements =
+                try_array_buffer(vector.elements.len(), "Array-containing Vec copy")?;
+            for element in &vector.elements {
+                elements.push(try_clone_array_containing_value(element)?);
+            }
+            Value::Vec(VecValue {
+                element_type: vector.element_type.clone(),
+                elements,
+            })
+        }
+        Value::Set(set) => {
+            let mut elements = try_array_buffer(set.elements.len(), "Array-containing Set copy")?;
+            for element in &set.elements {
+                elements.push(try_clone_array_containing_value(element)?);
+            }
+            Value::Set(SetValue {
+                element_type: set.element_type.clone(),
+                elements,
+            })
+        }
+        Value::Map(map) => {
+            let mut entries = try_array_buffer(map.entries.len(), "Array-containing Map copy")?;
+            for (key, value) in &map.entries {
+                entries.push((
+                    try_clone_array_containing_value(key)?,
+                    try_clone_array_containing_value(value)?,
+                ));
+            }
+            Value::Map(MapValue {
+                key_type: map.key_type.clone(),
+                value_type: map.value_type.clone(),
+                entries,
+            })
+        }
+        Value::Instance(instance) => {
+            let mut fields = BTreeMap::new();
+            for (name, value) in &instance.fields {
+                fields.insert(name.clone(), try_clone_array_containing_value(value)?);
+            }
+            Value::Instance(InstanceValue {
+                class_name: instance.class_name.clone(),
+                fields,
+            })
+        }
+        Value::EnumVariant(variant) => {
+            let mut payloads =
+                try_array_buffer(variant.payloads.len(), "Array-containing enum payload copy")?;
+            for payload in &variant.payloads {
+                payloads.push(try_clone_array_containing_value(payload)?);
+            }
+            Value::EnumVariant(EnumVariantValue {
+                enum_name: variant.enum_name.clone(),
+                variant_name: variant.variant_name.clone(),
+                payloads,
+            })
+        }
+        value => value.clone(),
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -1330,6 +2565,7 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
             Value::String(_) => "String".to_string(),
             Value::Tuple(_) => "tuple".to_string(),
             Value::Vec(_) => "Vec".to_string(),
+            Value::Array(_) => "Array".to_string(),
             Value::Set(_) => "Set".to_string(),
             Value::Map(_) => "Map".to_string(),
             Value::Duration(_) => "Duration".to_string(),
@@ -4911,6 +6147,7 @@ impl Clone for Value {
             Self::String(value) => Self::String(value.clone()),
             Self::Tuple(value) => Self::Tuple(value.clone()),
             Self::Vec(value) => Self::Vec(value.clone()),
+            Self::Array(value) => Self::Array(value.clone()),
             Self::Set(value) => Self::Set(value.clone()),
             Self::Map(value) => Self::Map(value.clone()),
             Self::Duration(value) => Self::Duration(*value),
@@ -4957,6 +6194,7 @@ impl PartialEq for Value {
             (Value::String(left), Value::String(right)) => left == right,
             (Value::Tuple(left), Value::Tuple(right)) => left == right,
             (Value::Vec(left), Value::Vec(right)) => left == right,
+            (Value::Array(left), Value::Array(right)) => left == right,
             (Value::Set(left), Value::Set(right)) => left == right,
             (Value::Map(left), Value::Map(right)) => left == right,
             (Value::Rng(left), Value::Rng(right)) => left == right,
@@ -5035,6 +6273,7 @@ impl Value {
                             }
                         }
                     }
+                    Value::Array(array) => rendered.push_str(&array.render()),
                     Value::Set(values) => {
                         rendered.push_str("Set{");
                         actions.push(RenderAction::Static("}"));

@@ -313,6 +313,19 @@ impl<'a> AnalysisBuilder<'a> {
                     }
                 }
             }
+            if let ExprKind::Specialize {
+                expr: specialized, ..
+            } = &receiver_expr.kind
+            {
+                if matches!(&specialized.kind, ExprKind::Name(name) if name == "Array") {
+                    return Ok(builtin_associated_function_completions("Array"));
+                }
+            }
+            if let ExprKind::Index { object, .. } = &receiver_expr.kind {
+                if matches!(&object.kind, ExprKind::Name(name) if name == "Array") {
+                    return Ok(builtin_associated_function_completions("Array"));
+                }
+            }
             let Some(receiver_type) = self.infer_expr_type(&receiver_expr, &scope) else {
                 return Ok(Vec::new());
             };
@@ -1174,6 +1187,11 @@ impl<'a> AnalysisBuilder<'a> {
                 detail: builtin_enum.detail.to_string(),
             });
         }
+        completions.push(AnalysisCompletion {
+            name: "Array".to_string(),
+            kind: "class".to_string(),
+            detail: "Array[T] numeric multidimensional array".to_string(),
+        });
         for function_info in self.program.functions.values() {
             completions.push(AnalysisCompletion {
                 name: function_info.decl.name.clone(),
@@ -2325,6 +2343,13 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         match name {
+            "Array" => Some(ResolvedSymbol {
+                hover: builtin_type_hover(
+                    "Array[T]",
+                    "An owned multidimensional Array with dtype int32, int64, float32, or float64.",
+                ),
+                definition: None,
+            }),
             "Duration" => Some(ResolvedSymbol {
                 hover: builtin_type_hover(
                     "Duration",
@@ -2363,6 +2388,24 @@ impl<'a> AnalysisBuilder<'a> {
         field: &str,
         scope: &BTreeMap<String, BindingInfo>,
     ) -> Option<ResolvedMember> {
+        if let ExprKind::Specialize {
+            expr: specialized,
+            type_args,
+        } = &object.kind
+        {
+            if matches!(&specialized.kind, ExprKind::Name(name) if name == "Array")
+                && type_args.len() == 1
+            {
+                if let Some(associated) = BuiltinAssociatedFunction::resolve("Array", field) {
+                    let dtype = self.lower_analysis_type_ref(&type_args[0]);
+                    return Some(ResolvedMember {
+                        hover: builtin_function_hover(associated.detail(), associated.docs()),
+                        definition: None,
+                        ty: Some(Type::Named("Array".to_string(), vec![dtype])),
+                    });
+                }
+            }
+        }
         if let ExprKind::Name(type_name) = &object.kind {
             if !scope.contains_key(type_name) {
                 if let Some(associated) = BuiltinAssociatedFunction::resolve(type_name, field) {
@@ -2374,6 +2417,11 @@ impl<'a> AnalysisBuilder<'a> {
                             "Result".to_string(),
                             vec![Type::named("String"), Type::named("bytes.Error")],
                         ),
+                        BuiltinAssociatedFunction::ArrayZeros
+                        | BuiltinAssociatedFunction::ArrayFull
+                        | BuiltinAssociatedFunction::ArrayFromVec => {
+                            Type::Named("Array".to_string(), vec![Type::named("Unknown")])
+                        }
                     };
                     return Some(ResolvedMember {
                         hover: builtin_function_hover(associated.detail(), associated.docs()),
@@ -2580,11 +2628,26 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         if let Some(builtin_member) = BuiltinMember::resolve(base_name, field) {
+            if is_array_integer_arithmetic_member(builtin_member)
+                && !matches!(
+                    receiver_type.type_arguments().first(),
+                    Some(Type::Named(dtype, args))
+                        if args.is_empty() && matches!(dtype.as_str(), "int32" | "int64")
+                )
+            {
+                return None;
+            }
             let ty = match builtin_member {
                 BuiltinMember::FloatSqrt
                 | BuiltinMember::IntegerToFloat
                 | BuiltinMember::DurationToMilliseconds
                 | BuiltinMember::DurationToSeconds => Some(Type::named("float64")),
+                BuiltinMember::IntegerWrappingAdd
+                | BuiltinMember::IntegerWrappingSub
+                | BuiltinMember::IntegerWrappingMul
+                | BuiltinMember::IntegerSaturatingAdd
+                | BuiltinMember::IntegerSaturatingSub
+                | BuiltinMember::IntegerSaturatingMul => Some(receiver_type.clone()),
                 BuiltinMember::StringLen | BuiltinMember::StringByteLen => {
                     Some(Type::named("int64"))
                 }
@@ -2606,6 +2669,31 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::StringStripPrefix | BuiltinMember::StringStripSuffix => Some(
                     Type::Named("Option".to_string(), vec![Type::named("String")]),
                 ),
+                BuiltinMember::ArrayShape => {
+                    Some(Type::Named("Vec".to_string(), vec![Type::named("int64")]))
+                }
+                BuiltinMember::ArrayLen => Some(Type::named("int64")),
+                BuiltinMember::ArrayClone
+                | BuiltinMember::ArrayWrappingAdd
+                | BuiltinMember::ArrayWrappingSub
+                | BuiltinMember::ArrayWrappingMul
+                | BuiltinMember::ArraySaturatingAdd
+                | BuiltinMember::ArraySaturatingSub
+                | BuiltinMember::ArraySaturatingMul => Some(receiver_type.clone()),
+                BuiltinMember::ArrayGet | BuiltinMember::ArraySet => {
+                    let payload = receiver_type
+                        .type_arguments()
+                        .first()
+                        .cloned()
+                        .unwrap_or(Type::Unit);
+                    Some(Type::Named("Option".to_string(), vec![payload]))
+                }
+                BuiltinMember::ArrayFill => Some(Type::Unit),
+                BuiltinMember::ArrayMap => None,
+                BuiltinMember::ArraySum | BuiltinMember::ArrayMin | BuiltinMember::ArrayMax => {
+                    receiver_type.type_arguments().first().cloned()
+                }
+                BuiltinMember::ArrayMean => Some(Type::named("float64")),
                 BuiltinMember::VecLen => Some(Type::named("int64")),
                 BuiltinMember::VecIsEmpty => Some(Type::named("bool")),
                 BuiltinMember::VecClone => Some(receiver_type.clone()),
@@ -3454,6 +3542,7 @@ impl<'a> AnalysisBuilder<'a> {
                                 | "Result"
                                 | "SendError"
                                 | "Queue"
+                                | "Array"
                                 | "Vec"
                                 | "Set"
                                 | "Map"
@@ -3570,15 +3659,16 @@ impl<'a> AnalysisBuilder<'a> {
                             _ => None,
                         },
                         _ => match base_type_name(&ty) {
+                            "Array" => ty.type_arguments().first().cloned(),
                             "Vec" => ty.type_arguments().first().cloned(),
                             "Map" => ty.type_arguments().get(1).cloned(),
                             _ => None,
                         },
                     })
             }
-            ExprKind::Slice { object, .. } => self
-                .infer_expr_type(object, scope)
-                .and_then(|ty| matches!(base_type_name(&ty), "Vec" | "String").then_some(ty)),
+            ExprKind::Slice { object, .. } => self.infer_expr_type(object, scope).and_then(|ty| {
+                matches!(base_type_name(&ty), "Array" | "Vec" | "String").then_some(ty)
+            }),
             ExprKind::Call { callee, args } => self.infer_call_type(callee, args, scope),
             ExprKind::Conditional {
                 then_expr,
@@ -3639,6 +3729,16 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Binary { op, left, right } => {
                 let left_ty = self.infer_expr_type(left, scope)?;
                 let right_ty = self.infer_expr_type(right, scope)?;
+                let left_array = (base_type_name(&left_ty) == "Array").then_some(&left_ty);
+                let right_array = (base_type_name(&right_ty) == "Array").then_some(&right_ty);
+                if left_array.is_some() || right_array.is_some() {
+                    return match op {
+                        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+                            left_array.or(right_array).cloned()
+                        }
+                        _ => None,
+                    };
+                }
                 if let Some(result) = builtin_duration_binary_result(*op, &left_ty, &right_ty) {
                     return Some(result);
                 }
@@ -3809,6 +3909,11 @@ impl<'a> AnalysisBuilder<'a> {
                                     "Result".to_string(),
                                     vec![Type::named("String"), Type::named("bytes.Error")],
                                 ),
+                                BuiltinAssociatedFunction::ArrayZeros
+                                | BuiltinAssociatedFunction::ArrayFull
+                                | BuiltinAssociatedFunction::ArrayFromVec => {
+                                    Type::Named("Array".to_string(), vec![Type::named("Unknown")])
+                                }
                             });
                         }
                     }
@@ -3839,6 +3944,20 @@ impl<'a> AnalysisBuilder<'a> {
                     };
                     return Some(Type::Named("Vec".to_string(), vec![*return_type]));
                 }
+                if BuiltinMember::resolve(base_type_name(&receiver_type), field)
+                    == Some(BuiltinMember::ArrayMap)
+                {
+                    let callback_type = args
+                        .first()
+                        .and_then(|argument| self.infer_expr_type(&argument.value, scope))?;
+                    let return_type = match callback_type {
+                        Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
+                            return_type
+                        }
+                        _ => return None,
+                    };
+                    return Some(Type::Named("Array".to_string(), vec![*return_type]));
+                }
                 self.resolve_member_expr(object, field, scope)
                     .and_then(|member| member.ty)
                     .map(|ty| match ty {
@@ -3851,7 +3970,10 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Specialize { expr, type_args } => match &expr.kind {
                 ExprKind::Name(name)
                     if self.program.classes.contains_key(name)
-                        || matches!(name.as_str(), "Queue" | "Vec" | "Set" | "Map" | "Task") =>
+                        || matches!(
+                            name.as_str(),
+                            "Queue" | "Array" | "Vec" | "Set" | "Map" | "Task"
+                        ) =>
                 {
                     let args = type_args
                         .iter()
@@ -5313,6 +5435,29 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
     }
 
     for builtin in [
+        BuiltinMember::IntegerWrappingAdd,
+        BuiltinMember::IntegerWrappingSub,
+        BuiltinMember::IntegerWrappingMul,
+        BuiltinMember::IntegerSaturatingAdd,
+        BuiltinMember::IntegerSaturatingSub,
+        BuiltinMember::IntegerSaturatingMul,
+        BuiltinMember::ArrayShape,
+        BuiltinMember::ArrayLen,
+        BuiltinMember::ArrayClone,
+        BuiltinMember::ArrayGet,
+        BuiltinMember::ArraySet,
+        BuiltinMember::ArrayFill,
+        BuiltinMember::ArrayMap,
+        BuiltinMember::ArraySum,
+        BuiltinMember::ArrayMin,
+        BuiltinMember::ArrayMax,
+        BuiltinMember::ArrayMean,
+        BuiltinMember::ArrayWrappingAdd,
+        BuiltinMember::ArrayWrappingSub,
+        BuiltinMember::ArrayWrappingMul,
+        BuiltinMember::ArraySaturatingAdd,
+        BuiltinMember::ArraySaturatingSub,
+        BuiltinMember::ArraySaturatingMul,
         BuiltinMember::FileReadAll,
         BuiltinMember::FileReadBytes,
         BuiltinMember::FileWriteAll,
@@ -5467,6 +5612,22 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::RngNextFloat,
         BuiltinMember::RngShuffle,
     ] {
+        if is_array_integer_arithmetic_member(builtin)
+            && !matches!(
+                receiver_type,
+                Type::Named(name, args)
+                    if name == "Array"
+                        && args.len() == 1
+                        && matches!(
+                            &args[0],
+                            Type::Named(dtype, dtype_args)
+                                if dtype_args.is_empty()
+                                    && matches!(dtype.as_str(), "int32" | "int64")
+                        )
+            )
+        {
+            continue;
+        }
         if BuiltinMember::resolve(base_type_name(receiver_type), builtin.name()) == Some(builtin)
             && !completions
                 .iter()
@@ -5481,6 +5642,18 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
     }
 
     completions
+}
+
+fn is_array_integer_arithmetic_member(member: BuiltinMember) -> bool {
+    matches!(
+        member,
+        BuiltinMember::ArrayWrappingAdd
+            | BuiltinMember::ArrayWrappingSub
+            | BuiltinMember::ArrayWrappingMul
+            | BuiltinMember::ArraySaturatingAdd
+            | BuiltinMember::ArraySaturatingSub
+            | BuiltinMember::ArraySaturatingMul
+    )
 }
 
 fn builtin_associated_function_completions(type_name: &str) -> Vec<AnalysisCompletion> {

@@ -1,0 +1,44 @@
+import io
+
+
+def read_control(expected: String) -> bool:
+    match io.read_line():
+        case Result.Ok(Option.Some(line)):
+            return line == expected
+        case Result.Ok(Option.None):
+            return false
+        case Result.Err(_):
+            return false
+
+
+def flush_stdout() -> bool:
+    match io.flush():
+        case Result.Ok(_):
+            return true
+        case Result.Err(_):
+            return false
+
+
+def main() -> int32:
+    element_count: int64 = 1000000
+    iterations: int64 = 1024
+    values = Array[float64].full([element_count], 4.0)
+    if values.sum() != 4000000.0:
+        return 3
+
+    print("READY numeric-arrays sum 1000000 1024")
+    if not flush_stdout():
+        return 4
+    if not read_control("GO numeric-arrays sum"):
+        return 5
+
+    mut checksum: float64 = 0.0
+    mut iteration: int64 = 0
+    while iteration < iterations:
+        checksum += values.sum()
+        iteration += 1
+
+    print(f"DONE numeric-arrays sum 1024 {checksum}")
+    if not flush_stdout():
+        return 6
+    return 0

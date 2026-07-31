@@ -128,6 +128,14 @@ fn diagnostic_code_registry_is_unique_banded_and_append_only_shaped() {
                 && entry.title == "callable equality"),
         "the callable-equality rejection must retain its dedicated public registry entry"
     );
+    assert!(
+        DIAGNOSTIC_CODE_REGISTRY
+            .iter()
+            .any(|entry| entry.code == "AU4007"
+                && entry.band == "runtime"
+                && entry.title == "array shape or reduction violation"),
+        "array shape failures must retain their dedicated public registry entry"
+    );
 }
 
 #[test]

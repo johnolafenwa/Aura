@@ -826,6 +826,21 @@ single task-result right on the first attempt.
     - `12`
     - `9.0`
     - `9.0`
+- `numeric_arrays.au`
+  - global contiguous row-major `Array[T]` over the four maintained dtypes
+  - construction, multidimensional indexing, mutable replacement,
+    first-axis owned slices, mapping, reductions, scalar kernels, and explicit
+    wrapping/saturating integer arithmetic
+  - prints:
+    - `2`
+    - `[1, 2, 3, 4]`
+    - `[2, 2]`
+    - `20`
+    - `46`
+    - `25.0`
+    - `-2147483648`
+    - `2147483647`
+    - `16.0`
 - `uint128_values.au`
   - full-range `uint128` literals and arithmetic through the current runtimes and direct backend
   - prints:
@@ -974,6 +989,7 @@ cargo run -p aura -- run examples/concurrency/duration_arithmetic.au
 cargo run -p aura -- run examples/numbers/float32_values.au
 cargo run -p aura -- run examples/numbers/numeric_casts.au
 cargo run -p aura -- run examples/numbers/numeric_builtins.au
+cargo run -p aura -- run examples/numbers/numeric_arrays.au
 cargo run -p aura -- run examples/numbers/unary_minus.au
 cargo run -p aura -- run examples/strings/string_clone.au
 cargo run -p aura -- run examples/strings/string_methods.au

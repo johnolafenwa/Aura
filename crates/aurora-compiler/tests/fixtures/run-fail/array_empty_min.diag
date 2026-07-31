@@ -1,0 +1,3 @@
+error[AU4007]: cannot compute array min over an empty array
+ --> crates/aurora-compiler/tests/fixtures/run-fail/array_empty_min.au
+  = note: Aurora call chain (innermost first): main at 1:1

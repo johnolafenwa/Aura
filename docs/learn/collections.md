@@ -442,8 +442,52 @@ def count_words(counts: mut Map[String, int32], line: String):
 consumes that temporary vector and gives each iteration an owned `word`.
 Lookup borrows the word; `set` then stores it.
 
+## Numeric Arrays
+
+Use `Array[T]` when the data has a fixed multidimensional shape and every
+element is one of `int32`, `int64`, `float32`, or `float64`. Unlike `Vec[T]`,
+an Array has no grow or remove operation: its shape and contiguous row-major
+storage are fixed at construction.
+
+```python
+def doubled(value: float32) -> float32:
+    return value * 2.0
+
+source: Vec[float32] = [1.0, 2.0, 3.0, 4.0]
+matrix = Array[float32].from_vec(source, [2, 2])
+scaled = matrix.map[float32](doubled)
+
+print(scaled.shape())  # [2, 2]
+print(scaled[1, 0])    # 6.0
+print(source.len())    # 4: from_vec copied the elements
+```
+
+An Array is an owned non-Copy value. Bare parameters share it, assignment
+transfers it, and `.clone()` makes an independent copy. Arrays over all four
+maintained dtypes are `Transfer`, although a `Task[Array[T]]` result is still
+single-consumer because the result itself is non-Copy.
+
+Direct `matrix[row, column]` reads and writes use exact `int32` coordinates.
+`matrix.get([row, column])` returns `None` for an invalid rank or coordinate;
+mutable `matrix.set([row, column], value)` returns `Some(old_value)` on
+success and treats an invalid coordinate as a runtime error. A first-axis
+slice such as `matrix[0:1]` is a fresh owned copy, not a view.
+
+Arithmetic is deliberately strict: Array/Array operations require identical
+shapes and dtypes, scalar operations require the same dtype, and integer
+Arrays do not support `/`. There is no broadcasting, reshape, transpose,
+mixed-dtype promotion, view, step, or slice-assignment surface in this first
+maintained layer.
+
+See
+[`examples/numbers/numeric_arrays.au`](../../examples/numbers/numeric_arrays.au)
+for a runnable tour and [Numeric Arrays](/manual/numeric-arrays) for the exact
+constructors, members, arithmetic modes, reductions, and diagnostics.
+
 ## Reference
 
-See [Collections](/manual/collections) in the Manual for the exact signature and return contract of every method.
+See [Collections](/manual/collections) and
+[Numeric Arrays](/manual/numeric-arrays) in the Manual for exact signatures
+and return contracts.
 
 The next chapter is the centrepiece of the book: Aurora's ownership model explained through the programs that benefit from it.

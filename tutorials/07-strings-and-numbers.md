@@ -81,6 +81,54 @@ See [examples/numbers/unary_minus.au](../examples/numbers/unary_minus.au).
 
 Aurora does not do implicit numeric widening. Mixed expressions like `int32 + int64` are rejected -- use explicit casts instead (see below).
 
+## Explicit Integer Arithmetic Modes
+
+Ordinary integer `+`, `-`, and `*` are checked and report `AU4002` if the
+mathematical result does not fit the integer type. Every integer type also
+provides explicit wrapping and saturating alternatives:
+
+```python
+top: int32 = 2147483647
+
+print(top.wrapping_add(1))    # -2147483648
+print(top.saturating_add(1))  # 2147483647
+print(top.wrapping_sub(-1))   # -2147483648
+print(top.saturating_mul(2))  # 2147483647
+```
+
+The same six method names are available on integer `Array[T]`. Their right
+operand is either another same-shape `Array[T]` or one scalar of exactly `T`.
+
+## Numeric Arrays
+
+`Array[T]` provides fixed-shape, contiguous, row-major numeric storage for
+exactly `int32`, `int64`, `float32`, and `float64`:
+
+```python
+def square(value: float64) -> float64:
+    return value * value
+
+matrix = Array[float64].from_vec([1.0, 2.0, 3.0, 4.0], [2, 2])
+squares = matrix.map[float64](square)
+first_row = squares[0:1]
+
+print(squares[1, 0])  # 9.0
+print(first_row.sum()) # 5.0
+print(squares.mean())  # 7.5
+```
+
+Array/Array arithmetic requires the same dtype and exact shape. Scalar
+arithmetic requires exactly `T`; scalar operands work on either side of
+`+`, `-`, and `*`. `/` is available only for floating Arrays. There is no
+implicit dtype promotion or broadcasting.
+
+`sum`, `min`, and `max` return `T`; `mean` always returns `float64`.
+Floating `sum`, `min`, and `max` proceed left-to-right in row-major order
+with dtype rounding, floating `mean` accumulates as `float64`, and floating
+reductions propagate NaN. See
+[examples/numbers/numeric_arrays.au](../examples/numbers/numeric_arrays.au)
+and [Numeric Arrays](../docs/manual/numeric-arrays.md).
+
 ## Floating-Point Math
 
 Integer literals default to `int64`, whose shorter alias is `int`. Floating-point literals default to `float64`. Both adopt a compatible expected numeric type when the surrounding context requires it:

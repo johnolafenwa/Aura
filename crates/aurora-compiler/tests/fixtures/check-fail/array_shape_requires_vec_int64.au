@@ -1,0 +1,4 @@
+def main():
+    shape: Vec[int32] = [2, 2]
+    values = Array[int32].zeros(shape=shape)
+    print(values)
