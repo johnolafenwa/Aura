@@ -637,7 +637,6 @@ fn configured_git_command_disables_interactive_prompts() {
 #[cfg(unix)]
 #[test]
 fn command_timeout_terminates_hung_git_helpers() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let mut command = Command::new("sh");
     command.args(["-c", "sleep 10"]);
     let started = Instant::now();

@@ -45,9 +45,5 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Isolate macOS wall-clock assertions
-        if: runner.os == 'macOS'
-        run: echo "RUST_TEST_THREADS=1" >> "$GITHUB_ENV"
-
       - name: Run repo gate
         run: npm run ci

@@ -522,6 +522,21 @@ class ProcessUnitTests(unittest.TestCase):
         with self.assertRaisesRegex(bench.BenchmarkError, "VmRSS"):
             bench.parse_linux_status_rss_bytes("Name:\taura\n")
 
+    def test_linux_zombie_sample_is_natural_completion_not_invalid_rss(self) -> None:
+        stat_fields = ["123", "(aura)", "Z"] + ["0"] * 12
+        with self.assertRaises(ProcessLookupError):
+            bench.parse_linux_process_stats_records(
+                "Name:\taura\nState:\tZ (zombie)\n",
+                " ".join(stat_fields),
+                ticks=100,
+                pid=123,
+            )
+
+    def test_linux_disappearing_proc_record_is_natural_completion(self) -> None:
+        with mock.patch.object(Path, "read_text", side_effect=FileNotFoundError):
+            with self.assertRaises(ProcessLookupError):
+                bench.read_linux_process_stats(123)
+
     def test_cpu_time_parser_handles_portable_ps_shapes(self) -> None:
         self.assertEqual(bench.parse_ps_cpu_seconds("02:03"), 123.0)
         self.assertEqual(bench.parse_ps_cpu_seconds("01:02:03"), 3723.0)

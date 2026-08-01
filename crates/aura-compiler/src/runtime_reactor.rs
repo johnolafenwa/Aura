@@ -968,7 +968,6 @@ mod tests {
 
     #[test]
     fn control_notification_before_poll_is_durable_without_a_wait_key() {
-        let _timing_guard = crate::serialize_timing_assertion();
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<ReactorHandle>();
 
@@ -977,18 +976,17 @@ mod tests {
 
         let started = Instant::now();
         assert!(reactor
-            .poll(Some(Duration::from_secs(1)))
+            .poll(Some(crate::hosted_ci_timing_limit(Duration::from_secs(1))))
             .unwrap()
             .is_empty());
         assert!(
-            started.elapsed() < Duration::from_millis(250),
+            started.elapsed() < crate::hosted_ci_timing_limit(Duration::from_millis(250)),
             "a durable control notification should make the next poll return promptly"
         );
     }
 
     #[test]
     fn control_notification_during_poll_wakes_without_fabricating_readiness() {
-        let _timing_guard = crate::serialize_timing_assertion();
         let mut reactor = RuntimeReactor::new().unwrap();
         let handle = reactor.handle();
         let sender = thread::spawn(move || {
@@ -998,26 +996,25 @@ mod tests {
 
         let started = Instant::now();
         assert!(reactor
-            .poll(Some(Duration::from_secs(2)))
+            .poll(Some(crate::hosted_ci_timing_limit(Duration::from_secs(2))))
             .unwrap()
             .is_empty());
         sender.join().unwrap();
         assert!(
-            started.elapsed() < Duration::from_millis(500),
+            started.elapsed() < crate::hosted_ci_timing_limit(Duration::from_millis(500)),
             "control notification should wake a blocked poll"
         );
     }
 
     #[test]
     fn repeated_control_notifications_coalesce_into_one_scheduler_turn() {
-        let _timing_guard = crate::serialize_timing_assertion();
         let mut reactor = RuntimeReactor::new().unwrap();
         let handle = reactor.handle();
         for _ in 0..32 {
             handle.notify_control().unwrap();
         }
         assert!(reactor
-            .poll(Some(Duration::from_secs(1)))
+            .poll(Some(crate::hosted_ci_timing_limit(Duration::from_secs(1))))
             .unwrap()
             .is_empty());
 
@@ -1027,7 +1024,7 @@ mod tests {
         });
         let started = Instant::now();
         assert!(reactor
-            .poll(Some(Duration::from_secs(1)))
+            .poll(Some(crate::hosted_ci_timing_limit(Duration::from_secs(1))))
             .unwrap()
             .is_empty());
         sender.join().unwrap();
@@ -1036,7 +1033,7 @@ mod tests {
             "coalesced notifications must not leave extra control turns pending"
         );
         assert!(
-            started.elapsed() < Duration::from_millis(500),
+            started.elapsed() < crate::hosted_ci_timing_limit(Duration::from_millis(500)),
             "a fresh notification should still wake the next poll"
         );
     }

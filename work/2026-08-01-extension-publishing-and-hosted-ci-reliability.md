@@ -85,19 +85,23 @@ removed after the proof.
 
 ## F2: macOS Timing Assertions
 
-Policy: preserve the calibrated timing margins and serialize the complete
-wall-clock assertion family. A shared compiler-test lock covers every test that
-asserts `Instant::elapsed()`, plus the bounded-queue ordering and DNS sibling
-progress probes. A matching CLI lock covers both safepoint latency probes.
-Hosted macOS additionally runs the complete Rust test surface with one test
-thread so unrelated suite work cannot load those measurements.
-Timeouts used only as deadlock guards remain parallel.
+Policy: preserve calibrated local timing margins and scale the complete
+wall-clock upper-bound family by four under `GITHUB_ACTIONS`. Each deliberately
+slow comparison operation is scaled with its upper limit, retaining the gap
+that catches blocked scheduler, reactor, DNS, and safepoint behavior. The
+bounded-queue test no longer estimates ordering from sleeps: the Aura consumer
+waits for an explicit host release file, so the host observes the second put
+blocked before allowing the first receive. Ordinary timeouts used only as
+deadlock guards remain unchanged, and Rust tests stay parallel on both hosted
+systems.
 
-This applies one criterion to the family instead of naming only the four tests
-that happened to fail. The compiler library completed all 1,499 tests at
-`--test-threads=64`; the guarded cancellation, DNS, queue, socket, TLS, reactor,
-and protocol timing tests were green. Both CLI safepoint probes were green at
-`--test-threads=64`.
+This replaces two policies disproved by hosted evidence. Per-binary guards
+could not isolate a measurement from unrelated tests, and run `30717422681`
+still failed four macOS cases with the complete Rust suite restricted to one
+test thread. The revised hosted path passes the full 1,501-test compiler
+library at `--test-threads=64`, the four previously failing compiler cases,
+the deterministic queue test, and both CLI safepoint probes under the same
+parallel load.
 
 The policy and the requirement to inspect hosted results with `gh run list` are
 recorded in `docs/testing_strategy.md` and `docs/release-process.md`.
@@ -159,11 +163,11 @@ environment-dependent facts:
   object-emission regression reproduces the exact `bool` plus two-field
   receiver-writeback shape. The two observable CLI cases from the hosted log
   remain the end-to-end pins.
-- macOS still failed three timing assertions because the per-binary guard could
-  not isolate them from ordinary tests running concurrently in the same Rust
-  suite. Hosted macOS now sets `RUST_TEST_THREADS=1` before `npm run ci`, while
-  Linux remains parallel. A release-workflow regression pins that conditional
-  policy.
+- macOS still failed timing assertions because a per-binary guard could not
+  isolate them from ordinary suite and host load. The next corrective run also
+  disproved whole-suite single-thread execution, so the final policy uses
+  proportionally widened hosted discrimination windows and explicit ordering
+  handshakes while keeping both hosted systems parallel.
 
 The user authorized an isolated branch for faster hosted proof. The correction
 is being validated on `codex/hosted-ci-x64-writeback` before main moves again.
@@ -182,3 +186,13 @@ Timeout and wait-error cleanup signal the entire group, retain a direct-child
 kill fallback, reap the child, and only then join its output readers. The
 regression now uses a ten-second helper with a five-second anti-wait ceiling;
 the repaired path completes in roughly 60 ms and leaves no descendant process.
+
+Corrective branch run
+[30718486470](https://github.com/johnolafenwa/Aura/actions/runs/30718486470)
+then exposed a separate Linux benchmark-monitor race before reaching Rust. A
+naturally completed child can remain in `/proc` as a zombie until reaped, and
+Linux omits `VmRSS` from a zombie's status record. The monitor now recognizes
+the `Z` state as natural completion, while malformed RSS from a live process
+remains an error. The pure zombie-record regression and the original
+short-lived sleepers execution test both pass; the complete harness has 56
+green tests.

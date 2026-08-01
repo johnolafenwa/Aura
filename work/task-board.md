@@ -22,16 +22,19 @@ Last updated: 2026-08-01
   writes to the inherited descriptor directly. The test now deliberately holds
   descriptors above 9 and its POSIX shell helper writes through `/dev/fd`; the
   focused high-thread macOS run and 100/100 Linux high-thread loop are green.
-- F2 policy: preserve the calibrated margins and serialize the complete
-  wall-clock timing-assertion family through shared guards. The first hosted
-  run proved per-binary guards insufficient against unrelated whole-suite load,
-  so hosted macOS now isolates the complete Rust suite with
-  `RUST_TEST_THREADS=1`. Linux retains normal parallel execution.
+- F2 policy: preserve calibrated local margins and use four-times hosted
+  discrimination windows across the complete wall-clock family, scaling the
+  deliberately slow comparison operation with the limit so real regressions
+  remain distinguishable. Bounded-queue ordering now uses an explicit
+  host/program release handshake. Both hosted systems retain normal parallel
+  Rust execution. Corrective run `30717422681` proved that per-binary guards
+  plus whole-suite single-thread execution still failed four macOS timing
+  cases, which is why that attempted policy was removed rather than extended.
 - Focused proof is green: `vsce ls`, `vsce package`, extension/workflow tests,
   actionlint, both safepoint probes, all 1,499 compiler-library tests at 64
   test threads, and 100/100 Linux high-thread runs of the F1 family. Both
   required repository secret names are configured.
-- Exact full `npm run ci` is green: 336 CLI/runtime tests, 1,499 compiler
+- Pre-correction exact full `npm run ci` was green: 336 CLI/runtime tests, 1,499 compiler
   tests, the forced parity matrix, 101 LSP tests at 100% coverage, 20 extension
   tests, compiler coverage at 96.28% lines / 97.21% functions / 94.62%
   regions, reference integrity, docs, audits, warning-denied Clippy, and
@@ -47,6 +50,17 @@ Last updated: 2026-08-01
   joins waited for the descendant. Timed package commands now run in a fresh
   Unix process group and timeout/error cleanup kills and reaps the whole tree;
   the regression uses a ten-second descendant and completes in about 60 ms.
+- Corrective run `30718486470` exposed a Linux-only benchmark-monitor race
+  before Rust tests: a naturally completed child remained momentarily in
+  `/proc` as a zombie, whose status intentionally has no `VmRSS`. Zombie
+  samples now use the same natural-completion path as a disappeared process;
+  malformed live-process RSS remains a hard error. All 56 harness tests pass,
+  including the exact zombie record and natural-completion regression.
+- Current focused proof: all 1,501 compiler-library tests pass under
+  `GITHUB_ACTIONS=true` with 64 test threads; the prior macOS failures, both
+  CLI safepoint probes, deterministic queue ordering, x86 codegen pin, package
+  process-tree timeout, 21 release-workflow tests, and 56 runtime-harness tests
+  are green.
 - Remaining: prove the corrective branch with the full local gate and three
   consecutive hosted CI runs on Linux and macOS, then land the proven tree on
   main. Publishing remains a separate user dispatch after this gate.

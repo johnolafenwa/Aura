@@ -155,17 +155,17 @@ Local and hosted gates are complementary. A batch is not complete until the
 latest GitHub Actions runs have been inspected with `gh run list`; a local
 green gate cannot establish environment-conditional Linux or macOS behavior.
 
-Tests whose pass condition depends on a measured wall-clock margin use one
-shared serialization guard within each Rust test binary. This applies to the
-whole timing-assertion family: scheduler cancellation wakeups, bounded-queue
-ordering, safepoint latency, blocking-service timeout budgets, socket timing,
-and related reactor fairness probes. Hosted macOS additionally sets
-`RUST_TEST_THREADS=1` for the repository gate, because separate Rust test
-binaries and ordinary compiler tests can otherwise contend with that family on
-the shared three-core runner. The policy preserves the real-hardware margins
-while isolating their measurement from the complete concurrent Rust suite.
-Ordinary timeout values used only as deadlock guards remain parallel outside
-hosted macOS.
+Tests whose pass condition depends on a measured wall-clock upper bound use
+one CI-aware margin policy across the whole family: scheduler cancellation
+wakeups, safepoint latency, blocking-service timeout budgets, socket timing,
+and related reactor fairness probes. Local limits retain their calibrated
+real-hardware values. Under `GITHUB_ACTIONS`, the limit and any deliberately
+slow comparison operation are both scaled by four, preserving the test's
+ability to distinguish prompt progress from the blocked behavior while giving
+shared runners scheduling headroom. Ordering tests such as bounded queues use
+explicit host/program handshakes instead of time estimates. Ordinary timeout
+values used only as deadlock guards are unchanged, and the Rust suite remains
+parallel on both hosted systems.
 
 ## Workflow For A New Feature
 

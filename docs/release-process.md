@@ -15,10 +15,10 @@ the extension but never sends it to either registry.
    environment-conditional failure before reporting the release ready.
 5. Confirm the release tag resolves to the intended immutable commit.
 
-Timing assertions keep their calibrated margins. The complete wall-clock
-timing family shares one serialization guard, so parallel test execution on a
-small hosted runner cannot make independent latency probes measure one
-another's host contention.
+Timing assertions keep their calibrated local margins and use proportionally
+scaled discrimination windows under `GITHUB_ACTIONS`; ordering tests use
+explicit handshakes. This keeps the hosted Rust suite parallel without making
+shared-runner scheduling noise part of the product contract.
 
 ## Extension Secrets
 

@@ -988,17 +988,37 @@ def parse_ps_cpu_seconds(text: str) -> float:
     )
 
 
-def read_linux_process_stats(pid: int) -> ProcessStats:
-    proc = pathlib.Path("/proc") / str(pid)
-    status = (proc / "status").read_text(encoding="utf-8")
-    stat_fields = (proc / "stat").read_text(encoding="utf-8").split()
+def parse_linux_process_stats_records(
+    status: str, stat: str, *, ticks: int, pid: int
+) -> ProcessStats:
+    stat_fields = stat.split()
     if len(stat_fields) < 15:
         raise BenchmarkError("Linux process stat record is incomplete")
-    ticks = os.sysconf("SC_CLK_TCK")
+    # A naturally completed child remains in /proc as a zombie until its
+    # owner reaps it, but Linux omits VmRSS from that zombie status record.
+    # Treat that transition like the adjacent process-disappearance race so a
+    # valid earlier sample is not converted into a benchmark failure.
+    if stat_fields[2] == "Z":
+        raise ProcessLookupError(pid)
     cpu_seconds = (int(stat_fields[13]) + int(stat_fields[14])) / ticks
     return ProcessStats(
         rss_bytes=parse_linux_status_rss_bytes(status),
         cpu_seconds=cpu_seconds,
+    )
+
+
+def read_linux_process_stats(pid: int) -> ProcessStats:
+    proc = pathlib.Path("/proc") / str(pid)
+    try:
+        status = (proc / "status").read_text(encoding="utf-8")
+        stat = (proc / "stat").read_text(encoding="utf-8")
+    except FileNotFoundError as error:
+        raise ProcessLookupError(pid) from error
+    return parse_linux_process_stats_records(
+        status,
+        stat,
+        ticks=os.sysconf("SC_CLK_TCK"),
+        pid=pid,
     )
 
 

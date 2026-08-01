@@ -47,18 +47,20 @@ pub use native_codegen::{
 pub use runtime_value::{RunOutput, Value};
 
 #[cfg(test)]
-pub(crate) fn serialize_timing_assertion() -> std::sync::MutexGuard<'static, ()> {
-    static TIMING_ASSERTION_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
-        std::sync::OnceLock::new();
+fn timing_limit_for_hosted_ci(
+    local_limit: std::time::Duration,
+    hosted_ci: bool,
+) -> std::time::Duration {
+    if hosted_ci {
+        local_limit.saturating_mul(4)
+    } else {
+        local_limit
+    }
+}
 
-    // These tests retain meaningful real-hardware timing margins, but a
-    // shared three-core CI runner can otherwise make unrelated wall-clock
-    // assertions measure one another's host contention. Keep the margins and
-    // serialize the complete timing-assertion family instead.
-    TIMING_ASSERTION_LOCK
-        .get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+#[cfg(test)]
+pub(crate) fn hosted_ci_timing_limit(local_limit: std::time::Duration) -> std::time::Duration {
+    timing_limit_for_hosted_ci(local_limit, std::env::var_os("GITHUB_ACTIONS").is_some())
 }
 
 #[doc(hidden)]

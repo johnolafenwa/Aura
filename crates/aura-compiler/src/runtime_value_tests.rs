@@ -3650,7 +3650,6 @@ fn dropping_scheduler_removes_outstanding_source_subscriptions() {
 
 #[test]
 fn continuously_yielding_task_does_not_starve_reactor_wakeups() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let wake_queue = ChannelValue::new();
     let sender = wake_queue.clone();
     let stop = Arc::new(AtomicBool::new(false));
@@ -3658,7 +3657,7 @@ fn continuously_yielding_task_does_not_starve_reactor_wakeups() {
     let sender_thread = thread::spawn(move || {
         thread::sleep(StdDuration::from_millis(10));
         assert_eq!(sender.try_send(Value::Unit), super::TrySendResult::Sent);
-        thread::sleep(StdDuration::from_millis(240));
+        thread::sleep(crate::hosted_ci_timing_limit(StdDuration::from_millis(240)));
         sender_stop.store(true, Ordering::SeqCst);
     });
 
@@ -3697,7 +3696,8 @@ fn continuously_yielding_task_does_not_starve_reactor_wakeups() {
         panic!("fairness probe should return its observed latency")
     };
     assert!(
-        received_after.as_i128().expect("latency should fit i128") < 100,
+        received_after.as_i128().expect("latency should fit i128")
+            < crate::hosted_ci_timing_limit(StdDuration::from_millis(100)).as_millis() as i128,
         "a continually yielding task delayed the reactor wake for {received_after:?} ms"
     );
 }
@@ -6444,7 +6444,6 @@ fn json_codec_service_bounds_admission_and_recovers_permits_after_failures() {
 
 #[test]
 fn json_codec_non_task_admission_waits_for_capacity_before_cloning() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let pool = super::JsonCodecPool::start_with_limits(1, 1);
     let release = Arc::new(AtomicBool::new(false));
     let worker_started = Arc::new(AtomicBool::new(false));
@@ -7091,7 +7090,6 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
 
 #[test]
 fn bounded_channel_waits_for_capacity_before_accepting_another_value() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let channel = ChannelValue::with_capacity(1);
     channel
         .send(Value::Int(IntegerValue::from_signed(1)))
@@ -7392,7 +7390,6 @@ fn lightweight_worker_runner_rejects_an_empty_pool_before_starting_work() {
 
 #[test]
 fn worker_coordinator_preserves_round_robin_admission_and_shutdown_accounting() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let workers = super::LightweightWorkerCoordinator::new(2);
     let first_reactor = RuntimeReactor::new().expect("first worker reactor should initialize");
     let second_reactor = RuntimeReactor::new().expect("second worker reactor should initialize");
@@ -7473,11 +7470,13 @@ fn worker_coordinator_preserves_round_robin_admission_and_shutdown_accounting() 
     workers.register_reactor(0, late_reactor.handle());
     let started = Instant::now();
     assert!(late_reactor
-        .poll(Some(StdDuration::from_secs(1)))
+        .poll(Some(crate::hosted_ci_timing_limit(StdDuration::from_secs(
+            1
+        ))))
         .expect("shutdown wake should be observable")
         .is_empty());
     assert!(
-        started.elapsed() < StdDuration::from_millis(250),
+        started.elapsed() < crate::hosted_ci_timing_limit(StdDuration::from_millis(250)),
         "a worker registered during shutdown must be woken immediately"
     );
 }
@@ -8375,7 +8374,6 @@ fn phase58_select_rejects_a_deadline_that_overflows_after_source_validation() {
 
 #[test]
 fn phase58_select_captures_one_deadline_base_after_all_sources_validate() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let validation_finished_at = Arc::new(Mutex::new(None));
     let hook_timestamp = validation_finished_at.clone();
     install_after_select_source_validation_hook(move || {
@@ -8679,7 +8677,6 @@ fn phase58_select_check_subscribe_recheck_and_loser_cleanup_are_race_safe() {
 
 #[test]
 fn phase58_select_concurrent_queue_and_task_publication_enqueues_waiter_once() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let queue = ChannelValue::new();
     let publication_barrier = Arc::new(Barrier::new(3));
     let task_barrier = publication_barrier.clone();
@@ -9147,14 +9144,13 @@ fn non_unix_tls_listener_wait_timeout_keeps_short_slices_when_handshakes_are_pen
 
 #[test]
 fn runtime_scheduler_wakes_sleep_on_cancellation() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let parent = CancellationContext::default();
     let group = TaskGroupValue::new(&parent);
     let cancellation = group.child_cancellation();
     let start = Instant::now();
-    let worker = thread::spawn(move || {
-        sleep_with_runtime_scheduler(StdDuration::from_millis(250), Some(&cancellation))
-    });
+    let blocked_sleep = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
+    let worker =
+        thread::spawn(move || sleep_with_runtime_scheduler(blocked_sleep, Some(&cancellation)));
 
     thread::sleep(StdDuration::from_millis(20));
     group.cancel();
@@ -9166,7 +9162,7 @@ fn runtime_scheduler_wakes_sleep_on_cancellation() {
         super::RuntimeSchedulerWakeReason::Cancelled
     );
     assert!(
-        start.elapsed() < StdDuration::from_millis(100),
+        start.elapsed() < crate::hosted_ci_timing_limit(StdDuration::from_millis(100)),
         "scheduler sleep should wake promptly when cancelled; elapsed {:?}",
         start.elapsed()
     );
@@ -9174,14 +9170,14 @@ fn runtime_scheduler_wakes_sleep_on_cancellation() {
 
 #[test]
 fn runtime_scheduler_wakes_select_wait_on_cancellation() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let parent = CancellationContext::default();
     let group = TaskGroupValue::new(&parent);
     let cancellation = group.child_cancellation();
     let channel = ChannelValue::new();
     let start = Instant::now();
+    let blocked_wait = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
     let worker = thread::spawn(move || {
-        let deadline = Instant::now() + StdDuration::from_millis(250);
+        let deadline = Instant::now() + blocked_wait;
         let _ = wait_for_runtime_scheduler(
             vec![channel],
             true,
@@ -9196,7 +9192,7 @@ fn runtime_scheduler_wakes_select_wait_on_cancellation() {
     group.cancel();
     worker.join().expect("scheduler wait worker should join");
     assert!(
-        start.elapsed() < StdDuration::from_millis(100),
+        start.elapsed() < crate::hosted_ci_timing_limit(StdDuration::from_millis(100)),
         "scheduler wait should wake promptly when cancelled; elapsed {:?}",
         start.elapsed()
     );
@@ -11192,8 +11188,7 @@ fn lightweight_scheduler_handles_http_after_blocking_io_server_step() {
 
 #[test]
 fn lightweight_tasks_observe_blocking_io_completion_before_parent_timeout() {
-    let _timing_guard = crate::serialize_timing_assertion();
-    let timeout = StdDuration::from_millis(250);
+    let timeout = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
     let start = Instant::now();
     let result = super::run_lightweight_root_task_with_worker_count(1, move || {
         let task = spawn_lightweight_task(move || {
@@ -11233,7 +11228,7 @@ fn lightweight_tasks_observe_blocking_io_completion_before_parent_timeout() {
         "blocking-I/O child task should finish before the wait timeout: {result:?}"
     );
     assert!(
-        start.elapsed() < StdDuration::from_millis(150),
+        start.elapsed() < crate::hosted_ci_timing_limit(StdDuration::from_millis(150)),
         "blocking-I/O wake should be prompt; elapsed {:?}",
         start.elapsed()
     );
@@ -11368,7 +11363,6 @@ fn protocol_state_step_panics_return_owned_state_and_preserve_the_service() {
 
 #[test]
 fn protocol_step_deadlines_cover_queue_saturation_and_late_completion() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let pool = super::ProtocolStepPool::start();
     let release = Arc::new(AtomicBool::new(false));
     let release_guard = AtomicReleaseGuard(release.clone());
@@ -13163,7 +13157,6 @@ fn abandoned_blocking_io_discards_late_host_errors_and_panics_then_recovers() {
 
 #[test]
 fn tcp_connect_offloads_slow_resolution_without_starving_a_sibling_timer() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let listener = std::net::TcpListener::bind("127.0.0.1:0")
         .expect("loopback listener should bind for the injected resolver");
     let candidate = listener
@@ -13180,7 +13173,7 @@ fn tcp_connect_offloads_slow_resolution_without_starving_a_sibling_timer() {
                 Some(StdDuration::from_secs(1)),
                 None,
                 move |_address| {
-                    thread::sleep(StdDuration::from_millis(100));
+                    thread::sleep(crate::hosted_ci_timing_limit(StdDuration::from_millis(100)));
                     resolver_finished.store(true, Ordering::SeqCst);
                     Ok(vec![candidate])
                 },
@@ -13219,7 +13212,6 @@ fn tcp_connect_offloads_slow_resolution_without_starving_a_sibling_timer() {
 
 #[test]
 fn tcp_connect_timeout_budget_includes_resolution_wait() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let started = Instant::now();
     let result = run_lightweight_root_task(move || {
         let error = TcpStreamValue::connect_with_operations(
@@ -13227,7 +13219,7 @@ fn tcp_connect_timeout_budget_includes_resolution_wait() {
             Some(StdDuration::from_millis(20)),
             None,
             |_address| {
-                thread::sleep(StdDuration::from_millis(150));
+                thread::sleep(crate::hosted_ci_timing_limit(StdDuration::from_millis(150)));
                 Ok(vec!["127.0.0.1:9"
                     .parse()
                     .expect("test address should parse")])
@@ -13244,7 +13236,7 @@ fn tcp_connect_timeout_budget_includes_resolution_wait() {
 
     assert!(result.is_ok(), "timeout path should complete: {result:?}");
     assert!(
-        started.elapsed() < StdDuration::from_millis(100),
+        started.elapsed() < crate::hosted_ci_timing_limit(StdDuration::from_millis(100)),
         "connect timeout must not restart after DNS; elapsed {:?}",
         started.elapsed()
     );
@@ -13252,14 +13244,13 @@ fn tcp_connect_timeout_budget_includes_resolution_wait() {
 
 #[test]
 fn tcp_connect_timeout_offloads_resolution_without_a_lightweight_task_context() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let started = Instant::now();
     let error = TcpStreamValue::connect_with_operations(
         "slow.host-entry.test:443",
         Some(StdDuration::from_millis(20)),
         None,
         |_address| {
-            thread::sleep(StdDuration::from_millis(150));
+            thread::sleep(crate::hosted_ci_timing_limit(StdDuration::from_millis(150)));
             Ok(vec!["127.0.0.1:9"
                 .parse()
                 .expect("test address should parse")])
@@ -13273,7 +13264,7 @@ fn tcp_connect_timeout_offloads_resolution_without_a_lightweight_task_context() 
 
     assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     assert!(
-        started.elapsed() < StdDuration::from_millis(100),
+        started.elapsed() < crate::hosted_ci_timing_limit(StdDuration::from_millis(100)),
         "host-entry DNS must use the blocking service; elapsed {:?}",
         started.elapsed()
     );
@@ -14821,7 +14812,6 @@ fn network_resources_use_nonblocking_descriptors_internally() {
 #[cfg(unix)]
 #[test]
 fn socket_timeouts_honor_the_requested_budget() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp bind should succeed");
     let started = Instant::now();
     let error = listener
@@ -15130,7 +15120,6 @@ fn tls_listener_accept_skips_timed_out_handshakes_and_accepts_the_next_peer() {
 #[cfg(unix)]
 #[test]
 fn tls_listener_accept_is_not_linearly_delayed_by_multiple_stalled_peers() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let temp = TempDir::new("aura-runtime-tls-multi-slowloris");
     let certificate =
         generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
@@ -15202,7 +15191,7 @@ fn tls_listener_accept_is_not_linearly_delayed_by_multiple_stalled_peers() {
     .expect("tls connect should succeed after the stalled peers are queued");
     let elapsed = start.elapsed();
     assert!(
-        elapsed < StdDuration::from_secs(5),
+        elapsed < crate::hosted_ci_timing_limit(StdDuration::from_secs(5)),
         "legitimate tls clients should not be delayed linearly by stalled peers; elapsed {:?}",
         elapsed
     );

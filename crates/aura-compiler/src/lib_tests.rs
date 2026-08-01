@@ -37,6 +37,16 @@ fn lock_io_example() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+#[test]
+fn hosted_ci_timing_policy_preserves_local_limits_and_scales_runner_limits() {
+    let local = StdDuration::from_millis(125);
+    assert_eq!(crate::timing_limit_for_hosted_ci(local, false), local);
+    assert_eq!(
+        crate::timing_limit_for_hosted_ci(local, true),
+        StdDuration::from_millis(500)
+    );
+}
+
 fn captured_stdout_sink() -> (Arc<Mutex<String>>, StdoutSink) {
     let captured = Arc::new(Mutex::new(String::new()));
     let sink_capture = captured.clone();
@@ -3013,11 +3023,12 @@ def main() -> int32:
 
 #[test]
 fn cancellation_wakes_sleep_tasks_promptly() {
-    let _timing_guard = crate::serialize_timing_assertion();
-    let source = r#"
+    let blocked_sleep = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
+    let source = format!(
+        r#"
 def sleeper(started: Queue[String], finished: Queue[String]) -> None:
     started.put("sleep")
-    sleep(250ms)
+    sleep({blocked_sleep_ms}ms)
     finished.put("sleep")
 
 def wait_for_one(queue: Queue[String]):
@@ -3040,15 +3051,17 @@ def main() -> int32:
         wait_for_one(started)
         group.cancel()
     return 0
-"#;
+"#,
+        blocked_sleep_ms = blocked_sleep.as_millis()
+    );
 
     let start = Instant::now();
-    let output = run_source(source).expect("sleep cancellation source should run");
+    let output = run_source(&source).expect("sleep cancellation source should run");
     let elapsed = start.elapsed();
 
     assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
     assert!(
-        elapsed < StdDuration::from_millis(120),
+        elapsed < crate::hosted_ci_timing_limit(StdDuration::from_millis(120)),
         "sleep cancellation should return promptly; elapsed {:?}",
         elapsed
     );
@@ -3056,12 +3069,13 @@ def main() -> int32:
 
 #[test]
 fn cancellation_wakes_queue_wait_tasks_promptly() {
-    let _timing_guard = crate::serialize_timing_assertion();
-    let source = r#"
+    let blocked_wait = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
+    let source = format!(
+        r#"
 def waiter(started: Queue[String], jobs: Queue[int32], finished: Queue[String]) -> None:
     started.put("wait")
     while not cancelled():
-        match jobs.get(timeout=250ms):
+        match jobs.get(timeout={blocked_wait_ms}ms):
             case QueueReceive.Item(_):
                 pass
             case QueueReceive.TimedOut:
@@ -3094,15 +3108,17 @@ def main() -> int32:
         group.cancel()
     wait_for_one(finished)
     return 0
-"#;
+"#,
+        blocked_wait_ms = blocked_wait.as_millis()
+    );
 
     let start = Instant::now();
-    let output = run_source(source).expect("queue-wait cancellation source should run");
+    let output = run_source(&source).expect("queue-wait cancellation source should run");
     let elapsed = start.elapsed();
 
     assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
     assert!(
-        elapsed < StdDuration::from_millis(120),
+        elapsed < crate::hosted_ci_timing_limit(StdDuration::from_millis(120)),
         "queue wait cancellation should return promptly; elapsed {:?}",
         elapsed
     );
@@ -3110,18 +3126,28 @@ def main() -> int32:
 
 #[test]
 fn bounded_queue_blocks_second_put_until_capacity_frees() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let temp = TempDir::new("aura-bounded-queue");
-    let before_path = temp.path().join("before.txt");
-    let after_path = temp.path().join("after.txt");
-    let before_literal = escape_aura_string(&before_path.display().to_string());
-    let after_literal = escape_aura_string(&after_path.display().to_string());
+    let consumer_drained_path = temp.path().join("consumer-drained.txt");
+    let second_put_started_path = temp.path().join("second-put-started.txt");
+    let second_put_finished_path = temp.path().join("second-put-finished.txt");
+    let release_consumer_path = temp.path().join("release-consumer.txt");
+    let consumer_drained_literal = escape_aura_string(&consumer_drained_path.display().to_string());
+    let second_put_started_literal =
+        escape_aura_string(&second_put_started_path.display().to_string());
+    let second_put_finished_literal =
+        escape_aura_string(&second_put_finished_path.display().to_string());
+    let release_consumer_literal = escape_aura_string(&release_consumer_path.display().to_string());
     let source = format!(
         r#"
 import fs
 
-def consumer(jobs: Queue[int32], after_get_path: String) -> None:
-    sleep(120ms)
+def consumer(
+    jobs: Queue[int32],
+    after_get_path: String,
+    release_path: String
+) -> None:
+    while not fs.exists(release_path):
+        sleep(5ms)
     match jobs.get():
         case QueueReceive.Item(_):
             pass
@@ -3140,13 +3166,18 @@ def consumer(jobs: Queue[int32], after_get_path: String) -> None:
 def main() -> int32:
     jobs = Queue[int32](capacity=1)
     with TaskGroup() as group:
-        group.start(consumer, jobs, "{before_path}")
+        group.start(
+            consumer,
+            jobs,
+            "{consumer_drained_path}",
+            "{release_consumer_path}"
+        )
         match jobs.put(1):
             case Result.Ok(_):
                 pass
             case Result.Err(_):
                 return 1
-        match fs.write_string("{after_path}", "before-second"):
+        match fs.write_string("{second_put_started_path}", "before-second"):
             case Result.Ok(_):
                 pass
             case Result.Err(_):
@@ -3156,33 +3187,50 @@ def main() -> int32:
                 pass
             case Result.Err(_):
                 return 3
+        match fs.write_string("{second_put_finished_path}", "finished"):
+            case Result.Ok(_):
+                pass
+            case Result.Err(_):
+                return 4
         print("second-put-finished")
     return 0
 "#,
-        before_path = before_literal,
-        after_path = after_literal
+        consumer_drained_path = consumer_drained_literal,
+        second_put_started_path = second_put_started_literal,
+        second_put_finished_path = second_put_finished_literal,
+        release_consumer_path = release_consumer_literal
     );
 
     let handle = thread::spawn(move || run_source(&source));
     let deadline = Instant::now() + StdDuration::from_secs(3);
-    while Instant::now() < deadline && !after_path.exists() {
+    while Instant::now() < deadline && !second_put_started_path.exists() {
         thread::sleep(StdDuration::from_millis(5));
     }
 
-    thread::sleep(StdDuration::from_millis(40));
-    let second_put_finished_early = before_path.exists();
+    let second_put_started = second_put_started_path.exists();
+    let second_put_finished_before_release = second_put_finished_path.exists();
+    fs::write(&release_consumer_path, "release")
+        .expect("the host should release the queue consumer");
     let output = handle
         .join()
         .expect("bounded queue runtime thread should join")
         .expect("bounded queue source should run");
 
     assert!(
-        after_path.exists(),
-        "bounded queue source never signalled the first put path"
+        second_put_started,
+        "bounded queue source never reached the second put"
     );
     assert!(
-        !second_put_finished_early,
-        "second put should not finish before the consumer frees capacity"
+        !second_put_finished_before_release,
+        "second put should remain blocked until the consumer is released"
+    );
+    assert!(
+        consumer_drained_path.exists(),
+        "the released consumer should drain the first queued value"
+    );
+    assert!(
+        second_put_finished_path.exists(),
+        "the second put should finish after the consumer frees capacity"
     );
     assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
     assert_eq!(output.stdout.trim(), "second-put-finished");
@@ -3191,13 +3239,13 @@ def main() -> int32:
 #[cfg(unix)]
 #[test]
 fn async_file_io_keeps_the_scheduler_running_while_a_fifo_read_waits() {
-    let _timing_guard = crate::serialize_timing_assertion();
     let _guard = lock_io_example();
     let temp = TempDir::new("aura-async-file-io");
     let fifo_path = temp.path().join("events.fifo");
     let ready_path = temp.path().join("ready.txt");
     let fifo_literal = escape_aura_string(&fifo_path.display().to_string());
     let ready_literal = escape_aura_string(&ready_path.display().to_string());
+    let read_timeout = crate::hosted_ci_timing_limit(StdDuration::from_secs(2));
 
     let status = Command::new("mkfifo")
         .arg(&fifo_path)
@@ -3228,7 +3276,7 @@ def main() -> int32:
     with TaskGroup() as group:
         reader = group.start(wait_for_text, "{fifo_path}")
         group.start_soon(mark_ready, "{ready_path}")
-        match reader.result(timeout=2s):
+        match reader.result(timeout={read_timeout_ms}ms):
             case TaskResult.Ready(_):
                 pass
             case TaskResult.Error(_message):
@@ -3240,12 +3288,13 @@ def main() -> int32:
     return 0
 "#,
         fifo_path = fifo_literal,
-        ready_path = ready_literal
+        ready_path = ready_literal,
+        read_timeout_ms = read_timeout.as_millis()
     );
 
     let writer_path = fifo_path.clone();
     let writer = thread::spawn(move || {
-        thread::sleep(StdDuration::from_millis(500));
+        thread::sleep(crate::hosted_ci_timing_limit(StdDuration::from_millis(500)));
         let mut fifo = fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -3255,7 +3304,8 @@ def main() -> int32:
     });
 
     let handle = thread::spawn(move || run_source(&source));
-    let ready_deadline = Instant::now() + StdDuration::from_millis(350);
+    let ready_deadline =
+        Instant::now() + crate::hosted_ci_timing_limit(StdDuration::from_millis(350));
     let mut ready_seen = false;
     while Instant::now() < ready_deadline {
         if ready_path.exists() {

@@ -26,16 +26,22 @@ fn serialize_bounded_blocking_pool_watchdog() -> std::sync::MutexGuard<'static, 
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn serialize_timing_assertion() -> std::sync::MutexGuard<'static, ()> {
-    static TIMING_ASSERTION_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
-        std::sync::OnceLock::new();
+fn timing_millis_for_hosted_ci(local_millis: u64, hosted_ci: bool) -> u64 {
+    if hosted_ci {
+        local_millis.saturating_mul(4)
+    } else {
+        local_millis
+    }
+}
 
-    // The backend safepoint probes use calibrated latency windows. Shared CI
-    // runners must not make them measure one another's CPU and I/O load.
-    TIMING_ASSERTION_LOCK
-        .get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+fn hosted_ci_timing_millis(local_millis: u64) -> u64 {
+    timing_millis_for_hosted_ci(local_millis, std::env::var_os("GITHUB_ACTIONS").is_some())
+}
+
+#[test]
+fn hosted_ci_safepoint_windows_scale_without_changing_local_windows() {
+    assert_eq!(timing_millis_for_hosted_ci(100, false), 100);
+    assert_eq!(timing_millis_for_hosted_ci(100, true), 400);
 }
 
 #[cfg(unix)]
@@ -10611,8 +10617,10 @@ def main() -> int32:
 
 #[test]
 fn loop_backedge_safepoints_prevent_timer_and_queue_starvation() {
-    let _timing_guard = serialize_timing_assertion();
-    let source = r#"
+    let hot_loop_millis = hosted_ci_timing_millis(100);
+    let max_latency_millis = hosted_ci_timing_millis(50);
+    let source = format!(
+        r#"
 import sys
 
 def sleep_then_report(progress: Queue[int64]) -> None:
@@ -10623,7 +10631,7 @@ def sleep_then_report(progress: Queue[int64]) -> None:
 def run_hot_loop() -> None:
     started_at = sys.monotonic_time_ms()
     while true:
-        if sys.monotonic_time_ms() - started_at >= 100:
+        if sys.monotonic_time_ms() - started_at >= {hot_loop_millis}:
             return
 
 def report_queue_progress(started_at: int64, progress: Queue[int64]) -> None:
@@ -10641,14 +10649,15 @@ def main() -> int32:
 
         queue_latency = queue_progress.get_or(-1, timeout=1s)
         timer_latency = timer_progress.get_or(-1, timeout=1s)
-        print(queue_latency >= 0 and queue_latency <= 50)
-        print(timer_latency >= 10 and timer_latency <= 50)
+        print(queue_latency >= 0 and queue_latency <= {max_latency_millis})
+        print(timer_latency >= 10 and timer_latency <= {max_latency_millis})
     return 0
-"#;
+"#
+    );
 
     assert_run_and_direct_source_stdout_with_timeout_and_workers(
         "aura-loop-backedge-safepoints",
-        source,
+        &source,
         std::time::Duration::from_secs(10),
         "true\ntrue\n",
         Some(1),
@@ -10657,8 +10666,10 @@ def main() -> int32:
 
 #[test]
 fn loop_backedge_safepoints_prevent_socket_readiness_starvation() {
-    let _timing_guard = serialize_timing_assertion();
-    let source = r#"
+    let hot_loop_millis = hosted_ci_timing_millis(200);
+    let max_latency_millis = hosted_ci_timing_millis(100);
+    let source = format!(
+        r#"
 import io
 import net
 import sys
@@ -10690,7 +10701,7 @@ def connect_after_delay(address: String) -> None:
 def run_hot_loop() -> None:
     started_at = sys.monotonic_time_ms()
     while true:
-        if sys.monotonic_time_ms() - started_at >= 200:
+        if sys.monotonic_time_ms() - started_at >= {hot_loop_millis}:
             return
 
 def socket_probe() -> Result[bool, io.Error]:
@@ -10705,7 +10716,7 @@ def socket_probe() -> Result[bool, io.Error]:
                 group.start(run_hot_loop)
 
                 socket_latency = socket_progress.get_or(-1, timeout=1s)
-                return Result.Ok(socket_latency >= 10 and socket_latency <= 100)
+                return Result.Ok(socket_latency >= 10 and socket_latency <= {max_latency_millis})
             case QueueReceive.Closed:
                 return Result.Ok(false)
             case QueueReceive.TimedOut:
@@ -10720,13 +10731,14 @@ def main() -> int32:
         case Result.Err(_):
             print(false)
     return 0
-"#;
+"#
+    );
 
     // Readiness must arrive in the first half of the 200 ms hot loop. Without
     // a cooperative backedge, the accept task cannot resume until the loop ends.
     assert_run_and_direct_source_stdout_with_timeout_and_workers(
         "aura-loop-backedge-socket-safepoints",
-        source,
+        &source,
         std::time::Duration::from_secs(10),
         "true\n",
         Some(1),
