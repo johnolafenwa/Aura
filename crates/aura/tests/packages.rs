@@ -96,7 +96,7 @@ impl GitRepo {
         let path = temp.path().join(relative);
         fs::create_dir_all(path.join("src")).expect("failed to create git package src");
         fs::write(
-            path.join("Aurora.toml"),
+            path.join("Aura.toml"),
             format!(
                 "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
                 package_name
@@ -112,8 +112,8 @@ impl GitRepo {
         }
         let repo = Self { path };
         repo.git(&["init", "-b", "main"]);
-        repo.git(&["config", "user.name", "Aurora Tests"]);
-        repo.git(&["config", "user.email", "aurora-tests@example.com"]);
+        repo.git(&["config", "user.name", "Aura Tests"]);
+        repo.git(&["config", "user.email", "aura-tests@example.com"]);
         repo.git(&["add", "."]);
         repo.git(&["commit", "-m", "initial"]);
         repo
@@ -149,7 +149,7 @@ impl GitRepo {
 fn write_manifest_package_fixture(prefix: &str) -> (TempDir, PathBuf) {
     let temp = TempDir::new(prefix);
     temp.write(
-        "app/Aurora.toml",
+        "app/Aura.toml",
         r#"[package]
 name = "app"
 version = "0.1.0"
@@ -176,7 +176,7 @@ def main() -> int32:
 "#,
     );
     temp.write(
-        "util/Aurora.toml",
+        "util/Aura.toml",
         r#"[package]
 name = "util"
 version = "0.1.0"
@@ -194,7 +194,7 @@ edition = "2026"
 
 #[test]
 fn manifest_aware_cli_commands_support_path_dependencies() {
-    let (temp, main_path) = write_manifest_package_fixture("aurora-cli-packages");
+    let (temp, main_path) = write_manifest_package_fixture("aura-cli-packages");
 
     let check = Command::new(aura_bin())
         .arg("check")
@@ -270,7 +270,7 @@ fn manifest_aware_cli_commands_support_path_dependencies() {
 
 #[test]
 fn manifest_aware_stdin_analysis_and_completion_support_path_dependencies() {
-    let (_temp, main_path) = write_manifest_package_fixture("aurora-cli-packages-stdin");
+    let (_temp, main_path) = write_manifest_package_fixture("aura-cli-packages-stdin");
     let completion_source = [
         "import util.math",
         "import helpers.math",
@@ -368,7 +368,7 @@ fn manifest_aware_stdin_analysis_and_completion_support_path_dependencies() {
 #[test]
 fn maintained_package_examples_run_through_cli_commands() {
     let repo = repo_root();
-    let temp = TempDir::new("aurora-cli-maintained-package-examples");
+    let temp = TempDir::new("aura-cli-maintained-package-examples");
     let local_path_dependencies = temp.path().join("local_path_dependencies");
     let workspace = temp.path().join("workspace");
     copy_dir_recursive(
@@ -403,7 +403,7 @@ fn maintained_package_examples_run_through_cli_commands() {
             }
         }
 
-        let output_dir = TempDir::new("aurora-cli-package-examples");
+        let output_dir = TempDir::new("aura-cli-package-examples");
         let output_path = output_dir.path().join("out");
         let build = Command::new(aura_bin())
             .arg("build")
@@ -432,7 +432,7 @@ fn maintained_package_examples_run_through_cli_commands() {
 
 #[test]
 fn manifest_aware_cli_commands_support_git_dependencies() {
-    let temp = TempDir::new("aurora-cli-packages-git");
+    let temp = TempDir::new("aura-cli-packages-git");
     let repo = GitRepo::init(
         &temp,
         "util-repo",
@@ -447,7 +447,7 @@ fn manifest_aware_cli_commands_support_git_dependencies() {
     let resolved_rev = repo.git(&["rev-parse", "HEAD"]);
 
     temp.write(
-        "app/Aurora.toml",
+        "app/Aura.toml",
         r#"[package]
 name = "app"
 version = "0.1.0"
@@ -534,7 +534,7 @@ def main() -> int32:
     assert_eq!(String::from_utf8_lossy(&built.stdout), "6\n");
 
     let lockfile =
-        fs::read_to_string(temp.path().join("app/Aurora.lock")).expect("lockfile should exist");
+        fs::read_to_string(temp.path().join("app/Aura.lock")).expect("lockfile should exist");
     assert!(lockfile.contains("source = \"git\""));
     assert!(lockfile.contains("branch = \"main\""));
     assert!(lockfile.contains(&format!("rev = \"{}\"", resolved_rev)));
@@ -542,7 +542,7 @@ def main() -> int32:
 
 #[test]
 fn manifest_aware_stdin_analysis_and_completion_support_git_dependencies() {
-    let temp = TempDir::new("aurora-cli-packages-git-stdin");
+    let temp = TempDir::new("aura-cli-packages-git-stdin");
     GitRepo::init(
         &temp,
         "util-repo",
@@ -555,7 +555,7 @@ fn manifest_aware_stdin_analysis_and_completion_support_git_dependencies() {
         )],
     );
     temp.write(
-        "app/Aurora.toml",
+        "app/Aura.toml",
         r#"[package]
 name = "app"
 version = "0.1.0"
@@ -647,7 +647,7 @@ def main() -> int32:
 
 #[test]
 fn deps_update_refreshes_a_specific_git_dependency_only() {
-    let temp = TempDir::new("aurora-cli-deps-update-one");
+    let temp = TempDir::new("aura-cli-deps-update-one");
     let util_repo = GitRepo::init(
         &temp,
         "util-repo",
@@ -672,7 +672,7 @@ fn deps_update_refreshes_a_specific_git_dependency_only() {
     );
 
     temp.write(
-        "app/Aurora.toml",
+        "app/Aura.toml",
         r#"[package]
 name = "app"
 version = "0.1.0"
@@ -744,7 +744,7 @@ def main() -> int32:
     assert_eq!(String::from_utf8_lossy(&after_update.stdout), "14\n");
 
     let lockfile =
-        fs::read_to_string(temp.path().join("app/Aurora.lock")).expect("lockfile should exist");
+        fs::read_to_string(temp.path().join("app/Aura.lock")).expect("lockfile should exist");
     assert!(lockfile.contains(&new_util_rev));
     assert!(
         !lockfile.contains(&new_jsonx_rev),
@@ -754,7 +754,7 @@ def main() -> int32:
 
 #[test]
 fn deps_update_preserves_the_compiler_diagnostic_code() {
-    let temp = TempDir::new("aurora-cli-deps-update-diagnostic-code");
+    let temp = TempDir::new("aura-cli-deps-update-diagnostic-code");
 
     let output = Command::new(aura_bin())
         .arg("deps")
@@ -766,7 +766,7 @@ fn deps_update_preserves_the_compiler_diagnostic_code() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.starts_with("error[AU2999]: could not find an enclosing Aurora package"),
+        stderr.starts_with("error[AU2999]: could not find an enclosing Aura package"),
         "deps update must retain the compiler-owned diagnostic code, stderr was:\n{stderr}"
     );
     assert!(stderr.contains(&temp.path().display().to_string()));
@@ -774,7 +774,7 @@ fn deps_update_preserves_the_compiler_diagnostic_code() {
 
 #[test]
 fn deps_update_refreshes_all_git_dependencies_in_the_current_package() {
-    let temp = TempDir::new("aurora-cli-deps-update-all");
+    let temp = TempDir::new("aura-cli-deps-update-all");
     let util_repo = GitRepo::init(
         &temp,
         "util-repo",
@@ -799,7 +799,7 @@ fn deps_update_refreshes_all_git_dependencies_in_the_current_package() {
     );
 
     temp.write(
-        "app/Aurora.toml",
+        "app/Aura.toml",
         r#"[package]
 name = "app"
 version = "0.1.0"
@@ -869,7 +869,7 @@ def main() -> int32:
     assert_eq!(String::from_utf8_lossy(&after_update.stdout), "24\n");
 
     let lockfile =
-        fs::read_to_string(temp.path().join("app/Aurora.lock")).expect("lockfile should exist");
+        fs::read_to_string(temp.path().join("app/Aura.lock")).expect("lockfile should exist");
     assert!(lockfile.contains(&new_util_rev));
     assert!(lockfile.contains(&new_jsonx_rev));
 }

@@ -20,5 +20,5 @@ def show[T: Labelled](value: T) -> None:
     print(value.name())
 
 def main() -> int32:
-    show(value=User(name="aurora"))
+    show(value=User(name="aura"))
     return 0

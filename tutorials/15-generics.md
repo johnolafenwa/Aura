@@ -82,7 +82,7 @@ The compiler infers type arguments from call arguments and the expected return t
 
 ```python
 print(identity(7))               # infers T = int64
-text: String = identity("aurora") # infers T = String
+text: String = identity("aura") # infers T = String
 print(text)
 ```
 
@@ -111,7 +111,7 @@ def forward[T](values: Vec[T]) -> Vec[T]:
     return duplicate(values)
 ```
 
-Aurora infers that `T` must be clone-safe. A call with `int32` or `String`
+Aura infers that `T` must be clone-safe. A call with `int32` or `String`
 works. A call with `random.Rng`, including through a class, enum, or collection
 wrapper, is rejected with `AU3007`. `forward` receives the same requirement
 through its generic-to-generic call. The inferred contract also survives a
@@ -125,7 +125,7 @@ with `AU3008`. `Task[T]` is always a transferable handle, but is copyable only
 when `T` is repeatable; `random.Rng` is neither `Transfer` nor repeatable, so a
 task may not return it.
 
-Aurora does not infer a deferred `Transfer` obligation for an unresolved type
+Aura does not infer a deferred `Transfer` obligation for an unresolved type
 parameter. A generic task target must be fully specialized by inference,
 defaults, or the narrow explicit target form `function[Types]` (and the
 equivalent associated-method form) before `TaskGroup.start(...)` can validate

@@ -1,3 +1,0 @@
-error[AU4003]: JSON value exceeds the maximum depth of 128
- --> crates/aurora-compiler/tests/fixtures/run-fail/json_dump_depth.au
-  = note: Aurora call chain (innermost first): main at 3:1

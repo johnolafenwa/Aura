@@ -19,7 +19,7 @@ class Box[T]:
     value: T
 ```
 
-Aurora also supports explicit copy classes when every field is itself copyable:
+Aura also supports explicit copy classes when every field is itself copyable:
 
 ```python
 copy class Point:
@@ -31,7 +31,7 @@ See [examples/classes/copy_class.au](../examples/classes/copy_class.au).
 
 ## Constructing A Value
 
-Aurora currently uses keyword-style construction:
+Aura currently uses keyword-style construction:
 
 ```python
 p1 = Point(x=0.0, y=0.0)
@@ -62,7 +62,7 @@ You can then omit those fields during construction:
 
 ```python
 local = ServerConfig()
-named = ServerConfig(host="aurora.dev")
+named = ServerConfig(host="aura.dev")
 ```
 
 See [examples/classes/default_fields.au](../examples/classes/default_fields.au).
@@ -83,7 +83,7 @@ See [examples/classes/indirect_recursive.au](../examples/classes/indirect_recurs
 
 ## `public` Fields And Methods
 
-Aurora now enforces class visibility across module boundaries. Fields and methods are private by default and must be marked `public` to be used from another module:
+Aura now enforces class visibility across module boundaries. Fields and methods are private by default and must be marked `public` to be used from another module:
 
 ```python
 class User:
@@ -104,7 +104,7 @@ See [examples/modules/simple_import.au](../examples/modules/simple_import.au).
 
 ## Methods
 
-Aurora supports methods declared directly inside the class body.
+Aura supports methods declared directly inside the class body.
 
 ```python
 class Counter:
@@ -173,7 +173,7 @@ class Greeter:
         return Greeter(prefix=prefix)
 
 greeter = Greeter.named(prefix="hello, ")
-print(greeter.say(name="aurora"))
+print(greeter.say(name="aura"))
 ```
 
 ## Associated Methods
@@ -196,7 +196,7 @@ See [examples/classes/methods.au](../examples/classes/methods.au).
 
 ## Mutating Methods
 
-Aurora now supports `mut self` methods and member-target assignment.
+Aura now supports `mut self` methods and member-target assignment.
 
 ```python
 class Counter:

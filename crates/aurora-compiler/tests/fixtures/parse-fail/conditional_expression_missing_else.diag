@@ -1,5 +1,0 @@
-error[AU1101]: conditional expression requires `else` and an alternative value
- --> crates/aurora-compiler/tests/fixtures/parse-fail/conditional_expression_missing_else.au:2:15
-  |
-2 |     value = 1 if true
-  |               ^

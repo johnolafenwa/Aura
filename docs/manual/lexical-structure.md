@@ -1,10 +1,10 @@
 # Lexical Structure
 
-This chapter defines how Aurora source text becomes tokens and indentation markers. It is normative for source spelling. The complete token-level productions are collected in [Grammar](/manual/grammar); name binding and reserved builtin names are defined by [Names And Scopes](/manual/names-and-scopes) and [Static Semantics](/manual/static-semantics).
+This chapter defines how Aura source text becomes tokens and indentation markers. It is normative for source spelling. The complete token-level productions are collected in [Grammar](/manual/grammar); name binding and reserved builtin names are defined by [Names And Scopes](/manual/names-and-scopes) and [Static Semantics](/manual/static-semantics).
 
 ## Source Files And Text
 
-Aurora source files conventionally use the `.au` extension and contain UTF-8 text. One UTF-8 byte-order mark is ignored only when it occurs at the beginning of the file.
+Aura source files conventionally use the `.au` extension and contain UTF-8 text. One UTF-8 byte-order mark is ignored only when it occurs at the beginning of the file.
 
 Source is processed as physical lines and logical lines. Outside an open source
 delimiter, a nonblank physical line normally ends one logical line. While a
@@ -45,12 +45,10 @@ bodyless declarations described by [FFI v0](/manual/ffi). `own` is reserved
 everywhere; it marks consuming ordinary parameters, collection loops, and
 matches, as well as the consuming receiver spelling `own self`. `mut` marks
 mutable parameters, loops, matches, and the receiver spelling `mut self`, and
-also introduces a mutable local binding. `borrow` is a **reserved retired
-keyword**: it lexes, but every position that once accepted it now reports the
-exact replacement to write. For example, a retired `borrow mut T` parameter
-receives guidance to write `mut T`. It is reserved for one announced
-compatibility window; releasing it as an ordinary identifier is a future
-decision.
+also introduces a mutable local binding. `borrow` is a **reserved keyword**,
+not an accepted capability or identifier. When it appears in a capability
+position, the diagnostic names the exact bare, `mut`, or `own` spelling to
+write.
 
 `from` is contextual. At module level, a complete prefix of the form `from module.path import ...` begins an import. In other identifier positions, `from` can name a parameter, local binding, expression, member, type-path component, or named argument:
 
@@ -83,7 +81,7 @@ Several other spellings are lexed as ordinary identifiers and become special onl
 print("ready") # A trailing comment.
 ```
 
-Aurora 0.2 has no block comments.
+Aura 0.2 has no block comments.
 
 ## Spaces, Tabs, And Indentation
 
@@ -111,7 +109,7 @@ Blank and comment-only lines do not produce tokens and do not change indentation
    expression-form `match` layout island.
 5. End of file emits all outstanding `DEDENT` tokens and then `EOF`.
 
-Aurora does not require an indentation width of four spaces, but sibling lines must return to exactly the same recorded count. The maintained examples use four spaces.
+Aura does not require an indentation width of four spaces, but sibling lines must return to exactly the same recorded count. The maintained examples use four spaces.
 
 A suite must contain at least one nonblank, non-comment line. Use `pass` for an intentionally empty suite.
 
@@ -170,7 +168,7 @@ cannot cross a physical newline.
 
 ## Punctuation And Operators
 
-Aurora 0.2 recognizes:
+Aura 0.2 recognizes:
 
 ```text
 ( ) [ ] { } : , . ?
@@ -180,7 +178,7 @@ Aurora 0.2 recognizes:
 ```
 
 There is no semicolon. Multiple statements cannot share one physical line.
-Aurora 0.2 also has no exponentiation, unary `+`, bitwise operators, assignment
+Aura 0.2 also has no exponentiation, unary `+`, bitwise operators, assignment
 expressions or a lambda arrow; lambdas use `lambda parameters: expression`. The lexer
 chooses the longest operator spelling, so `//=` is one token rather than `//`
 followed by `=`.
@@ -206,7 +204,7 @@ available and verifies that the value fits. It may instead select an expected
 that type; otherwise the literal defaults to `int64`. The source spelling
 `int` is an alias for `int64`.
 
-`-7` is not one signed token. It is unary `-` applied to the positive integer literal `7`. Aurora has no hexadecimal, octal, binary, or underscore-separated integer syntax.
+`-7` is not one signed token. It is unary `-` applied to the positive integer literal `7`. Aura has no hexadecimal, octal, binary, or underscore-separated integer syntax.
 
 ## Floating-Point Literals
 
@@ -249,9 +247,9 @@ Ordinary string literals use matching single or double quote delimiters and are
 single-line:
 
 ```python
-double = "Aurora"
-single = 'Aurora'
-apostrophe = 'Aurora\'s strings'
+double = "Aura"
+single = 'Aura'
+apostrophe = 'Aura\'s strings'
 quotation = 'the compiler said "ready"'
 ```
 
@@ -270,7 +268,7 @@ Both delimiters produce a `String` and support the same escapes:
 
 Unknown escapes, invalid Unicode scalars, missing hexadecimal digits, and
 missing or mismatched closing quotes are lexical errors. Triple-quoted, raw,
-and byte-string literals are not part of Aurora 0.2. A one-character literal
+and byte-string literals are not part of Aura 0.2. A one-character literal
 such as `'x'` is a `String`, not a distinct character type.
 
 A string literal has type `String`. See [Types](/manual/types) for ownership and [Execution Model](/manual/execution-model#evaluation-order) for expression evaluation order.
@@ -280,23 +278,23 @@ A string literal has type `String`. See [Types](/manual/types) for ownership and
 An f-string begins with `f"` and is double-quoted and single-line:
 
 ```python
-name = "aurora"
+name = "aura"
 print(f"hello {name}")
 ```
 
-Text inside `{` and `}` is parsed as an ordinary Aurora expression.
+Text inside `{` and `}` is parsed as an ordinary Aura expression.
 Interpolations may contain indexing, calls, nested braces used by expressions,
 and either form of ordinary string literal, including braces inside those
 strings. Empty or syntactically invalid interpolations are rejected.
 
-Use two consecutive opening braces for a literal opening brace. Two consecutive closing braces decode to one literal closing brace; Aurora 0.2 also treats a lone closing brace outside an interpolation as literal text:
+Use two consecutive opening braces for a literal opening brace. Two consecutive closing braces decode to one literal closing brace; Aura 0.2 also treats a lone closing brace outside an interpolation as literal text:
 
 ```python
 print(f"{{name}} = {name}")
 ```
 
 F-strings support the same escapes as ordinary strings. F-strings themselves
-remain double-quoted: `f'...'` is not Aurora 0.2 syntax. They do not support
+remain double-quoted: `f'...'` is not Aura 0.2 syntax. They do not support
 conversion flags such as `!r` or a format-specifier mini-language.
 Interpolations are evaluated from left to right and the result is an owned
 `String`.

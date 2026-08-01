@@ -1,0 +1,8 @@
+error[AU3002]: parameter `value` is borrowed; declare it as `own String` to take ownership, or clone the value before consuming it
+ --> crates/aura-compiler/tests/fixtures/check-fail/borrowed_parameter_class_storage_requires_own.au:5:22
+  |
+5 |     return Box(value=value)
+  |                      ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/borrowed_parameter_class_storage_requires_own.au:4:10: parameter `value` is borrowed here
+  = help: declare the parameter as `own String` when the function should consume it, or call `.clone()` to consume an independent copy
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/borrowed_parameter_class_storage_requires_own.au:5:27-5:27 with `.clone()`

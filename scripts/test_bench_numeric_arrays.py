@@ -69,7 +69,7 @@ class NumericArrayBenchmarkTests(unittest.TestCase):
         self.assertEqual(
             bench.SINGLE_THREAD_ENVIRONMENT,
             {
-                "AURORA_WORKERS": "1",
+                "AURA_WORKERS": "1",
                 "OMP_NUM_THREADS": "1",
                 "VECLIB_MAXIMUM_THREADS": "1",
                 "OPENBLAS_NUM_THREADS": "1",
@@ -79,7 +79,7 @@ class NumericArrayBenchmarkTests(unittest.TestCase):
         )
 
     def test_run_order_reverses_every_pair(self) -> None:
-        forward = ["aurora_add", "numpy_add", "aurora_sum", "numpy_sum"]
+        forward = ["aura_add", "numpy_add", "aura_sum", "numpy_sum"]
         self.assertEqual(bench.pair_order(0), forward)
         self.assertEqual(bench.pair_order(1), list(reversed(forward)))
         self.assertEqual(bench.pair_order(10), forward)
@@ -120,7 +120,7 @@ class NumericArrayBenchmarkTests(unittest.TestCase):
         self.assertEqual(inventory[0]["cpu_percent_samples"], [99.0, 99.0])
         self.assertEqual(
             inventory[1]["reasons"],
-            ["Aurora repository cargo/rustc/aura process"],
+            ["Aura repository cargo/rustc/aura process"],
         )
         self.assertEqual(inventory[1]["cwd"], str(bench.ROOT))
 
@@ -201,31 +201,31 @@ class NumericArrayBenchmarkTests(unittest.TestCase):
         pairs = [
             {
                 "runs": {
-                    "aurora_add": {"elapsed_s": 2.0},
+                    "aura_add": {"elapsed_s": 2.0},
                     "numpy_add": {"elapsed_s": 1.0},
-                    "aurora_sum": {"elapsed_s": 3.0},
+                    "aura_sum": {"elapsed_s": 3.0},
                     "numpy_sum": {"elapsed_s": 1.5},
                 }
             },
             {
                 "runs": {
-                    "aurora_add": {"elapsed_s": 4.0},
+                    "aura_add": {"elapsed_s": 4.0},
                     "numpy_add": {"elapsed_s": 2.0},
-                    "aurora_sum": {"elapsed_s": 6.0},
+                    "aura_sum": {"elapsed_s": 6.0},
                     "numpy_sum": {"elapsed_s": 3.0},
                 }
             },
             {
                 "runs": {
-                    "aurora_add": {"elapsed_s": 3.0},
+                    "aura_add": {"elapsed_s": 3.0},
                     "numpy_add": {"elapsed_s": 1.5},
-                    "aurora_sum": {"elapsed_s": 4.5},
+                    "aura_sum": {"elapsed_s": 4.5},
                     "numpy_sum": {"elapsed_s": 2.25},
                 }
             },
         ]
         summary = bench.summarize_pairs(pairs)
-        self.assertEqual(summary["add"]["aurora"]["samples_s"], [2.0, 4.0, 3.0])
+        self.assertEqual(summary["add"]["aura"]["samples_s"], [2.0, 4.0, 3.0])
         self.assertEqual(summary["add"]["numpy"]["samples_s"], [1.0, 2.0, 1.5])
         self.assertEqual(summary["add"]["paired_ratios"], [2.0, 2.0, 2.0])
         self.assertEqual(summary["add"]["paired_median_ratio"], 2.0)
@@ -315,11 +315,11 @@ class NumericArrayBenchmarkTests(unittest.TestCase):
                         ):
                             with mock.patch.object(
                                 bench,
-                                "build_aurora_workloads",
+                                "build_aura_workloads",
                                 return_value=(
                                     {
-                                        "add": Path("/tmp/aurora-add"),
-                                        "sum": Path("/tmp/aurora-sum"),
+                                        "add": Path("/tmp/aura-add"),
+                                        "sum": Path("/tmp/aura-sum"),
                                     },
                                     [],
                                 ),

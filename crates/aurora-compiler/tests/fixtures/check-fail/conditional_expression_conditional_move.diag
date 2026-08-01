@@ -1,8 +1,0 @@
-error[AU3001]: use of moved value `text`
- --> crates/aurora-compiler/tests/fixtures/check-fail/conditional_expression_conditional_move.au:8:11
-  |
-8 |     print(text)
-  |           ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/conditional_expression_conditional_move.au:6:24: value moved here
-  = help: pass shared access when ownership is not needed, or call `.clone()` at the move site when an independent value is required
-  = fix: replace crates/aurora-compiler/tests/fixtures/check-fail/conditional_expression_conditional_move.au:6:28-6:28 with `.clone()`

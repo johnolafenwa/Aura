@@ -4,7 +4,7 @@ use std::io::{self, BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
-use aurora_compiler::{
+use aura_compiler::{
     analyze_path_source, check_path, check_path_with_source, complete_path_source,
     emit_host_native_object_with_metadata, lower_path_to_mir, lower_path_with_source_to_mir,
     parse_source, run_path, run_path_entry_with_stdout_sink_and_program_args,
@@ -398,12 +398,12 @@ fn handle_new_command(args: Vec<String>) {
     }
     let manifest =
         format!("[package]\nname = \"{manifest_name}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n");
-    if let Err(error) = fs::write(project.join("Aurora.toml"), manifest)
+    if let Err(error) = fs::write(project.join("Aura.toml"), manifest)
         .and_then(|()| fs::write(project.join(".gitignore"), "target/\n"))
         .and_then(|()| {
             fs::write(
                 source_dir.join("main.au"),
-                "def main() -> int32:\n    print(\"Hello from Aurora\")\n    return 0\n",
+                "def main() -> int32:\n    print(\"Hello from Aura\")\n    return 0\n",
             )
         })
         .and_then(|()| {
@@ -415,7 +415,7 @@ fn handle_new_command(args: Vec<String>) {
     {
         let _ = fs::remove_dir_all(&project);
         eprintln!(
-            "failed to create Aurora project `{}`: {error}",
+            "failed to create Aura project `{}`: {error}",
             project.display()
         );
         process::exit(1);
@@ -439,7 +439,7 @@ fn handle_fmt_command(args: Vec<String>) {
     if inputs.is_empty() {
         inputs.push(PathBuf::from("."));
     }
-    let paths = collect_aurora_source_paths(&inputs).unwrap_or_else(|error| {
+    let paths = collect_aura_source_paths(&inputs).unwrap_or_else(|error| {
         eprintln!("{error}");
         process::exit(1);
     });
@@ -449,7 +449,7 @@ fn handle_fmt_command(args: Vec<String>) {
             eprintln!("failed to read `{}`: {error}", path.display());
             process::exit(1);
         });
-        let formatted = format_aurora_source(&source);
+        let formatted = format_aura_source(&source);
         if let Err(error) = parse_source(&formatted) {
             eprintln!(
                 "{}",
@@ -475,7 +475,7 @@ fn handle_fmt_command(args: Vec<String>) {
     }
 }
 
-fn format_aurora_source(source: &str) -> String {
+fn format_aura_source(source: &str) -> String {
     let mut formatted = source
         .lines()
         .map(|line| line.trim_end_matches([' ', '\t', '\r']))
@@ -487,7 +487,7 @@ fn format_aurora_source(source: &str) -> String {
     formatted
 }
 
-fn collect_aurora_source_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+fn collect_aura_source_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     fn visit(path: &Path, paths: &mut Vec<PathBuf>) -> Result<(), String> {
         if path.is_file() {
             if path.extension().and_then(|extension| extension.to_str()) == Some("au") {
@@ -497,7 +497,7 @@ fn collect_aurora_source_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, Strin
         }
         if !path.is_dir() {
             return Err(format!(
-                "Aurora source path `{}` does not exist",
+                "Aura source path `{}` does not exist",
                 path.display()
             ));
         }
@@ -557,12 +557,12 @@ fn handle_test_command(args: Vec<String>) {
     } else {
         inputs
     };
-    let paths = collect_aurora_source_paths(&inputs).unwrap_or_else(|error| {
+    let paths = collect_aura_source_paths(&inputs).unwrap_or_else(|error| {
         eprintln!("{error}");
         process::exit(1);
     });
     if paths.is_empty() {
-        eprintln!("no Aurora test files found");
+        eprintln!("no Aura test files found");
         process::exit(1);
     }
 
@@ -740,7 +740,7 @@ fn handle_lsp_service() {
             Ok(line) => lsp_response_for_line(&line),
             Err(error) => serde_json::json!({
                 "id": JsonValue::Null,
-                "semantic_interface_version": aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+                "semantic_interface_version": aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
                 "error": format!("failed to read LSP compiler request: {error}")
             }),
         };
@@ -764,7 +764,7 @@ fn lsp_response_for_line(line: &str) -> JsonValue {
         Err(error) => {
             return serde_json::json!({
                 "id": JsonValue::Null,
-                "semantic_interface_version": aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+                "semantic_interface_version": aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
                 "error": format!("invalid LSP compiler request JSON: {error}")
             });
         }
@@ -774,12 +774,12 @@ fn lsp_response_for_line(line: &str) -> JsonValue {
     match result {
         Ok(result) => serde_json::json!({
             "id": id,
-            "semantic_interface_version": aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+            "semantic_interface_version": aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
             "result": result
         }),
         Err(error) => serde_json::json!({
             "id": id,
-            "semantic_interface_version": aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+            "semantic_interface_version": aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
             "error": error
         }),
     }
@@ -789,17 +789,13 @@ fn lsp_result_for_request(request: &JsonValue) -> Result<JsonValue, String> {
     let request_schema = request
         .get("semantic_interface_version")
         .and_then(JsonValue::as_u64);
-    if request_schema
-        != Some(u64::from(
-            aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
-        ))
-    {
+    if request_schema != Some(u64::from(aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION)) {
         let reported = request_schema
             .map(|version| version.to_string())
             .unwrap_or_else(|| "<missing>".to_string());
         return Err(format!(
-            "Aurora semantic schema mismatch: client reported `{reported}`, compiler requires `{}`",
-            aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
+            "Aura semantic schema mismatch: client reported `{reported}`, compiler requires `{}`",
+            aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
         ));
     }
     let method = request
@@ -864,7 +860,7 @@ fn handle_deps_command(args: Vec<String>) -> ! {
     match update_git_dependencies_in_working_dir(&current_dir, target_package) {
         Ok(result) => {
             if result.updated_packages.is_empty() {
-                write_stdout("Aurora.lock is already up to date\n");
+                write_stdout("Aura.lock is already up to date\n");
             } else {
                 for package in result.updated_packages {
                     write_stdout(&format!("updated {}\n", package));
@@ -944,10 +940,10 @@ enum RunBackend {
 enum NativeRunOutcome {
     /// The native binary ran to completion with this exit code.
     Ran(i32),
-    /// The Aurora program could not be lowered. Keep the compiler diagnostic
+    /// The Aura program could not be lowered. Keep the compiler diagnostic
     /// intact rather than degrading it into a host-backend message.
     Diagnostic(Diagnostic),
-    /// The native runtime reported an Aurora trap over the private structured
+    /// The native runtime reported an Aura trap over the private structured
     /// channel used by JSON-mode `aura run`.
     StructuredDiagnostic(StructuredDiagnostic),
     /// The requested backend could not produce a binary.
@@ -1161,7 +1157,7 @@ fn run_through_native_backend(
         }
 
         if let Some(cached) = cache_key.as_deref().and_then(cached_native_binary) {
-            // Launching is outside the establishment lock. Long-running Aurora
+            // Launching is outside the establishment lock. Long-running Aura
             // programs must not prevent unrelated processes from consulting or
             // populating the cache after these bytes have been privately staged.
             drop(runtime_lock);
@@ -1464,8 +1460,8 @@ fn spawn_unix_native_binary_without_shell_fallback(
     // Build the exact environment used by `execve` in the parent. In
     // particular, strip any caller-supplied value for the private channel so a
     // normal/human launch cannot be tricked into writing to an unrelated fd.
-    let internal_data_key = aurora_compiler::INTERNAL_DIAGNOSTIC_FD_ENV.as_bytes();
-    let internal_signal_key = aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV.as_bytes();
+    let internal_data_key = aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV.as_bytes();
+    let internal_signal_key = aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV.as_bytes();
     let mut environment = std::env::vars_os()
         .filter_map(|(key, value)| {
             let key = key.as_os_str().as_bytes();
@@ -1483,7 +1479,7 @@ fn spawn_unix_native_binary_without_shell_fallback(
         environment.push(
             CString::new(format!(
                 "{}={fd}",
-                aurora_compiler::INTERNAL_DIAGNOSTIC_FD_ENV
+                aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV
             ))
             .expect("the internal diagnostic fd environment entry cannot contain NUL"),
         );
@@ -1492,7 +1488,7 @@ fn spawn_unix_native_binary_without_shell_fallback(
         environment.push(
             CString::new(format!(
                 "{}={fd}",
-                aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV
+                aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV
             ))
             .expect("the internal diagnostic signal fd environment entry cannot contain NUL"),
         );
@@ -1573,7 +1569,7 @@ fn wait_for_native_binary(mut spawned: SpawnedNativeBinary) -> io::Result<Native
             let mut bytes = Vec::new();
             reader
                 .take(
-                    u64::try_from(aurora_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES)
+                    u64::try_from(aura_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES)
                         .unwrap_or(u64::MAX)
                         .saturating_add(1),
                 )
@@ -1614,7 +1610,7 @@ fn wait_for_native_binary(mut spawned: SpawnedNativeBinary) -> io::Result<Native
         if signal_bytes.len() > 1
             || signal_bytes
                 .first()
-                .is_some_and(|marker| *marker != aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_MARKER)
+                .is_some_and(|marker| *marker != aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_MARKER)
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -1622,12 +1618,12 @@ fn wait_for_native_binary(mut spawned: SpawnedNativeBinary) -> io::Result<Native
             ));
         }
         let trap_intended = !signal_bytes.is_empty();
-        if diagnostic_bytes.len() > aurora_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES {
+        if diagnostic_bytes.len() > aura_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
                     "native diagnostic-channel record exceeded the {}-byte limit",
-                    aurora_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES
+                    aura_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES
                 ),
             ));
         }
@@ -1723,10 +1719,10 @@ fn select_run_outcome(
     }
 }
 
-/// The directory holding cached native binaries. `AURORA_CACHE_DIR` overrides
+/// The directory holding cached native binaries. `AURA_CACHE_DIR` overrides
 /// the default so a sandbox or a test can keep its own cache.
 fn native_cache_root() -> Option<PathBuf> {
-    let root = if let Some(explicit) = std::env::var_os("AURORA_CACHE_DIR") {
+    let root = if let Some(explicit) = std::env::var_os("AURA_CACHE_DIR") {
         let explicit = PathBuf::from(explicit);
         (!explicit.as_os_str().is_empty()).then_some(explicit)?
     } else {
@@ -1734,13 +1730,13 @@ fn native_cache_root() -> Option<PathBuf> {
         if home.as_os_str().is_empty() {
             return None;
         }
-        home.join(".cache").join("aurora").join("native")
+        home.join(".cache").join("aura").join("native")
     };
     create_private_cache_directory_all(&root).ok()?;
     Some(root)
 }
 
-const NATIVE_RUNTIME_BUILD_LOCK: &str = ".aurora-native-runtime-build.lock";
+const NATIVE_RUNTIME_BUILD_LOCK: &str = ".aura-native-runtime-build.lock";
 const NATIVE_CACHE_LOCKS: &str = "locks";
 
 struct NativeBuildLock {
@@ -2034,7 +2030,7 @@ fn native_cache_key(mir: &MirModule, runtime_identity: &NativeRuntimeIdentity) -
     native_cache_key_for_semantic_schema(
         mir,
         runtime_identity,
-        aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+        aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
     )
 }
 
@@ -2060,7 +2056,7 @@ fn native_cache_key_for_semantic_schema(
         material.push(0);
     }
     material.extend_from_slice(&lowered);
-    Some(aurora_compiler::sha256_hex(&material))
+    Some(aura_compiler::sha256_hex(&material))
 }
 
 fn native_runtime_identity_material(identity: &NativeRuntimeIdentity) -> Option<Vec<u8>> {
@@ -2070,7 +2066,7 @@ fn native_runtime_identity_material(identity: &NativeRuntimeIdentity) -> Option<
 // Bumped to `v4` by the ADR-0022 capability migration. The compiler-owned
 // semantic schema version is an additional, independent key component, so a
 // semantic migration need not pretend that the cache container format changed.
-const NATIVE_CACHE_FORMAT: &str = "aurora-native-cache-v4";
+const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v5";
 
 /// The exact runtime inputs that a warm native-cache lookup may reuse.
 ///
@@ -2130,7 +2126,7 @@ fn native_runtime_identity_for_cache() -> Option<NativeRuntimeIdentity> {
     let native_link_args = installed_link_args?;
     let contents = fs::read(&path).ok()?;
     let identity = NativeRuntimeIdentity {
-        archive_sha256: aurora_compiler::sha256_hex(&contents),
+        archive_sha256: aura_compiler::sha256_hex(&contents),
         native_link_args,
     };
     write_runtime_identity_memo(&memo, &stamp, &identity);
@@ -2186,7 +2182,7 @@ fn read_runtime_identity_memo_by_content(
         .and_then(|metadata| runtime_archive_memo_stamp(archive, &metadata))?;
     if before != stamp
         || after != stamp
-        || aurora_compiler::sha256_hex(&contents) != identity.archive_sha256
+        || aura_compiler::sha256_hex(&contents) != identity.archive_sha256
     {
         return None;
     }
@@ -2248,13 +2244,13 @@ fn establish_native_runtime_identity_memo() -> std::result::Result<NativeRuntime
         .and_then(|metadata| runtime_archive_memo_stamp(&native_runtime.staticlib, &metadata))
         .ok_or_else(|| {
             format!(
-                "failed to fingerprint Aurora runtime library `{}`",
+                "failed to fingerprint Aura runtime library `{}`",
                 native_runtime.staticlib.display()
             )
         })?;
     let contents = fs::read(&native_runtime.staticlib).map_err(|error| {
         format!(
-            "failed to read Aurora runtime library `{}`: {error}",
+            "failed to read Aura runtime library `{}`: {error}",
             native_runtime.staticlib.display()
         )
     })?;
@@ -2263,18 +2259,18 @@ fn establish_native_runtime_identity_memo() -> std::result::Result<NativeRuntime
         .and_then(|metadata| runtime_archive_memo_stamp(&native_runtime.staticlib, &metadata))
         .ok_or_else(|| {
             format!(
-                "failed to recheck Aurora runtime library `{}`",
+                "failed to recheck Aura runtime library `{}`",
                 native_runtime.staticlib.display()
             )
         })?;
     if before != after {
         return Err(format!(
-            "Aurora runtime library `{}` changed while its identity was being established",
+            "Aura runtime library `{}` changed while its identity was being established",
             native_runtime.staticlib.display()
         ));
     }
     let identity = NativeRuntimeIdentity {
-        archive_sha256: aurora_compiler::sha256_hex(&contents),
+        archive_sha256: aura_compiler::sha256_hex(&contents),
         native_link_args: native_runtime.native_link_args,
     };
     write_runtime_identity_memos(&after, &identity);
@@ -2375,7 +2371,7 @@ fn inspect_cached_native_binary(
         .zip(entry_id.as_deref())
         .zip(contents.as_deref())
         .is_some_and(|((recorded_digest, _), contents)| {
-            recorded_digest == aurora_compiler::sha256_hex(contents)
+            recorded_digest == aura_compiler::sha256_hex(contents)
                 && native_binary_has_expected_shape(contents)
         });
     if verified {
@@ -2461,7 +2457,7 @@ fn launch_verified_native_binary(
     let launch_root = std::env::temp_dir();
     cleanup_stale_verified_native_directories(&launch_root);
     let directory = launch_root.join(format!(
-        "aurora-verified-native-{}-{}",
+        "aura-verified-native-{}-{}",
         std::process::id(),
         system_time_nanos()
     ));
@@ -2652,7 +2648,7 @@ fn cleanup_stale_verified_native_directories(root: &Path) {
         let Some(name) = name.to_str() else {
             continue;
         };
-        if !name.starts_with("aurora-verified-native-") {
+        if !name.starts_with("aura-verified-native-") {
             continue;
         }
         let path = entry.path();
@@ -2757,7 +2753,7 @@ fn verified_native_launch_owner_is_live(name: &str) -> bool {
     #[cfg(unix)]
     {
         let Some(pid) = name
-            .strip_prefix("aurora-verified-native-")
+            .strip_prefix("aura-verified-native-")
             .and_then(|suffix| suffix.split_once('-').map(|(pid, _)| pid))
             .and_then(|pid| pid.parse::<libc::pid_t>().ok())
         else {
@@ -2816,13 +2812,13 @@ fn store_native_binary(key: &str, built: &Path) {
         remove_native_cache_path(&staged);
         return;
     };
-    let digest = aurora_compiler::sha256_hex(&contents);
+    let digest = aura_compiler::sha256_hex(&contents);
     if write_private_cache_file(&staged_digest, format!("{digest}\n").as_bytes()).is_err() {
         remove_native_cache_path(&staged);
         return;
     }
     let entry_nonce =
-        aurora_compiler::sha256_hex(format!("{key}:{}:{nonce}", std::process::id()).as_bytes());
+        aura_compiler::sha256_hex(format!("{key}:{}:{nonce}", std::process::id()).as_bytes());
     let entry_id = format!("{key}:{entry_nonce}");
     if write_private_cache_file(&staged_entry_id, format!("{entry_id}\n").as_bytes()).is_err() {
         remove_native_cache_path(&staged);
@@ -2920,9 +2916,9 @@ fn temporary_run_binary_path(source_path: &str) -> PathBuf {
     let stem = Path::new(source_path)
         .file_stem()
         .and_then(|name| name.to_str())
-        .unwrap_or("aurora-run");
+        .unwrap_or("aura-run");
     let unique = format!(
-        "aurora-run-{}-{}-{}",
+        "aura-run-{}-{}-{}",
         stem,
         std::process::id(),
         system_time_nanos()
@@ -3155,7 +3151,7 @@ fn build_direct_native_binary_with_identity(
         .and_then(|metadata| runtime_archive_memo_stamp(&native_runtime.staticlib, &metadata));
     let staticlib_bytes = fs::read(&native_runtime.staticlib).map_err(|error| {
         format!(
-            "failed to read Aurora runtime library `{}`: {}",
+            "failed to read Aura runtime library `{}`: {}",
             native_runtime.staticlib.display(),
             error
         )
@@ -3170,12 +3166,12 @@ fn build_direct_native_binary_with_identity(
     // storing under the earlier identity would make the immediate warm run
     // miss and could associate the binary with the wrong runtime.
     let runtime_identity = NativeRuntimeIdentity {
-        archive_sha256: aurora_compiler::sha256_hex(&staticlib_bytes),
+        archive_sha256: aura_compiler::sha256_hex(&staticlib_bytes),
         native_link_args: native_runtime.native_link_args.clone(),
     };
     fs::write(&temp_staticlib, &staticlib_bytes).map_err(|error| {
         format!(
-            "failed to stage Aurora runtime library `{}` as `{}`: {}",
+            "failed to stage Aura runtime library `{}` as `{}`: {}",
             native_runtime.staticlib.display(),
             temp_staticlib.display(),
             error
@@ -3255,7 +3251,7 @@ fn build_mir_runtime_binary(
             .and_then(|refreshed| {
                 fs::read(&refreshed).map_err(|error| {
                     format!(
-                        "failed to read Aurora runtime library `{}`: {}",
+                        "failed to read Aura runtime library `{}`: {}",
                         refreshed.display(),
                         error
                     )
@@ -3265,7 +3261,7 @@ fn build_mir_runtime_binary(
     write_unique_temp_file(
         &temp_staticlib,
         &staticlib_bytes,
-        "staged Aurora runtime library",
+        "staged Aura runtime library",
     )?;
 
     let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
@@ -3303,9 +3299,9 @@ fn temporary_direct_object_path(output_path: &Path) -> PathBuf {
     let file_name = output_path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("aurora-output");
+        .unwrap_or("aura-output");
     let unique = format!(
-        "aurora-direct-object-{}-{}-{}.o",
+        "aura-direct-object-{}-{}-{}.o",
         file_name,
         std::process::id(),
         system_time_nanos()
@@ -3317,9 +3313,9 @@ fn temporary_mir_runtime_source_path(output_path: &Path) -> PathBuf {
     let file_name = output_path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("aurora-output");
+        .unwrap_or("aura-output");
     let unique = format!(
-        "aurora-mir-runtime-{}-{}-{}.c",
+        "aura-mir-runtime-{}-{}-{}.c",
         file_name,
         std::process::id(),
         system_time_nanos()
@@ -3331,9 +3327,9 @@ fn temporary_direct_staticlib_path(output_path: &Path) -> PathBuf {
     let file_name = output_path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("aurora-output");
+        .unwrap_or("aura-output");
     let unique = format!(
-        "aurora-direct-runtime-{}-{}-{}.a",
+        "aura-direct-runtime-{}-{}-{}.a",
         file_name,
         std::process::id(),
         system_time_nanos()
@@ -3410,10 +3406,10 @@ fn emit_mir_runtime_launcher_source(mir_json: &[u8], source_path: &[u8], source:
     }
 
     format!(
-        "#include <stddef.h>\n#include <stdint.h>\n\nextern int aurora_native_run(const uint8_t*, size_t, const uint8_t*, size_t, const uint8_t*, size_t);\n\n{}{}{}int main(void) {{\n    return aurora_native_run(AURORA_MIR, {mir_len}, AURORA_SOURCE_PATH, {path_len}, AURORA_SOURCE, {source_len});\n}}\n",
-        render_bytes("AURORA_MIR", mir_json),
-        render_bytes("AURORA_SOURCE_PATH", source_path),
-        render_bytes("AURORA_SOURCE", source),
+        "#include <stddef.h>\n#include <stdint.h>\n\nextern int aura_native_run(const uint8_t*, size_t, const uint8_t*, size_t, const uint8_t*, size_t);\n\n{}{}{}int main(void) {{\n    return aura_native_run(AURA_MIR, {mir_len}, AURA_SOURCE_PATH, {path_len}, AURA_SOURCE, {source_len});\n}}\n",
+        render_bytes("AURA_MIR", mir_json),
+        render_bytes("AURA_SOURCE_PATH", source_path),
+        render_bytes("AURA_SOURCE", source),
         mir_len = mir_json.len(),
         path_len = source_path.len(),
         source_len = source.len(),
@@ -3457,7 +3453,7 @@ fn ensure_native_runtime_artifacts() -> std::result::Result<NativeRuntimeArtifac
         })
         .ok_or_else(|| {
             format!(
-                "failed to locate compiled Aurora runtime library from Cargo artifact output or `{}`",
+                "failed to locate compiled Aura runtime library from Cargo artifact output or `{}`",
                 repo_root()
                     .join("target")
                     .join(current_profile())
@@ -3467,7 +3463,7 @@ fn ensure_native_runtime_artifacts() -> std::result::Result<NativeRuntimeArtifac
         })?;
     if !staticlib.exists() {
         return Err(format!(
-            "failed to locate compiled Aurora runtime library `{}` after build",
+            "failed to locate compiled Aura runtime library `{}` after build",
             staticlib.display()
         ));
     }
@@ -3486,7 +3482,7 @@ fn resolve_installed_runtime_artifacts_from_executable(
     let Some(prefix) = executable.parent().and_then(Path::parent) else {
         return Ok(None);
     };
-    let runtime_dir = prefix.join("lib").join("aurora");
+    let runtime_dir = prefix.join("lib").join("aura");
     let staticlib = runtime_dir.join(static_library_file_name());
     let manifest = runtime_dir.join("native-link-args.json");
     let staticlib_exists = staticlib.is_file();
@@ -3497,7 +3493,7 @@ fn resolve_installed_runtime_artifacts_from_executable(
     }
     if !staticlib_exists || !manifest_exists {
         return Err(format!(
-            "incomplete Aurora runtime installation in `{}`: expected both `{}` and `{}`",
+            "incomplete Aura runtime installation in `{}`: expected both `{}` and `{}`",
             runtime_dir.display(),
             staticlib.display(),
             manifest.display()
@@ -3506,7 +3502,7 @@ fn resolve_installed_runtime_artifacts_from_executable(
 
     let manifest_bytes = fs::read(&manifest).map_err(|error| {
         format!(
-            "failed to read Aurora runtime link manifest `{}`: {}",
+            "failed to read Aura runtime link manifest `{}`: {}",
             manifest.display(),
             error
         )
@@ -3514,7 +3510,7 @@ fn resolve_installed_runtime_artifacts_from_executable(
     let native_link_args =
         serde_json::from_slice::<Vec<String>>(&manifest_bytes).map_err(|error| {
             format!(
-                "invalid Aurora runtime link manifest `{}`: {}",
+                "invalid Aura runtime link manifest `{}`: {}",
                 manifest.display(),
                 error
             )
@@ -3538,7 +3534,7 @@ fn build_native_runtime_staticlib() -> std::result::Result<Option<PathBuf>, Stri
         .arg("build")
         .arg("-q")
         .arg("-p")
-        .arg("aurora-compiler")
+        .arg("aura-compiler")
         .arg("--lib")
         .arg("--message-format=json-render-diagnostics");
     if current_profile() == "release" {
@@ -3547,11 +3543,11 @@ fn build_native_runtime_staticlib() -> std::result::Result<Option<PathBuf>, Stri
 
     let output = command
         .output()
-        .map_err(|error| format!("failed to build Aurora runtime artifacts: {}", error))?;
+        .map_err(|error| format!("failed to build Aura runtime artifacts: {}", error))?;
 
     if !output.status.success() {
         return Err(format!(
-            "failed to build Aurora runtime artifacts:\n{}",
+            "failed to build Aura runtime artifacts:\n{}",
             String::from_utf8_lossy(&output.stderr)
         ));
     }
@@ -3571,7 +3567,7 @@ fn query_native_runtime_link_args() -> std::result::Result<Vec<String>, String> 
         .arg("rustc")
         .arg("-q")
         .arg("-p")
-        .arg("aurora-compiler")
+        .arg("aura-compiler")
         .arg("--lib");
     if current_profile() == "release" {
         command.arg("--release");
@@ -3580,10 +3576,10 @@ fn query_native_runtime_link_args() -> std::result::Result<Vec<String>, String> 
 
     let output = command
         .output()
-        .map_err(|error| format!("failed to query Aurora runtime link args: {}", error))?;
+        .map_err(|error| format!("failed to query Aura runtime link args: {}", error))?;
     if !output.status.success() {
         return Err(format!(
-            "failed to query Aurora runtime link args:\n{}",
+            "failed to query Aura runtime link args:\n{}",
             String::from_utf8_lossy(&output.stderr)
         ));
     }
@@ -3633,7 +3629,7 @@ fn parse_static_library_artifact_path(stdout: &[u8]) -> Option<PathBuf> {
         let Some(target) = message.get("target") else {
             continue;
         };
-        if target.get("name").and_then(|value| value.as_str()) != Some("aurora_compiler") {
+        if target.get("name").and_then(|value| value.as_str()) != Some("aura_compiler") {
             continue;
         }
         let Some(filenames) = message.get("filenames").and_then(|value| value.as_array()) else {
@@ -3647,7 +3643,7 @@ fn parse_static_library_artifact_path(stdout: &[u8]) -> Option<PathBuf> {
             let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
                 continue;
             };
-            if name.starts_with("libaurora_compiler") && name.ends_with(".a") {
+            if name.starts_with("libaura_compiler") && name.ends_with(".a") {
                 candidate = Some(path);
             }
         }
@@ -3664,7 +3660,7 @@ fn current_profile() -> &'static str {
 }
 
 fn static_library_file_name() -> &'static str {
-    "libaurora_compiler.a"
+    "libaura_compiler.a"
 }
 
 #[cfg(test)]
@@ -3699,7 +3695,7 @@ fn resolve_static_library_path_in_target_dir(
     let mut candidates = fs::read_dir(&deps_dir)
         .map_err(|error| {
             format!(
-                "failed to inspect Aurora runtime library directory `{}`: {}",
+                "failed to inspect Aura runtime library directory `{}`: {}",
                 deps_dir.display(),
                 error
             )
@@ -3708,7 +3704,7 @@ fn resolve_static_library_path_in_target_dir(
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .map(|name| name.starts_with("libaurora_compiler-") && name.ends_with(".a"))
+                .map(|name| name.starts_with("libaura_compiler-") && name.ends_with(".a"))
                 .unwrap_or(false)
         })
         .collect::<Vec<_>>();
@@ -3720,7 +3716,7 @@ fn resolve_static_library_path_in_target_dir(
     if !candidates.is_empty() {
         candidates.sort();
         return Err(format!(
-            "found multiple hashed Aurora runtime archives in `{}` but no canonical `{}`: {}; rebuild the workspace so the current static runtime path is unambiguous",
+            "found multiple hashed Aura runtime archives in `{}` but no canonical `{}`: {}; rebuild the workspace so the current static runtime path is unambiguous",
             deps_dir.display(),
             primary.display(),
             candidates
@@ -3732,7 +3728,7 @@ fn resolve_static_library_path_in_target_dir(
     }
 
     Err(format!(
-        "failed to locate compiled Aurora runtime library `{}` or a matching archive in `{}`",
+        "failed to locate compiled Aura runtime library `{}` or a matching archive in `{}`",
         primary.display(),
         deps_dir.display()
     ))
@@ -3796,7 +3792,7 @@ fn print_version_and_exit() -> ! {
     write_stdout(&format!(
         "aura {}-preview ({})\n",
         env!("CARGO_PKG_VERSION"),
-        env!("AURORA_BUILD_COMMIT")
+        env!("AURA_BUILD_COMMIT")
     ));
     process::exit(0);
 }
@@ -3832,7 +3828,7 @@ mod tests {
 
     fn unique_temp_dir(name: &str) -> PathBuf {
         let unique = format!(
-            "aurora-aura-tests-{}-{}-{}",
+            "aura-aura-tests-{}-{}-{}",
             name,
             std::process::id(),
             SystemTime::now()
@@ -3851,13 +3847,10 @@ mod tests {
         let target = root.join("target").join("debug");
         let deps = target.join("deps");
         fs::create_dir_all(&deps).expect("deps dir should exist");
-        let primary = target.join("libaurora_compiler.a");
+        let primary = target.join("libaura_compiler.a");
         fs::write(&primary, b"primary").expect("primary staticlib should write");
-        fs::write(
-            deps.join("libaurora_compiler-old.a"),
-            b"stale hashed archive",
-        )
-        .expect("hashed archive should write");
+        fs::write(deps.join("libaura_compiler-old.a"), b"stale hashed archive")
+            .expect("hashed archive should write");
 
         let resolved = resolve_static_library_path(root.clone(), "debug")
             .expect("should resolve runtime library");
@@ -3870,7 +3863,7 @@ mod tests {
     #[test]
     fn runtime_archive_memo_stamp_detects_same_size_same_mtime_replacement() {
         let root = unique_temp_dir("runtime-memo-stamp");
-        let archive = root.join("libaurora_compiler.a");
+        let archive = root.join("libaura_compiler.a");
         let replacement = root.join("replacement.a");
         fs::write(&archive, b"archive-a").expect("first archive should write");
         let first_metadata = fs::metadata(&archive).expect("first metadata should exist");
@@ -3966,11 +3959,11 @@ mod tests {
 
     #[test]
     fn native_cache_key_independently_tracks_the_semantic_interface_schema() {
-        let mir = aurora_compiler::lower_source_to_mir("def main() -> int32:\n    return 0\n")
+        let mir = aura_compiler::lower_source_to_mir("def main() -> int32:\n    return 0\n")
             .expect("cache-key fixture should lower");
         let runtime_identity = NativeRuntimeIdentity {
             archive_sha256: "a".repeat(64),
-            native_link_args: vec!["-laurora_compiler".to_string()],
+            native_link_args: vec!["-laura_compiler".to_string()],
         };
 
         let old_key = native_cache_key_for_semantic_schema(&mir, &runtime_identity, 1)
@@ -3978,7 +3971,7 @@ mod tests {
         let current_key = native_cache_key_for_semantic_schema(
             &mir,
             &runtime_identity,
-            aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+            aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
         )
         .expect("current-schema key should serialize");
         let production_key =
@@ -4010,7 +4003,7 @@ mod tests {
         assert_eq!(response["id"], 7);
         assert_eq!(
             response["semantic_interface_version"],
-            aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
+            aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
         );
         assert!(
             response["error"]
@@ -4025,7 +4018,7 @@ mod tests {
         let malformed = lsp_response_for_line("not JSON");
         assert_eq!(
             malformed["semantic_interface_version"],
-            aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
+            aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
         );
         assert!(malformed["error"].is_string());
 
@@ -4040,7 +4033,7 @@ mod tests {
         );
         assert_eq!(
             missing_schema["semantic_interface_version"],
-            aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
+            aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
         );
         assert!(missing_schema["error"]
             .as_str()
@@ -4068,7 +4061,7 @@ mod tests {
     #[test]
     fn stale_verified_launch_cleanup_never_removes_a_live_owner() {
         let root = unique_temp_dir("live-verified-launch");
-        let launch = root.join(format!("aurora-verified-native-{}-1", std::process::id()));
+        let launch = root.join(format!("aura-verified-native-{}-1", std::process::id()));
         fs::create_dir(&launch).expect("launch directory should exist");
         fs::File::open(&launch)
             .expect("launch directory should open")
@@ -4088,7 +4081,7 @@ mod tests {
     #[test]
     fn verified_launch_lease_survives_parent_handle_until_native_child_exits() {
         let root = unique_temp_dir("inherited-verified-launch-lease");
-        let launch = root.join(format!("aurora-verified-native-{}-1", libc::pid_t::MAX));
+        let launch = root.join(format!("aura-verified-native-{}-1", libc::pid_t::MAX));
         create_private_directory(&launch).expect("launch directory should be private");
         let lease =
             create_verified_native_launch_lease(&launch).expect("launch lease should exist");
@@ -4137,15 +4130,15 @@ mod tests {
         let script = format!(
             "eval \"printf '\\\\001' >&${}\"; \
              eval \"printf '%s' \\\"\\$1\\\" >&${}\"; exit 1",
-            aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
-            aurora_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
+            aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
+            aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
         );
         let trapped = spawn_native_binary_with_diagnostic_mode(
             PathBuf::from("/bin/sh").as_path(),
             &[
                 "-c".to_string(),
                 script,
-                "aurora-channel-test".to_string(),
+                "aura-channel-test".to_string(),
                 record.to_string(),
             ],
             true,
@@ -4180,15 +4173,15 @@ mod tests {
             let script = format!(
                 "eval \"printf '\\\\001' >&${}\"; \
                  eval \"printf '%s' \\\"\\$1\\\" >&${}\"; exit 1",
-                aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
-                aurora_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
+                aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
+                aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
             );
             let spawned = spawn_native_binary_with_diagnostic_mode(
                 PathBuf::from("/bin/sh").as_path(),
                 &[
                     "-c".to_string(),
                     script,
-                    "aurora-channel-test".to_string(),
+                    "aura-channel-test".to_string(),
                     record,
                 ],
                 true,
@@ -4203,9 +4196,9 @@ mod tests {
         let script = format!(
             "eval \"printf '\\\\001' >&${}\"; \
              eval \"dd if=/dev/zero bs={} count=1 2>/dev/null >&${}\"; exit 1",
-            aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
-            aurora_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES + 1,
-            aurora_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
+            aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
+            aura_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES + 1,
+            aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
         );
         let spawned = spawn_native_binary_with_diagnostic_mode(
             PathBuf::from("/bin/sh").as_path(),
@@ -4227,14 +4220,14 @@ mod tests {
                 "missing data after trap intent",
                 format!(
                     "eval \"printf '\\\\001' >&${}\"; exit 1",
-                    aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV
+                    aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV
                 ),
             ),
             (
                 "data without trap intent",
                 format!(
                     "eval \"printf '%s' \\\"\\$1\\\" >&${}\"; exit 1",
-                    aurora_compiler::INTERNAL_DIAGNOSTIC_FD_ENV
+                    aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV
                 ),
             ),
         ] {
@@ -4243,7 +4236,7 @@ mod tests {
                 &[
                     "-c".to_string(),
                     script,
-                    "aurora-channel-test".to_string(),
+                    "aura-channel-test".to_string(),
                     r#"{"code":"AU4001","severity":"error","message":"trap","primary_span":null,"secondary_spans":[],"notes":[],"help":[],"edits":[],"call_frames":[],"task_ancestry":[]}"#.to_string(),
                 ],
                 true,
@@ -4274,15 +4267,15 @@ mod tests {
             let script = format!(
                 "eval \"printf '{marker}' >&${}\"; \
                  eval \"printf '%s' \\\"\\$1\\\" >&${}\"; exit {exit_status}",
-                aurora_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
-                aurora_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
+                aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
+                aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
             );
             let spawned = spawn_native_binary_with_diagnostic_mode(
                 PathBuf::from("/bin/sh").as_path(),
                 &[
                     "-c".to_string(),
                     script,
-                    "aurora-channel-test".to_string(),
+                    "aura-channel-test".to_string(),
                     record.to_string(),
                 ],
                 true,
@@ -4305,7 +4298,7 @@ mod tests {
         )
         .expect("signal-terminating native child should start");
         let error =
-            wait_for_native_binary(spawned).expect_err("a signal exit is not an Aurora status");
+            wait_for_native_binary(spawned).expect_err("a signal exit is not an Aura status");
         assert!(error.to_string().contains("host signal"));
         assert!(matches!(
             native_execution_failure(
@@ -4464,12 +4457,12 @@ mod tests {
     fn installed_runtime_artifacts_resolve_relative_to_packaged_executable() {
         let root = unique_temp_dir("installed-runtime");
         let executable = root.join("bin").join("aura");
-        let runtime_dir = root.join("lib").join("aurora");
+        let runtime_dir = root.join("lib").join("aura");
         fs::create_dir_all(executable.parent().expect("binary should have a parent"))
             .expect("bin dir should exist");
         fs::create_dir_all(&runtime_dir).expect("runtime dir should exist");
         fs::write(&executable, b"test executable").expect("test executable should write");
-        let staticlib = runtime_dir.join("libaurora_compiler.a");
+        let staticlib = runtime_dir.join("libaura_compiler.a");
         fs::write(&staticlib, b"test runtime").expect("test runtime should write");
         fs::write(
             runtime_dir.join("native-link-args.json"),
@@ -4548,7 +4541,7 @@ mod tests {
         ));
 
         // Once a child has launched, wait and channel failures are execution
-        // failures. `auto` must never rerun the Aurora program through MIR,
+        // failures. `auto` must never rerun the Aura program through MIR,
         // whether the child came from a fresh build or a verified cache hit.
         assert!(matches!(
             native_execution_failure(
@@ -4607,7 +4600,7 @@ mod tests {
         let root = unique_temp_dir("single-hashed");
         let deps = root.join("target").join("debug").join("deps");
         fs::create_dir_all(&deps).expect("deps dir should exist");
-        let archive = deps.join("libaurora_compiler-only.a");
+        let archive = deps.join("libaura_compiler-only.a");
         fs::write(&archive, b"archive").expect("hashed archive should write");
 
         let resolved = resolve_static_library_path(root.clone(), "debug")
@@ -4622,16 +4615,16 @@ mod tests {
         let root = unique_temp_dir("ambiguous-hashed");
         let deps = root.join("target").join("debug").join("deps");
         fs::create_dir_all(&deps).expect("deps dir should exist");
-        let first = deps.join("libaurora_compiler-first.a");
+        let first = deps.join("libaura_compiler-first.a");
         fs::write(&first, b"first").expect("first archive should write");
         thread::sleep(Duration::from_millis(10));
-        let second = deps.join("libaurora_compiler-second.a");
+        let second = deps.join("libaura_compiler-second.a");
         fs::write(&second, b"second").expect("second archive should write");
 
         let error = resolve_static_library_path(root.clone(), "debug")
             .expect_err("ambiguous hashed archives should be rejected");
         assert!(
-            error.contains("multiple hashed Aurora runtime archives"),
+            error.contains("multiple hashed Aura runtime archives"),
             "unexpected error message: {}",
             error
         );
@@ -4641,11 +4634,11 @@ mod tests {
 
     #[test]
     fn parse_static_library_artifact_path_prefers_cargo_reported_archive() {
-        let stdout = br#"{"reason":"compiler-artifact","target":{"name":"aurora_compiler"},"filenames":["/tmp/libaurora_compiler-abc123.rlib","/tmp/libaurora_compiler-abc123.a"]}
+        let stdout = br#"{"reason":"compiler-artifact","target":{"name":"aura_compiler"},"filenames":["/tmp/libaura_compiler-abc123.rlib","/tmp/libaura_compiler-abc123.a"]}
 {"reason":"compiler-artifact","target":{"name":"other"},"filenames":["/tmp/libother.a"]}"#;
         let resolved = parse_static_library_artifact_path(stdout)
             .expect("cargo artifact output should expose a static archive");
-        assert_eq!(resolved, PathBuf::from("/tmp/libaurora_compiler-abc123.a"));
+        assert_eq!(resolved, PathBuf::from("/tmp/libaura_compiler-abc123.a"));
     }
 
     #[test]

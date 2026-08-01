@@ -1,0 +1,6 @@
+error[AU4003]: vector index `0` is out of bounds for length `0`
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_map_callback_trap.au:3:19
+  |
+3 |     return values[value]
+  |                   ^
+  = note: Aura call chain (innermost first): explode at 1:1 -> main at 5:1

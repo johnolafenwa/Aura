@@ -2,7 +2,7 @@
 # Tests: recursive functions, class with mutable state, conditional logic
 # Note: No array/map built-in, so we use a cache of fixed size via class fields
 
-# Since Aurora doesn't have arrays or hashmaps, we'll memoize manually
+# Since Aura doesn't have arrays or hashmaps, we'll memoize manually
 # by passing previously computed values through the call chain
 
 def fib(n: int32) -> int32:

@@ -1,6 +1,6 @@
 # Strings And Numbers
 
-Aurora supports enough numeric and string behavior for real programs. This chapter covers arithmetic, string operations, parsing, formatting, and the numeric type system.
+Aura supports enough numeric and string behavior for real programs. This chapter covers arithmetic, string operations, parsing, formatting, and the numeric type system.
 
 ## Arithmetic
 
@@ -79,7 +79,7 @@ temperature: float64 = -3.5
 
 See [examples/numbers/unary_minus.au](../examples/numbers/unary_minus.au).
 
-Aurora does not do implicit numeric widening. Mixed expressions like `int32 + int64` are rejected -- use explicit casts instead (see below).
+Aura does not do implicit numeric widening. Mixed expressions like `int32 + int64` are rejected -- use explicit casts instead (see below).
 
 ## Explicit Integer Arithmetic Modes
 
@@ -141,7 +141,7 @@ whole: float64 = 2
 
 An integer literal adopts a `float32` or `float64` context only when its value is exactly representable in that type. This also makes mixed-literal arithmetic read naturally: `7.5 // 2` is floating floor division and `-7.5 % 2` is floating remainder. A bound integer variable is never widened this way. For an inexact value, use an explicit floating spelling when literal rounding is intentional, or call `.to_float()` when converting an integer value intentionally.
 
-Aurora provides builtin numeric helpers:
+Aura provides builtin numeric helpers:
 
 ```python
 print(abs(-7))        # 7
@@ -184,7 +184,7 @@ widened = 3 as float64
 
 Integer casts are range-checked at runtime -- `300 as int8` fails cleanly instead of silently wrapping.
 
-Integer-to-float casts are also exactness-checked at runtime -- Aurora rejects casts that would silently lose integer precision instead of rounding them away.
+Integer-to-float casts are also exactness-checked at runtime -- Aura rejects casts that would silently lose integer precision instead of rounding them away.
 
 That strict cast is intentionally different from `.to_float()`. For the
 `9007199254740993` value above, `large.to_float()` returns the rounded
@@ -215,7 +215,7 @@ print(value)
 
 See [examples/numbers/uint128_values.au](../examples/numbers/uint128_values.au).
 
-Annotated integer widths are enforced at runtime. If a value exceeds its annotated type's range, Aurora reports an error instead of silently widening.
+Annotated integer widths are enforced at runtime. If a value exceeds its annotated type's range, Aura reports an error instead of silently widening.
 
 The bootstrap compiler also supports `float32` in typed contexts like class fields and function parameters:
 
@@ -235,8 +235,8 @@ Ordinary strings use matching single or double quotes. Both forms produce the
 same `String`, support the same escapes, and concatenate with `+`:
 
 ```python
-greeting = 'hello' + ", aurora"
-apostrophe = 'Aurora\'s strings'
+greeting = 'hello' + ", aura"
+apostrophe = 'Aura\'s strings'
 quotation = 'the compiler said "ready"'
 ```
 
@@ -250,7 +250,7 @@ Interpolated strings use the double-quoted `f"..."` form and produce an owned
 `String`; `f'...'` is not supported:
 
 ```python
-name: String = "Aurora"
+name: String = "Aura"
 answer: int32 = 42
 print(f"Hello, {name} {answer}")
 ```
@@ -276,19 +276,19 @@ See [examples/strings/borrow_str.au](../examples/strings/borrow_str.au).
 
 ## String Methods
 
-Aurora provides a rich set of string methods:
+Aura provides a rich set of string methods:
 
 ```python
-text = "  aurora repo  "
+text = "  aura repo  "
 print(text.len())                    # 15
 print(text.contains("repo"))         # true
 print(text.starts_with("  au"))      # true
 print(text.ends_with("  "))          # true
-trimmed = text.trim()                # "aurora repo"
-parts = trimmed.split(" ")           # ["aurora", "repo"]
-print(trimmed.replace("repo", "lang"))  # "aurora lang"
-print(trimmed.to_lower())           # "aurora repo"
-print(trimmed.to_upper())           # "AURORA REPO"
+trimmed = text.trim()                # "aura repo"
+parts = trimmed.split(" ")           # ["aura", "repo"]
+print(trimmed.replace("repo", "lang"))  # "aura lang"
+print(trimmed.to_lower())           # "aura repo"
+print(trimmed.to_upper())           # "AURA REPO"
 ```
 
 `len()` counts Unicode scalar values, while `byte_len()` reports the number of
@@ -315,7 +315,7 @@ Endpoints count Unicode scalar values, matching `len()`, rather than UTF-8
 bytes or grapheme clusters. Locating scalar boundaries scans the text, so
 String slicing is O(n). Written endpoints are exactly `int32`; negatives
 normalize once. Both effective endpoints must lie in `0..=len`, and start must
-not exceed end. Aurora does not clamp invalid bounds like Python: invalid or
+not exceed end. Aura does not clamp invalid bounds like Python: invalid or
 reversed ranges trap with `AU4003`.
 
 The result is an owned copy, not a view. Slice steps and slice assignment are
@@ -328,7 +328,7 @@ argument remains reserved but unimplemented.
 `strip_prefix(...)` and `strip_suffix(...)` return `Option[String]`, so they compose with `match`:
 
 ```python
-match trimmed.strip_prefix("aurora "):
+match trimmed.strip_prefix("aura "):
     case Some(rest):
         print(rest)     # "repo"
     case None:
@@ -338,14 +338,14 @@ match trimmed.strip_prefix("aurora "):
 `join(...)` uses the receiver as the separator:
 
 ```python
-parts = ["aurora", "lang", "tests"]
-print("-".join(parts))    # "aurora-lang-tests"
+parts = ["aura", "lang", "tests"]
+print("-".join(parts))    # "aura-lang-tests"
 ```
 
 `clone()` creates an independent copy of a string (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for why this matters):
 
 ```python
-text: String = "aurora"
+text: String = "aura"
 copy = text.clone()
 print(text)    # still valid
 print(copy)
@@ -355,7 +355,7 @@ See [examples/strings/string_methods.au](../examples/strings/string_methods.au) 
 
 ## Parsing And Formatting
 
-Aurora provides parsing builtins that return `Result`:
+Aura provides parsing builtins that return `Result`:
 
 - `parse_int32(text: str) -> Result[int32, String]`
 - `parse_int64(text: str) -> Result[int64, String]`
@@ -380,7 +380,7 @@ See [examples/strings/string_parsing_and_formatting.au](../examples/strings/stri
 Strings support `==` and `!=`:
 
 ```python
-if greeting == "hello, aurora":
+if greeting == "hello, aura":
     print(greeting)
 ```
 

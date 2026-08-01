@@ -1,6 +1,6 @@
 # aura CLI
 
-This package contains the Aurora bootstrap compiler CLI.
+This package contains the Aura bootstrap compiler CLI.
 
 ## Build The Binary
 
@@ -63,8 +63,8 @@ After the release build completes, run the binary directly:
 ./target/release/aura run examples/io/unix_tls_roundtrip.au
 ./target/release/aura run examples/concurrency/sleep_builtin.au
 ./target/release/aura run examples/concurrency/yield_now.au
-./target/release/aura build -o ./target/aurora-point examples/point.au
-./target/release/aura build --backend direct -o ./target/aurora-direct examples/basic_addition.au
+./target/release/aura build -o ./target/aura-point examples/point.au
+./target/release/aura build --backend direct -o ./target/aura-direct examples/basic_addition.au
 ./target/release/aura ast examples/classes/point_distance.au
 ./target/release/aura ast-json examples/classes/point_distance.au
 ./target/release/aura mir examples/control_flow/while_break_continue.au
@@ -135,9 +135,9 @@ aura deps update util
   - parse and type check a program
   - add `--format json` for the schema-versioned structured diagnostic document; human diagnostics remain the default
   - nested package modules can now be checked directly, with the CLI inferring the nearest package root that satisfies their imports
-  - package entrypoints under `src/` now also resolve `Aurora.toml`, local path dependencies, git dependencies, workspaces, and `Aurora.lock`
+  - package entrypoints under `src/` now also resolve `Aura.toml`, local path dependencies, git dependencies, workspaces, and `Aura.lock`
 - `aura deps update [package]`
-  - refresh git dependencies for the current package or workspace and rewrite `Aurora.lock`
+  - refresh git dependencies for the current package or workspace and rewrite `Aura.lock`
   - with no package name, all branch/tag/default-main git dependencies are refreshed
   - with a package name such as `util`, only that dependency is refreshed
 - `aura run <file.au>`
@@ -149,11 +149,11 @@ aura deps update util
   - append `-- <program-args>...` to expose arguments through `sys.args()`
   - add `--format json` to select structured output when checking or execution fails
 - `aura new <project-path>`
-  - create `Aurora.toml` and `src/main.au`; existing paths are never overwritten
+  - create `Aura.toml` and `src/main.au`; existing paths are never overwritten
 - `aura fmt [--check] [path ...]`
   - normalize line endings/trailing whitespace/final newlines, or verify without writing
 - `aura test [--timeout-ms N] [path ...]`
-  - run package-aware Aurora tests; defaults to `tests/` and a 30-second per-test timeout
+  - run package-aware Aura tests; defaults to `tests/` and a 30-second per-test timeout
   - a file declaring `def test_*()` functions reports one result per function, labelled `path::function`
   - a file declaring none keeps the file-level model and reports one result for the path
 - `aura lsp`
@@ -163,12 +163,12 @@ aura deps update util
   - `mir` executes the lowered MIR and is the default
   - `direct` builds a native binary and runs it, reporting build or launch failures rather than degrading
   - `auto` prefers `direct` and degrades to the MIR runtime; human mode prints the reason before the fallback program runs, while JSON mode includes it in the final structured report
-  - successful native builds are cached by content under `AURORA_CACHE_DIR`, defaulting to `~/.cache/aurora/native`; every hit verifies the entry identity, artifact SHA-256, regular-file/execute state, size bound, and executable shape, then launches a private copy of those verified bytes without a shell fallback
+  - successful native builds are cached by content under `AURA_CACHE_DIR`, defaulting to `~/.cache/aura/native`; every hit verifies the entry identity, artifact SHA-256, regular-file/execute state, size bound, and executable shape, then launches a private copy of those verified bytes without a shell fallback
   - on maintained Unix hosts, concurrent cold runs of the same content key coordinate through cross-process locks: one process builds and atomically publishes the entry, while the remaining processes wait and then reuse the verified result; established warm hits do not wait on that key's writer lock
   - human output flushes `aura: waiting for a concurrent build...` before blocking and `aura: building native program...` before building a native program artifact; JSON mode currently buffers these notices so stderr remains exactly one JSON document, reporting them through `progress` on success or diagnostic `notes` on failure, while an `auto` fallback also records its direct-to-MIR transition and reason in `fallback`
   - malformed entries and executable-format/architecture failures are discarded and rebuilt; temporary-directory, process-resource, and other environmental launch failures preserve the verified entry and follow the selected backend's ordinary error/fallback policy
-  - the cache directory is a trust boundary: use only a location private to the current OS account; on the maintained Unix hosts, Aurora rejects roots owned by another user or writable by group/other
-  - cache keys independently include native cache format `v4`, semantic-interface schema `v3`, the exact linked runtime archive, and ordered native link arguments; inherited launch leases and owner-aware staging cleanup prevent interrupted-run cleanup from deleting a live native child
+  - the cache directory is a trust boundary: use only a location private to the current OS account; on the maintained Unix hosts, Aura rejects roots owned by another user or writable by group/other
+  - cache keys independently include native cache format `v5`, semantic-interface schema `v3`, the exact linked runtime archive, and ordered native link arguments; inherited launch leases and owner-aware staging cleanup prevent interrupted-run cleanup from deleting a live native child
   - caching is optional for an installed immutable runtime layout: an empty or unavailable cache does not prevent an otherwise valid direct build, but that build is not retained for a later hit
 - `aura build -o <output> <file.au>`
   - compile a standalone native binary for a program
@@ -178,7 +178,7 @@ aura deps update util
     `aura: waiting for a concurrent build...` before blocking on another
     process that is refreshing the shared native runtime
   - `auto` is the default; it first tries the direct native backend and may fall back to a standalone embedded-MIR launcher when direct emission is unavailable
-  - `direct` forces the new low-level native backend for the full currently implemented Aurora language surface
+  - `direct` forces the new low-level native backend for the full currently implemented Aura language surface
   - source-checkout builds can refresh the runtime through Cargo; packaged release builds use the bundled runtime and require only a host C compiler
   - file-backed and stdin-backed programs with local module imports and package dependencies now build correctly through this path
   - the maintained direct build path now also covers builtin scheduler-aware text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, and the shell-free `process` surface including supervised child processes with restart policies
@@ -200,7 +200,7 @@ aura deps update util
   - the CLI now tolerates the common incomplete-editor state where the buffer currently contains one or more dangling member accesses such as `counter.` or `helpers.math.`, including at EOF
   - local imported modules now participate in compiler-backed completions for both file-backed and stdin-backed buffers, including imported trait methods
 - built binaries now preserve file, line, and caret context for arithmetic runtime failures such as division by zero
-- MIR and directly generated native failures preserve the same typed Aurora
+- MIR and directly generated native failures preserve the same typed Aura
   call frames and child-task ancestry. Human output renders those records as
   call-chain/task notes; JSON output exposes `call_frames` and
   `task_ancestry` arrays without requiring tools to parse prose.
@@ -215,7 +215,7 @@ Examples:
 cat examples/classes/point_distance.au | ./target/release/aura analyze --stdin /virtual/point.au
 cat examples/classes/point_distance.au | ./target/release/aura ast-json --stdin /virtual/point.au
 cat examples/point.au | ./target/release/aura complete --line 5 --character 11 --trigger . --stdin /virtual/point.au
-cat examples/point.au | ./target/release/aura build -o ./target/aurora-point --stdin /virtual/point.au
+cat examples/point.au | ./target/release/aura build -o ./target/aura-point --stdin /virtual/point.au
 cat examples/modules/simple_import.au | ./target/release/aura analyze --stdin "$(pwd)/examples/modules/simple_import.au"
 cat examples/modules/simple_import.au | ./target/release/aura check --stdin "$(pwd)/examples/modules/simple_import.au"
 cat examples/modules/simple_import.au | ./target/release/aura run --stdin "$(pwd)/examples/modules/simple_import.au"
@@ -242,7 +242,7 @@ empty. Editor tooling consumes the same compiler-owned fields.
 
 For `aura run --format json --backend direct`, the CLI gives the native child a
 private trap-signal pipe and a separate bounded diagnostic-data pipe. The
-child signals and writes one compiler-owned JSON record only when Aurora
+child signals and writes one compiler-owned JSON record only when Aura
 traps; ordinary nonzero `main` results write neither. Native initialization
 hides both internal descriptors from user code and marks them close-on-exec.
 This lets JSON mode distinguish a program returning status `1` from an
@@ -253,7 +253,7 @@ native renderer.
 
 ## Current Limitation
 
-Building the Aurora compiler itself still uses Cargo. Installed release archives are relocatable and do not use Cargo when compiling an Aurora program.
+Building the Aura compiler itself still uses Cargo. Installed release archives are relocatable and do not use Cargo when compiling an Aura program.
 
 The supported build path today is:
 
@@ -263,7 +263,7 @@ The supported build path today is:
 The current `aura build` matrix is:
 
 1. `--backend auto` is the default
-2. `--backend direct` uses the true direct native backend for the full currently implemented Aurora language surface
+2. `--backend direct` uses the true direct native backend for the full currently implemented Aura language surface
 3. built binaries no longer depend on the original `.au` source files at runtime
 4. both backend paths need a host C compiler; installed archives load the bundled runtime and link manifest without Cargo or the source checkout
 
@@ -271,4 +271,4 @@ The maintained execution architecture is now:
 
 1. `aura run` executes through the MIR runtime
 2. `aura build --backend direct` requires direct native emission; `--backend auto` may instead package MIR with the native runtime when direct emission is unavailable
-3. both execution paths now cover the maintained Aurora language surface, including builtin text/binary file I/O, shell-free subprocess helpers, plus TCP, UDP, HTTP, WebSocket, Unix-socket, and TLS networking
+3. both execution paths now cover the maintained Aura language surface, including builtin text/binary file I/O, shell-free subprocess helpers, plus TCP, UDP, HTTP, WebSocket, Unix-socket, and TLS networking

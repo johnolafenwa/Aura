@@ -1,0 +1,5 @@
+error[AU1101]: expected Newline
+ --> crates/aura-compiler/tests/fixtures/check-fail/spawn_rejects_borrowed_params.au:9:18
+  |
+9 |     task = spawn show(counter)
+  |                  ^

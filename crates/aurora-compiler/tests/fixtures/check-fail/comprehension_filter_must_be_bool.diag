@@ -1,5 +1,0 @@
-error[AU2002]: comprehension filter must have type `bool`, found `int64`
- --> crates/aurora-compiler/tests/fixtures/check-fail/comprehension_filter_must_be_bool.au:2:49
-  |
-2 |     values = [value for value in range(0, 2) if 1]
-  |                                                 ^

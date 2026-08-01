@@ -1,6 +1,6 @@
 # Results And Options
 
-Aurora provides three built-in generic enums for representing success/failure and presence/absence. These are the foundation of error handling in Aurora.
+Aura provides three built-in generic enums for representing success/failure and presence/absence. These are the foundation of error handling in Aura.
 
 ## `Result[T, E]`
 
@@ -23,7 +23,7 @@ match divide(10, 3):
         print(f"error: {message}")
 ```
 
-This is Aurora's primary error-handling pattern. Instead of exceptions (like Python's `try/except`), Aurora makes errors part of the return type so the compiler ensures you handle them.
+This is Aura's primary error-handling pattern. Instead of exceptions (like Python's `try/except`), Aura makes errors part of the return type so the compiler ensures you handle them.
 
 ## `Option[T]`
 
@@ -46,7 +46,7 @@ match find_user(1):
         print("not found")
 ```
 
-You will see `Option[T]` throughout Aurora's standard library -- `Vec.pop()`, `Vec.get()`, `Map.get()`, and `String.strip_prefix()` all return `Option` values.
+You will see `Option[T]` throughout Aura's standard library -- `Vec.pop()`, `Vec.get()`, `Map.get()`, and `String.strip_prefix()` all return `Option` values.
 
 Those APIs do not all obtain `T` the same way. `pop` transfers a stored value,
 while collection `get` clones one and therefore requires clone-safe `T`; a
@@ -112,7 +112,7 @@ def process(input: String) -> Result[int32, String]:
             return Result.Err(message)
 ```
 
-For simpler cases, Aurora provides `try expr` to reduce the nesting. See [12-error-propagation.md](12-error-propagation.md).
+For simpler cases, Aura provides `try expr` to reduce the nesting. See [12-error-propagation.md](12-error-propagation.md).
 
 ## Retrying A Result Worker
 

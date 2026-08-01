@@ -1,6 +1,0 @@
-error[AU1001]: mismatched closing delimiter `)`; expected `]` to close `[`
- --> crates/aurora-compiler/tests/fixtures/parse-fail/newline_continuation_mismatched_delimiter.au:5:5
-  |
-5 |     )
-  |     ^
-  = related crates/aurora-compiler/tests/fixtures/parse-fail/newline_continuation_mismatched_delimiter.au:2:14: opening delimiter `[` is here

@@ -1,0 +1,5 @@
+error[AU2999]: recursive field `next` on class `Node` requires `indirect`
+ --> crates/aura-compiler/tests/fixtures/check-fail/direct_recursive_class_field.au:3:5
+  |
+3 |     next: Node
+  |     ^

@@ -1,7 +1,0 @@
-error[AU3008]: task argument `value` cannot cross a task boundary because payload of `Option[random.Rng]` -> `random.Rng` is a stateful generator and is not Transfer
- --> crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_nested_option_argument.au:7:31
-  |
-7 |     group.start_soon(consume, value)
-  |                               ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_nested_option_argument.au:3:13: task parameter `value` is declared here
-  = help: send owned data made only from Transfer components; keep capabilities and host resources on their owning worker

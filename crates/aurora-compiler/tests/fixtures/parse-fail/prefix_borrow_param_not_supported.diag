@@ -1,5 +1,0 @@
-error[AU1101]: ordinary parameters are written as `name: Type`, `name: mut Type`, or `name: own Type`
- --> crates/aurora-compiler/tests/fixtures/parse-fail/prefix_borrow_param_not_supported.au:1:10
-  |
-1 | def read(borrow counter: Counter) -> int32:
-  |          ^

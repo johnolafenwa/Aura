@@ -1,0 +1,7 @@
+error[AU3002]: cannot consume `value` while `value` remains shared by a bare match
+ --> crates/aura-compiler/tests/fixtures/check-fail/bare_copy_match_nested_own_rejected.au:5:23
+  |
+5 |             match own value:
+  |                       ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/bare_copy_match_nested_own_rejected.au:3:5: bare `match value` starts here
+  = help: finish the selected match arm before consuming `value`, or use `match own value` when the match should consume it

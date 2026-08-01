@@ -1,6 +1,6 @@
 def string_sender(ch: Channel[String]):
     ch.send("hello")
-    ch.send("aurora")
+    ch.send("aura")
     ch.send("world")
     ch.close()
 

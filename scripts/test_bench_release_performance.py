@@ -47,9 +47,9 @@ class ReleasePerformanceBenchmarkTests(unittest.TestCase):
         self.assertEqual(
             list(bench.V6_LANES),
             [
-                "aurora_startup",
-                "aurora_int32",
-                "aurora_int64",
+                "aura_startup",
+                "aura_int32",
+                "aura_int64",
                 "cpython_startup",
                 "cpython_int",
             ],
@@ -64,8 +64,8 @@ class ReleasePerformanceBenchmarkTests(unittest.TestCase):
             "fib30",
         )
         self.assertEqual(second[0][0], "tasks_10000")
-        self.assertEqual(first[0][1], ["aurora", "cpython"])
-        self.assertEqual(second[0][1], ["cpython", "aurora"])
+        self.assertEqual(first[0][1], ["aura", "cpython"])
+        self.assertEqual(second[0][1], ["cpython", "aura"])
         self.assertEqual(first[-1][0], "v6")
         self.assertNotEqual(
             dict(first)["v6"],
@@ -75,7 +75,7 @@ class ReleasePerformanceBenchmarkTests(unittest.TestCase):
     def test_protocol_lane_uses_exact_ready_go_done_and_owned_process(self) -> None:
         contract = bench.ProtocolWorkload(
             name="fake",
-            aurora_source=Path("unused.au"),
+            aura_source=Path("unused.au"),
             cpython_source=Path("unused.py"),
             ready=b"READY release-performance fake 1\n",
             go=b"GO release-performance fake\n",
@@ -107,7 +107,7 @@ class ReleasePerformanceBenchmarkTests(unittest.TestCase):
     def test_protocol_lane_rejects_wrong_done_and_trailing_output(self) -> None:
         contract = bench.ProtocolWorkload(
             name="fake",
-            aurora_source=Path("unused.au"),
+            aura_source=Path("unused.au"),
             cpython_source=Path("unused.py"),
             ready=b"READY release-performance fake\n",
             go=b"GO release-performance fake\n",
@@ -138,7 +138,7 @@ class ReleasePerformanceBenchmarkTests(unittest.TestCase):
     def test_protocol_lane_rejects_wrong_ready_and_bounded_ready_timeout(self) -> None:
         contract = bench.ProtocolWorkload(
             name="fake",
-            aurora_source=Path("unused.au"),
+            aura_source=Path("unused.au"),
             cpython_source=Path("unused.py"),
             ready=b"READY release-performance fake\n",
             go=b"GO release-performance fake\n",
@@ -186,11 +186,11 @@ class ReleasePerformanceBenchmarkTests(unittest.TestCase):
 
     def test_controlled_environment_clears_runtime_and_cache_overrides(self) -> None:
         inherited = {
-            "AURORA_WORKERS": "99",
-            "AURORA_BLOCKING_WORKERS": "88",
-            "AURORA_BLOCKING_QUEUE_CAPACITY": "77",
-            "AURORA_CACHE_DIR": "/tmp/cache",
-            "AURORA_NATIVE_CACHE_DIR": "/tmp/old-cache",
+            "AURA_WORKERS": "99",
+            "AURA_BLOCKING_WORKERS": "88",
+            "AURA_BLOCKING_QUEUE_CAPACITY": "77",
+            "AURA_CACHE_DIR": "/tmp/cache",
+            "AURA_NATIVE_CACHE_DIR": "/tmp/old-cache",
         }
         with mock.patch.dict(bench.os.environ, inherited, clear=False):
             environment = bench.controlled_environment()
@@ -204,9 +204,9 @@ class ReleasePerformanceBenchmarkTests(unittest.TestCase):
                 "workloads": {
                     "fib30": {
                         "runs": {
-                            "aurora": {
-                                "protocol_elapsed_s": aurora,
-                                "whole_process_elapsed_s": aurora + 0.5,
+                            "aura": {
+                                "protocol_elapsed_s": aura,
+                                "whole_process_elapsed_s": aura + 0.5,
                             },
                             "cpython": {
                                 "protocol_elapsed_s": cpython,
@@ -216,11 +216,11 @@ class ReleasePerformanceBenchmarkTests(unittest.TestCase):
                     }
                 }
             }
-            for aurora, cpython in ((2.0, 1.0), (4.0, 2.0), (3.0, 1.5))
+            for aura, cpython in ((2.0, 1.0), (4.0, 2.0), (3.0, 1.5))
         ]
         summary = bench.summarize_protocol_workload(pairs, "fib30")
         primary = summary["protocol"]
-        self.assertEqual(primary["aurora"]["samples_s"], [2.0, 4.0, 3.0])
+        self.assertEqual(primary["aura"]["samples_s"], [2.0, 4.0, 3.0])
         self.assertEqual(primary["cpython"]["samples_s"], [1.0, 2.0, 1.5])
         self.assertEqual(primary["paired_ratios"], [2.0, 2.0, 2.0])
         self.assertEqual(primary["paired_median_ratio"], 2.0)
@@ -242,9 +242,9 @@ class ReleasePerformanceBenchmarkTests(unittest.TestCase):
         pairs = []
         for multiplier in (1.0, 2.0, 3.0):
             samples = {
-                "aurora_startup": 1.0 * multiplier,
-                "aurora_int32": 5.0 * multiplier,
-                "aurora_int64": 3.0 * multiplier,
+                "aura_startup": 1.0 * multiplier,
+                "aura_int32": 5.0 * multiplier,
+                "aura_int64": 3.0 * multiplier,
                 "cpython_startup": 2.0 * multiplier,
                 "cpython_int": 10.0 * multiplier,
             }
@@ -262,7 +262,7 @@ class ReleasePerformanceBenchmarkTests(unittest.TestCase):
             )
         summary = bench.summarize_v6(pairs)
         self.assertEqual(
-            summary["startup_adjusted"]["aurora_int32"]["samples_s"],
+            summary["startup_adjusted"]["aura_int32"]["samples_s"],
             [4.0, 8.0, 12.0],
         )
         self.assertEqual(
@@ -270,23 +270,23 @@ class ReleasePerformanceBenchmarkTests(unittest.TestCase):
             [8.0, 16.0, 24.0],
         )
         self.assertEqual(
-            summary["comparisons"]["aurora_int32_vs_cpython"][
+            summary["comparisons"]["aura_int32_vs_cpython"][
                 "paired_median_ratio"
             ],
             0.5,
         )
-        pairs[0]["workloads"]["v6"]["runs"]["aurora_int32"][
+        pairs[0]["workloads"]["v6"]["runs"]["aura_int32"][
             "whole_process_elapsed_s"
         ] = 0.5
         revised = bench.summarize_v6(pairs)
         self.assertEqual(
-            revised["startup_adjusted"]["aurora_int32"][
+            revised["startup_adjusted"]["aura_int32"][
                 "invalid_nonpositive_pair_repetitions"
             ],
             [0],
         )
         self.assertEqual(
-            revised["comparisons"]["aurora_int32_vs_cpython_startup_adjusted"][
+            revised["comparisons"]["aura_int32_vs_cpython_startup_adjusted"][
                 "excluded_pair_repetitions"
             ],
             [0],
@@ -315,7 +315,7 @@ class ReleasePerformanceBenchmarkTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory[1]["reasons"],
-            ["Aurora repository cargo/rustc/aura process"],
+            ["Aura repository cargo/rustc/aura process"],
         )
         unknown = bench.classify_competing_processes(
             {104: bench.ProcessSample(104, 50, 1.0, "cargo", "cargo build")},
@@ -519,7 +519,7 @@ class ReleasePerformanceBenchmarkTests(unittest.TestCase):
 
         def fake_build(*_args: object) -> tuple[dict[str, Path], list[dict[str, object]]]:
             events.append("build")
-            return ({name: Path("/tmp") / name for name in bench.AURORA_BUILD_SOURCES}, [])
+            return ({name: Path("/tmp") / name for name in bench.AURA_BUILD_SOURCES}, [])
 
         def fake_protocol(
             contract: object, lane: str, _command: list[str]
@@ -589,7 +589,7 @@ class ReleasePerformanceBenchmarkTests(unittest.TestCase):
             stack.enter_context(
                 mock.patch.object(
                     bench,
-                    "build_aurora_workloads",
+                    "build_aura_workloads",
                     side_effect=fake_build,
                 )
             )

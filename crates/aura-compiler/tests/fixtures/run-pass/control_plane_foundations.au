@@ -1,0 +1,64 @@
+import json
+import log
+import metrics
+import path
+import toml
+import trace
+
+def main() -> int32:
+    print(path.join(child="beta", base="alpha"))
+    match path.file_name("alpha/beta.au"):
+        case Option.Some(name):
+            print(name)
+        case Option.None:
+            return 1
+    match path.extension("alpha/beta.au"):
+        case Option.Some(extension):
+            print(extension)
+        case Option.None:
+            return 1
+    print(path.is_absolute("alpha/beta.au"))
+
+    labels: Map[String, String] = {"name": "aura", "role": "control-plane"}
+    match json.stringify_map(labels.clone()):
+        case Result.Ok(text):
+            print(text)
+        case Result.Err(error):
+            print(error)
+            return 1
+    match json.parse_string_map("{\"name\":\"aura\"}"):
+        case Result.Ok(parsed):
+            match parsed.get("name"):
+                case Option.Some(name):
+                    print(name)
+                case Option.None:
+                    return 1
+        case Result.Err(error):
+            print(error)
+            return 1
+    print(json.is_valid("[1, true, null]"))
+
+    match toml.stringify_map(labels.clone()):
+        case Result.Ok(text):
+            print(toml.is_valid(text))
+        case Result.Err(error):
+            print(error)
+            return 1
+    match toml.parse_string_map("name = \"aura\""):
+        case Result.Ok(parsed):
+            match parsed.get("name"):
+                case Option.Some(name):
+                    print(name)
+                case Option.None:
+                    return 1
+        case Result.Err(error):
+            print(error)
+            return 1
+
+    metrics.reset()
+    metrics.increment(value=2, name="jobs")
+    metrics.increment("jobs", 3)
+    print(metrics.get(name="jobs"))
+    log.info("ready", labels.clone())
+    trace.event("boot", labels)
+    return 0

@@ -1,0 +1,7 @@
+import json
+
+def main():
+    text = "aura"
+    value = json.Value.String(text)
+    print(value)
+    print(text)

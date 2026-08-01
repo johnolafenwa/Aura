@@ -1,0 +1,64 @@
+{
+  "Class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name}:",
+      "    ${2:field}: ${3:Type}"
+    ],
+    "description": "Aura class declaration"
+  },
+  "Function": {
+    "prefix": "def",
+    "body": [
+      "def ${1:name}(${2:param}: ${3:Type}) -> ${4:None}:",
+      "    ${5:return None}"
+    ],
+    "description": "Aura function declaration"
+  },
+  "Lambda": {
+    "prefix": "lambda",
+    "body": [
+      "lambda ${1:value}: ${2:expression}"
+    ],
+    "description": "Aura expression lambda"
+  },
+  "Extern C function": {
+    "prefix": "externc",
+    "body": [
+      "public extern \"C\" def ${1:name}(${2}) -> ${3:int32}"
+    ],
+    "description": "Aura FFI v0 C function declaration"
+  },
+  "Extern C opaque handle": {
+    "prefix": "externhandle",
+    "body": [
+      "public extern \"C\" opaque class ${1:Handle}"
+    ],
+    "description": "Aura FFI v0 opaque C handle declaration"
+  },
+  "If": {
+    "prefix": "if",
+    "body": [
+      "if ${1:condition}:",
+      "    ${2:# TODO}"
+    ],
+    "description": "Aura if block"
+  },
+  "Match": {
+    "prefix": "match",
+    "body": [
+      "match ${1:value}:",
+      "    case ${2:Pattern}:",
+      "        ${3:# TODO}"
+    ],
+    "description": "Aura match block"
+  },
+  "With": {
+    "prefix": "with",
+    "body": [
+      "with ${1:expr} as ${2:name}:",
+      "    ${3:# TODO}"
+    ],
+    "description": "Aura with block"
+  }
+}

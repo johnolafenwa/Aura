@@ -1,7 +1,7 @@
 # Working With Collections
 
 A program that manipulates a handful of values usually needs one of three
-shapes: an ordered sequence, a keyed lookup, or a membership test. Aurora ships
+shapes: an ordered sequence, a keyed lookup, or a membership test. Aura ships
 these as `Vec[T]`, `Map[K, V]`, and `Set[T]`. All three are owned move types. A
 bare parameter or loop shares them; write `own` when ownership should transfer.
 
@@ -91,9 +91,9 @@ values.insert(values.len() as int32, 40)
 ```
 
 The cast is checked, so a length outside the `int32` range fails rather than
-wrapping. Aurora deliberately does not copy Python's clamping behavior for an
+wrapping. Aura deliberately does not copy Python's clamping behavior for an
 extremely negative insertion index. If one normalization still leaves the
-index below zero, Aurora reports the error instead of silently inserting at
+index below zero, Aura reports the error instead of silently inserting at
 the start.
 
 The same boundary applies to length-driven `range(...)` loops:
@@ -128,7 +128,7 @@ Written endpoints have exactly type `int32`. A negative endpoint is normalized
 once as `len + endpoint`. After that, both bounds must be between zero and the
 length, inclusive, and start must not exceed end.
 
-Aurora deliberately does **not** clamp slice bounds like Python. `values[-99:2]`
+Aura deliberately does **not** clamp slice bounds like Python. `values[-99:2]`
 and `values[3:1]` report `AU4003` instead of silently selecting a different or
 empty range. If invalid bounds are expected input, validate them before
 slicing.
@@ -181,7 +181,7 @@ before it reorders anything. If a key call fails at runtime, the vector remains
 unchanged. The callback parameter must be bare/shared. A callback declared
 with `mut` or `own` is intentionally a different contract.
 
-Aurora 0.2's built-in orderable element types are all signed and unsigned
+Aura 0.2's built-in orderable element types are all signed and unsigned
 integers, `float32`, `float64`, and `Duration`. `String` has no built-in
 `Ord[String]`, so `Vec[String].sort()` is rejected. For text workflows, keep
 insertion order when it already carries meaning, use `sort_by` with an
@@ -395,7 +395,7 @@ for value in users:
 
 ## Ownership Details That Matter
 
-Most of the friction people run into with Aurora collections is about keys and clones. Two common patterns will feel awkward the first time and obvious the second.
+Most of the friction people run into with Aura collections is about keys and clones. Two common patterns will feel awkward the first time and obvious the second.
 
 ### Borrowing keys at lookup
 
@@ -507,4 +507,4 @@ See [Collections](/manual/collections) and
 [Numeric Arrays](/manual/numeric-arrays) in the Manual for exact signatures
 and return contracts.
 
-The next chapter is the centrepiece of the book: Aurora's ownership model explained through the programs that benefit from it.
+The next chapter is the centrepiece of the book: Aura's ownership model explained through the programs that benefit from it.

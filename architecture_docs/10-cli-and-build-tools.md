@@ -12,9 +12,9 @@ The compiler library knows how to parse, check, lower, analyze, and emit artifac
 - renders errors
 - writes outputs or artifacts
 
-Aurora's driver lives in [`crates/aura/src/main.rs`](../crates/aura/src/main.rs).
+Aura's driver lives in [`crates/aura/src/main.rs`](../crates/aura/src/main.rs).
 
-## Aurora's command surface
+## Aura's command surface
 
 The main command groups are:
 
@@ -45,7 +45,7 @@ flowchart TD
 
 ## File-backed and stdin-backed modes
 
-Aurora's CLI supports both:
+Aura's CLI supports both:
 
 - ordinary file input
 - editor-style stdin input with an associated virtual path
@@ -106,30 +106,30 @@ and silently stop protecting MIR behavior.
 
 ### Direct backend path
 
-For `--backend direct`, Aurora:
+For `--backend direct`, Aura:
 
 1. checks and lowers to MIR
 2. asks `emit_host_native_object_with_metadata` for object bytes
-3. ensures the Aurora runtime static library exists
+3. ensures the Aura runtime static library exists
 4. writes temporary object/runtime files
 5. invokes the host C compiler/linker
 6. produces the final executable
 
 ### MIR-runtime launcher fallback
 
-If `--backend auto` cannot use direct codegen successfully, Aurora can build a launcher binary that embeds:
+If `--backend auto` cannot use direct codegen successfully, Aura can build a launcher binary that embeds:
 
 - serialized MIR
 - source path
 - source text
 
-That launcher calls `aurora_native_run(...)` from the runtime library.
+That launcher calls `aura_native_run(...)` from the runtime library.
 
 This fallback is implemented through `build_mir_runtime_binary` in the CLI.
 
 ## Why the CLI embeds source in built binaries
 
-Aurora preserves source path and source text metadata in build artifacts so runtime diagnostics can still render file, line, and caret context even after compilation.
+Aura preserves source path and source text metadata in build artifacts so runtime diagnostics can still render file, line, and caret context even after compilation.
 
 JSON-mode direct `run` adds a private two-pipe Unix child protocol for
 structured runtime traps. One pipe carries a fixed trap marker; the other
@@ -138,7 +138,7 @@ Native initialization owns both write endpoints, marks them close-on-exec, and
 removes the internal environment entries before user code. A longer-lived
 program subprocess therefore cannot retain the descriptors and delay EOF.
 Because normal program status writes neither marker nor record, `main`
-returning `1` cannot be confused with an Aurora trap; marker-without-record is
+returning `1` cannot be confused with an Aura trap; marker-without-record is
 instead a hard transport failure. The CLI uses the record to emit the public
 JSON document. Human direct runs and standalone binaries create no private
 channel and render their own complete diagnostic. Post-launch wait, signal,
@@ -169,7 +169,7 @@ fn lower(_program: &()) {}
 fn run(_mir: &()) -> Result<(), String> { Ok(()) }
 ```
 
-Aurora's real CLI adds:
+Aura's real CLI adds:
 
 - argument parsing
 - multiple subcommands
@@ -189,7 +189,7 @@ At the repo root, `package.json` defines workspace scripts such as:
 - `coverage:compiler`
 - `ci`
 
-Those scripts are part of Aurora's build-tooling story even though the core compiler is Rust. They keep the editor tooling and coverage gates in the same monorepo workflow.
+Those scripts are part of Aura's build-tooling story even though the core compiler is Rust. They keep the editor tooling and coverage gates in the same monorepo workflow.
 
 ## Files to study
 

@@ -1,0 +1,5 @@
+error[AU3002]: task starting does not support mutable parameter 1 on a function value; child tasks cannot write back through the starting call frame
+ --> crates/aura-compiler/tests/fixtures/check-fail/task_group_mut_function_value_target_rejected.au:11:26
+   |
+11 |         group.start_soon(target, counter)
+   |                          ^

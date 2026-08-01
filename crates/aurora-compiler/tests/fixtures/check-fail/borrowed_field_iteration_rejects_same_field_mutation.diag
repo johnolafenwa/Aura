@@ -1,7 +1,0 @@
-error[AU3002]: cannot mutate `holder.values` while `holder.values` is borrowed for iteration
- --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_field_iteration_rejects_same_field_mutation.au:8:23
-  |
-8 |         holder.values.push(value)
-  |                       ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/borrowed_field_iteration_rejects_same_field_mutation.au:7:25: `holder.values` is borrowed for this loop here
-  = help: perform owner mutation after the loop; use `for item in mut holder.values:` when mutating elements through the loop binding

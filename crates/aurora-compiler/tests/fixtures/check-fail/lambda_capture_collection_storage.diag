@@ -1,5 +1,0 @@
-error[AU2002]: list literal elements must all have type `def() -> int64`, found `closure def() -> int64`
- --> crates/aurora-compiler/tests/fixtures/check-fail/lambda_capture_collection_storage.au:3:39
-  |
-3 |     callbacks: Vec[def() -> int64] = [lambda: offset]
-  |                                       ^

@@ -56,7 +56,7 @@ def main() -> int:
 
     aura = resolve_aura()
     results: dict[str, float] = {}
-    with tempfile.TemporaryDirectory(prefix="aurora-bench-") as work:
+    with tempfile.TemporaryDirectory(prefix="aura-bench-") as work:
         work = pathlib.Path(work)
         for width in WIDTHS:
             program = ROOT / f"benchmarks/direct_integer_loops/{width}_loop.au"

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Measure Aurora's one-million-element float64 add and sum against NumPy.
+"""Measure Aura's one-million-element float64 add and sum against NumPy.
 
 This runner produces release evidence, not a performance gate. It builds the
-Aurora workloads with the direct backend before timing, starts every measured
+Aura workloads with the direct backend before timing, starts every measured
 process in an owned process group, times only the exact GO/DONE protocol
 window, and retains every raw paired observation with host and input identity.
 """
@@ -48,7 +48,7 @@ REPOSITORY_PROCESS_EXECUTABLES = {"cargo", "rustc", "aura"}
 PROCESS_INVENTORY_EXECUTABLES = {"ps", "lsof"}
 
 SINGLE_THREAD_ENVIRONMENT = {
-    "AURORA_WORKERS": "1",
+    "AURA_WORKERS": "1",
     "OMP_NUM_THREADS": "1",
     "VECLIB_MAXIMUM_THREADS": "1",
     "OPENBLAS_NUM_THREADS": "1",
@@ -57,8 +57,8 @@ SINGLE_THREAD_ENVIRONMENT = {
 }
 
 LANES: Dict[str, Dict[str, object]] = {
-    "aurora_add": {
-        "implementation": "aurora",
+    "aura_add": {
+        "implementation": "aura",
         "workload": "add",
         "iterations": ADD_ITERATIONS,
         "expected_checksum": 2_048.0,
@@ -69,8 +69,8 @@ LANES: Dict[str, Dict[str, object]] = {
         "iterations": ADD_ITERATIONS,
         "expected_checksum": 2_048.0,
     },
-    "aurora_sum": {
-        "implementation": "aurora",
+    "aura_sum": {
+        "implementation": "aura",
         "workload": "sum",
         "iterations": SUM_ITERATIONS,
         "expected_checksum": 4_096_000_000.0,
@@ -200,10 +200,10 @@ def summarize_pairs(pairs: Sequence[Dict[str, object]]) -> Dict[str, object]:
     result: Dict[str, object] = {}
     for workload in ("add", "sum"):
         iterations = int(
-            LANES[f"aurora_{workload}"]["iterations"]  # type: ignore[arg-type]
+            LANES[f"aura_{workload}"]["iterations"]  # type: ignore[arg-type]
         )
-        aurora = [
-            float(pair["runs"][f"aurora_{workload}"]["elapsed_s"])  # type: ignore[index]
+        aura = [
+            float(pair["runs"][f"aura_{workload}"]["elapsed_s"])  # type: ignore[index]
             for pair in pairs
         ]
         numpy = [
@@ -211,13 +211,13 @@ def summarize_pairs(pairs: Sequence[Dict[str, object]]) -> Dict[str, object]:
             for pair in pairs
         ]
         paired_ratios = [
-            aurora_value / numpy_value
-            for aurora_value, numpy_value in zip(aurora, numpy)
+            aura_value / numpy_value
+            for aura_value, numpy_value in zip(aura, numpy)
         ]
-        aurora_summary = duration_summary(aurora)
+        aura_summary = duration_summary(aura)
         numpy_summary = duration_summary(numpy)
-        aurora_summary["median_per_operation_s"] = (
-            float(aurora_summary["median_s"]) / iterations
+        aura_summary["median_per_operation_s"] = (
+            float(aura_summary["median_s"]) / iterations
         )
         numpy_summary["median_per_operation_s"] = (
             float(numpy_summary["median_s"]) / iterations
@@ -226,12 +226,12 @@ def summarize_pairs(pairs: Sequence[Dict[str, object]]) -> Dict[str, object]:
             "elements": ELEMENT_COUNT,
             "dtype": "float64",
             "iterations_per_observation": iterations,
-            "aurora": aurora_summary,
+            "aura": aura_summary,
             "numpy": numpy_summary,
             "paired_ratios": paired_ratios,
             "paired_median_ratio": statistics.median(paired_ratios),
             "ratio_of_medians": (
-                float(aurora_summary["median_s"]) / float(numpy_summary["median_s"])
+                float(aura_summary["median_s"]) / float(numpy_summary["median_s"])
             ),
         }
     return result
@@ -517,7 +517,7 @@ def classify_competing_processes(
             (cwd is not None and path_is_within(cwd, ROOT))
             or str(ROOT.resolve()) in sample.arguments
         ):
-            reasons.append("Aurora repository cargo/rustc/aura process")
+            reasons.append("Aura repository cargo/rustc/aura process")
         if (
             previous is not None
             and previous.cpu_percent >= COMPETING_CPU_PERCENT
@@ -613,14 +613,14 @@ def qualify_inputs(options: Options) -> Dict[str, object]:
     }
 
 
-def build_aurora_workloads(
+def build_aura_workloads(
     aura: pathlib.Path, output_directory: pathlib.Path
 ) -> tuple[Dict[str, pathlib.Path], List[Dict[str, object]]]:
     binaries: Dict[str, pathlib.Path] = {}
     records: List[Dict[str, object]] = []
     for workload in ("add", "sum"):
         source = ROOT / f"benchmarks/numeric_arrays/float64_{workload}.au"
-        output = output_directory / f"aurora_{workload}"
+        output = output_directory / f"aura_{workload}"
         command = [
             str(aura),
             "build",
@@ -668,9 +668,9 @@ def lane_commands(
 ) -> Dict[str, List[str]]:
     reference = ROOT / "benchmarks/numeric_arrays/numpy_reference.py"
     return {
-        "aurora_add": [str(binaries["add"])],
+        "aura_add": [str(binaries["add"])],
         "numpy_add": [str(python), str(reference), "--workload", "add"],
-        "aurora_sum": [str(binaries["sum"])],
+        "aura_sum": [str(binaries["sum"])],
         "numpy_sum": [str(python), str(reference), "--workload", "sum"],
     }
 
@@ -727,8 +727,8 @@ def execute(options: Options) -> Dict[str, object]:
     repository = repository_record()
     host = hardware_record()
 
-    with tempfile.TemporaryDirectory(prefix="aurora-numeric-array-bench-") as directory:
-        binaries, builds = build_aurora_workloads(
+    with tempfile.TemporaryDirectory(prefix="aura-numeric-array-bench-") as directory:
+        binaries, builds = build_aura_workloads(
             options.aura.resolve(), pathlib.Path(directory)
         )
         commands = lane_commands(binaries, options.python.resolve())
@@ -791,7 +791,7 @@ def execute(options: Options) -> Dict[str, object]:
         "summaries": summarize_pairs(pairs),
         "performance_gate": None,
         "evidence_policy": (
-            "measured release evidence only; no Aurora-versus-NumPy threshold"
+            "measured release evidence only; no Aura-versus-NumPy threshold"
         ),
     }
 

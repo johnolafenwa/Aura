@@ -1,0 +1,5 @@
+error[AU2999]: `while` loop body moves `task` and may execute more than once
+ --> crates/aura-compiler/tests/fixtures/check-fail/task_result_loop_observation.au:8:9
+  |
+8 |         while count < 2:
+  |         ^

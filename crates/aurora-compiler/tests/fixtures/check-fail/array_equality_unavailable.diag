@@ -1,5 +1,0 @@
-error[AU2003]: Array equality is not supported
- --> crates/aurora-compiler/tests/fixtures/check-fail/array_equality_unavailable.au:4:11
-  |
-4 |     print(left == right)
-  |           ^

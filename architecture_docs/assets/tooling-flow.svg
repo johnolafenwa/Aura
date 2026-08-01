@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="360" viewBox="0 0 1400 360" role="img" aria-labelledby="title desc">
-  <title id="title">Aurora editor and tooling flow</title>
+  <title id="title">Aura editor and tooling flow</title>
   <desc id="desc">VS Code talks to a language server, which uses a persistent compiler service and lexical recovery only when that service is unavailable.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -19,11 +19,11 @@
   </defs>
 
   <rect class="bg" x="0" y="0" width="1400" height="360" />
-  <text class="title" x="40" y="42">Aurora Tooling Flow</text>
+  <text class="title" x="40" y="42">Aura Tooling Flow</text>
 
   <rect class="box accentA" x="60" y="110" width="220" height="100" />
   <text class="label" x="121" y="146">VS Code</text>
-  <text class="text" x="91" y="170">Aurora extension registers the language,</text>
+  <text class="text" x="91" y="170">Aura extension registers the language,</text>
   <text class="text" x="91" y="192">indentation handler, and LSP client.</text>
 
   <rect class="box accentA" x="350" y="110" width="220" height="100" />
@@ -42,7 +42,7 @@
   <text class="text" x="676" y="292">when compiler analysis is unavailable.</text>
 
   <rect class="box accentC" x="1000" y="110" width="280" height="100" />
-  <text class="label" x="1042" y="146">Aurora Compiler</text>
+  <text class="label" x="1042" y="146">Aura Compiler</text>
   <text class="text" x="1027" y="170">Produces machine-readable diagnostics,</text>
   <text class="text" x="1027" y="192">symbols, hover, definition, completion data.</text>
 

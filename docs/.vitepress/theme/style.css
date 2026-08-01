@@ -49,7 +49,7 @@ code {
   font-variant-ligatures: none;
 }
 
-.aurora-release-stamp {
+.aura-release-stamp {
   display: grid;
   gap: 4px;
   margin: 20px 0 24px;
@@ -58,6 +58,6 @@ code {
   background: var(--vp-c-brand-soft);
 }
 
-.aurora-release-stamp span {
+.aura-release-stamp span {
   overflow-wrap: anywhere;
 }

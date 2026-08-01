@@ -68,7 +68,7 @@ class ReferenceIntegrityTests(unittest.TestCase):
                 check=True,
             )
 
-    def test_inventory_extracts_only_aurora_fences_with_stable_ordinals(self) -> None:
+    def test_inventory_extracts_only_aura_fences_with_stable_ordinals(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manual = Path(directory)
             (manual / "feature.md").write_text(
@@ -84,7 +84,7 @@ class ReferenceIntegrityTests(unittest.TestCase):
                     print("one")
                     ```
 
-                    ```aurora title="example.au"
+                    ```aura title="example.au"
                     print("two")
                     ```
                     """
@@ -94,7 +94,7 @@ class ReferenceIntegrityTests(unittest.TestCase):
             nested = manual / "nested"
             nested.mkdir()
             (nested / "detail.md").write_text(
-                "# Detail\n\n```aurora\nprint(\"nested\")\n```\n",
+                "# Detail\n\n```aura\nprint(\"nested\")\n```\n",
                 encoding="utf-8",
             )
 
@@ -103,25 +103,25 @@ class ReferenceIntegrityTests(unittest.TestCase):
             self.assertEqual(inventory.page_count, 2)
             self.assertEqual(inventory.fence_count, 4)
             self.assertEqual(
-                [block.identifier for block in inventory.aurora_blocks],
+                [block.identifier for block in inventory.aura_blocks],
                 [
-                    "docs/manual/feature.md#aurora-1",
-                    "docs/manual/feature.md#aurora-2",
-                    "docs/manual/nested/detail.md#aurora-1",
+                    "docs/manual/feature.md#aura-1",
+                    "docs/manual/feature.md#aura-2",
+                    "docs/manual/nested/detail.md#aura-1",
                 ],
             )
-            self.assertEqual(inventory.aurora_blocks[0].source, 'print("one")\n')
+            self.assertEqual(inventory.aura_blocks[0].source, 'print("one")\n')
 
     def test_metadata_rejects_stale_hash_and_unexplained_illustration(self) -> None:
         block = reference_integrity.ReferenceBlock(
             path="docs/manual/feature.md",
             ordinal=1,
             line=4,
-            language="aurora",
+            language="aura",
             source='print("hello")\n',
         )
         metadata = {
-            "docs/manual/feature.md#aurora-1": {
+            "docs/manual/feature.md#aura-1": {
                 "sha256": "stale",
                 "mode": "illustrative",
                 "reason": "",
@@ -133,7 +133,7 @@ class ReferenceIntegrityTests(unittest.TestCase):
         self.assertTrue(any("stale sha256" in error for error in errors))
         self.assertTrue(any("non-empty reason" in error for error in errors))
 
-    def test_metadata_requires_a_contract_for_non_aurora_fences(self) -> None:
+    def test_metadata_requires_a_contract_for_non_aura_fences(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manual = Path(directory)
             (manual / "feature.md").write_text(
@@ -154,10 +154,10 @@ class ReferenceIntegrityTests(unittest.TestCase):
             )
 
             inventory = reference_integrity.collect_manual(manual)
-            aurora = inventory.aurora_blocks[0]
+            aura = inventory.aura_blocks[0]
             metadata = {
-                aurora.identifier: {
-                    "sha256": aurora.sha256,
+                aura.identifier: {
+                    "sha256": aura.sha256,
                     "mode": "check",
                     "stdout": "ok\n",
                     "stderr": "",
@@ -172,7 +172,7 @@ class ReferenceIntegrityTests(unittest.TestCase):
                 [block.identifier for block in inventory.blocks],
                 [
                     "docs/manual/feature.md#bash-1",
-                    "docs/manual/feature.md#aurora-1",
+                    "docs/manual/feature.md#aura-1",
                 ],
             )
             self.assertTrue(
@@ -228,7 +228,7 @@ class ReferenceIntegrityTests(unittest.TestCase):
                 encoding="utf-8",
             )
             inventory = reference_integrity.collect_manual(manual)
-            block = inventory.aurora_blocks[0]
+            block = inventory.aura_blocks[0]
             metadata = {
                 block.identifier: {
                     "sha256": block.sha256,
@@ -274,21 +274,21 @@ class ReferenceIntegrityTests(unittest.TestCase):
                     path="docs/manual/feature.md",
                     ordinal=1,
                     line=1,
-                    language="aurora",
+                    language="aura",
                     source="check_me\n",
                 ),
                 reference_integrity.ReferenceBlock(
                     path="docs/manual/feature.md",
                     ordinal=2,
                     line=4,
-                    language="aurora",
+                    language="aura",
                     source="run_me\n",
                 ),
                 reference_integrity.ReferenceBlock(
                     path="docs/manual/feature.md",
                     ordinal=3,
                     line=7,
-                    language="aurora",
+                    language="aura",
                     source="reject_me\n",
                 ),
             ]
@@ -372,7 +372,7 @@ class ReferenceIntegrityTests(unittest.TestCase):
                     entry = pathlib.Path(sys.argv[2])
                     package = entry.parent.parent
                     assert sys.argv[1] == "check"
-                    assert (package / "Aurora.toml").is_file()
+                    assert (package / "Aura.toml").is_file()
                     assert (package / "src/helpers/text.au").is_file()
                     print("ok")
                     """
@@ -393,7 +393,7 @@ class ReferenceIntegrityTests(unittest.TestCase):
                     "mode": "package-check",
                     "entry": "src/main.au",
                     "files": {
-                        "Aurora.toml": "[package]\nname='docs'\n",
+                        "Aura.toml": "[package]\nname='docs'\n",
                         "src/helpers/text.au": "public def helper():\n    pass\n",
                     },
                     "stdout": "ok\n",

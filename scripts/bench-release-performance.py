@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Measure Aurora's Batch-6 release workloads against CPython reproducibly.
+"""Measure Aura's Batch-6 release workloads against CPython reproducibly.
 
-The runner builds every Aurora workload as a standalone direct-native binary
+The runner builds every Aura workload as a standalone direct-native binary
 before timing. Protocol workloads use exact READY/GO/DONE records; the V6
 startup and loop controls retain their established whole-process contract.
 Every measured child owns a fresh process group, and the raw report preserves
@@ -49,19 +49,19 @@ REPOSITORY_PROCESS_EXECUTABLES = {"cargo", "rustc", "aura"}
 PROCESS_INVENTORY_EXECUTABLES = {"ps", "lsof"}
 CONTROLLED_ENVIRONMENT = {"PYTHONHASHSEED": "0"}
 CLEARED_ENVIRONMENT_VARIABLES = (
-    "AURORA_WORKERS",
-    "AURORA_BLOCKING_WORKERS",
-    "AURORA_BLOCKING_QUEUE_CAPACITY",
-    "AURORA_CACHE_DIR",
-    "AURORA_NATIVE_CACHE_DIR",
+    "AURA_WORKERS",
+    "AURA_BLOCKING_WORKERS",
+    "AURA_BLOCKING_QUEUE_CAPACITY",
+    "AURA_CACHE_DIR",
+    "AURA_NATIVE_CACHE_DIR",
     "PYTHONASYNCIODEBUG",
 )
 
 ARRAY_EVIDENCE = {
     "measurement": "numeric Array add and sum against NumPy",
-    "raw_path": "/private/tmp/aurora-phase73-arrays-post-reboot-raw.json",
+    "raw_path": "/private/tmp/aura-phase73-arrays-post-reboot-raw.json",
     "raw_sha256": "f51b979977519b5cbca9be4119a77bb3aff1d1a2874e1cdd4269f315bc1f9e7d",
-    "summary_path": "/private/tmp/aurora-phase73-arrays-post-reboot-summary.json",
+    "summary_path": "/private/tmp/aura-phase73-arrays-post-reboot-summary.json",
     "summary_sha256": "f6fc84c1f0fadfb4b93a5f07befb5a33cbaa6926d54ef88a795e103106b410ab",
     "measured_commit": "0511adf61931953df096dc1b6721a543d856be25",
     "merge_policy": (
@@ -82,7 +82,7 @@ METHODOLOGY_NOTES = {
     "tcp_fanout": (
         "Both lanes pre-bind 20 ephemeral loopback listeners before READY, then "
         "fan out 20 clients to 20 owning server tasks with a 100 ms handler "
-        "delay. Aurora cannot transfer an accepted TcpStream to a handler task "
+        "delay. Aura cannot transfer an accepted TcpStream to a handler task "
         "because host resources are non-Transfer (AU3008), so a one-listener "
         "shape would serialize the handlers and is deliberately not measured."
     ),
@@ -99,7 +99,7 @@ class BenchmarkError(RuntimeError):
 
 class ProtocolWorkload(NamedTuple):
     name: str
-    aurora_source: pathlib.Path
+    aura_source: pathlib.Path
     cpython_source: pathlib.Path
     ready: bytes
     go: bytes
@@ -134,7 +134,7 @@ class ProcessSample(NamedTuple):
 PROTOCOL_WORKLOADS: Dict[str, ProtocolWorkload] = {
     "fib30": ProtocolWorkload(
         name="fib30",
-        aurora_source=PERFORMANCE_ROOT / "fib30.au",
+        aura_source=PERFORMANCE_ROOT / "fib30.au",
         cpython_source=PERFORMANCE_ROOT / "fib30.py",
         ready=b"READY release-performance fib30 30\n",
         go=b"GO release-performance fib30\n",
@@ -142,7 +142,7 @@ PROTOCOL_WORKLOADS: Dict[str, ProtocolWorkload] = {
     ),
     "tasks_10000": ProtocolWorkload(
         name="tasks_10000",
-        aurora_source=PERFORMANCE_ROOT / "tasks_10000.au",
+        aura_source=PERFORMANCE_ROOT / "tasks_10000.au",
         cpython_source=PERFORMANCE_ROOT / "tasks_10000.py",
         ready=b"READY release-performance tasks 10000\n",
         go=b"GO release-performance tasks\n",
@@ -150,7 +150,7 @@ PROTOCOL_WORKLOADS: Dict[str, ProtocolWorkload] = {
     ),
     "tcp_fanout": ProtocolWorkload(
         name="tcp_fanout",
-        aurora_source=PERFORMANCE_ROOT / "tcp_fanout.au",
+        aura_source=PERFORMANCE_ROOT / "tcp_fanout.au",
         cpython_source=PERFORMANCE_ROOT / "tcp_fanout.py",
         ready=b"READY release-performance tcp-fanout 20 100 4\n",
         go=b"GO release-performance tcp-fanout\n",
@@ -158,7 +158,7 @@ PROTOCOL_WORKLOADS: Dict[str, ProtocolWorkload] = {
     ),
     "retrying_worker": ProtocolWorkload(
         name="retrying_worker",
-        aurora_source=PERFORMANCE_ROOT / "retrying_worker.au",
+        aura_source=PERFORMANCE_ROOT / "retrying_worker.au",
         cpython_source=PERFORMANCE_ROOT / "retrying_worker.py",
         ready=b"READY release-performance retrying-worker 16 112 288\n",
         go=b"GO release-performance retrying-worker\n",
@@ -167,21 +167,21 @@ PROTOCOL_WORKLOADS: Dict[str, ProtocolWorkload] = {
 }
 
 V6_LANES: Dict[str, WholeProcessLane] = {
-    "aurora_startup": WholeProcessLane(
-        name="aurora_startup",
-        implementation="aurora",
+    "aura_startup": WholeProcessLane(
+        name="aura_startup",
+        implementation="aura",
         source=ROOT / "benchmarks/direct_integer_loops/startup.au",
         expected_stdout=b"",
     ),
-    "aurora_int32": WholeProcessLane(
-        name="aurora_int32",
-        implementation="aurora",
+    "aura_int32": WholeProcessLane(
+        name="aura_int32",
+        implementation="aura",
         source=ROOT / "benchmarks/direct_integer_loops/int32_loop.au",
         expected_stdout=b"10000000\n",
     ),
-    "aurora_int64": WholeProcessLane(
-        name="aurora_int64",
-        implementation="aurora",
+    "aura_int64": WholeProcessLane(
+        name="aura_int64",
+        implementation="aura",
         source=ROOT / "benchmarks/direct_integer_loops/int64_loop.au",
         expected_stdout=b"10000000\n",
     ),
@@ -199,15 +199,15 @@ V6_LANES: Dict[str, WholeProcessLane] = {
     ),
 }
 
-AURORA_BUILD_SOURCES: Dict[str, pathlib.Path] = {
+AURA_BUILD_SOURCES: Dict[str, pathlib.Path] = {
     **{
-        name: contract.aurora_source
+        name: contract.aura_source
         for name, contract in PROTOCOL_WORKLOADS.items()
     },
     **{
         name: lane.source
         for name, lane in V6_LANES.items()
-        if lane.implementation == "aurora"
+        if lane.implementation == "aura"
     },
 }
 
@@ -249,25 +249,25 @@ def duration_summary(values: Sequence[float]) -> Dict[str, object]:
 
 
 def paired_duration_summary(
-    aurora: Sequence[float], cpython: Sequence[float]
+    aura: Sequence[float], cpython: Sequence[float]
 ) -> Dict[str, object]:
-    if len(aurora) != len(cpython) or not aurora:
+    if len(aura) != len(cpython) or not aura:
         raise BenchmarkError("paired duration samples must be nonempty and aligned")
-    aurora_values = [float(value) for value in aurora]
+    aura_values = [float(value) for value in aura]
     cpython_values = [float(value) for value in cpython]
-    aurora_summary = duration_summary(aurora_values)
+    aura_summary = duration_summary(aura_values)
     cpython_summary = duration_summary(cpython_values)
     ratios = [
-        aurora_value / cpython_value
-        for aurora_value, cpython_value in zip(aurora_values, cpython_values)
+        aura_value / cpython_value
+        for aura_value, cpython_value in zip(aura_values, cpython_values)
     ]
     return {
-        "aurora": aurora_summary,
+        "aura": aura_summary,
         "cpython": cpython_summary,
         "paired_ratios": ratios,
         "paired_median_ratio": statistics.median(ratios),
         "ratio_of_medians": (
-            float(aurora_summary["median_s"])
+            float(aura_summary["median_s"])
             / float(cpython_summary["median_s"])
         ),
     }
@@ -295,7 +295,7 @@ def measurement_plan(repeat: int) -> List[Tuple[str, List[str]]]:
         if workload == "v6":
             lanes = v6_lane_order(repeat)
         else:
-            lanes = ["aurora", "cpython"]
+            lanes = ["aura", "cpython"]
             if (repeat + position) % 2 == 1:
                 lanes.reverse()
         plan.append((workload, lanes))
@@ -467,15 +467,15 @@ def summarize_protocol_workload(
         ("protocol", "protocol_elapsed_s"),
         ("whole_process", "whole_process_elapsed_s"),
     ):
-        aurora = [
-            float(pair["workloads"][workload]["runs"]["aurora"][metric])  # type: ignore[index]
+        aura = [
+            float(pair["workloads"][workload]["runs"]["aura"][metric])  # type: ignore[index]
             for pair in pairs
         ]
         cpython = [
             float(pair["workloads"][workload]["runs"]["cpython"][metric])  # type: ignore[index]
             for pair in pairs
         ]
-        result[label] = paired_duration_summary(aurora, cpython)
+        result[label] = paired_duration_summary(aura, cpython)
     result["primary_measurement"] = "protocol"
     result["performance_gate"] = None
     return result
@@ -496,13 +496,13 @@ def summarize_v6(pairs: Sequence[Dict[str, object]]) -> Dict[str, object]:
         lane: duration_summary(values) for lane, values in samples.items()
     }
     adjusted = {
-        "aurora_int32": [
+        "aura_int32": [
             loop - startup
-            for loop, startup in zip(samples["aurora_int32"], samples["aurora_startup"])
+            for loop, startup in zip(samples["aura_int32"], samples["aura_startup"])
         ],
-        "aurora_int64": [
+        "aura_int64": [
             loop - startup
-            for loop, startup in zip(samples["aurora_int64"], samples["aurora_startup"])
+            for loop, startup in zip(samples["aura_int64"], samples["aura_startup"])
         ],
         "cpython_int": [
             loop - startup
@@ -524,23 +524,23 @@ def summarize_v6(pairs: Sequence[Dict[str, object]]) -> Dict[str, object]:
         }
         adjustment_validity[lane] = {"valid": valid, "invalid": invalid}
     whole_int32 = paired_duration_summary(
-        samples["aurora_int32"], samples["cpython_int"]
+        samples["aura_int32"], samples["cpython_int"]
     )
     whole_int64 = paired_duration_summary(
-        samples["aurora_int64"], samples["cpython_int"]
+        samples["aura_int64"], samples["cpython_int"]
     )
-    def adjusted_comparison(aurora_lane: str) -> Dict[str, object]:
+    def adjusted_comparison(aura_lane: str) -> Dict[str, object]:
         valid = sorted(
-            set(adjustment_validity[aurora_lane]["valid"])
+            set(adjustment_validity[aura_lane]["valid"])
             & set(adjustment_validity["cpython_int"]["valid"])
         )
         if not valid:
             raise BenchmarkError(
-                "no valid paired startup-adjusted V6 samples for " + aurora_lane
+                "no valid paired startup-adjusted V6 samples for " + aura_lane
             )
         return {
             **paired_duration_summary(
-                [adjusted[aurora_lane][index] for index in valid],
+                [adjusted[aura_lane][index] for index in valid],
                 [adjusted["cpython_int"][index] for index in valid],
             ),
             "valid_pair_repetitions": valid,
@@ -549,16 +549,16 @@ def summarize_v6(pairs: Sequence[Dict[str, object]]) -> Dict[str, object]:
             ],
         }
 
-    adjusted_int32 = adjusted_comparison("aurora_int32")
-    adjusted_int64 = adjusted_comparison("aurora_int64")
+    adjusted_int32 = adjusted_comparison("aura_int32")
+    adjusted_int64 = adjusted_comparison("aura_int64")
     return {
         "whole_process": lane_summaries,
         "startup_adjusted": adjusted_summaries,
         "comparisons": {
-            "aurora_int32_vs_cpython": whole_int32,
-            "aurora_int64_vs_cpython": whole_int64,
-            "aurora_int32_vs_cpython_startup_adjusted": adjusted_int32,
-            "aurora_int64_vs_cpython_startup_adjusted": adjusted_int64,
+            "aura_int32_vs_cpython": whole_int32,
+            "aura_int64_vs_cpython": whole_int64,
+            "aura_int32_vs_cpython_startup_adjusted": adjusted_int32,
+            "aura_int64_vs_cpython_startup_adjusted": adjusted_int64,
         },
         "primary_measurement": "whole_process",
         "performance_gate": None,
@@ -822,7 +822,7 @@ def classify_competing_processes(
             if cwd is None:
                 reasons.append("cargo/rustc/aura process with unknown cwd")
             elif path_is_within(cwd, ROOT) or str(ROOT.resolve()) in sample.arguments:
-                reasons.append("Aurora repository cargo/rustc/aura process")
+                reasons.append("Aura repository cargo/rustc/aura process")
         if (
             previous is not None
             and previous.cpu_percent >= COMPETING_CPU_PERCENT
@@ -879,7 +879,7 @@ def manifest_record() -> Dict[str, object]:
     return {
         "protocol_workloads": {
             name: {
-                "aurora_source": str(contract.aurora_source.resolve()),
+                "aura_source": str(contract.aura_source.resolve()),
                 "cpython_source": str(contract.cpython_source.resolve()),
                 "ready": contract.ready.decode("ascii"),
                 "go": contract.go.decode("ascii"),
@@ -905,7 +905,7 @@ def manifest_record() -> Dict[str, object]:
 
 
 def source_paths() -> List[pathlib.Path]:
-    paths = set(AURORA_BUILD_SOURCES.values())
+    paths = set(AURA_BUILD_SOURCES.values())
     paths.update(contract.cpython_source for contract in PROTOCOL_WORKLOADS.values())
     paths.update(
         lane.source for lane in V6_LANES.values() if lane.implementation == "cpython"
@@ -982,14 +982,14 @@ def qualify_aura_binary(aura: pathlib.Path) -> Dict[str, object]:
     }
 
 
-def build_aurora_workloads(
+def build_aura_workloads(
     aura: pathlib.Path, output_directory: pathlib.Path
 ) -> Tuple[Dict[str, pathlib.Path], List[Dict[str, object]]]:
     binaries: Dict[str, pathlib.Path] = {}
     records: List[Dict[str, object]] = []
-    for name, source in AURORA_BUILD_SOURCES.items():
+    for name, source in AURA_BUILD_SOURCES.items():
         if not source.is_file():
-            raise BenchmarkError("missing Aurora benchmark source " + str(source))
+            raise BenchmarkError("missing Aura benchmark source " + str(source))
         output = output_directory / name
         command = [
             str(aura),
@@ -1041,7 +1041,7 @@ def protocol_commands(
 ) -> Dict[str, Dict[str, List[str]]]:
     return {
         name: {
-            "aurora": [str(binaries[name])],
+            "aura": [str(binaries[name])],
             "cpython": [str(python), str(contract.cpython_source)],
         }
         for name, contract in PROTOCOL_WORKLOADS.items()
@@ -1055,7 +1055,7 @@ def v6_commands(
     for name, lane in V6_LANES.items():
         commands[name] = (
             [str(binaries[name])]
-            if lane.implementation == "aurora"
+            if lane.implementation == "aura"
             else [str(python), str(lane.source)]
         )
     return commands
@@ -1070,7 +1070,7 @@ def run_warmups(
     for name, contract in PROTOCOL_WORKLOADS.items():
         result[name] = {
             lane: run_protocol_lane(contract, lane, protocol[name][lane])
-            for lane in ("aurora", "cpython")
+            for lane in ("aura", "cpython")
         }
     result["v6"] = {
         lane: run_whole_process_lane(
@@ -1157,9 +1157,9 @@ def execute(options: Options) -> Dict[str, object]:
     inputs = qualify_inputs(options)
 
     with tempfile.TemporaryDirectory(
-        prefix="aurora-release-performance-"
+        prefix="aura-release-performance-"
     ) as directory:
-        binaries, builds = build_aurora_workloads(
+        binaries, builds = build_aura_workloads(
             options.aura.resolve(), pathlib.Path(directory)
         )
         before_timing = quiet_process_inventory()
@@ -1250,7 +1250,7 @@ def execute(options: Options) -> Dict[str, object]:
         "summaries": summaries,
         "performance_gate": None,
         "evidence_policy": (
-            "measured release evidence only; no Aurora-versus-CPython threshold"
+            "measured release evidence only; no Aura-versus-CPython threshold"
         ),
     }
 

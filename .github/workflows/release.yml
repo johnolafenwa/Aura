@@ -75,13 +75,13 @@ jobs:
         include:
           - name: linux-x64
             os: ubuntu-24.04
-            archive: aurora-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}-x86_64-unknown-linux-gnu
+            archive: aura-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}-x86_64-unknown-linux-gnu
           - name: macos-x64
             os: macos-15-intel
-            archive: aurora-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}-x86_64-apple-darwin
+            archive: aura-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}-x86_64-apple-darwin
           - name: macos-arm64
             os: macos-15
-            archive: aurora-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}-aarch64-apple-darwin
+            archive: aura-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}-aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
 
@@ -108,7 +108,7 @@ jobs:
 
       - name: Build release CLI
         env:
-          AURORA_BUILD_COMMIT: ${{ needs.release_identity.outputs.implementation_commit }}
+          AURA_BUILD_COMMIT: ${{ needs.release_identity.outputs.implementation_commit }}
         run: cargo build -p aura --release --locked
 
       - name: Package CLI
@@ -171,28 +171,28 @@ jobs:
 
       - name: Build docs
         env:
-          VITEPRESS_BASE: /Aurora/
-          AURORA_DOCS_COMMIT: ${{ steps.release-metadata.outputs.implementation_commit }}
+          VITEPRESS_BASE: /Aura/
+          AURA_DOCS_COMMIT: ${{ steps.release-metadata.outputs.implementation_commit }}
         run: npm run docs:build
 
       - name: Package docs
         shell: bash
         env:
-          DOCS_ARCHIVE_NAME: aurora-docs-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}.tar.gz
+          DOCS_ARCHIVE_NAME: aura-docs-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}.tar.gz
         run: tar -czf "$DOCS_ARCHIVE_NAME" -C docs/.vitepress/dist .
 
       - name: Upload VS Code extension
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: aurora-language-vsix
-          path: tools/vscode-aurora/aurora-language.vsix
+          name: aura-language-vsix
+          path: tools/vscode-aura/aura-language.vsix
           if-no-files-found: error
 
       - name: Upload docs artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: aurora-docs
-          path: aurora-docs-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}.tar.gz
+          name: aura-docs
+          path: aura-docs-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}.tar.gz
           if-no-files-found: error
 
   publish:

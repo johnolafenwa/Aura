@@ -1,0 +1,73 @@
+{
+  "name": "vscode-aura",
+  "displayName": "Aura Language",
+  "description": "VS Code support for the Aura programming language.",
+  "version": "0.2.0",
+  "publisher": "aura-lang",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.91.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "files": [
+    "INSTALL.md",
+    "README.md",
+    "dist/**",
+    "language-configuration.json",
+    "snippets/**",
+    "syntaxes/**"
+  ],
+  "activationEvents": [
+    "onLanguage:aura"
+  ],
+  "main": "./dist/extension.js",
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "vscode-languageclient": "^10.1.0",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "aura",
+        "aliases": [
+          "Aura",
+          "aura"
+        ],
+        "extensions": [
+          ".au"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "aura",
+        "scopeName": "source.aura",
+        "path": "./syntaxes/aura.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "aura",
+        "path": "./snippets/aura.json"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node ./scripts/build.js",
+    "vscode:prepublish": "npm run build",
+    "package:vsix": "npm run build && npx @vscode/vsce package --out aura-language.vsix --no-dependencies --allow-missing-repository --skip-license",
+    "test": "npm run build && node --test ./test/*.test.js",
+    "check": "npm run build && node --check ./src/extension.js && node --check ./scripts/build.js"
+  },
+  "keywords": [
+    "aura",
+    "language",
+    "vscode"
+  ]
+}

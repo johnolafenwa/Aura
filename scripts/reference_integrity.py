@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Inventory every Manual fence and execute its verified examples safely.
 
-The sidecar metadata makes every fence an explicit contract. Aurora source may
+The sidecar metadata makes every fence an explicit contract. Aura source may
 be checked, run, checked as an expected rejection, or checked in a local
 package; one allowlisted CLI form may run without a shell. Every remaining
 fence is classified as illustrative with a specific reason. Source hashes make
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-AURORA_FENCE_LANGUAGES = frozenset({"aurora", "python"})
+AURA_FENCE_LANGUAGES = frozenset({"aura", "python"})
 VERIFIED_MODES = frozenset(
     {"check", "run", "check-fail", "package-check", "command"}
 )
@@ -53,15 +53,15 @@ class ReferenceBlock:
     line: int
     language: str
     source: str
-    identifier_kind: str = "aurora"
+    identifier_kind: str = "aura"
 
     @property
     def identifier(self) -> str:
         return f"{self.path}#{self.identifier_kind}-{self.ordinal}"
 
     @property
-    def is_aurora(self) -> bool:
-        return self.language in AURORA_FENCE_LANGUAGES
+    def is_aura(self) -> bool:
+        return self.language in AURA_FENCE_LANGUAGES
 
     @property
     def sha256(self) -> str:
@@ -74,7 +74,7 @@ class ManualInventory:
     fence_count: int
     fence_languages: Mapping[str, int]
     blocks: tuple[ReferenceBlock, ...]
-    aurora_blocks: tuple[ReferenceBlock, ...]
+    aura_blocks: tuple[ReferenceBlock, ...]
 
     @property
     def page_count(self) -> int:
@@ -96,7 +96,7 @@ def _is_closing_fence(line: str, marker: str) -> bool:
 def collect_manual(manual_dir: Path) -> ManualInventory:
     pages: list[str] = []
     blocks: list[ReferenceBlock] = []
-    aurora_blocks: list[ReferenceBlock] = []
+    aura_blocks: list[ReferenceBlock] = []
     languages: Counter[str] = Counter()
     fence_count = 0
 
@@ -105,8 +105,8 @@ def collect_manual(manual_dir: Path) -> ManualInventory:
         pages.append(relative)
         lines = page.read_text(encoding="utf-8").splitlines(keepends=True)
         index = 0
-        aurora_ordinal = 0
-        non_aurora_ordinals: Counter[str] = Counter()
+        aura_ordinal = 0
+        non_aura_ordinals: Counter[str] = Counter()
         while index < len(lines):
             match = FENCE_OPEN_RE.match(lines[index].rstrip("\r\n"))
             if match is None:
@@ -128,13 +128,13 @@ def collect_manual(manual_dir: Path) -> ManualInventory:
             source = "".join(body)
             if source and not source.endswith("\n"):
                 source += "\n"
-            if language in AURORA_FENCE_LANGUAGES:
-                aurora_ordinal += 1
-                ordinal = aurora_ordinal
-                identifier_kind = "aurora"
+            if language in AURA_FENCE_LANGUAGES:
+                aura_ordinal += 1
+                ordinal = aura_ordinal
+                identifier_kind = "aura"
             else:
-                non_aurora_ordinals[language] += 1
-                ordinal = non_aurora_ordinals[language]
+                non_aura_ordinals[language] += 1
+                ordinal = non_aura_ordinals[language]
                 identifier_kind = language
             block = ReferenceBlock(
                 path=relative,
@@ -145,15 +145,15 @@ def collect_manual(manual_dir: Path) -> ManualInventory:
                 identifier_kind=identifier_kind,
             )
             blocks.append(block)
-            if block.is_aurora:
-                aurora_blocks.append(block)
+            if block.is_aura:
+                aura_blocks.append(block)
 
     return ManualInventory(
         pages=tuple(pages),
         fence_count=fence_count,
         fence_languages=dict(sorted(languages.items())),
         blocks=tuple(blocks),
-        aurora_blocks=tuple(aurora_blocks),
+        aura_blocks=tuple(aura_blocks),
     )
 
 
@@ -202,9 +202,9 @@ def validate_block_metadata(
                     errors.append(
                         f"{mode} metadata for {identifier} must pin exact {stream}"
                     )
-            if mode in {"check", "run", "package-check"} and not block.is_aurora:
+            if mode in {"check", "run", "package-check"} and not block.is_aura:
                 errors.append(
-                    f"{mode} metadata for {identifier} requires an Aurora/Python fence"
+                    f"{mode} metadata for {identifier} requires an Aura/Python fence"
                 )
             if mode == "command" and block.language != "bash":
                 errors.append(
@@ -232,9 +232,9 @@ def validate_block_metadata(
                     )
             continue
         exit_code = entry.get("exit_code")
-        if mode == "check-fail" and not block.is_aurora:
+        if mode == "check-fail" and not block.is_aura:
             errors.append(
-                f"check-fail metadata for {identifier} requires an Aurora/Python fence"
+                f"check-fail metadata for {identifier} requires an Aura/Python fence"
             )
         if not isinstance(exit_code, int) or exit_code == 0:
             errors.append(
@@ -446,7 +446,7 @@ def execute_examples(
     repository_root: Path,
 ) -> list[str]:
     errors: list[str] = []
-    with tempfile.TemporaryDirectory(prefix="aurora-reference-") as directory:
+    with tempfile.TemporaryDirectory(prefix="aura-reference-") as directory:
         extracted = Path(directory)
         for block in blocks:
             entry = metadata.get(block.identifier)
@@ -553,7 +553,7 @@ def _resolve_aura_binary(repository_root: Path, requested: str | None) -> Path:
             check=True,
         )
     if not candidate.is_file() or not os.access(candidate, os.X_OK):
-        raise FileNotFoundError(f"Aurora CLI is not executable: {candidate}")
+        raise FileNotFoundError(f"Aura CLI is not executable: {candidate}")
     return candidate
 
 
@@ -577,8 +577,8 @@ def _print_inventory(
 ) -> None:
     modes = _mode_counts(inventory.blocks, metadata)
     verified = sum(modes[mode] for mode in VERIFIED_MODES)
-    aurora_modes = _mode_counts(inventory.aurora_blocks, metadata)
-    aurora_verified = sum(aurora_modes[mode] for mode in VERIFIED_MODES)
+    aura_modes = _mode_counts(inventory.aura_blocks, metadata)
+    aura_verified = sum(aura_modes[mode] for mode in VERIFIED_MODES)
     feature_pages = sum(
         1
         for role in page_roles.values()
@@ -612,15 +612,15 @@ def _print_inventory(
                 if modes[mode]
             )
         )
-    print(f"  Aurora blocks: {len(inventory.aurora_blocks)}")
+    print(f"  Aura blocks: {len(inventory.aura_blocks)}")
     print(
-        "  verified Aurora blocks: "
-        f"{aurora_verified} (check={aurora_modes['check']}, "
-        f"run={aurora_modes['run']}, "
-        f"expected-rejection={aurora_modes['check-fail']}, "
-        f"package-check={aurora_modes['package-check']})"
+        "  verified Aura blocks: "
+        f"{aura_verified} (check={aura_modes['check']}, "
+        f"run={aura_modes['run']}, "
+        f"expected-rejection={aura_modes['check-fail']}, "
+        f"package-check={aura_modes['package-check']})"
     )
-    print(f"  illustrative Aurora blocks: {aurora_modes['illustrative']}")
+    print(f"  illustrative Aura blocks: {aura_modes['illustrative']}")
     print("  per-page fenced blocks:")
     page_blocks: dict[str, list[ReferenceBlock]] = defaultdict(list)
     for block in inventory.blocks:
@@ -631,10 +631,10 @@ def _print_inventory(
             continue
         counts = _mode_counts(blocks, metadata)
         page_verified = sum(counts[mode] for mode in VERIFIED_MODES)
-        aurora_count = sum(1 for block in blocks if block.is_aurora)
+        aura_count = sum(1 for block in blocks if block.is_aura)
         print(
             f"    {path}: total={len(blocks)}, verified={page_verified}, "
-            f"illustrative={counts['illustrative']}, aurora={aurora_count}"
+            f"illustrative={counts['illustrative']}, aura={aura_count}"
         )
 
 
@@ -654,7 +654,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--aura-bin",
         default=os.environ.get("AURA_BIN"),
-        help="Aurora CLI binary (or set AURA_BIN)",
+        help="Aura CLI binary (or set AURA_BIN)",
     )
     parser.add_argument(
         "--inventory-only",
@@ -723,7 +723,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             aura_binary = _resolve_aura_binary(root, args.aura_bin)
         except (OSError, subprocess.CalledProcessError) as error:
-            errors.append(f"cannot prepare Aurora CLI: {error}")
+            errors.append(f"cannot prepare Aura CLI: {error}")
         else:
             errors.extend(
                 execute_examples(inventory.blocks, blocks, aura_binary, root)

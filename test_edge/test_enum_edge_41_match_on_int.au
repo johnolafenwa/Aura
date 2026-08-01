@@ -1,4 +1,4 @@
-# Test: match on integer literals is NOT supported in Aurora
+# Test: match on integer literals is NOT supported in Aura
 # ISSUE: case 0: / case 1: etc. gives "expected identifier" error
 # Match patterns only support: EnumName.Variant, EnumName.Variant(binding), _
 # Workaround: use if/elif chains for integer matching

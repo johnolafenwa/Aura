@@ -1,5 +1,0 @@
-error[AU2999]: `main` must return `int32` or `None` in the bootstrap runtime
- --> crates/aurora-compiler/tests/fixtures/check-fail/main_returns_uint64.au:1:1
-  |
-1 | def main() -> uint64:
-  | ^

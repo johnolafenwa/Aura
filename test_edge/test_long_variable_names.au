@@ -1,7 +1,7 @@
 ## Test 11: Very long identifiers
 def main() -> int32:
     this_is_a_very_long_variable_name_that_tests_the_limit_of_the_compiler: int32 = 42
-    another_extremely_long_identifier_for_testing_purposes_in_aurora_lang: int32 = 58
-    total = this_is_a_very_long_variable_name_that_tests_the_limit_of_the_compiler + another_extremely_long_identifier_for_testing_purposes_in_aurora_lang
+    another_extremely_long_identifier_for_testing_purposes_in_aura_lang: int32 = 58
+    total = this_is_a_very_long_variable_name_that_tests_the_limit_of_the_compiler + another_extremely_long_identifier_for_testing_purposes_in_aura_lang
     print(total)
     return 0

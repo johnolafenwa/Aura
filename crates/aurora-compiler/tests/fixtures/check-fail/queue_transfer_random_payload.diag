@@ -1,6 +1,0 @@
-error[AU3008]: Queue payload `random.Rng` cannot cross a worker boundary because `random.Rng` is a stateful generator and is not Transfer
- --> crates/aurora-compiler/tests/fixtures/check-fail/queue_transfer_random_payload.au:4:14
-  |
-4 |     _queue = Queue[random.Rng]()
-  |              ^
-  = help: use a Queue payload made only from Transfer components; keep capabilities and host resources on their owning worker

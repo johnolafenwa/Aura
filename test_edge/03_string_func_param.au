@@ -8,7 +8,7 @@ def chain(a: String, b: String) -> String:
     return a + " and " + b
 
 def main() -> int32:
-    result = greet("aurora")
+    result = greet("aura")
     print(result)
 
     loud = shout("wow")

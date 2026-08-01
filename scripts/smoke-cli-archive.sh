@@ -14,7 +14,7 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 archive="$(cd "$(dirname "$archive")" && pwd -P)/$(basename "$archive")"
-work_root="$(mktemp -d "${TMPDIR:-/tmp}/aurora-cli-archive-smoke.XXXXXX")"
+work_root="$(mktemp -d "${TMPDIR:-/tmp}/aura-cli-archive-smoke.XXXXXX")"
 install_root="$work_root/install"
 source_root="$work_root/sources"
 output_root="$work_root/output"
@@ -161,12 +161,12 @@ run_and_show() {
 
 cd "$work_root"
 
-expected_commit="${AURORA_EXPECTED_COMMIT:-}"
+expected_commit="${AURA_EXPECTED_COMMIT:-}"
 if [[ -z "$expected_commit" ]]; then
   expected_commit="$(git -C "$repo_root" rev-parse --verify --short=12 HEAD^{commit})"
 fi
 if [[ ! "$expected_commit" =~ ^[0-9a-fA-F]{12}$ ]]; then
-  echo "expected Aurora build commit must be exactly 12 hexadecimal digits" >&2
+  echo "expected Aura build commit must be exactly 12 hexadecimal digits" >&2
   exit 2
 fi
 expected_version="aura 0.2.0-preview ($expected_commit)"
@@ -184,7 +184,7 @@ if [[ -e "$cache_root" ]]; then
 fi
 
 run_and_show "$basic_stdout" "$basic_stderr" 60 \
-  env AURORA_CACHE_DIR="$cache_root" CARGO="$missing_cargo" \
+  env AURA_CACHE_DIR="$cache_root" CARGO="$missing_cargo" \
   "$packaged" run --backend direct \
   "$source_root/examples/basic_addition.au"
 if [[ "$(<"$basic_stdout")" != "16" ]]; then
@@ -193,7 +193,7 @@ if [[ "$(<"$basic_stdout")" != "16" ]]; then
 fi
 
 run_and_show "$retry_stdout" "$retry_stderr" 90 \
-  env AURORA_CACHE_DIR="$cache_root" CARGO="$missing_cargo" \
+  env AURA_CACHE_DIR="$cache_root" CARGO="$missing_cargo" \
   "$packaged" run --backend direct \
   "$source_root/examples/agents/retrying_network_worker.au"
 

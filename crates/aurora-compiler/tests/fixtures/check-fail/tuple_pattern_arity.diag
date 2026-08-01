@@ -1,5 +1,0 @@
-error[AU2999]: tuple pattern has 3 elements but the scrutinee has 2
- --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_pattern_arity.au:3:14
-  |
-3 |         case (left, right, third):
-  |              ^

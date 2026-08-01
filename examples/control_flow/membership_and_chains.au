@@ -7,7 +7,7 @@ def main():
     ports.push(443)
 
     mut allowed = Set[String]()
-    allowed.insert("aurora.dev")
+    allowed.insert("aura.dev")
 
     mut ages = Map[String, int32]()
     ages.set("ada", 36)
@@ -16,7 +16,7 @@ def main():
 
     print(443 in ports)
     print(8080 not in ports)
-    print("aurora.dev" in allowed)
+    print("aura.dev" in allowed)
     print("ada" in ages)
     print("/health" in request)
     print(in_range(80, 1, 1024))

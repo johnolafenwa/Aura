@@ -1,5 +1,0 @@
-error[AU2002]: variant `Value` of enum `PlainEnvelope` expects `int64`, found `String` (conflicting inferred types for `T`: `int64` and `String`)
- --> crates/aurora-compiler/tests/fixtures/check-path-fail/imported_generic_enum_payload_mismatch.au:4:72
-  |
-4 |     value = imported_generic_support.remote.PlainEnvelope[int64].Value("wrong")
-  |                                                                        ^

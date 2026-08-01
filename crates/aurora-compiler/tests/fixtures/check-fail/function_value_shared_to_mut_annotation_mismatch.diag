@@ -1,5 +1,0 @@
-error[AU2002]: function parameter 1 has `shared` capability, but `def(mut Counter) -> None` requires `mut`; update that function type parameter to use the matching bare, `mut`, or `own` prefix
- --> crates/aurora-compiler/tests/fixtures/check-fail/function_value_shared_to_mut_annotation_mismatch.au:8:5
-  |
-8 |     mutable_only: def(mut Counter) -> None = observe
-  |     ^

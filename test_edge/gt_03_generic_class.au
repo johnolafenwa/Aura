@@ -1,5 +1,5 @@
 ## Test 03: Generic class with field access and method
-## Expects: 99 then "aurora"
+## Expects: 99 then "aura"
 
 class Box[T]:
     value: T
@@ -10,6 +10,6 @@ class Box[T]:
 def main() -> int32:
     int_box: Box[int32] = Box(value=99)
     print(int_box.get())
-    str_box: Box[String] = Box(value="aurora")
+    str_box: Box[String] = Box(value="aura")
     print(str_box.get())
     return 0

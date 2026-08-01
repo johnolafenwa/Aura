@@ -43,7 +43,7 @@ jobs:
 
       - name: Build docs
         env:
-          VITEPRESS_BASE: /Aurora/
+          VITEPRESS_BASE: /Aura/
         run: npm run docs:build
 
       - name: Upload Pages artifact

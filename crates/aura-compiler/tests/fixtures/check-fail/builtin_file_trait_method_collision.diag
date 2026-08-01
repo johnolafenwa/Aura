@@ -1,0 +1,6 @@
+error[AU2006]: trait method `close` collides with builtin method `fs.File.close`
+ --> crates/aura-compiler/tests/fixtures/check-fail/builtin_file_trait_method_collision.au:7:5
+  |
+7 |     def close(self) -> int64:
+  |     ^
+  = help: rename the trait method; builtin methods cannot be shadowed by trait implementations

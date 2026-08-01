@@ -80,7 +80,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.workflow,
         )
         self.assertNotIn("inputs.tag", self.workflow)
-        self.assertIn(f"path: aurora-docs-{release_identity}.tar.gz", self.workflow)
+        self.assertIn(f"path: aura-docs-{release_identity}.tar.gz", self.workflow)
 
     def test_manual_publish_requires_tag_to_identify_immutable_source_commit(self) -> None:
         immutable_ref = "ref: ${{ needs.release_identity.outputs.implementation_commit }}"
@@ -120,7 +120,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.workflow,
         )
         self.assertIn(
-            "AURORA_DOCS_COMMIT: "
+            "AURA_DOCS_COMMIT: "
             "${{ steps.release-metadata.outputs.implementation_commit }}",
             self.workflow,
         )
@@ -146,7 +146,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.workflow,
         )
         self.assertIn(
-            f"DOCS_ARCHIVE_NAME: aurora-docs-{release_identity}.tar.gz",
+            f"DOCS_ARCHIVE_NAME: aura-docs-{release_identity}.tar.gz",
             self.workflow,
         )
         self.assertIn('tar -czf "$DOCS_ARCHIVE_NAME"', self.workflow)
@@ -176,16 +176,16 @@ class ArchiveLayoutTests(unittest.TestCase):
     def test_package_layout_is_stable_and_self_contained(self) -> None:
         script = PACKAGE_SCRIPT.read_text(encoding="utf-8")
         required_contracts = (
-            'mkdir -p "$archive_root/bin" "$archive_root/lib/aurora" '
+            'mkdir -p "$archive_root/bin" "$archive_root/lib/aura" '
             '"$archive_root/examples/agents"',
             'cp target/release/aura "$archive_root/bin/aura"',
-            'cp target/release/libaurora_compiler.a '
-            '"$archive_root/lib/aurora/libaurora_compiler.a"',
+            'cp target/release/libaura_compiler.a '
+            '"$archive_root/lib/aura/libaura_compiler.a"',
             'cp examples/basic_addition.au "$archive_root/examples/basic_addition.au"',
             'cp examples/agents/retrying_network_worker.au '
             '"$archive_root/examples/agents/retrying_network_worker.au"',
             'Path(os.environ["ARCHIVE_ROOT"]) / '
-            '"lib/aurora/native-link-args.json"',
+            '"lib/aura/native-link-args.json"',
             'cp README.md LICENSE "$archive_root/"',
             'cp crates/aura/README.md "$archive_root/AURA_CLI_README.md"',
             'tar -czf "$archive_name.tar.gz" -C release "$archive_name"',
@@ -210,7 +210,7 @@ class ArchiveLayoutTests(unittest.TestCase):
 
 class InstalledArchiveSmokeTests(unittest.TestCase):
     def test_archive_smoke_uses_copied_sources_without_cargo(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="aurora-release-test-") as temp:
+        with tempfile.TemporaryDirectory(prefix="aura-release-test-") as temp:
             root = Path(temp)
             commit = subprocess.run(
                 ["git", "rev-parse", "--verify", "--short=12", "HEAD^{commit}"],
@@ -219,7 +219,7 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 check=True,
             ).stdout.strip()
-            archive_root = root / "aurora-vtest-aarch64-apple-darwin"
+            archive_root = root / "aura-vtest-aarch64-apple-darwin"
             binary = archive_root / "bin" / "aura"
             binary.parent.mkdir(parents=True)
             packaged_basic = archive_root / "examples" / "basic_addition.au"
@@ -238,11 +238,11 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                     f"""\
                     #!/usr/bin/env bash
                     set -euo pipefail
-                    printf 'cwd=%s\\n' "$PWD" >> "$AURORA_SMOKE_TEST_LOG"
-                    printf 'cargo=%s\\n' "${{CARGO:-}}" >> "$AURORA_SMOKE_TEST_LOG"
-                    printf 'args=%s\\n' "$*" >> "$AURORA_SMOKE_TEST_LOG"
+                    printf 'cwd=%s\\n' "$PWD" >> "$AURA_SMOKE_TEST_LOG"
+                    printf 'cargo=%s\\n' "${{CARGO:-}}" >> "$AURA_SMOKE_TEST_LOG"
+                    printf 'args=%s\\n' "$*" >> "$AURA_SMOKE_TEST_LOG"
                     printf 'cache-args=%s|%s\\n' \
-                      "${{AURORA_CACHE_DIR:-}}" "$*" >> "$AURORA_SMOKE_TEST_LOG"
+                      "${{AURA_CACHE_DIR:-}}" "$*" >> "$AURA_SMOKE_TEST_LOG"
                     if [[ -e "${{CARGO:-}}" ]]; then
                       echo "CARGO unexpectedly exists" >&2
                       exit 90
@@ -251,14 +251,14 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                       echo "aura 0.2.0-preview ({commit})"
                     elif [[ "$*" == *"basic_addition.au" ]]; then
                       test -f "${{@: -1}}"
-                      mkdir -p "$AURORA_CACHE_DIR"
+                      mkdir -p "$AURA_CACHE_DIR"
                       echo "16"
                     elif [[ "$*" == *"retrying_network_worker.au" ]]; then
                       test -f "${{@: -1}}"
-                      test -d "$AURORA_CACHE_DIR"
-                      if [[ -n "${{AURORA_SMOKE_STUBBORN_PID:-}}" ]]; then
+                      test -d "$AURA_CACHE_DIR"
+                      if [[ -n "${{AURA_SMOKE_STUBBORN_PID:-}}" ]]; then
                         (trap '' TERM; exec sleep 300) >/dev/null 2>&1 &
-                        printf '%s\n' "$!" > "$AURORA_SMOKE_STUBBORN_PID"
+                        printf '%s\n' "$!" > "$AURA_SMOKE_STUBBORN_PID"
                       fi
                       printf '%b' {RETRY_STDOUT!r}
                     else
@@ -270,7 +270,7 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                 encoding="utf-8",
             )
             binary.chmod(0o755)
-            archive = root / "aurora-vtest-aarch64-apple-darwin.tar.gz"
+            archive = root / "aura-vtest-aarch64-apple-darwin.tar.gz"
             with tarfile.open(archive, "w:gz") as handle:
                 handle.add(archive_root, arcname=archive_root.name)
 
@@ -279,9 +279,9 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                 cwd=REPO_ROOT,
                 env={
                     **os.environ,
-                    "AURORA_SMOKE_TEST_LOG": str(log),
-                    "AURORA_SMOKE_STUBBORN_PID": str(stubborn_pid_file),
-                    "AURORA_CACHE_DIR": str(ambient_cache),
+                    "AURA_SMOKE_TEST_LOG": str(log),
+                    "AURA_SMOKE_STUBBORN_PID": str(stubborn_pid_file),
+                    "AURA_CACHE_DIR": str(ambient_cache),
                 },
                 text=True,
                 stdout=subprocess.PIPE,

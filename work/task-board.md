@@ -2,6 +2,39 @@
 
 Last updated: 2026-08-01
 
+## Aura identity migration (release packaging in progress)
+
+- Authorized target: atomically rename the product and language from Aurora to
+  Aura before the first public `v0.2.0-preview` release. The `aura` CLI and
+  `.au` extension stay unchanged; compiler crate/library/ABI names, cache and
+  environment contracts, manifests, diagnostics, editor tooling, docs, URLs,
+  and release artifacts move to the single Aura identity.
+- Current documentation describes the implemented Aura surface directly.
+  Removed-feature narratives and speculative-version commentary have been
+  removed from maintained README, Manual, Learn, tutorial, example, and tooling
+  prose. Existing ADR bodies, work logs, the proposal, and CHANGELOG retain
+  truthful history; ADR-0042 and its index note are the explicit rename bridge.
+- Pre-flip inventory is recorded in
+  `work/2026-08-01-aura-identity-migration.md`: 6,174 identity-style source
+  identifiers, 2,881 runtime symbols, 329 environment-variable tokens, 194
+  manifest references, 10 manifest paths, 711 diagnostic-oracle tokens, 1,568
+  documentation tokens, three old repository URLs, 1,746 identity-bearing
+  paths, and 52 prose-review candidates.
+- The compiler crate/library/ABI, cache and environment contracts, package
+  manifests, diagnostics, editor tooling, docs/site, URLs, and release metadata
+  now use Aura. A failing-first repository identity/content gate covers all
+  maintained public Markdown; focused compiler, CLI, package, reference, LSP,
+  extension, docs, release, formatting, and hygiene checks are green.
+- The exact full `npm run ci` replay is green: 336 CLI/runtime tests, 1,499
+  compiler-library tests, the forced MIR/direct matrix, 101 LSP tests, 19
+  extension tests, compiler coverage at 96.28% lines / 97.21% functions /
+  94.62% regions, LSP coverage at 100%, reference integrity over 37 pages and
+  260 fences, all 683 manifests, docs, audits, warning-denied Clippy, and
+  hygiene.
+- Remaining: atomic commit, final local tag movement, artifact rebuild,
+  checksum verification, and local-only handoff report.
+- Nothing will be pushed or published. Protected user files remain untouched.
+
 ## v0.2.0-preview pre-publish patch
 
 - Authorized target: close the queue-iteration oversubscription livelock if

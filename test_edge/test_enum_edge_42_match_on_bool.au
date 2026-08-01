@@ -1,4 +1,4 @@
-# Test: match on boolean literals is NOT supported in Aurora
+# Test: match on boolean literals is NOT supported in Aura
 # ISSUE: case true: / case false: gives "expected identifier" error
 # Match patterns only support: EnumName.Variant, EnumName.Variant(binding), _
 # Workaround: use if/else for boolean matching

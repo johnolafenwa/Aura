@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-aurora-compiler = { path = "../aurora-compiler" }
+aura-compiler = { path = "../aura-compiler" }
 libc = "0.2"
 serde_json = "1"
 

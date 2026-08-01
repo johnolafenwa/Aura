@@ -131,7 +131,7 @@ runner report the exact worker-start span and verify that the timer intervals
 overlapped. The raw overshoots provide the p99 sample set.
 
 Keeping worker-side observations primitive is part of the measurement
-contract. Aurora tasks are cooperative: worker-side string interpolation after
+contract. Aura tasks are cooperative: worker-side string interpolation after
 one timer's timestamp would delay the next ready worker and incorrectly charge
 formatting overhead to that timer's overshoot. Formatting only after the task
 group has joined removes that observer effect. The final line is:
@@ -170,13 +170,13 @@ DONE starvation
 The runner requires both lines exactly, rejects standard error, nonzero exit,
 negative elapsed time, extra output, and timeout, and uses the worst elapsed
 time across repetitions for the starvation gate. The runner forces
-`AURORA_WORKERS=1` for this workload so the measurement continues to prove
+`AURA_WORKERS=1` for this workload so the measurement continues to prove
 cooperative safepoint progress on one worker after multicore becomes the
 default. Other non-multicore workloads explicitly remove any ambient
-`AURORA_WORKERS` override and therefore measure the production default.
+`AURA_WORKERS` override and therefore measure the production default.
 
 `cpu-scaling` is built once and invoked with either `1` or `4` as its sole
-program argument. Both timed shapes run with `AURORA_WORKERS=4`; changing the
+program argument. Both timed shapes run with `AURA_WORKERS=4`; changing the
 worker count between the legs invalidates the comparison. Each child first
 reports to a prepared queue and then parks on a release queue. Only after every
 child is parked does the parent emit and flush:

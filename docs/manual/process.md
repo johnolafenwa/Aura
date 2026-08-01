@@ -1,6 +1,6 @@
 # Process Module
 
-The `process` module runs child processes without a shell by default. Commands are explicit `Vec[String]` argv values. That means `["/bin/echo", "hello world"]` runs exactly one executable with one argument; Aurora does not split strings or expand shell syntax.
+The `process` module runs child processes without a shell by default. Commands are explicit `Vec[String]` argv values. That means `["/bin/echo", "hello world"]` runs exactly one executable with one argument; Aura does not split strings or expand shell syntax.
 
 ```python
 import process
@@ -42,11 +42,11 @@ null stdin, captured stdout/stderr, and no caller deadline. Storing the value
 behind a structural function annotation, class field, or mutable collection
 erases those call-site extras and requires every positional argument.
 
-The `env` map augments the inherited host environment and replaces inherited values with matching names. Aurora never invokes a shell for `run` or `start`. Capture occurs only for streams configured with `process.pipe()` and each captured stream is capped at 64 MiB.
+The `env` map augments the inherited host environment and replaces inherited values with matching names. Aura never invokes a shell for `run` or `start`. Capture occurs only for streams configured with `process.pipe()` and each captured stream is capped at 64 MiB.
 
 ```python
 def run_echo() -> Result[None, process.Error]:
-    command = ["/bin/echo", "aurora"]
+    command = ["/bin/echo", "aura"]
     completed = try process.run(command, stdout=process.pipe(), stderr=process.pipe(), timeout=1s)
 
     try completed.check()
@@ -244,11 +244,11 @@ Child, pipe, and supervisor values are resources. Prefer `with` for supervisors 
 
 For child processes, `close()` terminates a still-running child. With `group=true`, cleanup targets the process group on maintained Unix hosts.
 
-When `process.run` times out or its Aurora task is cancelled, the runtime terminates the child and waits for cleanup; with `group=true` it applies that policy to the process group on maintained Unix hosts. As with all host I/O, cancellation cannot retroactively undo side effects already performed by the child.
+When `process.run` times out or its Aura task is cancelled, the runtime terminates the child and waits for cleanup; with `group=true` it applies that policy to the process group on maintained Unix hosts. As with all host I/O, cancellation cannot retroactively undo side effects already performed by the child.
 
 ## Grammar
 
-The process module adds no source-language grammar. Commands are ordinary `Vec[String]` expressions passed to ordinary calls; Aurora does not parse shell syntax, split one command string, expand variables, interpret redirections, or construct pipelines. Named arguments, `Duration` literals, `Result`, `Option`, `try`, `match`, and `with` use their general grammar.
+The process module adds no source-language grammar. Commands are ordinary `Vec[String]` expressions passed to ordinary calls; Aura does not parse shell syntax, split one command string, expand variables, interpret redirections, or construct pipelines. Named arguments, `Duration` literals, `Result`, `Option`, `try`, `match`, and `with` use their general grammar.
 
 An omitted parameter displayed with `= ...` selects the documented builtin default. The ellipsis is reference notation, not a source expression. Process and standard-I/O variants use ordinary qualified enum construction and pattern syntax.
 
@@ -271,7 +271,7 @@ The function and method signatures above are normative. Commands are `Vec[String
 
 ## Ownership And Evaluation Order
 
-Arguments are evaluated left to right before process creation. `run` and `start` share their Aurora arguments for the call and copy the required command, environment, and path data into host process state; they do not retain Aurora borrows after returning. A supervisor takes ownership of retained configuration. Child, pipe, completed-output, status, error, and event values returned from an operation are owned by the caller.
+Arguments are evaluated left to right before process creation. `run` and `start` share their Aura arguments for the call and copy the required command, environment, and path data into host process state; they do not retain Aura borrows after returning. A supervisor takes ownership of retained configuration. Child, pipe, completed-output, status, error, and event values returned from an operation are owned by the caller.
 
 Moving a resource invalidates the source binding. `with` closes a supervisor on every scope exit; explicit child and pipe `close()` operations close shared handle state, and child close terminates a process still running. Cleanup is ordered after body evaluation but cannot undo child filesystem, network, or other external side effects already performed.
 
@@ -298,10 +298,10 @@ Process-group creation and signaling are maintained on Unix hosts. On unsupporte
 
 Each `process.run` captured stream and each whole-pipe read is capped at 64 MiB; bounded pipe byte reads accept `1..=67108864`. This stream ceiling is independent of the larger filesystem whole-read limit. Text access is strict UTF-8. Supervisor restart backoff must be at least 10 ms when restart is enabled; omitted or `-1` maximum restarts means unlimited. There is no shell, command-string parser, pipeline builder, pseudo-terminal API, daemon manager, sandbox, resource-limit API, or portable signal-number abstraction.
 
-Executable discovery, path syntax, inherited environment, signal availability, numeric exit behavior, graceful-termination meaning, scheduling, and side effects are host-dependent. Timeouts and cancellation bound Aurora's wait but cannot retract child actions that already occurred. Group cleanup of descendants is a maintained Unix contract, not a portable guarantee for every host process tree.
+Executable discovery, path syntax, inherited environment, signal availability, numeric exit behavior, graceful-termination meaning, scheduling, and side effects are host-dependent. Timeouts and cancellation bound Aura's wait but cannot retract child actions that already occurred. Group cleanup of descendants is a maintained Unix contract, not a portable guarantee for every host process tree.
 
 ## Status
 
-One-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restart/event behavior, typed failures, and Unix process-group cleanup are implemented and maintained in Aurora 0.2. The fixed stream-cap policy recorded by ADR-0018 is Accepted, as is the omitted-timeout and invalid host-timer policy recorded by ADR-0019.
+One-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restart/event behavior, typed failures, and Unix process-group cleanup are implemented and maintained in Aura 0.2. The fixed stream-cap policy recorded by ADR-0018 is Accepted, as is the omitted-timeout and invalid host-timer policy recorded by ADR-0019.
 
 Shell evaluation, pipelines, pseudo-terminals, Windows process groups, portable signal control, sandboxing, and operating-system service management are unavailable. They are future, non-normative facilities rather than implicit behavior of the current API.

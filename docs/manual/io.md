@@ -107,7 +107,7 @@ Standard input and output are process-global resources. Output calls are observa
 
 Unknown I/O members use `AU2001`, wrong types use `AU2002`, invalid argument binding uses `AU2004`, and remaining static rejections use `AU2999`. The documented stream failures are typed `Result.Err(io.Error)` values, not language diagnostics. Invalid UTF-8 therefore produces `io.Error.InvalidData`, and a broken stream produces the applicable error variant.
 
-An uncaught failure outside the typed stream boundary uses the general runtime categories, including `AU4005` for a resource or I/O trap. The `aura` CLI treats its own broken output pipe as clean termination so compiler commands compose with pipe consumers; that tooling policy does not change an Aurora program's `io.write` return type.
+An uncaught failure outside the typed stream boundary uses the general runtime categories, including `AU4005` for a resource or I/O trap. The `aura` CLI treats its own broken output pipe as clean termination so compiler commands compose with pipe consumers; that tooling policy does not change an Aura program's `io.write` return type.
 
 ## Backend Support
 
@@ -117,12 +117,13 @@ The actual standard streams are supplied by the host process. A backend may buff
 
 ## Limits And Implementation-Defined Behavior
 
-Aurora 0.2 exposes line-oriented text input only; it has no standard-input byte API, terminal mode API, stream replacement API, asynchronous console API, or built-in formatted-output language. `io.read_line` has no separate Aurora line-length cap and therefore allocates according to the incoming line and host memory limits.
+Aura 0.2 exposes line-oriented text input only; it has no standard-input byte API, terminal mode API, stream replacement API, asynchronous console API, or built-in formatted-output language. `io.read_line` has no separate Aura line-length cap and therefore allocates according to the incoming line and host memory limits.
 
 Terminal encoding before bytes reach the process, host pipe buffering, scheduling between concurrent writers, and the precise message stored in `io.Error.Other` are host-dependent. Stable control flow should match the specific non-message variants where possible.
 
 ## Status
 
-The standard-stream functions, `print` behavior, `io.Error` enum, strict UTF-8 policy, EOF distinction, and shortest-roundtrip float rendering are implemented and maintained in Aurora 0.2. No I/O semantics on this page are provisional.
+The standard-stream functions, `print` behavior, `io.Error` enum, strict UTF-8 policy, EOF distinction, and shortest-roundtrip float rendering are implemented and maintained in Aura 0.2. No I/O semantics on this page are provisional.
 
-Binary standard input, async stream handles, terminal control, configurable formatting, and user-defined error derivation are unavailable future work and are non-normative.
+Aura 0.2 has no binary standard input, async stream handles, terminal control,
+configurable formatting, or user-defined error derivation.

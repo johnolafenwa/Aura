@@ -1,5 +1,0 @@
-error[AU2002]: field `value` on `copy class BadBox` must be a copy type, found `String`
- --> crates/aurora-compiler/tests/fixtures/check-fail/copy_class_non_copy_field.au:2:5
-  |
-2 |     value: String
-  |     ^

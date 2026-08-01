@@ -232,7 +232,7 @@ _KNOWN_MOVE = {
     "json.Value",
     "json.Error",
 }
-_BORROWED_RETURN_REVIEW_SENTINEL = "__AURORA_BORROWED_RETURN_REVIEW__"
+_BORROWED_RETURN_REVIEW_SENTINEL = "__AURA_BORROWED_RETURN_REVIEW__"
 
 
 @dataclass
@@ -495,7 +495,7 @@ def _public_record(record: dict, path: str) -> dict:
     }
 
 
-def analyze_aurora(source: str, path: str = "<memory>") -> MigrationAnalysis:
+def analyze_aura(source: str, path: str = "<memory>") -> MigrationAnalysis:
     """Migrate source and retain one auditable decision per semantic flip."""
     raw_records = (
         _bare_match_occurrences(source)
@@ -554,8 +554,8 @@ def analyze_aurora(source: str, path: str = "<memory>") -> MigrationAnalysis:
     return MigrationAnalysis(source, occurrences, findings)
 
 
-def migrate_aurora(source: str) -> str:
-    """Deterministically migrate one pre-flip Aurora source text.
+def migrate_aura(source: str) -> str:
+    """Deterministically migrate one pre-flip Aura source text.
 
     Semantic annotations run FIRST, against pre-migration text. `match borrow
     X`, `match borrow mut X`, and `value: borrow CopyType` are therefore not
@@ -564,7 +564,7 @@ def migrate_aurora(source: str) -> str:
     post-migration bare spelling cannot encode whether it came from an old
     explicit shared spelling.
     """
-    return analyze_aurora(source).text
+    return analyze_aura(source).text
 
 
 def migrate_markdown(source: str) -> str:
@@ -582,12 +582,12 @@ def migrate_markdown(source: str) -> str:
             out.append(line)
             continue
         if fenced:
-            out.append(migrate_aurora(body) + newline)
+            out.append(migrate_aura(body) + newline)
             continue
         out.append(
             re.sub(
                 r"`([^`\n]*)`",
-                lambda m: "`" + migrate_aurora(m.group(1)) + "`",
+                lambda m: "`" + migrate_aura(m.group(1)) + "`",
                 body,
             )
             + newline
@@ -598,7 +598,7 @@ def migrate_markdown(source: str) -> str:
 def migrate_text(path: Path, text: str) -> str:
     if path.suffix == ".md":
         return migrate_markdown(text)
-    return migrate_aurora(text)
+    return migrate_aura(text)
 
 
 def _digest(text: str) -> str:
@@ -614,7 +614,7 @@ def build_manifest(root: Path, paths: list[Path]) -> dict:
         text = path.read_text(encoding="utf-8", errors="strict")
         relative = str(path.relative_to(root))
         if path.suffix == ".au":
-            analysis = analyze_aurora(text, relative)
+            analysis = analyze_aura(text, relative)
             migrated = analysis.text
             semantic_occurrences.extend(analysis.occurrences)
             findings.extend(analysis.findings)
@@ -792,18 +792,18 @@ def _syntax_findings_in_code_regions(
 def find_retired_syntax(
     root: Path,
     paths: list[Path],
-    aurora_exemptions: dict[str, dict],
+    aura_exemptions: dict[str, dict],
 ) -> list[str]:
     """Find retired source spellings without banning explanatory terminology.
 
-    Aurora sources are token-scanned while ignoring comments and strings.
+    Aura sources are token-scanned while ignoring comments and strings.
     Maintained Markdown/HTML is searched only in code regions. Rust and
     diagnostic snapshots are searched only in backticked user-facing syntax.
     Historical ADRs and work notes are records rather than current syntax and
     are intentionally outside this standing gate.
     """
     findings = []
-    seen_aurora_exemptions = set()
+    seen_aura_exemptions = set()
     for path in paths:
         if not path.exists() or not path.is_file():
             continue
@@ -815,9 +815,9 @@ def find_retired_syntax(
         if path.suffix == ".au":
             masked = _mask(text)
             tokens = list(BORROW.finditer(masked))
-            exemption = aurora_exemptions.get(relative)
+            exemption = aura_exemptions.get(relative)
             if exemption is not None:
-                seen_aurora_exemptions.add(relative)
+                seen_aura_exemptions.add(relative)
                 expected = exemption["borrow_keywords"]
                 if len(tokens) == expected:
                     continue
@@ -830,7 +830,7 @@ def find_retired_syntax(
             for token in tokens:
                 findings.append(
                     f"{relative}:{_line_number(text, token.start())}: "
-                    "retired `borrow` keyword in maintained Aurora source"
+                    "retired `borrow` keyword in maintained Aura source"
                 )
             continue
 
@@ -869,8 +869,8 @@ def find_retired_syntax(
                         f"`{found.group(0)}` in maintained user-facing text"
                     )
 
-    for relative, exemption in aurora_exemptions.items():
-        if relative not in seen_aurora_exemptions:
+    for relative, exemption in aura_exemptions.items():
+        if relative not in seen_aura_exemptions:
             findings.append(
                 f"{relative}: stale retired-syntax allowlist entry "
                 f"({exemption['reason']})"
@@ -879,7 +879,7 @@ def find_retired_syntax(
 
 
 def load_retired_syntax_allowlist(path: Path) -> dict[str, dict]:
-    """Load and validate the exact Aurora-source retirement exemptions."""
+    """Load and validate the exact Aura-source retirement exemptions."""
     document = json.loads(path.read_text(encoding="utf-8"))
     if document.get("version") != ALLOWLIST_VERSION:
         raise ValueError(
@@ -887,7 +887,7 @@ def load_retired_syntax_allowlist(path: Path) -> dict[str, dict]:
             f"found {document.get('version')!r}"
         )
     exemptions = {}
-    for entry in document.get("aurora_source_exemptions", []):
+    for entry in document.get("aura_source_exemptions", []):
         relative = entry.get("path")
         count = entry.get("borrow_keywords")
         reason = entry.get("reason")
@@ -899,7 +899,7 @@ def load_retired_syntax_allowlist(path: Path) -> dict[str, dict]:
             or not isinstance(reason, str)
             or not reason.strip()
         ):
-            raise ValueError(f"{path}: invalid Aurora-source exemption {entry!r}")
+            raise ValueError(f"{path}: invalid Aura-source exemption {entry!r}")
         if relative in exemptions:
             raise ValueError(f"{path}: duplicate exemption for {relative}")
         exemptions[relative] = {

@@ -1,6 +1,6 @@
 # Randomness Module
 
-Aurora separates reproducible pseudo-random streams from security-sensitive
+Aura separates reproducible pseudo-random streams from security-sensitive
 operating-system randomness. Import `random`, construct an explicitly seeded
 `random.Rng` when results must repeat, and use the module's `secure_*`
 functions only when results must be unpredictable.
@@ -21,7 +21,7 @@ seed, or advance any deterministic `Rng` stream.
 
 ## Deterministic Algorithm
 
-This section is normative and is sufficient to reconstruct Aurora's seeded
+This section is normative and is sufficient to reconstruct Aura's seeded
 stream without consulting the compiler implementation. Let every value in this
 section be an unsigned 64-bit word, let `+`, `*`, `<<`, and exclusive-or wrap or
 truncate to 64 bits, and let `rotl(x, k)` rotate `x` left by `k` bits.
@@ -106,11 +106,11 @@ secure random source. It has no seed and no reproducibility guarantee.
 
 `random.secure_bytes(n)` requires `0 <= n <= 2147483647`. The upper bound is a
 fixed per-call resource and safety ceiling for allocation and operating-system
-entropy requests, independently of Aurora's public `Vec` length domain. The
+entropy requests, independently of Aura's public `Vec` length domain. The
 function allocates a fresh `Vec[uint8]` and fills it from that same OS source.
 `secure_bytes(0)` returns an empty vector without contacting the entropy source.
 A count above the secure-random request ceiling fails with `AU4005` before
-allocation or entropy is requested. For any accepted positive count, Aurora
+allocation or entropy is requested. For any accepted positive count, Aura
 either returns exactly that many initialized bytes or fails; it never returns
 a short vector and never substitutes deterministic data.
 
@@ -298,16 +298,16 @@ ordering relationship exists between secure calls, tasks, backends, processes,
 or hosts.
 
 The deterministic algorithm and seeded results are not
-implementation-defined: they are stable throughout the Aurora 0.2.x series as
+implementation-defined: they are stable throughout the Aura 0.2.x series as
 fixed above. They remain unsuitable for cryptography regardless of seed
 secrecy.
 
 ## Status
 
 The constructor, deterministic methods, secure functions, move-only ownership,
-backend parity, and documented diagnostics are maintained Aurora 0.2 surface.
+backend parity, and documented diagnostics are maintained Aura 0.2 surface.
 The exact algorithm, mapping, compatibility window, identity/rendering policy,
 and secure-failure boundary are accepted under ADR-0020.
 
 No other random distributions, secure floating function, global generator,
-derived sampling trait, or `random.Error` type is part of Aurora 0.2.
+derived sampling trait, or `random.Error` type is part of Aura 0.2.

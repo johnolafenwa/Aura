@@ -1,7 +1,0 @@
-import json
-
-def main():
-    text = "aurora"
-    value = json.Value.String(text)
-    print(value)
-    print(text)

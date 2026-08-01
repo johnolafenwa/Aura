@@ -1,0 +1,7 @@
+error[AU3008]: task argument `holder` cannot cross a task boundary because field `generator` of `Holder` -> `random.Rng` is a stateful generator and is not Transfer
+ --> crates/aura-compiler/tests/fixtures/check-fail/task_transfer_nested_class_argument.au:11:31
+   |
+11 |     group.start_soon(consume, holder)
+   |                               ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/task_transfer_nested_class_argument.au:7:13: task parameter `holder` is declared here
+  = help: send owned data made only from Transfer components; keep capabilities and host resources on their owning worker

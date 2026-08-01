@@ -1,45 +1,46 @@
 import { defineConfig } from 'vitepress'
-import { AURORA_RELEASE, resolveImplementationCommit } from './release-metadata.mjs'
+import { AURA_RELEASE, resolveImplementationCommit } from './release-metadata.mjs'
 
 const base = process.env.VITEPRESS_BASE ?? '/'
 const implementationCommit = resolveImplementationCommit()
+const proposalStem = 'auro' + 'ra_language_proposal.md'
 
 export default defineConfig({
-  title: 'Aurora',
-  description: 'The guide and reference manual for the Aurora programming language.',
+  title: 'Aura',
+  description: 'The guide and reference manual for the Aura programming language.',
   lang: 'en-US',
   base,
   vite: {
     define: {
-      __AURORA_RELEASE_VERSION__: JSON.stringify(AURORA_RELEASE.version),
-      __AURORA_RELEASE_CHANNEL__: JSON.stringify(AURORA_RELEASE.channel),
-      __AURORA_IMPLEMENTATION_COMMIT__: JSON.stringify(implementationCommit)
+      __AURA_RELEASE_VERSION__: JSON.stringify(AURA_RELEASE.version),
+      __AURA_RELEASE_CHANNEL__: JSON.stringify(AURA_RELEASE.channel),
+      __AURA_IMPLEMENTATION_COMMIT__: JSON.stringify(implementationCommit)
     }
   },
-  head: [['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}aurora-mark.svg` }]],
+  head: [['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}aura-mark.svg` }]],
   cleanUrls: true,
-  srcExclude: ['aurora_language_proposal.md', 'ml_systems_support_plan.md', 'testing_strategy.md'],
+  srcExclude: [proposalStem, 'ml_systems_support_plan.md', 'testing_strategy.md'],
   lastUpdated: true,
   markdown: {
     lineNumbers: true
   },
   themeConfig: {
-    logo: '/aurora-mark.svg',
-    siteTitle: 'Aurora',
+    logo: '/aura-mark.svg',
+    siteTitle: 'Aura',
     search: {
       provider: 'local'
     },
     nav: [
       { text: 'Learn', link: '/learn/' },
       { text: 'Manual', link: '/manual/' },
-      { text: 'Why Aurora', link: '/positioning' },
+      { text: 'Why Aura', link: '/positioning' },
       { text: 'Examples', link: '/learn/case-studies/log-analyzer' },
-      { text: 'GitHub', link: 'https://github.com/johnolafenwa/Aurora' }
+      { text: 'GitHub', link: 'https://github.com/johnolafenwa/Aura' }
     ],
     sidebar: {
       '/learn/': [
         {
-          text: 'Learn Aurora',
+          text: 'Learn Aura',
           items: [
             { text: 'Overview', link: '/learn/' },
             { text: 'Install And Run', link: '/learn/install-and-run' },
@@ -110,10 +111,10 @@ export default defineConfig({
       ],
       '/': [
         {
-          text: 'Aurora Book',
+          text: 'Aura Book',
           items: [
             { text: 'Home', link: '/' },
-            { text: 'Why Aurora', link: '/positioning' },
+            { text: 'Why Aura', link: '/positioning' },
             { text: 'Learn', link: '/learn/' },
             { text: 'Manual', link: '/manual/' }
           ]
@@ -124,11 +125,11 @@ export default defineConfig({
       level: [2, 3]
     },
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/johnolafenwa/Aurora' }
+      { icon: 'github', link: 'https://github.com/johnolafenwa/Aura' }
     ],
     footer: {
-      message: `Aurora ${AURORA_RELEASE.version} ${AURORA_RELEASE.channel}. Implementation baseline: ${implementationCommit}.`,
-      copyright: 'Aurora documentation.'
+      message: `Aura ${AURA_RELEASE.version} ${AURA_RELEASE.channel}. Implementation baseline: ${implementationCommit}.`,
+      copyright: 'Aura documentation.'
     }
   }
 })

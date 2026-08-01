@@ -1,0 +1,5 @@
+error[AU2002]: binding `wide` has annotated type `uint64`, but value has type `int32`
+ --> crates/aura-compiler/tests/fixtures/check-fail/implicit_int32_to_uint64_requires_cast.au:3:5
+  |
+3 |     wide: uint64 = narrow
+  |     ^

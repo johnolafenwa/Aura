@@ -1,0 +1,7 @@
+error[AU3003]: cannot mutate through shared receiver `self`; declare the receiver as `mut self`
+ --> crates/aura-compiler/tests/fixtures/check-fail/shared_self_mutation_requires_borrow_mut.au:5:9
+  |
+5 |         self.value += 1
+  |         ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/shared_self_mutation_requires_borrow_mut.au:4:5: shared receiver `self` is declared here
+  = help: declare the receiver as `mut self` when the method mutates through `self`

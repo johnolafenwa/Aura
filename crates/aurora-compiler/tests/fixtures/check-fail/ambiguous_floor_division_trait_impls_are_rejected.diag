@@ -1,5 +1,0 @@
-error[AU2002]: operator trait `FloorDiv` is ambiguous for type `Pair[int32, int32]`
- --> crates/aurora-compiler/tests/fixtures/check-fail/ambiguous_floor_division_trait_impls_are_rejected.au:19:14
-   |
-19 |     result = left // right
-   |              ^

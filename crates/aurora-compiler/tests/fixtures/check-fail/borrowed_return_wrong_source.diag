@@ -1,8 +1,0 @@
-error[AU3002]: parameter `right` is borrowed; declare it as `own String` to take ownership, or clone the value before consuming it
- --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_return_wrong_source.au:2:12
-  |
-2 |     return right
-  |            ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/borrowed_return_wrong_source.au:1:29: parameter `right` is borrowed here
-  = help: declare the parameter as `own String` when the function should consume it, or call `.clone()` to consume an independent copy
-  = fix: replace crates/aurora-compiler/tests/fixtures/check-fail/borrowed_return_wrong_source.au:2:17-2:17 with `.clone()`

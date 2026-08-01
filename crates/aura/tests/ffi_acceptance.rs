@@ -16,7 +16,7 @@ struct TempPackage {
 impl TempPackage {
     fn new(allow_ffi: bool) -> Self {
         let unique = format!(
-            "aurora-ffi-acceptance-{}-{}",
+            "aura-ffi-acceptance-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -28,7 +28,7 @@ impl TempPackage {
             .expect("FFI acceptance package source directory should exist");
         let opt_in = if allow_ffi { "allow_ffi = true\n" } else { "" };
         fs::write(
-            path.join("Aurora.toml"),
+            path.join("Aura.toml"),
             format!(
                 "[package]\nname = \"ffi_acceptance\"\nversion = \"0.1.0\"\nedition = \"2026\"\n{opt_in}"
             ),
@@ -121,7 +121,7 @@ fn maintained_getpid_example_runs_with_backend_parity() {
     let source = package.join("src/main.au");
     assert!(source.is_file(), "maintained FFI example source is missing");
     assert!(
-        package.join("Aurora.toml").is_file(),
+        package.join("Aura.toml").is_file(),
         "maintained FFI example manifest is missing"
     );
 

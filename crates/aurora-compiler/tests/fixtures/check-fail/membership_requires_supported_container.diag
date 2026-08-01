@@ -1,6 +1,0 @@
-error[AU2003]: `in` requires a `Vec[T]`, `Set[T]`, `Map[K, V]`, or `String` container, found `int64`
- --> crates/aurora-compiler/tests/fixtures/check-fail/membership_requires_supported_container.au:2:13
-  |
-2 |     print(1 in 5)
-  |             ^
-  = help: membership tests read `Vec` and `Set` elements, `Map` keys, and `String` substrings

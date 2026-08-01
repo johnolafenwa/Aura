@@ -1,0 +1,5 @@
+error[AU2003]: `Array.saturating_add` is available only for integer Arrays
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_integer_mode_requires_integer_dtype.au:3:18
+  |
+3 |     print(values.saturating_add(rhs=1.0))
+  |                  ^

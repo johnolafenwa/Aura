@@ -1,0 +1,7 @@
+error[AU3001]: use of moved value `token`
+ --> crates/aura-compiler/tests/fixtures/check-fail/use_after_move_if_branch.au:11:11
+   |
+11 |     print(token.value)
+   |           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/use_after_move_if_branch.au:10:17: value moved here
+  = help: pass shared access when ownership is not needed, or transfer this non-cloneable value only once

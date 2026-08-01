@@ -2,7 +2,7 @@
 
 Most programs get easier to read once the data has names. A loose bag of strings and integers becomes a `Job` with an `id`, a `queue`, and an `attempts` counter. A value that was "sometimes a number and sometimes an error" becomes a `Result` with two variants. The behaviour that used to drift between helper functions moves onto the type.
 
-This chapter introduces Aurora's two data shapes — **classes** and **enums** — together with **methods**, **copy classes**, and **generics**. It is deliberately not a feature checklist. The through-line is how to decide which shape fits your domain.
+This chapter introduces Aura's two data shapes — **classes** and **enums** — together with **methods**, **copy classes**, and **generics**. It is deliberately not a feature checklist. The through-line is how to decide which shape fits your domain.
 
 ## When To Use What
 
@@ -53,7 +53,7 @@ def describe(job: Job) -> String:
     return job.queue + "#" + job.id.to_string()
 ```
 
-The caller keeps the value and can use it again. The call site writes `describe(job)`; Aurora reads the borrow form from the parameter type.
+The caller keeps the value and can use it again. The call site writes `describe(job)`; Aura reads the borrow form from the parameter type.
 
 ## Add Methods
 
@@ -177,7 +177,7 @@ When each state carries different data, an enum almost always reads better than 
 
 ## Combine Classes And Enums
 
-A class can own an enum, and often should. This shape — a stable record with a changing state — is one of the cleanest patterns in Aurora.
+A class can own an enum, and often should. This shape — a stable record with a changing state — is one of the cleanest patterns in Aura.
 
 ```python
 class TrackedJob:
@@ -211,12 +211,12 @@ Generic types let you write utility data structures without giving up the type o
 
 ## Design Notes
 
-Three habits keep Aurora data types clean:
+Three habits keep Aura data types clean:
 
 - **Prefer small classes with meaningful fields.** A class with ten unrelated fields is often two classes waiting for names.
 - **Prefer enums for domain states.** `JobState.Failed(message=...)` is harder to misuse than a `"failed"` string plus a maybe-empty error field.
 - **Prefer methods for type-local behaviour.** A function that reads one class's fields usually belongs to that class. A function that coordinates several types is usually a free function.
 
-The next chapter takes the same ideas into Aurora's standard collections — where the classes and enums we just built start to form programs.
+The next chapter takes the same ideas into Aura's standard collections — where the classes and enums we just built start to form programs.
 
 Reference: [Classes](/manual/classes), [Enums And Pattern Matching](/manual/enums-and-match).

@@ -1,5 +1,0 @@
-error[AU3002]: cannot start `match mut` on `x` while an enclosing match already has mutable access to `x`
- --> crates/aurora-compiler/tests/fixtures/check-fail/nested_match_borrow_mut_same_place.au:9:13
-  |
-9 |             match mut x:
-  |             ^

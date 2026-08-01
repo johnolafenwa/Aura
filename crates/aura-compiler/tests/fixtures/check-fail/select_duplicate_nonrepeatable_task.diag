@@ -1,0 +1,6 @@
+error[AU3009]: one `select` call cannot use the same non-repeatable Task source `task` more than once
+ --> crates/aura-compiler/tests/fixtures/check-fail/select_duplicate_nonrepeatable_task.au:2:24
+  |
+2 |     print(select(task, task))
+  |                        ^
+  = help: `select` consumes every non-repeatable Task source at call entry and abandons losing observation rights; pass each unique handle once

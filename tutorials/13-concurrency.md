@@ -1,6 +1,6 @@
 # Concurrency
 
-Aurora's maintained concurrency surface is built around pinned-worker
+Aura's maintained concurrency surface is built around pinned-worker
 scheduler-backed lightweight tasks, structured task groups, typed queues, and
 explicit wait helpers. Queue waits, task waits, `sleep(...)`, socket waits,
 and the maintained HTTP helpers all use the same pinned-worker runtime.
@@ -19,7 +19,7 @@ The maintained user-facing model is:
 - `select(queue_or_task_or_duration, ...) -> SelectOutcome[Q, T]`
 - `wait_any(...)` and `wait_all(...)`
 
-Aurora no longer exposes the older unstructured task forms. Every task belongs to a `TaskGroup`.
+Aura no longer exposes the older unstructured task forms. Every task belongs to a `TaskGroup`.
 
 ## Queues
 
@@ -130,7 +130,7 @@ with TaskGroup() as group:
     print(second.result_or(-1, timeout=50ms))
 ```
 
-When the `with` block ends, Aurora waits for child tasks to finish. A
+When the `with` block ends, Aura waits for child tasks to finish. A
 no-deadline wait is cancelled only when no live task can wake it; elapsed time
 and host load do not make a reachable queue wait deadlocked. This lets the
 scope shut down cleanly when the remaining waits form a true deadlock while
@@ -152,7 +152,7 @@ with TaskGroup() as group:
     group.start_soon(producer, jobs)
 ```
 
-That is Aurora's maintained replacement for fire-and-forget task creation. Background work still belongs to a group, scope exit still waits for it, and unread task failures still surface when the group closes.
+That is Aura's maintained replacement for fire-and-forget task creation. Background work still belongs to a group, scope exit still waits for it, and unread task failures still surface when the group closes.
 
 See [examples/concurrency/task_group_start.au](../examples/concurrency/task_group_start.au) and [examples/concurrency/task_group_start_soon.au](../examples/concurrency/task_group_start_soon.au).
 
@@ -175,12 +175,12 @@ caller-visible writeback.
 
 Generic task targets must be concrete at the boundary. Inference and defaults
 may provide the types, or the callable slot may use the narrow forms
-`function[Types]` and `Type.associated_method[Types]`. Aurora rejects an
+`function[Types]` and `Type.associated_method[Types]`. Aura rejects an
 unresolved type parameter instead of assuming it can cross.
 
 ### Per-task Stack Overrides
 
-`TaskGroup.start(...)` and `start_soon(...)` use Aurora's guarded 512 KiB
+`TaskGroup.start(...)` and `start_soon(...)` use Aura's guarded 512 KiB
 default task stack. A child with a measured task-local stack requirement can
 request a custom capacity without changing its target arguments:
 
@@ -191,14 +191,14 @@ with group = TaskGroup():
 ```
 
 Both size arguments have exact type `int64`. The accepted range is 262,144
-through 67,108,864 bytes inclusive (256 KiB through 64 MiB). Aurora rejects
+through 67,108,864 bytes inclusive (256 KiB through 64 MiB). Aura rejects
 out-of-range requests rather than clamping them. Accepted requests are rounded
 up to the host page size and protected by the platform stack allocator's guard
 pages. Use the ordinary start methods unless a real workload demonstrates the
 need for a custom capacity.
 
 The lower 256 KiB bound is also available for an explicitly measured shallow
-task, but it is not the generally safe default. Aurora's complete compiled
+task, but it is not the generally safe default. Aura's complete compiled
 HTTP example faulted when 256 KiB was used as the global task default during
 integration and succeeds with the 512 KiB default. A separate runtime-only
 round trip succeeds with forced 256 KiB protocol callers because the deep
@@ -364,12 +364,12 @@ def worker(out: Queue[int32]):
 
 If the current `with TaskGroup()` scope is iterating a `Queue[T]` from that scope with `for value in queue:`, `group.cancel()` also wakes that queue iteration so it can finish cleanly instead of parking forever.
 
-Cancellation is cooperative. Aurora does not forcibly kill tasks.
+Cancellation is cooperative. Aura does not forcibly kill tasks.
 
-Aurora 0.2 runs task bodies on cooperative pinned scheduler workers on both
+Aura 0.2 runs task bodies on cooperative pinned scheduler workers on both
 maintained backends. The default worker count is the available parallelism
 reported by the host;
-the provisional `AURORA_WORKERS=<positive integer>` environment override
+the provisional `AURA_WORKERS=<positive integer>` environment override
 selects an explicit count. A task receives its stable worker assignment when
 it is spawned. Its coroutine stack never migrates, the runtime does not steal
 work, and `yield_now()` yields only to runnable work on that worker.
@@ -390,12 +390,12 @@ waking on a periodic tick.
 Queue and Task handles are the maintained cross-worker channels. Every other
 task capture and result stays owned and share-nothing through structural
 `Transfer`. Cancellation and diagnostic context remain isolated per task.
-If a child traps, its diagnostic preserves typed Aurora call frames and a
+If a child traps, its diagnostic preserves typed Aura call frames and a
 youngest-first ancestry chain naming the task entry and parent spawn site.
 Both maintained backends render the same human call/task notes, and tooling
 receives the same records without parsing those notes.
 Scheduling, independent completion, and printed-output order are unspecified,
-and Aurora exposes no worker-index or affinity-introspection API. Pinned
+and Aura exposes no worker-index or affinity-introspection API. Pinned
 workers enable multicore task execution; they do not promise work stealing,
 preemption, or parallel speedup for every workload.
 
@@ -416,23 +416,23 @@ Mac14,9 uses 16 KiB pages: 101,000 stackful tasks therefore have a
 1,654,784,000-byte one-page floor before scheduler, program, and process
 metadata. The earlier Phase 5.9 below-gate sample depended on nondeterministic
 memory compression and does not establish a repeatable bound. Under the
-roadmap's measured-best escape hatch, Aurora retains the result as benchmark
+roadmap's measured-best escape hatch, Aura retains the result as benchmark
 evidence but makes no “100,000 tasks in 1.5 GiB” promise. This is not a hard
 100,000-task limit; it withdraws only that memory guarantee. The same current
 contractual report passes the four-worker scaling gate at a `1.039673x` paired
 median wall-time ratio with `396.73%` median four-task process CPU.
 
-The protocol service starts lazily and lives until process exit; Aurora 0.2
+The protocol service starts lazily and lives until process exit; Aura 0.2
 does not expose a shutdown or join operation for it. File reads, resolver work,
 and listener binding use the generic blocking-I/O pool. TLS asset bytes are
 read there before PEM parsing and rustls construction run on protocol workers.
 
 The generic blocking-I/O pool is configured separately. An exact positive
-`AURORA_BLOCKING_WORKERS` value is not clamped; without it, host parallelism
+`AURA_BLOCKING_WORKERS` value is not clamped; without it, host parallelism
 is used with fallback `4` and a derived `2..=8` clamp. A positive
-`AURORA_BLOCKING_QUEUE_CAPACITY` bounds accepted pending jobs only, while
+`AURA_BLOCKING_QUEUE_CAPACITY` bounds accepted pending jobs only, while
 omission preserves an unbounded queue. Full-queue admission is FIFO and parks
-the Aurora task through the scheduler. Cancellation or timeout before queue
+the Aura task through the scheduler. Cancellation or timeout before queue
 insertion prevents submission; accepted work cannot be retracted and its late
 result is discarded. Bounding the queue does not guarantee unrelated progress
 while every blocking worker remains stuck.
@@ -443,7 +443,7 @@ See [examples/concurrency/task_group_cancel.au](../examples/concurrency/task_gro
 
 ## Automatic Loop Safepoints
 
-Loop safepoints make progress automatic at backedges; they do not make Aurora
+Loop safepoints make progress automatic at backedges; they do not make Aura
 preemptive. A single long iteration can still delay siblings until it reaches
 the body tail, and long straight-line CPU work has no automatic checkpoint.
 The safepoint also does not inspect cancellation. Keep calling `cancelled()`

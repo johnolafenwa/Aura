@@ -1,0 +1,6 @@
+error[AU4004]: array division has a zero divisor at flat index 0
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_division_by_zero.au:3:11
+  |
+3 |     print(values / 0.0)
+  |           ^
+  = note: Aura call chain (innermost first): main at 1:1

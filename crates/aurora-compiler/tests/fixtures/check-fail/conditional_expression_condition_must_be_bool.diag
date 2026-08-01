@@ -1,6 +1,0 @@
-error[AU2002]: conditional expression condition must have type `bool`, found `int64`
- --> crates/aurora-compiler/tests/fixtures/check-fail/conditional_expression_condition_must_be_bool.au:2:22
-  |
-2 |     value = "yes" if 1 else "no"
-  |                      ^
-  = help: Aurora has no implicit truthiness; compare the value explicitly

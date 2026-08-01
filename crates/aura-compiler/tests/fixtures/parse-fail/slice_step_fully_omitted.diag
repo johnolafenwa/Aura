@@ -1,0 +1,5 @@
+error[AU2005]: slice steps are unavailable; use an explicit loop to select a stride
+ --> crates/aura-compiler/tests/fixtures/parse-fail/slice_step_fully_omitted.au:3:19
+  |
+3 |     print(values[::])
+  |                   ^

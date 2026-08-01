@@ -2,12 +2,12 @@
 layout: home
 
 hero:
-  name: Aurora
+  name: Aura
   text: A Python-shaped language for agent control planes.
   tagline: Deterministic ownership, structured concurrency, and typed failure from files and processes through networking and retries.
   image:
-    src: /aurora-mark.svg
-    alt: Aurora language mark
+    src: /aura-mark.svg
+    alt: Aura language mark
   actions:
     - theme: brand
       text: Start Learning
@@ -16,7 +16,7 @@ hero:
       text: Open The Manual
       link: /manual/
     - theme: alt
-      text: Why Aurora
+      text: Why Aura
       link: /positioning
 
 features:
@@ -28,14 +28,14 @@ features:
     details: Files, subprocesses, sockets, retries, and supervisors return structured results. Failure is part of the type. Cleanup is part of the with block. Timeouts are arguments, not afterthoughts.
 ---
 
-## What Aurora Is
+## What Aura Is
 
-Aurora is a compiled language for programs that manage resources on purpose: files, subprocesses, sockets, worker tasks, and the data that moves between them. It is statically typed, has no garbage collector, and carries its ownership and concurrency rules into ordinary application code rather than hiding them behind convention.
+Aura is a compiled language for programs that manage resources on purpose: files, subprocesses, sockets, worker tasks, and the data that moves between them. It is statically typed, has no garbage collector, and carries its ownership and concurrency rules into ordinary application code rather than hiding them behind convention.
 
-That combination is Aurora's current wedge: deterministic ownership,
+That combination is Aura's current wedge: deterministic ownership,
 structured concurrency, and typed failure for agent control planes. It is not a
 claim that task schedules are deterministic, nor a claim to beat another
-language in general. [Why Aurora](/positioning) compares the 0.2 technical
+language in general. [Why Aura](/positioning) compares the 0.2 technical
 preview with Mojo, Nim, Go, and free-threaded Python 3.13+, and publishes the
 exact measured workloads behind the performance snapshot.
 
@@ -52,11 +52,11 @@ copies. See [Numeric Arrays](/manual/numeric-arrays).
 
 ## Measured Snapshot
 
-On one post-reboot Mac14,9 (M2 Pro, 10 cores, 16 GiB), Aurora's release
+On one post-reboot Mac14,9 (M2 Pro, 10 cores, 16 GiB), Aura's release
 benchmark recorded these protocol-window medians against CPython 3.9.6. Lower
-is faster; the ratio is Aurora divided by CPython.
+is faster; the ratio is Aura divided by CPython.
 
-| exact workload | Aurora | CPython | Aurora / CPython |
+| exact workload | Aura | CPython | Aura / CPython |
 | --- | ---: | ---: | ---: |
 | naive recursive `fib(30)` | 93.875250 ms | 158.491666 ms | 0.592304 |
 | create and join 10,000 tasks | 101.743042 ms | 51.950667 ms | 1.958455 |
@@ -64,7 +64,7 @@ is faster; the ratio is Aurora divided by CPython.
 | 16-cycle retrying HTTP worker | 429.291292 ms | 520.447791 ms | 0.824850 |
 
 These are exact-workload observations, not portable performance promises or a
-release gate. See [Why Aurora](/positioning#measured-snapshot) for methodology,
+release gate. See [Why Aura](/positioning#measured-snapshot) for methodology,
 provenance, integer-loop results, numeric-Array measurements, and limitations.
 
 ## A First Program
@@ -93,13 +93,13 @@ These are the ideas the Learn track builds on.
 
 ## How To Read This Book
 
-[Learn Aurora](/learn/) is a guided path. It begins with runnable scripts, then grows into programs that have domain types, failure paths, owned resources, child tasks, and I/O.
+[Learn Aura](/learn/) is a guided path. It begins with runnable scripts, then grows into programs that have domain types, failure paths, owned resources, child tasks, and I/O.
 
 [The Manual](/manual/) is the normative language reference and standard-library contract. Start with the [Language Specification](/manual/language-specification) for its authority and reading order, then use the complete grammar, semantic chapters, execution model, and API chapters to answer precise questions.
 
 When a concept first appears in Learn, the Manual section that defines it is linked nearby.
 
-## Running Aurora
+## Running Aura
 
 Once the CLI is on your path, the two commands you will use most are `run` and `build`:
 

@@ -1,5 +1,5 @@
 # Test: recursive enum type (like a linked list node)
-# This is a very common pattern - does Aurora handle it?
+# This is a very common pattern - does Aura handle it?
 enum IntList:
     Cons(int32)
     Nil

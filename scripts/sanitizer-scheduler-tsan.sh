@@ -2,7 +2,7 @@
 set -euo pipefail
 
 target="${1:-x86_64-unknown-linux-gnu}"
-toolchain="${AURORA_NIGHTLY_TOOLCHAIN:-nightly-2026-07-01}"
+toolchain="${AURA_NIGHTLY_TOOLCHAIN:-nightly-2026-07-01}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 export RUSTFLAGS="${RUSTFLAGS:-} -Zsanitizer=thread"
@@ -18,7 +18,7 @@ export CC="$repo_root/scripts/cc-tsan.sh"
 cargo "+$toolchain" test \
   -Zbuild-std \
   --target "$target" \
-  -p aurora-compiler \
+  -p aura-compiler \
   --lib \
   'runtime_value::tests::' \
   -- --test-threads=1

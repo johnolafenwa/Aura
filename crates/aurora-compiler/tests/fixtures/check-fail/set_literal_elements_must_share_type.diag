@@ -1,5 +1,0 @@
-error[AU2002]: set literal elements must all have type `int64`, found `bool`
- --> crates/aurora-compiler/tests/fixtures/check-fail/set_literal_elements_must_share_type.au:2:18
-  |
-2 |     values = {1, true}
-  |                  ^

@@ -1,7 +1,0 @@
-error[AU2006]: trait method `result` collides with builtin method `Task.result`
- --> crates/aurora-compiler/tests/fixtures/check-fail/builtin_task_inherited_trait_method_collision.au:5:1
-  |
-5 | impl[T] CounterfeitResult for Task[T]:
-  | ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/builtin_task_inherited_trait_method_collision.au:2:5: colliding default trait method is declared here
-  = help: rename the trait method; builtin methods cannot be shadowed by trait implementations

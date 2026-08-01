@@ -1,6 +1,0 @@
-error[AU2003]: cannot test membership for `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable
- --> crates/aurora-compiler/tests/fixtures/check-fail/array_membership_equality_unavailable.au:4:18
-  |
-4 |     print(needle in values)
-  |                  ^
-  = help: compare Array elements explicitly, or compare a chosen scalar summary such as shape, length, or a reduction result

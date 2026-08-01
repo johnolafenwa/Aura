@@ -837,7 +837,7 @@ def multicore_gate_summary(
         )
 
     return {
-        "worker_environment": {"AURORA_WORKERS": str(MULTICORE_WORKERS)},
+        "worker_environment": {"AURA_WORKERS": str(MULTICORE_WORKERS)},
         "paired_repeats": len(pairs),
         "one_task_summary": one_summary,
         "four_task_summary": four_summary,
@@ -1130,11 +1130,11 @@ def controlled_runtime_environment(
     *, worker_count: Optional[int] = None
 ) -> Dict[str, str]:
     environment = dict(os.environ)
-    environment.pop("AURORA_WORKERS", None)
+    environment.pop("AURA_WORKERS", None)
     if worker_count is not None:
         if worker_count <= 0:
             raise BenchmarkError("controlled worker count must be positive")
-        environment["AURORA_WORKERS"] = str(worker_count)
+        environment["AURA_WORKERS"] = str(worker_count)
     return environment
 
 
@@ -1561,7 +1561,7 @@ def run_starvation(binary: pathlib.Path) -> Dict[str, object]:
     )
     return {
         "command": [str(binary)],
-        "environment": {"AURORA_WORKERS": "1"},
+        "environment": {"AURA_WORKERS": "1"},
         "elapsed_s": elapsed,
         **observation,
         "stdout": result.stdout.decode("ascii"),
@@ -1666,7 +1666,7 @@ def run_multicore_once(
     )
     return {
         "command": [str(binary), str(tasks)],
-        "environment": {"AURORA_WORKERS": str(MULTICORE_WORKERS)},
+        "environment": {"AURA_WORKERS": str(MULTICORE_WORKERS)},
         "ready": ready.decode("ascii"),
         "ready_observation": ready_observation,
         "go": "GO multicore\n",
@@ -1882,7 +1882,7 @@ def require_quiet_process_check(
         for row in competitors
     )
     raise BenchmarkError(
-        "competing Aurora-repo build processes detected "
+        "competing Aura-repo build processes detected "
         + phase
         + " ("
         + details
@@ -1916,7 +1916,7 @@ def benchmark_noncontractual_reasons(
     if allow_competing_processes:
         reasons.append("the competing-process override was enabled")
     if any(process_checks):
-        reasons.append("competing Aurora-repository processes were observed")
+        reasons.append("competing Aura-repository processes were observed")
     if host is not None and host.get("hardware_model") != "Mac14,9":
         reasons.append(
             "host hardware model is not the contractual Mac14,9 baseline"
@@ -2119,8 +2119,8 @@ def compiler_runtime_inputs(aura: pathlib.Path) -> Dict[str, object]:
     artifacts = []
     release = ROOT / "target/release"
     if release.is_dir():
-        candidates = list(release.glob("libaurora_compiler*.a"))
-        candidates.extend((release / "deps").glob("libaurora_compiler*.a"))
+        candidates = list(release.glob("libaura_compiler*.a"))
+        candidates.extend((release / "deps").glob("libaura_compiler*.a"))
         for candidate in sorted(set(candidates)):
             artifacts.append(
                 {
@@ -2139,7 +2139,7 @@ def compiler_runtime_inputs(aura: pathlib.Path) -> Dict[str, object]:
         "runtime_archives": artifacts,
         "environment": {
             name: os.environ.get(name)
-            for name in ("CC", "CARGO", "RUSTC", "AURORA_NATIVE_CACHE_DIR")
+            for name in ("CC", "CARGO", "RUSTC", "AURA_NATIVE_CACHE_DIR")
         },
     }
 
@@ -2358,7 +2358,7 @@ def execute(options: Options) -> Dict[str, object]:
     }
 
     with tempfile.TemporaryDirectory(
-        prefix="aurora-scalable-runtime-bench-"
+        prefix="aura-scalable-runtime-bench-"
     ) as directory:
         binaries, build_records = build_workloads(aura, pathlib.Path(directory))
         report["builds"] = build_records

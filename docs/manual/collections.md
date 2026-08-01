@@ -1,6 +1,6 @@
 # Collections
 
-Aurora provides three generic owned collection types:
+Aura provides three generic owned collection types:
 
 - `Vec[T]` for ordered sequences
 - `Map[K, V]` for key/value lookup
@@ -114,7 +114,7 @@ an explicit `.clone()` when clone-safe:
 
     names_copy = [name.clone() for name in names]
 
-Aurora never inserts a hidden clone. A Queue-received item is already owned and
+Aura never inserts a hidden clone. A Queue-received item is already owned and
 may move directly into the result. Comprehension targets are local to the
 expression and do not leak afterwards. See
 [Expressions](/manual/expressions#comprehensions) for clause order and
@@ -147,7 +147,7 @@ normalization, each operation keeps its normal bounds contract.
 | `insert` | `insert(index: int32, value: own T) -> bool` | Normalizes `index`, inserts `value` before it, and returns `true`. The valid normalized range is `0..=len`. |
 | `clear` | `clear() -> None` | Removes all elements. |
 | `reverse` | `reverse() -> None` | Reverses the vector in place. |
-| `sort` | `sort() -> None` | Stably sorts an orderable vector in place through a mutable receiver. Built-in order is available for every integer type, `float32`, `float64`, and `Duration`; `String` has no built-in `Ord[String]` in Aurora 0.2. |
+| `sort` | `sort() -> None` | Stably sorts an orderable vector in place through a mutable receiver. Built-in order is available for every integer type, `float32`, `float64`, and `Duration`; `String` has no built-in `Ord[String]` in Aura 0.2. |
 | `sort_by` | `sort_by[K](key: def(T) -> K) -> None` | Evaluates `key` once per element from left to right, then stably sorts in place by the orderable produced keys. |
 | `map` | `map[U](f: def(T) -> U) -> Vec[U]` | Calls `f` once per element in order and returns a fresh owned vector; the source is retained. |
 | `filter` | `filter(f: def(T) -> bool) -> Vec[T]` | Calls `f` once per element in order and returns a fresh owned vector of accepted cloned elements; requires clone-safe `T`. |
@@ -186,8 +186,8 @@ index sites continue to adopt the expected `int32` type directly.
 
 `set`, `remove`, `swap`, and `insert` treat invalid indexes as runtime errors because they usually indicate a broken invariant. Use `get` before mutating when an out-of-range index is normal program data.
 
-Aurora deliberately differs from Python for insertion indexes. Python clamps
-an extremely negative `list.insert` index to the start; Aurora does not clamp
+Aura deliberately differs from Python for insertion indexes. Python clamps
+an extremely negative `list.insert` index to the start; Aura does not clamp
 an index that remains out of range after normalization. For example,
 `values.insert(-999, value)` raises a runtime error instead of silently placing
 `value` at the wrong position. `get(-999)` follows its existing optional
@@ -214,7 +214,7 @@ endpoint must then lie in `0..=len`, and start must not exceed end. Equal
 endpoints return an empty value. Any out-of-range or reversed range traps with
 `AU4003`.
 
-This is deliberately **not Python's clamping behavior**. Aurora never changes
+This is deliberately **not Python's clamping behavior**. Aura never changes
 an invalid slice endpoint to the nearest boundary. For example,
 `values[-999:2]` and `values[3:1]` fail loudly instead of silently selecting a
 different or empty range.
@@ -246,12 +246,12 @@ ordering. `sort_by` first evaluates the shared `key` callback exactly once for
 each element, from the first element to the last, and records every key before
 reordering the vector. If a key call traps, the receiver has not been mutated.
 
-Orderable values use Aurora's existing `<` relation: integers, floating-point
+Orderable values use Aura's existing `<` relation: integers, floating-point
 values under their ordinary partial-order behavior, `Duration`, and user types
 with an applicable `Ord` implementation. `sort_by` requires the produced `K`,
 not necessarily the stored `T`, to be orderable.
 
-Concretely, Aurora 0.2 provides built-in ordering for every signed and unsigned
+Concretely, Aura 0.2 provides built-in ordering for every signed and unsigned
 integer type (including the `int` alias), `float32`, `float64`, and `Duration`.
 It does not provide a built-in `Ord[String]`, so `Vec[String].sort()` is
 rejected. Keep insertion order when ordering is unnecessary; use `sort_by` to
@@ -277,7 +277,7 @@ grant element mutation nor consume source elements.
 
 ## Map[K, V]
 
-`Map[K, V]` stores keys and values. Key equality uses Aurora equality for `K`.
+`Map[K, V]` stores keys and values. Key equality uses Aura equality for `K`.
 
 | API | Signature | Contract |
 | --- | --- | --- |
@@ -343,7 +343,7 @@ insertion slot.
 Compound Map indexed assignment is narrower. `map[key] op= rhs` is permitted
 only for copy `V`, because it must first read the stored value and later write
 the operator result. A missing key traps with `AU4003` at that read. For
-non-copy `V`, Aurora neither inserts an implicit clone nor destructively removes
+non-copy `V`, Aura neither inserts an implicit clone nor destructively removes
 the stored value before an operation that may fail.
 Use `get(key)` when `V` is clone-safe, or `remove(key)` to take ownership and
 perform an explicit simple assignment.
@@ -392,7 +392,7 @@ This executable example demonstrates eager callback and comprehension
 transformation, filtering, natural ordering, keyed ordering, source retention,
 set deduplication, and nested outer-major order:
 
-```aurora
+```aura
 def doubled(value: int32) -> int32:
     return value * 2
 
@@ -493,7 +493,7 @@ right is rejected with `AU3009`.
 
 `sort` requires a mutable `Vec[T]` place and an orderable `T`. The built-in
 orderable element types are every integer type, `float32`, `float64`, and
-`Duration`; `String` has no built-in `Ord[String]` in Aurora 0.2. `sort_by`
+`Duration`; `String` has no built-in `Ord[String]` in Aura 0.2. `sort_by`
 requires a mutable `Vec[T]` place, exact callback type `def(T) -> K`, and an
 orderable result type `K`. `map` requires exact callback type
 `def(T) -> U`; `filter` requires exact callback type `def(T) -> bool`.
@@ -660,12 +660,12 @@ including callable-powered Vec algorithms, are implemented for the post-Phase
 simple-assignment, and compound-assignment Map rules are implemented under
 `architecture_docs/decisions/0014-map-literals-and-indexing.md`, whose status is
 **Accepted**. They are pinned by
-`crates/aurora-compiler/tests/fixtures/run-pass/map_literal_duplicate_keys.au`,
-`crates/aurora-compiler/tests/fixtures/check-fail/map_index_non_copy_requires_explicit_clone.au`,
-`crates/aurora-compiler/tests/fixtures/check-fail/map_index_assignment_consumes_noncopy_key.au`,
-`crates/aurora-compiler/tests/fixtures/check-fail/map_compound_assignment_noncopy_value_rejected.au`,
+`crates/aura-compiler/tests/fixtures/run-pass/map_literal_duplicate_keys.au`,
+`crates/aura-compiler/tests/fixtures/check-fail/map_index_non_copy_requires_explicit_clone.au`,
+`crates/aura-compiler/tests/fixtures/check-fail/map_index_assignment_consumes_noncopy_key.au`,
+`crates/aura-compiler/tests/fixtures/check-fail/map_compound_assignment_noncopy_value_rejected.au`,
 and
-`crates/aurora-compiler/tests/fixtures/run-fail/map_index_missing_key.au`.
+`crates/aura-compiler/tests/fixtures/run-fail/map_index_missing_key.au`.
 Comprehensions are Accepted under ADR-0039 and pinned by the focused
 comprehension fixture family and `examples/collections/comprehensions.au`.
 Owned Vec and Unicode-scalar String slices are Accepted under ADR-0040 and

@@ -66,7 +66,7 @@ Construction follows these rules:
 Every supplied field expression is evaluated first, in call-site source order.
 Its copy or move result is captured into the owned field slot before the next
 supplied expression begins, so later side effects cannot change an earlier
-captured field value. Aurora then evaluates the defaults for omitted fields in field
+captured field value. Aura then evaluates the defaults for omitted fields in field
 declaration order. Binding positional or named arguments to field slots never
 reorders evaluation, and supplying a field suppresses that field's default
 completely.
@@ -228,7 +228,7 @@ class Resource:
         print("closing " + self.name)
 ```
 
-The method must be named `close`, use `mut self`, take no ordinary parameters, and return `None`. Generic user resource classes are not supported by `with` in Aurora 0.2.
+The method must be named `close`, use `mut self`, take no ordinary parameters, and return `None`. Generic user resource classes are not supported by `with` in Aura 0.2.
 
 ```python
 with resource = Resource(name="db"):
@@ -242,7 +242,7 @@ with resource = Resource(name="db"):
 The normative productions for `class`, `copy class`, visibility, type
 parameters, fields, field defaults, `indirect`, methods, receivers, and
 associated methods are in [Grammar](/manual/grammar#classes). A class suite
-contains fields, methods, and/or `pass`; Aurora has no separate constructor,
+contains fields, methods, and/or `pass`; Aura has no separate constructor,
 property, inheritance, or destructor declaration grammar.
 
 ## Typing Rules
@@ -280,7 +280,7 @@ non-copy arguments move into the new value. Ordinary classes move; valid
 `copy class` values copy. Shared receivers read, `own self` consumes, and
 `mut self` requires an exclusive mutable place. Moving an owned
 non-copy field partially moves its class until that field is reinitialized;
-moving through a borrowed receiver is rejected. Aurora inserts no hidden clone
+moving through a borrowed receiver is rejected. Aura inserts no hidden clone
 at a constructor, field, receiver, or return boundary. Constructor side effects
 follow the supplied-then-default order above even when named arguments bind
 fields in a different declaration order.
@@ -315,7 +315,7 @@ resolution and signatures.
 
 ## Limits And Implementation-Defined Behavior
 
-Aurora 0.2 has no class inheritance, overloads, property syntax, custom
+Aura 0.2 has no class inheritance, overloads, property syntax, custom
 constructor hook, or general destructor hook. Generic user classes cannot be
 managed directly by `with`. A class field default cannot call a user-defined
 function in the current compiler; compute that value before construction and
@@ -338,5 +338,5 @@ unavailable and MUST NOT be inferred from accepted class syntax. The
 constructor evaluation rule is implemented under
 `architecture_docs/decisions/0015-explicit-and-default-argument-order.md`,
 whose status is **Accepted**, and is pinned by
-`crates/aurora-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au`
+`crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au`
 on both backends.

@@ -46,7 +46,7 @@ fn hold_native_runtime_build_locks(target_dir: &std::path::Path) -> Vec<fs::File
         .into_iter()
         .map(|target_dir| {
             fs::create_dir_all(&target_dir).expect("native runtime target directory should exist");
-            let lock_path = target_dir.join(".aurora-native-runtime-build.lock");
+            let lock_path = target_dir.join(".aura-native-runtime-build.lock");
             let held_lock = fs::OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -104,7 +104,7 @@ fn native_runtime_archive() -> PathBuf {
         } else {
             "release"
         })
-        .join("libaurora_compiler.a")
+        .join("libaura_compiler.a")
 }
 
 struct TempDir {
@@ -140,7 +140,7 @@ impl Drop for TempDir {
 
 fn assert_default_backend_example_runs(example: &str, binary_name: &str, expected_stdout: &str) {
     let fixture = repo_root().join(example);
-    let output_dir = TempDir::new("aurora-build-auto-full");
+    let output_dir = TempDir::new("aura-build-auto-full");
     let output_path = output_dir.path().join(binary_name);
 
     let build = Command::new(aura_bin())
@@ -242,7 +242,7 @@ fn command_output_with_timeout(
 
 fn assert_direct_backend_example_runs(example: &str, binary_name: &str, expected_stdout: &str) {
     let fixture = repo_root().join(example);
-    let output_dir = TempDir::new("aurora-build-direct-full");
+    let output_dir = TempDir::new("aura-build-direct-full");
     let output_path = output_dir.path().join(binary_name);
 
     let build = Command::new(aura_bin())
@@ -278,7 +278,7 @@ fn assert_direct_backend_example_runs(example: &str, binary_name: &str, expected
 fn write_temp_source(prefix: &str, source: &str) -> (TempDir, PathBuf) {
     let temp = TempDir::new(prefix);
     let source_path = temp.path().join("main.au");
-    fs::write(&source_path, source).expect("failed to write temporary Aurora source");
+    fs::write(&source_path, source).expect("failed to write temporary Aura source");
     (temp, source_path)
 }
 
@@ -372,7 +372,7 @@ fn generic_tuple_substitution_runs_in_mir_and_direct_backends() {
     ]
     .join("\n");
 
-    assert_run_and_direct_source_stdout("aurora-cli-generic-tuples", &source, "seven\n7\n");
+    assert_run_and_direct_source_stdout("aura-cli-generic-tuples", &source, "seven\n7\n");
 }
 
 fn build_and_run_direct_source(
@@ -547,7 +547,7 @@ fn assert_mir_and_direct_source_stdout_with_timeout_and_workers(
     let (temp, source_path) = write_temp_source(prefix, source);
 
     let mut mir = Command::new(aura_bin());
-    mir.env("AURORA_WORKERS", worker_count.to_string())
+    mir.env("AURA_WORKERS", worker_count.to_string())
         .args(["run", "--backend", "mir"])
         .arg(&source_path);
     let mir = command_output_with_timeout(mir, timeout, "forced-MIR fixture");
@@ -572,7 +572,7 @@ fn assert_mir_and_direct_source_stdout_with_timeout_and_workers(
     );
 
     let mut direct = generated_binary(&output_path);
-    direct.env("AURORA_WORKERS", worker_count.to_string());
+    direct.env("AURA_WORKERS", worker_count.to_string());
     let direct = command_output_with_timeout(direct, timeout, "direct fixture");
     assert!(
         direct.status.success(),
@@ -654,7 +654,7 @@ fn run_aura_source_with_timeout_and_workers(
     let mut command = Command::new(aura_bin());
     command.arg("run").arg(&source_path);
     if let Some(worker_count) = worker_count {
-        command.env("AURORA_WORKERS", worker_count.to_string());
+        command.env("AURA_WORKERS", worker_count.to_string());
     }
     let child = command
         .stdout(Stdio::piped())
@@ -700,7 +700,7 @@ fn build_direct_source_with_timeout_and_workers(
     );
     let mut command = generated_binary(&output_path);
     if let Some(worker_count) = worker_count {
-        command.env("AURORA_WORKERS", worker_count.to_string());
+        command.env("AURA_WORKERS", worker_count.to_string());
     }
     let child = command
         .stdout(Stdio::piped())
@@ -742,14 +742,14 @@ fn lsp_service_handles_multiple_requests_in_one_process() {
     let input = [
         serde_json::json!({
             "id": 1,
-            "semantic_interface_version": aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+            "semantic_interface_version": aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
             "method": "analyze",
             "path": "/virtual/main.au",
             "source": "def main() -> int32:\n    return 0\n"
         }),
         serde_json::json!({
             "id": 2,
-            "semantic_interface_version": aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
+            "semantic_interface_version": aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
             "method": "complete",
             "path": "/virtual/main.au",
             "source": "def main() -> int32:\n    value: String = \"hi\"\n    value.\n    return 0\n",
@@ -786,13 +786,13 @@ fn lsp_service_handles_multiple_requests_in_one_process() {
     assert_eq!(responses[0]["id"], 1);
     assert_eq!(
         responses[0]["semantic_interface_version"],
-        aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
+        aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
     );
     assert!(responses[0]["result"]["diagnostics"].is_array());
     assert_eq!(responses[1]["id"], 2);
     assert_eq!(
         responses[1]["semantic_interface_version"],
-        aurora_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
+        aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION
     );
     assert!(responses[1]["result"]
         .as_array()
@@ -803,7 +803,7 @@ fn lsp_service_handles_multiple_requests_in_one_process() {
 
 #[test]
 fn new_fmt_and_test_commands_cover_the_project_workflow() {
-    let temp = TempDir::new("aurora-project-workflow");
+    let temp = TempDir::new("aura-project-workflow");
     let create = Command::new(aura_bin())
         .current_dir(temp.path())
         .args(["new", "agent-app"])
@@ -815,7 +815,7 @@ fn new_fmt_and_test_commands_cover_the_project_workflow() {
         String::from_utf8_lossy(&create.stderr)
     );
     let project = temp.path().join("agent-app");
-    assert!(project.join("Aurora.toml").is_file());
+    assert!(project.join("Aura.toml").is_file());
     assert!(project.join("src/main.au").is_file());
     assert!(project.join("tests/smoke.au").is_file());
     assert_eq!(
@@ -897,7 +897,7 @@ fn new_fmt_and_test_commands_cover_the_project_workflow() {
 
 #[test]
 fn fmt_is_idempotent_for_adr_0022_capability_syntax() {
-    let temp = TempDir::new("aurora-capability-format");
+    let temp = TempDir::new("aura-capability-format");
     let source_path = temp.path().join("capabilities.au");
     fs::write(
         &source_path,
@@ -958,7 +958,7 @@ fn fmt_is_idempotent_for_adr_0022_capability_syntax() {
 
 #[test]
 fn fmt_is_idempotent_for_lambda_expression_syntax() {
-    let temp = TempDir::new("aurora-lambda-format");
+    let temp = TempDir::new("aura-lambda-format");
     let source_path = temp.path().join("lambdas.au");
     fs::write(
         &source_path,
@@ -1006,7 +1006,7 @@ fn fmt_is_idempotent_for_lambda_expression_syntax() {
 
 #[test]
 fn fmt_is_idempotent_for_extern_c_declarations() {
-    let temp = TempDir::new("aurora-ffi-format");
+    let temp = TempDir::new("aura-ffi-format");
     let source_path = temp.path().join("ffi.au");
     fs::write(
         &source_path,
@@ -1064,19 +1064,19 @@ def main() -> int32:
         print("main:" + argument)
     with TaskGroup() as group:
         group.start_soon(print_child_arguments)
-    match sys.env("AURORA_CLI_TEST_VALUE"):
+    match sys.env("AURA_CLI_TEST_VALUE"):
         case Option.Some(value):
             print(value)
         case Option.None:
             return 1
     return 0
 "#;
-    let (temp, source_path) = write_temp_source("aurora-program-args", source);
+    let (temp, source_path) = write_temp_source("aura-program-args", source);
     let interpreted = Command::new(aura_bin())
         .args(["run", source_path.to_str().expect("UTF-8 temp path"), "--"])
         .args(["alpha", "beta"])
-        .env("AURORA_CLI_TEST_VALUE", "from-env")
-        .env("AURORA_PROGRAM_ARGS_JSON", "[\"spoofed\"]")
+        .env("AURA_CLI_TEST_VALUE", "from-env")
+        .env("AURA_PROGRAM_ARGS_JSON", "[\"spoofed\"]")
         .output()
         .expect("failed to run aura program with arguments");
     assert!(
@@ -1095,13 +1095,13 @@ def main() -> int32:
         .arg(&source_path)
         .arg("--")
         .args(["alpha", "beta"])
-        .env("AURORA_CLI_TEST_VALUE", "from-env")
-        .env("AURORA_PROGRAM_ARGS_JSON", "[\"spoofed\"]")
+        .env("AURA_CLI_TEST_VALUE", "from-env")
+        .env("AURA_PROGRAM_ARGS_JSON", "[\"spoofed\"]")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to run stdin Aurora program with arguments");
+        .expect("failed to run stdin Aura program with arguments");
     stdin_child
         .stdin
         .take()
@@ -1135,8 +1135,8 @@ def main() -> int32:
     );
     let direct = generated_binary(&output_path)
         .args(["alpha", "beta"])
-        .env("AURORA_CLI_TEST_VALUE", "from-env")
-        .env("AURORA_PROGRAM_ARGS_JSON", "[\"spoofed\"]")
+        .env("AURA_CLI_TEST_VALUE", "from-env")
+        .env("AURA_PROGRAM_ARGS_JSON", "[\"spoofed\"]")
         .output()
         .expect("failed to run built program with arguments");
     assert!(
@@ -1192,7 +1192,7 @@ def main() -> int32:
     return 0
 "#;
 
-    assert_run_and_direct_source_stdout("aurora-thousand-suspended-direct-tasks", source, "1000\n");
+    assert_run_and_direct_source_stdout("aura-thousand-suspended-direct-tasks", source, "1000\n");
 }
 
 #[test]
@@ -1233,7 +1233,7 @@ def main() -> int32:
 "#;
 
     let (_temp, _source_path, mut child) = run_aura_source_with_timeout(
-        "aurora-task-group-close",
+        "aura-task-group-close",
         source,
         std::time::Duration::from_secs(15),
     );
@@ -1250,7 +1250,7 @@ def main() -> int32:
     assert_eq!(String::from_utf8_lossy(&output.stdout), "cancelled\ndone\n");
 
     let (_temp, _source_path, mut direct_child) = build_direct_source_with_timeout(
-        "aurora-task-group-close-direct",
+        "aura-task-group-close-direct",
         source,
         std::time::Duration::from_secs(15),
     );
@@ -1337,7 +1337,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-task-group-reachable-queue-join",
+        "aura-task-group-reachable-queue-join",
         source,
         std::time::Duration::from_secs(30),
         "4000\n",
@@ -1404,7 +1404,7 @@ def main() -> int32:
     );
 
     assert_run_and_direct_source_stdout_with_timeout(
-        "aurora-queue-iteration-default-worker-contention",
+        "aura-queue-iteration-default-worker-contention",
         &source,
         std::time::Duration::from_secs(20),
         "1000\n",
@@ -1433,7 +1433,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-task-group-unreachable-queue-join",
+        "aura-task-group-unreachable-queue-join",
         source,
         std::time::Duration::from_secs(15),
         "cancelled\ndone\n",
@@ -1465,7 +1465,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-task-group-joining-parent-is-not-waker",
+        "aura-task-group-joining-parent-is-not-waker",
         source,
         std::time::Duration::from_secs(15),
         "cancelled\nnested done\ndone\n",
@@ -1525,7 +1525,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-task-group-dynamic-queue-waker",
+        "aura-task-group-dynamic-queue-waker",
         source,
         std::time::Duration::from_secs(20),
         "2\n",
@@ -1565,10 +1565,10 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-task-group-cross-join-cycle",
+        "aura-task-group-cross-join-cycle",
         source,
         // The outer watchdog includes process scheduling while the complete
-        // CLI suite launches many direct binaries in parallel. The Aurora
+        // CLI suite launches many direct binaries in parallel. The Aura
         // sleeps above remain the semantic timing pins.
         std::time::Duration::from_secs(30),
         "done\n",
@@ -1609,9 +1609,9 @@ def main() -> int32:
     return 0
 "#;
 
-    let (_temp, source_path) = write_temp_source("aurora-queue-fairness", source);
+    let (_temp, source_path) = write_temp_source("aura-queue-fairness", source);
     let output = Command::new(aura_bin())
-        .env("AURORA_WORKERS", "1")
+        .env("AURA_WORKERS", "1")
         .arg("run")
         .arg(&source_path)
         .output()
@@ -1669,7 +1669,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aurora-sleep-cancel-observed",
+        "aura-sleep-cancel-observed",
         source,
         "after-sleep\nobserved-cancel\n7\n",
     );
@@ -1682,13 +1682,12 @@ fn scheduler_mixed_wakeups_complete_in_mir_and_direct_backends() {
     // of rescanning is intentionally proved by the reactor's instrumented unit
     // tests because both implementations have the same language-level result.
     let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/scheduler_mixed_wakeups.au");
-    let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/scheduler_mixed_wakeups.stdout"
-    );
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/scheduler_mixed_wakeups.au");
+    let expected =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/scheduler_mixed_wakeups.stdout");
 
     assert_run_and_direct_source_stdout_with_timeout(
-        "aurora-scheduler-mixed-wakeups",
+        "aura-scheduler-mixed-wakeups",
         source,
         std::time::Duration::from_secs(20),
         expected,
@@ -1697,13 +1696,12 @@ fn scheduler_mixed_wakeups_complete_in_mir_and_direct_backends() {
 
 #[test]
 fn yield_now_fairness_remains_observable_on_one_worker() {
-    let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/yield_now_fairness.au");
+    let source = include_str!("../../aura-compiler/tests/fixtures/run-pass/yield_now_fairness.au");
     let expected =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/yield_now_fairness.stdout");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/yield_now_fairness.stdout");
 
     assert_run_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-yield-now-one-worker",
+        "aura-yield-now-one-worker",
         source,
         std::time::Duration::from_secs(20),
         expected,
@@ -1717,13 +1715,12 @@ fn nested_scheduler_spawns_preserve_outcomes_cleanup_and_backend_parity() {
     // structured cleanup must all complete on both backends. The fixture
     // validates the event multiset rather than freezing a cross-worker order.
     let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/scheduler_nested_spawns.au");
-    let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/scheduler_nested_spawns.stdout"
-    );
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/scheduler_nested_spawns.au");
+    let expected =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/scheduler_nested_spawns.stdout");
 
     assert_run_and_direct_source_stdout_with_timeout(
-        "aurora-scheduler-nested-spawns",
+        "aura-scheduler-nested-spawns",
         source,
         std::time::Duration::from_secs(20),
         expected,
@@ -1732,16 +1729,15 @@ fn nested_scheduler_spawns_preserve_outcomes_cleanup_and_backend_parity() {
 
 #[test]
 fn explicit_four_worker_queue_and_task_handles_match_backends() {
-    let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/multicore_queue_task_matrix.au"
-    );
+    let source =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/multicore_queue_task_matrix.au");
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/multicore_queue_task_matrix.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/multicore_queue_task_matrix.stdout"
     );
-    let (temp, source_path) = write_temp_source("aurora-four-worker-task-parity", source);
+    let (temp, source_path) = write_temp_source("aura-four-worker-task-parity", source);
 
     let mut mir = Command::new(aura_bin());
-    mir.env("AURORA_WORKERS", "4")
+    mir.env("AURA_WORKERS", "4")
         .args(["run", "--backend", "mir"])
         .arg(&source_path);
     let mir = command_output_with_timeout(
@@ -1770,7 +1766,7 @@ fn explicit_four_worker_queue_and_task_handles_match_backends() {
     );
 
     let mut direct = generated_binary(&output_path);
-    direct.env("AURORA_WORKERS", "4");
+    direct.env("AURA_WORKERS", "4");
     let direct = command_output_with_timeout(
         direct,
         std::time::Duration::from_secs(20),
@@ -1790,12 +1786,12 @@ fn explicit_four_worker_queue_stress_preserves_integrity_and_per_producer_fifo()
     // receive. The one-slot ticket Queue serializes only observation/dequeue,
     // letting the fixture reconstruct order without fixing producer interleaving.
     let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/multicore_queue_stress.au");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/multicore_queue_stress.au");
     let expected =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/multicore_queue_stress.stdout");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/multicore_queue_stress.stdout");
 
     assert_mir_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-four-worker-queue-stress",
+        "aura-four-worker-queue-stress",
         source,
         std::time::Duration::from_secs(30),
         expected,
@@ -1806,12 +1802,12 @@ fn explicit_four_worker_queue_stress_preserves_integrity_and_per_producer_fifo()
 #[test]
 fn single_worker_queue_stress_preserves_integrity_without_promising_consumer_fairness() {
     let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/multicore_queue_stress.au");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/multicore_queue_stress.au");
     let expected =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/multicore_queue_stress.stdout");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/multicore_queue_stress.stdout");
 
     assert_mir_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-single-worker-queue-stress",
+        "aura-single-worker-queue-stress",
         source,
         std::time::Duration::from_secs(30),
         expected,
@@ -1822,14 +1818,14 @@ fn single_worker_queue_stress_preserves_integrity_without_promising_consumer_fai
 #[test]
 fn explicit_four_worker_cancellation_and_task_failures_remain_isolated() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/multicore_cancellation_failure_isolation.au"
+        "../../aura-compiler/tests/fixtures/run-pass/multicore_cancellation_failure_isolation.au"
     );
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/multicore_cancellation_failure_isolation.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/multicore_cancellation_failure_isolation.stdout"
     );
 
     assert_mir_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-four-worker-cancellation-failure-isolation",
+        "aura-four-worker-cancellation-failure-isolation",
         source,
         std::time::Duration::from_secs(30),
         expected,
@@ -1854,7 +1850,7 @@ def main():
         tasks.start_soon(print_many, "gamma")
         tasks.start_soon(print_many, "delta")
 "#;
-    let (temp, source_path) = write_temp_source("aurora-four-worker-atomic-print", source);
+    let (temp, source_path) = write_temp_source("aura-four-worker-atomic-print", source);
 
     let assert_complete_lines = |stdout: Vec<u8>, backend: &str| {
         let mut actual = String::from_utf8(stdout)
@@ -1882,7 +1878,7 @@ def main():
     };
 
     let mut mir = Command::new(aura_bin());
-    mir.env("AURORA_WORKERS", "4")
+    mir.env("AURA_WORKERS", "4")
         .args(["run", "--backend", "mir"])
         .arg(&source_path);
     let mir = command_output_with_timeout(
@@ -1911,7 +1907,7 @@ def main():
     );
 
     let mut command = generated_binary(&output_path);
-    command.env("AURORA_WORKERS", "4");
+    command.env("AURA_WORKERS", "4");
     let output = command_output_with_timeout(
         command,
         std::time::Duration::from_secs(20),
@@ -1943,7 +1939,7 @@ def main():
             case TaskResult.Cancelled:
                 print("cancelled")
 "#;
-    let (temp, source_path) = write_temp_source("aurora-invalid-worker-override", source);
+    let (temp, source_path) = write_temp_source("aura-invalid-worker-override", source);
     let output_path = temp.path().join("out");
     let build = Command::new(aura_bin())
         .args(["build", "--backend", "direct", "-o"])
@@ -1959,10 +1955,10 @@ def main():
 
     for invalid in ["0", "two"] {
         let expected =
-            format!("invalid AURORA_WORKERS value `{invalid}`: expected a positive integer");
+            format!("invalid AURA_WORKERS value `{invalid}`: expected a positive integer");
 
         let mir = Command::new(aura_bin())
-            .env("AURORA_WORKERS", invalid)
+            .env("AURA_WORKERS", invalid)
             .args(["run", "--backend", "mir"])
             .arg(&source_path)
             .output()
@@ -1976,7 +1972,7 @@ def main():
         assert!(mir_stderr.contains(&expected), "{mir_stderr}");
 
         let direct = generated_binary(&output_path)
-            .env("AURORA_WORKERS", invalid)
+            .env("AURA_WORKERS", invalid)
             .output()
             .expect("failed to run invalid worker override through direct backend");
         assert!(
@@ -1987,6 +1983,52 @@ def main():
         assert!(direct_stderr.contains("error[AU4006]"), "{direct_stderr}");
         assert!(direct_stderr.contains(&expected), "{direct_stderr}");
     }
+}
+
+#[test]
+fn old_product_environment_names_are_not_honored() {
+    let old_prefix = ["AURO", "RA"].concat();
+    let old_worker = format!("{old_prefix}_WORKERS");
+    let old_blocking_workers = format!("{old_prefix}_BLOCKING_WORKERS");
+    let old_blocking_capacity = format!("{old_prefix}_BLOCKING_QUEUE_CAPACITY");
+    let old_cache = format!("{old_prefix}_CACHE_DIR");
+    let (temp, source_path) =
+        write_temp_source("aura-old-environment-names", "def main():\n    print(42)\n");
+    let ignored_cache = temp.path().join("ignored-old-cache");
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).expect("isolated home should be creatable");
+
+    for backend in ["mir", "direct"] {
+        let output = Command::new(aura_bin())
+            .env_remove("AURA_WORKERS")
+            .env_remove("AURA_BLOCKING_WORKERS")
+            .env_remove("AURA_BLOCKING_QUEUE_CAPACITY")
+            .env_remove("AURA_CACHE_DIR")
+            .env(&old_worker, "0")
+            .env(&old_blocking_workers, "0")
+            .env(&old_blocking_capacity, "0")
+            .env(&old_cache, &ignored_cache)
+            .env("HOME", &home)
+            .args(["run", "--backend", backend])
+            .arg(&source_path)
+            .output()
+            .expect("failed to run with old product environment names");
+        assert!(
+            output.status.success(),
+            "old environment names must be ignored on {backend}, stderr was:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "42\n");
+    }
+
+    assert!(
+        !ignored_cache.exists(),
+        "the old cache override must not create or select its path"
+    );
+    assert!(
+        home.join(".cache/aura/native").is_dir(),
+        "direct execution should use the Aura default cache beneath HOME"
+    );
 }
 
 #[test]
@@ -2004,8 +2046,7 @@ def main():
     print("USER_CODE_RAN")
     write_marker()
 "#;
-    let (temp, source_path) =
-        write_temp_source("aurora-invalid-blocking-pool-configuration", source);
+    let (temp, source_path) = write_temp_source("aura-invalid-blocking-pool-configuration", source);
     let standalone_path = temp.path().join("standalone");
     let build = Command::new(aura_bin())
         .args(["build", "--backend", "direct", "-o"])
@@ -2037,15 +2078,15 @@ def main():
         invalid_values.push(OsString::from_vec(b"invalid-\xff".to_vec()));
     }
 
-    for setting in ["AURORA_BLOCKING_WORKERS", "AURORA_BLOCKING_QUEUE_CAPACITY"] {
+    for setting in ["AURA_BLOCKING_WORKERS", "AURA_BLOCKING_QUEUE_CAPACITY"] {
         for invalid in &invalid_values {
             let rendered = invalid.to_string_lossy();
             let expected =
                 format!("invalid {setting} value `{rendered}`: expected a positive integer");
 
             let mut mir = Command::new(aura_bin());
-            mir.env_remove("AURORA_BLOCKING_WORKERS")
-                .env_remove("AURORA_BLOCKING_QUEUE_CAPACITY")
+            mir.env_remove("AURA_BLOCKING_WORKERS")
+                .env_remove("AURA_BLOCKING_QUEUE_CAPACITY")
                 .env(setting, invalid)
                 .current_dir(temp.path())
                 .args(["run", "--backend", "mir"])
@@ -2053,8 +2094,8 @@ def main():
 
             let mut direct = Command::new(aura_bin());
             direct
-                .env_remove("AURORA_BLOCKING_WORKERS")
-                .env_remove("AURORA_BLOCKING_QUEUE_CAPACITY")
+                .env_remove("AURA_BLOCKING_WORKERS")
+                .env_remove("AURA_BLOCKING_QUEUE_CAPACITY")
                 .env(setting, invalid)
                 .current_dir(temp.path())
                 .args(["run", "--backend", "direct"])
@@ -2062,8 +2103,8 @@ def main():
 
             let mut standalone = generated_binary(&standalone_path);
             standalone
-                .env_remove("AURORA_BLOCKING_WORKERS")
-                .env_remove("AURORA_BLOCKING_QUEUE_CAPACITY")
+                .env_remove("AURA_BLOCKING_WORKERS")
+                .env_remove("AURA_BLOCKING_QUEUE_CAPACITY")
                 .env(setting, invalid)
                 .current_dir(temp.path());
 
@@ -2222,9 +2263,9 @@ fn bounded_blocking_pool_admission_preserves_scheduler_progress_on_every_runtime
         let second_gate = spawn_fifo_writer(second_fifo.to_path_buf(), b"gate-two");
 
         command
-            .env("AURORA_WORKERS", "1")
-            .env("AURORA_BLOCKING_WORKERS", "2")
-            .env("AURORA_BLOCKING_QUEUE_CAPACITY", "1")
+            .env("AURA_WORKERS", "1")
+            .env("AURA_BLOCKING_WORKERS", "2")
+            .env("AURA_BLOCKING_QUEUE_CAPACITY", "1")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = command
@@ -2368,7 +2409,7 @@ fn bounded_blocking_pool_admission_preserves_scheduler_progress_on_every_runtime
         stdout
     }
 
-    let temp = TempDir::new("aurora-blocking-pool-product-saturation");
+    let temp = TempDir::new("aura-blocking-pool-product-saturation");
     let first_fifo = temp.path().join("gate-one.fifo");
     let second_fifo = temp.path().join("gate-two.fifo");
     for fifo in [&first_fifo, &second_fifo] {
@@ -2394,7 +2435,7 @@ fn bounded_blocking_pool_admission_preserves_scheduler_progress_on_every_runtime
             path.to_str()
                 .expect("temporary product-regression path should be UTF-8"),
         )
-        .expect("temporary path should encode as an Aurora string")
+        .expect("temporary path should encode as an Aura string")
     };
     let source = format!(
         r#"import fs
@@ -2506,7 +2547,7 @@ def main() -> int32:
 
     let mut direct = Command::new(aura_bin());
     direct
-        .env("AURORA_CACHE_DIR", temp.path().join("direct-cache"))
+        .env("AURA_CACHE_DIR", temp.path().join("direct-cache"))
         .current_dir(temp.path())
         .args(["run", "--backend", "direct"])
         .arg(&source_path);
@@ -2724,9 +2765,9 @@ fn bounded_blocking_pool_timeout_and_cancellation_preserve_acceptance_boundary_p
         let accepted_cancel = spawn_writer_gate(paths[7].clone(), b"late-cancel-value");
 
         command
-            .env("AURORA_WORKERS", "1")
-            .env("AURORA_BLOCKING_WORKERS", "1")
-            .env("AURORA_BLOCKING_QUEUE_CAPACITY", "1")
+            .env("AURA_WORKERS", "1")
+            .env("AURA_BLOCKING_WORKERS", "1")
+            .env("AURA_BLOCKING_QUEUE_CAPACITY", "1")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = command
@@ -2875,7 +2916,7 @@ fn bounded_blocking_pool_timeout_and_cancellation_preserve_acceptance_boundary_p
         captured_stdout
     }
 
-    let temp = TempDir::new("aurora-blocking-pool-acceptance-boundaries");
+    let temp = TempDir::new("aura-blocking-pool-acceptance-boundaries");
     let fifo_names = [
         "pre-timeout-active.fifo",
         "pre-timeout-pending.fifo",
@@ -2912,7 +2953,7 @@ fn bounded_blocking_pool_timeout_and_cancellation_preserve_acceptance_boundary_p
             path.to_str()
                 .expect("temporary product-regression path should be UTF-8"),
         )
-        .expect("temporary path should encode as an Aurora string")
+        .expect("temporary path should encode as an Aura string")
     };
     let source = format!(
         r#"import fs
@@ -3067,7 +3108,7 @@ def main() -> int32:
 
     let mut direct = Command::new(aura_bin());
     direct
-        .env("AURORA_CACHE_DIR", temp.path().join("direct-cache"))
+        .env("AURA_CACHE_DIR", temp.path().join("direct-cache"))
         .current_dir(temp.path())
         .args(["run", "--backend", "direct"])
         .arg(&source_path);
@@ -3093,7 +3134,7 @@ def main() -> int32:
 
 #[test]
 fn large_http_responses_complete_without_timing_out() {
-    let temp = TempDir::new("aurora-http-large-response");
+    let temp = TempDir::new("aura-http-large-response");
     let body_path = temp.path().join("body.txt");
     fs::write(&body_path, "x".repeat(2_000_000)).expect("failed to write HTTP response body");
     let source = format!(
@@ -3138,11 +3179,7 @@ def main() -> int32:
 "#,
         body_path = body_path.display()
     );
-    assert_run_and_direct_source_stdout(
-        "aurora-http-raised-response-cap",
-        &source,
-        "200\n2000000\n",
-    );
+    assert_run_and_direct_source_stdout("aura-http-raised-response-cap", &source, "200\n2000000\n");
 }
 
 #[test]
@@ -3188,11 +3225,7 @@ def main() -> int32:
             return 1
 "#;
 
-    assert_run_and_direct_source_stdout(
-        "aurora-http-fixed-response-cap",
-        source,
-        "http-too-large\n",
-    );
+    assert_run_and_direct_source_stdout("aura-http-fixed-response-cap", source, "http-too-large\n");
 }
 
 #[test]
@@ -3202,7 +3235,7 @@ fn check_rejects_huge_left_associative_expression_chains_without_crashing() {
         expr.push_str(" + 1");
     }
     let source = format!("def main() -> int32:\n    value = {expr}\n    return value\n");
-    let (_temp, source_path) = write_temp_source("aurora-huge-chain", &source);
+    let (_temp, source_path) = write_temp_source("aura-huge-chain", &source);
 
     let output = Command::new(aura_bin())
         .arg("check")
@@ -3230,7 +3263,7 @@ fn check_rejects_huge_left_associative_expression_chains_without_crashing() {
 #[test]
 fn compile_commands_emit_the_shared_structured_diagnostic_schema() {
     let (temp, source_path) = write_temp_source(
-        "aurora-structured-diagnostics",
+        "aura-structured-diagnostics",
         "def main():\n    print(missing)\n    print(also_missing)\n",
     );
     let output_path = temp.path().join("out");
@@ -3328,7 +3361,7 @@ impl NativeCacheFixture {
 
         let run = |cache_path: &std::path::Path| {
             Command::new(aura_bin())
-                .env("AURORA_CACHE_DIR", cache_path)
+                .env("AURA_CACHE_DIR", cache_path)
                 .arg("run")
                 .arg("--backend")
                 .arg("direct")
@@ -3355,14 +3388,14 @@ impl NativeCacheFixture {
         // to different runtime bytes from the later timed checks.
         let install = TempDir::new(&format!("{prefix}-install"));
         let bin_dir = install.path().join("bin");
-        let runtime_dir = install.path().join("lib").join("aurora");
+        let runtime_dir = install.path().join("lib").join("aura");
         fs::create_dir_all(&bin_dir).expect("installed bin directory should be creatable");
         fs::create_dir_all(&runtime_dir).expect("installed runtime directory should be creatable");
         let installed_aura = bin_dir.join("aura");
         fs::copy(aura_bin(), &installed_aura).expect("aura executable should be installable");
         fs::copy(
             native_runtime_archive(),
-            runtime_dir.join("libaurora_compiler.a"),
+            runtime_dir.join("libaura_compiler.a"),
         )
         .expect("native runtime archive should be installable");
         let runtime_memo = fs::read_to_string(cache.path().join("runtime-identity"))
@@ -3379,7 +3412,7 @@ impl NativeCacheFixture {
         fs::remove_dir_all(cache.path().join("programs"))
             .expect("workspace bootstrap entry should be removable");
         let installed_cold = Command::new(&installed_aura)
-            .env("AURORA_CACHE_DIR", cache.path())
+            .env("AURA_CACHE_DIR", cache.path())
             .arg("run")
             .arg("--backend")
             .arg("direct")
@@ -3421,7 +3454,7 @@ impl NativeCacheFixture {
     fn command(&self) -> Command {
         let mut command = Command::new(&self.installed_aura);
         command
-            .env("AURORA_CACHE_DIR", self.cache.path())
+            .env("AURA_CACHE_DIR", self.cache.path())
             .arg("run")
             .arg("--backend")
             .arg("direct")
@@ -3461,18 +3494,18 @@ fn native_cache_creates_every_new_path_component_private_under_permissive_umask(
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
 
-    let root = TempDir::new("aurora-native-cache-private-components");
+    let root = TempDir::new("aura-native-cache-private-components");
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
         .expect("pre-existing cache parent should be private");
     let cache = root.path().join("new-parent").join("new-cache");
     let (_source, source_path) = write_temp_source(
-        "aurora-native-cache-private-components-run",
+        "aura-native-cache-private-components-run",
         "def main() -> int32:\n    return 0\n",
     );
 
     let mut command = Command::new(aura_bin());
     command
-        .env("AURORA_CACHE_DIR", &cache)
+        .env("AURA_CACHE_DIR", &cache)
         .arg("run")
         .arg("--backend")
         .arg("direct")
@@ -3510,13 +3543,13 @@ fn native_cache_creates_every_new_path_component_private_under_permissive_umask(
 
 #[test]
 fn native_run_cache_verifies_artifacts_rebuilds_invalid_entries_and_keys_on_the_program() {
-    let cache = TempDir::new("aurora-native-cache");
+    let cache = TempDir::new("aura-native-cache");
     let source = "def main() -> int32:\n    print(\"cached\")\n    return 0\n";
-    let (_temp, source_path) = write_temp_source("aurora-native-cache-run", source);
+    let (_temp, source_path) = write_temp_source("aura-native-cache-run", source);
 
     let run = |path: &std::path::Path| {
         Command::new(aura_bin())
-            .env("AURORA_CACHE_DIR", cache.path())
+            .env("AURA_CACHE_DIR", cache.path())
             .arg("run")
             .arg("--backend")
             .arg("direct")
@@ -3572,7 +3605,7 @@ fn native_run_cache_verifies_artifacts_rebuilds_invalid_entries_and_keys_on_the_
     );
 
     let cached_contents = fs::read(&cached_binary).expect("cached binary should be readable");
-    let expected_digest = aurora_compiler::sha256_hex(&cached_contents);
+    let expected_digest = aura_compiler::sha256_hex(&cached_contents);
     assert_eq!(
         fs::read_to_string(&cached_digest)
             .expect("cached digest should be readable")
@@ -3592,7 +3625,7 @@ fn native_run_cache_verifies_artifacts_rebuilds_invalid_entries_and_keys_on_the_
     // existing content-addressed entry masks the attempted republish.
     let missing_cc = cache.path().join("missing-cc");
     let warm = Command::new(aura_bin())
-        .env("AURORA_CACHE_DIR", cache.path())
+        .env("AURA_CACHE_DIR", cache.path())
         .env("CC", &missing_cc)
         .arg("run")
         .arg("--backend")
@@ -3656,7 +3689,7 @@ fn native_run_cache_verifies_artifacts_rebuilds_invalid_entries_and_keys_on_the_
         "rebuilt entry identity must be bound to its content key"
     );
     let retained_identity = Command::new(aura_bin())
-        .env("AURORA_CACHE_DIR", cache.path())
+        .env("AURA_CACHE_DIR", cache.path())
         .env("CC", &missing_cc)
         .arg("run")
         .arg("--backend")
@@ -3695,7 +3728,7 @@ fn native_run_cache_verifies_artifacts_rebuilds_invalid_entries_and_keys_on_the_
         fs::read_to_string(&cached_digest)
             .expect("digest-mismatch rebuild should publish a digest")
             .trim(),
-        aurora_compiler::sha256_hex(&rebuilt_contents),
+        aura_compiler::sha256_hex(&rebuilt_contents),
         "a digest mismatch must be replaced by a self-verifying entry"
     );
 
@@ -3761,7 +3794,7 @@ fn native_run_cache_verifies_artifacts_rebuilds_invalid_entries_and_keys_on_the_
     fs::write(&cached_binary, wrong_bytes).expect("cached binary should be replaceable");
     fs::write(
         &cached_digest,
-        format!("{}\n", aurora_compiler::sha256_hex(wrong_bytes)),
+        format!("{}\n", aura_compiler::sha256_hex(wrong_bytes)),
     )
     .expect("matching wrong-bytes digest should be writable");
     let after_wrong_bytes = run(&source_path);
@@ -3786,7 +3819,7 @@ fn native_run_cache_verifies_artifacts_rebuilds_invalid_entries_and_keys_on_the_
     // Changing the program changes the content key, so the cache gains a
     // second entry rather than launching the stale binary.
     let (_changed_temp, changed_path) = write_temp_source(
-        "aurora-native-cache-changed",
+        "aura-native-cache-changed",
         "def main() -> int32:\n    print(\"changed\")\n    return 0\n",
     );
     let changed = run(&changed_path);
@@ -3822,9 +3855,9 @@ fn native_run_cache_serializes_concurrent_cold_runs_into_one_build_and_verified_
     use std::os::fd::AsRawFd;
     use std::sync::mpsc;
 
-    let cache = TempDir::new("aurora-native-cache-concurrent");
+    let cache = TempDir::new("aura-native-cache-concurrent");
     let (_source, source_path) = write_temp_source(
-        "aurora-native-cache-concurrent-run",
+        "aura-native-cache-concurrent-run",
         "def main() -> int32:\n    print(\"concurrent\")\n    return 0\n",
     );
 
@@ -3832,7 +3865,7 @@ fn native_run_cache_serializes_concurrent_cold_runs_into_one_build_and_verified_
     // program entry. Holding that key gives every child a deterministic cold
     // miss and a real establishment barrier.
     let bootstrap = Command::new(aura_bin())
-        .env("AURORA_CACHE_DIR", cache.path())
+        .env("AURA_CACHE_DIR", cache.path())
         .arg("run")
         .arg("--backend")
         .arg("direct")
@@ -3872,7 +3905,7 @@ fn native_run_cache_serializes_concurrent_cold_runs_into_one_build_and_verified_
     let mut children = (0..4)
         .map(|_| {
             Command::new(aura_bin())
-                .env("AURORA_CACHE_DIR", cache.path())
+                .env("AURA_CACHE_DIR", cache.path())
                 .arg("run")
                 .arg("--backend")
                 .arg("direct")
@@ -4024,7 +4057,7 @@ fn native_run_cache_serializes_concurrent_cold_runs_into_one_build_and_verified_
     );
 
     let warm = Command::new(aura_bin())
-        .env("AURORA_CACHE_DIR", cache.path())
+        .env("AURA_CACHE_DIR", cache.path())
         .env("CC", cache.path().join("missing-cc"))
         .env("CARGO", cache.path().join("missing-cargo"))
         .arg("run")
@@ -4050,16 +4083,16 @@ fn native_run_cache_serializes_concurrent_cold_runs_into_one_build_and_verified_
 fn native_run_cache_unrelated_warm_hit_does_not_wait_for_another_key() {
     use std::os::fd::AsRawFd;
 
-    let fixture = NativeCacheFixture::new("aurora-native-cache-per-key");
+    let fixture = NativeCacheFixture::new("aura-native-cache-per-key");
     let cache = &fixture.cache;
     let first_path = &fixture.source_path;
     let (_second_source, second_path) = write_temp_source(
-        "aurora-native-cache-per-key-second",
+        "aura-native-cache-per-key-second",
         "def main() -> int32:\n    print(\"second\")\n    return 0\n",
     );
     let run = |path: &std::path::Path| {
         Command::new(&fixture.installed_aura)
-            .env("AURORA_CACHE_DIR", cache.path())
+            .env("AURA_CACHE_DIR", cache.path())
             .arg("run")
             .arg("--backend")
             .arg("direct")
@@ -4097,7 +4130,7 @@ fn native_run_cache_unrelated_warm_hit_does_not_wait_for_another_key() {
     let warm = |label: &str, path: &std::path::Path| {
         let mut warm_command = Command::new(&fixture.installed_aura);
         warm_command
-            .env("AURORA_CACHE_DIR", cache.path())
+            .env("AURA_CACHE_DIR", cache.path())
             .env("CC", cache.path().join("missing-cc"))
             .env("CARGO", cache.path().join("missing-cargo"))
             .arg("run")
@@ -4152,13 +4185,13 @@ fn native_run_cache_unrelated_warm_hit_does_not_wait_for_another_key() {
 
 #[test]
 fn direct_run_json_failure_remains_one_document_when_a_rebuild_is_needed() {
-    let cache = TempDir::new("aurora-native-json-rebuild");
+    let cache = TempDir::new("aura-native-json-rebuild");
     let (_source, source_path) = write_temp_source(
-        "aurora-native-json-rebuild-source",
+        "aura-native-json-rebuild-source",
         "def main() -> int32:\n    return 0\n",
     );
     let output = Command::new(aura_bin())
-        .env("AURORA_CACHE_DIR", cache.path())
+        .env("AURA_CACHE_DIR", cache.path())
         .env("CC", cache.path().join("missing-cc"))
         .arg("run")
         .arg("--format")
@@ -4206,15 +4239,15 @@ fn parse_single_json_stderr(output: &std::process::Output, context: &str) -> ser
 #[cfg(unix)]
 #[test]
 fn direct_run_json_transports_runtime_traps_on_cold_warm_and_auto_paths() {
-    let cache = TempDir::new("aurora-native-json-runtime-trap");
+    let cache = TempDir::new("aura-native-json-runtime-trap");
     let (_source, source_path) = write_temp_source(
-        "aurora-native-json-runtime-trap-source",
+        "aura-native-json-runtime-trap-source",
         "def explode() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    return explode()\n",
     );
 
     let run = |backend: &str| {
         Command::new(aura_bin())
-            .env("AURORA_CACHE_DIR", cache.path())
+            .env("AURA_CACHE_DIR", cache.path())
             .args(["run", "--format", "json", "--backend", backend])
             .arg(&source_path)
             .output()
@@ -4280,21 +4313,21 @@ fn direct_run_json_transports_runtime_traps_on_cold_warm_and_auto_paths() {
     );
     assert!(
         automatic_report.get("fallback").is_none(),
-        "an Aurora program trap is not a backend failure and must not fall back: {automatic_report}"
+        "an Aura program trap is not a backend failure and must not fall back: {automatic_report}"
     );
 }
 
 #[cfg(unix)]
 #[test]
 fn direct_run_json_distinguishes_normal_nonzero_status_from_a_runtime_trap() {
-    let cache = TempDir::new("aurora-native-json-normal-nonzero");
+    let cache = TempDir::new("aura-native-json-normal-nonzero");
     let (_source, source_path) = write_temp_source(
-        "aurora-native-json-normal-nonzero-source",
+        "aura-native-json-normal-nonzero-source",
         "def main() -> int32:\n    return 1\n",
     );
     let run = || {
         Command::new(aura_bin())
-            .env("AURORA_CACHE_DIR", cache.path())
+            .env("AURA_CACHE_DIR", cache.path())
             .args(["run", "--format", "json", "--backend", "direct"])
             .arg(&source_path)
             .output()
@@ -4327,17 +4360,17 @@ fn direct_run_json_distinguishes_normal_nonzero_status_from_a_runtime_trap() {
 #[cfg(unix)]
 #[test]
 fn direct_json_channel_is_private_and_does_not_wait_for_a_grandchild() {
-    let cache = TempDir::new("aurora-native-json-grandchild");
+    let cache = TempDir::new("aura-native-json-grandchild");
     let source = r#"import process
 import sys
 
 def internal_env_visible() -> bool:
-    match sys.env("AURORA_INTERNAL_DIAGNOSTIC_FD"):
+    match sys.env("AURA_INTERNAL_DIAGNOSTIC_FD"):
         case Option.Some(_):
             return true
         case Option.None:
             pass
-    match sys.env("AURORA_INTERNAL_DIAGNOSTIC_SIGNAL_FD"):
+    match sys.env("AURA_INTERNAL_DIAGNOSTIC_SIGNAL_FD"):
         case Option.Some(_):
             return true
         case Option.None:
@@ -4348,7 +4381,7 @@ def run() -> Result[int32, process.Error]:
         return Result.Ok(11)
     environment = try process.run(["/usr/bin/env"], stdout=process.pipe(), stderr=process.pipe(), timeout=2s)
     child_environment = environment.stdout()
-    if child_environment.contains("AURORA_INTERNAL_DIAGNOSTIC_FD") or child_environment.contains("AURORA_INTERNAL_DIAGNOSTIC_SIGNAL_FD"):
+    if child_environment.contains("AURA_INTERNAL_DIAGNOSTIC_FD") or child_environment.contains("AURA_INTERNAL_DIAGNOSTIC_SIGNAL_FD"):
         return Result.Ok(12)
     try process.run(["/bin/sh", "-c", "sleep 10 &"], stdout=process.null(), stderr=process.null(), timeout=2s)
     values: Vec[int32] = [1, 2]
@@ -4361,11 +4394,11 @@ def main() -> int32:
         case Result.Err(_):
             return 13
 "#;
-    let (_source, source_path) = write_temp_source("aurora-native-json-grandchild-source", source);
+    let (_source, source_path) = write_temp_source("aura-native-json-grandchild-source", source);
 
     // Populate the program cache without installing the private JSON channel.
     let cold = Command::new(aura_bin())
-        .env("AURORA_CACHE_DIR", cache.path())
+        .env("AURA_CACHE_DIR", cache.path())
         .args(["run", "--backend", "direct"])
         .arg(&source_path)
         .output()
@@ -4379,7 +4412,7 @@ def main() -> int32:
 
     let mut command = Command::new(aura_bin());
     command
-        .env("AURORA_CACHE_DIR", cache.path())
+        .env("AURA_CACHE_DIR", cache.path())
         .args(["run", "--format", "json", "--backend", "direct"])
         .arg(&source_path);
     let output = command_output_with_timeout(
@@ -4401,7 +4434,7 @@ def main() -> int32:
 #[test]
 fn forced_direct_json_preserves_the_original_lowering_diagnostic() {
     let (_source, source_path) = write_temp_source(
-        "aurora-native-json-lowering-diagnostic",
+        "aura-native-json-lowering-diagnostic",
         "def main() -> int32:\n    return missing\n",
     );
     let output = Command::new(aura_bin())
@@ -4429,7 +4462,7 @@ fn direct_run_json_buffers_wait_progress_into_one_document() {
     use std::os::fd::AsRawFd;
 
     let fixture = NativeCacheFixture::new_with_program(
-        "aurora-native-json-wait",
+        "aura-native-json-wait",
         "def explode() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    return explode()\n",
         Some(1),
         "",
@@ -4463,7 +4496,7 @@ fn direct_run_json_buffers_wait_progress_into_one_document() {
     );
 
     let mut child = Command::new(&fixture.installed_aura)
-        .env("AURORA_CACHE_DIR", fixture.cache.path())
+        .env("AURA_CACHE_DIR", fixture.cache.path())
         .arg("run")
         .arg("--format")
         .arg("json")
@@ -4566,11 +4599,11 @@ fn direct_run_json_buffers_wait_progress_into_one_document() {
 #[cfg(unix)]
 #[test]
 fn auto_run_json_fallback_preserves_native_progress_in_one_document() {
-    let fixture = NativeCacheFixture::new("aurora-native-json-auto-fallback");
+    let fixture = NativeCacheFixture::new("aura-native-json-auto-fallback");
     fs::remove_dir_all(&fixture.entry)
         .expect("the warm entry should be removable to force a direct build");
     let output = Command::new(&fixture.installed_aura)
-        .env("AURORA_CACHE_DIR", fixture.cache.path())
+        .env("AURA_CACHE_DIR", fixture.cache.path())
         .env("CC", fixture.cache.path().join("missing-cc"))
         .arg("run")
         .arg("--format")
@@ -4615,13 +4648,13 @@ fn auto_run_json_fallback_preserves_native_progress_in_one_document() {
 #[cfg(unix)]
 #[test]
 fn installed_direct_run_keeps_native_cache_optional_for_build_locking() {
-    let bootstrap_cache = TempDir::new("aurora-installed-no-cache-bootstrap");
+    let bootstrap_cache = TempDir::new("aura-installed-no-cache-bootstrap");
     let (_source, source_path) = write_temp_source(
-        "aurora-installed-no-cache-source",
+        "aura-installed-no-cache-source",
         "def main() -> int32:\n    print(\"uncached\")\n    return 0\n",
     );
     let bootstrap = Command::new(aura_bin())
-        .env("AURORA_CACHE_DIR", bootstrap_cache.path())
+        .env("AURA_CACHE_DIR", bootstrap_cache.path())
         .arg("run")
         .arg("--backend")
         .arg("direct")
@@ -4634,16 +4667,16 @@ fn installed_direct_run_keeps_native_cache_optional_for_build_locking() {
         String::from_utf8_lossy(&bootstrap.stderr)
     );
 
-    let prefix = TempDir::new("aurora-installed-no-cache-prefix");
+    let prefix = TempDir::new("aura-installed-no-cache-prefix");
     let bin_dir = prefix.path().join("bin");
-    let runtime_dir = prefix.path().join("lib").join("aurora");
+    let runtime_dir = prefix.path().join("lib").join("aura");
     fs::create_dir_all(&bin_dir).expect("installed bin directory should be creatable");
     fs::create_dir_all(&runtime_dir).expect("installed runtime directory should be creatable");
     let installed_aura = bin_dir.join("aura");
     fs::copy(aura_bin(), &installed_aura).expect("aura executable should be installable");
     fs::copy(
         native_runtime_archive(),
-        runtime_dir.join("libaurora_compiler.a"),
+        runtime_dir.join("libaura_compiler.a"),
     )
     .expect("native runtime archive should be installable");
     let runtime_memo = fs::read_to_string(bootstrap_cache.path().join("runtime-identity"))
@@ -4659,7 +4692,7 @@ fn installed_direct_run_keeps_native_cache_optional_for_build_locking() {
     .expect("installed native-link manifest should be writable");
 
     let output = Command::new(&installed_aura)
-        .env("AURORA_CACHE_DIR", "")
+        .env("AURA_CACHE_DIR", "")
         .env_remove("HOME")
         .arg("run")
         .arg("--backend")
@@ -4684,7 +4717,7 @@ fn installed_direct_run_keeps_native_cache_optional_for_build_locking() {
 fn native_run_cache_rejects_symlink_and_fifo_members_without_blocking_or_leaking() {
     use std::os::unix::fs::symlink;
 
-    let fixture = NativeCacheFixture::new("aurora-native-cache-non-regular");
+    let fixture = NativeCacheFixture::new("aura-native-cache-non-regular");
     // Each invalid member triggers a real native rebuild. The no-blocking
     // assertion must tolerate compiler/linker contention from the surrounding
     // default-parallel CLI suite while still bounding any accidental FIFO open.
@@ -4717,7 +4750,7 @@ fn native_run_cache_rejects_symlink_and_fifo_members_without_blocking_or_leaking
                 .to_string_lossy()
                 .into_owned()
         })
-        .filter(|name| name.starts_with("aurora-verified-native-"))
+        .filter(|name| name.starts_with("aura-verified-native-"))
         .collect::<Vec<_>>();
     assert!(
         leaked_launch_artifacts.is_empty(),
@@ -4734,7 +4767,7 @@ fn native_run_cache_rejects_symlink_and_fifo_members_without_blocking_or_leaking
     symlink(&external_program, fixture.program()).expect("program symlink should be creatable");
     fs::write(
         fixture.digest(),
-        format!("{}\n", aurora_compiler::sha256_hex(&external_contents)),
+        format!("{}\n", aura_compiler::sha256_hex(&external_contents)),
     )
     .expect("program-symlink digest should be writable");
     let program_symlink = command_output_with_timeout(
@@ -4771,7 +4804,7 @@ fn native_run_cache_rejects_symlink_and_fifo_members_without_blocking_or_leaking
         fs::read(fixture.program()).expect("rebuilt cached program should be readable");
     fs::write(
         &external_digest,
-        format!("{}\n", aurora_compiler::sha256_hex(&current_program)),
+        format!("{}\n", aura_compiler::sha256_hex(&current_program)),
     )
     .expect("external digest should be writable");
     fs::remove_file(fixture.digest()).expect("cached digest should be removable");
@@ -4833,7 +4866,7 @@ fn native_run_cache_rejects_symlink_and_fifo_members_without_blocking_or_leaking
 fn native_run_cache_preserves_verified_entry_when_private_launch_staging_fails() {
     use std::os::unix::fs::MetadataExt;
 
-    let fixture = NativeCacheFixture::new("aurora-native-cache-launch-environment");
+    let fixture = NativeCacheFixture::new("aura-native-cache-launch-environment");
     let program_before =
         fs::read(fixture.program()).expect("cached program should be readable before launch");
     let digest_before =
@@ -4909,7 +4942,7 @@ fn native_run_cache_preserves_verified_entry_when_private_launch_staging_fails()
 #[test]
 fn run_backend_selector_matches_across_mir_direct_and_auto() {
     let source = "import sys\n\ndef main() -> int32:\n    print(\"selector\")\n    for arg in sys.args():\n        print(arg)\n    return 3\n";
-    let (_temp, source_path) = write_temp_source("aurora-run-backend-selector", source);
+    let (_temp, source_path) = write_temp_source("aura-run-backend-selector", source);
     let expected = "selector\nalpha\nbeta\n";
 
     for backend in ["mir", "direct", "auto"] {
@@ -4959,10 +4992,10 @@ fn run_backend_selector_matches_across_mir_direct_and_auto() {
 
 #[test]
 fn run_backends_match_eager_comprehension_behavior() {
-    let source = include_str!("../../aurora-compiler/tests/fixtures/run-pass/comprehensions.au");
+    let source = include_str!("../../aura-compiler/tests/fixtures/run-pass/comprehensions.au");
     let expected =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/comprehensions.stdout");
-    let (_temp, source_path) = write_temp_source("aurora-comprehension-parity", source);
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/comprehensions.stdout");
+    let (_temp, source_path) = write_temp_source("aura-comprehension-parity", source);
 
     for backend in ["mir", "direct"] {
         let output = Command::new(aura_bin())
@@ -4987,13 +5020,12 @@ fn run_backends_match_eager_comprehension_behavior() {
 
 #[test]
 fn run_backends_match_full_comprehension_runtime_matrix() {
-    let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/comprehension_runtime_matrix.au"
-    );
+    let source =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/comprehension_runtime_matrix.au");
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/comprehension_runtime_matrix.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/comprehension_runtime_matrix.stdout"
     );
-    let (_temp, source_path) = write_temp_source("aurora-comprehension-runtime-matrix", source);
+    let (_temp, source_path) = write_temp_source("aura-comprehension-runtime-matrix", source);
 
     for backend in ["mir", "direct"] {
         let output = Command::new(aura_bin())
@@ -5019,10 +5051,10 @@ fn run_backends_match_full_comprehension_runtime_matrix() {
 #[test]
 fn run_backends_lower_comprehensions_in_function_and_field_defaults() {
     let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/comprehension_defaults.au");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/comprehension_defaults.au");
     let expected =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/comprehension_defaults.stdout");
-    let (_temp, source_path) = write_temp_source("aurora-comprehension-defaults", source);
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/comprehension_defaults.stdout");
+    let (_temp, source_path) = write_temp_source("aura-comprehension-defaults", source);
 
     for backend in ["mir", "direct"] {
         let output = Command::new(aura_bin())
@@ -5048,10 +5080,9 @@ fn run_backends_lower_comprehensions_in_function_and_field_defaults() {
 #[test]
 fn owned_slice_matrix_matches_forced_mir_and_direct_backends() {
     let root = repo_root();
-    let fixture = "crates/aurora-compiler/tests/fixtures/run-pass/owned_vec_string_slices.au";
-    let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/owned_vec_string_slices.stdout"
-    );
+    let fixture = "crates/aura-compiler/tests/fixtures/run-pass/owned_vec_string_slices.au";
+    let expected =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/owned_vec_string_slices.stdout");
 
     let mir = Command::new(aura_bin())
         .current_dir(&root)
@@ -5064,7 +5095,7 @@ fn owned_slice_matrix_matches_forced_mir_and_direct_backends() {
         String::from_utf8_lossy(&mir.stderr)
     );
 
-    let output_dir = TempDir::new("aurora-owned-slice-direct");
+    let output_dir = TempDir::new("aura-owned-slice-direct");
     let output_path = output_dir.path().join("out");
     let direct_build = Command::new(aura_bin())
         .current_dir(&root)
@@ -5101,16 +5132,16 @@ fn owned_slice_au4003_traps_match_forced_mir_and_direct_backends() {
     let cases = [
         (
             "Vec reversed bounds",
-            "crates/aurora-compiler/tests/fixtures/run-fail/vec_slice_reversed_bounds.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/vec_slice_reversed_bounds.au",
             include_str!(
-                "../../aurora-compiler/tests/fixtures/run-fail/vec_slice_reversed_bounds.diag"
+                "../../aura-compiler/tests/fixtures/run-fail/vec_slice_reversed_bounds.diag"
             ),
         ),
         (
             "String normalized start out of bounds",
-            "crates/aurora-compiler/tests/fixtures/run-fail/string_slice_start_out_of_bounds.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/string_slice_start_out_of_bounds.au",
             include_str!(
-                "../../aurora-compiler/tests/fixtures/run-fail/string_slice_start_out_of_bounds.diag"
+                "../../aura-compiler/tests/fixtures/run-fail/string_slice_start_out_of_bounds.diag"
             ),
         ),
     ];
@@ -5128,7 +5159,7 @@ fn owned_slice_au4003_traps_match_forced_mir_and_direct_backends() {
             String::from_utf8_lossy(&mir.stderr)
         );
 
-        let output_dir = TempDir::new("aurora-owned-slice-trap-direct");
+        let output_dir = TempDir::new("aura-owned-slice-trap-direct");
         let output_path = output_dir.path().join("out");
         let direct_build = Command::new(aura_bin())
             .current_dir(&root)
@@ -5175,10 +5206,9 @@ fn owned_slice_au4003_traps_match_forced_mir_and_direct_backends() {
 
 #[test]
 fn numeric_array_matrix_matches_forced_mir_and_direct_backends() {
-    let source = include_str!("../../aurora-compiler/tests/fixtures/run-pass/array_runtime.au");
-    let expected =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/array_runtime.stdout");
-    assert_run_and_direct_source_stdout("aurora-numeric-array-matrix", source, expected);
+    let source = include_str!("../../aura-compiler/tests/fixtures/run-pass/array_runtime.au");
+    let expected = include_str!("../../aura-compiler/tests/fixtures/run-pass/array_runtime.stdout");
+    assert_run_and_direct_source_stdout("aura-numeric-array-matrix", source, expected);
 
     let rank_one_source = [
         "def main() -> int32:",
@@ -5191,7 +5221,7 @@ fn numeric_array_matrix_matches_forced_mir_and_direct_backends() {
     ]
     .join("\n");
     assert_run_and_direct_source_stdout(
-        "aurora-numeric-array-rank-one-index",
+        "aura-numeric-array-rank-one-index",
         &rank_one_source,
         "6\n9\n",
     );
@@ -5200,10 +5230,10 @@ fn numeric_array_matrix_matches_forced_mir_and_direct_backends() {
 #[test]
 fn numeric_array_operator_modes_match_forced_mir_and_direct_backends() {
     let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/array_operator_modes.au");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/array_operator_modes.au");
     let expected =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/array_operator_modes.stdout");
-    assert_run_and_direct_source_stdout("aurora-numeric-array-operator-modes", source, expected);
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/array_operator_modes.stdout");
+    assert_run_and_direct_source_stdout("aura-numeric-array-operator-modes", source, expected);
 }
 
 #[test]
@@ -5244,7 +5274,7 @@ def main() -> int32:
         "Array[int32](shape=[2], values=[2147483647, 2147483647])\n",
     );
     assert_run_and_direct_source_stdout(
-        "aurora-numeric-array-composed-member-results",
+        "aura-numeric-array-composed-member-results",
         source,
         expected,
     );
@@ -5344,7 +5374,7 @@ def main() -> int32:
     );
 
     assert_mir_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-array-all-dtypes",
+        "aura-array-all-dtypes",
         source,
         std::time::Duration::from_secs(60),
         expected,
@@ -5410,7 +5440,7 @@ def main() -> int32:
         "1\n",
     );
     assert_run_and_direct_source_stdout(
-        "aurora-numeric-array-nested-collection-clones",
+        "aura-numeric-array-nested-collection-clones",
         source,
         expected,
     );
@@ -5433,7 +5463,7 @@ fn numeric_array_invalid_shapes_match_forced_mir_and_direct_backends() {
 
     for (label, source, expected_message) in cases {
         let (temp, source_path) =
-            write_temp_source(&format!("aurora-array-invalid-shape-{label}"), source);
+            write_temp_source(&format!("aura-array-invalid-shape-{label}"), source);
         let mir = Command::new(aura_bin())
             .args(["run", "--backend", "mir"])
             .arg(&source_path)
@@ -5516,7 +5546,7 @@ fn fixed_width_integer_methods_match_forced_mir_and_direct_backends() {
     ]
     .join("\n");
     assert_run_and_direct_source_stdout(
-        "aurora-fixed-width-integer-methods",
+        "aura-fixed-width-integer-methods",
         &source,
         "-128\n127\n-2\n127\n-128\n127\n0\n255\n254\n255\n0\n255\n-32768\n32767\n-2\n32767\n-32768\n32767\n",
     );
@@ -5528,72 +5558,72 @@ fn numeric_array_traps_match_forced_mir_and_direct_backends() {
     let cases = [
         (
             "binary shape mismatch",
-            "crates/aurora-compiler/tests/fixtures/run-fail/array_binary_shape_mismatch.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/array_binary_shape_mismatch.au",
             "error[AU4007]",
         ),
         (
             "checked overflow",
-            "crates/aurora-compiler/tests/fixtures/run-fail/array_checked_overflow.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/array_checked_overflow.au",
             "error[AU4002]",
         ),
         (
             "floating division by zero",
-            "crates/aurora-compiler/tests/fixtures/run-fail/array_division_by_zero.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/array_division_by_zero.au",
             "error[AU4004]",
         ),
         (
             "empty minimum",
-            "crates/aurora-compiler/tests/fixtures/run-fail/array_empty_min.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/array_empty_min.au",
             "error[AU4007]",
         ),
         (
             "empty maximum",
-            "crates/aurora-compiler/tests/fixtures/run-fail/array_empty_max.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/array_empty_max.au",
             "error[AU4007]",
         ),
         (
             "empty mean",
-            "crates/aurora-compiler/tests/fixtures/run-fail/array_empty_mean.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/array_empty_mean.au",
             "error[AU4007]",
         ),
         (
             "index rank mismatch",
-            "crates/aurora-compiler/tests/fixtures/run-fail/array_index_rank_mismatch.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/array_index_rank_mismatch.au",
             "error[AU4007]",
         ),
         (
             "integer mode shape mismatch",
-            "crates/aurora-compiler/tests/fixtures/run-fail/array_integer_mode_shape_mismatch.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/array_integer_mode_shape_mismatch.au",
             "error[AU4007]",
         ),
         (
             "map callback trap",
-            "crates/aurora-compiler/tests/fixtures/run-fail/array_map_callback_trap.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/array_map_callback_trap.au",
             "error[AU4003]",
         ),
         (
             "set out of bounds",
-            "crates/aurora-compiler/tests/fixtures/run-fail/array_set_out_of_bounds.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/array_set_out_of_bounds.au",
             "error[AU4003]",
         ),
         (
             "set rank mismatch",
-            "crates/aurora-compiler/tests/fixtures/run-fail/array_set_rank_mismatch.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/array_set_rank_mismatch.au",
             "error[AU4007]",
         ),
         (
             "indexed assignment out of bounds",
-            "crates/aurora-compiler/tests/fixtures/run-fail/array_index_assignment_out_of_bounds.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/array_index_assignment_out_of_bounds.au",
             "error[AU4003]",
         ),
         (
             "shape mismatch",
-            "crates/aurora-compiler/tests/fixtures/run-fail/array_shape_mismatch.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/array_shape_mismatch.au",
             "error[AU4007]",
         ),
         (
             "slice out of bounds",
-            "crates/aurora-compiler/tests/fixtures/run-fail/array_slice_negative_no_clamp.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/array_slice_negative_no_clamp.au",
             "error[AU4003]",
         ),
     ];
@@ -5611,7 +5641,7 @@ fn numeric_array_traps_match_forced_mir_and_direct_backends() {
             String::from_utf8_lossy(&mir.stderr)
         );
 
-        let output_dir = TempDir::new("aurora-array-trap-direct");
+        let output_dir = TempDir::new("aura-array-trap-direct");
         let output_path = output_dir.path().join("out");
         let direct_build = Command::new(aura_bin())
             .current_dir(&root)
@@ -5657,10 +5687,9 @@ fn numeric_array_traps_match_forced_mir_and_direct_backends() {
 #[test]
 fn run_backends_drop_partial_comprehension_before_propagating_trap() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-fail/comprehension_partial_result_trap.au"
+        "../../aura-compiler/tests/fixtures/run-fail/comprehension_partial_result_trap.au"
     );
-    let (_temp, source_path) =
-        write_temp_source("aurora-comprehension-partial-result-trap", source);
+    let (_temp, source_path) = write_temp_source("aura-comprehension-partial-result-trap", source);
 
     for backend in ["mir", "direct"] {
         let output = Command::new(aura_bin())
@@ -5691,7 +5720,7 @@ fn run_backends_drop_partial_comprehension_before_propagating_trap() {
 #[test]
 fn compile_commands_accept_membership_and_comparison_chains() {
     let (temp, source_path) = write_temp_source(
-        "aurora-membership-and-chains",
+        "aura-membership-and-chains",
         "def main():\n    ports = [80, 443]\n    if 443 in ports and 1 <= 80 < 1024:\n        print(\"ok\")\n",
     );
     let output_path = temp.path().join("out");
@@ -5731,7 +5760,7 @@ fn compile_commands_accept_membership_and_comparison_chains() {
     assert_eq!(String::from_utf8_lossy(&direct.stdout), "ok\n");
 
     let (_reject_temp, reject_path) = write_temp_source(
-        "aurora-membership-rejection",
+        "aura-membership-rejection",
         "def main():\n    print(1 in 5)\n",
     );
     let rejected = Command::new(aura_bin())
@@ -5761,7 +5790,7 @@ def main() -> int32:
     return recurse(10000000)
 "#;
 
-    let (_build, run) = build_and_run_direct_source("aurora-direct-recursion", source);
+    let (_build, run) = build_and_run_direct_source("aura-direct-recursion", source);
     assert!(
         !run.status.success(),
         "deep recursion should fail cleanly in the direct backend"
@@ -6038,7 +6067,7 @@ fn analyze_recovers_symbols_for_dangling_dot_at_eof_stdin_buffers() {
 
 #[test]
 fn analyze_stdin_resolves_local_module_imports() {
-    let temp = TempDir::new("aurora-cli-analyze-modules");
+    let temp = TempDir::new("aura-cli-analyze-modules");
     fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
     fs::write(
         temp.path().join("helpers/math.au"),
@@ -6099,7 +6128,7 @@ fn analyze_stdin_resolves_local_module_imports() {
 
 #[test]
 fn check_stdin_resolves_local_module_imports() {
-    let temp = TempDir::new("aurora-cli-check-modules");
+    let temp = TempDir::new("aura-cli-check-modules");
     fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
     fs::write(
         temp.path().join("helpers/math.au"),
@@ -6141,7 +6170,7 @@ fn check_stdin_resolves_local_module_imports() {
 
 #[test]
 fn run_stdin_resolves_local_module_imports() {
-    let temp = TempDir::new("aurora-cli-run-modules-stdin");
+    let temp = TempDir::new("aura-cli-run-modules-stdin");
     fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
     fs::write(
         temp.path().join("helpers/math.au"),
@@ -6183,7 +6212,7 @@ fn run_stdin_resolves_local_module_imports() {
 
 #[test]
 fn run_stdin_with_path_resolves_local_module_imports() {
-    let temp = TempDir::new("aurora-cli-run-modules-stdin");
+    let temp = TempDir::new("aura-cli-run-modules-stdin");
     fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
     fs::write(
         temp.path().join("helpers/math.au"),
@@ -6225,7 +6254,7 @@ fn run_stdin_with_path_resolves_local_module_imports() {
 
 #[test]
 fn mir_stdin_resolves_local_module_imports() {
-    let temp = TempDir::new("aurora-cli-mir-modules-stdin");
+    let temp = TempDir::new("aura-cli-mir-modules-stdin");
     fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
     fs::write(
         temp.path().join("helpers/math.au"),
@@ -6270,7 +6299,7 @@ fn mir_stdin_resolves_local_module_imports() {
 
 #[test]
 fn complete_stdin_resolves_local_module_member_completions() {
-    let temp = TempDir::new("aurora-cli-complete-modules");
+    let temp = TempDir::new("aura-cli-complete-modules");
     fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
     fs::write(
         temp.path().join("helpers/math.au"),
@@ -6325,16 +6354,16 @@ fn complete_stdin_resolves_local_module_member_completions() {
 
 #[test]
 fn editor_stdin_analysis_and_completion_do_not_write_package_lockfile() {
-    let temp = TempDir::new("aurora-cli-editor-no-lock");
+    let temp = TempDir::new("aura-cli-editor-no-lock");
     fs::create_dir_all(temp.path().join("app/src")).expect("failed to create app src");
     fs::create_dir_all(temp.path().join("util/src")).expect("failed to create util src");
     fs::write(
-        temp.path().join("app/Aurora.toml"),
+        temp.path().join("app/Aura.toml"),
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\nutil = { path = \"../util\" }\n",
     )
     .expect("failed to write app manifest");
     fs::write(
-        temp.path().join("util/Aurora.toml"),
+        temp.path().join("util/Aura.toml"),
         "[package]\nname = \"util\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
     )
     .expect("failed to write util manifest");
@@ -6347,7 +6376,7 @@ fn editor_stdin_analysis_and_completion_do_not_write_package_lockfile() {
     let main_path = temp.path().join("app/src/main.au");
     let analyze_source =
         "import util.math\n\ndef main() -> int32:\n    print(util.math.double(5))\n    return 0\n";
-    let lockfile = temp.path().join("app/Aurora.lock");
+    let lockfile = temp.path().join("app/Aura.lock");
     assert!(
         !lockfile.exists(),
         "test package should start without a lockfile"
@@ -6378,7 +6407,7 @@ fn editor_stdin_analysis_and_completion_do_not_write_package_lockfile() {
     );
     assert!(
         !lockfile.exists(),
-        "analyze --stdin should not write Aurora.lock for editor buffers"
+        "analyze --stdin should not write Aura.lock for editor buffers"
     );
 
     let completion_source =
@@ -6414,13 +6443,13 @@ fn editor_stdin_analysis_and_completion_do_not_write_package_lockfile() {
     );
     assert!(
         !lockfile.exists(),
-        "complete --stdin should not write Aurora.lock for editor buffers"
+        "complete --stdin should not write Aura.lock for editor buffers"
     );
 }
 
 #[test]
 fn complete_stdin_includes_imported_trait_methods() {
-    let temp = TempDir::new("aurora-cli-complete-imported-trait");
+    let temp = TempDir::new("aura-cli-complete-imported-trait");
     fs::create_dir_all(temp.path().join("pkg")).expect("failed to create package dir");
     fs::write(
         temp.path().join("pkg/named.au"),
@@ -6545,7 +6574,7 @@ fn complete_recovers_member_completions_for_dangling_dot_at_eof_stdin_buffers() 
 
 #[test]
 fn analyze_recovers_symbols_for_multiple_dangling_dots_with_imports() {
-    let temp = TempDir::new("aurora-analyze-multi-dangling-imports");
+    let temp = TempDir::new("aura-analyze-multi-dangling-imports");
     let helpers_dir = temp.path().join("helpers");
     fs::create_dir_all(&helpers_dir).expect("failed to create helpers dir");
     fs::write(
@@ -6595,7 +6624,7 @@ fn analyze_recovers_symbols_for_multiple_dangling_dots_with_imports() {
 
 #[test]
 fn complete_recovers_member_completions_for_multiple_dangling_dots_with_imports() {
-    let temp = TempDir::new("aurora-complete-multi-dangling-imports");
+    let temp = TempDir::new("aura-complete-multi-dangling-imports");
     let helpers_dir = temp.path().join("helpers");
     fs::create_dir_all(&helpers_dir).expect("failed to create helpers dir");
     fs::write(
@@ -6648,7 +6677,7 @@ fn complete_recovers_member_completions_for_multiple_dangling_dots_with_imports(
 #[test]
 fn build_produces_a_runnable_binary() {
     let fixture = repo_root().join("examples/point.au");
-    let output_dir = TempDir::new("aurora-build");
+    let output_dir = TempDir::new("aura-build");
     let output_path = output_dir.path().join("point");
 
     let build = Command::new(aura_bin())
@@ -6680,7 +6709,7 @@ fn build_produces_a_runnable_binary() {
 
 #[test]
 fn build_with_direct_backend_produces_runnable_binary_for_supported_program() {
-    let temp = TempDir::new("aurora-build-direct");
+    let temp = TempDir::new("aura-build-direct");
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
@@ -6723,7 +6752,7 @@ def main() -> int32:\n    mut current: int32 = 1\n    if current < 5:\n        c
 fn build_with_direct_backend_flushes_notice_before_waiting_for_concurrent_build() {
     use std::sync::mpsc;
 
-    let temp = TempDir::new("aurora-build-concurrent-wait");
+    let temp = TempDir::new("aura-build-concurrent-wait");
     let source_path = temp.path().join("main.au");
     fs::write(&source_path, "def main() -> int32:\n    return 0\n")
         .expect("failed to write concurrent-build source");
@@ -6798,7 +6827,7 @@ fn build_with_direct_backend_flushes_notice_before_waiting_for_concurrent_build(
         "the deliberately unavailable Cargo executable should fail after the lock release"
     );
     assert!(
-        String::from_utf8_lossy(&rest).contains("failed to build Aurora runtime artifacts"),
+        String::from_utf8_lossy(&rest).contains("failed to build Aura runtime artifacts"),
         "the build should proceed beyond the released lock to the intended toolchain failure; \
          remaining stderr was:\n{}",
         String::from_utf8_lossy(&rest)
@@ -6812,7 +6841,7 @@ fn build_with_direct_backend_flushes_notice_before_waiting_for_concurrent_build(
 #[cfg(unix)]
 #[test]
 fn build_json_buffers_concurrent_wait_notice_into_one_failure_document() {
-    let temp = TempDir::new("aurora-build-json-concurrent-wait");
+    let temp = TempDir::new("aura-build-json-concurrent-wait");
     let source_path = temp.path().join("main.au");
     fs::write(&source_path, "def main() -> int32:\n    return 0\n")
         .expect("failed to write JSON concurrent-build source");
@@ -6906,7 +6935,7 @@ fn build_json_buffers_concurrent_wait_notice_into_one_failure_document() {
     assert!(
         report["diagnostics"][0]["message"]
             .as_str()
-            .is_some_and(|message| message.contains("failed to build Aurora runtime artifacts")),
+            .is_some_and(|message| message.contains("failed to build Aura runtime artifacts")),
         "the build should reach the intended post-lock toolchain failure: {report}"
     );
     let notes = report["diagnostics"][0]["notes"]
@@ -6929,7 +6958,7 @@ fn build_json_buffers_concurrent_wait_notice_into_one_failure_document() {
 #[test]
 fn build_with_direct_backend_rejects_unsupported_programs() {
     let fixture = repo_root().join("examples/modules/helpers/math.au");
-    let output_dir = TempDir::new("aurora-build-direct-unsupported");
+    let output_dir = TempDir::new("aura-build-direct-unsupported");
     let output_path = output_dir.path().join("helper-module-direct");
 
     let build = Command::new(aura_bin())
@@ -6957,7 +6986,7 @@ fn build_with_direct_backend_rejects_unsupported_programs() {
 #[test]
 fn build_rejects_removed_mir_runtime_backend_option() {
     let fixture = repo_root().join("examples/point.au");
-    let output_dir = TempDir::new("aurora-build-removed-backend");
+    let output_dir = TempDir::new("aura-build-removed-backend");
     let output_path = output_dir.path().join("point-removed-backend");
 
     let build = Command::new(aura_bin())
@@ -6985,7 +7014,7 @@ fn build_rejects_removed_mir_runtime_backend_option() {
 #[test]
 fn build_with_direct_backend_supports_point_example() {
     let fixture = repo_root().join("examples/point.au");
-    let output_dir = TempDir::new("aurora-build-direct-point");
+    let output_dir = TempDir::new("aura-build-direct-point");
     let output_path = output_dir.path().join("point-direct");
 
     let build = Command::new(aura_bin())
@@ -7030,7 +7059,7 @@ fn build_with_direct_backend_supports_string_example() {
     assert_direct_backend_example_runs(
         "examples/strings/greeting.au",
         "greeting-direct",
-        "hello, aurora\n",
+        "hello, aura\n",
     );
 }
 
@@ -7039,14 +7068,14 @@ fn build_with_direct_backend_supports_string_methods_example() {
     assert_direct_backend_example_runs(
         "examples/strings/string_methods.au",
         "string-methods-direct",
-        "15\ntrue\ntrue\ntrue\naurora repo\n2\naurora\nrepo\naurora lang\naurora repo\nAURORA REPO\nrepo\nnone\naurora\nnone\n11\n",
+        "13\ntrue\ntrue\ntrue\naura repo\n2\naura\nrepo\naura lang\naura repo\nAURA REPO\nrepo\nnone\naura\nnone\n9\n",
     );
 }
 
 #[test]
 fn build_with_auto_backend_falls_back_for_rich_match_example() {
     let fixture = repo_root().join("examples/enums/rich_match.au");
-    let output_dir = TempDir::new("aurora-build-auto-rich-match");
+    let output_dir = TempDir::new("aura-build-auto-rich-match");
     let output_path = output_dir.path().join("rich-match-auto");
 
     let build = Command::new(aura_bin())
@@ -7080,7 +7109,7 @@ fn build_with_auto_backend_falls_back_for_rich_match_example() {
 #[test]
 fn build_with_direct_backend_supports_indexed_member_chains_and_fstring_indexing() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-index-chain-fstring",
+        "aura-build-direct-index-chain-fstring",
         "def main() -> int32:\n    keys = [\"a\", \"b\"]\n    idx: int32 = 1\n    mut counts = {\"key\": 7}\n    match keys.get(idx):\n        case Some(key):\n            print(key)\n        case None:\n            print(\"missing\")\n    print(f\"val: {counts[\"key\"]}\")\n    return 0\n",
     );
 
@@ -7095,7 +7124,7 @@ fn build_with_direct_backend_supports_indexed_member_chains_and_fstring_indexing
 #[test]
 fn build_with_direct_backend_supports_inferred_enum_match_variants() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-inferred-enum-match",
+        "aura-build-direct-inferred-enum-match",
         "enum Signal:\n    Ready\n    Busy\n\ndef main() -> int32:\n    signal = Signal.Ready\n    match signal:\n        case Ready:\n            print(\"ready\")\n        case Busy:\n            print(\"busy\")\n    return 0\n",
     );
 
@@ -7110,7 +7139,7 @@ fn build_with_direct_backend_supports_inferred_enum_match_variants() {
 #[test]
 fn build_with_direct_backend_supports_generic_class_field_arithmetic() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-generic-class-fields",
+        "aura-build-direct-generic-class-fields",
         "class Pair[A]:\n    a: A\n    b: A\n\ndef main() -> int32:\n    pair = Pair[int32](a=3, b=4)\n    inferred = Pair(a=10, b=3)\n    print(pair.a + pair.b)\n    print(inferred.a + inferred.b)\n    return 0\n",
     );
 
@@ -7125,7 +7154,7 @@ fn build_with_direct_backend_supports_generic_class_field_arithmetic() {
 #[test]
 fn build_with_direct_backend_supports_multi_payload_enum_variants() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-multi-payload-enum",
+        "aura-build-direct-multi-payload-enum",
         "enum Pairing:\n    Pair(int32, int32)\n\ndef main() -> int32:\n    value = Pairing.Pair(2, 3)\n    match value:\n        case Pairing.Pair(a, b):\n            print(a + b)\n    return 0\n",
     );
 
@@ -7139,7 +7168,7 @@ fn build_with_direct_backend_supports_multi_payload_enum_variants() {
 
 #[test]
 fn check_reports_imported_module_syntax_errors_at_the_imported_file() {
-    let temp = TempDir::new("aurora-imported-module-syntax");
+    let temp = TempDir::new("aura-imported-module-syntax");
     let main_path = temp.path().join("main.au");
     let broken_path = temp.path().join("broken.au");
     fs::write(
@@ -7190,7 +7219,7 @@ fn build_with_direct_backend_supports_map_basics_example() {
     assert_direct_backend_example_runs(
         "examples/collections/map_basics.au",
         "map-basics-direct",
-        "3\ntrue\n1\n1\n5\naurora\n3\n3\n3\n3\ntrue\n",
+        "3\ntrue\n1\n1\n5\naura\n3\n3\n3\n3\ntrue\n",
     );
 }
 
@@ -7208,7 +7237,7 @@ fn build_with_direct_backend_supports_string_parsing_and_formatting_example() {
     assert_direct_backend_example_runs(
         "examples/strings/string_parsing_and_formatting.au",
         "string-parsing-formatting-direct",
-        "42\n-9000000000\n3.5\ntrue\naurora-lang-tests\ntrue\n12\n4\n9\n3.0\n",
+        "42\n-9000000000\n3.5\ntrue\naura-lang-tests\ntrue\n12\n4\n9\n3.0\n",
     );
 }
 
@@ -7224,7 +7253,7 @@ fn build_with_direct_backend_supports_file_io_example() {
 #[test]
 fn run_and_direct_backends_preserve_false_fs_exists_results() {
     let missing_name = format!(
-        "aurora-fs-exists-false-{}-{}.missing",
+        "aura-fs-exists-false-{}-{}.missing",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -7241,101 +7270,93 @@ fn run_and_direct_backends_preserve_false_fs_exists_results() {
         missing_name
     );
 
-    assert_run_and_direct_source_stdout("aurora-fs-exists-false", &source, "false\n");
+    assert_run_and_direct_source_stdout("aura-fs-exists-false", &source, "false\n");
 }
 
 #[test]
 fn run_and_direct_backends_preserve_the_dynamic_json_surface() {
-    let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/json_dynamic_values.au");
+    let source = include_str!("../../aura-compiler/tests/fixtures/run-pass/json_dynamic_values.au");
     let expected =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/json_dynamic_values.stdout");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/json_dynamic_values.stdout");
 
-    assert_run_and_direct_source_stdout("aurora-dynamic-json-parity", source, expected);
+    assert_run_and_direct_source_stdout("aura-dynamic-json-parity", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_preserve_vec_algorithm_order_stability_and_ownership() {
-    let source = include_str!("../../aurora-compiler/tests/fixtures/run-pass/vec_algorithms.au");
+    let source = include_str!("../../aura-compiler/tests/fixtures/run-pass/vec_algorithms.au");
     let expected =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/vec_algorithms.stdout");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/vec_algorithms.stdout");
 
-    assert_run_and_direct_source_stdout("aurora-vec-algorithms-parity", source, expected);
+    assert_run_and_direct_source_stdout("aura-vec-algorithms-parity", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_transfer_json_task_results_and_clean_up_unobserved_values() {
     let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/task_json_result_cleanup.au");
-    let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/task_json_result_cleanup.stdout"
-    );
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/task_json_result_cleanup.au");
+    let expected =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/task_json_result_cleanup.stdout");
 
-    assert_run_and_direct_source_stdout("aurora-json-task-result-parity", source, expected);
+    assert_run_and_direct_source_stdout("aura-json-task-result-parity", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_move_deep_fields_without_consuming_siblings() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/deep_projected_move_preserves_siblings.au"
+        "../../aura-compiler/tests/fixtures/run-pass/deep_projected_move_preserves_siblings.au"
     );
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/deep_projected_move_preserves_siblings.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/deep_projected_move_preserves_siblings.stdout"
     );
 
-    assert_run_and_direct_source_stdout("aurora-deep-projected-move-parity", source, expected);
+    assert_run_and_direct_source_stdout("aura-deep-projected-move-parity", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_backtrack_before_moving_match_expression_payloads() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/consuming_nested_noncopy_match_expression.au"
+        "../../aura-compiler/tests/fixtures/run-pass/consuming_nested_noncopy_match_expression.au"
     );
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/consuming_nested_noncopy_match_expression.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/consuming_nested_noncopy_match_expression.stdout"
     );
 
-    assert_run_and_direct_source_stdout(
-        "aurora-consuming-match-expression-parity",
-        source,
-        expected,
-    );
+    assert_run_and_direct_source_stdout("aura-consuming-match-expression-parity", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_discover_queues_nested_in_task_arguments() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/task_nested_queue_capture_lifecycle.au"
+        "../../aura-compiler/tests/fixtures/run-pass/task_nested_queue_capture_lifecycle.au"
     );
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/task_nested_queue_capture_lifecycle.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/task_nested_queue_capture_lifecycle.stdout"
     );
 
-    assert_run_and_direct_source_stdout("aurora-nested-task-queue-parity", source, expected);
+    assert_run_and_direct_source_stdout("aura-nested-task-queue-parity", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_transfer_structural_values_across_task_boundaries() {
-    let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/task_transfer_runtime_matrix.au"
-    );
+    let source =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/task_transfer_runtime_matrix.au");
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/task_transfer_runtime_matrix.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/task_transfer_runtime_matrix.stdout"
     );
 
-    assert_run_and_direct_source_stdout("aurora-task-transfer-matrix", source, expected);
+    assert_run_and_direct_source_stdout("aura-task-transfer-matrix", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_move_noncopy_try_errors_through_from_conversion() {
-    let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/try_noncopy_error_conversion.au"
-    );
+    let source =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/try_noncopy_error_conversion.au");
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/try_noncopy_error_conversion.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/try_noncopy_error_conversion.stdout"
     );
 
-    assert_run_and_direct_source_stdout("aurora-noncopy-try-from-parity", source, expected);
+    assert_run_and_direct_source_stdout("aura-noncopy-try-from-parity", source, expected);
 }
 
 #[test]
@@ -7349,7 +7370,7 @@ fn build_with_direct_backend_supports_bytes_file_io_example() {
 
 #[test]
 fn build_with_direct_backend_caps_fs_read_to_string_and_read_bytes() {
-    let temp = TempDir::new("aurora-direct-file-read-cap");
+    let temp = TempDir::new("aura-direct-file-read-cap");
     let file_path = temp.path().join("huge.txt");
     let file = fs::File::create(&file_path).expect("create oversized file");
     file.set_len((FILESYSTEM_READ_CAP_BYTES + 1) as u64)
@@ -7359,7 +7380,7 @@ fn build_with_direct_backend_caps_fs_read_to_string_and_read_bytes() {
         "import fs\n\ndef main() -> int32:\n    match fs.read_to_string(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-string\")\n        case Result.Err(error):\n            print(error)\n    match fs.read_bytes(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-bytes\")\n        case Result.Err(error):\n            print(error)\n    return 0\n",
         path = file_path.display()
     );
-    fs::write(&source_path, source).expect("write Aurora source");
+    fs::write(&source_path, source).expect("write Aura source");
     let output_path = temp.path().join("out");
 
     let build = Command::new(aura_bin())
@@ -7393,7 +7414,7 @@ fn build_with_direct_backend_caps_fs_read_to_string_and_read_bytes() {
 
 #[test]
 fn run_caps_fs_read_to_string_and_read_bytes() {
-    let temp = TempDir::new("aurora-run-file-read-cap");
+    let temp = TempDir::new("aura-run-file-read-cap");
     let file_path = temp.path().join("huge.txt");
     let file = fs::File::create(&file_path).expect("create oversized file");
     file.set_len((FILESYSTEM_READ_CAP_BYTES + 1) as u64)
@@ -7403,7 +7424,7 @@ fn run_caps_fs_read_to_string_and_read_bytes() {
         "import fs\n\ndef main() -> int32:\n    match fs.read_to_string(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-string\")\n        case Result.Err(error):\n            print(error)\n    match fs.read_bytes(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-bytes\")\n        case Result.Err(error):\n            print(error)\n    return 0\n",
         path = file_path.display()
     );
-    fs::write(&source_path, source).expect("write Aurora source");
+    fs::write(&source_path, source).expect("write Aura source");
 
     let run = Command::new(aura_bin())
         .arg("run")
@@ -7424,7 +7445,7 @@ fn run_caps_fs_read_to_string_and_read_bytes() {
 
 #[test]
 fn run_and_direct_filesystem_read_to_string_accepts_above_retired_cap() {
-    let temp = TempDir::new("aurora-raised-file-read-cap");
+    let temp = TempDir::new("aura-raised-file-read-cap");
     let file_path = temp.path().join("above-retired-cap.txt");
     let file = fs::File::create(&file_path).expect("create sparse file above retired cap");
     file.set_len((RETIRED_FILESYSTEM_READ_CAP_BYTES + 1) as u64)
@@ -7434,7 +7455,7 @@ fn run_and_direct_filesystem_read_to_string_accepts_above_retired_cap() {
         path = file_path.display()
     );
 
-    assert_run_and_direct_source_stdout("aurora-raised-file-read-cap", &source, "67108865\n");
+    assert_run_and_direct_source_stdout("aura-raised-file-read-cap", &source, "67108865\n");
 }
 
 #[test]
@@ -7461,7 +7482,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aurora-match-borrow-mut-dead-branch-writeback",
+        "aura-match-borrow-mut-dead-branch-writeback",
         source,
         "11\n",
     );
@@ -7470,10 +7491,10 @@ def main() -> int32:
 #[test]
 fn run_and_direct_backend_preserve_field_match_writeback_across_sibling_mutation() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/match_borrow_mut_field_sibling_write_preserves_writeback.au"
+        "../../aura-compiler/tests/fixtures/run-pass/match_borrow_mut_field_sibling_write_preserves_writeback.au"
     );
     assert_run_and_direct_source_stdout(
-        "aurora-match-borrow-mut-field-sibling-writeback",
+        "aura-match-borrow-mut-field-sibling-writeback",
         source,
         "9\n11\n",
     );
@@ -7482,85 +7503,80 @@ fn run_and_direct_backend_preserve_field_match_writeback_across_sibling_mutation
 #[test]
 fn run_and_direct_backends_preserve_int64_defaulting_boundaries_aliases_and_casts() {
     let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/default_integer_is_int64.au");
-    let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/default_integer_is_int64.stdout"
-    );
-    assert_run_and_direct_source_stdout("aurora-int64-defaulting", source, expected);
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/default_integer_is_int64.au");
+    let expected =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/default_integer_is_int64.stdout");
+    assert_run_and_direct_source_stdout("aura-int64-defaulting", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_preserve_floor_division_and_modulo() {
     let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/floor_division_and_modulo.au");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/floor_division_and_modulo.au");
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/floor_division_and_modulo.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/floor_division_and_modulo.stdout"
     );
-    assert_run_and_direct_source_stdout("aurora-floor-division-modulo", source, expected);
+    assert_run_and_direct_source_stdout("aura-floor-division-modulo", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_preserve_floor_division_across_integer_widths_and_places() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/floor_division_integer_widths_and_places.au"
+        "../../aura-compiler/tests/fixtures/run-pass/floor_division_integer_widths_and_places.au"
     );
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/floor_division_integer_widths_and_places.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/floor_division_integer_widths_and_places.stdout"
     );
-    assert_run_and_direct_source_stdout("aurora-floor-division-widths-places", source, expected);
+    assert_run_and_direct_source_stdout("aura-floor-division-widths-places", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_preserve_integer_to_float_rounding() {
     let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/integer_to_float_rounding.au");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/integer_to_float_rounding.au");
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/integer_to_float_rounding.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/integer_to_float_rounding.stdout"
     );
-    assert_run_and_direct_source_stdout("aurora-integer-to-float-rounding", source, expected);
+    assert_run_and_direct_source_stdout("aura-integer-to-float-rounding", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_preserve_integer_to_float_expression_contexts() {
     let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/integer_to_float_contexts.au");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/integer_to_float_contexts.au");
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/integer_to_float_contexts.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/integer_to_float_contexts.stdout"
     );
-    assert_run_and_direct_source_stdout("aurora-integer-to-float-contexts", source, expected);
+    assert_run_and_direct_source_stdout("aura-integer-to-float-contexts", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_preserve_float_context_integer_literals() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/float_context_integer_literals.au"
+        "../../aura-compiler/tests/fixtures/run-pass/float_context_integer_literals.au"
     );
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/float_context_integer_literals.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/float_context_integer_literals.stdout"
     );
-    assert_run_and_direct_source_stdout("aurora-float-context-integer-literals", source, expected);
+    assert_run_and_direct_source_stdout("aura-float-context-integer-literals", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_preserve_shortest_roundtrip_float_printing() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/float_shortest_roundtrip_printing.au"
+        "../../aura-compiler/tests/fixtures/run-pass/float_shortest_roundtrip_printing.au"
     );
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/float_shortest_roundtrip_printing.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/float_shortest_roundtrip_printing.stdout"
     );
-    assert_run_and_direct_source_stdout(
-        "aurora-shortest-roundtrip-float-printing",
-        source,
-        expected,
-    );
+    assert_run_and_direct_source_stdout("aura-shortest-roundtrip-float-printing", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_preserve_the_numbers_example() {
     let source = include_str!("../../../examples/basics/numbers.au");
     assert_run_and_direct_source_stdout(
-        "aurora-numbers-example",
+        "aura-numbers-example",
         source,
         "2\n-3\n2\n-3\n-2\n3.5\n2.0\ntrue\ntrue\n42.0\n9007199254740992.0\n",
     );
@@ -7568,11 +7584,10 @@ fn run_and_direct_backends_preserve_the_numbers_example() {
 
 #[test]
 fn run_and_direct_backends_trap_float_floor_division_by_zero() {
-    let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-fail/float_floor_division_by_zero.au"
-    );
+    let source =
+        include_str!("../../aura-compiler/tests/fixtures/run-fail/float_floor_division_by_zero.au");
     assert_run_and_direct_source_failure_with_timeout(
-        "aurora-float-floor-division-zero",
+        "aura-float-floor-division-zero",
         source,
         std::time::Duration::from_secs(30),
         "",
@@ -7583,9 +7598,9 @@ fn run_and_direct_backends_trap_float_floor_division_by_zero() {
 #[test]
 fn run_and_direct_backends_trap_signed_floor_division_overflow() {
     let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-fail/int64_division_overflow.au");
+        include_str!("../../aura-compiler/tests/fixtures/run-fail/int64_division_overflow.au");
     assert_run_and_direct_source_failure_with_timeout(
-        "aurora-int64-floor-division-overflow",
+        "aura-int64-floor-division-overflow",
         source,
         std::time::Duration::from_secs(15),
         "",
@@ -7596,10 +7611,10 @@ fn run_and_direct_backends_trap_signed_floor_division_overflow() {
 #[test]
 fn run_and_direct_backends_trap_boxed_int128_floor_division_overflow() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-fail/int128_floor_division_overflow.au"
+        "../../aura-compiler/tests/fixtures/run-fail/int128_floor_division_overflow.au"
     );
     assert_run_and_direct_source_failure_with_timeout(
-        "aurora-int128-floor-division-overflow",
+        "aura-int128-floor-division-overflow",
         source,
         std::time::Duration::from_secs(30),
         "0\n",
@@ -7610,10 +7625,10 @@ fn run_and_direct_backends_trap_boxed_int128_floor_division_overflow() {
 #[test]
 fn run_and_direct_backends_distinguish_exact_cast_from_rounding_conversion() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-fail/int64_to_float64_cast_inexact_boundary.au"
+        "../../aura-compiler/tests/fixtures/run-fail/int64_to_float64_cast_inexact_boundary.au"
     );
     assert_run_and_direct_source_failure_with_timeout(
-        "aurora-int64-exact-float-cast-boundary",
+        "aura-int64-exact-float-cast-boundary",
         source,
         std::time::Duration::from_secs(15),
         "",
@@ -7624,32 +7639,32 @@ fn run_and_direct_backends_distinguish_exact_cast_from_rounding_conversion() {
 #[test]
 fn run_and_direct_backends_preserve_contextual_int32_literal_inference() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/contextual_int32_literals_remain_int32.au"
+        "../../aura-compiler/tests/fixtures/run-pass/contextual_int32_literals_remain_int32.au"
     );
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/contextual_int32_literals_remain_int32.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/contextual_int32_literals_remain_int32.stdout"
     );
-    assert_run_and_direct_source_stdout("aurora-contextual-int32-inference", source, expected);
+    assert_run_and_direct_source_stdout("aura-contextual-int32-inference", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_preserve_default_integer_generic_dispatch() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/default_integer_generic_dispatch.au"
+        "../../aura-compiler/tests/fixtures/run-pass/default_integer_generic_dispatch.au"
     );
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/default_integer_generic_dispatch.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/default_integer_generic_dispatch.stdout"
     );
-    assert_run_and_direct_source_stdout("aurora-default-int64-generic-dispatch", source, expected);
+    assert_run_and_direct_source_stdout("aura-default-int64-generic-dispatch", source, expected);
 }
 
 #[test]
 fn run_and_direct_backends_preserve_generic_numeric_receiver_dispatch() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/generic_numeric_receiver_dispatch.au"
+        "../../aura-compiler/tests/fixtures/run-pass/generic_numeric_receiver_dispatch.au"
     );
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/generic_numeric_receiver_dispatch.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/generic_numeric_receiver_dispatch.stdout"
     );
     assert_run_and_direct_source_stdout("generic-numeric-receiver-dispatch", source, expected);
 }
@@ -7657,10 +7672,10 @@ fn run_and_direct_backends_preserve_generic_numeric_receiver_dispatch() {
 #[test]
 fn run_and_direct_backends_preserve_nested_numeric_generic_dispatch() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/nested_numeric_generic_dispatch.au"
+        "../../aura-compiler/tests/fixtures/run-pass/nested_numeric_generic_dispatch.au"
     );
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/nested_numeric_generic_dispatch.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/nested_numeric_generic_dispatch.stdout"
     );
     assert_run_and_direct_source_stdout("nested-numeric-generic-dispatch", source, expected);
 }
@@ -7668,10 +7683,10 @@ fn run_and_direct_backends_preserve_nested_numeric_generic_dispatch() {
 #[test]
 fn run_and_direct_backends_preserve_try_error_conversion_width() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/try_numeric_error_conversion_width.au"
+        "../../aura-compiler/tests/fixtures/run-pass/try_numeric_error_conversion_width.au"
     );
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/try_numeric_error_conversion_width.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/try_numeric_error_conversion_width.stdout"
     );
     assert_run_and_direct_source_stdout("try-numeric-error-conversion-width", source, expected);
 }
@@ -7679,10 +7694,10 @@ fn run_and_direct_backends_preserve_try_error_conversion_width() {
 #[test]
 fn run_and_direct_backends_preserve_default_int64_to_uint64_negation_failure() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-fail/uint64_unary_negation_underflow.au"
+        "../../aura-compiler/tests/fixtures/run-fail/uint64_unary_negation_underflow.au"
     );
     assert_run_and_direct_source_failure_with_timeout(
-        "aurora-default-int64-uint64-negation",
+        "aura-default-int64-uint64-negation",
         source,
         std::time::Duration::from_secs(15),
         "",
@@ -7727,7 +7742,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aurora-bare-none-direct-match",
+        "aura-bare-none-direct-match",
         source,
         "-1\n-2\n-4\ntrue\n",
     );
@@ -7736,9 +7751,9 @@ def main() -> int32:
 #[test]
 fn mir_and_forced_direct_reject_noncopy_internal_exposure() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/check-fail/borrowed_noncopy_return_call.au"
+        "../../aura-compiler/tests/fixtures/check-fail/borrowed_noncopy_return_call.au"
     );
-    let (temp, source_path) = write_temp_source("aurora-borrowed-return-containment", source);
+    let (temp, source_path) = write_temp_source("aura-borrowed-return-containment", source);
     let expected = "cannot move non-copy field `name` out of borrowed value `user`";
 
     let mir = Command::new(aura_bin())
@@ -7824,7 +7839,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout(
-        "aurora-bare-none-collections-and-nested-option",
+        "aura-bare-none-collections-and-nested-option",
         source,
         // The generated program is tiny, but the default-parallel CLI suite can
         // delay its process after spawn while other native builds are linking.
@@ -7836,7 +7851,7 @@ def main() -> int32:
 #[test]
 fn check_rejects_match_borrow_mut_binding_use_after_scrutinee_reassign() {
     let source = "enum Opt:\n    Some(int32)\n    None\n\ndef main() -> int32:\n    mut x: Opt = Opt.Some(10)\n    match mut x:\n        case Some(v):\n            x = Opt.Some(v)\n            v = v + 1\n        case None:\n            pass\n    return 0\n";
-    let (_temp, source_path) = write_temp_source("aurora-stale-match-binding", source);
+    let (_temp, source_path) = write_temp_source("aura-stale-match-binding", source);
 
     let output = Command::new(aura_bin())
         .arg("check")
@@ -7859,9 +7874,9 @@ fn check_rejects_match_borrow_mut_binding_use_after_scrutinee_reassign() {
 #[test]
 fn check_and_forced_direct_reject_stale_field_match_binding() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/check-fail/match_borrow_mut_field_binding_use_after_scrutinee_reassign.au"
+        "../../aura-compiler/tests/fixtures/check-fail/match_borrow_mut_field_binding_use_after_scrutinee_reassign.au"
     );
-    let (temp, source_path) = write_temp_source("aurora-stale-field-match-binding", source);
+    let (temp, source_path) = write_temp_source("aura-stale-field-match-binding", source);
     let expected =
         "cannot use pattern binding `v` after reassigning match scrutinee `holder.state`";
 
@@ -7901,7 +7916,7 @@ fn check_and_forced_direct_reject_stale_field_match_binding() {
 fn check_accepts_module_qualified_builtin_io_error_variants() {
     let source =
         "import io\n\ndef main() -> int32:\n    err: io.Error = io.Error.NotFound\n    return 0\n";
-    let (_temp, source_path) = write_temp_source("aurora-qualified-io-error", source);
+    let (_temp, source_path) = write_temp_source("aura-qualified-io-error", source);
 
     let output = Command::new(aura_bin())
         .arg("check")
@@ -7950,7 +7965,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aurora-builtin-module-enum-identity",
+        "aura-builtin-module-enum-identity",
         source,
         "io.Error.NotFound\n1\nio.Error.Other(miss)\nmiss\n4\n",
     );
@@ -8026,7 +8041,7 @@ fn build_with_direct_backend_supports_trait_dispatch_example() {
     assert_direct_backend_example_runs(
         "examples/traits/greeter.au",
         "greeter-direct",
-        "hello aurora\nhello aurora\n",
+        "hello aura\nhello aura\n",
     );
 }
 
@@ -8051,7 +8066,7 @@ fn build_with_direct_backend_supports_generic_trait_impl_example() {
 #[test]
 fn build_with_direct_backend_prefers_more_specific_trait_impls() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-trait-specificity",
+        "aura-build-direct-trait-specificity",
         "trait Show:\n    def show(self) -> String\n\nclass Box[T]:\n    value: T\n\nimpl[T] Show for Box[T]:\n    def show(self) -> String:\n        return \"generic\"\n\nimpl Show for Box[int32]:\n    def show(self) -> String:\n        return \"int32\"\n\ndef main() -> int32:\n    value = Box[int32](value=7)\n    print(value.show())\n    return 0\n",
     );
 
@@ -8127,10 +8142,10 @@ fn build_with_direct_backend_supports_borrow_parameters_example() {
 }
 
 #[test]
-fn build_with_direct_backend_supports_borrowed_lifetime_labels_example() {
+fn build_with_direct_backend_supports_copy_return_selection_example() {
     assert_direct_backend_example_runs(
-        "examples/basics/borrowed_lifetime_labels.au",
-        "borrowed-lifetime-labels-direct",
+        "examples/basics/copy_return_selection.au",
+        "copy-return-selection-direct",
         "7\n",
     );
 }
@@ -8174,7 +8189,7 @@ fn build_with_direct_backend_supports_explicit_builtin_enum_type_args_example() 
 #[test]
 fn build_with_direct_backend_supports_float_return_from_enum_match() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-enum-float-match",
+        "aura-build-direct-enum-float-match",
         "enum Value:\n    IntVal(int32)\n    FloatVal(float64)\n\ndef to_float(v: Value) -> float64:\n    match v:\n        case Value.IntVal(i):\n            return 0.0\n        case Value.FloatVal(f):\n            return f\n\ndef main() -> int32:\n    value = Value.FloatVal(2.5)\n    print(to_float(value))\n    return 0\n",
     );
 
@@ -8252,7 +8267,7 @@ fn build_with_direct_backend_supports_full_range_uint128_example() {
 #[test]
 fn build_with_direct_backend_supports_bare_none_unit_values() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-none-unit",
+        "aura-build-direct-none-unit",
         "def noop() -> None:\n    return None\n\ndef main() -> int32:\n    done: None = None\n    noop()\n    print(1)\n    return 0\n",
     );
 
@@ -8266,7 +8281,7 @@ fn build_with_direct_backend_supports_bare_none_unit_values() {
 
 #[test]
 fn build_with_direct_backend_supports_vec_literals_and_iteration() {
-    let temp = TempDir::new("aurora-build-direct-vec");
+    let temp = TempDir::new("aura-build-direct-vec");
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
@@ -8306,7 +8321,7 @@ fn build_with_direct_backend_supports_vec_literals_and_iteration() {
 #[test]
 fn build_with_direct_backend_supports_vec_methods_and_constructor() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-vec-methods",
+        "aura-build-direct-vec-methods",
         "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    values = Vec[int32]()\n    print(values.is_empty())\n    mut items: Vec[int32] = [1, 2, 3]\n    print(items.len())\n    print_int_option(items.get(1))\n    print_int_option(items.set(index=1, value=20))\n    print_int_option(items.remove(0))\n    items.push(99)\n    print_int_option(items.pop())\n    mut total: int32 = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
     );
 
@@ -8324,8 +8339,8 @@ fn build_with_direct_backend_supports_vec_methods_and_constructor() {
 #[test]
 fn build_with_direct_backend_supports_string_map_and_numeric_builtins() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-string-map-numbers",
-        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aurora repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts: Map[String, int32] = {\"aurora\": 1, \"codex\": 2}\n    print(counts.len())\n    print(counts.contains_key(\"aurora\"))\n    print_int_option(counts.get(\"aurora\"))\n    print_int_option(counts.set(key=\"aurora\", value=5))\n    print(counts[\"aurora\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
+        "aura-build-direct-string-map-numbers",
+        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aura repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts: Map[String, int32] = {\"aura\": 1, \"codex\": 2}\n    print(counts.len())\n    print(counts.contains_key(\"aura\"))\n    print_int_option(counts.get(\"aura\"))\n    print_int_option(counts.set(key=\"aura\", value=5))\n    print(counts[\"aura\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
     );
 
     assert!(
@@ -8335,7 +8350,7 @@ fn build_with_direct_backend_supports_string_map_and_numeric_builtins() {
     );
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
-        "15\ntrue\ntrue\ntrue\naurora repo\n7\n2\n12\n9.0\n2\ntrue\n1\n1\n5\n2\n2\n2\nfalse\n"
+        "13\ntrue\ntrue\ntrue\naura repo\n7\n2\n12\n9.0\n2\ntrue\n1\n1\n5\n2\n2\n2\nfalse\n"
     );
 }
 
@@ -8372,7 +8387,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aurora-string-lengths-negative-vec-indices",
+        "aura-string-lengths-negative-vec-indices",
         source,
         "4\n9\n40\n35\n10\n-999\n10\n35\ntrue\ntrue\ntrue\n40\n20\n99\n11\n77\n",
     );
@@ -8388,7 +8403,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_failure_with_timeout(
-        "aurora-too-negative-vec-index",
+        "aura-too-negative-vec-index",
         source,
         std::time::Duration::from_secs(20),
         "",
@@ -8399,7 +8414,7 @@ def main() -> int32:
 #[test]
 fn build_with_direct_backend_supports_queue_timeout_matches() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-queue-timeout",
+        "aura-build-direct-queue-timeout",
         "def main() -> int32:\n    ch = Queue[int32]()\n    match ch.get(timeout=1ms):\n        case QueueReceive.Item(v):\n            print(v)\n        case QueueReceive.Closed:\n            print(1)\n        case QueueReceive.TimedOut:\n            print(2)\n        case QueueReceive.Cancelled:\n            print(3)\n    return 0\n",
     );
 
@@ -8413,7 +8428,7 @@ fn build_with_direct_backend_supports_queue_timeout_matches() {
 
 #[test]
 fn built_direct_binaries_render_runtime_errors_with_source_context() {
-    let temp = TempDir::new("aurora-build-direct-runtime-diag");
+    let temp = TempDir::new("aura-build-direct-runtime-diag");
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
@@ -8463,9 +8478,9 @@ fn default_build_supports_simple_example() {
 }
 
 #[test]
-fn default_build_supports_borrowed_lifetime_labels_example() {
+fn default_build_supports_copy_return_selection_example() {
     assert_default_backend_example_runs(
-        "examples/basics/borrowed_lifetime_labels.au",
+        "examples/basics/copy_return_selection.au",
         "borrowed-lifetime-labels-auto",
         "7\n",
     );
@@ -8503,7 +8518,7 @@ fn default_build_supports_map_basics_example() {
     assert_default_backend_example_runs(
         "examples/collections/map_basics.au",
         "map-basics-auto",
-        "3\ntrue\n1\n1\n5\naurora\n3\n3\n3\n3\ntrue\n",
+        "3\ntrue\n1\n1\n5\naura\n3\n3\n3\n3\ntrue\n",
     );
 }
 
@@ -8566,7 +8581,7 @@ fn default_build_supports_string_methods_example() {
     assert_default_backend_example_runs(
         "examples/strings/string_methods.au",
         "string-methods-auto",
-        "15\ntrue\ntrue\ntrue\naurora repo\n2\naurora\nrepo\naurora lang\naurora repo\nAURORA REPO\nrepo\nnone\naurora\nnone\n11\n",
+        "13\ntrue\ntrue\ntrue\naura repo\n2\naura\nrepo\naura lang\naura repo\nAURA REPO\nrepo\nnone\naura\nnone\n9\n",
     );
 }
 
@@ -8584,7 +8599,7 @@ fn default_build_supports_string_parsing_and_formatting_example() {
     assert_default_backend_example_runs(
         "examples/strings/string_parsing_and_formatting.au",
         "string-parsing-formatting-auto",
-        "42\n-9000000000\n3.5\ntrue\naurora-lang-tests\ntrue\n12\n4\n9\n3.0\n",
+        "42\n-9000000000\n3.5\ntrue\naura-lang-tests\ntrue\n12\n4\n9\n3.0\n",
     );
 }
 
@@ -8665,7 +8680,7 @@ fn default_build_supports_explicit_builtin_enum_type_args_example() {
 #[test]
 fn default_build_supports_float_return_from_enum_match() {
     let (_, run) = build_and_run_default_source(
-        "aurora-build-auto-enum-float-match",
+        "aura-build-auto-enum-float-match",
         "enum Value:\n    IntVal(int32)\n    FloatVal(float64)\n\ndef to_float(v: Value) -> float64:\n    match v:\n        case Value.IntVal(i):\n            return 0.0\n        case Value.FloatVal(f):\n            return f\n\ndef main() -> int32:\n    value = Value.FloatVal(2.5)\n    print(to_float(value))\n    return 0\n",
     );
 
@@ -8698,7 +8713,7 @@ fn default_build_supports_generic_trait_impl_example() {
 #[test]
 fn default_build_supports_bare_none_unit_values() {
     let (_, run) = build_and_run_default_source(
-        "aurora-build-auto-none-unit",
+        "aura-build-auto-none-unit",
         "def noop() -> None:\n    return None\n\ndef main() -> int32:\n    done: None = None\n    noop()\n    print(1)\n    return 0\n",
     );
 
@@ -8713,7 +8728,7 @@ fn default_build_supports_bare_none_unit_values() {
 #[test]
 fn default_build_supports_queue_timeout_matches() {
     let (_, run) = build_and_run_default_source(
-        "aurora-build-auto-queue-timeout",
+        "aura-build-auto-queue-timeout",
         "def main() -> int32:\n    ch = Queue[int32]()\n    match ch.get(timeout=1ms):\n        case QueueReceive.Item(v):\n            print(v)\n        case QueueReceive.Closed:\n            print(1)\n        case QueueReceive.TimedOut:\n            print(2)\n        case QueueReceive.Cancelled:\n            print(3)\n    return 0\n",
     );
 
@@ -8727,7 +8742,7 @@ fn default_build_supports_queue_timeout_matches() {
 
 #[test]
 fn built_default_binaries_render_runtime_errors_with_source_context() {
-    let temp = TempDir::new("aurora-build-auto-runtime-diag");
+    let temp = TempDir::new("aura-build-auto-runtime-diag");
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
@@ -8768,7 +8783,7 @@ fn built_default_binaries_render_runtime_errors_with_source_context() {
 #[test]
 fn build_with_direct_backend_supports_float_comparisons_in_conditions() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-float-cmp",
+        "aura-build-direct-float-cmp",
         "def main() -> int32:\n    x: float64 = 3.0\n    y: float64 = 3.0\n    if x == y:\n        print(\"equal\")\n    return 0\n",
     );
 
@@ -8783,7 +8798,7 @@ fn build_with_direct_backend_supports_float_comparisons_in_conditions() {
 #[test]
 fn build_with_direct_backend_supports_float_modulo() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-float-mod",
+        "aura-build-direct-float-mod",
         "def main() -> int32:\n    x: float64 = 10.0\n    y: float64 = 3.0\n    print(x % y)\n    return 0\n",
     );
 
@@ -8798,7 +8813,7 @@ fn build_with_direct_backend_supports_float_modulo() {
 #[test]
 fn build_with_direct_backend_runs_with_cleanup_on_normal_scope_exit() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-with-normal-exit",
+        "aura-build-direct-with-normal-exit",
         "class Handle:\n    name: String\n\n    def close(mut self):\n        print(\"closing \" + self.name)\n\ndef main() -> int32:\n    with h = Handle(name=\"db\"):\n        print(\"inside with\")\n    print(\"after with\")\n    return 0\n",
     );
 
@@ -8816,7 +8831,7 @@ fn build_with_direct_backend_runs_with_cleanup_on_normal_scope_exit() {
 #[test]
 fn build_with_direct_backend_preserves_scalar_return_values_through_with_cleanup() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-with-return",
+        "aura-build-direct-with-return",
         "class Handle:\n    name: String\n\n    def close(mut self):\n        print(\"closing \" + self.name)\n\ndef process() -> int32:\n    with h = Handle(name=\"file\"):\n        return 42\n    return 0\n\ndef main() -> int32:\n    print(process())\n    return 0\n",
     );
 
@@ -8831,7 +8846,7 @@ fn build_with_direct_backend_preserves_scalar_return_values_through_with_cleanup
 #[test]
 fn build_with_direct_backend_prints_boolean_values_as_true_and_false() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-print-bool",
+        "aura-build-direct-print-bool",
         "def main() -> int32:\n    print(1 == 1)\n    print(1 == 2)\n    return 0\n",
     );
 
@@ -8846,7 +8861,7 @@ fn build_with_direct_backend_prints_boolean_values_as_true_and_false() {
 #[test]
 fn build_with_direct_backend_rejects_narrow_integer_overflow_at_runtime() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-int8-overflow",
+        "aura-build-direct-int8-overflow",
         "def main() -> int32:\n    a: int8 = 127\n    b: int8 = 1\n    c = a + b\n    print(c)\n    return 0\n",
     );
 
@@ -8865,7 +8880,7 @@ fn build_with_direct_backend_rejects_narrow_integer_overflow_at_runtime() {
 #[test]
 fn build_with_direct_backend_supports_trait_impls_on_builtin_types() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-builtin-trait",
+        "aura-build-direct-builtin-trait",
         "trait Show:\n    def show(self) -> String\n\nimpl Show for int32:\n    def show(self) -> String:\n        return \"int\"\n\ndef main() -> int32:\n    value: int32 = 7\n    print(value.show())\n    return 0\n",
     );
 
@@ -8898,7 +8913,7 @@ fn build_runs_indirect_recursive_example() {
 #[test]
 fn build_with_direct_backend_supports_task_result_returning_plain_classes() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-task-result-class",
+        "aura-build-direct-task-result-class",
         "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        task = group.start(make_box)\n        match task.result():\n            case TaskResult.Ready(box):\n                print(box.value)\n            case TaskResult.Error(_message):\n                print(0)\n            case TaskResult.TimedOut:\n                print(0)\n            case TaskResult.Cancelled:\n                print(0)\n    return 0\n",
     );
 
@@ -8913,7 +8928,7 @@ fn build_with_direct_backend_supports_task_result_returning_plain_classes() {
 #[test]
 fn build_supports_task_result_returning_plain_classes() {
     let (temp, source_path) = write_temp_source(
-        "aurora-build-default-task-result-class",
+        "aura-build-default-task-result-class",
         "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        task = group.start(make_box)\n        match task.result():\n            case TaskResult.Ready(box):\n                print(box.value)\n            case TaskResult.Error(_message):\n                print(0)\n            case TaskResult.TimedOut:\n                print(0)\n            case TaskResult.Cancelled:\n                print(0)\n    return 0\n",
     );
     let output_path = temp.path().join("out");
@@ -8947,7 +8962,7 @@ fn build_supports_task_result_returning_plain_classes() {
 #[test]
 fn build_produces_runnable_concurrency_binary() {
     let fixture = repo_root().join("examples/concurrency/task_group_start.au");
-    let output_dir = TempDir::new("aurora-build-concurrency");
+    let output_dir = TempDir::new("aura-build-concurrency");
     let output_path = output_dir.path().join("task-group-start");
 
     let build = Command::new(aura_bin())
@@ -8978,7 +8993,7 @@ fn build_produces_runnable_concurrency_binary() {
 
 #[test]
 fn build_from_stdin_produces_runnable_module_binary() {
-    let temp = TempDir::new("aurora-cli-stdin-build-modules");
+    let temp = TempDir::new("aura-cli-stdin-build-modules");
     fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
     fs::write(
         temp.path().join("helpers/math.au"),
@@ -9032,7 +9047,7 @@ fn build_from_stdin_produces_runnable_module_binary() {
 
 #[test]
 fn built_binary_runs_after_source_file_is_removed() {
-    let temp = TempDir::new("aurora-cli-build-source-removal");
+    let temp = TempDir::new("aura-cli-build-source-removal");
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
@@ -9072,7 +9087,7 @@ fn built_binary_runs_after_source_file_is_removed() {
 #[test]
 fn built_binary_exits_cleanly_when_stdout_pipe_closes() {
     let fixture = repo_root().join("examples/point.au");
-    let output_dir = TempDir::new("aurora-build-broken-pipe");
+    let output_dir = TempDir::new("aura-build-broken-pipe");
     let output_path = output_dir.path().join("point");
 
     let build = Command::new(aura_bin())
@@ -9197,17 +9212,17 @@ fn run_executes_with_example() {
 }
 
 #[test]
-fn run_executes_borrowed_lifetime_labels_example() {
-    let fixture = repo_root().join("examples/basics/borrowed_lifetime_labels.au");
+fn run_executes_copy_return_selection_example() {
+    let fixture = repo_root().join("examples/basics/copy_return_selection.au");
     let output = Command::new(aura_bin())
         .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run on borrowed lifetime labels example");
+        .expect("failed to run aura run on copy return selection example");
 
     assert!(
         output.status.success(),
-        "run should succeed for borrowed lifetime labels example, stderr was:\n{}",
+        "run should succeed for copy return selection example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
@@ -9295,7 +9310,7 @@ fn run_executes_vec_iteration_example() {
 
 #[test]
 fn run_executes_vec_literals_and_iteration() {
-    let temp = TempDir::new("aurora-run-vec");
+    let temp = TempDir::new("aura-run-vec");
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
@@ -9319,7 +9334,7 @@ fn run_executes_vec_literals_and_iteration() {
 
 #[test]
 fn run_executes_vec_methods_and_constructor() {
-    let temp = TempDir::new("aurora-run-vec-methods");
+    let temp = TempDir::new("aura-run-vec-methods");
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
@@ -9360,7 +9375,7 @@ fn run_executes_map_basics_example() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "3\ntrue\n1\n1\n5\naurora\n3\n3\n3\n3\ntrue\n"
+        "3\ntrue\n1\n1\n5\naura\n3\n3\n3\n3\ntrue\n"
     );
 }
 
@@ -9454,7 +9469,7 @@ fn run_executes_string_methods_example() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "15\ntrue\ntrue\ntrue\naurora repo\n2\naurora\nrepo\naurora lang\naurora repo\nAURORA REPO\nrepo\nnone\naurora\nnone\n11\n"
+        "13\ntrue\ntrue\ntrue\naura repo\n2\naura\nrepo\naura lang\naura repo\nAURA REPO\nrepo\nnone\naura\nnone\n9\n"
     );
 }
 
@@ -9494,7 +9509,7 @@ fn run_executes_string_parsing_and_formatting_example() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "42\n-9000000000\n3.5\ntrue\naurora-lang-tests\ntrue\n12\n4\n9\n3.0\n"
+        "42\n-9000000000\n3.5\ntrue\naura-lang-tests\ntrue\n12\n4\n9\n3.0\n"
     );
 }
 
@@ -9643,11 +9658,11 @@ fn run_executes_unix_and_tls_roundtrip_example() {
 
 #[test]
 fn run_executes_string_map_and_numeric_builtins() {
-    let temp = TempDir::new("aurora-run-string-map-numbers");
+    let temp = TempDir::new("aura-run-string-map-numbers");
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aurora repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts: Map[String, int32] = {\"aurora\": 1, \"codex\": 2}\n    print(counts.len())\n    print(counts.contains_key(\"aurora\"))\n    print_int_option(counts.get(\"aurora\"))\n    print_int_option(counts.set(key=\"aurora\", value=5))\n    print(counts[\"aurora\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
+        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aura repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts: Map[String, int32] = {\"aura\": 1, \"codex\": 2}\n    print(counts.len())\n    print(counts.contains_key(\"aura\"))\n    print_int_option(counts.get(\"aura\"))\n    print_int_option(counts.set(key=\"aura\", value=5))\n    print(counts[\"aura\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
     )
     .expect("failed to write string/map/numbers source");
 
@@ -9664,13 +9679,13 @@ fn run_executes_string_map_and_numeric_builtins() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "15\ntrue\ntrue\ntrue\naurora repo\n7\n2\n12\n9.0\n2\ntrue\n1\n1\n5\n2\n2\n2\nfalse\n"
+        "13\ntrue\ntrue\ntrue\naura repo\n7\n2\n12\n9.0\n2\ntrue\n1\n1\n5\n2\n2\n2\nfalse\n"
     );
 }
 
 #[test]
 fn run_executes_programs_with_local_modules() {
-    let temp = TempDir::new("aurora-cli-modules-run");
+    let temp = TempDir::new("aura-cli-modules-run");
     fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
     fs::write(
         temp.path().join("helpers/math.au"),
@@ -9699,7 +9714,7 @@ fn run_executes_programs_with_local_modules() {
 
 #[test]
 fn module_qualified_spawn_target_runs_across_commands() {
-    let temp = TempDir::new("aurora-cli-qualified-task-start");
+    let temp = TempDir::new("aura-cli-qualified-task-start");
     fs::create_dir_all(temp.path().join("pkg")).expect("failed to create module dir");
     fs::write(
         temp.path().join("pkg/helpers.au"),
@@ -9785,7 +9800,7 @@ fn run_handles_long_binary_expression_chains_quickly() {
         "def main() -> int32:\n    result = {}\n    print(result)\n    return 0\n",
         terms
     );
-    let (_temp, source_path) = write_temp_source("aurora-cli-long-expr", &source);
+    let (_temp, source_path) = write_temp_source("aura-cli-long-expr", &source);
 
     let mut child = Command::new(aura_bin())
         .arg("run")
@@ -9817,7 +9832,7 @@ fn run_handles_long_binary_expression_chains_quickly() {
 
 #[test]
 fn build_produces_runnable_binary_for_program_with_local_modules() {
-    let temp = TempDir::new("aurora-cli-modules-build");
+    let temp = TempDir::new("aura-cli-modules-build");
     fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
     fs::write(
         temp.path().join("helpers/math.au"),
@@ -9829,7 +9844,7 @@ fn build_produces_runnable_binary_for_program_with_local_modules() {
         "import helpers.math\n\ndef main() -> int32:\n    print(helpers.math.double(value=5))\n    return 0\n",
     )
     .expect("failed to write main module");
-    let output_path = temp.path().join("aurora-modules");
+    let output_path = temp.path().join("aura-modules");
 
     let build = Command::new(aura_bin())
         .arg("build")
@@ -9881,7 +9896,7 @@ def main() -> int32:
     render(Box(value="hi"))
     return 0
 "#;
-    let (temp, source_path) = write_temp_source("aurora-cli-build-specialized-trait-impls", source);
+    let (temp, source_path) = write_temp_source("aura-cli-build-specialized-trait-impls", source);
     let output_path = temp.path().join("specialized-trait-impls");
 
     let build = Command::new(aura_bin())
@@ -9933,10 +9948,8 @@ def main() -> int32:
     print(result.value)
     return 0
 "#;
-    let (temp, source_path) = write_temp_source(
-        "aurora-cli-build-nested-generic-trait-bound-dispatch",
-        source,
-    );
+    let (temp, source_path) =
+        write_temp_source("aura-cli-build-nested-generic-trait-bound-dispatch", source);
     let output_path = temp.path().join("nested-generic-trait-bound-dispatch");
 
     let build = Command::new(aura_bin())
@@ -9983,8 +9996,7 @@ def main() -> int32:
     print(Widget.make())
     return 0
 "#;
-    let (temp, source_path) =
-        write_temp_source("aurora-cli-build-trait-associated-methods", source);
+    let (temp, source_path) = write_temp_source("aura-cli-build-trait-associated-methods", source);
     let output_path = temp.path().join("trait-associated-methods");
 
     let build = Command::new(aura_bin())
@@ -10015,7 +10027,7 @@ def main() -> int32:
 
 #[test]
 fn direct_backend_build_supports_advanced_io_and_network_surface() {
-    let temp = TempDir::new("aurora-cli-direct-advanced-io-net");
+    let temp = TempDir::new("aura-cli-direct-advanced-io-net");
     let file_path = temp.path().join("data.bin");
     let source = format!(
         r#"import io
@@ -10186,7 +10198,7 @@ def main() -> int32:
         path = file_path.display()
     );
 
-    let (_build, run) = build_and_run_direct_source("aurora-cli-direct-advanced-io-net", &source);
+    let (_build, run) = build_and_run_direct_source("aura-cli-direct-advanced-io-net", &source);
     assert!(
         run.status.success(),
         "direct backend advanced io/network binary should exit successfully, stderr was:\n{}",
@@ -10225,11 +10237,7 @@ def main() -> int32:
     return 0
 "#;
 
-    assert_run_and_direct_source_stdout(
-        "aurora-unannotated-option-match-lowering",
-        source,
-        "5\n7\n",
-    );
+    assert_run_and_direct_source_stdout("aura-unannotated-option-match-lowering", source, "5\n7\n");
 }
 
 #[test]
@@ -10249,7 +10257,7 @@ def main() -> int32:
     return 0
 "#;
 
-    assert_run_and_direct_source_stdout("aurora-indirect-option-none-match", source, "-1\n");
+    assert_run_and_direct_source_stdout("aura-indirect-option-none-match", source, "-1\n");
 }
 
 #[test]
@@ -10272,7 +10280,7 @@ def main() -> int32:
     return 0
 "#;
 
-    assert_run_and_direct_source_stdout("aurora-match-expr-value-scrutinee", source, "20\n");
+    assert_run_and_direct_source_stdout("aura-match-expr-value-scrutinee", source, "20\n");
 }
 
 #[test]
@@ -10285,7 +10293,7 @@ def main() -> int32:
     print(values[99])
     return 0
 "#;
-    let (_temp, source_path) = write_temp_source("aurora-run-buffered-stdout-error", source);
+    let (_temp, source_path) = write_temp_source("aura-run-buffered-stdout-error", source);
 
     let output = Command::new(aura_bin())
         .arg("run")
@@ -10321,7 +10329,7 @@ def main() -> int32:
     return 0
 "#;
 
-    assert_run_and_direct_source_stdout("aurora-task-group-start-soon-join", source, "scope\n9\n");
+    assert_run_and_direct_source_stdout("aura-task-group-start-soon-join", source, "scope\n9\n");
 }
 
 #[test]
@@ -10364,7 +10372,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aurora-task-group-stack-override",
+        "aura-task-group-stack-override",
         source,
         "stack\nright\nleft\n3\n9\n",
     );
@@ -10386,7 +10394,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_failure_with_timeout(
-        "aurora-task-group-stack-override-bounds",
+        "aura-task-group-stack-override-bounds",
         source,
         std::time::Duration::from_secs(20),
         "",
@@ -10448,7 +10456,7 @@ def main() -> int32:
         array_render.len(),
         object_render.len()
     );
-    assert_run_and_direct_source_stdout("aurora-json-dumps-small-stack", source, &expected);
+    assert_run_and_direct_source_stdout("aura-json-dumps-small-stack", source, &expected);
 }
 
 #[test]
@@ -10484,7 +10492,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aurora-task-result-error-surface",
+        "aura-task-result-error-surface",
         source,
         "true\n-1\n-1\nafter\n",
     );
@@ -10504,7 +10512,7 @@ def main() -> int32:
     print("after")
     return 0
 "#;
-    let (temp, source_path) = write_temp_source("aurora-task-group-unread-failure", source);
+    let (temp, source_path) = write_temp_source("aura-task-group-unread-failure", source);
 
     let run = Command::new(aura_bin())
         .arg("run")
@@ -10581,7 +10589,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-cancelled-yields",
+        "aura-cancelled-yields",
         source,
         std::time::Duration::from_secs(20),
         "9999\n",
@@ -10626,7 +10634,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-loop-backedge-safepoints",
+        "aura-loop-backedge-safepoints",
         source,
         std::time::Duration::from_secs(10),
         "true\ntrue\n",
@@ -10703,7 +10711,7 @@ def main() -> int32:
     // Readiness must arrive in the first half of the 200 ms hot loop. Without
     // a cooperative backedge, the accept task cannot resume until the loop ends.
     assert_run_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-loop-backedge-socket-safepoints",
+        "aura-loop-backedge-socket-safepoints",
         source,
         std::time::Duration::from_secs(10),
         "true\n",
@@ -10727,7 +10735,7 @@ def main() -> int32:
     return 0
 "#;
 
-    let (_temp, source_path) = write_temp_source("aurora-value-receiver-binding", source);
+    let (_temp, source_path) = write_temp_source("aura-value-receiver-binding", source);
     let check = Command::new(aura_bin())
         .arg("check")
         .arg(&source_path)
@@ -10740,7 +10748,7 @@ def main() -> int32:
         String::from_utf8_lossy(&check.stderr)
     );
 
-    assert_run_and_direct_source_stdout("aurora-value-receiver-binding", source, "held\n");
+    assert_run_and_direct_source_stdout("aura-value-receiver-binding", source, "held\n");
 }
 
 #[test]
@@ -10753,7 +10761,7 @@ def main() -> int32:
     print("after")
     return 0
 "#;
-    let (temp, source_path) = write_temp_source("aurora-vec-insert-oob", source);
+    let (temp, source_path) = write_temp_source("aura-vec-insert-oob", source);
 
     let run = Command::new(aura_bin())
         .arg("run")
@@ -10808,7 +10816,7 @@ def main() -> int32:
     print("after")
     return 0
 "#;
-    let (temp, source_path) = write_temp_source("aurora-vec-set-oob", source);
+    let (temp, source_path) = write_temp_source("aura-vec-set-oob", source);
 
     let run = Command::new(aura_bin())
         .arg("run")
@@ -10863,7 +10871,7 @@ def main() -> int32:
     print("after")
     return 0
 "#;
-    let (temp, source_path) = write_temp_source("aurora-vec-remove-oob", source);
+    let (temp, source_path) = write_temp_source("aura-vec-remove-oob", source);
 
     let run = Command::new(aura_bin())
         .arg("run")
@@ -10918,7 +10926,7 @@ def main() -> int32:
     print("after")
     return 0
 "#;
-    let (temp, source_path) = write_temp_source("aurora-vec-swap-oob", source);
+    let (temp, source_path) = write_temp_source("aura-vec-swap-oob", source);
 
     let run = Command::new(aura_bin())
         .arg("run")
@@ -10987,7 +10995,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout(
-        "aurora-queue-iteration-cancel",
+        "aura-queue-iteration-cancel",
         source,
         std::time::Duration::from_secs(30),
         "about to cancel\nabout to iterate\nloop done\nscope done\n",
@@ -11014,7 +11022,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_failure_with_timeout(
-        "aurora-queue-iteration-sibling-failure",
+        "aura-queue-iteration-sibling-failure",
         source,
         std::time::Duration::from_secs(30),
         "before\n",
@@ -11041,7 +11049,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout(
-        "aurora-queue-iteration-clean-return",
+        "aura-queue-iteration-clean-return",
         source,
         std::time::Duration::from_secs(30),
         "1\n2\nloop done\nscope done\n",
@@ -11065,7 +11073,7 @@ def main() -> int32:
     return 0
 "#;
 
-    let (_, run) = build_and_run_direct_source("aurora-direct-with-trap-cleanup", source);
+    let (_, run) = build_and_run_direct_source("aura-direct-with-trap-cleanup", source);
     assert!(
         !run.status.success(),
         "direct binary should fail on vector OOB"
@@ -11099,7 +11107,7 @@ def main() -> int32:
     return 0
 "#;
 
-    let (_, run) = build_and_run_direct_source("aurora-direct-with-callee-trap-cleanup", source);
+    let (_, run) = build_and_run_direct_source("aura-direct-with-callee-trap-cleanup", source);
     assert!(
         !run.status.success(),
         "direct binary should fail on vector OOB"
@@ -11135,7 +11143,7 @@ def main() -> int32:
     return 0
 "#;
 
-    let (_, run) = build_and_run_direct_source("aurora-direct-with-current-cleanup", source);
+    let (_, run) = build_and_run_direct_source("aura-direct-with-current-cleanup", source);
     assert!(
         !run.status.success(),
         "direct binary should fail on vector OOB"
@@ -11168,7 +11176,7 @@ def main() -> int32:
     return 0
 "#;
 
-    let (_, run) = build_and_run_direct_source("aurora-direct-primary-trap-diagnostic", source);
+    let (_, run) = build_and_run_direct_source("aura-direct-primary-trap-diagnostic", source);
     assert!(
         !run.status.success(),
         "direct binary should fail when the body traps"
@@ -11197,7 +11205,7 @@ def main() -> int32:
     return recurse(0)
 "#;
 
-    let (_, run) = build_and_run_direct_source("aurora-direct-recursion-diagnostic", source);
+    let (_, run) = build_and_run_direct_source("aura-direct-recursion-diagnostic", source);
     assert!(
         !run.status.success(),
         "direct binary should fail on recursion limit"
@@ -11205,7 +11213,7 @@ def main() -> int32:
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(
         stderr.contains("maximum call depth") && stderr.contains("while calling `recurse`"),
-        "stderr should describe the Aurora recursion limit, stderr was:\n{}",
+        "stderr should describe the Aura recursion limit, stderr was:\n{}",
         stderr
     );
     assert!(
@@ -11230,7 +11238,7 @@ def main() -> int32:
     return recurse(0)
 "#;
 
-    let (temp, source_path) = write_temp_source("aurora-recursion-with-cleanup-count", source);
+    let (temp, source_path) = write_temp_source("aura-recursion-with-cleanup-count", source);
     let run = Command::new(aura_bin())
         .arg("run")
         .arg(&source_path)
@@ -11300,7 +11308,7 @@ def main() -> int32:
     return 0
 "#;
 
-    let (_, run) = build_and_run_direct_source("aurora-direct-recursion-cleanup", source);
+    let (_, run) = build_and_run_direct_source("aura-direct-recursion-cleanup", source);
     assert!(
         !run.status.success(),
         "direct binary should fail on recursion limit"
@@ -11308,7 +11316,7 @@ def main() -> int32:
     assert_eq!(String::from_utf8_lossy(&run.stdout), "close A\n");
     assert!(
         String::from_utf8_lossy(&run.stderr).contains("maximum call depth"),
-        "stderr should describe the Aurora recursion limit, stderr was:\n{}",
+        "stderr should describe the Aura recursion limit, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
 }
@@ -11323,7 +11331,7 @@ def main() -> int32:
     return 0
 "#;
 
-    let (temp, source_path) = write_temp_source("aurora-run-sigkill-flush", source);
+    let (temp, source_path) = write_temp_source("aura-run-sigkill-flush", source);
     let mut child = Command::new(aura_bin())
         .arg("run")
         .arg(&source_path)
@@ -11368,7 +11376,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aurora-process-completed-stdout-bytes",
+        "aura-process-completed-stdout-bytes",
         source,
         "3\n255\n0\n65\n",
     );
@@ -11399,7 +11407,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aurora-process-stdout-bytes-short-option-match",
+        "aura-process-stdout-bytes-short-option-match",
         source,
         "some\n104\n",
     );
@@ -11430,7 +11438,7 @@ fn retrying_network_worker_runs_with_computed_backoff_on_both_backends() {
     );
 
     assert_run_and_direct_source_stdout_with_timeout(
-        "aurora-retrying-network-worker",
+        "aura-retrying-network-worker",
         &source,
         std::time::Duration::from_secs(20),
         expected,
@@ -11483,7 +11491,7 @@ def main() -> int32:
     // cannot affect the result. Keep one worker to avoid making the 30-second
     // deadlock watchdog measure host-wide CLI-process oversubscription.
     assert_run_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-queue-iteration-zero-producers",
+        "aura-queue-iteration-zero-producers",
         source,
         std::time::Duration::from_secs(30),
         "done\n",
@@ -11510,7 +11518,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout(
-        "aurora-queue-iteration-standalone-task-group",
+        "aura-queue-iteration-standalone-task-group",
         source,
         std::time::Duration::from_secs(30),
         "7\ndone\n",
@@ -11536,7 +11544,7 @@ fn wait_any_without_tasks_times_out_immediately() {
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout(
-        "aurora-wait-any-empty",
+        "aura-wait-any-empty",
         source,
         std::time::Duration::from_secs(15),
         "timedout\n",
@@ -11554,7 +11562,7 @@ fn queue_get_or_without_timeout_returns_default_immediately() {
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout(
-        "aurora-queue-get-or-no-timeout",
+        "aura-queue-get-or-no-timeout",
         source,
         std::time::Duration::from_secs(15),
         "before\n7\nafter\n",
@@ -11580,7 +11588,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout(
-        "aurora-task-result-or-no-timeout",
+        "aura-task-result-or-no-timeout",
         source,
         std::time::Duration::from_secs(15),
         "-1\n-2\n",
@@ -11592,7 +11600,7 @@ fn fs_write_bytes_accepts_empty_lists_in_run_and_direct_backend() {
     let source = r#"import fs
 
 def main() -> int32:
-    match fs.write_bytes("/tmp/aurora-empty-bytes.bin", []):
+    match fs.write_bytes("/tmp/aura-empty-bytes.bin", []):
         case Result.Ok(_):
             print("ok")
         case Result.Err(error):
@@ -11600,12 +11608,12 @@ def main() -> int32:
     return 0
 "#;
 
-    assert_run_and_direct_source_stdout("aurora-fs-write-empty-bytes", source, "ok\n");
+    assert_run_and_direct_source_stdout("aura-fs-write-empty-bytes", source, "ok\n");
 }
 
 #[test]
 fn direct_backend_build_supports_process_module_surface() {
-    let temp = TempDir::new("aurora-cli-direct-process");
+    let temp = TempDir::new("aura-cli-direct-process");
     let cwd = fs::canonicalize(temp.path())
         .expect("temp path should canonicalize")
         .display()
@@ -11614,8 +11622,8 @@ fn direct_backend_build_supports_process_module_surface() {
         r#"import process
 
 def run(cwd: own String) -> Result[None, process.Error]:
-    env: Map[String, String] = {{"AURORA_PROCESS_VAR": "present"}}
-    completed = try process.run(["/usr/bin/printenv", "AURORA_PROCESS_VAR"], env=env, timeout=2s, group=true)
+    env: Map[String, String] = {{"AURA_PROCESS_VAR": "present"}}
+    completed = try process.run(["/usr/bin/printenv", "AURA_PROCESS_VAR"], env=env, timeout=2s, group=true)
     print(completed.stdout().trim())
     print(completed.stderr().len())
     pwd = try process.run(["/bin/pwd"], cwd=Option.Some(cwd), timeout=2s, group=true)
@@ -11668,7 +11676,7 @@ def main() -> int32:
         cwd = cwd,
     );
 
-    let (_build, run) = build_and_run_direct_source("aurora-cli-direct-process", &source);
+    let (_build, run) = build_and_run_direct_source("aura-cli-direct-process", &source);
     assert!(
         run.status.success(),
         "direct backend process binary should exit successfully, stderr was:\n{}",
@@ -11686,9 +11694,9 @@ def main() -> int32:
 #[cfg(unix)]
 #[test]
 fn direct_backend_build_supports_unix_and_tls_network_surface() {
-    let temp = TempDir::new("aurora-cli-direct-unix-tls");
+    let temp = TempDir::new("aura-cli-direct-unix-tls");
     let unix_path = PathBuf::from(format!(
-        "/tmp/aurora-cli-{}-{}.sock",
+        "/tmp/aura-cli-{}-{}.sock",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -11806,7 +11814,7 @@ def main() -> int32:
         key_path = key_path.display()
     );
 
-    let (_build, run) = build_and_run_direct_source("aurora-cli-direct-unix-tls", &source);
+    let (_build, run) = build_and_run_direct_source("aura-cli-direct-unix-tls", &source);
     let _ = fs::remove_file(&unix_path);
     assert!(
         run.status.success(),
@@ -11840,7 +11848,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aurora-zero-sized-udp-read",
+        "aura-zero-sized-udp-read",
         source,
         "Result.Err(io.Error.InvalidInput)\nResult.Err(io.Error.InvalidInput)\n",
     );
@@ -11858,7 +11866,7 @@ def main() -> int32:
     return 0
 "#;
 
-    let (_build, run) = build_and_run_direct_source("aurora-direct-metrics-overflow", source);
+    let (_build, run) = build_and_run_direct_source("aura-direct-metrics-overflow", source);
     assert!(!run.status.success(), "metrics overflow should fail");
     assert!(
         String::from_utf8_lossy(&run.stderr).contains("metric value overflowed `int64`"),
@@ -11915,7 +11923,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aurora-d6-defaults",
+        "aura-d6-defaults",
         source,
         "6\nshared\nAda\nGrace\n2\nmoved\n7\n",
     );
@@ -11926,7 +11934,7 @@ fn check_and_direct_backend_preserve_d6_own_parameter_guidance() {
     let source = r#"def take(value: String) -> String:
     return value
 "#;
-    let (temp, source_path) = write_temp_source("aurora-d6-own-guidance", source);
+    let (temp, source_path) = write_temp_source("aura-d6-own-guidance", source);
     let expected = "parameter `value` is borrowed; declare it as `own String` to take ownership, or clone the value before consuming it";
 
     let checked = Command::new(aura_bin())
@@ -11969,7 +11977,7 @@ fn check_and_direct_backend_reject_queue_iteration_modifiers() {
         let source = format!(
             "def main() -> int32:\n    queue = Queue[int64]()\n    for item in {modifier}queue:\n        print(item)\n    return 0\n"
         );
-        let (temp, source_path) = write_temp_source(&format!("aurora-d6-queue-{name}"), &source);
+        let (temp, source_path) = write_temp_source(&format!("aura-d6-queue-{name}"), &source);
 
         let checked = Command::new(aura_bin())
             .arg("check")
@@ -12012,7 +12020,7 @@ fn check_and_direct_backend_reject_range_iteration_modifiers() {
         let source = format!(
             "def main() -> int32:\n    for item in {modifier}range(0, 3):\n        print(item)\n    return 0\n"
         );
-        let (temp, source_path) = write_temp_source(&format!("aurora-d6-range-{name}"), &source);
+        let (temp, source_path) = write_temp_source(&format!("aura-d6-range-{name}"), &source);
 
         let checked = Command::new(aura_bin())
             .arg("check")
@@ -12096,7 +12104,7 @@ fn assertions_preserve_exact_messages_in_run_and_direct_backends() {
     ] {
         let source = format!("def main():\n    assert false{suffix}\n");
         for output in
-            run_and_direct_failure_outputs(&format!("aurora-assert-message-{name}"), &source)
+            run_and_direct_failure_outputs(&format!("aura-assert-message-{name}"), &source)
         {
             assert!(output.stdout.is_empty(), "{name} should not print");
             assert_eq!(
@@ -12120,7 +12128,7 @@ def main():
     print("after")
 "#;
     assert_run_and_direct_source_stdout(
-        "aurora-assert-lazy-passing-message",
+        "aura-assert-lazy-passing-message",
         passing,
         "before\nafter\n",
     );
@@ -12143,7 +12151,7 @@ def main():
     mut probe = Probe(condition_calls=0, message_calls=0)
     assert probe.condition(), probe.message()
 "#;
-    for output in run_and_direct_failure_outputs("aurora-assert-order", failing) {
+    for output in run_and_direct_failure_outputs("aura-assert-order", failing) {
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
             "condition 1\nmessage 1\n"
@@ -12169,7 +12177,7 @@ def message() -> String:
 def main():
     assert condition(), message()
 "#;
-    for output in run_and_direct_failure_outputs("aurora-assert-condition-trap", condition_trap) {
+    for output in run_and_direct_failure_outputs("aura-assert-condition-trap", condition_trap) {
         assert_eq!(String::from_utf8_lossy(&output.stdout), "condition\n");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("vector index `5` is out of bounds"));
@@ -12186,7 +12194,7 @@ def main():
     print("condition")
     assert false, message()
 "#;
-    for output in run_and_direct_failure_outputs("aurora-assert-message-trap", message_trap) {
+    for output in run_and_direct_failure_outputs("aura-assert-message-trap", message_trap) {
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
             "condition\nmessage\n"
@@ -12210,7 +12218,7 @@ def main():
         assert false, "body assertion"
 "#;
 
-    for output in run_and_direct_failure_outputs("aurora-assert-cleanup-primary", source) {
+    for output in run_and_direct_failure_outputs("aura-assert-cleanup-primary", source) {
         assert_eq!(String::from_utf8_lossy(&output.stdout), "body\nclose\n");
         assert_eq!(
             String::from_utf8_lossy(&output.stderr).lines().next(),
@@ -12221,7 +12229,7 @@ def main():
 
 #[test]
 fn aura_test_discovers_test_functions_and_keeps_main_files_working() {
-    let temp = TempDir::new("aurora-test-discovery");
+    let temp = TempDir::new("aura-test-discovery");
     let tests = temp.path().join("tests");
     fs::create_dir_all(&tests).expect("test directory should create");
 
@@ -12272,7 +12280,7 @@ fn aura_test_discovers_test_functions_and_keeps_main_files_working() {
 
 #[test]
 fn aura_test_treats_file_level_assertions_as_test_results() {
-    let temp = TempDir::new("aurora-file-assert-tests");
+    let temp = TempDir::new("aura-file-assert-tests");
     let passing_path = temp.path().join("passing.au");
     fs::write(
         &passing_path,
@@ -12314,29 +12322,26 @@ fn aura_test_treats_file_level_assertions_as_test_results() {
 }
 
 #[test]
-fn native_cache_format_is_bumped_past_the_capability_migration() {
-    // ADR-0022 Q9 requires every Phase-4 artifact built from the old grammar
-    // to be invalidated, so the cache format string must have moved past the
-    // `v3` that pre-migration builds keyed on.
+fn native_cache_format_carries_the_aura_identity_epoch() {
     let main = include_str!("../src/main.rs");
     assert!(
-        main.contains(r#"const NATIVE_CACHE_FORMAT: &str = "aurora-native-cache-v4";"#),
-        "native cache format must be v4 so pre-migration artifacts cannot be reused"
+        main.contains(r#"const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v5";"#),
+        "native cache format must carry the Aura identity epoch"
     );
     assert!(
-        !main.contains("aurora-native-cache-v3"),
-        "the retired v3 cache format must not linger in the key material"
+        !main.contains("aura-native-cache-v4"),
+        "the prior cache format must not linger in key material"
     );
 }
 
 #[test]
 fn typed_select_queue_priority_and_loser_preservation_match_with_four_workers() {
     let source =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/select_queue_priority.au");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/select_queue_priority.au");
     let expected =
-        include_str!("../../aurora-compiler/tests/fixtures/run-pass/select_queue_priority.stdout");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/select_queue_priority.stdout");
     assert_mir_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-typed-select-queue-priority",
+        "aura-typed-select-queue-priority",
         source,
         std::time::Duration::from_secs(30),
         expected,
@@ -12346,14 +12351,13 @@ fn typed_select_queue_priority_and_loser_preservation_match_with_four_workers() 
 
 #[test]
 fn typed_select_nested_queue_payload_types_match_on_both_backends() {
-    let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/select_nested_payload_typing.au"
-    );
+    let source =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/select_nested_payload_typing.au");
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/select_nested_payload_typing.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/select_nested_payload_typing.stdout"
     );
     assert_mir_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-typed-select-nested-payload-typing",
+        "aura-typed-select-nested-payload-typing",
         source,
         std::time::Duration::from_secs(30),
         expected,
@@ -12364,13 +12368,13 @@ fn typed_select_nested_queue_payload_types_match_on_both_backends() {
 #[test]
 fn typed_select_nonrepeatable_task_delivery_matches_with_four_workers() {
     let source = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/select_nonrepeatable_task_delivery.au"
+        "../../aura-compiler/tests/fixtures/run-pass/select_nonrepeatable_task_delivery.au"
     );
     let expected = include_str!(
-        "../../aurora-compiler/tests/fixtures/run-pass/select_nonrepeatable_task_delivery.stdout"
+        "../../aura-compiler/tests/fixtures/run-pass/select_nonrepeatable_task_delivery.stdout"
     );
     assert_mir_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-typed-select-nonrepeatable-task-delivery",
+        "aura-typed-select-nonrepeatable-task-delivery",
         source,
         std::time::Duration::from_secs(30),
         expected,
@@ -12475,7 +12479,7 @@ def main():
     print(select(0ms, 0ms))
 "#;
     assert_mir_and_direct_source_stdout_with_timeout_and_workers(
-        "aurora-typed-select-four-worker-matrix",
+        "aura-typed-select-four-worker-matrix",
         source,
         std::time::Duration::from_secs(30),
         concat!(
@@ -12501,10 +12505,10 @@ def main():
 #[test]
 fn typed_select_negative_deadline_is_au4001_on_both_backends_with_four_workers() {
     let source = "def main():\n    print(select(Duration.ms(-1)))\n";
-    let (temp, source_path) = write_temp_source("aurora-typed-select-negative-deadline", source);
+    let (temp, source_path) = write_temp_source("aura-typed-select-negative-deadline", source);
 
     let mut mir = Command::new(aura_bin());
-    mir.env("AURORA_WORKERS", "4")
+    mir.env("AURA_WORKERS", "4")
         .args(["run", "--backend", "mir"])
         .arg(&source_path);
     let mir = command_output_with_timeout(
@@ -12531,7 +12535,7 @@ fn typed_select_negative_deadline_is_au4001_on_both_backends_with_four_workers()
         String::from_utf8_lossy(&build.stderr)
     );
     let mut direct = generated_binary(&output_path);
-    direct.env("AURORA_WORKERS", "4");
+    direct.env("AURA_WORKERS", "4");
     let direct = command_output_with_timeout(
         direct,
         std::time::Duration::from_secs(30),
@@ -12639,7 +12643,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aurora-capture-free-function-values",
+        "aura-capture-free-function-values",
         source,
         "2\n3\n4\n8\n6\n7\n14\n11\n31\n41\nsecond-default\n22\nnamed-second\nnamed-first\n12\n21\nlocal-none\n9\ntask-second-default\n42\n",
     );
@@ -12677,13 +12681,13 @@ def main() -> int32:
     return 0
 "#;
 
-    assert_run_and_direct_source_stdout("aurora-imported-builtin-function-value", source, "pipe\n");
+    assert_run_and_direct_source_stdout("aura-imported-builtin-function-value", source, "pipe\n");
 }
 
 #[test]
 fn imported_builtin_function_values_retain_process_run_defaults_on_both_backends() {
     let fixture =
-        "crates/aurora-compiler/tests/fixtures/run-pass/function_value_imported_builtin_defaults.au";
+        "crates/aura-compiler/tests/fixtures/run-pass/function_value_imported_builtin_defaults.au";
     let expected = "true\nbuiltin-defaults\n";
 
     assert_default_backend_example_runs(fixture, "builtin-function-defaults-auto", expected);
@@ -12718,7 +12722,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aurora-function-value-generic-default-supplier",
+        "aura-function-value-generic-default-supplier",
         source,
         "ordinary-none\ntask-none\n",
     );
@@ -12769,7 +12773,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aurora-function-value-capabilities",
+        "aura-function-value-capabilities",
         source,
         "44\nparameter-owned\nvector-owned\nowned\n",
     );
@@ -12793,11 +12797,11 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_failure_with_timeout(
-        "aurora-dynamic-function-value-frame",
+        "aura-dynamic-function-value-frame",
         source,
         std::time::Duration::from_secs(20),
         "",
-        "Aurora call chain (innermost first): explode at 2:1 -> main at 11:1",
+        "Aura call chain (innermost first): explode at 2:1 -> main at 11:1",
     );
 }
 
@@ -12813,7 +12817,7 @@ def main() -> int32:
 "#;
     let timeout = std::time::Duration::from_secs(20);
     let (_temp, _source_path, mut mir_child) =
-        run_aura_source_with_timeout("aurora-function-value-default-trap", source, timeout);
+        run_aura_source_with_timeout("aura-function-value-default-trap", source, timeout);
     let mir_status = wait_with_timeout(&mut mir_child, timeout).unwrap_or_else(|| {
         mir_child.kill().expect("failed to kill timed out aura run");
         panic!("aura run timed out after {:?}", timeout);
@@ -12824,7 +12828,7 @@ def main() -> int32:
     assert!(!mir_status.success());
 
     let (_temp, _source_path, mut direct_child) = build_direct_source_with_timeout(
-        "aurora-function-value-default-trap-direct",
+        "aura-function-value-default-trap-direct",
         source,
         timeout,
     );
@@ -12846,9 +12850,8 @@ def main() -> int32:
             "default trap should preserve the public diagnostic, stderr was:\n{stderr}"
         );
         assert!(
-            stderr.contains(
-                "Aurora call chain (innermost first): default_trap at 2:33 -> main at 5:1"
-            ),
+            stderr
+                .contains("Aura call chain (innermost first): default_trap at 2:33 -> main at 5:1"),
             "default trap should preserve the public function frame, stderr was:\n{stderr}"
         );
         assert!(
@@ -12878,7 +12881,7 @@ def main() -> int32:
 "#;
     let timeout = std::time::Duration::from_secs(20);
     let (_temp, _source_path, mut mir_child) =
-        run_aura_source_with_timeout("aurora-function-value-task-trap", source, timeout);
+        run_aura_source_with_timeout("aura-function-value-task-trap", source, timeout);
     let mir_status = wait_with_timeout(&mut mir_child, timeout).unwrap_or_else(|| {
         mir_child.kill().expect("failed to kill timed out aura run");
         panic!("aura run timed out after {:?}", timeout);
@@ -12889,7 +12892,7 @@ def main() -> int32:
     assert!(!mir_status.success());
 
     let (_temp, _source_path, mut direct_child) =
-        build_direct_source_with_timeout("aurora-function-value-task-trap-direct", source, timeout);
+        build_direct_source_with_timeout("aura-function-value-task-trap-direct", source, timeout);
     let direct_status = wait_with_timeout(&mut direct_child, timeout).unwrap_or_else(|| {
         direct_child
             .kill()
@@ -12908,12 +12911,12 @@ def main() -> int32:
             "chosen task target should preserve its trap, stderr was:\n{stderr}"
         );
         assert!(
-            stderr.contains("Aurora task entry: explode at 2:1"),
+            stderr.contains("Aura task entry: explode at 2:1"),
             "task entry should name the runtime-selected target, stderr was:\n{stderr}"
         );
         assert!(
             stderr.contains(
-                "Aurora task ancestry (youngest first): explode spawned from main at 14:"
+                "Aura task ancestry (youngest first): explode spawned from main at 14:"
             ),
             "task ancestry should name the runtime-selected target and spawn site, stderr was:\n{stderr}"
         );

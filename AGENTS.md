@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repository is a monorepo for the Aurora language, compiler, examples, tutorials, and editor tooling.
+This repository is a monorepo for the Aura language, compiler, examples, tutorials, and editor tooling.
 
 The default engineering mode for this repo is test-first development.
 
@@ -58,7 +58,7 @@ If a language or tooling behavior changes, update these in the same pass when re
 
 ## Package Expectations
 
-### `crates/aurora-compiler`
+### `crates/aura-compiler`
 
 Use layered tests:
 
@@ -77,7 +77,7 @@ Treat CLI behavior as product behavior:
 - validate annotated diagnostic output
 - keep command examples in README files current
 
-### `tools/aurora-language-server`
+### `tools/aura-language-server`
 
 The LSP must have regression tests for:
 
@@ -90,7 +90,7 @@ The LSP must have regression tests for:
 
 Use `npm run coverage:lsp` regularly and move the package toward enforced 100% coverage before expanding the semantic surface further.
 
-### `tools/vscode-aurora`
+### `tools/vscode-aura`
 
 Keep the extension thin and test packaging/build behavior whenever the LSP surface changes.
 
@@ -109,7 +109,7 @@ consume the workstation indefinitely.
   Use `cargo llvm-cov clean --workspace` after coverage-only outputs are no
   longer needed, and use `cargo clean` when the accumulated Rust build tree is
   no longer worth preserving.
-- Remove stale Aurora-generated temporary linker/test artifacts after an
+- Remove stale Aura-generated temporary linker/test artifacts after an
   interrupted or failed gate. Do not remove a live process's files while the
   process is still running.
 - After a broad cleanup, rebuild only the minimal binary or profile needed for
@@ -120,7 +120,7 @@ consume the workstation indefinitely.
 
 ## Tutorials And Examples
 
-The `tutorials/` directory should track the implemented subset of Aurora, not just the proposal.
+The `tutorials/` directory should track the implemented subset of Aura, not just the proposal.
 
 The `examples/` directory should stay categorized, runnable, and aligned with tutorial chapters.
 

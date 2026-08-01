@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-export const AURORA_RELEASE = Object.freeze({
+export const AURA_RELEASE = Object.freeze({
   version: '0.2.0',
   channel: 'technical preview'
 })
@@ -31,7 +31,7 @@ function checkoutIsDirty() {
 
 /**
  * Resolve the implementation baseline without writing a hash back into source.
- * Release/archive builds should set AURORA_DOCS_COMMIT explicitly. GitHub builds
+ * Release/archive builds should set AURA_DOCS_COMMIT explicitly. GitHub builds
  * inherit GITHUB_SHA. A clean local checkout uses its current committed HEAD;
  * a dirty checkout or exported source archive without Git reports that it is
  * an uncommitted local build instead of inventing a commit.
@@ -41,7 +41,7 @@ export function resolveImplementationCommit({
   readLocalCommit = readCheckoutCommit,
   isLocalCheckoutDirty = checkoutIsDirty
 } = {}) {
-  for (const candidate of [env.AURORA_DOCS_COMMIT, env.GITHUB_SHA]) {
+  for (const candidate of [env.AURA_DOCS_COMMIT, env.GITHUB_SHA]) {
     const value = candidate?.trim()
     if (value && COMMIT_PATTERN.test(value)) {
       return value.toLowerCase()

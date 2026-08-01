@@ -6,7 +6,7 @@ This chapter states the cross-cutting rules. The declaration-specific chapters p
 
 ## Types And Type Equality
 
-Aurora 0.2 primarily uses nominal types with invariant generic arguments. Two
+Aura 0.2 primarily uses nominal types with invariant generic arguments. Two
 nominal types match when their canonical names and recursively all type
 arguments are equal. Tuple types are structural: two tuple types match exactly
 when their arity and every corresponding element type match recursively. There
@@ -26,7 +26,7 @@ Every generic type use must supply its declared number of type arguments. Non-ge
 
 ## Contextual Inference
 
-Aurora uses local, contextual inference rather than global inference. Public function parameters, fields, method signatures, and explicit return values remain typed in source. The checker uses an expected type from an annotation, parameter, return position, collection, constructor field, or surrounding expression where the rule is unambiguous.
+Aura uses local, contextual inference rather than global inference. Public function parameters, fields, method signatures, and explicit return values remain typed in source. The checker uses an expected type from an annotation, parameter, return position, collection, constructor field, or surrounding expression where the rule is unambiguous.
 
 ### Literals
 
@@ -81,7 +81,7 @@ rejects loop-carried full or partial moves from outer places.
 A lambda with parameters requires an expected structural function type. That
 type fixes its parameter count and each bare/`mut`/`own` capability and
 parameter type; an expected result constrains the body. The body is checked
-once under those parameter bindings. Aurora does not infer parameter types
+once under those parameter bindings. Aura does not infer parameter types
 from body operations. A zero-parameter lambda may infer `def() -> R` from its
 body when no expected callable type is present.
 
@@ -119,13 +119,13 @@ A declaration is valid only when:
 
 Class, enum, function, and trait declarations may be `public` at module scope. `impl` cannot be public because it introduces no independently imported item.
 
-An extern declaration participates in the module namespace but has no Aurora
+An extern declaration participates in the module namespace but has no Aura
 body. The ABI must be `"C"`, its package must be authorized, and its complete
 signature must belong to the fixed FFI v0 scalar/view/opaque-handle table.
 Extern functions are direct-call-only: referencing one without immediately
 calling it is rejected rather than producing a function value. An opaque
 declaration contributes a nominal type but no constructor, fields, methods, or
-Aurora-visible layout. See [FFI v0](/manual/ffi).
+Aura-visible layout. See [FFI v0](/manual/ffi).
 
 ## Bindings And Assignment
 
@@ -180,7 +180,7 @@ Arithmetic and ordering operators may otherwise resolve through the
 corresponding `Add`, `Sub`, `Mul`, `Div`, `FloorDiv`, `Mod`, or `Ord` trait
 method. Builtin numeric and Duration rules take precedence over operator-trait
 dispatch. Builtin equality does not dispatch through an operator trait in
-Aurora 0.2.
+Aura 0.2.
 
 Tuple `==` and `!=` require operands with the same static tuple type. They
 apply builtin equality recursively to corresponding element types and produce
@@ -201,7 +201,7 @@ Operator operands are not implicitly widened. An integer literal may be contextu
 
 `if` and `while` conditions, including the condition in
 `value if condition else alternative`, must have exactly type `bool`. `and`,
-`or`, and `not` also require boolean results under the rules above. Aurora does
+`or`, and `not` also require boolean results under the rules above. Aura does
 not apply general truthiness conversion to strings, collections, resources, or
 user types.
 
@@ -394,7 +394,7 @@ For a concrete receiver, the checker chooses the unique applicable implementatio
 
 For a type parameter, available methods and operators come from its declared bounds. If multiple bounds expose an indistinguishable method, the access is ambiguous unless the language can resolve one unique contract.
 
-Trait and implementation methods cannot declare default ordinary parameters in Aurora 0.2. Trait default method bodies are permitted; a signature-only trait method has no body after its terminating newline.
+Trait and implementation methods cannot declare default ordinary parameters in Aura 0.2. Trait default method bodies are permitted; a signature-only trait method has no body after its terminating newline.
 
 A clone-producing operation over unresolved generic types infers clone-safety
 obligations on the contributing declared parameters. Calls propagate those

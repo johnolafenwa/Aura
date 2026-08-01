@@ -1,0 +1,5 @@
+error[AU2002]: map literal values must all have type `int32`, found `String`
+ --> crates/aura-compiler/tests/fixtures/check-fail/map_literal_value_type_mismatch.au:2:55
+  |
+2 |     values: Map[String, int32] = {"aura": 1, "codex": "bad"}
+  |                                                       ^

@@ -1,13 +1,13 @@
 # Running Programs
 
-Aurora currently runs through the bootstrap CLI, `aura`. You invoke it from the repository root using `cargo run -p aura --`.
+Aura currently runs through the bootstrap CLI, `aura`. You invoke it from the repository root using `cargo run -p aura --`.
 
 ## Your First Program
 
 Create a file called `hello.au`:
 
 ```python
-print("hello, aurora")
+print("hello, aura")
 ```
 
 Run it:
@@ -16,7 +16,7 @@ Run it:
 cargo run -p aura -- run hello.au
 ```
 
-You should see `hello, aurora` printed to the terminal.
+You should see `hello, aura` printed to the terminal.
 
 ## The Core Commands
 
@@ -25,7 +25,7 @@ The three commands you will use most often:
 ```bash
 cargo run -p aura -- check examples/classes/point_distance.au
 cargo run -p aura -- run examples/classes/point_distance.au
-cargo run -p aura -- build -o ./target/aurora-point examples/point.au
+cargo run -p aura -- build -o ./target/aura-point examples/point.au
 ```
 
 - **`check`** -- parse and type-check the file without running it. Use this for fast feedback while editing.
@@ -79,7 +79,7 @@ The version command includes the release channel and a 12-hex-digit source
 commit, such as `aura 0.2.0-preview (0123456789ab)`, so a preview build is
 never mistaken for a future final `0.2.0` binary.
 
-Use `deps update` to refresh git dependencies without deleting `Aurora.lock` manually:
+Use `deps update` to refresh git dependencies without deleting `Aura.lock` manually:
 
 ```bash
 cargo run -p aura -- deps update
@@ -98,7 +98,7 @@ This is how the VS Code language server communicates with the compiler for unsav
 
 ## Package-Aware Commands
 
-When a file lives under a package with `Aurora.toml`, the CLI automatically resolves local modules from `src/`, resolves path and git dependencies by package name, and updates `Aurora.lock`:
+When a file lives under a package with `Aura.toml`, the CLI automatically resolves local modules from `src/`, resolves path and git dependencies by package name, and updates `Aura.lock`:
 
 ```bash
 cargo run -p aura -- run examples/packages/local_path_dependencies/app/src/main.au
@@ -117,7 +117,7 @@ See [18-packages-and-workspaces.md](18-packages-and-workspaces.md) for details.
 
 ## Scripts And `main`
 
-Aurora supports two entry styles.
+Aura supports two entry styles.
 
 ### Top-level script
 

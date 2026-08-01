@@ -1,0 +1,6 @@
+def eat(value: own String) -> String:
+    return value
+
+def main():
+    value = "Aura"
+    print(value.contains(f"{eat(value)}"))

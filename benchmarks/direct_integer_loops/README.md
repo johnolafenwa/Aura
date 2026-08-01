@@ -25,7 +25,7 @@ The contractual scalable-runtime runner also reports a startup split:
 npm run bench:scalable-runtime -- \
   --label v6-startup-split \
   --aura target/release/aura \
-  --json /tmp/aurora-v6-startup-split.json
+  --json /tmp/aura-v6-startup-split.json
 ```
 
 It rotates the startup, `int32`, and `int64` process order on each repetition
@@ -70,7 +70,7 @@ establish the complete cause of the regression or replace the clean baseline:
 in particular, its `41.746208 ms` `int32` loop estimate does not reproduce the
 Batch-2 whole-process median.
 
-A separate `AURORA_WORKERS=1` diagnostic measured a `7.851334 ms` startup
+A separate `AURA_WORKERS=1` diagnostic measured a `7.851334 ms` startup
 median. This gives no evidence that selecting one worker reduces the measured
 startup component; it does not by itself prove which initialization work
 causes the historical gap. The direct root scheduler remains the boundary

@@ -1,0 +1,8 @@
+error[AU3001]: use of moved value `names`
+ --> crates/aura-compiler/tests/fixtures/check-fail/own_vec_iteration_moves_owner.au:5:11
+  |
+5 |     print(names.len())
+  |           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/own_vec_iteration_moves_owner.au:3:21: value moved here
+  = help: pass shared access when ownership is not needed, or call `.clone()` at the move site when an independent value is required
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/own_vec_iteration_moves_owner.au:3:26-3:26 with `.clone()`

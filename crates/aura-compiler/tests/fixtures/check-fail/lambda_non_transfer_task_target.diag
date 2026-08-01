@@ -1,0 +1,7 @@
+error[AU3008]: task target `worker` cannot cross a task boundary because capture `holder` of `closure def() -> int64` -> field `generator` of `Holder` -> `random.Rng` is a stateful generator and is not Transfer
+ --> crates/aura-compiler/tests/fixtures/check-fail/lambda_non_transfer_task_target.au:11:28
+   |
+11 |         task = group.start(worker)
+   |                            ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/lambda_non_transfer_task_target.au:9:38: capture `holder` is created here
+  = help: task closures may capture only owned Transfer data; keep capabilities and host resources on their owning worker

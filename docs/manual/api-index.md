@@ -178,7 +178,7 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | `Vec.insert` | `insert(index: int32, value: own T) -> bool` | Normalizes a negative index, inserts before it, and returns `true`; valid range is `0..=len`, without clamping. |
 | `Vec.clear` | `clear() -> None` | Removes all elements. |
 | `Vec.reverse` | `reverse() -> None` | Reverses in place. |
-| `Vec.sort` | `sort() -> None` | Stable in-place natural ordering; mutable receiver and orderable `T`. Built-in orderable types are all integers, `float32`, `float64`, and `Duration`; Aurora 0.2 has no built-in `Ord[String]`. |
+| `Vec.sort` | `sort() -> None` | Stable in-place natural ordering; mutable receiver and orderable `T`. Built-in orderable types are all integers, `float32`, `float64`, and `Duration`; Aura 0.2 has no built-in `Ord[String]`. |
 | `Vec.sort_by` | `sort_by[K](key: def(T) -> K) -> None` | Stable in-place key ordering; evaluates the shared key callback once per element left-to-right before mutation and requires orderable `K`. |
 | `Vec.map` | `map[U](f: def(T) -> U) -> Vec[U]` | Eager shared traversal into a fresh owned result; retains the source. |
 | `Vec.filter` | `filter(f: def(T) -> bool) -> Vec[T]` | Eager shared traversal into a fresh owned result; retains the source and requires clone-safe `T`. |
@@ -304,7 +304,7 @@ See [Control-Plane Modules](/manual/control-plane).
 | `control.retry` | `retry[T, E](worker: def() -> Result[T, E], max_attempts: int32 = 3, initial_backoff: Duration = 0ms) -> Result[T, E]` |
 
 Metrics are process-global `int64` counters; missing names read as zero and
-overflow is a runtime diagnostic. Dynamic JSON object dumps and legacy
+overflow is a runtime diagnostic. Dynamic JSON object dumps and bounded
 JSON/TOML string maps serialize in sorted key order. See [JSON
 Module](/manual/json) and the control-plane chapter for exact value, limit,
 host-string/path, and telemetry-record rules.

@@ -1,0 +1,5 @@
+error[AU2002]: `Task` is a reserved built-in type name
+ --> crates/aura-compiler/tests/fixtures/check-fail/reserved_builtin_type_name_task.au:1:1
+  |
+1 | class Task:
+  | ^

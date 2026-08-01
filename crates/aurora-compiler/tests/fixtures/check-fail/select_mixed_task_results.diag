@@ -1,6 +1,0 @@
-error[AU2002]: all Task sources in one `select` call must have the same result type `int32`, found `Task[String]` at source 1
- --> crates/aurora-compiler/tests/fixtures/check-fail/select_mixed_task_results.au:11:35
-   |
-11 |         print(select(number_task, label_task))
-   |                                   ^
-  = help: wrap heterogeneous task results in one explicit enum before selecting

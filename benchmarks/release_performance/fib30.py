@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CPython counterpart to Aurora's naive recursive fib(30) workload."""
+"""CPython counterpart to Aura's naive recursive fib(30) workload."""
 
 from __future__ import annotations
 

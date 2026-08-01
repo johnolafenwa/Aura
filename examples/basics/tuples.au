@@ -1,5 +1,5 @@
 def make_record() -> (String, int64):
-    return ("Aurora", 7)
+    return ("Aura", 7)
 
 
 def main():
@@ -9,9 +9,9 @@ def main():
     print(version)
 
     # Equality retains non-copy tuple operands; tuple ordering is rejected.
-    baseline = ("Aurora", (7, true))
-    same = ("Aurora", (7, true))
-    changed = ("Aurora", (8, true))
+    baseline = ("Aura", (7, true))
+    same = ("Aura", (7, true))
+    changed = ("Aura", (8, true))
     assert baseline == same
     assert baseline != changed
     assert same != changed

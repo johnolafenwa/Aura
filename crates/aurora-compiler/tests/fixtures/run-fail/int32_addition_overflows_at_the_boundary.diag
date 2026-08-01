@@ -1,6 +1,0 @@
-error[AU4002]: integer value `2147483648` does not fit in `int32`
- --> crates/aurora-compiler/tests/fixtures/run-fail/int32_addition_overflows_at_the_boundary.au:5:5
-  |
-5 |     high += 1
-  |     ^
-  = note: Aurora call chain (innermost first): main at 1:1

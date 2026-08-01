@@ -1,5 +1,0 @@
-error[AU2004]: `String.from_bytes` expects 1 argument, found 2
- --> crates/aurora-compiler/tests/fixtures/check-fail/string_from_bytes_positional_encoding_reserved.au:3:19
-  |
-3 |     text = String.from_bytes(payload, "utf-8")
-  |                   ^

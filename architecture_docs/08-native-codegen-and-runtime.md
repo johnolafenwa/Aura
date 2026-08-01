@@ -1,20 +1,20 @@
 # Native Codegen And Runtime
 
-This chapter explains Aurora's direct native backend and the runtime ABI it targets.
+This chapter explains Aura's direct native backend and the runtime ABI it targets.
 
 ## What code generation is
 
 Code generation is the stage that turns an intermediate representation into machine-level artifacts.
 
-In Aurora, the direct backend:
+In Aura, the direct backend:
 
 - takes `MirModule`
 - uses Cranelift to emit native code into an object file
-- links that object file against Aurora's direct runtime
+- links that object file against Aura's direct runtime
 
-The code generator lives in [`native_codegen.rs`](../crates/aurora-compiler/src/native_codegen.rs). The runtime ABI it targets lives in [`native_runtime.rs`](../crates/aurora-compiler/src/native_runtime.rs).
+The code generator lives in [`native_codegen.rs`](../crates/aura-compiler/src/native_codegen.rs). The runtime ABI it targets lives in [`native_runtime.rs`](../crates/aura-compiler/src/native_runtime.rs).
 
-## Aurora's two native build modes
+## Aura's two native build modes
 
 From the CLI's perspective:
 
@@ -37,9 +37,9 @@ flowchart LR
     F --> G["link with native_runtime static library"]
 ```
 
-## Aurora's type strategy for native codegen
+## Aura's type strategy for native codegen
 
-Aurora does not lower every value the same way.
+Aura does not lower every value the same way.
 
 `native_codegen.rs` classifies values into:
 
@@ -50,11 +50,11 @@ Aurora does not lower every value the same way.
 - `DirectType::Opaque`
   rich values that are boxed and passed through runtime pointers
 
-This is one of the most important design choices in Aurora's native backend.
+This is one of the most important design choices in Aura's native backend.
 
 ### Why this matters
 
-It lets Aurora avoid boxing everything while still supporting rich language features.
+It lets Aura avoid boxing everything while still supporting rich language features.
 
 - simple data can stay cheap
 - complex data can still reuse runtime semantics
@@ -62,7 +62,7 @@ It lets Aurora avoid boxing everything while still supporting rich language feat
 
 ## Runtime imports instead of inlined complexity
 
-Aurora's native codegen does not implement every builtin directly in generated machine code.
+Aura's native codegen does not implement every builtin directly in generated machine code.
 
 Instead, it declares many runtime functions such as:
 
@@ -77,7 +77,7 @@ That keeps code generation smaller and keeps runtime semantics centralized.
 
 ## The role of `native_runtime.rs`
 
-The direct runtime is Aurora's native ABI layer. It is responsible for:
+The direct runtime is Aura's native ABI layer. It is responsible for:
 
 - hosting boxed `OpaqueValue` objects
 - explicit refcount management
@@ -88,10 +88,10 @@ The direct runtime is Aurora's native ABI layer. It is responsible for:
 - runtime diagnostics with source context
 - once-only typed call-frame and task-ancestry capture
 
-Aurora uses explicit retain/release helpers because generated code may pass opaque pointers around independently of Rust's normal ownership system.
+Aura uses explicit retain/release helpers because generated code may pass opaque pointers around independently of Rust's normal ownership system.
 
 Generated functions publish static frame metadata and push/pop native call
-records around Aurora calls. Direct task state also owns the task-entry and
+records around Aura calls. Direct task state also owns the task-entry and
 parent-spawn records needed to reconstruct ancestry. A trap captures both
 lists before generated cleanup or forced stack reset, using the same
 compiler-owned diagnostic types and ordering as the MIR runtime.
@@ -108,7 +108,7 @@ compiler-owned diagnostic types and ordering as the MIR runtime.
 The key idea is:
 
 - generated native code can cheaply pass opaque values as pointer-sized handles
-- the runtime preserves Aurora semantics by storing real `Value` data behind those handles
+- the runtime preserves Aura semantics by storing real `Value` data behind those handles
 
 ## A tiny direct-backend design example
 
@@ -143,7 +143,7 @@ fn emit_add(left: DirectType, right: DirectType) -> Result<&'static str, String>
 }
 ```
 
-Aurora's real backend is more advanced, but the design lesson is the same:
+Aura's real backend is more advanced, but the design lesson is the same:
 
 - classify values
 - emit fast paths for simple cases
@@ -151,14 +151,14 @@ Aurora's real backend is more advanced, but the design lesson is the same:
 
 ## Cranelift's role
 
-Aurora uses Cranelift to:
+Aura uses Cranelift to:
 
 - create function signatures
 - build IR blocks and instructions
 - manage variables and values
 - emit object code for the host ISA
 
-Aurora still does the language-specific work itself:
+Aura still does the language-specific work itself:
 
 - mapping MIR semantics onto Cranelift operations
 - deciding when to box or flatten
@@ -167,7 +167,7 @@ Aurora still does the language-specific work itself:
 
 ## Validation before emission
 
-Before codegen, Aurora validates the MIR module and functions. That protects the backend from malformed or unsupported input shapes.
+Before codegen, Aura validates the MIR module and functions. That protects the backend from malformed or unsupported input shapes.
 
 This is good compiler engineering:
 
@@ -191,7 +191,7 @@ They both depend on the same language-level concepts:
 They also produce the same complete structured diagnostics. Native execution
 does not reconstruct frames from human stderr: when launched by `aura` on a
 maintained Unix host, the runtime can write one bounded JSON diagnostic to a
-private inherited file descriptor. The channel is used only for Aurora traps;
+private inherited file descriptor. The channel is used only for Aura traps;
 ordinary nonzero program returns leave it empty. A successful structured write
 suppresses duplicate human stderr, while a failed write retains the human
 diagnostic.
@@ -218,18 +218,18 @@ well, so a trapped, cancelled, or internally abandoned root cannot leave its
 task-local ownership ledger behind.
 
 This fallback is for host/runtime containment only. Once the generated stack
-has been reset, it must not invoke arbitrary Aurora cleanup thunks. Ordinary
+has been reset, it must not invoke arbitrary Aura cleanup thunks. Ordinary
 source-level cleanup remains the responsibility of generated control flow and
 the direct-runtime error boundary before forced exit; scheduler abandonment is
 not a second language-level cleanup mechanism.
 
 ## Files to study
 
-- [`native_codegen.rs`](../crates/aurora-compiler/src/native_codegen.rs)
-- [`native_runtime.rs`](../crates/aurora-compiler/src/native_runtime.rs)
-- [`native_codegen_tests.rs`](../crates/aurora-compiler/src/native_codegen_tests.rs)
-- [`native_runtime_tests.rs`](../crates/aurora-compiler/src/native_runtime_tests.rs)
+- [`native_codegen.rs`](../crates/aura-compiler/src/native_codegen.rs)
+- [`native_runtime.rs`](../crates/aura-compiler/src/native_runtime.rs)
+- [`native_codegen_tests.rs`](../crates/aura-compiler/src/native_codegen_tests.rs)
+- [`native_runtime_tests.rs`](../crates/aura-compiler/src/native_runtime_tests.rs)
 
 ## What comes next
 
-Read [09-packages-and-module-loading.md](09-packages-and-module-loading.md) to see how Aurora finds modules, packages, workspaces, and dependencies before any of the execution paths run.
+Read [09-packages-and-module-loading.md](09-packages-and-module-loading.md) to see how Aura finds modules, packages, workspaces, and dependencies before any of the execution paths run.

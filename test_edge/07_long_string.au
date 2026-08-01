@@ -2,7 +2,7 @@ def main() -> int32:
     long1 = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     print(long1)
 
-    long2 = "The quick brown fox jumps over the lazy dog. This is a sentence used for testing purposes to verify that long string literals work correctly in the Aurora language."
+    long2 = "The quick brown fox jumps over the lazy dog. This is a sentence used for testing purposes to verify that long string literals work correctly in the Aura language."
     print(long2)
 
     combined = long1 + " " + long2

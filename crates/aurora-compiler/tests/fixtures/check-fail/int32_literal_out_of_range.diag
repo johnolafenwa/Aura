@@ -1,5 +1,0 @@
-error[AU2999]: integer literal `2147483648` does not fit in `int32`
- --> crates/aurora-compiler/tests/fixtures/check-fail/int32_literal_out_of_range.au:2:20
-  |
-2 |     value: int32 = 2147483648
-  |                    ^

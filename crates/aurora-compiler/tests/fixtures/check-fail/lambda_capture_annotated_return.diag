@@ -1,5 +1,0 @@
-error[AU2002]: return type mismatch: expected `def() -> int64`, found `closure def() -> int64`
- --> crates/aurora-compiler/tests/fixtures/check-fail/lambda_capture_annotated_return.au:3:5
-  |
-3 |     return lambda: offset
-  |     ^

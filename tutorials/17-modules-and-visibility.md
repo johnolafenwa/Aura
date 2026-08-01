@@ -1,6 +1,6 @@
 # Modules And Visibility
 
-Aurora supports local file modules with `import`, `from ... import ...`, and `public` visibility boundaries. Modules let you organize code across files and control what is exposed to other parts of your project.
+Aura supports local file modules with `import`, `from ... import ...`, and `public` visibility boundaries. Modules let you organize code across files and control what is exposed to other parts of your project.
 
 ## Importing A Module
 
@@ -77,7 +77,7 @@ Within the same module, all members are accessible regardless of visibility.
 
 ## Packages And Dependency Imports
 
-When a file lives under a package with `Aurora.toml`, the package's `src/` directory is the source root. Local imports work the same way:
+When a file lives under a package with `Aura.toml`, the package's `src/` directory is the source root. Local imports work the same way:
 
 ```python
 import helpers.math    # resolves to src/helpers/math.au

@@ -95,7 +95,7 @@ impl Mapper[T] for Box[T]:
 ## Clone-Safety Is Part Of The Trait Contract
 
 When a generic trait default method performs a clone-producing operation,
-Aurora infers a clone-safety obligation as part of that method's contract:
+Aura infers a clone-safety obligation as part of that method's contract:
 
 ```python
 trait Duplicator[T]:
@@ -109,7 +109,7 @@ one containing `random.Rng` is rejected with `AU3007`.
 
 A signature-only trait method has no inferred obligation. An explicit `impl`
 may satisfy the trait contract but may not strengthen it by adding hidden
-generic clone-producing behavior. Aurora 0.2 has no written clone-safety bound,
+generic clone-producing behavior. Aura 0.2 has no written clone-safety bound,
 so put that behavior in a default trait body when it is part of the intended
 contract.
 
@@ -122,10 +122,10 @@ def speak[T: Greeter](value: T):
     print(value.greet())
 ```
 
-At the call site, Aurora checks that the concrete type implements the required trait:
+At the call site, Aura checks that the concrete type implements the required trait:
 
 ```python
-speak(value=User(name="aurora"))   # User implements Greeter, so this works
+speak(value=User(name="aura"))   # User implements Greeter, so this works
 ```
 
 Multiple bounds use `+`:
@@ -208,7 +208,7 @@ See [examples/traits/trait_associated_factory.au](../examples/traits/trait_assoc
 
 ## Operator Traits
 
-Aurora supports operator overloading through traits. When you implement the right trait, standard operators like `+` and `-` work with your types:
+Aura supports operator overloading through traits. When you implement the right trait, standard operators like `+` and `-` work with your types:
 
 | Operator | Trait | Method |
 |----------|-------|--------|
@@ -284,7 +284,7 @@ See [examples/traits/ordering_traits.au](../examples/traits/ordering_traits.au).
 
 A trait can also target a builtin type, not only your own classes and enums:
 
-```aurora
+```aura
 trait Describe:
     def describe(self) -> String
 

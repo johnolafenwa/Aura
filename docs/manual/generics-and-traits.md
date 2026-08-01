@@ -2,7 +2,7 @@
 
 Generics parameterize declarations over types. Traits are nominal interfaces used for generic bounds, method dispatch, operator dispatch, supertrait requirements, and `try` error conversion.
 
-Aurora does not use structural typing: having methods with matching spellings does not satisfy a trait. A visible applicable `impl` is required.
+Aura does not use structural typing: having methods with matching spellings does not satisfy a trait. A visible applicable `impl` is required.
 
 ## Generic Declarations
 
@@ -55,7 +55,7 @@ the argument.
 
 ```python
 boxed = Box(value=7)          # Box[int64]
-value = identity("Aurora")   # String
+value = identity("Aura")   # String
 ```
 
 Every declared type parameter must resolve. The checker does not invent a type for a parameter that appears nowhere in supplied values or expected context.
@@ -88,7 +88,7 @@ A generic-to-generic call propagates the obligation to the caller. Inference
 continues to a fixed point independent of declaration order, and the resulting
 contract is retained by imported functions and methods. The same rules apply
 to ordinary, inherent, associated, task-target, trait, operator, and `From`
-calls. There is no source annotation for this obligation in Aurora 0.2.
+calls. There is no source annotation for this obligation in Aura 0.2.
 
 When a type is concrete, a substitution containing `random.Rng` is rejected
 with `AU3007`. A concrete type whose clone safety cannot be proved is rejected
@@ -185,7 +185,7 @@ An implementation target must have a concrete or generic named outer type such a
 
 Two implementations with exactly the same trait specialization and target are duplicates and are rejected. More general and more specialized overlapping patterns may coexist. Dispatch selects the unique applicable implementation with greatest structural specificity; equal-best matches are ambiguous and rejected. Source order is never a tie breaker.
 
-Aurora 0.2 does not impose a separate orphan-rule restriction, but an implementation must refer to known visible types and traits and participates only where that implementation is present in the loaded module/package context.
+Aura 0.2 does not impose a separate orphan-rule restriction, but an implementation must refer to known visible types and traits and participates only where that implementation is present in the loaded module/package context.
 
 ## Implementation Method Conformance
 
@@ -196,20 +196,19 @@ For an explicitly implemented method, conformance compares:
 - receiver presence and passing mode (shared `self`, consuming `own self`,
   `mut self`, or none)
 - ordinary parameter count and substituted types
-- each ordinary parameter's resolved owned/shared-borrow/mutable-borrow mode
+- each ordinary parameter's resolved owned/shared/mutable access mode
 - owned return type
 - the trait method's substituted clone-safety obligations
 
 Ordinary parameter names may differ between the trait and implementation when
-their positions and types still match. Return-source labels and return
-capabilities are not part of an Aurora signature.
+their positions and types still match.
 
 Implementation methods cannot add default ordinary arguments. Extra methods, missing required methods, receiver mismatches, and signature mismatches are rejected before body execution.
 
 An explicit implementation MUST NOT strengthen its trait method's clone-safety contract.
 Its body may rely on obligations already inferred by the trait method, but it
 cannot introduce a requirement that bound-based callers cannot see. Because
-Aurora 0.2 has no explicit clone-safety annotation, generic clone-producing
+Aura 0.2 has no explicit clone-safety annotation, generic clone-producing
 behavior belongs in a trait default body. An implementation that adds such a
 requirement is rejected with `AU3007`.
 
@@ -324,7 +323,7 @@ trait Ord[Rhs]:
 must return `bool`.
 
 `and` and `or` do not dispatch through traits. Builtin `==` and `!=` also do
-not use an equality trait in Aurora 0.2. This includes recursive structural
+not use an equality trait in Aura 0.2. This includes recursive structural
 tuple equality, which a trait implementation cannot override. Builtin
 operations take precedence wherever their concrete value rule applies.
 
@@ -443,7 +442,7 @@ behavior.
 
 ## Limits And Implementation-Defined Behavior
 
-Aurora 0.2 has no trait objects, dynamic dispatch, associated types or
+Aura 0.2 has no trait objects, dynamic dispatch, associated types or
 constants, higher-kinded parameters, default type arguments, `where` clauses,
 specialization annotations, general subtyping, or separate orphan-rule
 restriction. A bare target parameter in `impl[T] Trait for T` is unsupported.
@@ -459,9 +458,8 @@ Invariant generics, local/contextual inference, explicit specialization,
 nominal traits and bounds, supertraits, default methods, generic and specialized
 implementations, unique-most-specific dispatch, operator traits, `Self`, and
 `From`-based `try` conversion plus inferred clone-safety contracts are implemented for the post-Phase 1.5 surface.
-Return values are owned; any future loan or view feature requires a new design.
-Trait
-objects, dynamic dispatch, associated types, higher-kinded types, general
+Return values are owned. Trait objects, dynamic dispatch, associated types,
+higher-kinded types, general
 subtyping, and arbitrary blanket implementation targets are unavailable.
 
 ### Verified Clone-Safety Contracts

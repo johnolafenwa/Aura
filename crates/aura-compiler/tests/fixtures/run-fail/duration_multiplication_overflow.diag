@@ -1,0 +1,6 @@
+error[AU4002]: duration overflow
+ --> crates/aura-compiler/tests/fixtures/run-fail/duration_multiplication_overflow.au:3:20
+  |
+3 |     print(Duration.minutes(maximum) * maximum)
+  |                    ^
+  = note: Aura call chain (innermost first): main at 1:1

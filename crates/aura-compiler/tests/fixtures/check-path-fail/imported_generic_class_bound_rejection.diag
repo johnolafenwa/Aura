@@ -1,0 +1,5 @@
+error[AU2002]: type `imported_generic_support.remote.UnnamedValue` does not implement trait `Named`
+ --> crates/aura-compiler/tests/fixtures/check-path-fail/imported_generic_class_bound_rejection.au:4:45
+  |
+4 |     value = imported_generic_support.remote.BoundBox(value=imported_generic_support.remote.UnnamedValue(label="not named"))
+  |                                             ^

@@ -1,7 +1,0 @@
-error[AU3002]: argument for parameter `h` in function `read_ref_take` overlaps borrow for parameter `href`; consumed values must be exclusive
- --> crates/aurora-compiler/tests/fixtures/check-fail/consume_and_borrow_same_argument.au:10:22
-   |
-10 |     read_ref_take(h, h)
-   |                      ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/consume_and_borrow_same_argument.au:10:19: shared access for parameter `href` begins here
-  = help: pass non-overlapping places, or call `.clone()` before consuming a value that must remain available through shared access

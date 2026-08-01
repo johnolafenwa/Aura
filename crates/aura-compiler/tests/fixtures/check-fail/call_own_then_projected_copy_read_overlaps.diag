@@ -1,0 +1,7 @@
+error[AU2004]: argument for parameter `detail` in function `take` overlaps consumed argument for parameter `item`; consumed values must be exclusive
+ --> crates/aura-compiler/tests/fixtures/check-fail/call_own_then_projected_copy_read_overlaps.au:10:15
+   |
+10 |     take(box, box.value)
+   |               ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/call_own_then_projected_copy_read_overlaps.au:10:10: value for parameter `item` is consumed here
+  = help: pass non-overlapping places, or call `.clone()` before consuming a value that must remain available through shared access

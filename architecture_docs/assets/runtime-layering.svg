@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="360" viewBox="0 0 1400 360" role="img" aria-labelledby="title desc">
-  <title id="title">Aurora runtime layering</title>
-  <desc id="desc">Aurora has a shared runtime value layer used by both the MIR runtime and the native backend runtime.</desc>
+  <title id="title">Aura runtime layering</title>
+  <desc id="desc">Aura has a shared runtime value layer used by both the MIR runtime and the native backend runtime.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#2d3e50" />
@@ -19,7 +19,7 @@
   </defs>
 
   <rect class="bg" x="0" y="0" width="1400" height="360" />
-  <text class="title" x="40" y="42">Aurora Runtime Layering</text>
+  <text class="title" x="40" y="42">Aura Runtime Layering</text>
 
   <rect class="box accentC" x="50" y="86" width="260" height="104" />
   <text class="label" x="122" y="122">MIR Runtime</text>
@@ -33,7 +33,7 @@
 
   <rect class="box accentA" x="390" y="86" width="330" height="246" />
   <text class="label" x="473" y="122">Shared Runtime Value Layer</text>
-  <text class="text" x="418" y="148">`runtime_value.rs` defines Aurora values and resource wrappers:</text>
+  <text class="text" x="418" y="148">`runtime_value.rs` defines Aura values and resource wrappers:</text>
   <text class="text" x="418" y="174">scalars, class instances, enum variants, collections,</text>
   <text class="text" x="418" y="198">queues/tasks, files, TCP/UDP, HTTP, WebSocket, Unix, TLS.</text>
   <text class="text" x="418" y="228">It also owns the concrete blocking and poll-driven I/O behavior,</text>
@@ -46,7 +46,7 @@
   <text class="text" x="828" y="168">TLS sessions, HTTP/WebSocket libraries.</text>
 
   <rect class="box" x="800" y="228" width="260" height="104" />
-  <text class="label" x="844" y="264">Aurora Values</text>
+  <text class="label" x="844" y="264">Aura Values</text>
   <text class="text" x="826" y="288">The language-level objects seen by user programs.</text>
   <text class="text" x="826" y="310">Both runtime paths preserve the same semantics.</text>
 

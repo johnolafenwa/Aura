@@ -1,6 +1,6 @@
 # Values, Moves, And Borrows
 
-This is the central chapter of the book. Almost everything in Aurora — how functions receive data, how collections hold it, how tasks share it, how resources get cleaned up — follows from the rules introduced here.
+This is the central chapter of the book. Almost everything in Aura — how functions receive data, how collections hold it, how tasks share it, how resources get cleaned up — follows from the rules introduced here.
 
 The short version:
 
@@ -38,7 +38,7 @@ resources, and network resources — is a **move type**. Assigning a move value
 transfers ownership:
 
 ```python
-name = "aurora"
+name = "aura"
 other = name
 
 # name has moved into other. Using name is a compile error.
@@ -53,7 +53,7 @@ If a move type supports independent duplication, a program asks for it
 explicitly with `.clone()`:
 
 ```python
-name = "aurora"
+name = "aura"
 copy = name.clone()
 
 print(name)
@@ -72,7 +72,7 @@ print(snapshot.len())
 
 That requires every produced element to be clone-safe. `random.Rng` deliberately
 has no clone route, and putting one inside a vector, map, class, or enum does
-not change that. A generic clone helper is still valid: Aurora infers the
+not change that. A generic clone helper is still valid: Aura infers the
 requirement and rejects only a specialization that would duplicate an `Rng`.
 
 Clone close to the reason for cloning. A clone at the call site tells the reader that the program is deliberately keeping both values.
@@ -122,7 +122,7 @@ print(render_title(title))
 print(title)
 ```
 
-The call site writes no capability prefix; Aurora reads the bare shared form
+The call site writes no capability prefix; Aura reads the bare shared form
 from the function signature. The caller keeps ownership, and the helper cannot
 move a non-copy value out through that shared access.
 
@@ -164,7 +164,7 @@ Two rules apply to mutable borrows:
 2. Mutable access is **exclusive**. If one argument to a call takes `mut`, no
    other argument in that call may borrow the same value. This is not a
    stylistic preference; overlapping mutable aliases would make the order of
-   effects unclear, and Aurora rejects them at the call boundary rather than
+   effects unclear, and Aura rejects them at the call boundary rather than
    relying on the callee to behave well.
 
 ## Methods And `self`
@@ -285,7 +285,7 @@ result must also be structurally `Transfer`: Copy data, `String`, recursively
 transferable collections and user data, and Queue/Task handle identities can
 cross. `random.Rng`, `TaskGroup`, capability views, and live file, process, or
 network resources cannot. Keep a live resource on the task that creates it and
-exchange owned descriptions, bytes, snapshot results, or handles. Aurora still
+exchange owned descriptions, bytes, snapshot results, or handles. Aura still
 uses this rule as the share-nothing boundary between pinned scheduler workers.
 Queue and Task handle state is synchronized across workers; every other
 capture and result crosses as owned `Transfer` data.
@@ -307,7 +307,7 @@ with file = try fs.open("data.txt"):
     print(text)
 ```
 
-When the block exits, Aurora runs the resource's cleanup path. Cleanup fires on normal exit **and** on runtime errors that unwind through the scope, in both `aura run` and built programs. `with` is the place where "I borrowed a resource" becomes "the resource has definitely been released."
+When the block exits, Aura runs the resource's cleanup path. Cleanup fires on normal exit **and** on runtime errors that unwind through the scope, in both `aura run` and built programs. `with` is the place where "I borrowed a resource" becomes "the resource has definitely been released."
 
 ## A Checklist
 

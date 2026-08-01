@@ -46,8 +46,8 @@
   - `examples/concurrency/spawn_associated_method.au`
   - `examples/classes/positional_constructors.au`
   - `examples/enums/constructor_ergonomics.au`
-  - `examples/basics/borrowed_returns.au`
-  - `examples/basics/borrowed_lifetime_labels.au`
+  - `examples/basics/copy_field_returns.au`
+  - `examples/basics/copy_return_selection.au`
 - Updated the maintained tutorials/READMEs so the documented surface matches the implementation.
 
 ## Verification

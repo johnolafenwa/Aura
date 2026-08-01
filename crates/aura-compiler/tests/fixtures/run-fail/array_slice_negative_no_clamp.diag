@@ -1,0 +1,6 @@
+error[AU4003]: slice start `-3` normalizes to `-1`, outside `0..=2`
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_slice_negative_no_clamp.au:3:20
+  |
+3 |     print(values[-3:])
+  |                    ^
+  = note: Aura call chain (innermost first): main at 1:1

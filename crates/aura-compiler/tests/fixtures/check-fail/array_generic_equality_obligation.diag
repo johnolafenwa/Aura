@@ -1,0 +1,6 @@
+error[AU2003]: cannot use function `equal` with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_generic_equality_obligation.au:7:11
+  |
+7 |     print(equal[Array[int32]](left, right))
+  |           ^
+  = help: compare Array elements explicitly, or compare a chosen scalar summary such as shape, length, or a reduction result

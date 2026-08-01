@@ -1,5 +1,0 @@
-def main() -> int32:
-    name: String = "Aurora"
-    answer: int32 = 42
-    print(f"Hello, {name} {answer}")
-    return 0

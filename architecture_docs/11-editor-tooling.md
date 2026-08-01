@@ -1,6 +1,6 @@
 # Editor Tooling
 
-This chapter explains how Aurora's editor experience is assembled from the compiler, the language server, and the VS Code extension.
+This chapter explains how Aura's editor experience is assembled from the compiler, the language server, and the VS Code extension.
 
 ## What a language server is
 
@@ -12,28 +12,28 @@ A language server is a long-running process that answers editor questions such a
 - where is its definition?
 - what hover text should appear?
 
-Aurora implements this in [`tools/aurora-language-server`](../tools/aurora-language-server).
+Aura implements this in [`tools/aura-language-server`](../tools/aura-language-server).
 
-## Aurora's tooling architecture
+## Aura's tooling architecture
 
-Aurora deliberately keeps the VS Code extension thin and pushes semantic work down into the language server and compiler.
+Aura deliberately keeps the VS Code extension thin and pushes semantic work down into the language server and compiler.
 
-![Aurora tooling flow](assets/tooling-flow.svg)
+![Aura tooling flow](assets/tooling-flow.svg)
 
 ## The main pieces
 
 ### VS Code extension
 
-[`tools/vscode-aurora/src/extension.js`](../tools/vscode-aurora/src/extension.js):
+[`tools/vscode-aura/src/extension.js`](../tools/vscode-aura/src/extension.js):
 
-- registers Aurora as a language
+- registers Aura as a language
 - starts the language client
-- installs Aurora-specific newline indentation behavior
+- installs Aura-specific newline indentation behavior
 - watches `.au` files
 
 ### LSP server
 
-[`tools/aurora-language-server/src/server.js`](../tools/aurora-language-server/src/server.js):
+[`tools/aura-language-server/src/server.js`](../tools/aura-language-server/src/server.js):
 
 - manages documents and cached document state
 - debounces edits and guards asynchronous results by document version
@@ -44,18 +44,18 @@ Aurora deliberately keeps the VS Code extension thin and pushes semantic work do
 
 ### Compiler bridge
 
-[`tools/aurora-language-server/src/compiler_bridge.js`](../tools/aurora-language-server/src/compiler_bridge.js):
+[`tools/aura-language-server/src/compiler_bridge.js`](../tools/aura-language-server/src/compiler_bridge.js):
 
 - locates the best `aura` command for the workspace
 - owns one persistent `aura lsp` process
 - multiplexes newline-delimited JSON analysis and completion requests
 - enforces cancellation, request timeouts, response limits, and process restart after failure
-- normalizes `file://` URIs through the shared helper in [`src/uri.js`](../tools/aurora-language-server/src/uri.js), including Windows UNC paths
+- normalizes `file://` URIs through the shared helper in [`src/uri.js`](../tools/aura-language-server/src/uri.js), including Windows UNC paths
 - converts compiler output into LSP-shaped data
 
 ### Lexical recovery
 
-[`tools/aurora-language-server/src/recovery.js`](../tools/aurora-language-server/src/recovery.js):
+[`tools/aura-language-server/src/recovery.js`](../tools/aura-language-server/src/recovery.js):
 
 - recovers declaration outlines and top-level names
 - provides same-file hover/definition for those recovered declarations
@@ -78,11 +78,11 @@ This split is important:
 
 - the compiler is the canonical semantic engine
 - compiler recovery handles ordinary incomplete buffers
-- the lexical path keeps basic navigation available when the compiler process itself is unavailable without maintaining a second Aurora type system
+- the lexical path keeps basic navigation available when the compiler process itself is unavailable without maintaining a second Aura type system
 
-## Why Aurora uses compiler-backed analysis
+## Why Aura uses compiler-backed analysis
 
-Aurora's compiler already knows:
+Aura's compiler already knows:
 
 - real types
 - module resolution
@@ -94,7 +94,7 @@ That makes the compiler a better source of truth than a second independent seman
 
 ## What `analysis.rs` contributes
 
-Aurora's compiler-facing analysis layer in [`analysis.rs`](../crates/aurora-compiler/src/analysis.rs):
+Aura's compiler-facing analysis layer in [`analysis.rs`](../crates/aura-compiler/src/analysis.rs):
 
 - converts checked programs into diagnostics, symbols, hovers, definitions, and completions
 - attempts recovery for common incomplete-editor states
@@ -119,7 +119,7 @@ API detail follows the same rule, so calls such as `Vec.push(value: own T)` and
 
 ## Indentation behavior
 
-Aurora's extension also includes a deliberately small but important editing feature in [`indentation.js`](../tools/vscode-aurora/src/indentation.js).
+Aura's extension also includes a deliberately small but important editing feature in [`indentation.js`](../tools/vscode-aura/src/indentation.js).
 
 It detects block headers such as:
 
@@ -147,15 +147,15 @@ editor request
         -> convert result into editor protocol objects
 ```
 
-Aurora follows exactly that pattern.
+Aura follows exactly that pattern.
 
 ## Files to study
 
-- [`tools/aurora-language-server/src/server.js`](../tools/aurora-language-server/src/server.js)
-- [`tools/aurora-language-server/src/compiler_bridge.js`](../tools/aurora-language-server/src/compiler_bridge.js)
-- [`tools/aurora-language-server/src/recovery.js`](../tools/aurora-language-server/src/recovery.js)
-- [`tools/vscode-aurora/src/extension.js`](../tools/vscode-aurora/src/extension.js)
-- [`tools/vscode-aurora/src/indentation.js`](../tools/vscode-aurora/src/indentation.js)
+- [`tools/aura-language-server/src/server.js`](../tools/aura-language-server/src/server.js)
+- [`tools/aura-language-server/src/compiler_bridge.js`](../tools/aura-language-server/src/compiler_bridge.js)
+- [`tools/aura-language-server/src/recovery.js`](../tools/aura-language-server/src/recovery.js)
+- [`tools/vscode-aura/src/extension.js`](../tools/vscode-aura/src/extension.js)
+- [`tools/vscode-aura/src/indentation.js`](../tools/vscode-aura/src/indentation.js)
 
 ## What comes next
 

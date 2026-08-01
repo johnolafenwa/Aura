@@ -1,6 +1,6 @@
 # Control-Plane Modules
 
-Aurora 0.2 includes a small, typed host/control-plane surface intended for service launchers, workers, evaluation harnesses, and agent infrastructure. These modules behave the same through `aura run` and direct native binaries.
+Aura 0.2 includes a small, typed host/control-plane surface intended for service launchers, workers, evaluation harnesses, and agent infrastructure. These modules behave the same through `aura run` and direct native binaries.
 
 ## System And Path
 
@@ -57,14 +57,14 @@ JSON compact output has sorted object keys. `json.is_valid` accepts any valid
 JSON value, while `json.parse_string_map` succeeds only for an object whose
 values are all strings. TOML output is a sorted top-level string map;
 `toml.is_valid` accepts any valid TOML document, while
-`toml.parse_string_map` rejects nested tables and non-string values. Derived
-class/enum schemas and generated codecs remain future work.
+`toml.parse_string_map` rejects nested tables and non-string values. Aura 0.2
+has no derived class/enum schemas or generated codecs.
 
 ## Logs, Metrics, And Traces
 
 `log.debug/info/warn/error(message, fields)` and `trace.event(name, fields)` emit one compact JSON record to standard error. `fields` is a `Map[String, String]`. Every record has the shape `{ "kind": "log" | "trace", "level": String, "message": String, "fields": Object }`; for trace events, `level` is `event` and `message` is the event name.
 
-`metrics.increment(name, value)`, `metrics.get(name)`, and `metrics.reset()` provide process-global signed `int64` counters shared by Aurora tasks in that process. A missing counter reads as zero. Incrementing past either `int64` bound is a runtime diagnostic and leaves the checked operation incomplete. These counters are useful for worker and test instrumentation; they are not a metrics exporter. Export protocols and scoped trace spans remain future work.
+`metrics.increment(name, value)`, `metrics.get(name)`, and `metrics.reset()` provide process-global signed `int64` counters shared by Aura tasks in that process. A missing counter reads as zero. Incrementing past either `int64` bound is a runtime diagnostic and leaves the checked operation incomplete. These counters are useful for worker and test instrumentation; Aura 0.2 has no metrics exporter, export protocol, or scoped trace span API.
 
 ## Network Boundary
 
@@ -110,7 +110,7 @@ invalid runtime operations are not converted to `E`. Current-task
 cancellation propagates through the retry operation instead of returning the
 most recent `Err`.
 
-```aurora
+```aura
 import control
 import metrics
 
@@ -139,7 +139,7 @@ last-error behavior.
 
 ## Grammar
 
-These modules add no source-language grammar. They are imported and called with the ordinary import, call, member-access, named-argument, collection, `Result`, and `Option` forms defined elsewhere in this reference. Module and member names are case-sensitive. The `--` separator that supplies `sys.args()` belongs to the CLI protocol, not Aurora syntax.
+These modules add no source-language grammar. They are imported and called with the ordinary import, call, member-access, named-argument, collection, `Result`, and `Option` forms defined elsewhere in this reference. Module and member names are case-sensitive. The `--` separator that supplies `sys.args()` belongs to the CLI protocol, not Aura syntax.
 
 ## Typing Rules
 
@@ -147,7 +147,7 @@ The function signatures in the tables above are normative. `sys.args()`
 produces owned `String` values in a `Vec`; environment and path components that
 may be absent use `Option`; fallible current-directory access uses
 `Result[..., io.Error]`. Dynamic JSON parsing returns
-`Result[json.Value, json.Error]`. Legacy JSON and TOML string-map operations
+`Result[json.Value, json.Error]`. Bounded JSON and TOML string-map operations
 retain their `Result[..., String]` contracts.
 
 Telemetry fields are `Map[String, String]`. Metric names are `String`, increments and results are signed `int64`, and reset returns `None`. Passing any other type, using an unknown member, or binding an unsupported argument shape is rejected statically.
@@ -161,7 +161,7 @@ type, or a different function-value contract is rejected with `AU2002`.
 
 `sys.args()` returns program arguments without the executable name. `aura run` uses arguments after the CLI `--`; a built program uses its host argument vector. Environment lookup returns `None` for a missing or non-Unicode value. Path operations use host path rules, and their string results use the lossy Unicode policy stated above.
 
-Dynamic and legacy JSON object output and TOML top-level-map output are sorted
+Dynamic JSON object output and JSON/TOML top-level string-map output are sorted
 by key. Dynamic JSON parse and dump follow the recursive value, strict-number,
 and formatting rules in the JSON chapter. Validation accepts the broader
 source format, but each `parse_string_map` operation accepts only its
@@ -180,7 +180,7 @@ propagates through the helper.
 
 ## Ownership And Evaluation Order
 
-Call arguments are evaluated left to right. Inputs to these host helpers are shared for the duration of the call and are not retained as Aurora values after it returns. Returned vectors, maps, strings, options, and results are fresh owned values. The metrics implementation copies the metric name into process-global host state; it does not keep an Aurora borrow alive.
+Call arguments are evaluated left to right. Inputs to these host helpers are shared for the duration of the call and are not retained as Aura values after it returns. Returned vectors, maps, strings, options, and results are fresh owned values. The metrics implementation copies the metric name into process-global host state; it does not keep an Aura borrow alive.
 
 Telemetry emission and metric updates are observable side effects and occur at the call's position in source evaluation order. Concurrent tasks share standard error and the metric map. Each individual metric operation is synchronized, but a sequence such as `get` followed by `increment` is not one atomic transaction.
 
@@ -203,7 +203,7 @@ does not wrap. A retry attempt budget below one uses `AU4003`; a negative
 or host-unrepresentable initial backoff uses `AU4001`.
 
 Invalid JSON or TOML data is ordinary program data: validation returns
-`false`, dynamic JSON parsing returns `Result.Err(json.Error)`, and legacy
+`false`, dynamic JSON parsing returns `Result.Err(json.Error)`, and bounded
 string-map operations return `Result.Err(String)` as documented. JSON dumping
 has the runtime traps and limits specified by the JSON chapter. A missing
 environment variable returns `Option.None`, and current-directory failure
@@ -220,15 +220,15 @@ are backend-parity contracts. Retry attempt order, backoff, exact final-error
 return, trap propagation, and cancellation are also MIR/direct parity
 contracts.
 
-The HTTP client summarized here has the same MIR/direct support as the full [Network Module](/manual/network). Host-dependent path and environment results may differ with the host while preserving their Aurora types and error policy.
+The HTTP client summarized here has the same MIR/direct support as the full [Network Module](/manual/network). Host-dependent path and environment results may differ with the host while preserving their Aura types and error policy.
 
 ## Limits And Implementation-Defined Behavior
 
 Host argument and path bytes that are not Unicode are handled with the lossy or absent-value policies stated above. Path separators, roots, case sensitivity, and absolute-path rules follow the host. Unix time reflects the host clock and may move; monotonic time is process-local, millisecond-granularity elapsed time whose zero is the first call in that process.
 
 Dynamic JSON has the fixed tree, numeric, depth, node-materialization, and byte
-boundaries documented in [JSON Module](/manual/json); TOML and the legacy
-compatibility helpers retain their string-map limits. There are no derived
+boundaries documented in [JSON Module](/manual/json); TOML and the bounded
+string-map helpers retain their limits. There are no derived
 codecs or streaming encoders.
 Telemetry has no exporter, batching, delivery guarantee beyond the
 standard-error write, scoped spans, or metric labels. Concurrent
@@ -248,7 +248,7 @@ status-specific retry policy or jitter must express it explicitly. Its
 
 The system, path, JSON, TOML, logging, trace-event, metrics, retry, and
 summarized HTTP contracts on this page are implemented and maintained in
-Aurora 0.2. Recursive JSON gap-fill semantics are accepted under ADR-0021. The
+Aura 0.2. Recursive JSON gap-fill semantics are accepted under ADR-0021. The
 summarized fixed HTTP cap is Accepted under ADR-0018.
 
 Nested TOML data models, derived codecs, telemetry exporters, metric labels,

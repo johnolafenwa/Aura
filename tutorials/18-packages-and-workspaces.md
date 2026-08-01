@@ -1,14 +1,14 @@
 # Packages And Workspaces
 
-Aurora supports a package system built around `Aurora.toml` manifest files. Packages let you organize larger projects with multiple source directories, share code through local path and git dependencies, and group related packages into workspaces.
+Aura supports a package system built around `Aura.toml` manifest files. Packages let you organize larger projects with multiple source directories, share code through local path and git dependencies, and group related packages into workspaces.
 
 ## Single Package
 
-A package has an `Aurora.toml` manifest and source files under `src/`:
+A package has an `Aura.toml` manifest and source files under `src/`:
 
 ```text
 my-app/
-  Aurora.toml
+  Aura.toml
   src/main.au
   src/helpers/math.au
 ```
@@ -28,7 +28,7 @@ Run the package by pointing `aura` at a file under `src/`:
 cargo run -p aura -- run my-app/src/main.au
 ```
 
-The compiler treats the directory containing `Aurora.toml` as the package root and `src/` as the source root. Local imports resolve relative to `src/`:
+The compiler treats the directory containing `Aura.toml` as the package root and `src/` as the source root. Local imports resolve relative to `src/`:
 
 ```python
 import helpers.math    # resolves to src/helpers/math.au
@@ -49,7 +49,7 @@ Then import through the package name:
 import util.math
 ```
 
-The dependency package must have its own `Aurora.toml` with a matching `name`. Transitive dependencies are resolved through the package graph.
+The dependency package must have its own `Aura.toml` with a matching `name`. Transitive dependencies are resolved through the package graph.
 
 See [examples/packages/local_path_dependencies/app/src/main.au](../examples/packages/local_path_dependencies/app/src/main.au).
 
@@ -89,24 +89,24 @@ members = ["app", "util"]
 
 ```text
 my-workspace/
-  Aurora.toml           # workspace root
+  Aura.toml           # workspace root
   app/
-    Aurora.toml          # [package] name = "app"
+    Aura.toml          # [package] name = "app"
     src/main.au
   util/
-    Aurora.toml          # [package] name = "util"
+    Aura.toml          # [package] name = "util"
     src/math.au
 ```
 
 Member packages keep their own `[package]` section and dependency lists. The workspace root only declares membership.
 
-See [examples/packages/workspace/Aurora.toml](../examples/packages/workspace/Aurora.toml) and [examples/packages/workspace/app/src/main.au](../examples/packages/workspace/app/src/main.au).
+See [examples/packages/workspace/Aura.toml](../examples/packages/workspace/Aura.toml) and [examples/packages/workspace/app/src/main.au](../examples/packages/workspace/app/src/main.au).
 
 ## Lockfiles
 
-Aurora writes an `Aurora.lock` file to record the resolved dependency graph:
+Aura writes an `Aura.lock` file to record the resolved dependency graph:
 
-- for standalone packages: beside `Aurora.toml`
+- for standalone packages: beside `Aura.toml`
 - for workspace members: at the workspace root
 
 The lockfile records:
@@ -134,4 +134,4 @@ The package system is intentionally local-first:
 - no registry, publish, or install flows yet
 - no version solving
 
-This is deliberate -- Aurora supports real multi-package development before taking on registry infrastructure.
+This is deliberate -- Aura supports real multi-package development before taking on registry infrastructure.

@@ -1,5 +1,0 @@
-error[AU2008]: callable equality is not supported; compare results or use an explicit discriminant
- --> crates/aurora-compiler/tests/fixtures/check-fail/callable_inequality_capture_free_closure.au:4:11
-  |
-4 |     print(left != right)
-  |           ^

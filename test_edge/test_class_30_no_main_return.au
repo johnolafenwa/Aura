@@ -6,5 +6,5 @@ class Msg:
         print(self.text)
 
 def main():
-    msg = Msg(text="Hello from Aurora!")
+    msg = Msg(text="Hello from Aura!")
     msg.show()

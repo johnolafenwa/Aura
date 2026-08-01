@@ -4,7 +4,7 @@ Statements introduce and update bindings, control execution, or evaluate an expr
 
 ## Statements, Items, And Suites
 
-Aurora 0.2 statements are:
+Aura 0.2 statements are:
 
 - binding and assignment
 - expression statements
@@ -29,7 +29,7 @@ if ready:
 One-line suites such as `if ready: print("ready")` are not valid. Blank and comment-only lines do not make a suite nonempty; use `pass` when no operation is required.
 
 Statements are terminated by logical newlines. A physical newline suppressed
-inside an open delimiter is not a statement terminator. Aurora has no semicolon
+inside an open delimiter is not a statement terminator. Aura has no semicolon
 and does not permit multiple statements on one physical line.
 
 ## Bindings And Assignment
@@ -37,7 +37,7 @@ and does not permit multiple statements on one physical line.
 The first assignment to a simple name introduces a binding:
 
 ```python
-name = "aurora"
+name = "aura"
 count: int32 = 0
 ```
 
@@ -100,7 +100,7 @@ non-copy, matching `set(key: own K, value: own V)`.
 
 ### Compound Assignment
 
-Aurora supports the complete arithmetic compound-assignment family `+=`, `-=`, `*=`, `/=`, `%=`, and `//=`:
+Aura supports the complete arithmetic compound-assignment family `+=`, `-=`, `*=`, `/=`, `%=`, and `//=`:
 
 ```python
 count += 1
@@ -193,7 +193,7 @@ else:
     print("positive")
 ```
 
-Conditions must have exactly type `bool`. Aurora does not convert strings, numbers, collections, resources, or classes by truthiness.
+Conditions must have exactly type `bool`. Aura does not convert strings, numbers, collections, resources, or classes by truthiness.
 
 Conditions are evaluated in source order until one is `true`. Only the selected suite executes. Static checking analyzes branches independently and conservatively merges ownership, partial-move, and initialization state across paths that can continue.
 
@@ -207,7 +207,7 @@ while attempts < 3:
     attempts += 1
 ```
 
-The condition must have type `bool`. A false first condition executes the body zero times. Aurora 0.2 has no loop `else` clause.
+The condition must have type `bool`. A false first condition executes the body zero times. Aura 0.2 has no loop `else` clause.
 
 Moving a non-copy outer value for the first time inside a repeatable loop is rejected when it could make a later iteration invalid. Reinitialize the place on every continuing path or restructure ownership explicitly.
 
@@ -255,7 +255,7 @@ owned leaves; and bare Queue iteration receives an owned item and gives owned
 leaves. `mut` iteration with a tuple target is rejected because the
 minimal tuple surface has no recursive element writeback.
 
-`for value in mut set:` is not supported in Aurora 0.2. Queue iteration
+`for value in mut set:` is not supported in Aura 0.2. Queue iteration
 receives values rather than traversing places: each item arrives owned and the
 queue handle is a copy value. Consequently `own` and `mut` are rejected for
 Queue iteration; use the bare form. That form evaluates
@@ -340,7 +340,7 @@ writeback is not part of the minimal surface. See
 
 ## `with` And Scoped Cleanup
 
-Aurora accepts two equivalent binding forms:
+Aura accepts two equivalent binding forms:
 
 ```python
 with file = try fs.open("data.txt"):
@@ -363,7 +363,7 @@ The registered `close` operation runs exactly once when control leaves the body 
 - `return`
 - `break` or `continue` that exits the scope
 - `try` error propagation
-- a maintained Aurora runtime failure
+- a maintained Aura runtime failure
 
 Nested cleanups run in reverse registration order. If the body is already failing and cleanup also fails, the body diagnostic remains primary.
 
@@ -411,7 +411,7 @@ It must appear on its own logical line. It is used for intentionally empty funct
 
 ## Module-Level Imports And Execution
 
-Imports are module elements rather than executable statements. Aurora accepts:
+Imports are module elements rather than executable statements. Aura accepts:
 
 ```python
 import util.math
@@ -427,7 +427,7 @@ message = "hello"
 print(message)
 ```
 
-Those statements execute in their stored source order. Alternatively, the entry module may define a local `main`. It cannot combine executable top-level statements with a local `main`. Imported module top-level statements do not execute as import side effects in Aurora 0.2.
+Those statements execute in their stored source order. Alternatively, the entry module may define a local `main`. It cannot combine executable top-level statements with a local `main`. Imported module top-level statements do not execute as import side effects in Aura 0.2.
 
 The accepted `main` signatures and process exit behavior are defined in [Functions](/manual/functions#main) and [Execution Model](/manual/execution-model#entry-module-execution).
 
@@ -453,7 +453,7 @@ The complete checker rules are normative in [Static Semantics](/manual/static-se
 
 The simple and compound statement productions, suite indentation, binding and
 assignment targets, loop modifiers, match arms, and `with` forms are normative
-in [Grammar](/manual/grammar). Statements end at a physical `NEWLINE`; Aurora
+in [Grammar](/manual/grammar). Statements end at a physical `NEWLINE`; Aura
 has no semicolon-separated or inline compound statements.
 
 ## Typing Rules

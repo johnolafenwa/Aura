@@ -1,0 +1,8 @@
+error[AU3001]: use of moved value `values`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_is_noncopy.au:7:11
+  |
+7 |     print(values)
+  |           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/array_is_noncopy.au:6:13: value moved here
+  = help: pass shared access when ownership is not needed, or call `.clone()` at the move site when an independent value is required
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/array_is_noncopy.au:6:19-6:19 with `.clone()`

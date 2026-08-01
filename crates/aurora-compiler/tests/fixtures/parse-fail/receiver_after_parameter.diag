@@ -1,5 +1,0 @@
-error[AU1101]: method receiver must be the first parameter
- --> crates/aurora-compiler/tests/fixtures/parse-fail/receiver_after_parameter.au:2:27
-  |
-2 |     def add(value: int32, self):
-  |                           ^

@@ -1,5 +1,0 @@
-error[AU2002]: Array dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `String`
- --> crates/aurora-compiler/tests/fixtures/check-fail/array_invalid_dtype.au:2:13
-  |
-2 |     values: Array[String] = Array[String].zeros(shape=[1])
-  |             ^

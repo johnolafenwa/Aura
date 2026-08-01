@@ -44,7 +44,7 @@ impl Drop for TempDir {
 fn fixture_files(category: &str) -> Vec<PathBuf> {
     let mut fixtures = fs::read_dir(
         repo_root()
-            .join("crates/aurora-compiler/tests/fixtures")
+            .join("crates/aura-compiler/tests/fixtures")
             .join(category),
     )
     .unwrap_or_else(|error| panic!("failed to read {category} fixtures: {error}"))
@@ -97,7 +97,7 @@ fn packaged_test_aura(temp: &TempDir) -> PathBuf {
         .args([
             "rustc",
             "-p",
-            "aurora-compiler",
+            "aura-compiler",
             "--lib",
             "--message-format=json",
             "--",
@@ -128,28 +128,27 @@ fn packaged_test_aura(temp: &TempDir) -> PathBuf {
         .iter()
         .rev()
         .find(|message| {
-            message["reason"] == "compiler-artifact"
-                && message["target"]["name"] == "aurora_compiler"
+            message["reason"] == "compiler-artifact" && message["target"]["name"] == "aura_compiler"
         })
         .and_then(|message| message["filenames"].as_array())
         .and_then(|filenames| {
             filenames.iter().find_map(|filename| {
                 let filename = filename.as_str()?;
                 filename
-                    .ends_with("libaurora_compiler.a")
+                    .ends_with("libaura_compiler.a")
                     .then(|| PathBuf::from(filename))
             })
         })
-        .expect("Cargo should report the emitted aurora-compiler static archive");
+        .expect("Cargo should report the emitted aura-compiler static archive");
 
     let prefix = temp.path.join("toolchain");
     let bin_dir = prefix.join("bin");
-    let runtime_dir = prefix.join("lib/aurora");
+    let runtime_dir = prefix.join("lib/aura");
     fs::create_dir_all(&bin_dir).expect("packaged bin dir should exist");
     fs::create_dir_all(&runtime_dir).expect("packaged runtime dir should exist");
     let packaged = bin_dir.join("aura");
     fs::copy(aura_bin(), &packaged).expect("test aura should copy into package layout");
-    fs::copy(runtime_archive, runtime_dir.join("libaurora_compiler.a"))
+    fs::copy(runtime_archive, runtime_dir.join("libaura_compiler.a"))
         .expect("debug native runtime should copy into package layout");
     fs::write(
         runtime_dir.join("native-link-args.json"),
@@ -161,12 +160,12 @@ fn packaged_test_aura(temp: &TempDir) -> PathBuf {
 
 #[test]
 fn packaged_parity_aura_uses_cargo_reported_runtime_archive() {
-    let temp = TempDir::new("aurora-packaged-parity-path");
+    let temp = TempDir::new("aura-packaged-parity-path");
     let packaged = packaged_test_aura(&temp);
     assert!(packaged.is_file());
     assert!(
         temp.path
-            .join("toolchain/lib/aurora/libaurora_compiler.a")
+            .join("toolchain/lib/aura/libaura_compiler.a")
             .is_file(),
         "the Cargo-reported runtime archive should be copied into the test toolchain"
     );
@@ -176,7 +175,7 @@ fn packaged_parity_aura_uses_cargo_reported_runtime_archive() {
 fn callable_equality_rejection_is_identical_across_forced_backends() {
     let root = repo_root();
     let fixture = root.join(
-        "crates/aurora-compiler/tests/fixtures/check-fail/callable_equality_capturing_closure.au",
+        "crates/aura-compiler/tests/fixtures/check-fail/callable_equality_capturing_closure.au",
     );
     let expected =
         "error[AU2008]: callable equality is not supported; compare results or use an explicit discriminant";
@@ -218,7 +217,7 @@ fn forced_mir_and_direct_backends_match_every_runtime_fixture() {
     // are forced explicitly: `run --backend mir` against `build --backend
     // direct`. Neither side may fall back to `auto`.
     let root = repo_root();
-    let temp = TempDir::new("aurora-backend-parity");
+    let temp = TempDir::new("aura-backend-parity");
     let aura = packaged_test_aura(&temp);
 
     for (index, fixture) in fixture_files("run-pass").into_iter().enumerate() {

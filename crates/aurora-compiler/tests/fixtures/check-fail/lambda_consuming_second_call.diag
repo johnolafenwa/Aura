@@ -1,7 +1,0 @@
-error[AU3001]: use of moved value `take_payload`
- --> crates/aurora-compiler/tests/fixtures/check-fail/lambda_consuming_second_call.au:5:11
-  |
-5 |     print(take_payload())
-  |           ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/lambda_consuming_second_call.au:4:11: value moved here
-  = help: pass shared access when ownership is not needed, or transfer this non-cloneable value only once

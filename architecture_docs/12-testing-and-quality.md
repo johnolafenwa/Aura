@@ -1,6 +1,6 @@
 # Testing And Quality
 
-This chapter explains how Aurora validates the language implementation and why the repo is organized around test-first development.
+This chapter explains how Aura validates the language implementation and why the repo is organized around test-first development.
 
 ## The repo-level rule
 
@@ -15,9 +15,9 @@ For new features or bug fixes, the expected order is:
 
 That is not an informal preference. It is an architectural rule for how changes are supposed to land.
 
-## Aurora's test layers
+## Aura's test layers
 
-Aurora uses several complementary testing layers.
+Aura uses several complementary testing layers.
 
 ### Compiler unit tests
 
@@ -43,11 +43,11 @@ The compiler README documents fixture categories such as:
 - check fail
 - run pass
 
-Fixture tests are especially valuable for language behavior because they look like real Aurora programs.
+Fixture tests are especially valuable for language behavior because they look like real Aura programs.
 
 ### Example smoke tests
 
-The example library under `examples/` is maintained, runnable surface area. Aurora treats it as product behavior, not disposable documentation.
+The example library under `examples/` is maintained, runnable surface area. Aura treats it as product behavior, not disposable documentation.
 
 ### Tooling tests
 
@@ -71,11 +71,11 @@ A language implementation has many cross-cutting surfaces:
 - editor behavior
 - docs and tutorial accuracy
 
-Aurora's layered test strategy exists because a single test style will not catch all of those.
+Aura's layered test strategy exists because a single test style will not catch all of those.
 
 ## Quality is broader than tests
 
-Aurora also keeps these aligned:
+Aura also keeps these aligned:
 
 - examples
 - tutorials
@@ -87,7 +87,7 @@ That matters because stale examples or stale tutorials are effectively user-faci
 
 ## Suggested reading when adding a feature
 
-If you are extending Aurora, the stable order is:
+If you are extending Aura, the stable order is:
 
 1. add or update a targeted compiler unit or fixture test
 2. update any example that should demonstrate the feature
@@ -99,7 +99,7 @@ If you are extending Aurora, the stable order is:
 
 The repo documents and scripts several important commands:
 
-- `cargo test -p aurora-compiler`
+- `cargo test -p aura-compiler`
 - `cargo test -p aura`
 - `npm run test:lsp`
 - `npm run check:extension`
@@ -111,7 +111,7 @@ Which one is relevant depends on the change.
 
 ## Work tracking as quality infrastructure
 
-Aurora also treats `work/task-board.md` and dated notes under `work/` as maintained project state. Large changes are expected to leave a trace there.
+Aura also treats `work/task-board.md` and dated notes under `work/` as maintained project state. Large changes are expected to leave a trace there.
 
 That is useful because compiler work often spans:
 
@@ -123,11 +123,11 @@ That is useful because compiler work often spans:
 ## Files to study
 
 - [`AGENTS.md`](../AGENTS.md)
-- [`crates/aurora-compiler/README.md`](../crates/aurora-compiler/README.md)
+- [`crates/aura-compiler/README.md`](../crates/aura-compiler/README.md)
 - [`tutorials/README.md`](../tutorials/README.md)
 - [`examples/README.md`](../examples/README.md)
 - [`package.json`](../package.json)
 
 ## What comes next
 
-Read [13-end-to-end-walkthrough.md](13-end-to-end-walkthrough.md) to connect all the architectural layers with one small Aurora program.
+Read [13-end-to-end-walkthrough.md](13-end-to-end-walkthrough.md) to connect all the architectural layers with one small Aura program.

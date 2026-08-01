@@ -1,6 +1,6 @@
 # Concurrency
 
-Aurora provides pinned-worker scheduler-backed lightweight tasks, structured
+Aura provides pinned-worker scheduler-backed lightweight tasks, structured
 task groups, queues, task handles, cancellation checks, sleeping, and
 typed single- and multi-source wait helpers. Scheduler waits use a persistent
 event reactor:
@@ -12,12 +12,12 @@ The maintained model is structured by default: child tasks should live inside a 
 
 The runtime creates one pinned worker per unit of available parallelism
 reported by the host by default. The provisional
-`AURORA_WORKERS=<positive integer>` environment override selects an explicit
+`AURA_WORKERS=<positive integer>` environment override selects an explicit
 worker count. A child receives a stable worker assignment when it is
 spawned; its coroutine stack never migrates and the runtime performs no work
 stealing. This contract is shared by MIR execution and direct native
 execution. A positive override may exceed the host-reported default.
-`AURORA_WORKERS=1` preserves single-worker cooperative execution through the
+`AURA_WORKERS=1` preserves single-worker cooperative execution through the
 same worker-thread architecture.
 Empty, zero, signed, whitespace-padded, nonnumeric, and overflowing values are
 rejected before execution with `AU4006`.
@@ -105,7 +105,7 @@ surface is Provisional under ADR-0032.
 
 The 256 KiB lower bound is an opt-in minimum for a task whose shallow stack use
 has been measured; it is not the generally safe default. During integration,
-the complete compiled Aurora HTTP example faulted when 256 KiB was used as the
+the complete compiled Aura HTTP example faulted when 256 KiB was used as the
 global task default and succeeded with the 512 KiB default. An isolated
 runtime-level HTTP regression does succeed when only its protocol-calling
 children are forced to 256 KiB: that test proves deep host protocol frames
@@ -339,16 +339,16 @@ while not cancelled():
     do_step()
 ```
 
-Cancellation interrupts Aurora's wait for scheduler-aware or worker-backed
+Cancellation interrupts Aura's wait for scheduler-aware or worker-backed
 operations. For the generic blocking-I/O pool, insertion into the pending job
 queue is the acceptance boundary. Cancellation or deadline expiry while a
 caller is still waiting for admission prevents submission. After acceptance,
-Aurora cannot forcibly stop the pending or running host operation; it executes
+Aura cannot forcibly stop the pending or running host operation; it executes
 once, may still perform its side effect, and has any late result discarded.
 A configured queue bound limits accepted pending work, but cannot guarantee
 unrelated blocking-I/O progress while all blocking workers remain stuck.
 
-Aurora 0.2 task scheduling is cooperative across pinned workers. The compiler
+Aura 0.2 task scheduling is cooperative across pinned workers. The compiler
 inserts a scheduling check on every loop backedge, including the ordinary body
 tail and `continue`, so a tight loop eventually lets ready timers, Queue
 operations, and socket work on the same worker proceed. `break` and `return`
@@ -363,7 +363,7 @@ scheduler tick.
 
 ## Detached Work
 
-Aurora does not currently expose a `spawn detached` language form. Keep lightweight task work under `TaskGroup` so scope exit has a clear join and cleanup boundary.
+Aura does not currently expose a `spawn detached` language form. Keep lightweight task work under `TaskGroup` so scope exit has a clear join and cleanup boundary.
 
 For operating-system child processes, use the `process` module and decide explicitly whether the child should be supervised, waited on, or closed.
 
@@ -431,9 +431,9 @@ and defaults already resolve complete concrete types.
 
 ## Runtime Semantics
 
-Aurora tasks run on cooperative pinned workers. The default worker count is
+Aura tasks run on cooperative pinned workers. The default worker count is
 the available parallelism reported by the host, while provisional
-`AURORA_WORKERS=<positive integer>` selects an explicit count. Starting a child
+`AURA_WORKERS=<positive integer>` selects an explicit count. Starting a child
 stores its captures in task-owned storage and gives it a stable worker
 assignment. The child's coroutine stack remains on that worker for its entire
 lifetime; there is no migration or work stealing. Group exit observes or joins
@@ -483,8 +483,8 @@ of those slots before it makes the fallible owned source copy. A saturated
 lightweight task parks on a scheduler-aware availability notification rather
 than spinning. Once admitted, synchronous `json.parse` waits for codec
 completion; cancellation is deferred to the task's next ordinary cancellation
-boundary. The legacy `json.is_valid` and `json.parse_string_map` helpers remain
-bounded caller-side compatibility operations and do not use the service. The
+boundary. The bounded `json.is_valid` and `json.parse_string_map` operations
+remain caller-side and do not use the service. The
 service is distinct from the protocol and generic blocking-I/O pools and lives
 until process exit. The remaining stack-safety and backend rules are in
 [Execution Model](/manual/execution-model) and [JSON Module](/manual/json).
@@ -510,12 +510,12 @@ abandons any such right that loses.
 ## Diagnostics
 
 `AU1101` reports malformed concurrency syntax, including unavailable spawn
-forms. `AU2001` reports unknown concurrency types, functions, or members,
-including removed `Channel` names. `AU2002` covers generic, duration, capacity,
+forms. `AU2001` reports unknown concurrency types, functions, or members.
+`AU2002` covers generic, duration, capacity,
 task-vector, stack-byte, argument, and outcome type mismatch. `AU2004` reports invalid
 constructor or method argument binding. `AU2006` reports an explicit or
 inherited trait method that collides with a builtin `Queue[T]`, `Task[T]`, or
-`TaskGroup` member. `AU2999` covers unsupported targets, removed method aliases,
+`TaskGroup` member. `AU2999` covers unsupported targets,
 method-reference misuse, and remaining static concurrency rejections. `AU3001`
 reports use after a value moves into task or queue storage. `AU3002` reports
 invalid borrowed capture/storage use and the rejected `mut` task-target
@@ -531,8 +531,8 @@ deadline because these APIs have no typed InvalidInput carrier. `AU4002`
 reports arithmetic overflow or underflow, `AU4003` a bounds or lookup
 violation, `AU4004` a zero divisor, and `AU4005` a resource or I/O failure.
 `AU4006` reports invalid pinned-worker or blocking-I/O runtime configuration.
-`AURORA_WORKERS`, `AURORA_BLOCKING_WORKERS`, and
-`AURORA_BLOCKING_QUEUE_CAPACITY` each require a positive decimal integer; the
+`AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, and
+`AURA_BLOCKING_QUEUE_CAPACITY` each require a positive decimal integer; the
 diagnostic names the setting, renders the supplied invalid value, and is issued
 before user code. A non-Unicode value is displayed lossily.
 `AU2002` rejects an out-of-range literal stack request during checking.
@@ -556,7 +556,7 @@ attempting consumption through shared access is `AU3002`.
 
 The runtime's atomic defense rejects a second claim of a non-repeatable result
 with `AU4001`: `task result has already been observed; non-repeatable task
-results allow exactly one observing attempt`. A correctly checked Aurora
+results allow exactly one observing attempt`. A correctly checked Aura
 program should be stopped earlier by the static ownership diagnostics.
 For `select(...)`, `AU2004` reports an empty call or named source, `AU2002`
 reports an invalid source or inconsistent Queue/Task category type, `AU3002`
@@ -580,7 +580,7 @@ Builtin handle member names
 retain builtin dispatch on both backends. The scheduler/runtime surface and
 complete diagnostics are parity-pinned. Both backends therefore share the
 persistent reactor, timer heap, and direct runtime-event notification behavior.
-MIR and direct-native traps capture the same typed Aurora call frames and task
+MIR and direct-native traps capture the same typed Aura call frames and task
 ancestry once, before cleanup resets task-local state. Human output derives
 call-chain and parent-task notes from those records, while JSON and the LSP
 preserve the frame arrays directly.
@@ -593,30 +593,30 @@ long straight-line computation can still delay siblings assigned to the same
 worker. The checks do not inspect cancellation. Scheduling, independent task
 completion, and output order are deliberately unspecified. The worker count
 defaults to the available parallelism reported by the host and may be selected
-provisionally with a positive `AURORA_WORKERS` value. Assignments never migrate
+provisionally with a positive `AURA_WORKERS` value. Assignments never migrate
 and work is not stolen.
-Aurora exposes no worker-index or affinity-introspection API. Ordinary
+Aura exposes no worker-index or affinity-introspection API. Ordinary
 lightweight tasks request 512 KiB of writable coroutine stack; an explicit
 request is limited to 64 MiB. Requests are page-rounded and guard-protected.
 The MIR/direct entry thread reserves
 64 MiB. The scheduler
 keeps descriptor registrations persistent and blocks until an event or
-deadline when idle; it does not use a periodic readiness scan. Nested Aurora
+deadline when idle; it does not use a periodic readiness scan. Nested Aura
 calls stop at 256 frames. The process-wide blocking-I/O pool derives a default
 of 2 through 8 host threads from host parallelism (fallback 4), or uses an
-exact positive `AURORA_BLOCKING_WORKERS` value without clamping.
-`AURORA_BLOCKING_QUEUE_CAPACITY` optionally bounds pending accepted jobs;
+exact positive `AURA_BLOCKING_WORKERS` value without clamping.
+`AURA_BLOCKING_QUEUE_CAPACITY` optionally bounds pending accepted jobs;
 omitting it leaves the queue unbounded. The first runtime preflight reads this
 configuration once without starting the pool, and the configuration remains
 immutable for the process lifetime. First submission creates the complete
-worker set; production reuses it until process exit and has no Aurora
+worker set; production reuses it until process exit and has no Aura
 shutdown/join surface. Non-repeatable transferable task results have one
 statically enforced observation right. Cancelling after a blocking job is
 accepted cannot retract an OS side effect. If the scheduler itself stops with
 tasks still suspended, it disarms
 their waits, publishes cancellation to their handles and observers, and
 reclaims scheduler-owned and direct-runtime host state. That abandonment path
-does not run arbitrary Aurora cleanup thunks; direct generated stacks may be
+does not run arbitrary Aura cleanup thunks; direct generated stacks may be
 reset because they cannot safely be unwound through Cranelift frames. Detached
 lightweight tasks are unavailable.
 
@@ -644,8 +644,8 @@ compatibility path. Plain socket/reactor operations remain scheduler-side;
 resolver, listener-bind, and file-read work uses the generic blocking-I/O pool.
 TLS asset bytes are read there, while PEM parsing and rustls construction run
 on protocol workers. Phase 5.4 also adds the bounded dynamic-`json.parse`
-service and scheduler-aware admission described above; it does not move the
-legacy JSON compatibility helpers. The host-timer policy recorded by ADR-0019
+service and scheduler-aware admission described above; the JSON string-map
+operations stay caller-side. The host-timer policy recorded by ADR-0019
 is Accepted. Phase 5.5 gives the scheduler driver unique mutable ownership,
 routes nested starts through an owned internal broker, makes preparation
 failure synchronous, and contains scheduler teardown across MIR and direct
@@ -663,7 +663,7 @@ unavailable. On the clean Mac14,9 Phase 5.10 measurement at `181204b`,
 198,787,072 bytes above their same-process pre-spawn baseline, passing the
 512 MiB gate.
 
-Aurora does not maintain a 100,000-sleeper claim. The final Phase 5.10
+Aura does not maintain a 100,000-sleeper claim. The final Phase 5.10
 100,000-sleeper plus 1,000-timer repetitions peaked at 1,170,735,104,
 1,921,531,904, and 2,001,305,600 bytes, so two of three exceeded the 1.5 GiB
 gate. On this 16 KiB-page host, one resident page for each of the 101,000
@@ -678,8 +678,8 @@ has a `1.039673x` paired median wall-time ratio and `396.73%` median four-task
 process CPU; these are measured Mac14,9 results, not portable speedup
 guarantees.
 The Queue capacity boundary is pinned by
-`crates/aurora-compiler/tests/fixtures/run-fail/queue_zero_capacity.au` and
-`crates/aurora-compiler/tests/fixtures/run-fail/queue_negative_capacity.au` on
+`crates/aura-compiler/tests/fixtures/run-fail/queue_zero_capacity.au` and
+`crates/aura-compiler/tests/fixtures/run-fail/queue_negative_capacity.au` on
 both backends.
 
 Accepted ADR-0033 specifies the implemented Phase 5.6 contract: structural

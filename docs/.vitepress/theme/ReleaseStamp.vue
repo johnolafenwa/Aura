@@ -1,16 +1,16 @@
 <script setup lang="ts">
-declare const __AURORA_RELEASE_VERSION__: string
-declare const __AURORA_RELEASE_CHANNEL__: string
-declare const __AURORA_IMPLEMENTATION_COMMIT__: string
+declare const __AURA_RELEASE_VERSION__: string
+declare const __AURA_RELEASE_CHANNEL__: string
+declare const __AURA_IMPLEMENTATION_COMMIT__: string
 
-const version = __AURORA_RELEASE_VERSION__
-const channel = __AURORA_RELEASE_CHANNEL__
-const implementationCommit = __AURORA_IMPLEMENTATION_COMMIT__
+const version = __AURA_RELEASE_VERSION__
+const channel = __AURA_RELEASE_CHANNEL__
+const implementationCommit = __AURA_IMPLEMENTATION_COMMIT__
 </script>
 
 <template>
-  <aside class="aurora-release-stamp" aria-label="Aurora Manual release stamp">
-    <strong>Aurora {{ version }} ({{ channel }})</strong>
+  <aside class="aura-release-stamp" aria-label="Aura Manual release stamp">
+    <strong>Aura {{ version }} ({{ channel }})</strong>
     <span>
       Implementation baseline commit:
       <code>{{ implementationCommit }}</code>

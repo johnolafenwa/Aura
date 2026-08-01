@@ -1,0 +1,7 @@
+error[AU3002]: argument for parameter `other` in method `merge` overlaps mutable borrow for parameter `self`
+ --> crates/aura-compiler/tests/fixtures/check-fail/method_receiver_overlapping_borrow_mut_argument.au:9:15
+  |
+9 |     acc.merge(other=acc)
+  |               ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/method_receiver_overlapping_borrow_mut_argument.au:9:5: mutable borrow for parameter `self` begins here
+  = help: pass non-overlapping places; shared accesses may overlap, but mutable access must remain exclusive

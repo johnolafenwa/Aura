@@ -1,0 +1,6 @@
+error[AU4002]: integer value `9223372036854775808` does not fit in `int64`
+ --> crates/aura-compiler/tests/fixtures/run-fail/uint64_to_int64_cast_out_of_range.au:3:20
+  |
+3 |     value: int64 = source as int64
+  |                    ^
+  = note: Aura call chain (innermost first): main at 1:1

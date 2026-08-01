@@ -1,7 +1,7 @@
 import bytes
 
 def main():
-    text = "Aurora 🌌"
+    text = "Aura 🌌"
     encoded = text.to_bytes()
     print(bytes.hex_encode(encoded))
 

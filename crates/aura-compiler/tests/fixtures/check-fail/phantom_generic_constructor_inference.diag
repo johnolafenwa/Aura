@@ -1,0 +1,5 @@
+error[AU2002]: cannot infer type parameter `T` for class constructor `Phantom`
+ --> crates/aura-compiler/tests/fixtures/check-fail/phantom_generic_constructor_inference.au:5:13
+  |
+5 |     value = Phantom(marker=1)
+  |             ^

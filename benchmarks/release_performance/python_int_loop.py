@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Whole-process CPython counterpart to Aurora's V6 integer loops."""
+"""Whole-process CPython counterpart to Aura's V6 integer loops."""
 
 from __future__ import annotations
 

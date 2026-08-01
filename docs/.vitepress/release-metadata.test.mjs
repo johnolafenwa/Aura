@@ -2,21 +2,21 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  AURORA_RELEASE,
+  AURA_RELEASE,
   resolveImplementationCommit
 } from './release-metadata.mjs'
 
 test('the maintained documentation source identifies the 0.2.0 preview', () => {
-  assert.deepEqual(AURORA_RELEASE, {
+  assert.deepEqual(AURA_RELEASE, {
     version: '0.2.0',
     channel: 'technical preview'
   })
 })
 
-test('AURORA_DOCS_COMMIT takes precedence over GITHUB_SHA and the local checkout', () => {
+test('AURA_DOCS_COMMIT takes precedence over GITHUB_SHA and the local checkout', () => {
   const commit = resolveImplementationCommit({
     env: {
-      AURORA_DOCS_COMMIT: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      AURA_DOCS_COMMIT: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       GITHUB_SHA: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
     },
     readLocalCommit: () => 'cccccccccccccccccccccccccccccccccccccccc',
@@ -36,7 +36,7 @@ test('GITHUB_SHA is used when an explicit documentation commit is absent', () =>
 
 test('an invalid environment value falls back to the local checkout commit', () => {
   const commit = resolveImplementationCommit({
-    env: { AURORA_DOCS_COMMIT: 'not-a-commit' },
+    env: { AURA_DOCS_COMMIT: 'not-a-commit' },
     readLocalCommit: () => 'cccccccccccccccccccccccccccccccccccccccc',
     isLocalCheckoutDirty: () => false
   })

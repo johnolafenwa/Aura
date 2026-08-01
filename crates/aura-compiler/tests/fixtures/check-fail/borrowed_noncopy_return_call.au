@@ -1,0 +1,10 @@
+class User:
+    name: String
+
+def name_ref(user: User) -> String:
+    return user.name
+
+def main():
+    user = User(name="aura")
+    alias = name_ref(user)
+    print(alias)

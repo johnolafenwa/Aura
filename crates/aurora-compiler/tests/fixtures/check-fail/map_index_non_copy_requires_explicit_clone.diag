@@ -1,5 +1,0 @@
-error[AU3005]: cannot implicitly copy `String` out of a map index; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership
- --> crates/aurora-compiler/tests/fixtures/check-fail/map_index_non_copy_requires_explicit_clone.au:3:24
-  |
-3 |     language: String = labels["language"]
-  |                        ^

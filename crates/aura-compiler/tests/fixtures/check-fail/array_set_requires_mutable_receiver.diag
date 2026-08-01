@@ -1,0 +1,6 @@
+error[AU3003]: method `set` requires a mutable receiver
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_set_requires_mutable_receiver.au:3:12
+  |
+3 |     values.set(index=[0], value=1)
+  |            ^
+  = help: declare the receiver place with `mut` before calling a mutating method

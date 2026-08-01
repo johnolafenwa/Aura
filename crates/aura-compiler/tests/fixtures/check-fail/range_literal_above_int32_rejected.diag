@@ -1,0 +1,5 @@
+error[AU2999]: integer literal `2147483648` does not fit in `int32`
+ --> crates/aura-compiler/tests/fixtures/check-fail/range_literal_above_int32_rejected.au:2:29
+  |
+2 |     for value in range(stop=2147483648):
+  |                             ^

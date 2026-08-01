@@ -1,5 +1,5 @@
 # Test: direct impl block on enum (without trait) is NOT supported
-# DESIGN: Aurora requires `impl TraitName for EnumName:` syntax
+# DESIGN: Aura requires `impl TraitName for EnumName:` syntax
 # Direct `impl EnumName:` gives "expected KwFor, found Colon"
 # Classes define methods inline; enums need traits for methods
 

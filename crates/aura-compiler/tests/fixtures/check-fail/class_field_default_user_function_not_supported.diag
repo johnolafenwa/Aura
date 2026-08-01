@@ -1,0 +1,5 @@
+error[AU2999]: unsupported call target
+ --> crates/aura-compiler/tests/fixtures/check-fail/class_field_default_user_function_not_supported.au:5:19
+  |
+5 |     port: int32 = default_port()
+  |                   ^

@@ -1,8 +1,8 @@
-# Aurora Tutorials
+# Aura Tutorials
 
-This directory is the beginning of the Aurora tutorial track: a book-style set of Markdown chapters that explains the language as it exists in the repository today.
+This directory is the beginning of the Aura tutorial track: a book-style set of Markdown chapters that explains the language as it exists in the repository today.
 
-These tutorials are intentionally scoped to the implemented subset of Aurora. They should stay in sync with the compiler, the examples, and the normative Manual. The original language proposal is historical design material, not the source of current behavior.
+These tutorials are intentionally scoped to the implemented Aura surface. They stay in sync with the compiler, examples, and normative Manual.
 
 ## Maintenance Rule
 
@@ -72,7 +72,7 @@ The current tutorial set covers:
 - user-defined generic classes, enums, and functions
 - trait declarations, trait impls, and bounded generic calls
 - local file modules with `import`, `from ... import ...`, and `public` visibility at module boundaries
-- `Aurora.toml` packages with `src/`, local path dependencies, git dependencies, workspaces, and local lockfiles
+- `Aura.toml` packages with `src/`, local path dependencies, git dependencies, workspaces, and local lockfiles
 - package-authorized FFI v0 with bodyless `extern "C"` declarations,
   fixed-width scalars, pointer-length String/byte views, opaque handles, and
   exact root dependency reports

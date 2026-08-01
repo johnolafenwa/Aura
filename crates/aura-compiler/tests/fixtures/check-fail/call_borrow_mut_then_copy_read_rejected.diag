@@ -1,0 +1,7 @@
+error[AU3002]: argument for parameter `second` in function `set` overlaps mutable borrow for parameter `first`; mutable borrows must be exclusive
+ --> crates/aura-compiler/tests/fixtures/check-fail/call_borrow_mut_then_copy_read_rejected.au:6:16
+  |
+6 |     set(value, value)
+  |                ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/call_borrow_mut_then_copy_read_rejected.au:6:9: mutable borrow for parameter `first` begins here
+  = help: pass non-overlapping places; shared accesses may overlap, but mutable access must remain exclusive

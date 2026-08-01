@@ -2,7 +2,7 @@ import fs
 import io
 
 def run() -> Result[None, io.Error]:
-    path = "/tmp/aurora-bytes-file-io-example.bin"
+    path = "/tmp/aura-bytes-file-io-example.bin"
     seed: Vec[uint8] = [65 as uint8, 66 as uint8]
     try fs.write_bytes(path.clone(), seed)
     try fs.append_bytes(path.clone(), [67 as uint8, 10 as uint8])

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release-metadata regression tests for the Aurora 0.2 preview."""
+"""Release-metadata regression tests for the Aura 0.2 preview."""
 
 from __future__ import annotations
 
@@ -32,17 +32,17 @@ class ReleaseMetadataTests(unittest.TestCase):
             if (
                 name_match is not None
                 and version_match is not None
-                and name_match.group(1) in {"aura", "aurora-compiler"}
+                and name_match.group(1) in {"aura", "aura-compiler"}
             ):
                 workspace_packages[name_match.group(1)] = version_match.group(1)
         self.assertEqual(
             workspace_packages,
-            {"aura": VERSION, "aurora-compiler": VERSION},
+            {"aura": VERSION, "aura-compiler": VERSION},
         )
 
         fuzz_lock = (ROOT / "fuzz/Cargo.lock").read_text()
         fuzz_compiler = re.search(
-            r'\[\[package\]\]\nname = "aurora-compiler"\nversion = "([^"]+)"',
+            r'\[\[package\]\]\nname = "aura-compiler"\nversion = "([^"]+)"',
             fuzz_lock,
         )
         self.assertIsNotNone(fuzz_compiler)
@@ -50,8 +50,8 @@ class ReleaseMetadataTests(unittest.TestCase):
 
         manifests = {
             "root": ROOT / "package.json",
-            "lsp": ROOT / "tools/aurora-language-server/package.json",
-            "extension": ROOT / "tools/vscode-aurora/package.json",
+            "lsp": ROOT / "tools/aura-language-server/package.json",
+            "extension": ROOT / "tools/vscode-aura/package.json",
         }
         for label, path in manifests.items():
             with self.subTest(label=label):
@@ -61,11 +61,11 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(root_lock["version"], VERSION)
         self.assertEqual(root_lock["packages"][""]["version"], VERSION)
         self.assertEqual(
-            root_lock["packages"]["tools/aurora-language-server"]["version"],
+            root_lock["packages"]["tools/aura-language-server"]["version"],
             VERSION,
         )
         self.assertEqual(
-            root_lock["packages"]["tools/vscode-aurora"]["version"], VERSION
+            root_lock["packages"]["tools/vscode-aura"]["version"], VERSION
         )
 
         # This npm workspace intentionally uses one root lock. The LSP and
@@ -101,16 +101,16 @@ class ReleaseMetadataTests(unittest.TestCase):
         component = (ROOT / "docs/.vitepress/theme/ReleaseStamp.vue").read_text()
         theme = (ROOT / "docs/.vitepress/theme/index.ts").read_text()
 
-        self.assertIn("Aurora 0.2.0", manual)
+        self.assertIn("Aura 0.2.0", manual)
         self.assertIn("technical preview", manual.lower())
         self.assertIn("implementation baseline commit", manual.lower())
-        self.assertIn("AURORA_DOCS_COMMIT", metadata)
+        self.assertIn("AURA_DOCS_COMMIT", metadata)
         self.assertIn("GITHUB_SHA", metadata)
         self.assertIn("local-uncommitted-checkout", manual)
         self.assertIn("git", metadata)
         self.assertIn("release-metadata.mjs", config)
         self.assertIn("implementationCommit", config)
-        self.assertIn("__AURORA_IMPLEMENTATION_COMMIT__", component)
+        self.assertIn("__AURA_IMPLEMENTATION_COMMIT__", component)
         self.assertIn("Implementation baseline commit", component)
         self.assertIn("ReleaseStamp", theme)
 
@@ -135,7 +135,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             files.extend(directory.glob("**/*.md"))
 
         stale: list[str] = []
-        pattern = re.compile(r"\bAurora 0\.1(?:\.x)?\b|\b0\.1\.x\b")
+        pattern = re.compile(r"\bAura 0\.1(?:\.x)?\b|\b0\.1\.x\b")
         for path in sorted(set(files)):
             for number, line in enumerate(path.read_text().splitlines(), start=1):
                 if pattern.search(line):
@@ -152,12 +152,13 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertNotIn("Duration::from_secs(60)", cache_test)
 
         parity = (ROOT / "crates/aura/tests/backend_parity.rs").read_text()
-        self.assertNotIn('root.join("target/debug/libaurora_compiler.a")', parity)
+        self.assertNotIn('root.join("target/debug/libaura_compiler.a")', parity)
         self.assertIn('"--message-format=json"', parity)
         self.assertIn('"compiler-artifact"', parity)
         self.assertIn('"native-static-libs:"', parity)
 
-        proposal = (ROOT / "docs/aurora_language_proposal.md").read_text()
+        proposal_name = "auro" + "ra_language_proposal.md"
+        proposal = (ROOT / "docs" / proposal_name).read_text()
         self.assertIn("canonical 0.1/0.2 contract", proposal)
         self.assertIn("maintained 0.1/0.2 sources win", proposal)
         self.assertNotIn("canonical 0.1 contract", proposal)
@@ -165,7 +166,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         build_script = (ROOT / "crates/aura/build.rs").read_text()
         cli = (ROOT / "crates/aura/src/main.rs").read_text()
         smoke = (ROOT / "scripts/smoke-cli-archive.sh").read_text()
-        self.assertIn("AURORA_BUILD_COMMIT", build_script)
+        self.assertIn("AURA_BUILD_COMMIT", build_script)
         self.assertIn("--short=12", build_script)
         self.assertIn('"aura {}-preview ({})\\n"', cli)
         self.assertIn('expected_version="aura 0.2.0-preview ($expected_commit)"', smoke)

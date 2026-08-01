@@ -1,0 +1,7 @@
+error[AU3008]: task argument `generator` cannot cross a task boundary because `random.Rng` is a stateful generator and is not Transfer
+ --> crates/aura-compiler/tests/fixtures/check-fail/task_transfer_start_soon_with_stack_argument.au:7:50
+  |
+7 |     group.start_soon_with_stack(262144, consume, generator)
+  |                                                  ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/task_transfer_start_soon_with_stack_argument.au:3:13: task parameter `generator` is declared here
+  = help: send owned data made only from Transfer components; keep capabilities and host resources on their owning worker

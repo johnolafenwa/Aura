@@ -1,6 +1,6 @@
 # Structured Concurrency
 
-Concurrent programs get hard to reason about when child work has no parent. A task started deep inside a function might run forever, fail silently, or leak a resource. The fix Aurora builds into the language is called **structured concurrency**: every task is created within a scope, and leaving that scope waits for, cancels, or otherwise accounts for the children.
+Concurrent programs get hard to reason about when child work has no parent. A task started deep inside a function might run forever, fail silently, or leak a resource. The fix Aura builds into the language is called **structured concurrency**: every task is created within a scope, and leaving that scope waits for, cancels, or otherwise accounts for the children.
 
 This chapter introduces that scope — the `TaskGroup` — and the two other primitives that make it useful: `Task[T]`, a handle to a task's result, and `Queue[T]`, a typed channel for moving values between tasks.
 
@@ -83,20 +83,20 @@ with group = TaskGroup():
 
 Use `start_soon_with_stack(bytes, function, ...)` when the child does not
 return a retained handle. The byte count is exact `int64` and must be from
-256 KiB through 64 MiB inclusive. Aurora rejects a smaller or larger value
+256 KiB through 64 MiB inclusive. Aura rejects a smaller or larger value
 instead of silently clamping it. Accepted capacities are rounded upward to
 the host page size and guard-protected.
 
 Treat 256 KiB as an opt-in minimum only for a measured shallow task. It is not
-the ordinary default: Aurora's complete compiled HTTP example faulted when
+the ordinary default: Aura's complete compiled HTTP example faulted when
 256 KiB was the global task default during integration and succeeds with the
 512 KiB default. The lower-level runtime round trip that succeeds with
-256 KiB protocol callers intentionally omits compiled Aurora execution
+256 KiB protocol callers intentionally omits compiled Aura execution
 frames; it proves that deep protocol frames run on service workers, not that
-every complete Aurora task is safe at 256 KiB.
+every complete Aura task is safe at 256 KiB.
 
 The method name is deliberately separate from `start`: a forwarded target may
-have its own parameter named `stack_size`, so Aurora does not steal a named
+have its own parameter named `stack_size`, so Aura does not steal a named
 argument from the child. Prefer the ordinary methods until profiling
 demonstrates a need; a larger reservation is not a performance hint.
 
@@ -243,7 +243,7 @@ The runtime registers one composite wait and removes every loser when a source
 wins. A losing Queue remains unchanged. A non-repeatable Task right is
 consumed at entry and abandoned if another source wins.
 
-This is an ordinary builtin call. Aurora still has no statement-form
+This is an ordinary builtin call. Aura still has no statement-form
 `select:` syntax.
 
 ## Waiting For Several Tasks
@@ -314,10 +314,10 @@ with group = TaskGroup():
 
 Cancellation is not an exception that lands at arbitrary points in the code. It is a request that tasks observe at well-defined boundaries. That makes cancelled code easy to reason about — and easy to test.
 
-Aurora 0.2 runs task bodies on cooperative pinned workers on both maintained
+Aura 0.2 runs task bodies on cooperative pinned workers on both maintained
 backends. The runtime uses the available parallelism reported by the host by
 default; provisional
-`AURORA_WORKERS=<positive integer>` selects an explicit count. A task receives
+`AURA_WORKERS=<positive integer>` selects an explicit count. A task receives
 a stable assignment when it is spawned. Its coroutine stack never migrates,
 work is not stolen, and `yield_now()` yields only to runnable work on that
 worker.
@@ -337,7 +337,7 @@ instead of waking on a periodic tick.
 Queue and Task handles are the cross-worker channels. Other captures and
 results remain owned `Transfer` values, so the model stays share-nothing.
 Cancellation and diagnostics remain per task. Scheduling, independent task
-completion, and printed-output order are unspecified; Aurora exposes no worker
+completion, and printed-output order are unspecified; Aura exposes no worker
 identity or affinity API. Pinned workers enable multicore task execution, but
 do not promise preemption, work stealing, or speedup for every workload.
 
@@ -348,21 +348,21 @@ observing cancellation or returning to reactor readiness waiting. This is why
 ordinary application tasks no longer need to reserve enough coroutine stack
 for the deepest maintained third-party protocol frame.
 
-The protocol-step pool starts lazily and lives until the Aurora process exits;
+The protocol-step pool starts lazily and lives until the Aura process exits;
 there is no 0.2 shutdown or join call. File reads, resolver work, and listener
 binding continue through the generic blocking-I/O pool. For TLS assets, that
 generic pool reads the bytes and the protocol workers perform PEM parsing and
 rustls construction.
 
 The generic pool is a separate operational control.
-`AURORA_BLOCKING_WORKERS=<positive integer>` requests an exact worker count;
-without it Aurora derives a `2..=8` default from host parallelism with fallback
-`4`. `AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally limits
+`AURA_BLOCKING_WORKERS=<positive integer>` requests an exact worker count;
+without it Aura derives a `2..=8` default from host parallelism with fallback
+`4`. `AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally limits
 accepted jobs still waiting in the FIFO queue. It does not count running jobs
 or callers waiting for admission, and omitting it preserves an unbounded
-queue. A full bounded queue parks the Aurora task without blocking its pinned
+queue. A full bounded queue parks the Aura task without blocking its pinned
 worker. Cancellation or timeout before queue insertion prevents the host job
-from running. After insertion, Aurora can stop waiting but cannot retract the
+from running. After insertion, Aura can stop waiting but cannot retract the
 host operation; its late result is discarded. The bound controls accepted
 pending backlog, not admission waiters or a stuck OS call, so unrelated
 blocking-I/O host work still cannot run until some worker returns when every
@@ -403,14 +403,14 @@ the task must also respond to a cancellation request.
 
 ## The Shape Worth Copying
 
-Good Aurora concurrency tends to look the same across programs:
+Good Aura concurrency tends to look the same across programs:
 
 - one `with TaskGroup()` per concurrent operation
 - queues owned by the parent, closed by the producers
 - task results inspected through `TaskResult`, `wait_any`, or `wait_all`
 - long CPU loops that check `cancelled()` when cancellation matters and use
   explicit yields when a particular chunk boundary should schedule siblings
-- no detached background work; Aurora 0.2 exposes no detached task form
+- no detached background work; Aura 0.2 exposes no detached task form
 
 If you can say, for each child task, which scope created it and which scope waits for it, the program is usually on the right track.
 

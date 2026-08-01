@@ -1,8 +1,0 @@
-def consume(text: own String):
-    print(text)
-
-def main() -> int32:
-    text: String = "aurora"
-    consume(text=text)
-    consume(text=text)
-    return 0

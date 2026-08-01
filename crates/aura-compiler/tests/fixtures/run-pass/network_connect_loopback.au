@@ -1,0 +1,106 @@
+import fs
+import io
+import net
+
+def serve_tcp(addresses: Queue[String]) -> Result[None, io.Error]:
+    with server_listener = try net.listen("127.0.0.1:0"):
+        addresses.put(try server_listener.local_addr())
+        stream = try server_listener.accept(timeout=2s)
+        with server_stream = stream:
+            match try server_stream.read_line(timeout=2s):
+                case Option.Some(text):
+                    try server_stream.write_all("tcp:" + text + "\n", timeout=2s)
+                case Option.None:
+                    pass
+    return Result.Ok(None)
+
+def serve_unix(path: String, ready: Queue[bool]) -> Result[None, io.Error]:
+    with server_listener = try net.unix_listen(path):
+        ready.put(true)
+        stream = try server_listener.accept(timeout=2s)
+        with server_stream = stream:
+            match try server_stream.read_line(timeout=2s):
+                case Option.Some(text):
+                    try server_stream.write_all("unix:" + text + "\n", timeout=2s)
+                case Option.None:
+                    pass
+    return Result.Ok(None)
+
+def run() -> Result[None, io.Error]:
+    socket_path = "/tmp/aura-network-connect-loopback.sock"
+    match fs.remove_file(socket_path.clone()):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+
+    with TaskGroup() as group:
+        tcp_addresses = Queue[String](capacity=1)
+        tcp_server = group.start(serve_tcp, tcp_addresses)
+        match tcp_addresses.get(timeout=2s):
+            case QueueReceive.Item(tcp_address):
+                tcp_hostname = tcp_address.replace("127.0.0.1", "localhost")
+                with tcp_client = try net.connect_timeout(tcp_hostname, 2s):
+                    try tcp_client.write_all("ping\n", timeout=2s)
+                    match try tcp_client.read_line(timeout=2s):
+                        case Option.Some(text):
+                            print(text)
+                        case Option.None:
+                            pass
+            case QueueReceive.Closed:
+                return Result.Err(io.Error.Other(message="TCP address queue closed"))
+            case QueueReceive.TimedOut:
+                return Result.Err(io.Error.TimedOut)
+            case QueueReceive.Cancelled:
+                return Result.Err(io.Error.Cancelled)
+        match own tcp_server.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Error(message):
+                print(message)
+            case TaskResult.Cancelled:
+                pass
+            case TaskResult.TimedOut:
+                pass
+
+        unix_ready = Queue[bool](capacity=1)
+        unix_server = group.start(serve_unix, socket_path.clone(), unix_ready)
+        match unix_ready.get(timeout=2s):
+            case QueueReceive.Item(_):
+                with unix_client = try net.unix_connect_timeout(socket_path.clone(), 2s):
+                    try unix_client.write_all("ping\n", timeout=2s)
+                    match try unix_client.read_line(timeout=2s):
+                        case Option.Some(text):
+                            print(text)
+                        case Option.None:
+                            pass
+            case QueueReceive.Closed:
+                return Result.Err(io.Error.Other(message="Unix readiness queue closed"))
+            case QueueReceive.TimedOut:
+                return Result.Err(io.Error.TimedOut)
+            case QueueReceive.Cancelled:
+                return Result.Err(io.Error.Cancelled)
+        match own unix_server.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Error(message):
+                print(message)
+            case TaskResult.Cancelled:
+                pass
+            case TaskResult.TimedOut:
+                pass
+
+    match fs.remove_file(socket_path):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+    return Result.Ok(None)
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1

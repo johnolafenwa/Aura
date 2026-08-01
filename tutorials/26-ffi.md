@@ -1,6 +1,6 @@
 # 26. Foreign Function Interface v0
 
-Aurora FFI v0 binds small, trusted C APIs without opening the language to
+Aura FFI v0 binds small, trusted C APIs without opening the language to
 general pointer manipulation. FFI declarations are package-only and require
 an explicit manifest opt-in.
 
@@ -62,7 +62,7 @@ public extern "C" def inspect(handle: Handle) -> int32
 public extern "C" def close(handle: own Handle) -> None
 ```
 
-Aurora cannot construct, inspect the layout or address of, clone, or transfer
+Aura cannot construct, inspect the layout or address of, clone, or transfer
 an opaque handle. A bare parameter retains it; `own` consumes it. Rendering
 shows only `<opaque TypeName>`. FFI v0 does not automatically invoke a
 destructor, so a binding must call the correct consuming native function.
@@ -92,7 +92,7 @@ entries are errors.
 
 ## Safety Boundary
 
-Aurora checks that the declaration uses the supported surface. It cannot
+Aura checks that the declaration uses the supported surface. It cannot
 verify the real native signature or behavior. A missing process-global symbol,
 or null handle becomes an `AU4005` runtime failure. A non-canonical C boolean
 result (a byte other than `0` or `1`) traps with `AU4001`.

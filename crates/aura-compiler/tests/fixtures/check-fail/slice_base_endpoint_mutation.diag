@@ -1,0 +1,7 @@
+error[AU3002]: cannot mutably borrow `values` while `values` remains shared-borrowed by the slice base
+ --> crates/aura-compiler/tests/fixtures/check-fail/slice_base_endpoint_mutation.au:6:27
+  |
+6 |     return values[:mutate(values)]
+  |                           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/slice_base_endpoint_mutation.au:6:12: shared access for the slice base begins here
+  = help: call `.clone()` before the expression when an independent value is intended, or perform the mutation in a separate statement first

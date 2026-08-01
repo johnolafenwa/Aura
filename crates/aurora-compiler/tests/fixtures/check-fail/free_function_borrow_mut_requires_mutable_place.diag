@@ -1,5 +1,0 @@
-error[AU2004]: argument for parameter `counter` in function `bump` must be a mutable place
- --> crates/aurora-compiler/tests/fixtures/check-fail/free_function_borrow_mut_requires_mutable_place.au:9:10
-  |
-9 |     bump(counter=counter)
-  |          ^

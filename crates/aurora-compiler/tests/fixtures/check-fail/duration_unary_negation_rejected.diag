@@ -1,5 +1,0 @@
-error[AU2003]: unary `-` expects a numeric value, found `Duration`
- --> crates/aurora-compiler/tests/fixtures/check-fail/duration_unary_negation_rejected.au:3:11
-  |
-3 |     print(-duration)
-  |           ^

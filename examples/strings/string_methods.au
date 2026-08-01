@@ -10,7 +10,7 @@ def main() -> int32:
     unicode.len()       # 2 Unicode scalar values; O(n)
     unicode.byte_len()  # 5 UTF-8 bytes; O(1)
 
-    text = "  aurora repo  "
+    text = "  aura repo  "
     print(text.len())
     print(text.contains("repo"))
     print(text.starts_with("  au"))
@@ -32,9 +32,9 @@ def main() -> int32:
     print(trimmed.replace("repo", "lang"))
     print(trimmed.to_lower())
     print(trimmed.to_upper())
-    print_string_option(trimmed.strip_prefix("aurora "))
+    print_string_option(trimmed.strip_prefix("aura "))
     print_string_option(trimmed.strip_prefix("repo"))
     print_string_option(trimmed.strip_suffix(" repo"))
-    print_string_option(trimmed.strip_suffix("aurora"))
+    print_string_option(trimmed.strip_suffix("aura"))
     print(trimmed.clone().len())
     return 0

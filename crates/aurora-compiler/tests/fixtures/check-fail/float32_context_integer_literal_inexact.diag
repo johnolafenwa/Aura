@@ -1,5 +1,0 @@
-error[AU2002]: integer literal `16777217` cannot be represented exactly as `float32`; write an explicit float spelling such as `16777217.0` or use `.to_float()` when rounding is intended
- --> crates/aurora-compiler/tests/fixtures/check-fail/float32_context_integer_literal_inexact.au:2:22
-  |
-2 |     value: float32 = 16777217
-  |                      ^

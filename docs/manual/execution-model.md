@@ -1,10 +1,10 @@
 # Execution Model
 
-Aurora source is statically checked, lowered, and executed with deterministic single-expression sequencing plus scheduler-controlled concurrency and external I/O. This chapter defines observable behavior shared by `aura run` and built programs.
+Aura source is statically checked, lowered, and executed with deterministic single-expression sequencing plus scheduler-controlled concurrency and external I/O. This chapter defines observable behavior shared by `aura run` and built programs.
 
 ## Maintained Execution Paths
 
-Aurora 0.2 maintains one checked source language and two runtime representations:
+Aura 0.2 maintains one checked source language and two runtime representations:
 
 - `aura run` lowers the entry package to MIR and executes it in the MIR runtime.
 - native direct builds lower MIR-compatible program structure to native code linked with the direct runtime.
@@ -26,7 +26,7 @@ After successful checking, an entry module runs in one of two modes:
 1. If it has executable top-level statements, those statements execute in their stored source order. The file cannot also declare a local `main`.
 2. Otherwise, a local `main()` is called when present. It returns `None` or `int32`.
 
-An imported function named `main` is not an entrypoint. Imported module top-level statements do not execute as import side effects in Aurora 0.2.
+An imported function named `main` is not an entrypoint. Imported module top-level statements do not execute as import side effects in Aura 0.2.
 
 For `aura run`, a returned `int32` is passed to the host process as the requested exit status; `None` means success. A built native program follows the same entry result contract.
 
@@ -122,13 +122,13 @@ runs active lexical cleanups, and returns to the caller. Reaching the end of a
 `None` function returns `None`. A non-`None` function cannot pass static
 checking if a reachable path falls through.
 
-A recursive Aurora call consumes one logical call-depth unit. The maintained runtime rejects execution after 256 nested Aurora calls with a source diagnostic rather than allowing the host stack to overflow.
+A recursive Aura call consumes one logical call-depth unit. The maintained runtime rejects execution after 256 nested Aura calls with a source diagnostic rather than allowing the host stack to overflow.
 
 ## Foreign Calls
 
 A direct extern call evaluates its arguments left-to-right, marshals them only
 after ordinary call binding succeeds, and synchronously invokes the matching
-process-global C symbol. The current Aurora worker remains occupied until the
+process-global C symbol. The current Aura worker remains occupied until the
 foreign function returns. A missing symbol or pre-call marshalling failure
 prevents entry. Return validation occurs after the foreign function and cannot
 roll back native side effects or mutable-byte writeback.
@@ -138,10 +138,10 @@ with length zero. A non-empty shared view passes a valid const pointer and byte
 length. A non-empty mutable byte view uses a same-length scratch buffer:
 initial bytes are copied in, then exactly that length is copied back after the
 foreign function returns, even when later return-value validation produces an
-Aurora runtime error. The callee must not retain a pointer or read/write
+Aura runtime error. The callee must not retain a pointer or read/write
 outside the supplied length.
 
-Aurora diagnostics do not unwind through a foreign frame. A native abort,
+Aura diagnostics do not unwind through a foreign frame. A native abort,
 signal, memory fault, or foreign unwind is not caught and may terminate the
 process. The complete type, ownership, package, and safety contract is in
 [FFI v0](/manual/ffi).
@@ -203,15 +203,15 @@ value result. Operand expressions retain their ordinary ownership effects; the
 equality operation itself adds no move of the resulting tuples.
 
 Tuple `!=` is the logical negation of tuple `==`. Tuple `<`, `<=`, `>`, and
-`>=` remain static errors; Aurora does not define lexicographic or
+`>=` remain static errors; Aura does not define lexicographic or
 metadata-based tuple ordering.
 
 ## Value Rendering
 
-`print`, f-string interpolation, and scalar `.to_string()` use Aurora's maintained value rendering where applicable. Strings render as their contents without quotes and `None` renders as the empty string. A directly printed `float32` or `float64` uses the shortest decimal spelling that round-trips to the same value in its source type. Integral finite values retain a decimal marker, scientific notation is used when it is shorter, and signed zero remains `-0.0`. A Duration renders as an exact decimal millisecond value with an `ms` suffix, using at most six fractional digits and trimming trailing fractional zeros; for example, `2s` renders as `2000ms` and `1ms // 3` renders as `0.333333ms`. This rendering policy is accepted under ADR-0019.
+`print`, f-string interpolation, and scalar `.to_string()` use Aura's maintained value rendering where applicable. Strings render as their contents without quotes and `None` renders as the empty string. A directly printed `float32` or `float64` uses the shortest decimal spelling that round-trips to the same value in its source type. Integral finite values retain a decimal marker, scientific notation is used when it is shorter, and signed zero remains `-0.0`. A Duration renders as an exact decimal millisecond value with an `ms` suffix, using at most six fractional digits and trimming trailing fractional zeros; for example, `2s` renders as `2000ms` and `1ms // 3` renders as `0.333333ms`. This rendering policy is accepted under ADR-0019.
 
 Vectors render as `[a, b]`, sets as `Set{a, b}`, and maps as `{key: value}` in their maintained insertion order. Class values render as `Class(field=value, ...)`; enum values render as `Enum.Variant(...)`. Nested strings remain unquoted, so this display form is for people and is not a round-trippable serialization format. A deterministic random generator renders exactly `<rng>` without exposing or advancing its state. Live resources render opaque labels such as `<file>` or `<tcp-stream>` rather than host identifiers.
-An FFI opaque handle renders as `<opaque TypeName>`, using its canonical Aurora
+An FFI opaque handle renders as `<opaque TypeName>`, using its canonical Aura
 type name and never exposing the foreign pointer address.
 
 ## Assignment And Mutation
@@ -353,35 +353,35 @@ Cleanup runs on:
 - `return`
 - `break` or `continue` that exits the scope
 - `try` error propagation
-- a maintained Aurora runtime failure
+- a maintained Aura runtime failure
 
 Nested active cleanups run in reverse registration order. If a body is already failing and cleanup also fails, the original body diagnostic remains primary. Resource-specific `close()` behavior is defined in its API chapter.
 
 Explicitly closing a resource before scope exit is permitted only where the resource contract makes repeated close harmless; otherwise programs should let the lexical owner perform cleanup.
 
-These cleanup rules apply while Aurora control flow or a maintained runtime
+These cleanup rules apply while Aura control flow or a maintained runtime
 failure exits the task through the language cleanup machinery. Internal
 scheduler abandonment is a last-resort containment path used when the whole
 scheduler stops with a child still suspended, such as after root completion or
 a fatal reactor failure. It marks the remaining task cancelled and releases
 scheduler-owned and direct-runtime host state, but it does not invoke arbitrary
-Aurora cleanup thunks. A direct generated stack may be reset on that path
+Aura cleanup thunks. A direct generated stack may be reset on that path
 because it cannot be safely Rust-unwound across Cranelift frames. Programs must
 use structured `TaskGroup` scopes rather than depend on scheduler abandonment
 as a cleanup mechanism.
 
 ## Tasks And Scheduler
 
-Aurora lightweight tasks run on cooperative pinned scheduler workers. The
+Aura lightweight tasks run on cooperative pinned scheduler workers. The
 runtime uses the available parallelism reported by the host by default; the
-`AURORA_WORKERS=<positive integer>` environment override selects an explicit
+`AURA_WORKERS=<positive integer>` environment override selects an explicit
 count. Each child receives a stable assignment when it is spawned. Its
 coroutine stack never migrates and the runtime does not steal tasks between
 workers. Operations such as queue waits, task waits, sleep, nonblocking
 sockets, and scheduler-integrated I/O yield instead of creating one OS thread
-per Aurora task. A task can also yield explicitly with `yield_now()`. The
+per Aura task. A task can also yield explicitly with `yield_now()`. The
 generic blocking-I/O pool may execute host calls concurrently, but those
-service workers do not run Aurora code.
+service workers do not run Aura code.
 
 The compiler inserts a cooperative scheduling check on every semantic loop
 backedge. Reaching the ordinary tail of a `while` or `for` body participates,
@@ -400,7 +400,7 @@ local task runs next.
 
 MIR execution amortizes the cooperative yield with 8 units of function-local
 loop fuel. Direct native code uses 4,096 units and replenishes the fuel after
-yielding. A program proven to have no possible sibling Aurora task elides the
+yielding. A program proven to have no possible sibling Aura task elides the
 runtime check entirely. These backend strategies may produce different valid
 interleavings; scheduling order is not observable language order. An ordinary
 lightweight task requests 512 KiB of writable coroutine stack. The
@@ -409,7 +409,7 @@ exact `int64` request from 256 KiB through 64 MiB inclusive. Accepted requests
 are rounded upward to the host page size and guard-protected; out-of-range
 requests are rejected rather than clamped. This surface is Provisional under
 ADR-0032. The 256 KiB lower bound is an explicit minimum for measured shallow
-tasks, not the general default. The complete compiled Aurora HTTP example,
+tasks, not the general default. The complete compiled Aura HTTP example,
 including its MIR/direct language-execution frames, proved unsafe when
 256 KiB was the global task default and succeeds with the 512 KiB default.
 The separate isolated runtime round trip that forces protocol callers to
@@ -460,7 +460,7 @@ task and remain isolated across workers.
 Scheduling order among multiple ready tasks, completion order among
 independent tasks, and program-output order are not specified. Programs
 coordinate through queues, task results, cancellation, and other documented
-synchronization rather than timing assumptions. Aurora exposes no worker
+synchronization rather than timing assumptions. Aura exposes no worker
 identity or affinity API. The multicore guarantee applies to task execution;
 it does not promise preemption, work stealing, or speedup for every workload.
 
@@ -483,20 +483,20 @@ owners, and no resource mutex remains held across the worker wait. Reactor
 readiness, absolute deadlines, and cancellation remain scheduler-side
 concerns. This protocol-step pool is lazily initialized and shared by every
 lightweight scheduler. Its workers intentionally live until process exit;
-Aurora 0.2 has no protocol-pool shutdown or join surface. The non-Unix
+Aura 0.2 has no protocol-pool shutdown or join surface. The non-Unix
 WebSocket fallback retains its compatibility path. Resolver, listener-bind,
 and file reads use the generic blocking-I/O pool.
-`AURORA_BLOCKING_WORKERS=<positive integer>` selects its exact worker count
+`AURA_BLOCKING_WORKERS=<positive integer>` selects its exact worker count
 without clamping; otherwise host parallelism is used with fallback `4` and a
 derived `2..=8` clamp.
-`AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally bounds accepted
+`AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally bounds accepted
 pending jobs. Capacity excludes running jobs and callers waiting for admission,
 and omission preserves an unbounded queue. TLS asset bytes are read there
 before PEM parsing and rustls construction run on protocol workers.
 The generic pool is also process-global. Its settings are read once by the
 first runtime preflight and remain immutable for the process lifetime; that
 preflight starts no worker. First blocking submission creates the complete
-configured set, which production reuses until process exit without an Aurora
+configured set, which production reuses until process exit without an Aura
 shutdown/join surface.
 
 Dynamic `json.parse` uses a third, independent process-global service with two
@@ -510,9 +510,9 @@ service stack, while runtime materialization, JSON-aware cloning/rendering,
 and dump conversion/emission use iterative traversals. The direct backend
 waits for admission without value-table access, then holds read access only
 long enough to copy the source and releases it before submission and
-completion waiting. The legacy `json.is_valid` and `json.parse_string_map`
-helpers remain bounded caller-side compatibility operations and do not use
-this service. Codec workers are process-lifetime and have no Aurora 0.2
+completion waiting. The bounded `json.is_valid` and `json.parse_string_map`
+operations remain caller-side and do not use
+this service. Codec workers are process-lifetime and have no Aura 0.2
 shutdown or configuration surface.
 
 `Queue[T]` is a copy handle to shared runtime state. Under Accepted
@@ -588,13 +588,13 @@ ADR-0019.
 
 Filesystem operations and some host operations run on the generic blocking-I/O
 pool under Accepted ADR-0035. When its optional pending-queue bound is full,
-Aurora tasks wait for
+Aura tasks wait for
 admission through the scheduler in FIFO order instead of blocking a pinned
 worker. Cancellation or deadline expiry before queue insertion prevents the
 operation from being submitted. Once inserted, the operation cannot be
-retracted: cancelling the Aurora task cancels its wait, not an
+retracted: cancelling the Aura task cancels its wait, not an
 operating-system call already pending or executing. A cancelled write or other
-side-effecting operation may therefore complete in the host after Aurora has
+side-effecting operation may therefore complete in the host after Aura has
 stopped waiting, with its late result discarded. Programs requiring
 transactional cancellation must write to a temporary artifact and commit it
 explicitly. Bounding accepted pending jobs does not bound admission waiters or
@@ -611,7 +611,7 @@ Process cancellation and close operations signal/terminate according to the proc
 
 ## Runtime Limits
 
-The maintained resource size, header, frame, timeout, and platform limits are normative for Aurora 0.2 and are collected in [Current Limits](/manual/current-limits). An implementation MUST reject or return a typed error when a limit is exceeded; it must not allocate without bound or hang indefinitely where the API supplies a deadline.
+The maintained resource size, header, frame, timeout, and platform limits are normative for Aura 0.2 and are collected in [Current Limits](/manual/current-limits). An implementation MUST reject or return a typed error when a limit is exceeded; it must not allocate without bound or hang indefinitely where the API supplies a deadline.
 
 ## Determinism
 
@@ -627,7 +627,7 @@ Pure expression evaluation, ordinary control flow, and collection operations are
 
 An explicitly seeded `random.Rng` is deterministic rather than part of that
 list: its xoshiro256** sequence, integer/float mapping, and shuffle order are
-fixed for Aurora 0.2.x and specified in [Randomness Module](/manual/randomness).
+fixed for Aura 0.2.x and specified in [Randomness Module](/manual/randomness).
 Secure random calls are external effects and never draw from that stream.
-Aurora converts host effects into typed values and ordering primitives where
+Aura converts host effects into typed values and ordering primitives where
 practical, but does not pretend the host environment is deterministic.

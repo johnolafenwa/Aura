@@ -1,5 +1,0 @@
-error[AU2002]: `SelectOutcome` expects exactly two type arguments
- --> crates/aurora-compiler/tests/fixtures/check-fail/select_outcome_type_arity.au:1:22
-  |
-1 | def observe(outcome: SelectOutcome[int32]):
-  |                      ^

@@ -13,9 +13,8 @@ fn write_source(name: &str, source: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock should follow the Unix epoch")
         .as_nanos();
-    let path =
-        std::env::temp_dir().join(format!("aurora-{name}-{}-{unique}.au", std::process::id()));
-    fs::write(&path, source).expect("temporary Aurora source should write");
+    let path = std::env::temp_dir().join(format!("aura-{name}-{}-{unique}.au", std::process::id()));
+    fs::write(&path, source).expect("temporary Aura source should write");
     path
 }
 
@@ -117,7 +116,7 @@ fn aura_run_renders_nested_call_and_child_task_backtraces() {
     assert_mir_run_stderr_contains(
         "nested-call-backtrace",
         nested,
-        &["note: Aurora call chain (innermost first): explode at 1:1 -> relay at 5:1 -> main at 8:1"],
+        &["note: Aura call chain (innermost first): explode at 1:1 -> relay at 5:1 -> main at 8:1"],
     );
 
     let task = "def child() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    with group = TaskGroup():\n        group.start(child)\n    return 0\n";
@@ -125,9 +124,9 @@ fn aura_run_renders_nested_call_and_child_task_backtraces() {
         "child-task-backtrace",
         task,
         &[
-            "note: Aurora call chain (innermost first): child at 1:1",
-            "note: Aurora task entry: child at 1:1",
-            "note: Aurora task ancestry (youngest first): child spawned from main at 7:15",
+            "note: Aura call chain (innermost first): child at 1:1",
+            "note: Aura task entry: child at 1:1",
+            "note: Aura task ancestry (youngest first): child spawned from main at 7:15",
         ],
     );
 }
@@ -159,9 +158,9 @@ fn standalone_direct_human_trap_keeps_frames_and_runs_cleanup_once() {
     );
     let stderr = String::from_utf8_lossy(&run.stderr);
     for expected in [
-        "note: Aurora call chain (innermost first): child at 5:1",
-        "note: Aurora task entry: child at 5:1",
-        "note: Aurora task ancestry (youngest first): child spawned from main at 12:19",
+        "note: Aura call chain (innermost first): child at 5:1",
+        "note: Aura task entry: child at 5:1",
+        "note: Aura task ancestry (youngest first): child spawned from main at 12:19",
     ] {
         assert!(
             stderr.contains(expected),
@@ -201,7 +200,7 @@ fn mir_and_direct_json_use_the_same_typed_call_and_task_frames() {
                 .is_some_and(|notes| notes.iter().all(|note| !note
                     .as_str()
                     .unwrap_or_default()
-                    .starts_with("Aurora call chain"))),
+                    .starts_with("Aura call chain"))),
             "generated frame prose must be absent from structured notes: {diagnostic}"
         );
     }
@@ -318,7 +317,7 @@ fn structured_frames_keep_imported_function_paths_on_both_backends() {
         .expect("system clock should follow the Unix epoch")
         .as_nanos();
     let root = std::env::temp_dir().join(format!(
-        "aurora-imported-frame-{}-{unique}",
+        "aura-imported-frame-{}-{unique}",
         std::process::id()
     ));
     let helpers = root.join("helpers");

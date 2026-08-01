@@ -1,0 +1,5 @@
+error[AU2005]: strings use quoted literals; `String(...)` is not a constructor
+ --> crates/aura-compiler/tests/fixtures/check-fail/string_constructor_not_supported.au:2:13
+  |
+2 |     value = String("hello")
+  |             ^

@@ -1,5 +1,5 @@
 # Edge test: Closure-like behavior - function passed to another function
-# Aurora may not have first-class functions, testing
+# Aura may not have first-class functions, testing
 
 def apply_twice(n: int32) -> int32:
     return double(n=double(n=n))

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/aurora-compiler", "crates/aura"]
+members = ["crates/aura-compiler", "crates/aura"]
 resolver = "2"
 
 [workspace.package]

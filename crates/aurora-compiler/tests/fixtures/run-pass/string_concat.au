@@ -1,7 +1,0 @@
-def main():
-    greeting = "hello" + ", aurora"
-
-    if greeting == "hello, aurora":
-        print(greeting)
-    else:
-        print("unexpected")

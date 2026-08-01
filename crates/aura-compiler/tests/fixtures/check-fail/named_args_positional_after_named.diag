@@ -1,0 +1,5 @@
+error[AU2004]: positional arguments must come before named arguments in function `add`
+ --> crates/aura-compiler/tests/fixtures/check-fail/named_args_positional_after_named.au:5:23
+  |
+5 |     print(add(left=1, 2))
+  |                       ^

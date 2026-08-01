@@ -1,6 +1,6 @@
 # Grammar
 
-This chapter defines the complete source grammar of Aurora 0.2. The grammar is normative after lexical token formation. Static restrictions—types, visibility, ownership, exhaustiveness, valid receivers, and API-specific rules—are defined by [Static Semantics](/manual/static-semantics).
+This chapter defines the complete source grammar of Aura 0.2. The grammar is normative after lexical token formation. Static restrictions—types, visibility, ownership, exhaustiveness, valid receivers, and API-specific rules—are defined by [Static Semantics](/manual/static-semantics).
 
 ## Notation
 
@@ -83,12 +83,12 @@ accept the same escapes:
 
 An invalid scalar, unknown escape, missing digit, or missing or mismatched
 closing quote is a lexical error. Triple-quoted, raw, and byte-string literals
-are not part of Aurora 0.2. There is no separate character-literal token.
+are not part of Aura 0.2. There is no separate character-literal token.
 
 `FSTRING` begins with `f"` and ends at the matching double quote.
-`{ expression }` interpolates an ordinary Aurora expression. Two opening braces insert one
+`{ expression }` interpolates an ordinary Aura expression. Two opening braces insert one
 literal opening brace, and two closing braces insert one literal closing brace.
-A lone closing brace outside an interpolation is also literal in Aurora 0.2.
+A lone closing brace outside an interpolation is also literal in Aura 0.2.
 Interpolations may contain nested braces and ordinary single- or double-quoted
 strings; braces inside those strings do not change interpolation depth. Empty
 or invalid interpolations are rejected. Single-quoted f-strings, conversion
@@ -117,7 +117,7 @@ Layout token formation is:
    its header and arms.
 6. At end of source, remaining indentation levels emit `DEDENT`, followed by `EOF`.
 
-Outside an open delimiter, Aurora does not prescribe four-space indentation;
+Outside an open delimiter, Aura does not prescribe four-space indentation;
 it requires consistent return to previous block levels. The maintained
 formatter and examples use four spaces.
 
@@ -127,7 +127,7 @@ kind. A delimited expression-form `match` is a layout island: its header and
 arms retain the layout tokens required by the match productions even though an
 outer delimiter remains open.
 
-Backslash continuation is not part of Aurora 0.2. Ordinary strings and
+Backslash continuation is not part of Aura 0.2. Ordinary strings and
 f-strings remain single-line, and existing comma-separated forms do not gain a
 trailing comma.
 
@@ -321,9 +321,9 @@ A receiver, when present, is the first method parameter. Bare `self` is the shar
 
 Bare means shared access for every type, including declaration-known copy types. Return annotations carry no capability: every return is an ordinary owned return.
 
-`borrow` is a reserved retired keyword. It is parsed only far enough to emit
-its exact replacement diagnostic. For example, a retired `borrow mut T`
-parameter receives guidance to write `mut T`.
+`borrow` is reserved and is not part of the accepted capability grammar. It is
+parsed only far enough to emit a diagnostic naming the accepted bare, `mut`,
+or `own` spelling.
 
 Parameter lists, calls, and return annotations do not accept trailing commas. Static checking further restricts duplicate names, default placement/availability, and mutable task targets.
 
@@ -786,9 +786,10 @@ The implementation rejects source that exceeds the maintained parser complexity 
 - one comprehension rejects a 128th combined `for` clause or `if` filter
 - f-string interpolation brace nesting is limited to 128
 
-These are implementation limits of Aurora 0.2 and therefore observable parts of the current reference. A future implementation may raise them but must continue to reject excessive input cleanly.
+These are observable implementation limits of Aura 0.2. Inputs that exceed
+them must be rejected cleanly.
 
-## Syntax Not In Aurora 0.2
+## Syntax Not In Aura 0.2
 
 The grammar intentionally excludes:
 
@@ -805,4 +806,4 @@ The grammar intentionally excludes:
 - detached `spawn`, statement-form `select`, and proposal-only concurrency
   syntax; the maintained `select(source, ...)` is an ordinary call expression
 
-If a form is absent from this grammar, examples and books must not present it as implemented Aurora.
+If a form is absent from this grammar, examples and books must not present it as implemented Aura.

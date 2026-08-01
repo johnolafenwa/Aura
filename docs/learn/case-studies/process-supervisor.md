@@ -6,7 +6,7 @@ The program uses `process.supervisor()`, named children, a restart policy, proce
 
 ## When To Use A Supervisor
 
-Three levels of process management in Aurora, roughly from simplest to richest:
+Three levels of process management in Aura, roughly from simplest to richest:
 
 - `process.run(...)` for a single command that should execute to completion and produce a `Completed` record.
 - `process.start(...)` for a single child whose lifetime overlaps with the parent and whose pipes the parent needs to interact with.

@@ -35,7 +35,7 @@ The lexical spelling and default literal types are defined by [Lexical Structure
 
 Parentheses without a comma group exactly one expression. `(value)` is a
 group, `(value,)` is a singleton tuple, and `(left, right)` is a two-element
-tuple. Tuple value expressions always require parentheses; Aurora does not
+tuple. Tuple value expressions always require parentheses; Aura does not
 accept a naked comma expression.
 
 ## Tuple Expressions
@@ -107,7 +107,7 @@ a binary left operand, index base, method receiver, or indexed-assignment target
 remains borrowed through the operation's later inputs. Another shared borrow is
 permitted, but an overlapping mutable borrow or consumption is rejected with
 `AU3002`, which identifies both the conflict and the retained-borrow origin.
-Name roots and projected member places follow the same rule, and Aurora never
+Name roots and projected member places follow the same rule, and Aura never
 deep-clones the selected place implicitly. Each f-string interpolation renders
 to `String` at its own position before evaluation moves to the next
 interpolation. Static borrow analysis checks all accesses at one call boundary
@@ -155,7 +155,7 @@ inside = lower < value < upper
 
 ## Boolean Operators
 
-`and`, `or`, and `not` operate on `bool`; Aurora has no general truthiness conversion for numbers, strings, collections, resources, or classes.
+`and`, `or`, and `not` operate on `bool`; Aura has no general truthiness conversion for numbers, strings, collections, resources, or classes.
 
 `and` and `or` short-circuit:
 
@@ -194,7 +194,7 @@ selected arm and preserves both source owners, while assignment, return, or an
 
 ## Arithmetic And Comparison
 
-Built-in arithmetic supports equal integer types or equal floating-point types. `String + String` concatenates strings. Aurora does not implicitly widen non-literal numeric values.
+Built-in arithmetic supports equal integer types or equal floating-point types. `String + String` concatenates strings. Aura does not implicitly widen non-literal numeric values.
 
 | Operators | Builtin result |
 | --- | --- |
@@ -233,7 +233,7 @@ Equality and inequality have one contextual `Option` rule: when either operand
 has static type `Option[T]`, a bare `None` on the other side denotes
 `Option.None` of that same specialization. The rule is symmetric. Unit
 `None == None` is `true` and unit `None != None` is `false`; a qualified
-`Option.None` with no context for its type argument is rejected. Aurora rejects
+`Option.None` with no context for its type argument is rejected. Aura rejects
 Python identity tests such as `value is None`; use `value == None`,
 `value != None`, or `match`.
 
@@ -241,9 +241,9 @@ Arithmetic and ordering may resolve through the corresponding operator trait.
 For non-numeric user types, `/` requests `Div.div`; `//` requests
 `FloorDiv.floor_div` when neither a builtin numeric rule nor the builtin
 `Duration // int64` rule applies. Builtin equality does not use an equality
-operator trait in Aurora 0.2.
+operator trait in Aura 0.2.
 
-Tuple `<`, `<=`, `>`, and `>=` are static errors. Aurora has no lexicographic
+Tuple `<`, `<=`, `>`, and `>=` are static errors. Aura has no lexicographic
 tuple ordering, and an `Ord` implementation cannot add one to a structural
 tuple type.
 
@@ -537,7 +537,7 @@ A negative endpoint `i` is normalized exactly once as `len + i`. After
 normalization, start and end must each be in `0..=len`, and start must not
 exceed end. Otherwise evaluation traps with `AU4003`.
 
-Aurora deliberately differs from Python here: slice endpoints are **not
+Aura deliberately differs from Python here: slice endpoints are **not
 clamped**. An endpoint that remains out of range after one normalization is a
 broken invariant, not a request for the nearest boundary. A reversed range is
 also an `AU4003` failure rather than an empty slice.
@@ -573,7 +573,7 @@ copies; mutate the source by index or build a new value`.
 
 ## Collection Literals
 
-Aurora has list, set, and map literals:
+Aura has list, set, and map literals:
 
 ```python
 values = [1, 2, 3]
@@ -660,7 +660,7 @@ to right. Each interpolation is rendered to `String` immediately, before the
 next interpolation begins:
 
 ```python
-name = "aurora"
+name = "aura"
 count = 3
 message = f"{name}: {count}"
 ```
@@ -756,7 +756,7 @@ unavailable.
 
 ## Forms Not Implemented
 
-Aurora 0.2 expressions do not include generator expressions, method values,
+Aura 0.2 expressions do not include generator expressions, method values,
 assignment expressions, call-site capability annotations, non-numeric casts, or
 ordinary trailing commas. Lambdas are expression-bodied and contextually
 typed; they do not add statement-bodied or implicitly reference-capturing
@@ -879,7 +879,7 @@ Collection and string resource caps are documented by their feature pages.
 Comprehensions are eager, have no `mut`/`own` source form, and do not provide
 early exit, lazy resumption, or a user-defined iterable protocol; use an
 explicit loop when those properties are required.
-Floating values follow the specified Aurora operations and shortest-round-trip
+Floating values follow the specified Aura operations and shortest-round-trip
 printing; no backend may substitute a different expression result as an
 implementation-defined choice.
 

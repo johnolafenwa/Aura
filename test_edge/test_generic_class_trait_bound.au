@@ -18,7 +18,7 @@ class Container[T: Printable]:
         print(self.item.to_string())
 
 def main() -> int32:
-    l = Label(text="aurora")
+    l = Label(text="aura")
     c = Container(item=l)
     c.display()
     return 0

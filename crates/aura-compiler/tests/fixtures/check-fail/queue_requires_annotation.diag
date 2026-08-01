@@ -1,0 +1,5 @@
+error[AU2999]: unsupported call target
+ --> crates/aura-compiler/tests/fixtures/check-fail/queue_requires_annotation.au:2:10
+  |
+2 |     ch = queue()
+  |          ^

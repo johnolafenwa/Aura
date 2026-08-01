@@ -1,0 +1,7 @@
+error[AU3002]: argument for parameter `w` in function `read_and_write` overlaps borrow for parameter `r`; mutable borrows must be exclusive
+ --> crates/aura-compiler/tests/fixtures/check-fail/overlapping_borrow_and_borrow_mut_arguments.au:9:26
+  |
+9 |     read_and_write(data, data)
+  |                          ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/overlapping_borrow_and_borrow_mut_arguments.au:9:20: shared access for parameter `r` begins here
+  = help: pass non-overlapping places; shared accesses may overlap, but mutable access must remain exclusive

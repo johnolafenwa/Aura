@@ -1,5 +1,0 @@
-error[AU2003]: tuple ordering is not supported; use `==` or `!=`, or compare tuple elements explicitly
- --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_ordering_rejected.au:2:11
-  |
-2 |     print((1, 2) < (1, 3))
-  |           ^

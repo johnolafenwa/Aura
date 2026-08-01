@@ -1,3 +1,0 @@
-def main():
-    text = "Aurora"
-    print(text[0])

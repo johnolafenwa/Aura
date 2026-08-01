@@ -1,0 +1,5 @@
+error[AU2999]: duplicate parameter `value` on function `choose`
+ --> crates/aura-compiler/tests/fixtures/check-fail/duplicate_function_parameters.au:1:26
+  |
+1 | def choose(value: int32, value: int32) -> int32:
+  |                          ^

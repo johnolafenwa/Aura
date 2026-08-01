@@ -1,5 +1,0 @@
-error[AU1101]: empty tuple literals are not supported; use `None` for unit
- --> crates/aurora-compiler/tests/fixtures/parse-fail/tuple_empty_literal.au:2:13
-  |
-2 |     value = ()
-  |             ^

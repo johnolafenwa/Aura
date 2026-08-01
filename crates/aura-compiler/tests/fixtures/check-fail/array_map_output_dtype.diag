@@ -1,0 +1,5 @@
+error[AU2002]: Array.map callback must return `int32`, `int64`, `float32`, or `float64`, found `bool`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_map_output_dtype.au:3:31
+  |
+3 |     mapped = values.map[bool](f=lambda value: value > 0)
+  |                               ^

@@ -5,7 +5,7 @@ This benchmark measures two exact one-million-element `float64` workloads:
 - fresh owned elementwise addition of two contiguous arrays
 - reduction of one existing contiguous array with `sum()`
 
-It compares Aurora's direct native backend with NumPy under the same explicit
+It compares Aura's direct native backend with NumPy under the same explicit
 single-thread environment. The comparison is release evidence, not a CI
 performance gate and not a general claim of NumPy performance or API
 compatibility.
@@ -26,8 +26,8 @@ python3 scripts/bench-numeric-arrays.py \
   --aura target/release/aura \
   --python /Applications/Xcode.app/Contents/Developer/usr/bin/python3 \
   --pairs 11 \
-  --raw-json /private/tmp/aurora-phase73-arrays-post-reboot-raw.json \
-  --summary-json /private/tmp/aurora-phase73-arrays-post-reboot-summary.json
+  --raw-json /private/tmp/aura-phase73-arrays-post-reboot-raw.json \
+  --summary-json /private/tmp/aura-phase73-arrays-post-reboot-summary.json
 ```
 
 The raw schema records all warmups and paired observations, exact commands,
@@ -41,15 +41,15 @@ The smaller summary repeats the release-relevant provenance and links back to
 the raw report by SHA-256.
 
 The four-lane order reverses every repetition. Each lane uses
-`AURORA_WORKERS=1` plus the common BLAS/OpenMP single-thread environment.
+`AURA_WORKERS=1` plus the common BLAS/OpenMP single-thread environment.
 There are 512 add operations and 1,024 reductions per timed observation.
 Reported values include raw samples, median, median absolute deviation, p95,
-best, the paired Aurora/NumPy ratios, their median, and the ratio of medians.
+best, the paired Aura/NumPy ratios, their median, and the ratio of medians.
 
-No threshold compares Aurora with NumPy. A report is contractual only when
+No threshold compares Aura with NumPy. A report is contractual only when
 the checkout is clean and detached, the host is Mac14,9, every
 protocol/checksum validates, the competing-process override is absent, and
-all three host inventories are quiet. An inventory rejects an Aurora-checkout
+all three host inventories are quiet. An inventory rejects an Aura-checkout
 `cargo`, `rustc`, or `aura` process at any CPU level. It also rejects any other
 process that remains at or above 50% CPU in two snapshots 0.25 seconds apart,
 so a canonical CPU burner such as `yes` is recorded even outside the checkout.
@@ -64,16 +64,16 @@ was `Thu Jul 30 23:02:25 2026`; the checkout was clean and detached, all three
 quiet-host inventories were empty, and no override was used. Xcode Python
 3.9.6 supplied NumPy 2.0.2 with Accelerate.
 
-| workload | Aurora median per operation | NumPy median per operation | ratio of medians |
+| workload | Aura median per operation | NumPy median per operation | ratio of medians |
 | --- | ---: | ---: | ---: |
 | fresh owned one-million-element `float64` add | 1.142461 ms | 0.251602 ms | 4.540751× |
 | existing one-million-element `float64` sum | 1.150392 ms | 0.174065 ms | 6.608975× |
 
 The 11-pair raw report is retained at
-`/private/tmp/aurora-phase73-arrays-post-reboot-raw.json`, SHA-256
+`/private/tmp/aura-phase73-arrays-post-reboot-raw.json`, SHA-256
 `f51b979977519b5cbca9be4119a77bb3aff1d1a2874e1cdd4269f315bc1f9e7d`.
 The summary is retained at
-`/private/tmp/aurora-phase73-arrays-post-reboot-summary.json`, SHA-256
+`/private/tmp/aura-phase73-arrays-post-reboot-summary.json`, SHA-256
 `f6fc84c1f0fadfb4b93a5f07befb5a33cbaa6926d54ef88a795e103106b410ab`.
 The measured release `aura` binary hash is
 `a717e19d2f634087ae51c601632b428ed8cc5c98ed6745039d7f036b189ca035`.

@@ -1,6 +1,6 @@
 # Types
 
-Aurora is statically typed. Every expression has a type, and type annotations are part of the public shape of functions, fields, methods, and many empty literals.
+Aura is statically typed. Every expression has a type, and type annotations are part of the public shape of functions, fields, methods, and many empty literals.
 
 The type system is designed to keep three facts visible:
 
@@ -18,7 +18,7 @@ The type system is designed to keep three facts visible:
 | `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize` | Unsigned integers. |
 | `float32`, `float64` | Floating-point values. |
 | `String` | Owned UTF-8 string; `len()` counts Unicode scalar values and `byte_len()` counts encoded bytes. |
-| `str` | Compatibility spelling that canonicalizes to `String` in Aurora 0.2; it is not a distinct runtime view type. |
+| `str` | Compatibility spelling that canonicalizes to `String` in Aura 0.2; it is not a distinct runtime view type. |
 | `None` | Unit type and unit value. |
 | `Duration` | Signed 128-bit nanosecond duration used by arithmetic, sleeps, timeouts, and scheduling APIs. |
 | `Range` | Integer range returned by `range(...)`. |
@@ -40,7 +40,7 @@ Integer bounds are exact:
 | `intsize` | host-pointer-width signed range |
 | `uintsize` | host-pointer-width unsigned range |
 
-`float32` and `float64` use IEEE-754 binary32 and binary64 representations. Literal lexing first requires a finite binary64 value; contextual `float32` conversion may round or overflow as recorded in [Current Limits](/manual/current-limits). Runtime operations may produce NaN, but Aurora 0.2 makes `/`, `//`, or `%` by a floating zero explicit runtime failures rather than producing infinity or NaN through those operators.
+`float32` and `float64` use IEEE-754 binary32 and binary64 representations. Literal lexing first requires a finite binary64 value; contextual `float32` conversion may round or overflow as recorded in [Current Limits](/manual/current-limits). Runtime operations may produce NaN, but Aura 0.2 makes `/`, `//`, or `%` by a floating zero explicit runtime failures rather than producing infinity or NaN through those operators.
 
 `int` is an alias for `int64`, so the two spellings have identical bounds, type identity, layout, and runtime behavior. An unsuffixed integer literal uses an expected integer type when one is available. It may also use an expected `float32` or `float64` when its value is exactly representable in that target; this is literal typing, not a conversion available to integer variables. Otherwise it defaults to `int64`.
 
@@ -86,8 +86,8 @@ representation.
 O(n). `String.byte_len() -> int64` reads the UTF-8 byte count in O(1).
 `String.to_bytes() -> Vec[uint8]` and
 `String.from_bytes(Vec[uint8]) -> Result[String, bytes.Error]` provide the
-explicit strict UTF-8 boundary; `Vec[uint8]` is Aurora's bytes representation.
-Aurora has no distinct character type, integer String indexing, `chars()`,
+explicit strict UTF-8 boundary; `Vec[uint8]` is Aura's bytes representation.
+Aura has no distinct character type, integer String indexing, `chars()`,
 `ord()`, or `chr()`. String slicing accepts exact `int32` scalar endpoints,
 runs in O(n) over the source, and returns a fresh owned String. It is not a
 view or a byte-indexing operation.
@@ -142,7 +142,7 @@ queue or task.
 
 `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`, and `WaitAll[T]` are
 treated as move outcome values even when every payload type is copyable.
-`Range` is also not a general copy type in Aurora 0.2; use ranges directly in
+`Range` is also not a general copy type in Aura 0.2; use ranges directly in
 iteration rather than relying on duplication.
 
 A generic user-enum payload whose declared type is an unconstrained type parameter is not assumed copyable, even when one later instantiation supplies a copy type.
@@ -166,7 +166,7 @@ values and reads rather than consumes both operands, regardless of copy
 classification. Runtime metadata carried with a tuple value is not part of
 value equality. Tuple ordering is not defined.
 
-Aurora has no empty tuple type and does not convert tuples to or from
+Aura has no empty tuple type and does not convert tuples to or from
 collections. See [Tuples](/manual/tuples) for construction, unpacking,
 patterns, indexing, and the exact current boundary.
 
@@ -181,7 +181,7 @@ one owner instead of cloning it.
 ## Provisional Transfer Classification
 
 Accepted ADR-0033 defines the static property used at a task boundary.
-`Transfer` means that ownership of a value may cross from one Aurora task
+`Transfer` means that ownership of a value may cross from one Aura task
 worker to another; it is separate from both Copy and clone safety. `Transfer`
 is derived by the compiler and is not a builtin trait that source code can
 implement or assert. An ordinary user trait also named `Transfer` does not
@@ -288,7 +288,7 @@ Simple annotations:
 
 ```python
 count: int32 = 0
-name: String = "aurora"
+name: String = "aura"
 ```
 
 Collection annotations:
@@ -313,7 +313,7 @@ seen = Set[int32]()
 name: String? = None
 ```
 
-Type arguments are invariant, nonempty when brackets are present, and must exactly match the declared arity. Aurora does not implicitly convert `Vec[int32]` to `Vec[int64]` or treat structurally identical user classes as the same type.
+Type arguments are invariant, nonempty when brackets are present, and must exactly match the declared arity. Aura does not implicitly convert `Vec[int32]` to `Vec[int64]` or treat structurally identical user classes as the same type.
 
 ## Option And Result Types
 
@@ -334,7 +334,7 @@ symmetrically: if either operand is `Option[T]`, a bare `None` on the other side
 has that same option type. Unit `None == None` is `true` and unit
 `None != None` is `false`. A qualified `Option.None` without an expected or
 otherwise inferred specialization is rejected because `T` is unconstrained.
-Aurora has no identity-test spelling: use `value == None`, `value != None`, or
+Aura has no identity-test spelling: use `value == None`, `value != None`, or
 `match`, not Python's `is` or `is not`.
 
 Pattern matching may use qualified or short-form variants when the type is known:
@@ -438,7 +438,7 @@ recursive field.
 The static type determines whether reading an owned place copies it or moves
 it. A copy declaration is valid only when every stored field or payload is
 copy. Borrowing and parameter passing do not change the underlying type, and
-Aurora inserts neither hidden cloning nor runtime coercion. Type annotations
+Aura inserts neither hidden cloning nor runtime coercion. Type annotations
 are erased after checking and add no evaluation step. Generic clone-producing
 uses infer clone-safety obligations that are checked after specialization; this
 does not change the underlying copy/move category.
@@ -473,10 +473,9 @@ contains a backend surface that cannot preserve the same behavior.
 
 ## Limits And Implementation-Defined Behavior
 
-`str` is currently an alias rather than a distinct view; first-class loan or
-view values are unavailable; method-value types, user-defined numeric casts,
-and non-numeric casts are unavailable; and recursive value fields
-require `indirect`. Capture-free named function values use
+`str` is an alias for `String`; method-value types, user-defined numeric casts,
+and non-numeric casts are unavailable, and recursive value fields require
+`indirect`. Capture-free named function values use
 `def(T1, mut T2, own T3) -> R`; bare parameters are shared and the written
 `mut`/`own` modes are part of the type. Contextually typed lambdas use that
 same source-level callable signature; a capturing closure additionally owns
@@ -484,7 +483,7 @@ its hidden environment. Arbitrary stored and parameter `def` types describe
 capture-free code pointers; compiler-known callback and task-start sites
 preserve the additional closure metadata. `intsize` and
 `uintsize` follow the target pointer width, and host process exit transport may
-narrow an `int32` after Aurora returns it. Other numeric widths and overflow
+narrow an `int32` after Aura returns it. Other numeric widths and overflow
 behavior are language-defined rather than implementation-defined. FFI v0
 opaque handles are nominal non-Copy, non-cloneable, non-Transfer wrappers for
 one non-null foreign pointer. Extern functions are direct-call-only

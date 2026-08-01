@@ -1,0 +1,6 @@
+error[AU4002]: integer value `200` does not fit in `int8`
+ --> crates/aura-compiler/tests/fixtures/run-fail/int8_overflow_binary_expression.au:4:11
+  |
+4 |     print(a + b)
+  |           ^
+  = note: Aura call chain (innermost first): main at 1:1

@@ -1,5 +1,0 @@
-error[AU2005]: slice steps are unavailable; use an explicit loop to select a stride
- --> crates/aurora-compiler/tests/fixtures/parse-fail/slice_step_omitted_bounds.au:3:19
-  |
-3 |     print(values[::2])
-  |                   ^

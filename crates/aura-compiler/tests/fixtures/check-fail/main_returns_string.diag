@@ -1,0 +1,5 @@
+error[AU2999]: `main` must return `int32` or `None` in the bootstrap runtime
+ --> crates/aura-compiler/tests/fixtures/check-fail/main_returns_string.au:1:1
+  |
+1 | def main() -> String:
+  | ^

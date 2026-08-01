@@ -1,18 +1,19 @@
 # Changelog
 
-All notable user-facing changes are recorded here. Aurora follows semantic
+All notable user-facing changes are recorded here. Aura follows semantic
 versioning for release artifacts while it remains a technical preview; a minor
 preview release may still contain source and API incompatibilities called out
 in this file.
 
 ## 0.2.0 — 2026-07-31 (technical preview)
 
-Aurora 0.2.0 is the first complete distribution of the implemented
+Aura 0.2.0 is the first complete distribution of the implemented
 language reference: a typed Python-shaped source language, deterministic
 ownership model, structured-concurrency runtime, MIR and direct-native
 backends, package tooling, language server, VS Code extension, and maintained
 Learn and Manual tracks. It is intended for evaluation and controlled
-experiments, not production deployment or execution of untrusted code.
+experiments, not production deployment or execution of untrusted code. It was
+developed under the working name Aurora before its first publication.
 
 ### Breaking changes and migration
 
@@ -53,7 +54,7 @@ experiments, not production deployment or execution of untrusted code.
   scheduler thread. Per-producer Queue order stays FIFO, but global sibling
   scheduling and output order are unspecified. Programs must synchronize any
   order they observe.
-- The native artifact-cache format is now `aurora-native-cache-v4`; artifacts
+- The native artifact-cache format is `aura-native-cache-v5`; artifacts
   carrying older capability or backend metadata are intentionally rebuilt.
 
 ### Language
@@ -66,7 +67,7 @@ experiments, not production deployment or execution of untrusted code.
   clauses and left-to-right filters. Generator expressions remain rejected
   with guidance to use a comprehension or explicit loop.
 - Added owned `Vec[T]` and Unicode-scalar `String` slicing with omitted
-  endpoints and one-time negative normalization. Aurora deliberately traps
+  endpoints and one-time negative normalization. Aura deliberately traps
   invalid or reversed ranges with `AU4003`; unlike Python, it does not clamp
   slice bounds. Steps, slice assignment, String integer indexing, and views
   remain unavailable.
@@ -95,9 +96,9 @@ experiments, not production deployment or execution of untrusted code.
 - Added typed heterogeneous `select(...)` across Queue, Task, and Duration
   sources, plus `wait_any`, `wait_all`, cancellation, scheduler-aware Queue
   operations, and structured child cleanup.
-- Added a lazily created blocking-I/O pool. `AURORA_BLOCKING_WORKERS` selects an
+- Added a lazily created blocking-I/O pool. `AURA_BLOCKING_WORKERS` selects an
   exact positive worker count;
-  `AURORA_BLOCKING_QUEUE_CAPACITY` optionally bounds accepted pending work.
+  `AURA_BLOCKING_QUEUE_CAPACITY` optionally bounds accepted pending work.
   Invalid settings fail before user code with `AU4006` on both backends.
 - Expanded the maintained filesystem, process, TCP/UDP, HTTP, WebSocket, Unix
   socket, TLS, JSON, and control-plane surfaces with typed errors, explicit
@@ -134,7 +135,7 @@ experiments, not production deployment or execution of untrusted code.
   byte views, and non-null opaque handles. Package manifests must opt in and
   dependency authorization is reported exactly from the root package.
 - FFI declarations are a native trust boundary. False declarations or
-  misbehaving C code can violate Aurora's invariants; callbacks, variadics,
+  misbehaving C code can violate Aura's invariants; callbacks, variadics,
   raw pointer values, nullable handles, returned views, retained views, and
   dynamic-library selection remain unsupported. The MIR and direct backends
   use the same validated ABI description and host-call engine.
@@ -147,7 +148,7 @@ experiments, not production deployment or execution of untrusted code.
   first-axis owned copying slices; map; sum/min/max/mean; exact-shape
   elementwise arithmetic; and scalar arithmetic.
 - Elementwise and reduction work runs in dtype-specialized contiguous native
-  runtime kernels. Aurora makes no vectorization claim. The Manual records the
+  runtime kernels. Aura makes no vectorization claim. The Manual records the
   baseline-host one-million-element measurements as evidence, not as a portable
   performance claim or gate.
 - Arrays intentionally have no views, array-shape broadcasting, mixed-dtype
@@ -166,7 +167,7 @@ experiments, not production deployment or execution of untrusted code.
   runtime/link manifests, a content-addressed native cache, function-level
   `aura test` discovery, recursive formatting/testing, package/workspace
   resolution and lockfiles, and compiler inspection/analysis commands.
-- Added complete typed Aurora call frames and child-task ancestry to MIR and
+- Added complete typed Aura call frames and child-task ancestry to MIR and
   direct runtime failures. Human diagnostics, schema-version-1 JSON, analysis,
   the language server, and the VS Code extension preserve the structured
   records. A private direct-runtime trap channel keeps ordinary process exit
@@ -176,12 +177,12 @@ experiments, not production deployment or execution of untrusted code.
   UTF-8/source spans, completion recovery on incomplete programs, hover and
   go-to-definition, and maintained example-file regression coverage.
 - Release archives carry the compiler, native runtime, and linker manifest.
-  Installed archives can check, run, and build Aurora without Cargo or a source
+  Installed archives can check, run, and build Aura without Cargo or a source
   checkout; a host C compiler is still required for native output.
 
 ### Current limits
 
-- Aurora 0.2.0 is not a stable compatibility promise, production
+- Aura 0.2.0 is not a stable compatibility promise, production
   systems release, sandbox, or security boundary for untrusted source.
 - Release archives support glibc Linux x86-64 and macOS x86-64/Apple silicon.
   Windows, musl Linux, other architectures, and cross-compilation are

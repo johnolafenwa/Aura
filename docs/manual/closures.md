@@ -1,17 +1,17 @@
 # Closures
 
-Aurora closures use `lambda parameters: expression`. They are small
+Aura closures use `lambda parameters: expression`. They are small
 expression-bodied callable values. Parameter types come from context; a
 zero-parameter lambda may infer its result type from its body. Captures are
 always by value: Copy values are copied and owned non-Copy values are moved
 when the closure is created.
 
-```aurora
+```aura
 def main():
     factor: int32 = 2
     scale: def(int32) -> int32 = lambda value: value * factor
 
-    name = "Aurora"
+    name = "Aura"
     length: def() -> int64 = lambda: name.len()
 
     token = "owned"
@@ -62,7 +62,7 @@ type. An expected result type also constrains the body. A zero-parameter
 `lambda: expression` may instead infer `def() -> R` from the body when no
 expected callable type is present.
 
-```aurora
+```aura
 shared: def(String) -> int64 = lambda text: text.len()
 owned: def(own String) -> String = lambda own text: text
 push_one: def(mut Vec[int32]) -> None = lambda mut values: values.push(1)
@@ -129,8 +129,8 @@ Copy captures leave their sources usable. Non-Copy captures move, so using the
 outer source afterward reports `AU3001`. Clone before creation when both
 owners are required:
 
-```aurora
-name = "Aurora"
+```aura
+name = "Aura"
 kept = name.clone()
 length: def() -> int64 = lambda: kept.len()
 print(name)
@@ -214,9 +214,8 @@ diagnostics.
 Closures are expression-only and contextually typed. They do not support
 statement bodies, inline parameter types, defaults, generics, capture lists,
 implicit reference capture, mutable captured state, method values, trait
-objects, FFI callbacks, or asynchronous syntax. In-loan
-capture is designed by accepted ADR-0038 for Aurora 0.3 but is not implemented
-or authorized in the 0.2 cycle.
+objects, FFI callbacks, asynchronous syntax, shared-capability capture, or
+mutable captured state.
 
 Arbitrary structural `def` parameters and stored `def` fields, collection
 elements, and annotated returns currently carry only capture-free code

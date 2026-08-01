@@ -1,6 +1,6 @@
 # I/O And Networking
 
-Aurora now has a maintained I/O surface through four builtin modules:
+Aura now has a maintained I/O surface through four builtin modules:
 
 - `io`
 - `fs`
@@ -76,7 +76,7 @@ Text and binary one-shot helpers:
 - `fs.read_dir(path)`
 - `fs.remove_file(path)`
 
-The one-shot helpers and `fs.File` whole-file reads are capped at 256 MiB of remaining content in both `aura run` and built binaries. Aurora 0.2 has no incremental file-read member, so larger files need a host helper or pre-splitting.
+The one-shot helpers and `fs.File` whole-file reads are capped at 256 MiB of remaining content in both `aura run` and built binaries. Aura 0.2 has no incremental file-read member, so larger files need a host helper or pre-splitting.
 
 Scoped file-handle constructors:
 
@@ -128,7 +128,7 @@ See:
 
 ## Processes
 
-The `process` module provides shell-free subprocess helpers that fit the current Aurora runtime model.
+The `process` module provides shell-free subprocess helpers that fit the current Aura runtime model.
 
 Process constructors:
 
@@ -139,8 +139,8 @@ Process constructors:
 - `process.null()`
 - `process.pipe()`
 
-`command` is always an explicit `Vec[String]` argv list. Aurora does not provide a shell-string subprocess API.
-When `group=true`, Aurora starts the child in its own process group and applies terminate/kill/close cleanup to that full group. On current maintained hosts, grouped children are supported on Unix.
+`command` is always an explicit `Vec[String]` argv list. Aura does not provide a shell-string subprocess API.
+When `group=true`, Aura starts the child in its own process group and applies terminate/kill/close cleanup to that full group. On current maintained hosts, grouped children are supported on Unix.
 
 `process.start(...)` returns `Result[process.Child, process.Error]`. `process.Child` works with `with` and exposes:
 
@@ -207,7 +207,7 @@ One-shot example:
 import process
 
 def run_echo() -> Result[None, process.Error]:
-    completed = try process.run(["/bin/echo", "aurora process"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s, group=true)
+    completed = try process.run(["/bin/echo", "aura process"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s, group=true)
     try completed.check()
     print(completed.stdout().trim())
     print(completed.stdout_bytes().len())
@@ -329,7 +329,7 @@ See:
 
 ## UDP
 
-Aurora also supports UDP sockets on the same poll-driven runtime:
+Aura also supports UDP sockets on the same poll-driven runtime:
 
 - `net.udp_bind(address)`
 
@@ -390,7 +390,7 @@ See [examples/io/http_roundtrip.au](../examples/io/http_roundtrip.au).
 
 ### Application-Level Retries
 
-Aurora's HTTP helpers perform one request. The generic
+Aura's HTTP helpers perform one request. The generic
 `control.retry` helper can repeat a capture-free `def() -> Result[T, E]`
 worker when every `Err` is retryable, using a fixed attempt budget and
 exponential `Duration` backoff. HTTP status classification, jitter, and richer
@@ -434,7 +434,7 @@ See [examples/io/websocket_roundtrip.au](../examples/io/websocket_roundtrip.au).
 
 ## Unix Sockets And TLS
 
-Aurora also supports Unix domain stream sockets and TLS streams on the maintained nonblocking socket runtime.
+Aura also supports Unix domain stream sockets and TLS streams on the maintained nonblocking socket runtime.
 
 Unix-socket constructors:
 
@@ -473,20 +473,20 @@ See [examples/io/unix_tls_roundtrip.au](../examples/io/unix_tls_roundtrip.au), w
 
 ## Timeouts And Cancellation
 
-Most maintained socket operations accept optional `timeout=...` arguments. Timeouts are expressed with Aurora `Duration` values such as `100ms`, `1s`, or `2m`. Computed timeouts may use `Duration.ms(n)` or arithmetic such as `attempt * 1ms`. Explicit values must be non-negative and fit the host deadline; invalid values return `io.Error.InvalidInput` rather than being treated as unlimited.
+Most maintained socket operations accept optional `timeout=...` arguments. Timeouts are expressed with Aura `Duration` values such as `100ms`, `1s`, or `2m`. Computed timeouts may use `Duration.ms(n)` or arithmetic such as `attempt * 1ms`. Explicit values must be non-negative and fit the host deadline; invalid values return `io.Error.InvalidInput` rather than being treated as unlimited.
 
 For connect operations, one timeout budget covers blocking-pool admission,
 hostname resolution, every resolved-address attempt, and the remaining
-protocol handshake. Aurora does not restart the full timeout for each address
+protocol handshake. Aura does not restart the full timeout for each address
 returned by DNS. Cancellation or expiry before pool acceptance prevents
-submission. After acceptance it stops the Aurora task's wait, but the host
+submission. After acceptance it stops the Aura task's wait, but the host
 resolver or connect syscall may finish later and its result is discarded
 safely.
 
-`AURORA_BLOCKING_WORKERS=<positive integer>` selects an exact worker count
+`AURA_BLOCKING_WORKERS=<positive integer>` selects an exact worker count
 without clamping; the absent default uses host parallelism with fallback `4`
 and a derived `2..=8` clamp.
-`AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally bounds accepted
+`AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally bounds accepted
 pending jobs only, and omission preserves an unbounded queue. Full-queue
 admission is FIFO and scheduler-aware. The queue bound limits accepted pending
 backlog, not admission waiters, and cannot interrupt accepted work or guarantee
@@ -501,14 +501,14 @@ The socket runtime also threads task-group cancellation into maintained socket w
 
 ## Current Model
 
-This surface is deliberately explicit but no longer relies on the old blocking/polling split:
+This surface uses one explicit scheduler-backed I/O model:
 
 - queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all
   run through the pinned-worker runtime scheduler
 - socket-backed networking and HTTP convenience helpers use nonblocking descriptors with timeout and cancellation support
 - hostname resolution, listener binding, UDP destination resolution, and blocking TCP/Unix connect syscalls offload through the configurable generic blocking-I/O pool
 - process waits and captured child stdio pipes use the same scheduler-backed wait path
-- Aurora tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
+- Aura tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
 - ordinary file operations offload through the pinned-worker scheduler-backed
   runtime instead of pinning a lightweight task on a blocking host thread
 
@@ -519,4 +519,4 @@ Current process notes:
 - there is not yet a PTY surface
 - there are not yet pipeline helpers
 
-That keeps the execution model straightforward while removing the old timeout-spin loops, the blocking HTTP special case, and the old synchronous file-I/O mismatch.
+This keeps lightweight tasks schedulable while host operations wait.

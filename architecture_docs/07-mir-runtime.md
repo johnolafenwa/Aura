@@ -1,6 +1,6 @@
 # MIR Runtime
 
-This chapter explains how Aurora executes MIR directly.
+This chapter explains how Aura executes MIR directly.
 
 ## What a runtime does
 
@@ -12,9 +12,9 @@ A runtime is the part of a language implementation that actually performs the pr
 - handling control flow
 - interacting with the host environment
 
-Aurora's MIR runtime lives in [`mir_runtime.rs`](../crates/aurora-compiler/src/mir_runtime.rs). It executes the MIR produced by [`mir.rs`](../crates/aurora-compiler/src/mir.rs).
+Aura's MIR runtime lives in [`mir_runtime.rs`](../crates/aura-compiler/src/mir_runtime.rs). It executes the MIR produced by [`mir.rs`](../crates/aura-compiler/src/mir.rs).
 
-## Aurora's maintained `run` architecture
+## Aura's maintained `run` architecture
 
 Today, `aura run` works like this:
 
@@ -27,18 +27,18 @@ The MIR runtime is not a toy leftover. It is one of the main maintained executio
 
 ## Runtime layering
 
-The MIR runtime uses the shared runtime value layer in [`runtime_value.rs`](../crates/aurora-compiler/src/runtime_value.rs).
+The MIR runtime uses the shared runtime value layer in [`runtime_value.rs`](../crates/aura-compiler/src/runtime_value.rs).
 
-![Aurora runtime layering](assets/runtime-layering.svg)
+![Aura runtime layering](assets/runtime-layering.svg)
 
 That split is important:
 
 - `mir_runtime.rs` knows how to execute MIR
-- `runtime_value.rs` knows how Aurora values and resources behave
+- `runtime_value.rs` knows how Aura values and resources behave
 
 ## The main runtime objects
 
-Aurora's MIR runtime centers around:
+Aura's MIR runtime centers around:
 
 | Type | Purpose |
 | --- | --- |
@@ -59,13 +59,13 @@ empty.
 
 `run(module)` does not execute directly on the caller's thread. It starts a dedicated runtime thread with a large stack:
 
-- Aurora supports real recursion
+- Aura supports real recursion
 - several runtime operations are stack-heavy enough to justify a larger stack budget
 - runtime panics are caught and translated into diagnostics
 
 That is why `run` wraps execution in a thread builder instead of just calling a function directly.
 
-This dedicated entry thread reserves a 64 MiB host stack. Aurora task bodies
+This dedicated entry thread reserves a 64 MiB host stack. Aura task bodies
 execute as stackful coroutines on the pinned-worker scheduler. The worker
 count defaults to the available parallelism reported by the host, and a child
 remains on its
@@ -76,15 +76,15 @@ stack from 256 KiB through 64 MiB for an individual child.
 Dedicated process-lifetime services keep blocking and stack-heavy host work off
 the coroutine stacks: the blocking-I/O pool owns ordinary blocking calls, the
 protocol service owns TLS/HTTP/WebSocket steps, and the JSON codec service owns
-the recursive parser frames for dynamic `json.parse`. The legacy
-`json.is_valid` and `json.parse_string_map` compatibility helpers remain
+the recursive parser frames for dynamic `json.parse`. The bounded
+`json.is_valid` and `json.parse_string_map` operations remain
 bounded caller-side operations and do not enter that service. These services
-resume the pinned coroutine after completion; they do not execute Aurora task
+resume the pinned coroutine after completion; they do not execute Aura task
 bodies and are distinct from the pinned-worker task-execution parallelism.
 
 ## The core execution loop
 
-At a high level, Aurora executes MIR like this:
+At a high level, Aura executes MIR like this:
 
 ```mermaid
 flowchart TD
@@ -105,7 +105,7 @@ Inside a function call, the runtime:
 - updates a cleanup stack for `with`
 - returns a `Value`
 
-## `Env`: Aurora's local state for one call
+## `Env`: Aura's local state for one call
 
 `Env` stores:
 
@@ -123,11 +123,11 @@ It supports:
 
 This is how MIR place strings become actual mutable runtime storage.
 
-## How Aurora evaluates MIR operations
+## How Aura evaluates MIR operations
 
 ### Instructions
 
-Aurora's instruction set is small:
+Aura's instruction set is small:
 
 - `Assign`
 - `Eval`
@@ -136,7 +136,7 @@ Aurora's instruction set is small:
 
 ### Terminators
 
-Aurora's terminators drive control flow:
+Aura's terminators drive control flow:
 
 - `Return`
 - `Goto`
@@ -161,7 +161,7 @@ Most interesting computation happens in `evaluate_rvalue`, which handles:
 
 ## Resource cleanup is explicit
 
-Aurora's `with` semantics are implemented through a cleanup stack.
+Aura's `with` semantics are implemented through a cleanup stack.
 
 ```mermaid
 sequenceDiagram
@@ -179,11 +179,11 @@ sequenceDiagram
     end
 ```
 
-This is one of the big reasons Aurora lowers to MIR: structured cleanup becomes a concrete runtime protocol.
+This is one of the big reasons Aura lowers to MIR: structured cleanup becomes a concrete runtime protocol.
 
 ## Concurrency in the MIR runtime
 
-Aurora's MIR runtime supports:
+Aura's MIR runtime supports:
 
 - queues
 - tasks
@@ -221,7 +221,7 @@ repeatedly while tearing the scheduler down.
 
 The broker is FIFO so admission is deterministic inside the current runtime
 implementation. That is not a public ready-task or execution-order guarantee:
-reactor events, yields, and other wakeups can interleave, and Aurora leaves
+reactor events, yields, and other wakeups can interleave, and Aura leaves
 scheduling order unspecified.
 
 Task-local context uses reference-counted ownership and is cloned out of its
@@ -245,7 +245,7 @@ is forbidden by their internal safety contract.
 
 Phase 5.7 hosts this scheduler state on N pinned workers. N defaults to the
 available parallelism reported by the host; the provisional
-`AURORA_WORKERS=<positive integer>` environment override selects an explicit
+`AURA_WORKERS=<positive integer>` environment override selects an explicit
 count. A child is assigned when admitted at spawn time and keeps that worker
 for its lifetime. Its coroutine stack never migrates and no worker steals
 another worker's ready tasks. Consequently `yield_now()` requeues only on the
@@ -263,7 +263,7 @@ MIR and direct-native tasks use the same pinned-worker contract. Ready-task
 order, independent completion order, and emitted-output order remain
 unspecified. The runtime exposes no worker identity or affinity control and
 makes no promise of preemption, migration, work stealing, or workload-wide
-parallel speedup; the multicore claim is limited to admitted Aurora task
+parallel speedup; the multicore claim is limited to admitted Aura task
 execution.
 
 ## Networking and I/O
@@ -279,7 +279,7 @@ The MIR runtime delegates I/O and networking behavior to resource types in `runt
 - `WebSocketValue`
 - `Unix*` and `Tls*` values
 
-Those types wrap host resources and expose Aurora-level methods such as:
+Those types wrap host resources and expose Aura-level methods such as:
 
 - `read_all`
 - `write_all`
@@ -291,10 +291,10 @@ Those types wrap host resources and expose Aurora-level methods such as:
 ### Configurable blocking-I/O service
 
 Host operations that can block are submitted to one process-wide, lazily
-initialized blocking-I/O pool. `AURORA_BLOCKING_WORKERS=<positive integer>`
+initialized blocking-I/O pool. `AURA_BLOCKING_WORKERS=<positive integer>`
 selects its exact worker count without clamping. When absent, available host
 parallelism is used, with fallback `4`, and that derived default is clamped to
-`2..=8`. `AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` bounds accepted
+`2..=8`. `AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` bounds accepted
 jobs waiting in the FIFO queue; it counts pending jobs only, not running jobs
 or callers still waiting for admission. Omitting it preserves the compatible
 unbounded queue.
@@ -304,7 +304,7 @@ parks without blocking its pinned worker; a non-task host caller may block its
 calling thread. Before insertion into the pending queue, cancellation or
 deadline expiry removes the admission waiter and prevents the host operation
 from running. Insertion is the acceptance boundary: an accepted pending or
-running operation executes exactly once even if the Aurora wait later ends,
+running operation executes exactly once even if the Aura wait later ends,
 and its late result is discarded.
 
 Both settings are validated before user code under MIR, direct execution, and
@@ -313,7 +313,7 @@ resulting configuration is immutable for the process lifetime. Empty, zero,
 signed, whitespace-padded, non-decimal, or overflowing values fail with
 `AU4006`. Valid preflight creates no blocking-pool worker threads. First
 submission creates the complete worker set, which is reused until process exit;
-production has no Aurora shutdown or join surface for this pool. A
+production has no Aura shutdown or join surface for this pool. A
 worker-creation failure is also `AU4006` and never degrades silently to a
 smaller or synchronous pool.
 
@@ -381,7 +381,7 @@ fn run_block(block: &Block, env: &mut HashMap<String, Value>) -> Value {
 }
 ```
 
-Aurora's real runtime is larger because it handles:
+Aura's real runtime is larger because it handles:
 
 - multiple blocks and jumps
 - many value kinds
@@ -394,10 +394,10 @@ But the tiny example shows the same basic interpreter pattern.
 
 ## Files to study
 
-- [`mir_runtime.rs`](../crates/aurora-compiler/src/mir_runtime.rs)
-- [`runtime_value.rs`](../crates/aurora-compiler/src/runtime_value.rs)
-- [`mir_runtime_tests.rs`](../crates/aurora-compiler/src/mir_runtime_tests.rs)
+- [`mir_runtime.rs`](../crates/aura-compiler/src/mir_runtime.rs)
+- [`runtime_value.rs`](../crates/aura-compiler/src/runtime_value.rs)
+- [`mir_runtime_tests.rs`](../crates/aura-compiler/src/mir_runtime_tests.rs)
 
 ## What comes next
 
-Read [08-native-codegen-and-runtime.md](08-native-codegen-and-runtime.md) to see how Aurora turns the same MIR into native machine code.
+Read [08-native-codegen-and-runtime.md](08-native-codegen-and-runtime.md) to see how Aura turns the same MIR into native machine code.

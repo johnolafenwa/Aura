@@ -1,0 +1,11 @@
+def main() -> int32:
+    mut labels: Map[String, int64] = {"ready": 1}
+    key = "ready"
+    labels.remove(key)
+    print(key)
+
+    mut tags: Set[String] = {"aura"}
+    probe = "aura"
+    tags.remove(probe)
+    print(probe)
+    return 0

@@ -1,6 +1,6 @@
 # Diagnostics
 
-Aurora diagnostics are part of the language and tooling contract. Lexing,
+Aura diagnostics are part of the language and tooling contract. Lexing,
 parsing, static checking, ownership checking, lowering, building, and runtime
 traps all use the compiler-owned diagnostic structure described here. A typed
 library failure such as `Result.Err`, `Option.None`, a timeout, cancellation, or
@@ -53,7 +53,7 @@ than trait methods on a builtin target.
 `AU2008` rejects `==` and `!=` when either operand is a callable. Named
 function values, capture-free closures, and capturing closures all receive the
 same diagnostic: `callable equality is not supported; compare results or use
-an explicit discriminant`. Aurora does not expose backend code-pointer or
+an explicit discriminant`. Aura does not expose backend code-pointer or
 closure-environment identity as language-level equality.
 
 `AU4007` is the numeric Array structural runtime diagnostic. It reports
@@ -82,7 +82,7 @@ A non-canonical C boolean result (a returned byte other than `0` or `1`) traps
 with `AU4001`. `AU4005` reports a missing process-global symbol, null
 opaque-handle result, or runtime marshalling failure. Native aborts, signals,
 memory faults, and foreign unwinds may terminate the process and are not
-Aurora diagnostics. See [FFI v0](/manual/ffi).
+Aura diagnostics. See [FFI v0](/manual/ffi).
 
 `AU3005` rejects a direct `Vec` or `Map` indexed read that selects a non-copy
 element or value, and constant tuple indexing that selects a non-copy element.
@@ -146,7 +146,7 @@ kind or inconsistent Queue/Task category type is `AU2002`.
 
 The atomic runtime containment for non-repeatable results is separate from
 those static errors. If a backend defect or foreign handle reaches a second
-runtime claim, Aurora traps with `AU4001` and
+runtime claim, Aura traps with `AU4001` and
 `task result has already been observed; non-repeatable task results allow
 exactly one observing attempt`; it never returns or clones the stored value.
 The same defense applies when malformed backend state reaches `select`; an
@@ -167,7 +167,7 @@ A diagnostic contains all of the following fields:
 | `notes` | contextual facts that do not prescribe a change |
 | `help` | actionable human guidance |
 | `edits` | source replacements with an applicability classification |
-| `call_frames` | Aurora call frames, ordered innermost first |
+| `call_frames` | Aura call frames, ordered innermost first |
 | `task_ancestry` | structured task parentage, ordered youngest first |
 
 The current compiler emits errors; the additional severity values are reserved
@@ -297,7 +297,7 @@ at a deliberate ownership boundary, use the appropriate borrow loop form, add
 local, unambiguous source replacement, the diagnostic also carries a
 machine-applicable edit.
 
-Guidance is not a relaxation of ownership rules. In particular, Aurora never
+Guidance is not a relaxation of ownership rules. In particular, Aura never
 inserts a hidden clone or converts a borrow into ownership to recover from an
 error.
 
@@ -319,14 +319,13 @@ borrowed and recommends declaring it as `own String` to take ownership or
 cloning the value before consuming it. The parameter name and concrete type in
 that message come from the rejected declaration.
 
-## Python-Migration Guidance
+## Python-Shaped Source Guidance
 
-`AU2005` identifies focused migration guidance where Python-looking source has
-an Aurora spelling or an explicitly later language surface. Maintained hints
+`AU2005` identifies focused guidance where Python-looking source has an Aura
+spelling. Maintained hints
 cover `True`/`False`, `.append(...)`, `is` and `is None`, and `try`/`except`.
-The former comprehension hint is retired because eager list, set, and map
-comprehensions are implemented. A generator expression, whether parenthesized
-or used as a call argument, instead receives this exact `AU2005`:
+Eager list, set, and map comprehensions are accepted. A generator expression,
+whether parenthesized or used as a call argument, receives this exact `AU2005`:
 
     generator expressions are unavailable; use an eager owned list comprehension or an explicit loop
 
@@ -352,21 +351,18 @@ Written slice endpoints have exactly type `int32`; a mismatched bound uses
 or a capturing closure environment uses `AU3007`; one that would duplicate a
 non-repeatable Task result right uses `AU3009`.
 An endpoint outside `0..=len` after one negative normalization, or a start
-greater than its end, traps with `AU4003`. Unlike Python, Aurora never clamps a
+greater than its end, traps with `AU4003`. Unlike Python, Aura never clamps a
 slice endpoint.
 
-A hint is retired when Aurora implements the form it pointed at. `in`,
-`not in`, chained comparisons, `len(...)`, `str(...)`, and contextually typed
-expression lambdas are implemented and no longer produce an unavailable-form
-hint; their fixtures remain in the family and now assert the accepted
-spelling.
+`in`, `not in`, chained comparisons, `len(...)`, `str(...)`, and contextually
+typed expression lambdas are accepted forms and their fixtures assert those
+spellings.
 
-Hints MUST name an available spelling when one exists. For a reserved future
-feature, they MUST say that it arrives in a later Aurora release and name a
-working expression or statement form for today. The complete hint family is
-pinned under `crates/aurora-compiler/tests/fixtures/python-hints/`.
+Hints MUST name an available spelling when one exists. For an unavailable
+form, they MUST name a working expression or statement form. The complete hint family is
+pinned under `crates/aura-compiler/tests/fixtures/python-hints/`.
 `AU2005` also identifies `String(...)` constructor-shaped source and directs
-the caller to Aurora string literals.
+the caller to Aura string literals.
 
 ## Runtime Traps And Backtraces
 
@@ -382,11 +378,11 @@ evaluating the condition or message remains primary. Active cleanup still
 runs, but a cleanup failure cannot replace an already established assertion
 diagnostic.
 
-The MIR and direct runtimes attach the same typed Aurora frames to every trap.
-Call frames name the Aurora function and its defining source span, ordered
+The MIR and direct runtimes attach the same typed Aura frames to every trap.
+Call frames name the Aura function and its defining source span, ordered
 innermost first. If the trap occurs in a task, task-ancestry records also
 identify that task's entry, its parent function, and the exact source location
-from which each task was started, ordered youngest first. These are Aurora
+from which each task was started, ordered youngest first. These are Aura
 frames, not host Rust, Cranelift, scheduler, or service-worker frames.
 
 Frame records are captured once when the primary trap is established, before
@@ -394,8 +390,8 @@ cleanup or task-state reset. Propagation through callers, Task results, task
 groups, or workers does not append observer frames. A child starts a new call
 chain; its relationship to the parent is represented by task ancestry.
 
-Human rendering synthesizes the established `Aurora call chain`, `Aurora task
-entry`, and `Aurora task ancestry` note lines from the typed records after
+Human rendering synthesizes the established `Aura call chain`, `Aura task
+entry`, and `Aura task ancestry` note lines from the typed records after
 ordinary notes. Those generated strings are not stored in structured `notes`,
 so JSON and LSP clients consume the frame arrays without parsing or
 deduplicating prose.
@@ -404,7 +400,7 @@ JSON-mode direct runs transport a native trap to the `aura` parent through a
 private fixed-marker pipe and a separate bounded JSON-data pipe. Native
 initialization hides and marks both descriptors close-on-exec before user code.
 The parent emits one schema-version-1 document, including any buffered
-native-build progress in ordinary `notes`. An Aurora trap is distinct from a
+native-build progress in ordinary `notes`. An Aura trap is distinct from a
 successful `main() -> int32` returning a nonzero status; a signalled
 missing/malformed record is a host failure, and `auto` never falls back to MIR
 after launch. Human-mode direct runs and standalone direct binaries continue
@@ -439,12 +435,12 @@ generator.
 An explicit task-stack request has exact type `int64` and an inclusive
 262,144..67,108,864-byte range. `AU2002` rejects an out-of-range literal during
 checking. A dynamic value outside that range and a stack-allocation or
-platform-size failure trap with `AU4005`; Aurora never clamps the request or
+platform-size failure trap with `AU4005`; Aura never clamps the request or
 silently substitutes the default.
 
 `AU4006` reports invalid process runtime configuration.
-`AURORA_WORKERS`, `AURORA_BLOCKING_WORKERS`, and
-`AURORA_BLOCKING_QUEUE_CAPACITY` each require a positive decimal integer.
+`AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, and
+`AURA_BLOCKING_QUEUE_CAPACITY` each require a positive decimal integer.
 Empty, zero, signed, whitespace-padded, non-decimal, non-Unicode, and
 overflowing values are rejected before user code; the diagnostic names the
 setting and renders the supplied value, using a lossy display for a non-Unicode
@@ -482,13 +478,13 @@ outside the catchable diagnostic contract.
 For `aura run`, an `int32` result from the entry module's `main` becomes the
 requested process exit status; a `None` result completes successfully. Host
 operating systems may restrict how exit values are represented after the value
-leaves Aurora. `aura test` succeeds only when every selected `.au` program
+leaves Aura. `aura test` succeeds only when every selected `.au` program
 checks and runs within its timeout and every integer `main` result is zero.
 
 ## Internal Errors
 
 An `internal error` message indicates an implementation invariant failure or a
-defensive check for malformed internal input. Valid, statically checked Aurora
+defensive check for malformed internal input. Valid, statically checked Aura
 source must not produce one. Panics, host crashes, memory-safety failures, and
 hangs are never conforming diagnostic behavior and must be treated as compiler
 or runtime bugs.

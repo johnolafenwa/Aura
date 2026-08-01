@@ -1,6 +1,6 @@
 # AST And Source Model
 
-Before you can understand Aurora's parser or checker, you need to understand what shape of data they are building and consuming.
+Before you can understand Aura's parser or checker, you need to understand what shape of data they are building and consuming.
 
 ## What an AST is
 
@@ -13,17 +13,17 @@ It is "abstract" because it keeps the meaning-bearing structure and drops most f
 - it remembers that a function has parameters, a return type, and a body
 - it does not store the original comments as semantic nodes
 
-Aurora's AST is defined in [`ast.rs`](../crates/aurora-compiler/src/ast.rs).
+Aura's AST is defined in [`ast.rs`](../crates/aura-compiler/src/ast.rs).
 
-## Aurora's source model
+## Aura's source model
 
-Aurora source is organized around a top-level `Module`:
+Aura source is organized around a top-level `Module`:
 
 - imports
 - items such as classes, enums, functions, traits, and impl blocks
 - executable top-level statements
 
-That means Aurora can represent both:
+That means Aura can represent both:
 
 - script-style files with top-level statements
 - module-style files with declarations
@@ -32,7 +32,7 @@ The parser does not type-check anything yet. It only answers "what was written?"
 
 ## The main AST nodes
 
-Aurora's most important AST types are:
+Aura's most important AST types are:
 
 | Type | Purpose |
 | --- | --- |
@@ -43,7 +43,7 @@ Aurora's most important AST types are:
 | `Pattern` | A `match` pattern such as a binding, wildcard, literal, or enum variant pattern |
 | `TypeRef` | A syntactic type reference before semantic lowering |
 
-The AST also carries `Span` values from [`diag.rs`](../crates/aurora-compiler/src/diag.rs), which lets later stages report useful diagnostics.
+The AST also carries `Span` values from [`diag.rs`](../crates/aura-compiler/src/diag.rs), which lets later stages report useful diagnostics.
 
 ## The tree shape
 
@@ -62,11 +62,11 @@ flowchart TD
     ST --> PA["Pattern"]
 ```
 
-## Example: a tiny Aurora program
+## Example: a tiny Aura program
 
-Aurora source:
+Aura source:
 
-```aurora
+```aura
 def add(left: int32, right: int32) -> int32:
     return left + right
 
@@ -97,9 +97,9 @@ The AST knows the syntactic structure, but not yet:
 
 Those questions belong to semantic analysis.
 
-## How Aurora models syntax choices
+## How Aura models syntax choices
 
-Aurora uses enums heavily in the AST because language constructs branch into distinct cases.
+Aura uses enums heavily in the AST because language constructs branch into distinct cases.
 
 Examples:
 
@@ -112,7 +112,7 @@ Examples:
 
 This is a common Rust compiler pattern: use algebraic data types to mirror language structure.
 
-## Aurora-specific AST decisions
+## Aura-specific AST decisions
 
 There are a few choices worth calling out because they affect later stages:
 
@@ -122,21 +122,21 @@ There are a few choices worth calling out because they affect later stages:
   the eventual ABI may still pass copy bits directly. Receiver syntax is
   normalized to shared `self`, consuming `own self`, or mutable `mut self`.
 - owned return types
-  Function declarations carry one `return_type`. Return-source modifiers and
-  labels are not represented because every return is owned.
+  Function declarations carry one `return_type`, and every result is an owned
+  value.
 - ownership modes on `match` and `for`
   A `for` statement preserves its bare, `own`, or `mut` capability so
   iterable-specific checking can resolve it. A `match` statement always has a
   normalized capability: bare is shared, `match own` consumes, and `match mut`
   grants mutable access.
 - `top_level_stmts`
-  Aurora explicitly supports file-level execution, so the AST models it directly.
+  Aura explicitly supports file-level execution, so the AST models it directly.
 - `Specialize`
   Explicit type arguments such as `Box[int32](...)` get their own expression node.
 
-## A tiny Rust model of an Aurora-like AST
+## A tiny Rust model of an Aura-like AST
 
-This example is intentionally much smaller than Aurora's real AST, but it shows the basic idea.
+This example is intentionally much smaller than Aura's real AST, but it shows the basic idea.
 
 ```rust
 #[derive(Debug)]
@@ -200,9 +200,9 @@ That is the central AST lesson:
 - store enough information for later passes
 - do not mix syntax parsing with semantic checking
 
-## Where Aurora goes beyond the tiny example
+## Where Aura goes beyond the tiny example
 
-Aurora's real AST adds:
+Aura's real AST adds:
 
 - spans for diagnostics
 - imports and module structure

@@ -1,6 +1,6 @@
 # Ownership And Borrowing
 
-Aurora statically tracks whether an operation copies, moves, shares, or mutates a value. The rules apply to local bindings, parameters, method receivers, fields, supported indexed operations, collection iteration, pattern matching, task starts, and resources.
+Aura statically tracks whether an operation copies, moves, shares, or mutates a value. The rules apply to local bindings, parameters, method receivers, fields, supported indexed operations, collection iteration, pattern matching, task starts, and resources.
 
 A **place** is a storage location such as a local binding or field path. A copy use duplicates a value. A move use transfers ownership from a place. A borrow temporarily grants access without transferring ownership.
 
@@ -49,7 +49,7 @@ Move values transfer ownership on by-value use. Current move categories include:
 - file, process, supervisor, pipe, and network resources
 
 ```python
-name = "aurora"
+name = "aura"
 other = name
 print(other)
 # print(name) would be rejected: name was moved
@@ -71,7 +71,7 @@ A non-copy value is consumed when used in an owned position, including:
 - the resource expression of `with`
 - a task-start argument copied or moved into task-owned capture storage
 
-An expression is evaluated before its move is recorded at that boundary. Aurora also rejects an expression that tries to borrow and move overlapping places in incompatible subexpressions.
+An expression is evaluated before its move is recorded at that boundary. Aura also rejects an expression that tries to borrow and move overlapping places in incompatible subexpressions.
 
 Vec slicing is a clone-producing shared read rather than an element move.
 `values[start:end]` retains `values` while the endpoint expressions run, then
@@ -116,7 +116,7 @@ declaration selects the mode:
 def render(name: String) -> String:
     return name.to_upper()
 
-name = "aurora"
+name = "aura"
 print(render(name))
 print(name)
 ```
@@ -199,7 +199,7 @@ def good(user: User) -> String:
 
 Branches and match arms are checked independently. At a reachable join, a binding or field is considered moved if it may have been moved on any incoming path unless it was definitely reinitialized on all relevant paths.
 
-Moves inside a loop need an additional invariant: the loop may execute again. Aurora rejects a first move or partial move from an outer value in a repeatable loop when the next iteration could reuse the moved place. Limited constant-boolean reasoning recognizes forms based on `true`, `false`, grouping, and `not`; programs should not depend on broader compile-time evaluation.
+Moves inside a loop need an additional invariant: the loop may execute again. Aura rejects a first move or partial move from an outer value in a repeatable loop when the next iteration could reuse the moved place. Limited constant-boolean reasoning recognizes forms based on `true`, `false`, grouping, and `not`; programs should not depend on broader compile-time evaluation.
 
 Block-local bindings do not escape their branch, arm, loop, or `with` body. See [Names And Scopes](/manual/names-and-scopes#block-scope-and-control-flow).
 
@@ -229,11 +229,9 @@ Shared or mutable access does not transfer ownership of a non-copy field, so
 returning that field directly is rejected as an invalid move through access
 the function does not own.
 
-There are no return-source labels or mutable-return capabilities in Aurora
-0.2, and current syntax reserves no hidden lifetime contract. Accepted
-ADR-0038 specifies a first-class loan/view design for Aurora 0.3, but that
-surface is not implemented or authorized in the 0.2 cycle. The detailed
-current return rules are in [Functions](/manual/functions#owned-returns).
+Every result is owned. Return syntax carries only a result type and no source
+label or access capability. The detailed rules are in
+[Functions](/manual/functions#owned-returns).
 
 ## Borrowed Pattern Matching
 
@@ -261,7 +259,7 @@ invalidate them.
 Tuple patterns follow a smaller rule. A `match own` tuple match consumes the
 whole non-copy scrutinee and gives owned leaf bindings. Bare `match` retains
 the tuple and gives shared leaf provenance. Tuple patterns are rejected under
-`match mut`; Aurora does not reconstruct and write back recursive tuple
+`match mut`; Aura does not reconstruct and write back recursive tuple
 targets.
 
 Payload bindings are arm-local and cannot shadow a visible binding. Match typing and exhaustiveness are specified in [Enums And Pattern Matching](/manual/enums-and-match).
@@ -299,7 +297,7 @@ iteration; recursive mutable tuple writeback is not defined.
 `.clone()` explicitly creates another owned structural value where the maintained type exposes cloning:
 
 ```python
-name = "aurora"
+name = "aura"
 copy = name.clone()
 print(name)
 print(copy)
@@ -332,14 +330,12 @@ non-Copy capture is itself consumed by the call and is single-use under
 when every captured value is Transfer.
 
 Enclosing bare and `mut` parameters are shared and mutable capabilities rather
-than owned values and cannot be captured. Captured state is read-only in Phase
-6.3; accepted ADR-0038 designs in-loan and mutable capture for Aurora 0.3, but
-the feature is unavailable in 0.2. See [Closures](/manual/closures) and
-Accepted ADR-0037.
+than owned values and cannot be captured. Captured state is read-only. See
+[Closures](/manual/closures) and Accepted ADR-0037.
 
 ## FFI Views And Opaque Handles
 
-FFI v0 views are temporary call-boundary capabilities, not first-class Aurora
+FFI v0 views are temporary call-boundary capabilities, not first-class Aura
 references. Bare `String` and `Vec[uint8]` retain their owner while exposing a
 const pointer and byte length for one synchronous foreign call. `mut
 Vec[uint8]` requires an exclusive mutable vector place and copies the initial
@@ -349,7 +345,7 @@ zero. Foreign code must not retain any view pointer.
 
 An opaque FFI handle is a non-Copy, non-cloneable, non-Transfer owned wrapper
 for one non-null foreign pointer. A bare handle parameter retains it; `own
-Handle` consumes it; `mut Handle` is unavailable. Aurora does not automatically
+Handle` consumes it; `mut Handle` is unavailable. Aura does not automatically
 call a foreign destructor, so a binding must invoke its explicit consuming
 close/free declaration. Opaque handles cannot be task captures, task results,
 or Queue payloads.
@@ -453,7 +449,7 @@ that are propagated through calls and discharged after specialization.
 
 A copy use duplicates a value and a move transfers it. Shared and mutable
 borrows are statically enforced access contracts rather than first-class
-runtime reference values in Aurora 0.2. Mutable borrowed calls and Vec
+runtime reference values in Aura 0.2. Mutable borrowed calls and Vec
 iteration write through the original place; `match mut` reconstructs
 and writes back on every arm exit. Simple Map indexed assignment accepts and
 owns any value type; direct compound indexed assignment requires a copy `Vec`
@@ -470,7 +466,7 @@ is applied at its typed boundary. All receiver and argument accesses for one
 call are checked together, so source order cannot legalize overlapping shared,
 mutable, and owned uses. A partial move preserves proven-disjoint fields;
 reinitializing the exact moved place restores it. Control-flow merging never
-silently restores ownership, and Aurora never inserts a clone or coercion to
+silently restores ownership, and Aura never inserts a clone or coercion to
 repair an invalid use.
 
 Capturing a copy place duplicates its value. A non-copy place selected as a
@@ -488,8 +484,8 @@ applicable user-defined operator traits for root and projected targets. A copy
 target is captured before the right operand. A non-copy root or projected
 target remains borrowed across that operand, so overlapping mutable borrow or
 consumption is `AU3002`. A non-copy `Vec` element or `Map` value cannot be a
-direct compound target because Aurora 0.2 has no indexed-place identity and
-writeback model; Aurora rejects the operation instead of cloning or
+direct compound target because Aura 0.2 has no indexed-place identity and
+writeback model; Aura rejects the operation instead of cloning or
 destructively moving the stored value.
 
 ## Diagnostics
@@ -550,6 +546,5 @@ partial moves and reinitialization, flow-sensitive checks, owned returns,
 borrowed matching and Vec/Set iteration, task capture, cloning,
 and lexical resource ownership are implemented for the post-Phase 1.5
 surface; the one-time Vec/Set/Queue iteration-source rule is accepted under
-ADR-0017. First-class loan or view values would require a new design; current
-syntax reserves no such contract. Mutable Set iteration, Queue ownership
-modifiers, and mutable-borrow task capture are unavailable.
+ADR-0017. Mutable Set iteration, Queue ownership modifiers, and mutable task
+capture are unavailable.

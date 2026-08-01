@@ -1,5 +1,0 @@
-error[AU2999]: tuple binding requires a tuple value, found `int64`
- --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_destructure_type.au:2:5
-  |
-2 |     left, right = 1
-  |     ^

@@ -1,5 +1,0 @@
-error[AU1101]: cannot mix literal entries with a comprehension; remove the comma-separated literal entries or use an explicit loop
- --> crates/aurora-compiler/tests/fixtures/parse-fail/comprehension_mixed_literal.au:3:23
-  |
-3 |     mixed = [0, value for value in values]
-  |                       ^

@@ -1,0 +1,5 @@
+error[AU2999]: non-exhaustive match over `Outer`: missing `Wrapped(Solo(_))`
+ --> crates/aura-compiler/tests/fixtures/check-fail/non_exhaustive_nested_match_reports_nested_variant.au:10:12
+   |
+10 |     return match own value:
+   |            ^

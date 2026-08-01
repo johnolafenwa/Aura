@@ -1,0 +1,15 @@
+class User:
+    score: int32
+
+def read_score(user: User) -> int32:
+    return user.score
+
+def echo_score(user: User) -> int32:
+    alias = read_score(user)
+    return alias
+
+def main():
+    user = User(score=7)
+    alias = read_score(user)
+    print(alias)
+    print(echo_score(user))

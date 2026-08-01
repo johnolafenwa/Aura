@@ -1,0 +1,5 @@
+error[AU2999]: `try` requires the enclosing function to return `Result`, found `int32`
+ --> crates/aura-compiler/tests/fixtures/check-fail/try_requires_result_return.au:5:13
+  |
+5 |     value = try ok()
+  |             ^

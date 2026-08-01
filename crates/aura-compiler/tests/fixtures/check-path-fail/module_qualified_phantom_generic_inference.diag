@@ -1,0 +1,5 @@
+error[AU2002]: cannot infer type parameter `T` for class constructor `imported_generic_support.remote.Phantom`
+ --> crates/aura-compiler/tests/fixtures/check-path-fail/module_qualified_phantom_generic_inference.au:4:45
+  |
+4 |     value = imported_generic_support.remote.Phantom(marker=1)
+  |                                             ^

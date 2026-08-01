@@ -1,5 +1,0 @@
-error[AU1101]: duplicate binding target `left`
- --> crates/aurora-compiler/tests/fixtures/parse-fail/tuple_duplicate_binding.au:2:11
-  |
-2 |     left, left = pair
-  |           ^

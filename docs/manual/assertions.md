@@ -50,7 +50,7 @@ assertion trap.
 The following verified program demonstrates successful fallthrough and a lazy
 message:
 
-```aurora
+```aura
 def build_message() -> String:
     print("message evaluated")
     return "unexpected arithmetic result"
@@ -100,18 +100,18 @@ program with the same diagnostic.
 
 ## Limits And Implementation-Defined Behavior
 
-Aurora 0.2 has no assertion-stripping mode, optimization flag, environment
+Aura 0.2 has no assertion-stripping mode, optimization flag, environment
 switch, or backend option. Every accepted assertion executes in every build.
 Message contents are not reformatted or augmented, although the surrounding
 human diagnostic renderer adds its normal `error[AU4001]` prefix and source
 context.
 
-Assertion failure terminates the current Aurora execution path; it is not a
+Assertion failure terminates the current Aura execution path; it is not a
 catchable exception. Use `Result` for recoverable validation.
 
 ## Status
 
-Both assertion forms are implemented in Aurora 0.2. Their exact sequencing,
+Both assertion forms are implemented in Aura 0.2. Their exact sequencing,
 diagnostic, cleanup, top-level, and no-strip behavior is accepted under
 ADR-0024. Exception statements, `raise`, and catchable assertion failures are
-not part of Aurora 0.2.
+not part of Aura 0.2.

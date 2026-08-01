@@ -1,6 +1,6 @@
 # Resource Management
 
-When you open a file, a network connection, or a task group, you need to ensure it gets cleaned up even if something goes wrong. Aurora's `with` statement provides deterministic scoped cleanup -- the resource is always closed when the block exits, whether by normal completion or early `return`.
+When you open a file, a network connection, or a task group, you need to ensure it gets cleaned up even if something goes wrong. Aura's `with` statement provides deterministic scoped cleanup -- the resource is always closed when the block exits, whether by normal completion or early `return`.
 
 If you are coming from Python, this works like Python's `with` statement and context managers.
 
@@ -54,7 +54,7 @@ with TaskGroup() as group:
 ```
 
 Task groups tie child tasks to a lexical scope. When the `with` block ends,
-Aurora waits for child tasks to finish. A child blocked in a queue wait is
+Aura waits for child tasks to finish. A child blocked in a queue wait is
 cancelled only when no live task can wake it; temporary queue backpressure does
 not become cancellation merely because the host is busy. A true deadlock with
 no reachable sender, receiver, or queue closer is cancelled so shutdown does

@@ -1,6 +1,0 @@
-error[AU2003]: owned slicing is available only for `Array[T]`, `Vec[T]`, and `String`, found `Set[int64]`
- --> crates/aurora-compiler/tests/fixtures/check-fail/slice_unsupported_base.au:3:11
-  |
-3 |     print(values[:])
-  |           ^
-  = help: use indexing or a collection method supported by the base type, or convert the value to an Array, Vec, or String before slicing

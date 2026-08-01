@@ -1,0 +1,8 @@
+def consume(value: own String) -> String:
+    return value
+
+def main():
+    text = "aura"
+    selected = consume(text) if true else "fallback"
+    print(selected)
+    print(text)

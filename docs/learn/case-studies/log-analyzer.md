@@ -1,6 +1,6 @@
 # Case Study: A Log Analyzer
 
-This case study walks end-to-end through a small program that turns free-form log text into a small structured report. It is deliberately modest — no regular expressions, no command-line flags, no database — because the point is to see how Aurora code grows as text enters the program and becomes typed data.
+This case study walks end-to-end through a small program that turns free-form log text into a small structured report. It is deliberately modest — no regular expressions, no command-line flags, no database — because the point is to see how Aura code grows as text enters the program and becomes typed data.
 
 ## The Input
 

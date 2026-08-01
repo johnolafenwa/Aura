@@ -1,5 +1,0 @@
-error[AU2005]: slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value
- --> crates/aurora-compiler/tests/fixtures/parse-fail/slice_compound_assignment_unavailable.au:2:12
-  |
-2 |     values[:] += values
-  |            ^

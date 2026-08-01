@@ -1,5 +1,0 @@
-error[AU2002]: `in` expects a `int32` element, found `String`
- --> crates/aurora-compiler/tests/fixtures/check-fail/membership_element_type_mismatch.au:4:11
-  |
-4 |     print("x" in values)
-  |           ^

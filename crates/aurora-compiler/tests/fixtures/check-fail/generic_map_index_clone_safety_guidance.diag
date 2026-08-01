@@ -1,5 +1,0 @@
-error[AU3005]: cannot implicitly copy `V` out of a map index; `get(key)` requires a clone-safe `V`, or use `remove(key)` to transfer ownership
- --> crates/aurora-compiler/tests/fixtures/check-fail/generic_map_index_clone_safety_guidance.au:2:12
-  |
-2 |     return values[key]
-  |            ^

@@ -1,8 +1,0 @@
-error[AU3002]: parameter `value` is borrowed; declare it as `own String` to take ownership, or clone the value before consuming it
- --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_parameter_queue_storage_requires_own.au:2:16
-  |
-2 |     output.put(value)
-  |                ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/borrowed_parameter_queue_storage_requires_own.au:1:33: parameter `value` is borrowed here
-  = help: declare the parameter as `own String` when the function should consume it, or call `.clone()` to consume an independent copy
-  = fix: replace crates/aurora-compiler/tests/fixtures/check-fail/borrowed_parameter_queue_storage_requires_own.au:2:21-2:21 with `.clone()`

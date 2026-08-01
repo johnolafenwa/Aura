@@ -1,13 +1,13 @@
 # Numeric Arrays
 
-`Array[T]` is Aurora's owned contiguous CPU numeric container. It is intended
+`Array[T]` is Aura's owned contiguous CPU numeric container. It is intended
 for local preprocessing, postprocessing, evaluation, and batch-shaped numeric
 work. It is smaller than a general tensor framework: shape is runtime
 metadata, storage is row-major and host-only, and results own their buffers.
 
 The only dtypes are `int32`, `int64`, `float32`, and `float64`.
 
-```aurora
+```aura
 def main() -> int32:
     left = Array[float64].from_vec([1.0, 2.0, 3.0, 4.0], [2, 2])
     right = Array[float64].full([2, 2], 0.5)
@@ -200,7 +200,7 @@ diagnostics. The bundled extension uses that compiler-owned semantic surface.
 
 ## Limits And Implementation-Defined Behavior
 
-Aurora 0.2 Arrays are CPU-only, contiguous, row-major, and rank-at-least-one.
+Aura 0.2 Arrays are CPU-only, contiguous, row-major, and rank-at-least-one.
 They have no array-shape broadcasting, mixed promotion, views, reshape,
 transpose, matrix multiplication, equality, ordering, multidimensional slicing, step
 slices, slice assignment, autograd, device placement, distributed storage, or
@@ -213,13 +213,13 @@ does not claim NumPy API compatibility.
 
 The maintained one-million-element `float64` add/sum comparison records
 post-reboot measurements from one named Mac14,9 host. It has no
-Aurora-versus-NumPy pass threshold and makes no portable performance claim.
+Aura-versus-NumPy pass threshold and makes no portable performance claim.
 
 On the post-reboot Mac14,9 M2 Pro host at commit `0511adf`, across 11 paired
 single-thread observations, the direct native backend measured these medians
 per one-million-element operation:
 
-| workload | Aurora | NumPy 2.0.2 | Aurora / NumPy |
+| workload | Aura | NumPy 2.0.2 | Aura / NumPy |
 | --- | ---: | ---: | ---: |
 | fresh owned `float64` add | 1.142461 ms | 0.251602 ms | 4.540751× |
 | existing-array `float64` sum | 1.150392 ms | 0.174065 ms | 6.608975× |
@@ -227,13 +227,13 @@ per one-million-element operation:
 These are measurements of the exact maintained workloads on that host, not a
 portable performance guarantee, a general NumPy comparison, or a claim of
 NumPy API compatibility. Release disassembly showed scalar floating-point
-instructions for these kernels; Aurora 0.2 makes no vectorization claim.
+instructions for these kernels; Aura 0.2 makes no vectorization claim.
 
 ## Status
 
 Contiguous numeric Arrays and explicit scalar/Array integer arithmetic modes
-are Accepted for Aurora 0.2 under
+are Accepted for Aura 0.2 under
 `architecture_docs/decisions/0041-contiguous-numeric-arrays.md`.
-The maintained contract is the exact surface on this page. Broader tensor
-placement, views, shape transformations, and distributed execution remain
-future work.
+The maintained contract is the exact surface on this page and contains no
+broader tensor placement, views, shape transformations, or distributed
+execution.

@@ -1,6 +1,6 @@
 # Organizing Code
 
-A single-file program is a fine way to start. At some point, though, helper types want a home, public APIs want to be marked as such, and dependencies want to be named somewhere the compiler can read them. That is what Aurora's module and package system is for.
+A single-file program is a fine way to start. At some point, though, helper types want a home, public APIs want to be marked as such, and dependencies want to be named somewhere the compiler can read them. That is what Aura's module and package system is for.
 
 This chapter walks from a single file to a package with dependencies.
 
@@ -48,11 +48,11 @@ obligation follows the import and is checked where the helper is specialized.
 
 ## Packages
 
-A **package** is a directory with an `Aurora.toml` manifest and usually a `src/` directory:
+A **package** is a directory with an `Aura.toml` manifest and usually a `src/` directory:
 
 ```
 app/
-├── Aurora.toml
+├── Aura.toml
 └── src/
     └── main.au
 ```
@@ -64,7 +64,7 @@ version = "0.1.0"
 edition = "2026"
 ```
 
-Manifest package names must be valid Aurora identifiers — letters, digits, and underscores. Hyphenated names are rejected because `import my-util.math` would not parse as an Aurora expression.
+Manifest package names must be valid Aura identifiers — letters, digits, and underscores. Hyphenated names are rejected because `import my-util.math` would not parse as an Aura expression.
 
 Commands that take a source file inside a package infer the nearest package root automatically. `aura run src/main.au` from inside `app/` works the same as running it from the repo root.
 
@@ -81,7 +81,7 @@ jsonx = { git = "https://github.com/example/jsonx.git", branch = "main" }
 - **Path dependencies** point at another local package. Good for related crates in the same repository or workspace.
 - **Git dependencies** point at a git repository. Optional `rev`, `tag`, or `branch` selectors pin the version; without one, the dependency defaults to `branch = "main"`.
 
-Both shapes are pinned by exact revision (or canonical path) in `Aurora.lock`. Repeat runs resolve the same code until you ask for an update:
+Both shapes are pinned by exact revision (or canonical path) in `Aura.lock`. Repeat runs resolve the same code until you ask for an update:
 
 ```bash
 aura deps update
@@ -109,7 +109,7 @@ When several packages live together, a **workspace** manifest coordinates them:
 members = ["app", "util"]
 ```
 
-Each member is still an ordinary package with its own `Aurora.toml`. The workspace root owns the shared `Aurora.lock`.
+Each member is still an ordinary package with its own `Aura.toml`. The workspace root owns the shared `Aura.lock`.
 
 ## A Good Module Boundary
 
@@ -132,6 +132,6 @@ Keep helper functions private unless another module genuinely needs them. A smal
 
 ## Notes On Editor Tooling
 
-`aura analyze` and `aura complete` can read an editor buffer through `--stdin` while resolving imports relative to the file being edited. These stdin-mode commands deliberately do not write `Aurora.lock`. Lockfile changes happen only when you `check`, `run`, `build`, or explicitly `deps update`.
+`aura analyze` and `aura complete` can read an editor buffer through `--stdin` while resolving imports relative to the file being edited. These stdin-mode commands deliberately do not write `Aura.lock`. Lockfile changes happen only when you `check`, `run`, `build`, or explicitly `deps update`.
 
 Reference: [Packages](/manual/packages), [CLI And Tooling](/manual/cli-and-tooling).

@@ -1,0 +1,5 @@
+error[AU2999]: match over `Status` expects enum variant patterns, not literal `1`
+ --> crates/aura-compiler/tests/fixtures/check-fail/enum_match_rejects_literal_pattern.au:7:14
+  |
+7 |         case 1:
+  |              ^

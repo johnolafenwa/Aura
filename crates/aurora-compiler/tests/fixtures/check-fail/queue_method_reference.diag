@@ -1,5 +1,0 @@
-error[AU2999]: method `put` on `Queue[int32]` must be called with `(...)`
- --> crates/aurora-compiler/tests/fixtures/check-fail/queue_method_reference.au:3:17
-  |
-3 |     sender = ch.put
-  |                 ^

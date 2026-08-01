@@ -1,5 +1,0 @@
-error[AU2003]: integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division
- --> crates/aurora-compiler/tests/fixtures/check-fail/integer_true_division_assign_rejected.au:3:5
-  |
-3 |     value /= 3
-  |     ^

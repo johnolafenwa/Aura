@@ -1,0 +1,8 @@
+error[AU3001]: use of moved value `text`
+ --> crates/aura-compiler/tests/fixtures/check-fail/function_value_inferred_own_moves_argument.au:8:11
+  |
+8 |     print(text)
+  |           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/function_value_inferred_own_moves_argument.au:7:16: value moved here
+  = help: pass shared access when ownership is not needed, or call `.clone()` at the move site when an independent value is required
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/function_value_inferred_own_moves_argument.au:7:20-7:20 with `.clone()`

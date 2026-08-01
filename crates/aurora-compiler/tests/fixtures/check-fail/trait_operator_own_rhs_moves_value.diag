@@ -1,7 +1,0 @@
-error[AU3001]: use of moved value `right`
- --> crates/aurora-compiler/tests/fixtures/check-fail/trait_operator_own_rhs_moves_value.au:16:11
-   |
-16 |     print(right.value)
-   |           ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/trait_operator_own_rhs_moves_value.au:14:23: value moved here
-  = help: pass shared access when ownership is not needed, or transfer this non-cloneable value only once

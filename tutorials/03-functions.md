@@ -78,7 +78,7 @@ bump(counter)
 print(counter.value)    # 42
 ```
 
-Aurora rejects overlapping arguments when `mut` is involved. Mutable access
+Aura rejects overlapping arguments when `mut` is involved. Mutable access
 must be exclusive -- no other overlapping access can exist in the same call:
 
 ```python
@@ -97,7 +97,7 @@ rejected.
 
 ## Calling Functions
 
-Aurora supports positional and named arguments:
+Aura supports positional and named arguments:
 
 ```python
 def subtract(left: int32, right: int32) -> int32:
@@ -123,7 +123,7 @@ def greet(name: String = "world"):
     print("hello " + name)
 
 greet()               # "hello world"
-greet(name="aurora")  # "hello aurora"
+greet(name="aura")  # "hello aura"
 ```
 
 Default values are evaluated on each call, in parameter order. They cannot
@@ -190,13 +190,10 @@ type is clone-safe, accept an `own` parameter and move from it, or provide an
 owner operation such as an `own self` method. A shared parameter cannot expose
 one of its non-copy fields as a return value.
 
-The legacy-named
-[borrowed_returns.au](../examples/basics/borrowed_returns.au) and
-[borrowed_lifetime_labels.au](../examples/basics/borrowed_lifetime_labels.au)
-examples now demonstrate ordinary owned copy results. Aurora has no
-borrow-source or return-label syntax. Accepted ADR-0038 designs explicit
-place-based loans and views for Aurora 0.3; it does not change the 0.2 meaning
-of `-> T`, and no implementation is authorized in the 0.2 cycle.
+Every function result is an owned value. Returning a Copy value copies it;
+returning a non-Copy value requires constructing, cloning, or moving a value
+the function owns. Return annotations contain only the result type and never
+name an argument, field, or lifetime source.
 
 ## Generic Functions
 
@@ -247,7 +244,7 @@ Calling `mutate` requires a mutable place; calling `consume` moves a non-copy
 argument. A function with either contract does not fit a bare shared
 `def(T) -> R` annotation.
 A function binding whose target declaration is statically known keeps that
-declaration's names and defaults, so `selected(name="Aurora")` and
+declaration's names and defaults, so `selected(name="Aura")` and
 `selected()` work when the original parameter is named `name` and has a
 default. The structural function type itself retains neither, so a value
 returned through a structural annotation requires the complete positional
@@ -295,7 +292,7 @@ Captures happen when the lambda is created. Copy values such as `offset` are
 snapshotted. A non-Copy owned value moves into the closure:
 
 ```python
-name = "Aurora"
+name = "Aura"
 length: def() -> int64 = lambda: name.len()
 print(length())
 print(length())
@@ -320,7 +317,6 @@ normative [Closures](../docs/manual/closures.md) page.
 
 ## Current Limits
 
-- return values are always owned; first-class loan or view return values are
-  not part of Aurora 0.2
+- return values are always owned
 - clone-based non-copy returns require the returned type to be clone-safe
 - method values and multi-statement closure bodies are not part of this stage

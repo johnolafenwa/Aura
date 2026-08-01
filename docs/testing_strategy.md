@@ -1,6 +1,6 @@
-# Aurora Testing Strategy
+# Aura Testing Strategy
 
-This document defines the testing model for the Aurora repository.
+This document defines the testing model for the Aura repository.
 
 The goal is not just high test counts. The goal is early failure when language behavior, diagnostics, or editor tooling regress.
 
@@ -35,7 +35,7 @@ If a bug appeared in a real example file, test that real example file.
 
 ## Test Layers
 
-### Compiler Library: `crates/aurora-compiler`
+### Compiler Library: `crates/aura-compiler`
 
 Use these layers together:
 
@@ -61,7 +61,7 @@ CLI tests should verify:
 - annotated diagnostics
 - stable command semantics for `check`, `run`, `build`, `new`, `fmt`, `test`, `ast`, `ast-json`, `analyze`, `complete`, `lsp`, and `mir`
 
-### Language Server: `tools/aurora-language-server`
+### Language Server: `tools/aura-language-server`
 
 The LSP test suite should cover:
 
@@ -76,7 +76,7 @@ The LSP test suite should cover:
 
 Coverage should be measured continuously. The package is moving toward enforced 100% coverage before its semantic surface expands further.
 
-### VS Code Extension: `tools/vscode-aurora`
+### VS Code Extension: `tools/vscode-aura`
 
 Extension tests should stay focused on:
 
@@ -145,13 +145,13 @@ Current enforced floor:
 
 These are non-regression gates, not a roadmap to 100% compiler coverage. During the 0.1 hardening cycle the compiler floor is frozen at this level; new behavior still requires focused tests, but distribution, safety validation, and editor responsiveness take priority over marginal coverage gains.
 
-Compiler coverage now runs the full Rust workspace test surface while reporting only compiler production code. It ignores sibling `crates/aurora-compiler/src/*_tests.rs` files that exist only to hold extracted unit-test scaffolding, and it excludes `crates/aura/**` from the reported files so CLI product tests can exercise compiler behavior without counting CLI source in the compiler floor.
+Compiler coverage now runs the full Rust workspace test surface while reporting only compiler production code. It ignores sibling `crates/aura-compiler/src/*_tests.rs` files that exist only to hold extracted unit-test scaffolding, and it excludes `crates/aura/**` from the reported files so CLI product tests can exercise compiler behavior without counting CLI source in the compiler floor.
 
 The GitHub Actions surface mirrors the local gate: CI runs on Linux and macOS, the docs workflow builds and deploys the VitePress book to GitHub Pages, and the release workflow builds platform CLI archives plus the VS Code extension and static docs archive for GitHub Releases.
 
 ## Workflow For A New Feature
 
-When adding a new Aurora feature:
+When adding a new Aura feature:
 
 1. add a failing compiler fixture
 2. add a failing runtime or diagnostic fixture if needed

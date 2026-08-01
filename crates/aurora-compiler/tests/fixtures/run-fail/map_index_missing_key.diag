@@ -1,6 +1,0 @@
-error[AU4003]: map key `missing` was not present
- --> crates/aurora-compiler/tests/fixtures/run-fail/map_index_missing_key.au:3:18
-  |
-3 |     print(values["missing"])
-  |                  ^
-  = note: Aurora call chain (innermost first): main at 1:1

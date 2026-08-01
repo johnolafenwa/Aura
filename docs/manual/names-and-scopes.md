@@ -1,6 +1,6 @@
 # Names And Scopes
 
-Aurora resolves names statically. A name denotes a local binding, parameter, pattern payload, type parameter, module, function, class, enum, trait, enum variant through a qualified path, or maintained builtin. Name resolution never falls back to dynamic lookup.
+Aura resolves names statically. A name denotes a local binding, parameter, pattern payload, type parameter, module, function, class, enum, trait, enum variant through a qualified path, or maintained builtin. Name resolution never falls back to dynamic lookup.
 
 ## Identifiers And Reserved Names
 
@@ -42,7 +42,7 @@ from tools.text import parse, ResultRow
 
 An import path consists of dot-separated identifiers and maps to a module path inside the current package/dependency graph. Filesystem path traversal is not part of import syntax. Package roots and dependency aliases are described by [Packages](/manual/packages).
 
-Only `public` top-level classes, enums, Aurora functions, extern functions,
+Only `public` top-level classes, enums, Aura functions, extern functions,
 extern opaque handle types, and traits may be imported from another module.
 Class fields and methods also have individual visibility. A non-public member
 remains accessible inside its defining module but is rejected across a module
@@ -70,14 +70,14 @@ A function body begins with bindings for its ordinary parameters. A method body 
 
 Parameter names, `self`, local bindings, loop bindings, `with` bindings, and pattern bindings occupy the function's value namespace. A use is valid only after the binding has been introduced on the current control-flow path.
 
-Aurora 0.2 does not support local function, class, enum, or trait declarations. Items are module-level or members of their permitted enclosing declaration.
+Aura 0.2 does not support local function, class, enum, or trait declarations. Items are module-level or members of their permitted enclosing declaration.
 
 ## Local Bindings
 
 An assignment to a previously unseen simple name introduces a binding:
 
 ```python
-name = "Aurora"
+name = "Aura"
 mut count: int32 = 0
 ```
 
@@ -130,7 +130,7 @@ that by-value capture.
 
 ## No-Shadowing Rules
 
-Aurora deliberately rejects several ambiguous forms of shadowing:
+Aura deliberately rejects several ambiguous forms of shadowing:
 
 - a `for` binding cannot reuse a visible name
 - a comprehension target cannot reuse a visible name or an earlier clause target
@@ -201,7 +201,7 @@ Builtin enum types such as `Option`, `Result`, `QueueReceive`, and `process.Erro
 
 An entry module may contain executable top-level statements instead of a local `main`. Those statements share one top-level local environment and execute in source order after checking.
 
-Imported modules contribute declarations, not executable initialization: their top-level statements are checked as source but are not run as import side effects in Aurora 0.2. Reusable modules should therefore keep executable work inside public functions. This boundary may be tightened in a later release, but programs MUST NOT depend on imported top-level side effects today.
+Imported modules contribute declarations, not executable initialization: their top-level statements are checked as source but are not run as import side effects in Aura 0.2. Reusable modules should therefore keep executable work inside public functions. This boundary may be tightened in a later release, but programs MUST NOT depend on imported top-level side effects today.
 
 ## Grammar
 

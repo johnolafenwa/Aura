@@ -1,5 +1,0 @@
-error[AU1101]: `mut` cannot prefix a call argument or other expression; pass the value directly because the callee parameter declares shared, mutable, or owned access. Capability modifiers belong only on parameters and receivers or on supported `for` and `match` selectors (`mut` also declares mutable local bindings)
- --> crates/aurora-compiler/tests/fixtures/parse-fail/capability_prefix_call_argument_rejected.au:6:13
-  |
-6 |     display(mut text)
-  |             ^

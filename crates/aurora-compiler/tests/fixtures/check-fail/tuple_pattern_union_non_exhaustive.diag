@@ -1,5 +1,0 @@
-error[AU2999]: non-exhaustive match over `(bool, int64)`: add a covering tuple pattern or final `case _:`
- --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_pattern_union_non_exhaustive.au:2:5
-  |
-2 |     match (true, 1):
-  |     ^

@@ -1,6 +1,6 @@
 # Multiline Expressions
 
-Aurora can keep one logical expression readable across several physical lines.
+Aura can keep one logical expression readable across several physical lines.
 The rule is simple: the line continues while `(`, `[`, or `{` remains open.
 
 ## Calls And Signatures
@@ -40,7 +40,7 @@ total = (
 )
 ```
 
-Continuation indentation is for readers. It does not create an Aurora suite,
+Continuation indentation is for readers. It does not create an Aura suite,
 and the compiler would accept different numbers of leading spaces. Use one
 extra four-space level so the structure remains obvious.
 
@@ -87,10 +87,10 @@ does not change types, ownership, borrow duration, or evaluation order.
 
 ## What Does Not Continue
 
-Aurora does not use a trailing backslash:
+Aura does not use a trailing backslash:
 
 ```text
-value = left + \        # invalid Aurora
+value = left + \        # invalid Aura
     right
 ```
 

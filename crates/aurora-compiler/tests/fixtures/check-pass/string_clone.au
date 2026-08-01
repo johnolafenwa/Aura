@@ -1,5 +1,0 @@
-def main() -> int32:
-    text: String = "aurora"
-    copy = text.clone()
-    print(copy)
-    return 0

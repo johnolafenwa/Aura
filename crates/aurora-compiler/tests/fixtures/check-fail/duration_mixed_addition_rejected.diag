@@ -1,5 +1,0 @@
-error[AU2003]: unsupported Duration operands: `Duration` and `int64`; supported forms are `Duration + Duration`, `Duration - Duration`, `Duration * int64`, `int64 * Duration`, `Duration // int64`, and comparisons between two Duration values
- --> crates/aurora-compiler/tests/fixtures/check-fail/duration_mixed_addition_rejected.au:2:15
-  |
-2 |     invalid = 1ms + 1
-  |               ^

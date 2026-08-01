@@ -1,6 +1,6 @@
 # Calling A Small C API
 
-Aurora's FFI v0 is for small, reviewed bindings to trusted C symbols that are
+Aura's FFI v0 is for small, reviewed bindings to trusted C symbols that are
 already visible in the running process. It deliberately does not expose raw
 pointers or arbitrary library loading.
 
@@ -32,7 +32,7 @@ aura run --backend direct examples/packages/ffi_getpid/src/main.au
 ```
 
 Both commands print `true`. The manifest opt-in is a review boundary: it says
-that the package contains native declarations whose correctness Aurora cannot
+that the package contains native declarations whose correctness Aura cannot
 prove.
 
 ## The Safe Surface Is Small
@@ -47,7 +47,7 @@ same-length scratch buffer for fixed-length copy-in/out. Empty views use a
 null pointer with length zero. The C function must not retain those pointers,
 and the string view is not promised to end in a NUL byte.
 
-Use an opaque handle when C owns an object whose layout Aurora should not see:
+Use an opaque handle when C owns an object whose layout Aura should not see:
 
 ```python
 public extern "C" opaque class Handle
@@ -57,16 +57,16 @@ public extern "C" def close(handle: own Handle) -> None
 ```
 
 The bare parameter shares the pointer for one synchronous call. `own Handle`
-consumes it. Opaque handles cannot be cloned or sent to another Aurora task,
+consumes it. Opaque handles cannot be cloned or sent to another Aura task,
 and a binding must call the appropriate native close/free function.
 
-## What Aurora Does Not Promise
+## What Aura Does Not Promise
 
-The compiler checks the Aurora declaration, not the native implementation. A
+The compiler checks the Aura declaration, not the native implementation. A
 wrong C signature, retained temporary pointer, or out-of-bounds native write
 can corrupt or terminate the process. Native aborts, signals, and unwinds are
-not translated into Aurora failures. Calls are synchronous and occupy their
-current Aurora worker.
+not translated into Aura failures. Calls are synchronous and occupy their
+current Aura worker.
 
 The complete ABI table, manifest dependency-report rule, diagnostics, and
 backend contract are in [Foreign Function Interface (FFI) v0](/manual/ffi).

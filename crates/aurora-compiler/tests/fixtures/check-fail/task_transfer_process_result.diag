@@ -1,7 +1,0 @@
-error[AU3008]: task result `Result[process.Child, process.Error]` cannot cross a task boundary because success payload of `Result[process.Child, process.Error]` -> `process.Child` is a host resource and is not Transfer
- --> crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_process_result.au:8:29
-  |
-8 |         _task = group.start(start_process)
-  |                             ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_process_result.au:3:24: task target return type is declared here
-  = help: send owned data made only from Transfer components; keep capabilities and host resources on their owning worker

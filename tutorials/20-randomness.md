@@ -1,6 +1,6 @@
 # Deterministic And Secure Randomness
 
-Aurora makes you choose which promise you need. A seeded `random.Rng` gives a
+Aura makes you choose which promise you need. A seeded `random.Rng` gives a
 repeatable sequence for tests, simulations, generated fixtures, and retry
 jitter. The module-level `random.secure_int` and `random.secure_bytes`
 functions ask the operating system for unpredictable values.
@@ -23,7 +23,7 @@ differently, so reproducibility depends on both the seed and call order.
 
 `next_int(lo, hi)` uses a half-open interval: `lo` can be returned and `hi`
 cannot. The bounds are `int64`, may be negative, and must satisfy `lo < hi`.
-Aurora uses rejection sampling internally, so every integer in the interval is
+Aura uses rejection sampling internally, so every integer in the interval is
 equally likely rather than biased by a naive remainder operation.
 
 `next_float()` returns a `float64` in `[0.0, 1.0)`. It can return zero and can
@@ -75,7 +75,7 @@ def roll(rng: mut random.Rng) -> int64:
 
 This makes state flow visible at the same call boundary as any other mutation.
 
-Wrapping the generator does not make it cloneable. Aurora rejects collection
+Wrapping the generator does not make it cloneable. Aura rejects collection
 clones and cloned collection reads that would duplicate an `Rng`, even when it
 is nested inside a class or enum. Moving or removing a generator from a
 collection within one owning task remains valid. An `Rng` is not `Transfer`,
@@ -84,7 +84,7 @@ so it cannot be a task result or Queue payload: those boundaries fail with
 Task handle is copyable only when its result is repeatable.
 
 Generic code is not rejected merely because its element type is unresolved.
-If a body clones `Vec[T]` or performs another clone-producing operation, Aurora
+If a body clones `Vec[T]` or performs another clone-producing operation, Aura
 infers that `T` must be clone-safe. The requirement propagates through other
 generic calls and imports, then a concrete `random.Rng` specialization fails
 with `AU3007`. A trait default body can establish the same contract; an
@@ -105,23 +105,23 @@ print(token_bytes.len())
 ```
 
 Secure calls have no seed and no reproducible sequence. They use only the
-operating system's cryptographically secure source; Aurora never falls back to
+operating system's cryptographically secure source; Aura never falls back to
 `random.Rng`, a clock, or a process identifier. `secure_bytes(0)` returns an
 empty vector without requesting entropy.
 
 The `secure_bytes` count is `int64`. Each call accepts at most `2147483647`
 bytes as a fixed resource and safety ceiling independent of the public `Vec`
-length domain. A larger count traps with `AU4005` before Aurora requests either
+length domain. A larger count traps with `AU4005` before Aura requests either
 allocation or entropy.
 
 Invalid or unavailable requests trap because these functions return plain
 values: an empty/reversed integer interval or negative byte count is `AU4003`,
 while a secure byte count above the ceiling, OS entropy failure, or allocation
-failure is `AU4005`. Aurora 0.2 has no `random.Error` type.
+failure is `AU4005`. Aura 0.2 has no `random.Error` type.
 
 ## Compatibility And The Full Contract
 
-Aurora 0.2 fixes xoshiro256** plus its SplitMix64 seed expansion, integer
+Aura 0.2 fixes xoshiro256** plus its SplitMix64 seed expansion, integer
 mapping, floating mapping, and shuffle order for the complete 0.2.x series.
 That promise makes seeded tests portable across the MIR and direct backends.
 It does not make xoshiro secure.

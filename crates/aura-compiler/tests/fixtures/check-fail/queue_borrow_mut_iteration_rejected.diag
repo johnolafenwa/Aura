@@ -1,0 +1,5 @@
+error[AU3004]: Queue iteration receives values; each received item is already owned by the loop binding, and the Queue handle is a copy value, so ownership modifiers have nothing to modify; use the bare form `for item in queue:`
+ --> crates/aura-compiler/tests/fixtures/check-fail/queue_borrow_mut_iteration_rejected.au:3:5
+  |
+3 |     for job in mut jobs:
+  |     ^

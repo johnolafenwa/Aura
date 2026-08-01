@@ -1,7 +1,0 @@
-error[AU3002]: cannot mutate `values` while `values` is borrowed for iteration
- --> crates/aurora-compiler/tests/fixtures/check-fail/comprehension_source_stays_frozen.au:3:23
-  |
-3 |     changed = [values.push(value) for value in values]
-  |                       ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/comprehension_source_stays_frozen.au:3:48: `values` is borrowed for this loop here
-  = help: perform owner mutation after the loop; use `for item in mut values:` when mutating elements through the loop binding

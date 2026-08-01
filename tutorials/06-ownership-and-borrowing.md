@@ -1,6 +1,6 @@
 # Ownership And Borrowing
 
-If you are coming from Python, this is the most important chapter in the tutorial. Aurora does not use a garbage collector. Instead, it tracks who owns each value and when that value can be freed. This system is called **ownership**, and the way you temporarily lend values without giving them away is called **borrowing**.
+If you are coming from Python, this is the most important chapter in the tutorial. Aura does not use a garbage collector. Instead, it tracks who owns each value and when that value can be freed. This system is called **ownership**, and the way you temporarily lend values without giving them away is called **borrowing**.
 
 This chapter walks through the full model with practical examples, explains why the rules exist, and shows you how to fix every common compiler error you will encounter.
 
@@ -8,7 +8,7 @@ This chapter walks through the full model with practical examples, explains why 
 
 In Python, every value lives on a heap and a garbage collector cleans up when nothing points to it anymore. This is simple, but it has costs: unpredictable pauses, higher memory use, and no deterministic cleanup.
 
-Aurora takes a different approach. Every value has exactly **one owner** at any point in time. When the owner goes out of scope, the value is freed immediately. No garbage collector, no reference counting, no surprises.
+Aura takes a different approach. Every value has exactly **one owner** at any point in time. When the owner goes out of scope, the value is freed immediately. No garbage collector, no reference counting, no surprises.
 
 This gives you:
 
@@ -20,11 +20,11 @@ The trade-off is that you need to think about who owns what. The compiler enforc
 
 ## Copy Types vs Move Types
 
-Aurora divides all types into two categories: **copy types** and **move types**. Understanding this distinction is the foundation of everything that follows.
+Aura divides all types into two categories: **copy types** and **move types**. Understanding this distinction is the foundation of everything that follows.
 
 ### Copy types
 
-Copy types are small, fixed-size values that are cheap to duplicate. When you assign a copy type to a new binding or pass it to a function, Aurora silently makes a copy. Both the original and the new binding are fully independent.
+Copy types are small, fixed-size values that are cheap to duplicate. When you assign a copy type to a new binding or pass it to a function, Aura silently makes a copy. Both the original and the new binding are fully independent.
 
 The built-in copy types are:
 
@@ -47,7 +47,7 @@ There is no surprise here. You can use `x` and `y` freely because integers are c
 
 ### Move types
 
-Move types are values that own heap-allocated data or manage a unique resource. When you assign a move type to a new binding, Aurora **moves** ownership. The original binding becomes invalid.
+Move types are values that own heap-allocated data or manage a unique resource. When you assign a move type to a new binding, Aura **moves** ownership. The original binding becomes invalid.
 
 The built-in move types include:
 
@@ -67,15 +67,15 @@ Copying an allowed handle never copies a queued value or task result.
 Here is where Python intuition breaks down:
 
 ```python
-name: String = "aurora"
+name: String = "aura"
 other = name          # ownership moves to `other`
-print(other)          # "aurora" -- works fine
+print(other)          # "aura" -- works fine
 ```
 
 If you try to use `name` after the move:
 
 ```python
-name: String = "aurora"
+name: String = "aura"
 other = name
 print(name)           # COMPILE ERROR
 ```
@@ -86,11 +86,11 @@ The compiler rejects this with:
 error: use of moved value `name`
 ```
 
-**Why does this happen?** After `other = name`, the `other` binding owns the string data. If `name` were still valid, you would have two bindings pointing to the same heap memory. When both go out of scope, the memory would be freed twice -- a crash. Aurora prevents this at compile time.
+**Why does this happen?** After `other = name`, the `other` binding owns the string data. If `name` were still valid, you would have two bindings pointing to the same heap memory. When both go out of scope, the memory would be freed twice -- a crash. Aura prevents this at compile time.
 
 ### The Python comparison
 
-| Python | Aurora |
+| Python | Aura |
 |--------|--------|
 | `y = x` always creates a reference, both point to the same object | `y = x` copies for copy types, moves for move types |
 | Garbage collector handles cleanup | Owner handles cleanup when it goes out of scope |
@@ -101,10 +101,10 @@ error: use of moved value `name`
 When a move type supports independent duplication, call `.clone()`:
 
 ```python
-name: String = "aurora"
+name: String = "aura"
 other = name.clone()   # explicit copy -- name stays valid
-print(name)            # "aurora"
-print(other)           # "aurora"
+print(name)            # "aura"
+print(other)           # "aura"
 ```
 
 Collections can be cloned too:
@@ -117,7 +117,7 @@ print(xs.len())        # 4
 print(ys.len())        # 3 -- unaffected
 ```
 
-`.clone()` is explicit because copying a large data structure is expensive. Aurora makes sure you know when you are paying that cost, unlike Python where every `=` on a list is a cheap reference but every mutation might surprise you via aliasing.
+`.clone()` is explicit because copying a large data structure is expensive. Aura makes sure you know when you are paying that cost, unlike Python where every `=` on a list is a cheap reference but every mutation might surprise you via aliasing.
 
 Move types are not automatically cloneable. `random.Rng` exposes no clone
 route, and a class, enum, or collection containing one cannot be cloned through
@@ -214,7 +214,7 @@ print(value)           # 5 -- still valid, it was copied
 
 Most of the time you want a function to read or modify a value without taking ownership. This is what **borrowing** does. A borrow is a temporary loan: the function can access the value, but the caller keeps ownership.
 
-Aurora has two kinds of borrows:
+Aura has two kinds of borrows:
 
 - `T` -- shared, read-only access
 - `mut T` -- exclusive, mutable access
@@ -287,7 +287,7 @@ mut c = Counter(value=1)
 bad(c, c)    # COMPILE ERROR: overlapping access
 ```
 
-**Why does this rule exist?** Imagine `bad` increments `a.value` while reading `b.value` -- but `a` and `b` are the same object. The final result would depend on the order of operations inside the function, creating a subtle bug. Aurora prevents this entirely.
+**Why does this rule exist?** Imagine `bad` increments `a.value` while reading `b.value` -- but `a` and `b` are the same object. The final result would depend on the order of operations inside the function, creating a subtle bug. Aura prevents this entirely.
 
 Think of it like a library book: many people can read it at the same time (shared borrows), or one person can take it home to annotate it (mutable borrow), but you cannot do both at once.
 
@@ -629,7 +629,7 @@ jobs.put("hello")      # "hello" moves into the queue
 # the sent string is now owned by whichever task receives it
 ```
 
-Queue construction and sending require the payload type to satisfy Aurora's
+Queue construction and sending require the payload type to satisfy Aura's
 compiler-derived `Transfer` rule. Copy values, `String`, and aggregates whose
 stored components are all `Transfer` may cross. `random.Rng`, `TaskGroup`,
 shared or mutable access, and live file, process, or network resources may
@@ -764,7 +764,7 @@ counter.bump()
 
 Here is how to translate your Python intuition:
 
-| Python concept | Aurora equivalent |
+| Python concept | Aura equivalent |
 |----------------|-------------------|
 | `x = y` (always a reference) | `x = y` copies if copy type, moves if move type |
 | `x = copy.deepcopy(y)` | `x = y.clone()` when `y` supports clone and is clone-safe |
@@ -774,7 +774,7 @@ Here is how to translate your Python intuition:
 | `for x in list: ...` (list survives) | `for x in list: ...` (shared; list survives) |
 | No direct equivalent | `for x in own list: ...` (list consumed) |
 
-The key shift is: in Python, assignment creates aliases. In Aurora, assignment transfers ownership. Once you internalize this, the rest of the system follows naturally.
+The key shift is: in Python, assignment creates aliases. In Aura, assignment transfers ownership. Once you internalize this, the rest of the system follows naturally.
 
 ## Summary
 

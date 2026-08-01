@@ -1,6 +1,6 @@
 #![no_main]
 
-use aurora_compiler::{emit_host_native_object, run_mir, MirModule};
+use aura_compiler::{emit_host_native_object, run_mir, MirModule};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

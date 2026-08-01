@@ -5,6 +5,11 @@ trap 'echo "reference check failed: $BASH_COMMAND" >&2' ERR
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+proposal_stem="auro""ra_language_proposal"
+proposal_md="docs/${proposal_stem}.md"
+proposal_html="docs/${proposal_stem}.html"
+former_name="Auro""ra"
+
 required_pages=(
   language-specification
   grammar
@@ -79,8 +84,8 @@ grep -Fq '`multiline_expressions.au`' examples/README.md
 grep -Fq 'examples/basics/multiline_expressions.au' README.md
 grep -Fq '[24-multiline-expressions.md]' tutorials/README.md
 grep -Fq 'Delimiter continuation, ignored continuation indentation' docs/manual/conformance.md
-grep -Fq 'compiler bridge analyzes and completes inside continued delimiters' tools/aurora-language-server/test/compiler_bridge.test.js
-grep -Fq 'Aurora newline indentation handles source delimiters' tools/vscode-aurora/test/package.test.js
+grep -Fq 'compiler bridge analyzes and completes inside continued delimiters' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'Aura newline indentation handles source delimiters' tools/vscode-aura/test/package.test.js
 grep -Fq 'tuple-expression' docs/manual/grammar.md
 grep -Fq 'tuple-type' docs/manual/grammar.md
 grep -Fq 'unpack-target' docs/manual/grammar.md
@@ -101,24 +106,24 @@ grep -Fq '[25-tuples.md]' tutorials/README.md
 grep -Fq 'assert baseline == same' examples/basics/tuples.au
 grep -Fq 'assert baseline != changed' examples/basics/tuples.au
 grep -Fq 'assert same != changed' examples/basics/tuples.au
-test -s crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
-test -s crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.stdout
-grep -Fq 'nested_with_score' crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
-grep -Fq 'generic_equal' crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
-grep -Fq 'trace_singleton' crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
-grep -Fq 'trace_text' crates/aurora-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
+test -s crates/aura-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
+test -s crates/aura-compiler/tests/fixtures/run-pass/tuple_structural_equality.stdout
+grep -Fq 'nested_with_score' crates/aura-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
+grep -Fq 'generic_equal' crates/aura-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
+grep -Fq 'trace_singleton' crates/aura-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
+grep -Fq 'trace_text' crates/aura-compiler/tests/fixtures/run-pass/tuple_structural_equality.au
 
 # B3.0-e: `AU3005` guidance is classified the same way the rejection is, so the
 # recommended recovery is never something `AU3007` rejects in turn.
-test -s crates/aurora-compiler/tests/fixtures/check-fail/random_vec_index_requires_transfer.diag
-test -s crates/aurora-compiler/tests/fixtures/check-fail/random_transitive_map_index_requires_transfer.diag
-test -s crates/aurora-compiler/tests/fixtures/check-fail/generic_vec_index_clone_safety_guidance.diag
-test -s crates/aurora-compiler/tests/fixtures/check-fail/generic_map_index_clone_safety_guidance.diag
-test -s crates/aurora-compiler/tests/fixtures/run-pass/random_index_remove_transfers_ownership.stdout
-grep -Fq 'cannot clone it because' crates/aurora-compiler/tests/fixtures/check-fail/random_vec_index_requires_transfer.diag
-grep -Fq 'cannot clone it because' crates/aurora-compiler/tests/fixtures/check-fail/random_transitive_map_index_requires_transfer.diag
-grep -Fq 'requires a clone-safe' crates/aurora-compiler/tests/fixtures/check-fail/generic_vec_index_clone_safety_guidance.diag
-grep -Fq 'requires a clone-safe' crates/aurora-compiler/tests/fixtures/check-fail/generic_map_index_clone_safety_guidance.diag
+test -s crates/aura-compiler/tests/fixtures/check-fail/random_vec_index_requires_transfer.diag
+test -s crates/aura-compiler/tests/fixtures/check-fail/random_transitive_map_index_requires_transfer.diag
+test -s crates/aura-compiler/tests/fixtures/check-fail/generic_vec_index_clone_safety_guidance.diag
+test -s crates/aura-compiler/tests/fixtures/check-fail/generic_map_index_clone_safety_guidance.diag
+test -s crates/aura-compiler/tests/fixtures/run-pass/random_index_remove_transfers_ownership.stdout
+grep -Fq 'cannot clone it because' crates/aura-compiler/tests/fixtures/check-fail/random_vec_index_requires_transfer.diag
+grep -Fq 'cannot clone it because' crates/aura-compiler/tests/fixtures/check-fail/random_transitive_map_index_requires_transfer.diag
+grep -Fq 'requires a clone-safe' crates/aura-compiler/tests/fixtures/check-fail/generic_vec_index_clone_safety_guidance.diag
+grep -Fq 'requires a clone-safe' crates/aura-compiler/tests/fixtures/check-fail/generic_map_index_clone_safety_guidance.diag
 grep -Fq 'clone-safety' docs/manual/diagnostics.md
 grep -Fq 'clone-safety' docs/manual/conformance.md
 grep -Fq 'clone-safety classification' architecture_docs/decisions/0014-map-literals-and-indexing.md
@@ -127,32 +132,32 @@ grep -Fq 'remove(index)' tutorials/14-current-language-surface.md
 
 # B3.0-e: builtin function redefinition owns `AU2007` instead of the `AU2999`
 # catch-all.
-grep -Fq 'error[AU2007]' crates/aurora-compiler/tests/fixtures/check-fail/builtin_function_names_cannot_be_redefined.diag
+grep -Fq 'error[AU2007]' crates/aura-compiler/tests/fixtures/check-fail/builtin_function_names_cannot_be_redefined.diag
 grep -Fq '`AU2007` builtin function redefinition' docs/manual/diagnostics.md
 grep -Fq 'AU2007' tutorials/14-current-language-surface.md
 
 # B3.0-e: `AU3002` recovery help names the access that actually conflicts, so a
 # pure read or consumption is never told to move "the mutation".
-grep -Fq 'perform the consumption in a separate statement' crates/aurora-compiler/tests/fixtures/check-fail/nested_consume_and_borrow_same_call.diag
-grep -Fq 'consumed values must be exclusive' crates/aurora-compiler/tests/fixtures/check-fail/call_own_then_projected_copy_read_overlaps.diag
-grep -Fq 'perform the mutation in a separate statement' crates/aurora-compiler/tests/fixtures/check-fail/binary_left_borrow_rejects_later_mutation.diag
-test -s crates/aurora-compiler/tests/fixtures/check-pass/tuple_equality_contextual_literals.au
-test -s crates/aurora-compiler/tests/fixtures/check-fail/tuple_ordering_rejected.au
-test -s crates/aurora-compiler/tests/fixtures/check-fail/tuple_ordering_rejected.diag
-test -s crates/aurora-compiler/tests/fixtures/check-fail/tuple_comparison_chain_left_borrow_rejects_later_mutation.au
-test -s crates/aurora-compiler/tests/fixtures/check-fail/tuple_comparison_chain_middle_borrow_rejects_later_mutation.au
-grep -Fq 'tuple ordering is not supported; use `==` or `!=`, or compare tuple elements explicitly' crates/aurora-compiler/tests/fixtures/check-fail/tuple_ordering_rejected.diag
-grep -Fq 'fn tuple_equality_and_inequality_are_structural_and_non_consuming()' crates/aurora-compiler/src/sema_tests.rs
-grep -Fq 'fn tuple_equality_requires_the_same_static_tuple_type()' crates/aurora-compiler/src/sema_tests.rs
-grep -Fq 'fn tuple_ordering_rejects_all_four_operators_with_the_teaching_diagnostic()' crates/aurora-compiler/src/sema_tests.rs
-grep -Fq 'fn tuple_value_equality_uses_elements_not_runtime_type_metadata()' crates/aurora-compiler/src/runtime_value_tests.rs
-grep -Fq 'fn analysis_exposes_structural_tuple_equality_without_consuming_operands()' crates/aurora-compiler/src/analysis_tests.rs
-grep -Fq 'compiler bridge exposes structural tuple equality and ordering diagnostics' tools/aurora-language-server/test/compiler_bridge.test.js
+grep -Fq 'perform the consumption in a separate statement' crates/aura-compiler/tests/fixtures/check-fail/nested_consume_and_borrow_same_call.diag
+grep -Fq 'consumed values must be exclusive' crates/aura-compiler/tests/fixtures/check-fail/call_own_then_projected_copy_read_overlaps.diag
+grep -Fq 'perform the mutation in a separate statement' crates/aura-compiler/tests/fixtures/check-fail/binary_left_borrow_rejects_later_mutation.diag
+test -s crates/aura-compiler/tests/fixtures/check-pass/tuple_equality_contextual_literals.au
+test -s crates/aura-compiler/tests/fixtures/check-fail/tuple_ordering_rejected.au
+test -s crates/aura-compiler/tests/fixtures/check-fail/tuple_ordering_rejected.diag
+test -s crates/aura-compiler/tests/fixtures/check-fail/tuple_comparison_chain_left_borrow_rejects_later_mutation.au
+test -s crates/aura-compiler/tests/fixtures/check-fail/tuple_comparison_chain_middle_borrow_rejects_later_mutation.au
+grep -Fq 'tuple ordering is not supported; use `==` or `!=`, or compare tuple elements explicitly' crates/aura-compiler/tests/fixtures/check-fail/tuple_ordering_rejected.diag
+grep -Fq 'fn tuple_equality_and_inequality_are_structural_and_non_consuming()' crates/aura-compiler/src/sema_tests.rs
+grep -Fq 'fn tuple_equality_requires_the_same_static_tuple_type()' crates/aura-compiler/src/sema_tests.rs
+grep -Fq 'fn tuple_ordering_rejects_all_four_operators_with_the_teaching_diagnostic()' crates/aura-compiler/src/sema_tests.rs
+grep -Fq 'fn tuple_value_equality_uses_elements_not_runtime_type_metadata()' crates/aura-compiler/src/runtime_value_tests.rs
+grep -Fq 'fn analysis_exposes_structural_tuple_equality_without_consuming_operands()' crates/aura-compiler/src/analysis_tests.rs
+grep -Fq 'compiler bridge exposes structural tuple equality and ordering diagnostics' tools/aura-language-server/test/compiler_bridge.test.js
 grep -Fq 'same-type recursive structural `==`/`!=`' docs/manual/conformance.md
 grep -Fq 'Tuple `==` and `!=` compare same-typed values structurally and' docs/manual/status-and-compatibility.md
 grep -Fq 'the executable `docs/manual/tuples.md` fence' docs/manual/conformance.md
-if [[ -e crates/aurora-compiler/tests/fixtures/check-fail/tuple_equality_rejected.au ||
-      -e crates/aurora-compiler/tests/fixtures/check-fail/tuple_equality_rejected.diag ]]; then
+if [[ -e crates/aura-compiler/tests/fixtures/check-fail/tuple_equality_rejected.au ||
+      -e crates/aura-compiler/tests/fixtures/check-fail/tuple_equality_rejected.diag ]]; then
   echo "retired tuple-equality rejection fixture is still present" >&2
   exit 1
 fi
@@ -171,30 +176,30 @@ grep -Fq '`value if condition else alternative`' tutorials/14-current-language-s
 grep -Fq 'conditional expressions' tutorials/README.md
 grep -Fq 'conditional expressions' docs/manual/index.md
 grep -Fq 'ADR-0027' docs/manual/status-and-compatibility.md
-grep -Fq 'compiler bridge preserves conditional operands and bool diagnostics' tools/aurora-language-server/test/compiler_bridge.test.js
-test -s crates/aurora-compiler/tests/fixtures/check-pass/conditional_expression_contexts.au
-test -s crates/aurora-compiler/tests/fixtures/run-pass/conditional_expressions.au
-test -s crates/aurora-compiler/tests/fixtures/check-fail/conditional_expression_condition_must_be_bool.au
-test -s crates/aurora-compiler/tests/fixtures/check-fail/conditional_expression_arm_type_mismatch.au
-test -s crates/aurora-compiler/tests/fixtures/check-fail/conditional_expression_conditional_move.au
+grep -Fq 'compiler bridge preserves conditional operands and bool diagnostics' tools/aura-language-server/test/compiler_bridge.test.js
+test -s crates/aura-compiler/tests/fixtures/check-pass/conditional_expression_contexts.au
+test -s crates/aura-compiler/tests/fixtures/run-pass/conditional_expressions.au
+test -s crates/aura-compiler/tests/fixtures/check-fail/conditional_expression_condition_must_be_bool.au
+test -s crates/aura-compiler/tests/fixtures/check-fail/conditional_expression_arm_type_mismatch.au
+test -s crates/aura-compiler/tests/fixtures/check-fail/conditional_expression_conditional_move.au
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0029-enumerate-and-zip-loop-forms.md
 grep -Fq '0029-enumerate-and-zip-loop-forms.md' architecture_docs/decisions/README.md
 grep -Fq 'distinct typed binding identities' architecture_docs/decisions/0029-enumerate-and-zip-loop-forms.md
 grep -Fq 'ADR-0028, and ADR-0029.' docs/manual/status-and-compatibility.md
 grep -Fq 'function-wide per-loop binding-slot isolation' docs/manual/conformance.md
-grep -Fq 'mut numbers = Vec[int64]()' crates/aurora-compiler/tests/fixtures/run-pass/enumerate_and_zip.au
-grep -Fq 'for number, word in zip(numbers, words):' crates/aurora-compiler/tests/fixtures/run-pass/enumerate_and_zip.au
-grep -Fq 'for number, word in zip(words, numbers):' crates/aurora-compiler/tests/fixtures/run-pass/enumerate_and_zip.au
-grep -Fxq 'one=1' crates/aurora-compiler/tests/fixtures/run-pass/enumerate_and_zip.stdout
-grep -Fxq 'two=2' crates/aurora-compiler/tests/fixtures/run-pass/enumerate_and_zip.stdout
-grep -Fq 'fn every_ordinary_for_form_uses_a_fresh_scoped_target_slot()' crates/aurora-compiler/src/mir_tests.rs
-grep -Fq 'for label, value in jobs:' crates/aurora-compiler/tests/fixtures/run-pass/tuple_for_pattern_queue.au
-grep -Fq 'def update_first(values: mut Vec[int64]) -> int64:' crates/aurora-compiler/tests/fixtures/run-pass/vec_borrow_mut_iteration.au
-test "$(grep -Fxc '24' crates/aurora-compiler/tests/fixtures/run-pass/vec_borrow_mut_iteration.stdout)" -eq 3
+grep -Fq 'mut numbers = Vec[int64]()' crates/aura-compiler/tests/fixtures/run-pass/enumerate_and_zip.au
+grep -Fq 'for number, word in zip(numbers, words):' crates/aura-compiler/tests/fixtures/run-pass/enumerate_and_zip.au
+grep -Fq 'for number, word in zip(words, numbers):' crates/aura-compiler/tests/fixtures/run-pass/enumerate_and_zip.au
+grep -Fxq 'one=1' crates/aura-compiler/tests/fixtures/run-pass/enumerate_and_zip.stdout
+grep -Fxq 'two=2' crates/aura-compiler/tests/fixtures/run-pass/enumerate_and_zip.stdout
+grep -Fq 'fn every_ordinary_for_form_uses_a_fresh_scoped_target_slot()' crates/aura-compiler/src/mir_tests.rs
+grep -Fq 'for label, value in jobs:' crates/aura-compiler/tests/fixtures/run-pass/tuple_for_pattern_queue.au
+grep -Fq 'def update_first(values: mut Vec[int64]) -> int64:' crates/aura-compiler/tests/fixtures/run-pass/vec_borrow_mut_iteration.au
+test "$(grep -Fxc '24' crates/aura-compiler/tests/fixtures/run-pass/vec_borrow_mut_iteration.stdout)" -eq 3
 grep -Fq '= "int" | "int8"' docs/manual/grammar.md
 grep -Fq 'Integer literals default to `int64`' tutorials/02-bindings-and-types.md
-grep -Fq '`int` is an alias for `int64`' docs/aurora_language_proposal.md
-grep -Fq '<code>int</code> is an alias for <code>int64</code>' docs/aurora_language_proposal.html
+grep -Fq '`int` is an alias for `int64`' "$proposal_md"
+grep -Fq '<code>int</code> is an alias for <code>int64</code>' "$proposal_html"
 grep -Fq '+ += - -= * *= / /= // //= % %=' docs/manual/lexical-structure.md
 grep -Fq 'assignment-operator = "=" | "+=" | "-=" | "*=" | "/=" | "//=" | "%=" ;' docs/manual/grammar.md
 grep -Fq '{ ("*" | "/" | "//" | "%"), prefix-expression } ;' docs/manual/grammar.md
@@ -218,7 +223,7 @@ grep -Fq '| `random.Rng.next_int` | `next_int(lo: int64, hi: int64) -> int64`' d
 grep -Fq 'result = rotl(s1 * 5, 7) * 9' docs/manual/randomness.md
 grep -Fq 'threshold = 2^64 mod span' docs/manual/randomness.md
 grep -Fq 'secure_bytes(0)' docs/manual/randomness.md
-grep -Fq 'stable throughout the Aurora 0.2.x' docs/manual/randomness.md
+grep -Fq 'stable throughout the Aura 0.2.x' docs/manual/randomness.md
 grep -Fq '3321214725393783201' docs/manual/randomness.md
 grep -Fq 'The no-clone rule is transitive.' docs/manual/randomness.md
 grep -Fq '`AU3007` rejects an operation that would duplicate non-cloneable state.' docs/manual/diagnostics.md
@@ -228,7 +233,7 @@ grep -Fq "An explicit implementation MUST NOT strengthen its trait method's clon
 grep -Fq 'Clone-safety obligations survive module imports as part of the callable contract.' docs/manual/packages.md
 grep -Fq 'Task and Queue handles are clone barriers' docs/manual/randomness.md
 grep -Fq 'unsafe concrete specialization' docs/manual/diagnostics.md
-grep -Fq 'code: "AU3007"' crates/aurora-compiler/src/diag.rs
+grep -Fq 'code: "AU3007"' crates/aura-compiler/src/diag.rs
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md
 grep -Fq '0020-randomness-algorithm-and-security-boundary.md' architecture_docs/decisions/README.md
 grep -Fq '| `json.parse` | `parse(text: String) -> Result[json.Value, json.Error]` |' docs/manual/api-index.md
@@ -300,35 +305,35 @@ grep -Fq '| `Map.len` | `len() -> int64` | Entry count. |' docs/manual/api-index
 grep -Fq '| `Set.len` | `len() -> int64` | Unique value count. |' docs/manual/api-index.md
 grep -Fq 'so `len(value)` and `value.len()` have the' docs/manual/expressions.md
 grep -Fq 'same static type and value. `String.byte_len()` likewise produces `int64`' docs/manual/expressions.md
-grep -Fq 'Self::StringLen => "len() -> int64"' crates/aurora-compiler/src/call.rs
-grep -Fq 'Self::StringByteLen => "byte_len() -> int64"' crates/aurora-compiler/src/call.rs
-grep -Fq 'Self::VecLen => "len() -> int64"' crates/aurora-compiler/src/call.rs
-grep -Fq 'Self::MapLen => "len() -> int64"' crates/aurora-compiler/src/call.rs
-grep -Fq 'Self::SetLen => "len() -> int64"' crates/aurora-compiler/src/call.rs
-grep -Fq 'if len(text) != text_length:' crates/aurora-compiler/tests/fixtures/run-pass/len_and_str.au
-grep -Fq 'if len(values) != values_length:' crates/aurora-compiler/tests/fixtures/run-pass/len_and_str.au
-grep -Fq 'if len(ages) != ages_length:' crates/aurora-compiler/tests/fixtures/run-pass/len_and_str.au
-grep -Fq 'if len(tags) != tags_length:' crates/aurora-compiler/tests/fixtures/run-pass/len_and_str.au
-grep -Fq 'unicode_length: int64 = unicode_text.len()' crates/aurora-compiler/tests/fixtures/run-pass/len_and_str.au
-grep -Fq 'unicode_byte_length: int64 = unicode_text.byte_len()' crates/aurora-compiler/tests/fixtures/run-pass/len_and_str.au
-grep -Fq 'fn len_delegates_to_the_value_and_str_renders_it()' crates/aurora-compiler/src/sema_tests.rs
-grep -Fq 'fn mir_types_public_length_members_as_int64()' crates/aurora-compiler/src/mir_tests.rs
-grep -Fq 'fn analysis_and_completion_report_public_length_members_as_int64()' crates/aurora-compiler/src/analysis_tests.rs
-grep -Fq 'test("compiler bridge exposes all public length members as int64"' tools/aurora-language-server/test/compiler_bridge.test.js
-grep -Fq '"free len(...) and the corresponding member length must have the same int64 type"' tools/aurora-language-server/test/compiler_bridge.test.js
-grep -Fq '"```aurora\nlen(value: String|Vec[T]|Map[K, V]|Set[T]) -> int64\n```"' tools/aurora-language-server/test/compiler_bridge.test.js
-grep -Fq 'test("compiler bridge includes Vec collection members in completions"' tools/aurora-language-server/test/compiler_bridge.test.js
-grep -Fq 'test("compiler bridge includes String and Map builtin members in completions"' tools/aurora-language-server/test/compiler_bridge.test.js
-grep -Fq 'test("compiler bridge includes Set collection members and MapEntry fields"' tools/aurora-language-server/test/compiler_bridge.test.js
-grep -Fq 'assert.equal(details.get("len"), "len() -> int64");' tools/aurora-language-server/test/compiler_bridge.test.js
-grep -Fq '"byte_len() -> int64"' tools/aurora-language-server/test/compiler_bridge.test.js
-test "$(grep -Fc '"len() -> int64"' tools/aurora-language-server/test/compiler_bridge.test.js)" -ge 4
+grep -Fq 'Self::StringLen => "len() -> int64"' crates/aura-compiler/src/call.rs
+grep -Fq 'Self::StringByteLen => "byte_len() -> int64"' crates/aura-compiler/src/call.rs
+grep -Fq 'Self::VecLen => "len() -> int64"' crates/aura-compiler/src/call.rs
+grep -Fq 'Self::MapLen => "len() -> int64"' crates/aura-compiler/src/call.rs
+grep -Fq 'Self::SetLen => "len() -> int64"' crates/aura-compiler/src/call.rs
+grep -Fq 'if len(text) != text_length:' crates/aura-compiler/tests/fixtures/run-pass/len_and_str.au
+grep -Fq 'if len(values) != values_length:' crates/aura-compiler/tests/fixtures/run-pass/len_and_str.au
+grep -Fq 'if len(ages) != ages_length:' crates/aura-compiler/tests/fixtures/run-pass/len_and_str.au
+grep -Fq 'if len(tags) != tags_length:' crates/aura-compiler/tests/fixtures/run-pass/len_and_str.au
+grep -Fq 'unicode_length: int64 = unicode_text.len()' crates/aura-compiler/tests/fixtures/run-pass/len_and_str.au
+grep -Fq 'unicode_byte_length: int64 = unicode_text.byte_len()' crates/aura-compiler/tests/fixtures/run-pass/len_and_str.au
+grep -Fq 'fn len_delegates_to_the_value_and_str_renders_it()' crates/aura-compiler/src/sema_tests.rs
+grep -Fq 'fn mir_types_public_length_members_as_int64()' crates/aura-compiler/src/mir_tests.rs
+grep -Fq 'fn analysis_and_completion_report_public_length_members_as_int64()' crates/aura-compiler/src/analysis_tests.rs
+grep -Fq 'test("compiler bridge exposes all public length members as int64"' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq '"free len(...) and the corresponding member length must have the same int64 type"' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq '"```aura\nlen(value: String|Vec[T]|Map[K, V]|Set[T]) -> int64\n```"' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'test("compiler bridge includes Vec collection members in completions"' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'test("compiler bridge includes String and Map builtin members in completions"' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'test("compiler bridge includes Set collection members and MapEntry fields"' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'assert.equal(details.get("len"), "len() -> int64");' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq '"byte_len() -> int64"' tools/aura-language-server/test/compiler_bridge.test.js
+test "$(grep -Fc '"len() -> int64"' tools/aura-language-server/test/compiler_bridge.test.js)" -ge 4
 grep -Fq 'end_index = values.len() as int32' docs/manual/collections.md
 grep -Fq 'end_index: int32 = items.len() as int32' tutorials/02-bindings-and-types.md
 grep -Fq 'for index in range(values.len() as int32):' examples/collections/vec_polish.au
-test -s crates/aurora-compiler/tests/fixtures/run-pass/vec_len_range.au
-grep -Fq 'for index in range(values.len() as int32):' crates/aurora-compiler/tests/fixtures/run-pass/vec_len_range.au
-grep -Fq 'fn direct_member_length_explicit_int32_cast_keeps_checked_narrowing()' crates/aurora-compiler/src/native_codegen_tests.rs
+test -s crates/aura-compiler/tests/fixtures/run-pass/vec_len_range.au
+grep -Fq 'for index in range(values.len() as int32):' crates/aura-compiler/tests/fixtures/run-pass/vec_len_range.au
+grep -Fq 'fn direct_member_length_explicit_int32_cast_keeps_checked_narrowing()' crates/aura-compiler/src/native_codegen_tests.rs
 grep -Fq 'execute `int64` member lengths, `len(value) == value.len()`' README.md
 grep -Fq 'checked `int64`-length to `int32`-index' README.md
 grep -Fq 'the `int64` results of `String.len()`, `String.byte_len()`, `Vec.len()`' examples/README.md
@@ -345,24 +350,24 @@ grep -Fq 'All five maintained length members return `int64`:' docs/learn/collect
 grep -Fq 'The free builtin delegates to the member, so `len(value) == value.len()`' docs/learn/collections.md
 grep -Fq 'values.insert(values.len() as int32, 40)' docs/learn/collections.md
 grep -Fq 'for index in range(values.len() as int32):' docs/learn/collections.md
-grep -Fq 'pub(crate) const MAX_CODEC_OUTPUT_LEN: usize = i32::MAX as usize;' crates/aurora-compiler/src/bytes_codec.rs
-grep -Fq 'fn checked_codec_output_len(output_len: Option<usize>) -> Result<usize, BytesResourceError>' crates/aurora-compiler/src/bytes_codec.rs
-grep -Fq 'Some(output_len) if output_len <= MAX_CODEC_OUTPUT_LEN => Ok(output_len)' crates/aurora-compiler/src/bytes_codec.rs
-grep -Fq 'RequestExceedsCeiling { requested: usize, maximum: usize }' crates/aurora-compiler/src/randomness.rs
-grep -Fq 'SecureRandomError::RequestExceedsCeiling' crates/aurora-compiler/src/mir_runtime.rs
-grep -Fq 'SecureRandomError::RequestExceedsCeiling' crates/aurora-compiler/src/native_runtime.rs
+grep -Fq 'pub(crate) const MAX_CODEC_OUTPUT_LEN: usize = i32::MAX as usize;' crates/aura-compiler/src/bytes_codec.rs
+grep -Fq 'fn checked_codec_output_len(output_len: Option<usize>) -> Result<usize, BytesResourceError>' crates/aura-compiler/src/bytes_codec.rs
+grep -Fq 'Some(output_len) if output_len <= MAX_CODEC_OUTPUT_LEN => Ok(output_len)' crates/aura-compiler/src/bytes_codec.rs
+grep -Fq 'RequestExceedsCeiling { requested: usize, maximum: usize }' crates/aura-compiler/src/randomness.rs
+grep -Fq 'SecureRandomError::RequestExceedsCeiling' crates/aura-compiler/src/mir_runtime.rs
+grep -Fq 'SecureRandomError::RequestExceedsCeiling' crates/aura-compiler/src/native_runtime.rs
 for fixture in \
   random_secure_bytes_request_ceiling \
   random_secure_bytes_request_ceiling_i64_max; do
-  test -s "crates/aurora-compiler/tests/fixtures/run-fail/${fixture}.au"
-  test -s "crates/aurora-compiler/tests/fixtures/run-fail/${fixture}.diag"
+  test -s "crates/aura-compiler/tests/fixtures/run-fail/${fixture}.au"
+  test -s "crates/aura-compiler/tests/fixtures/run-fail/${fixture}.diag"
   grep -Fq "\`${fixture}\`" docs/manual/conformance.md
   grep -Fq 'exceeds the secure-random request ceiling `2147483647`' \
-    "crates/aurora-compiler/tests/fixtures/run-fail/${fixture}.diag"
+    "crates/aura-compiler/tests/fixtures/run-fail/${fixture}.diag"
 done
-grep -Fq 'fn bytes_error_index_retains_the_int32_bytes_error_payload_boundary()' crates/aurora-compiler/src/runtime_value_tests.rs
-grep -Fq 'byte-codec error metadata exceeds the `bytes.Error` int32 payload range' crates/aurora-compiler/src/runtime_value.rs
-grep -Fq 'byte-codec error metadata exceeds the `bytes.Error` int32 payload range' crates/aurora-compiler/src/runtime_value_tests.rs
+grep -Fq 'fn bytes_error_index_retains_the_int32_bytes_error_payload_boundary()' crates/aura-compiler/src/runtime_value_tests.rs
+grep -Fq 'byte-codec error metadata exceeds the `bytes.Error` int32 payload range' crates/aura-compiler/src/runtime_value.rs
+grep -Fq 'byte-codec error metadata exceeds the `bytes.Error` int32 payload range' crates/aura-compiler/src/runtime_value_tests.rs
 grep -Fq 'Required malformed-data metadata above the `int32` maximum traps with' docs/manual/bytes.md
 grep -Fq 'whose exact reported offset or length exceeds `2147483647` also traps with' docs/manual/bytes.md
 grep -Fq 'secure-random request and resource ceiling. This ceiling bounds allocation' architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md
@@ -404,8 +409,8 @@ fi
 # describe these numeric ceilings as resource boundaries, never as the maximum
 # representable Vec/collection size.
 if rg -n 'MAX_(VEC|VECTOR|COLLECTION)(_OUTPUT)?_(LEN|LENGTH|SIZE)|checked_(vec|vector|collection)(_output)?_(len|length|size)|SecureRandomError::(LengthTooLarge|RequestTooLarge)|Self::(LengthTooLarge|RequestTooLarge)|BytesResourceError::((Vec|Vector|Collection)(Length|Output)?TooLarge)' \
-  crates/aurora-compiler/src \
-  crates/aurora-compiler/tests; then
+  crates/aura-compiler/src \
+  crates/aura-compiler/tests; then
   echo "retired collection-limit implementation names remain in maintained code" >&2
   exit 1
 fi
@@ -427,8 +432,8 @@ grep -Fq '| "own", "self"' docs/manual/grammar.md
 grep -Fq 'Bare `self` is the shared receiver, `mut self` is mutable, and `own self` is consuming' docs/manual/grammar.md
 grep -Fq '| `own self` | Consuming receiver.' docs/manual/classes.md
 grep -Fq '`self: Type` is not a method receiver' architecture_docs/decisions/0005-method-receivers.md
-grep -Fq '`own self` for by-value consumption' docs/aurora_language_proposal.md
-grep -Fq '<code>own self</code> for by-value consumption' docs/aurora_language_proposal.html
+grep -Fq '`own self` for by-value consumption' "$proposal_md"
+grep -Fq '<code>own self</code> for by-value consumption' "$proposal_html"
 grep -Fq '`value: T` | Shared access. An implementation may pass copy bits directly without changing the source contract.' docs/manual/functions.md
 grep -Fq '`value: own T` | Owned argument' docs/manual/functions.md
 grep -Fq 'caller-invisible temporary' docs/manual/functions.md
@@ -468,7 +473,7 @@ grep -Fq 'and file reads use the generic blocking-I/O pool.' docs/manual/executi
 grep -Fq 'PEM parsing and rustls construction run on protocol workers' docs/manual/execution-model.md
 grep -Fq 'Phase 5.10 measurement at `181204b`' docs/manual/current-limits.md
 grep -Fq '207,798,272 bytes of worst whole-process RSS and 198,787,072' docs/manual/current-limits.md
-grep -Fq 'Aurora does not maintain a 100,000-sleeper claim.' docs/manual/current-limits.md
+grep -Fq 'Aura does not maintain a 100,000-sleeper claim.' docs/manual/current-limits.md
 grep -Fq '1,170,735,104,' docs/manual/current-limits.md
 grep -Fq '1,921,531,904, and 2,001,305,600 bytes. Two of three exceed the 1.5 GiB' docs/manual/current-limits.md
 grep -Fq 'compression- and reclaim-dependent, not a robust capacity guarantee.' docs/manual/current-limits.md
@@ -477,15 +482,15 @@ grep -Fq '`1.039673x` paired median wall-time ratio with `396.73%`' docs/manual/
 grep -Fq 'A dynamic value outside that range and a stack-allocation or' docs/manual/diagnostics.md
 grep -Fq '## Choosing A Custom Task Stack' docs/learn/concurrency.md
 grep -Fq '### Per-task Stack Overrides' tutorials/13-concurrency.md
-grep -Fq 'compiler bridge exposes guarded TaskGroup stack override completion and hover' tools/aurora-language-server/test/compiler_bridge.test.js
-grep -Fq 'ordinary starts use the safe 512 KiB default' crates/aurora-compiler/src/call.rs
+grep -Fq 'compiler bridge exposes guarded TaskGroup stack override completion and hover' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'ordinary starts use the safe 512 KiB default' crates/aura-compiler/src/call.rs
 grep -Fq 'Accepted ADR-0032 guarded 512 KiB default task stacks' docs/manual/conformance.md
 grep -Fq 'consuming a bare shared parameter reports that parameter `x` is' docs/manual/diagnostics.md
 grep -Fq 'the current compiler emits at most one' docs/manual/diagnostics.md
 grep -Fq 'constant tuple indexing that selects a non-copy element' docs/manual/diagnostics.md
 grep -Fq 'corresponding `Vec` or `Map` indexed compound assignment' docs/manual/diagnostics.md
-grep -Fq 'code: "AU3005"' crates/aurora-compiler/src/diag.rs
-grep -Fq 'code: "AU3006"' crates/aurora-compiler/src/diag.rs
+grep -Fq 'code: "AU3005"' crates/aura-compiler/src/diag.rs
+grep -Fq 'code: "AU3006"' crates/aura-compiler/src/diag.rs
 grep -Fq 'or: aura build -o <output>' crates/aura/src/main.rs
 if grep -Fq 'aura build [-o <output>]' crates/aura/src/main.rs; then
   echo 'aura help still presents required build output as optional' >&2
@@ -496,18 +501,18 @@ if grep -Fq '<check|run|build' crates/aura/src/main.rs; then
   exit 1
 fi
 grep -Fq 'Class field defaults cannot call user-defined functions' docs/manual/current-limits.md
-test -s crates/aurora-compiler/tests/fixtures/check-fail/class_field_default_user_function_not_supported.au
+test -s crates/aura-compiler/tests/fixtures/check-fail/class_field_default_user_function_not_supported.au
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0031-cli-backend-defaults.md
 grep -Fq '0031-cli-backend-defaults.md' architecture_docs/decisions/README.md
 grep -Fq '`aura run --backend mir` executes the lowered MIR and is the default.' docs/manual/cli-and-tooling.md
 grep -Fq 'run_backend_parsing_defaults_to_mir_and_accepts_every_selector' crates/aura/src/main.rs
-grep -Fq 'MIR and native direct-backend traps carry the same typed Aurora call frames' docs/manual/current-limits.md
+grep -Fq 'MIR and native direct-backend traps carry the same typed Aura call frames' docs/manual/current-limits.md
 grep -Fq 'Those generated strings are not stored in structured `notes`' docs/manual/diagnostics.md
 grep -Fq '"call_frames": []' docs/manual/diagnostics.md
 grep -Fq '"task_ancestry": []' docs/manual/diagnostics.md
 grep -Fq 'MIR-specific frame-note masking.' docs/manual/cli-and-tooling.md
 if rg -n \
-  'Structured frame-list fields are deferred|Native-backend Aurora backtraces are deferred|direct native traps may omit|native frame parity.*unavailable|three-note parity carve-out' \
+  'Structured frame-list fields are deferred|Native-backend Aura backtraces are deferred|direct native traps may omit|native frame parity.*unavailable|three-note parity carve-out' \
   README.md crates/aura/README.md docs/manual docs/learn tutorials \
   architecture_docs/07-mir-runtime.md \
   architecture_docs/08-native-codegen-and-runtime.md \
@@ -529,8 +534,8 @@ for fixture in \
   retained_argument_nested_consumption_repro \
   method_receiver_rejects_nested_argument_consumption \
   retained_parameter_rejects_nested_argument_consumption; do
-  test -s "crates/aurora-compiler/tests/fixtures/check-fail/${fixture}.au"
-  test -s "crates/aurora-compiler/tests/fixtures/check-fail/${fixture}.diag"
+  test -s "crates/aura-compiler/tests/fixtures/check-fail/${fixture}.au"
+  test -s "crates/aura-compiler/tests/fixtures/check-fail/${fixture}.diag"
 done
 for namespace in io fs net process bytes json sys path toml log trace metrics random; do
   grep -Fq -- "- \`${namespace}\`" tutorials/14-current-language-surface.md
@@ -554,11 +559,11 @@ grep -Fq '`Queue[T]` is a copy handle to shared runtime state.' tutorials/06-own
 grep -Fq '`Task[T]` is always safe' tutorials/06-ownership-and-borrowing.md
 grep -Fq 'admit only structurally' tutorials/06-ownership-and-borrowing.md
 grep -Fq 'first result' tutorials/06-ownership-and-borrowing.md
-grep -Fq 'declaration-stable' docs/aurora_language_proposal.html
-grep -Fq 'Queue iteration receives each item already owned' docs/aurora_language_proposal.html
-grep -Fq 'const MAX_FILESYSTEM_READ_BYTES: usize = 256 * 1024 * 1024;' crates/aurora-compiler/src/runtime_value.rs
-grep -Fq 'const MAX_STREAM_READ_BYTES: usize = 64 * 1024 * 1024;' crates/aurora-compiler/src/runtime_value.rs
-grep -Fq 'const MAX_HTTP_MESSAGE_BYTES: usize = 16 * 1024 * 1024;' crates/aurora-compiler/src/runtime_value.rs
+grep -Fq 'declaration-stable' "$proposal_html"
+grep -Fq 'Queue iteration receives each item already owned' "$proposal_html"
+grep -Fq 'const MAX_FILESYSTEM_READ_BYTES: usize = 256 * 1024 * 1024;' crates/aura-compiler/src/runtime_value.rs
+grep -Fq 'const MAX_STREAM_READ_BYTES: usize = 64 * 1024 * 1024;' crates/aura-compiler/src/runtime_value.rs
+grep -Fq 'const MAX_HTTP_MESSAGE_BYTES: usize = 16 * 1024 * 1024;' crates/aura-compiler/src/runtime_value.rs
 grep -Fq 'capped at 256 MiB of remaining content' docs/manual/filesystem.md
 grep -Fq 'Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB' docs/manual/current-limits.md
 grep -Fq 'Process-pipe and captured-output reads plus TCP, Unix, and TLS whole/bounded reads remain capped at 64 MiB.' docs/manual/current-limits.md
@@ -671,8 +676,8 @@ fi
 if rg -ni 'defaults? to (`|<code>)?int32|default for most integer work|use (`|<code>)?int32[^[:space:]]* and (`|<code>)?float64[^[:space:]]* by default|no (unsuffixed|bare) (`|<code>)?int' \
   docs/manual \
   tutorials \
-  docs/aurora_language_proposal.md \
-  docs/aurora_language_proposal.html; then
+  "$proposal_md" \
+  "$proposal_html"; then
   echo "reference still describes the retired int32 default or rejects the int alias" >&2
   exit 1
 fi
@@ -697,8 +702,8 @@ if rg -n 'for x in expr:` consumes|for value in vec:` \| Consumes|`for value in 
   docs/manual \
   tutorials \
   docs/learn \
-  docs/aurora_language_proposal.md \
-  docs/aurora_language_proposal.html; then
+  "$proposal_md" \
+  "$proposal_html"; then
   echo "reference still describes retired parameter, loop, lookup, or task-capture ownership behavior" >&2
   exit 1
 fi
@@ -745,7 +750,7 @@ if rg -U -n 'Provisional\s+ADR-003(2|3|4|5|6)' \
 fi
 
 # Batch 6 opens by accepting the completed value-capture design and accepting
-# the place-loan design for Aurora 0.3 without authorizing its implementation
+# the place-loan design for Aura 0.3 without authorizing its implementation
 # in the 0.2 release family.
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0037-expression-closures-and-value-capture.md
 grep -Fq '0037-expression-closures-and-value-capture.md) — Accepted at the Batch 6 opening checkpoint' architecture_docs/decisions/README.md
@@ -757,7 +762,7 @@ grep -Fq -- '- Implementation: Not started; no 0.2 implementation is authorized'
 grep -Fq -- '- Version target: 0.3' architecture_docs/decisions/0038-place-based-loans-and-views.md
 test "$(grep -Ec '^[0-9]+\. \*\*Answer: Yes\.\*\*' architecture_docs/decisions/0038-place-based-loans-and-views.md)" -eq 10
 grep -Fq '0038-place-based-loans-and-views.md) — Accepted design for 0.3; unimplemented and not authorized in the 0.2 cycle' architecture_docs/decisions/README.md
-rg -U -q 'accepted ADR-0038 design(?:\s|>\s)*specifies in-loan captures for Aurora 0\.3' architecture_docs/decisions/0013-callable-sequencing-and-ownership.md
+rg -U -q "accepted ADR-0038 design(?:\\s|>\\s)*specifies in-loan captures for ${former_name} 0\\.3" architecture_docs/decisions/0013-callable-sequencing-and-ownership.md
 grep -Fq -- '- Future design amendment: ADR-0038 (accepted for 0.3; not implemented in 0.2)' architecture_docs/decisions/0037-expression-closures-and-value-capture.md
 
 if rg -U -n 'Provisional\s+ADR-0037|under Provisional\s+ADR-0037|ADR-0037[^.\n]*Provisional' \
@@ -805,15 +810,15 @@ grep -Fq 'Accepted ADR-0034 typed heterogeneous `select`' docs/manual/conformanc
 grep -Fq 'Use the builtin `select(...)` when one wait mixes queues, tasks, and a relative' tutorials/13-concurrency.md
 grep -Fq 'explicit-stack start methods, typed `select(...)` over Queue, Task, and' tutorials/README.md
 grep -Fq 'typed `select(queue_or_task_or_duration, ...)`' tutorials/14-current-language-surface.md
-test -s crates/aurora-compiler/tests/fixtures/parse-fail/select_statement_form_rejected.au
-test -s crates/aurora-compiler/tests/fixtures/parse-fail/select_statement_form_rejected.diag
-grep -Fq 'select:' crates/aurora-compiler/tests/fixtures/parse-fail/select_statement_form_rejected.au
-grep -Fq 'error[AU1101]: expected Newline' crates/aurora-compiler/tests/fixtures/parse-fail/select_statement_form_rejected.diag
-grep -Fq 'compiler bridge exposes typed select inference, hover, and outcome completions' tools/aurora-language-server/test/compiler_bridge.test.js
-grep -Fq 'compiler bridge preserves typed select diagnostic codes and guidance' tools/aurora-language-server/test/compiler_bridge.test.js
-grep -Fq 'assert.ok(names.includes("select"));' tools/aurora-language-server/test/recovery.test.js
-grep -Fq 'assert.ok(names.includes("SelectOutcome"));' tools/aurora-language-server/test/recovery.test.js
-grep -Fq '"SelectOutcome",' tools/vscode-aurora/test/package.test.js
+test -s crates/aura-compiler/tests/fixtures/parse-fail/select_statement_form_rejected.au
+test -s crates/aura-compiler/tests/fixtures/parse-fail/select_statement_form_rejected.diag
+grep -Fq 'select:' crates/aura-compiler/tests/fixtures/parse-fail/select_statement_form_rejected.au
+grep -Fq 'error[AU1101]: expected Newline' crates/aura-compiler/tests/fixtures/parse-fail/select_statement_form_rejected.diag
+grep -Fq 'compiler bridge exposes typed select inference, hover, and outcome completions' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'compiler bridge preserves typed select diagnostic codes and guidance' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'assert.ok(names.includes("select"));' tools/aura-language-server/test/recovery.test.js
+grep -Fq 'assert.ok(names.includes("SelectOutcome"));' tools/aura-language-server/test/recovery.test.js
+grep -Fq '"SelectOutcome",' tools/vscode-aura/test/package.test.js
 
 if rg -n 'language-level `select`|instead of the removed `select` statement|typed heterogeneous selection[^.\n]*(unavailable|not implemented)' \
   README.md \
@@ -832,13 +837,13 @@ fi
 test -s architecture_docs/decisions/0035-configurable-blocking-io-pool.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0035-configurable-blocking-io-pool.md
 grep -Fq '0035-configurable-blocking-io-pool.md) — Accepted after the Batch 5 default-parallel watchdog closure' architecture_docs/decisions/README.md
-grep -Fq '`AURORA_BLOCKING_WORKERS=<positive integer>`' architecture_docs/07-mir-runtime.md
+grep -Fq '`AURA_BLOCKING_WORKERS=<positive integer>`' architecture_docs/07-mir-runtime.md
 grep -Fq 'selects its exact worker count without clamping.' architecture_docs/07-mir-runtime.md
 grep -Fq 'resulting configuration is immutable for the process lifetime.' architecture_docs/07-mir-runtime.md
 grep -Fq 'Valid preflight creates no blocking-pool worker threads.' architecture_docs/07-mir-runtime.md
 grep -Fq 'submission creates the complete worker set, which is reused until process exit;' architecture_docs/07-mir-runtime.md
-grep -Fq 'production has no Aurora shutdown or join surface for this pool.' architecture_docs/07-mir-runtime.md
-grep -Fq '`AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally bounds accepted' docs/manual/execution-model.md
+grep -Fq 'production has no Aura shutdown or join surface for this pool.' architecture_docs/07-mir-runtime.md
+grep -Fq '`AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally bounds accepted' docs/manual/execution-model.md
 grep -Fq 'The generic pool is also process-global.' docs/manual/execution-model.md
 grep -Fq 'MIR execution, direct execution, and launched standalone native binaries' docs/manual/cli-and-tooling.md
 grep -Fq 'a non-Unicode' docs/manual/cli-and-tooling.md
@@ -851,8 +856,8 @@ grep -Fq 'limits accepted pending backlog, not' docs/learn/io-process-networking
 grep -Fq 'cannot guarantee unrelated blocking-I/O progress while' docs/learn/io-process-networking.md
 grep -Fq 'cannot interrupt accepted work or guarantee' tutorials/19-io-and-networking.md
 grep -Fq 'unrelated blocking-I/O progress while every worker remains stuck' tutorials/19-io-and-networking.md
-grep -Fq 'AURORA_BLOCKING_WORKERS' README.md
-grep -Fq 'AURORA_BLOCKING_QUEUE_CAPACITY' CHANGELOG.md
+grep -Fq 'AURA_BLOCKING_WORKERS' README.md
+grep -Fq 'AURA_BLOCKING_QUEUE_CAPACITY' CHANGELOG.md
 
 if rg -n 'blocking pool uses 2 through 8 host threads|no 0\.1 configuration or queue backpressure|count and queue are not configurable|current queue has no admission bound|configurable blocking-pool sizing[^.\n]*unavailable|bounded blocking service' \
   README.md \
@@ -868,7 +873,7 @@ fi
 # grammar, semantics, diagnostics, maintained examples, and teaching material.
 test -s architecture_docs/decisions/0039-comprehensions.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0039-comprehensions.md
-grep -Fq '0039-comprehensions.md) — Accepted for Aurora 0.2 in Batch 6, Phase 7.1' architecture_docs/decisions/README.md
+grep -Fq '0039-comprehensions.md) — Accepted for Aura 0.2 in Batch 6, Phase 7.1' architecture_docs/decisions/README.md
 grep -Fq 'list-comprehension' docs/manual/grammar.md
 grep -Fq 'comprehension-clauses' docs/manual/grammar.md
 grep -Fq 'Evaluation is outer-major.' docs/manual/collections.md
@@ -894,35 +899,35 @@ grep -Fq 'comprehensions with filters and nested clauses' tutorials/README.md
 # maintained teaching material.
 test -s architecture_docs/decisions/0040-owned-vec-and-string-slices.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0040-owned-vec-and-string-slices.md
-grep -Fq '0040-owned-vec-and-string-slices.md) — Accepted for Aurora 0.2 in Batch 6, Phase 7.2' architecture_docs/decisions/README.md
+grep -Fq '0040-owned-vec-and-string-slices.md) — Accepted for Aura 0.2 in Batch 6, Phase 7.2' architecture_docs/decisions/README.md
 grep -Fq '| "[", [ expression ], ":", [ expression ], "]" ;' docs/manual/grammar.md
 grep -Fq 'both endpoints must be in the' architecture_docs/decisions/0040-owned-vec-and-string-slices.md
 grep -Fq 'slice steps are unavailable; use an explicit loop to select a stride' docs/manual/diagnostics.md
 grep -Fq 'slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value' docs/manual/diagnostics.md
-grep -Fq 'Aurora deliberately differs from Python here: slice endpoints are **not' docs/manual/expressions.md
+grep -Fq 'Aura deliberately differs from Python here: slice endpoints are **not' docs/manual/expressions.md
 grep -Fq 'so slicing is O(n)' docs/manual/collections.md
 grep -Fq 'Accepted ADR-0040 owned Vec/String slices' docs/manual/conformance.md
-test -s crates/aurora-compiler/tests/fixtures/parse-pass/owned_slices.au
-test -s crates/aurora-compiler/tests/fixtures/check-pass/slice_static_semantics.au
-test -s crates/aurora-compiler/tests/fixtures/run-pass/owned_vec_string_slices.au
-test -s crates/aurora-compiler/tests/fixtures/run-pass/owned_vec_string_slices.stdout
+test -s crates/aura-compiler/tests/fixtures/parse-pass/owned_slices.au
+test -s crates/aura-compiler/tests/fixtures/check-pass/slice_static_semantics.au
+test -s crates/aura-compiler/tests/fixtures/run-pass/owned_vec_string_slices.au
+test -s crates/aura-compiler/tests/fixtures/run-pass/owned_vec_string_slices.stdout
 for fixture in \
   slice_step_explicit \
   slice_step_fully_omitted \
   slice_step_omitted_bounds \
   slice_step_omitted_value; do
-  test -s "crates/aurora-compiler/tests/fixtures/parse-fail/${fixture}.au"
-  test -s "crates/aurora-compiler/tests/fixtures/parse-fail/${fixture}.diag"
+  test -s "crates/aura-compiler/tests/fixtures/parse-fail/${fixture}.au"
+  test -s "crates/aura-compiler/tests/fixtures/parse-fail/${fixture}.diag"
   grep -Fq 'slice steps are unavailable; use an explicit loop to select a stride' \
-    "crates/aurora-compiler/tests/fixtures/parse-fail/${fixture}.diag"
+    "crates/aura-compiler/tests/fixtures/parse-fail/${fixture}.diag"
 done
 for fixture in \
   slice_assignment_unavailable \
   slice_compound_assignment_unavailable; do
-  test -s "crates/aurora-compiler/tests/fixtures/parse-fail/${fixture}.au"
-  test -s "crates/aurora-compiler/tests/fixtures/parse-fail/${fixture}.diag"
+  test -s "crates/aura-compiler/tests/fixtures/parse-fail/${fixture}.au"
+  test -s "crates/aura-compiler/tests/fixtures/parse-fail/${fixture}.diag"
   grep -Fq 'slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value' \
-    "crates/aurora-compiler/tests/fixtures/parse-fail/${fixture}.diag"
+    "crates/aura-compiler/tests/fixtures/parse-fail/${fixture}.diag"
 done
 for fixture in \
   vec_slice_start_out_of_bounds \
@@ -931,10 +936,10 @@ for fixture in \
   string_slice_start_out_of_bounds \
   string_slice_end_out_of_bounds \
   string_slice_reversed_bounds; do
-  test -s "crates/aurora-compiler/tests/fixtures/run-fail/${fixture}.au"
-  test -s "crates/aurora-compiler/tests/fixtures/run-fail/${fixture}.diag"
+  test -s "crates/aura-compiler/tests/fixtures/run-fail/${fixture}.au"
+  test -s "crates/aura-compiler/tests/fixtures/run-fail/${fixture}.diag"
   grep -Fq 'error[AU4003]' \
-    "crates/aurora-compiler/tests/fixtures/run-fail/${fixture}.diag"
+    "crates/aura-compiler/tests/fixtures/run-fail/${fixture}.diag"
 done
 test -s examples/collections/slices.au
 grep -Fq 'celebration = text[1:2]' examples/collections/slices.au
@@ -958,7 +963,7 @@ fi
 # evidence protocol.
 test -s architecture_docs/decisions/0041-contiguous-numeric-arrays.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0041-contiguous-numeric-arrays.md
-grep -Fq '0041-contiguous-numeric-arrays.md) — Accepted for Aurora 0.2 in Batch 6, Phase 7.3' architecture_docs/decisions/README.md
+grep -Fq '0041-contiguous-numeric-arrays.md) — Accepted for Aura 0.2 in Batch 6, Phase 7.3' architecture_docs/decisions/README.md
 grep -Fq 'array [ expression { , expression } ]' docs/manual/numeric-arrays.md
 grep -Fq 'copies its scalar elements, and leaves the' docs/manual/numeric-arrays.md
 grep -Fq 'shared source Vec usable' docs/manual/numeric-arrays.md
@@ -975,9 +980,9 @@ grep -Fq '`AU4007` (`numeric array shape or reduction violation`) reports:' docs
 grep -Fq 'Accepted ADR-0041 contiguous numeric Arrays and explicit integer modes' docs/manual/conformance.md
 grep -Fq '`AU4002` checked Array overflow and `AU4004` floating Array zero-divisor failures' docs/manual/conformance.md
 grep -Fq 'error[AU4002]: array addition overflowed at flat index 0' \
-  crates/aurora-compiler/tests/fixtures/run-fail/array_checked_overflow.diag
+  crates/aura-compiler/tests/fixtures/run-fail/array_checked_overflow.diag
 grep -Fq 'error[AU4004]: array division has a zero divisor at flat index 0' \
-  crates/aurora-compiler/tests/fixtures/run-fail/array_division_by_zero.diag
+  crates/aura-compiler/tests/fixtures/run-fail/array_division_by_zero.diag
 grep -Fq 'Phase 7.3 adds global contiguous `Array[T]` values under Accepted ADR-0041.' docs/manual/status-and-compatibility.md
 test -s examples/numbers/numeric_arrays.au
 grep -Fq 'Array[int32].from_vec' examples/numbers/numeric_arrays.au
@@ -985,10 +990,10 @@ grep -Fq '`numeric_arrays.au`' examples/README.md
 grep -Fq 'examples/numbers/numeric_arrays.au' README.md
 grep -Fq 'examples/numbers/numeric_arrays.au' tutorials/02-bindings-and-types.md
 grep -Fq 'owned contiguous numeric `Array[T]` values' tutorials/README.md
-grep -Fq 'compiler bridge exposes the global numeric Array surface and result types' tools/aurora-language-server/test/compiler_bridge.test.js
-grep -Fq 'bundled language server preserves numeric Array hover completion and diagnostics' tools/vscode-aurora/test/server_protocol.test.js
-grep -Fq 'names.includes("Array")' tools/aurora-language-server/test/recovery.test.js
-grep -Fq '"Array",' tools/vscode-aurora/test/package.test.js
+grep -Fq 'compiler bridge exposes the global numeric Array surface and result types' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'bundled language server preserves numeric Array hover completion and diagnostics' tools/vscode-aura/test/server_protocol.test.js
+grep -Fq 'names.includes("Array")' tools/aura-language-server/test/recovery.test.js
+grep -Fq '"Array",' tools/vscode-aura/test/package.test.js
 test -s benchmarks/numeric_arrays/README.md
 test -s benchmarks/numeric_arrays/numpy_reference.py
 test -s benchmarks/numeric_arrays/float64_add.au

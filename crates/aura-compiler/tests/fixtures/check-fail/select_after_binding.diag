@@ -1,0 +1,5 @@
+error[AU1101]: expected Newline
+ --> crates/aura-compiler/tests/fixtures/check-fail/select_after_binding.au:2:11
+  |
+2 |     select:
+  |           ^

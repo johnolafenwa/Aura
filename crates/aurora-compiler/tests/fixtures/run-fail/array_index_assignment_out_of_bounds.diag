@@ -1,6 +1,0 @@
-error[AU4003]: array coordinate 2 on axis 0 normalizes to 2, outside 0..2
- --> crates/aurora-compiler/tests/fixtures/run-fail/array_index_assignment_out_of_bounds.au:3:5
-  |
-3 |     values[2, 0] = 7
-  |     ^
-  = note: Aurora call chain (innermost first): main at 1:1

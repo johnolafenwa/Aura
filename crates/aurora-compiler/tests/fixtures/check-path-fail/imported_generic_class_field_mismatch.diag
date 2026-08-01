@@ -1,5 +1,0 @@
-error[AU2002]: field `value` expects `int64`, found `String` (conflicting inferred types for `T`: `int64` and `String`)
- --> crates/aurora-compiler/tests/fixtures/check-path-fail/imported_generic_class_field_mismatch.au:4:61
-  |
-4 |     value = imported_generic_support.remote.PlainBox[int64](value="wrong")
-  |                                                             ^

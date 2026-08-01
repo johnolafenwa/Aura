@@ -1,10 +1,10 @@
 # End-To-End Walkthrough
 
-This chapter follows one small Aurora program through the whole implementation stack.
+This chapter follows one small Aura program through the whole implementation stack.
 
 ## The program
 
-```aurora
+```aura
 def add(left: int32, right: int32) -> int32:
     return left + right
 
@@ -16,7 +16,7 @@ This example is intentionally small so you can see the whole pipeline without ge
 
 ## Stage 1: source text
 
-At the beginning, Aurora only has bytes or UTF-8 text read from:
+At the beginning, Aura only has bytes or UTF-8 text read from:
 
 - a file path
 - stdin with a virtual path
@@ -66,17 +66,17 @@ Important parsed facts:
 
 The checker turns the AST into a `Program`.
 
-At this stage Aurora now knows:
+At this stage Aura now knows:
 
 - `add` is a function in scope
 - `left` and `right` are `int32`
 - `left + right` is valid and has type `int32`
-- `main` has no parameters, which satisfies Aurora's entrypoint rule
+- `main` has no parameters, which satisfies Aura's entrypoint rule
 - the `return` statements match their declared return types
 
 ## Stage 5: MIR lowering
 
-Aurora then lowers the checked functions into `MirFunction` bodies.
+Aura then lowers the checked functions into `MirFunction` bodies.
 
 A simplified MIR sketch for `add` might look like:
 
@@ -104,7 +104,7 @@ If the user runs:
 aura run file.au
 ```
 
-Aurora:
+Aura:
 
 1. executes `main` in the MIR runtime
 2. binds the integer arguments to `add`
@@ -120,12 +120,12 @@ If the user runs:
 aura build -o ./program file.au
 ```
 
-Aurora:
+Aura:
 
 1. lowers to the same MIR
 2. feeds that MIR to the direct backend
 3. emits an object file
-4. links it against Aurora's runtime library
+4. links it against Aura's runtime library
 5. writes the final executable
 
 The compiled binary still knows enough source metadata to render runtime diagnostics.
@@ -157,7 +157,7 @@ flowchart LR
 
 ## What this walkthrough teaches
 
-The key architectural point is that Aurora has a clean staged pipeline:
+The key architectural point is that Aura has a clean staged pipeline:
 
 - syntax is separated from semantics
 - semantics are separated from execution

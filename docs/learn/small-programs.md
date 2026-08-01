@@ -6,10 +6,10 @@ Along the way we will meet bindings, functions, control flow, integer parsing, m
 
 ## Running A Script
 
-Aurora files run top to bottom. A script can mix prints, bindings, and computation:
+Aura files run top to bottom. A script can mix prints, bindings, and computation:
 
 ```python
-print('aurora')
+print('aura')
 print(40 + 2)
 ```
 
@@ -44,7 +44,7 @@ count = count + 1
 count += 1
 ```
 
-Aurora infers the type of most bindings from their initial value. Add an explicit annotation when the compiler cannot work it out on its own — especially for empty collection literals, which have no elements to guess from:
+Aura infers the type of most bindings from their initial value. Add an explicit annotation when the compiler cannot work it out on its own — especially for empty collection literals, which have no elements to guess from:
 
 ```python
 values: Vec[int32] = []
@@ -197,7 +197,7 @@ For enums, `match` becomes even more useful: the compiler will tell you when a v
 
 ## Turning Text Into Numbers
 
-Aurora expresses parsing with `Result`, so a bad input is ordinary control flow rather than an exception:
+Aura expresses parsing with `Result`, so a bad input is ordinary control flow rather than an exception:
 
 ```python
 def parse_count(text: String) -> int32:
@@ -261,7 +261,7 @@ Run the program and you should see a tally for each category that appeared in `v
 
 ## A Rule Of Thumb
 
-Small Aurora programs read well when type boundaries line up with data boundaries:
+Small Aura programs read well when type boundaries line up with data boundaries:
 
 - parse input into typed values as early as possible
 - use enums for states that have names

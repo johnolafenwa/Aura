@@ -1,7 +1,0 @@
-error[AU3002]: argument for parameter `b` in function `add_both` overlaps mutable borrow for parameter `a`
- --> crates/aurora-compiler/tests/fixtures/check-fail/aliased_borrow_mut_arguments.au:10:20
-   |
-10 |     add_both(data, data)
-   |                    ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/aliased_borrow_mut_arguments.au:10:14: mutable borrow for parameter `a` begins here
-  = help: pass non-overlapping places; shared accesses may overlap, but mutable access must remain exclusive

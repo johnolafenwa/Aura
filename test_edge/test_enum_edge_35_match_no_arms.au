@@ -1,7 +1,7 @@
-# Test: empty enum body - Aurora requires at least one variant
+# Test: empty enum body - Aura requires at least one variant
 # KNOWN ISSUE: `enum Empty:` with no variants fails with parse error:
 #   "expected Indent, found KwDef"
-# Aurora does not support empty enums (no `pass` keyword for enum bodies)
+# Aura does not support empty enums (no `pass` keyword for enum bodies)
 
 # Minimal test: single-variant enum works fine
 enum Minimal:

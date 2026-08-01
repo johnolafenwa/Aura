@@ -1,0 +1,22 @@
+{
+  "name": "aura-language-server",
+  "version": "0.2.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Language Server Protocol implementation for Aura.",
+  "main": "./src/server.js",
+  "scripts": {
+    "check": "node --check ./src/server.js && node --check ./src/recovery.js && node --check ./src/compiler_bridge.js",
+    "test": "node --test ./test/*.test.js",
+    "coverage": "c8 --reporter=text --reporter=text-summary node --test ./test/*.test.js",
+    "coverage:check": "c8 --check-coverage --lines 100 --branches 100 --functions 100 --statements 100 --reporter=text --reporter=text-summary node --test ./test/*.test.js",
+    "start": "node ./src/server.js"
+  },
+  "devDependencies": {
+    "c8": "^12.0.0"
+  },
+  "dependencies": {
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12"
+  }
+}

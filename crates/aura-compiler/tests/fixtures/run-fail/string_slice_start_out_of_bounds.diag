@@ -1,0 +1,6 @@
+error[AU4003]: slice start `-5` normalizes to `-1`, outside `0..=4`
+ --> crates/aura-compiler/tests/fixtures/run-fail/string_slice_start_out_of_bounds.au:3:18
+  |
+3 |     print(text[-5:])
+  |                  ^
+  = note: Aura call chain (innermost first): main at 1:1

@@ -14,7 +14,7 @@ struct TempDir {
 impl TempDir {
     fn new() -> Self {
         let unique = format!(
-            "aurora-lambda-acceptance-{}-{}",
+            "aura-lambda-acceptance-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -152,7 +152,7 @@ def main() -> int32:
 #[test]
 fn imported_lambdas_at_the_same_source_position_keep_distinct_closure_ids() {
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../aurora-compiler/tests/fixtures/run-pass/lambda_imported_closure_ids.au");
+        .join("../aura-compiler/tests/fixtures/run-pass/lambda_imported_closure_ids.au");
     let temp = TempDir::new();
     let binary = temp.path.join("imported-closure-ids-direct");
     assert_both_backends(&fixture, &binary, b"11\n21\n");

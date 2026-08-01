@@ -1,0 +1,3 @@
+def main():
+    labels: Map[String, String] = {"language": "Aura"}
+    language: String = labels["language"]

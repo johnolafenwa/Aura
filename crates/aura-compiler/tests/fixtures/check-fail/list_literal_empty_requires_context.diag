@@ -1,0 +1,5 @@
+error[AU2002]: empty list literals require an expected `Vec[T]` type annotation in the bootstrap compiler
+ --> crates/aura-compiler/tests/fixtures/check-fail/list_literal_empty_requires_context.au:2:10
+  |
+2 |     xs = []
+  |          ^

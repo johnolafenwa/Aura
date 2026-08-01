@@ -1,6 +1,6 @@
 # Semantic Analysis
 
-This chapter explains what semantic analysis is, what Aurora's checker does, and how to build a small Aurora-style type checker in Rust.
+This chapter explains what semantic analysis is, what Aura's checker does, and how to build a small Aura-style type checker in Rust.
 
 ## What semantic analysis means
 
@@ -8,7 +8,7 @@ After parsing, you know the structure of the program, but not whether it makes s
 
 Example:
 
-```aurora
+```aura
 return left + right
 ```
 
@@ -21,9 +21,9 @@ The parser can build this AST just fine. It does not know:
 
 Semantic analysis is the stage that answers those questions.
 
-## Aurora's checked model: `Program`
+## Aura's checked model: `Program`
 
-Aurora's checker lives in [`sema.rs`](../crates/aurora-compiler/src/sema.rs). Its main output is `Program`.
+Aura's checker lives in [`sema.rs`](../crates/aura-compiler/src/sema.rs). Its main output is `Program`.
 
 `Program` contains:
 
@@ -34,11 +34,11 @@ Aurora's checker lives in [`sema.rs`](../crates/aurora-compiler/src/sema.rs). It
 - the module registry used for cross-module lookup
 - the checked top-level statements
 
-In other words, `Program` is Aurora's typed semantic world model for one module and the names it can see.
+In other words, `Program` is Aura's typed semantic world model for one module and the names it can see.
 
-## What Aurora's checker actually does
+## What Aura's checker actually does
 
-Aurora's semantic analysis is not one check. It is a layered pass.
+Aura's semantic analysis is not one check. It is a layered pass.
 
 ```mermaid
 flowchart TD
@@ -53,7 +53,7 @@ flowchart TD
     I --> J["Check function, method, impl, and top-level bodies"]
 ```
 
-Aurora uses early collection phases so later checks can resolve forward references and cross-references.
+Aura uses early collection phases so later checks can resolve forward references and cross-references.
 
 ## The main semantic data types
 
@@ -62,14 +62,14 @@ The most important checker data structures are:
 | Type | Purpose |
 | --- | --- |
 | `Program` | The checked module plus semantic tables |
-| `Type` | Aurora's lowered semantic type model |
+| `Type` | Aura's lowered semantic type model |
 | `ClassInfo` / `EnumInfo` / `FunctionInfo` / `TraitInfo` | Collected semantic metadata |
 | `ModuleNamespace` | Exported/imported module surface |
 | `FunctionChecker` | The body checker for functions, methods, impl methods, and top-level blocks |
 
-## Aurora's semantic `Type`
+## Aura's semantic `Type`
 
-Aurora lowers syntactic `TypeRef` values into semantic `Type` values:
+Aura lowers syntactic `TypeRef` values into semantic `Type` values:
 
 - `Type::Named(String, Vec<Type>)`
 - `Type::TypeParam(String)`
@@ -78,9 +78,9 @@ Aurora lowers syntactic `TypeRef` values into semantic `Type` values:
 
 This is where names like `Option[int32]` stop being raw syntax and become a semantic type.
 
-## Checks Aurora performs
+## Checks Aura performs
 
-Aurora's checker covers more than "basic type checking". It performs:
+Aura's checker covers more than "basic type checking". It performs:
 
 - duplicate item detection
 - type-parameter validation and arity checks
@@ -99,7 +99,7 @@ Aurora's checker covers more than "basic type checking". It performs:
 
 ## Ownership and borrowing are semantic, not syntactic
 
-Aurora's syntax uses bare, `mut`, and `own` capabilities, which become
+Aura's syntax uses bare, `mut`, and `own` capabilities, which become
 meaningful only after the checker validates the requested access or transfer.
 
 Receiver syntax is normalized before body checking. Bare `self` installs a
@@ -127,10 +127,9 @@ copy-or-move behavior.
 
 Every return is owned. Copy results are ordinary copies. A non-copy result must
 be constructed, cloned when clone-safe, moved from an owned input, or produced
-through an owner operation. The checker has no return-source or label contract;
-any future first-class loan or view design starts from a new specification.
+through an owner operation.
 
-Aurora's `FunctionChecker` tracks local bindings with information such as:
+Aura's `FunctionChecker` tracks local bindings with information such as:
 
 - semantic type
 - whether the place is assignable
@@ -145,7 +144,7 @@ That is why move and borrow diagnostics come from `sema.rs`, not the parser.
 
 ## Provisional task-boundary Transfer analysis
 
-Phase 5.6 introduces the Accepted ADR-0033 design before Aurora enables
+Phase 5.6 introduces the Accepted ADR-0033 design before Aura enables
 multiple workers. `Transfer` is a compiler-derived structural property, not a
 user trait. The checker must walk specialized collection, tuple, class, and
 enum storage and retain a path to the first non-transferable leaf so a
@@ -192,7 +191,7 @@ workers, while all other captures and results cross as owned `Transfer`
 values. The semantic property does not by itself promise preemption, work
 stealing, a scheduling order, or parallel speedup.
 
-## A tiny Aurora-like type checker in Rust
+## A tiny Aura-like type checker in Rust
 
 This toy example checks three things:
 
@@ -258,30 +257,30 @@ fn check_block(body: &[Stmt], locals: &HashMap<String, Type>, return_type: &Type
 }
 ```
 
-This is obviously much smaller than Aurora's real checker, but the pattern is the same:
+This is obviously much smaller than Aura's real checker, but the pattern is the same:
 
 - collect names into scopes
 - walk statements and expressions
 - assign semantic types
 - emit diagnostics when meaning does not line up
 
-## What makes Aurora's checker interesting
+## What makes Aura's checker interesting
 
 ### 1. It builds semantic tables before checking bodies
 
-Aurora can resolve many names because it first builds metadata tables for classes, enums, functions, traits, and impls.
+Aura can resolve many names because it first builds metadata tables for classes, enums, functions, traits, and impls.
 
 ### 2. It reuses call-binding logic
 
-Named/positional argument binding is shared through [`call.rs`](../crates/aurora-compiler/src/call.rs), so function calls and builtin calls follow the same argument-shape rules.
+Named/positional argument binding is shared through [`call.rs`](../crates/aura-compiler/src/call.rs), so function calls and builtin calls follow the same argument-shape rules.
 
 ### 3. It treats builtin modules as namespaces
 
-`io`, `fs`, and `net` are represented as module namespaces through [`builtin_modules.rs`](../crates/aurora-compiler/src/builtin_modules.rs), which means import resolution and tooling can treat them similarly to ordinary modules.
+`io`, `fs`, and `net` are represented as module namespaces through [`builtin_modules.rs`](../crates/aura-compiler/src/builtin_modules.rs), which means import resolution and tooling can treat them similarly to ordinary modules.
 
 ### 4. It is the ownership gate
 
-The checker is where Aurora enforces:
+The checker is where Aura enforces:
 
 - non-copy moves
 - move-after-use and use-after-move
@@ -301,11 +300,11 @@ MIR lowering does not want to rediscover the whole language's meaning. The check
 
 ## Files to study after this chapter
 
-- [`sema.rs`](../crates/aurora-compiler/src/sema.rs)
-- [`call.rs`](../crates/aurora-compiler/src/call.rs)
-- [`builtin_modules.rs`](../crates/aurora-compiler/src/builtin_modules.rs)
-- [`sema_tests.rs`](../crates/aurora-compiler/src/sema_tests.rs)
+- [`sema.rs`](../crates/aura-compiler/src/sema.rs)
+- [`call.rs`](../crates/aura-compiler/src/call.rs)
+- [`builtin_modules.rs`](../crates/aura-compiler/src/builtin_modules.rs)
+- [`sema_tests.rs`](../crates/aura-compiler/src/sema_tests.rs)
 
 ## What comes next
 
-After Aurora has a checked `Program`, it lowers that model into MIR. Read [06-mir.md](06-mir.md).
+After Aura has a checked `Program`, it lowers that model into MIR. Read [06-mir.md](06-mir.md).

@@ -1,6 +1,0 @@
-error[AU2003]: integer Array `/` is not supported
- --> crates/aurora-compiler/tests/fixtures/check-fail/array_integer_true_division.au:3:11
-  |
-3 |     print(values / 2)
-  |           ^
-  = help: map the values to `float32` or `float64` before using true division

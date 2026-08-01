@@ -1,0 +1,73 @@
+{"f":1.5,"items":[true,null,"x"],"n":1}
+{
+  "f": 1.5,
+  "items": [
+    true,
+    null,
+    "x"
+  ],
+  "n": 1
+}
+{"n":1.0,"f":1.5,"items":[true,null,"x"]}
+{"f":1.5,"items":[true,null,"x"],"n":1}
+Option.Some(true)
+Option.None
+true
+true
+Option.Some(0)
+Option.Some(7)
+Option.None
+false
+true
+Option.Some(1.5)
+Option.None
+aura
+Option.None
+Option.None
+Option.None
+2
+2
+{"a":1,"b":2}
+null
+bool
+int
+float
+string
+array
+object
+Option.Some(-9223372036854775808)
+Option.Some(9223372036854775807)
+b
+a
+{"a":2,"b":3}
+1
+1
+1
+6
+-0.0
+"\b\f\r\t\u0000\u001f/é"
+1
+7
+1
+6
+2
+b
+a
+Option.Some(json.Value.Int(3))
+{"a":2,"b":3}
+{"a":0,"z":{"a":2,"b":1}}
+[]
+{}
+Option.Some(0.0)
+0.0
+[
+null
+]
+{
+                "a": null
+}
+260
+128
+1
+129
+262

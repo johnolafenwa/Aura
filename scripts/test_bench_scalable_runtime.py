@@ -987,7 +987,7 @@ class ValidationAndExecutionTests(unittest.TestCase):
             binary = self.make_executable(
                 root,
                 "multicore",
-                'test "$AURORA_WORKERS" = "4" || exit 20\n'
+                'test "$AURA_WORKERS" = "4" || exit 20\n'
                 'test "$1" = "1" || exit 21\n'
                 'printf "READY multicore 1 0 48271 2147483647\\n"\n'
                 "IFS= read -r go\n"
@@ -999,7 +999,7 @@ class ValidationAndExecutionTests(unittest.TestCase):
             )
             with mock.patch.object(bench, "MULTICORE_ITERATIONS", 0):
                 result = bench.run_multicore_once(binary, tasks=1)
-        self.assertEqual(result["environment"], {"AURORA_WORKERS": "4"})
+        self.assertEqual(result["environment"], {"AURA_WORKERS": "4"})
         self.assertEqual(result["ready_observation"]["tasks"], 1)
         self.assertEqual(result["done_observation"]["checksum"], 1)
         self.assertGreaterEqual(result["elapsed_s"], 0.05)
@@ -1070,7 +1070,7 @@ class ValidationAndExecutionTests(unittest.TestCase):
             valid = self.make_executable(
                 root,
                 "valid-starvation",
-                'test "$AURORA_WORKERS" = "1" || exit 20\n'
+                'test "$AURA_WORKERS" = "1" || exit 20\n'
                 'printf "SAMPLE starvation 10 17\\nDONE starvation\\n"\n',
             )
             invalid = self.make_executable(
@@ -1082,18 +1082,18 @@ class ValidationAndExecutionTests(unittest.TestCase):
             self.assertEqual(result["sleep_ms"], 10)
             self.assertEqual(result["elapsed_ms"], 17)
             self.assertEqual(result["returncode"], 0)
-            self.assertEqual(result["environment"], {"AURORA_WORKERS": "1"})
+            self.assertEqual(result["environment"], {"AURA_WORKERS": "1"})
             with self.assertRaisesRegex(bench.BenchmarkError, "trailing"):
                 bench.run_starvation(invalid)
 
     def test_controlled_runtime_environment_scrubs_ambient_worker_override(self) -> None:
-        with mock.patch.dict(os.environ, {"AURORA_WORKERS": "99"}):
+        with mock.patch.dict(os.environ, {"AURA_WORKERS": "99"}):
             default_environment = bench.controlled_runtime_environment()
             single_worker_environment = bench.controlled_runtime_environment(
                 worker_count=1
             )
-        self.assertNotIn("AURORA_WORKERS", default_environment)
-        self.assertEqual(single_worker_environment["AURORA_WORKERS"], "1")
+        self.assertNotIn("AURA_WORKERS", default_environment)
+        self.assertEqual(single_worker_environment["AURA_WORKERS"], "1")
 
     def test_massive_run_records_incremental_rss_and_timer_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1227,7 +1227,7 @@ class ValidationAndExecutionTests(unittest.TestCase):
             bench.benchmark_noncontractual_reasons(True, ([], [competitor])),
             [
                 "the competing-process override was enabled",
-                "competing Aurora-repository processes were observed",
+                "competing Aura-repository processes were observed",
             ],
         )
 

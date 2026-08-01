@@ -1,5 +1,0 @@
-error[AU1101]: lambda body must be a single expression after `:`; use a named `def` for multi-statement logic
- --> crates/aurora-compiler/tests/fixtures/parse-fail/lambda_missing_expression_body.au:2:28
-  |
-2 |     invalid = lambda value:
-  |                            ^

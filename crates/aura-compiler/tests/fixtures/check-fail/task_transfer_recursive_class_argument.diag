@@ -1,0 +1,7 @@
+error[AU3008]: task argument `node` cannot cross a task boundary because field `generator` of `Node` -> `random.Rng` is a stateful generator and is not Transfer
+ --> crates/aura-compiler/tests/fixtures/check-fail/task_transfer_recursive_class_argument.au:12:31
+   |
+12 |     group.start_soon(consume, node)
+   |                               ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/task_transfer_recursive_class_argument.au:8:13: task parameter `node` is declared here
+  = help: send owned data made only from Transfer components; keep capabilities and host resources on their owning worker

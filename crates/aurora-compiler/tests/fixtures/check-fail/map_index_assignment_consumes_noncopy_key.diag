@@ -1,8 +1,0 @@
-error[AU3001]: use of moved value `key`
- --> crates/aurora-compiler/tests/fixtures/check-fail/map_index_assignment_consumes_noncopy_key.au:5:11
-  |
-5 |     print(key)
-  |           ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/map_index_assignment_consumes_noncopy_key.au:4:12: value moved here
-  = help: pass shared access when ownership is not needed, or call `.clone()` at the move site when an independent value is required
-  = fix: replace crates/aurora-compiler/tests/fixtures/check-fail/map_index_assignment_consumes_noncopy_key.au:4:15-4:15 with `.clone()`

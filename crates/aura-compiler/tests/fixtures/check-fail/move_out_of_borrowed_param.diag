@@ -1,0 +1,8 @@
+error[AU3002]: cannot move non-copy field `name` out of borrowed value `user`
+ --> crates/aura-compiler/tests/fixtures/check-fail/move_out_of_borrowed_param.au:5:17
+  |
+5 |     return user.name
+  |                 ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/move_out_of_borrowed_param.au:4:15: `user` is borrowed here
+  = help: take `user` as `own User` when the field should be moved, or call `.clone()` on the field to return an independent value
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/move_out_of_borrowed_param.au:5:21-5:21 with `.clone()`

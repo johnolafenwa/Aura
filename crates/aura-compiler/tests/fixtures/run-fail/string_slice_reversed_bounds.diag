@@ -1,0 +1,6 @@
+error[AU4003]: slice start `3` is greater than slice end `1`
+ --> crates/aura-compiler/tests/fixtures/run-fail/string_slice_reversed_bounds.au:3:17
+  |
+3 |     print(text[3:1])
+  |                 ^
+  = note: Aura call chain (innermost first): main at 1:1

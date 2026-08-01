@@ -1,17 +1,17 @@
-# Aurora Architecture Docs
+# Aura Architecture Docs
 
-This folder is a guided architecture map for Aurora as it exists in this repository today. It is written for two audiences at once:
+This folder is a guided architecture map for Aura as it exists in this repository today. It is written for two audiences at once:
 
 - readers who want an accurate explanation of how the current implementation works
 - readers who are new to compiler internals and need each stage explained from first principles
 
-The docs are intentionally grounded in the actual source tree. When a chapter says "this is how Aurora works", it points at the real implementation files, not an idealized design that only exists in a proposal.
+The docs are intentionally grounded in the actual source tree. When a chapter says "this is how Aura works", it points at the real implementation files, not an idealized design that only exists in a proposal.
 
-![Aurora compiler pipeline](assets/compiler-pipeline.svg)
+![Aura compiler pipeline](assets/compiler-pipeline.svg)
 
 ```mermaid
 flowchart LR
-    A["Aurora source (.au)"] --> B["lexer.rs"]
+    A["Aura source (.au)"] --> B["lexer.rs"]
     B --> C["parser.rs"]
     C --> D["ast.rs"]
     D --> E["sema.rs"]
@@ -20,8 +20,8 @@ flowchart LR
     F --> H["native_codegen.rs (aura build)"]
     H --> I["native_runtime.rs"]
     E --> J["analysis.rs (aura analyze / complete)"]
-    J --> K["aurora-language-server"]
-    K --> L["vscode-aurora"]
+    J --> K["aura-language-server"]
+    K --> L["vscode-aura"]
 ```
 
 ## Reading order
@@ -50,29 +50,29 @@ implementation, and its ADR records the completion gate explicitly.
 
 The main implementation files these docs refer to are:
 
-- [`crates/aurora-compiler/src/lib.rs`](../crates/aurora-compiler/src/lib.rs)
-- [`crates/aurora-compiler/src/lexer.rs`](../crates/aurora-compiler/src/lexer.rs)
-- [`crates/aurora-compiler/src/parser.rs`](../crates/aurora-compiler/src/parser.rs)
-- [`crates/aurora-compiler/src/ast.rs`](../crates/aurora-compiler/src/ast.rs)
-- [`crates/aurora-compiler/src/sema.rs`](../crates/aurora-compiler/src/sema.rs)
-- [`crates/aurora-compiler/src/mir.rs`](../crates/aurora-compiler/src/mir.rs)
-- [`crates/aurora-compiler/src/mir_runtime.rs`](../crates/aurora-compiler/src/mir_runtime.rs)
-- [`crates/aurora-compiler/src/runtime_value.rs`](../crates/aurora-compiler/src/runtime_value.rs)
-- [`crates/aurora-compiler/src/native_codegen.rs`](../crates/aurora-compiler/src/native_codegen.rs)
-- [`crates/aurora-compiler/src/native_runtime.rs`](../crates/aurora-compiler/src/native_runtime.rs)
-- [`crates/aurora-compiler/src/package.rs`](../crates/aurora-compiler/src/package.rs)
-- [`crates/aurora-compiler/src/analysis.rs`](../crates/aurora-compiler/src/analysis.rs)
+- [`crates/aura-compiler/src/lib.rs`](../crates/aura-compiler/src/lib.rs)
+- [`crates/aura-compiler/src/lexer.rs`](../crates/aura-compiler/src/lexer.rs)
+- [`crates/aura-compiler/src/parser.rs`](../crates/aura-compiler/src/parser.rs)
+- [`crates/aura-compiler/src/ast.rs`](../crates/aura-compiler/src/ast.rs)
+- [`crates/aura-compiler/src/sema.rs`](../crates/aura-compiler/src/sema.rs)
+- [`crates/aura-compiler/src/mir.rs`](../crates/aura-compiler/src/mir.rs)
+- [`crates/aura-compiler/src/mir_runtime.rs`](../crates/aura-compiler/src/mir_runtime.rs)
+- [`crates/aura-compiler/src/runtime_value.rs`](../crates/aura-compiler/src/runtime_value.rs)
+- [`crates/aura-compiler/src/native_codegen.rs`](../crates/aura-compiler/src/native_codegen.rs)
+- [`crates/aura-compiler/src/native_runtime.rs`](../crates/aura-compiler/src/native_runtime.rs)
+- [`crates/aura-compiler/src/package.rs`](../crates/aura-compiler/src/package.rs)
+- [`crates/aura-compiler/src/analysis.rs`](../crates/aura-compiler/src/analysis.rs)
 - [`crates/aura/src/main.rs`](../crates/aura/src/main.rs)
-- [`tools/aurora-language-server/src/server.js`](../tools/aurora-language-server/src/server.js)
-- [`tools/aurora-language-server/src/compiler_bridge.js`](../tools/aurora-language-server/src/compiler_bridge.js)
-- [`tools/vscode-aurora/src/extension.js`](../tools/vscode-aurora/src/extension.js)
+- [`tools/aura-language-server/src/server.js`](../tools/aura-language-server/src/server.js)
+- [`tools/aura-language-server/src/compiler_bridge.js`](../tools/aura-language-server/src/compiler_bridge.js)
+- [`tools/vscode-aura/src/extension.js`](../tools/vscode-aura/src/extension.js)
 
-## What Aurora is today
+## What Aura is today
 
-Aurora is a language implementation monorepo. The current maintained execution architecture is:
+Aura is a language implementation monorepo. The current maintained execution architecture is:
 
 - `aura run` parses, checks, lowers to MIR, and executes with the MIR runtime
 - `aura build` parses, checks, lowers to MIR, lowers again into native code with Cranelift, and links against the direct runtime
 - editor tooling prefers compiler-produced analysis and only falls back to local JavaScript analysis when it has to
 
-These docs explain that architecture, not an older interpreter-only design and not a future proposal-only design.
+These docs explain the maintained architecture implemented in this repository.

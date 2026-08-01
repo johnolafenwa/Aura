@@ -2,7 +2,7 @@ def main():
     factor: int32 = 2
     scale: def(int32) -> int32 = lambda value: value * factor
 
-    label = "Aurora"
+    label = "Aura"
     length: def() -> int64 = lambda: label.len()
 
     token = "owned"

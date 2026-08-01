@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Process-group ownership for Aurora benchmark workload subprocesses."""
+"""Process-group ownership for Aura benchmark workload subprocesses."""
 
 from __future__ import annotations
 

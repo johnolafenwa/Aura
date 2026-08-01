@@ -1,6 +1,0 @@
-error[AU3003]: cannot rebind shared alias `alias`; shared aliases are non-assignable
- --> crates/aurora-compiler/tests/fixtures/check-fail/shared_alias_rebinding_rejected.au:6:5
-  |
-6 |     alias = User(name="Grace")
-  |     ^
-  = help: use `alias` only for shared access; rebinding requires a separate `mut` value obtained through `own` input or a supported `.clone()`

@@ -1,0 +1,8 @@
+error[AU3001]: use of moved value `payload`
+ --> crates/aura-compiler/tests/fixtures/check-fail/lambda_post_capture_use.au:4:11
+  |
+4 |     print(payload)
+  |           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/lambda_post_capture_use.au:3:39: value moved into closure here
+  = help: pass shared access when ownership is not needed, or call `.clone()` at the move site when an independent value is required
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/lambda_post_capture_use.au:3:46-3:46 with `.clone()`

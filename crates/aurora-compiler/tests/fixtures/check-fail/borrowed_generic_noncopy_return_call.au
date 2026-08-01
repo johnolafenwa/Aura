@@ -1,7 +1,0 @@
-def identity[T](value: T) -> T:
-    return value
-
-def main():
-    text = "aurora"
-    alias = identity[String](value=text)
-    print(alias)

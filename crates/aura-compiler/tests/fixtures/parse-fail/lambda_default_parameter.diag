@@ -1,0 +1,5 @@
+error[AU1101]: lambda parameters cannot have defaults; pass values explicitly when calling the closure
+ --> crates/aura-compiler/tests/fixtures/parse-fail/lambda_default_parameter.au:2:28
+  |
+2 |     invalid = lambda value = 1: value
+  |                            ^

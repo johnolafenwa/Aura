@@ -1,6 +1,0 @@
-error[AU2002]: `select` sources must be `Queue[Q]`, `Task[T]`, or `Duration`; found `int64` at source 0
- --> crates/aurora-compiler/tests/fixtures/check-fail/select_invalid_source.au:2:18
-  |
-2 |     print(select(1))
-  |                  ^
-  = help: pass one or more queue handles, task handles, or relative Duration values as positional sources

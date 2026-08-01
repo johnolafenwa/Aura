@@ -1,11 +1,11 @@
 # Bytes, Encodings, And Hashes
 
-Aurora uses `Vec[uint8]` whenever an API needs raw bytes. That is the same type
+Aura uses `Vec[uint8]` whenever an API needs raw bytes. That is the same type
 returned by file, socket, process, and secure-random byte APIs, so data can move
 between those boundaries without a wrapper conversion.
 
 There is deliberately no implicit conversion between `String` and bytes.
-Text has a character encoding; bytes do not. Aurora makes the UTF-8 boundary
+Text has a character encoding; bytes do not. Aura makes the UTF-8 boundary
 visible.
 
 ## Convert UTF-8 Explicitly
@@ -15,14 +15,14 @@ Call `to_bytes()` on a String:
 ```python
 import bytes
 
-text = "Aurora 🌌"
+text = "Aura 🌌"
 payload = text.to_bytes()
 print(bytes.hex_encode(payload))
 ```
 
-This prints `4175726f726120f09f8c8c`. The returned vector contains the exact
+This prints `4175726120f09f8c8c`. The returned vector contains the exact
 UTF-8 bytes. Embedded NULs, non-ASCII text, and a leading U+FEFF are preserved;
-Aurora does not normalize the text or rewrite line endings.
+Aura does not normalize the text or rewrite line endings.
 
 Going the other way can fail because an arbitrary byte vector need not be
 valid UTF-8:
@@ -30,7 +30,7 @@ valid UTF-8:
 ```python
 import bytes
 
-payload: Vec[uint8] = [65, 117, 114, 111, 114, 97]
+payload: Vec[uint8] = [65, 117, 114, 97]
 
 match String.from_bytes(payload):
     case Result.Ok(text):
@@ -98,7 +98,7 @@ match bytes.base64_decode(encoded):
 
 This prints `AAH+/w==` and then `[0, 1, 254, 255]`.
 
-Aurora uses the RFC 4648 standard alphabet with canonical `=` padding. The
+Aura uses the RFC 4648 standard alphabet with canonical `=` padding. The
 decoder rejects URL-safe `-`/`_`, whitespace, missing or extra padding,
 trailing data, and nonzero discarded bits. It does not quietly repair input.
 Decoded bytes are not assumed to be UTF-8; call `String.from_bytes` separately
@@ -139,7 +139,7 @@ Malformed UTF-8, hex, and base64 are expected data problems, so they return a
 `bytes.Error` inside `Result` when the exact offset or length fits the retained
 `int32` payload. Match the variant and report, reject, or retry as the
 application requires. If required malformed-data metadata exceeds
-`2147483647`, Aurora traps with `AU4005` rather than truncating or wrapping it.
+`2147483647`, Aura traps with `AU4005` rather than truncating or wrapping it.
 
 Each fresh codec destination has a fixed 2,147,483,647-byte safety ceiling
 independent of the public String and `Vec` length domains. Crossing that

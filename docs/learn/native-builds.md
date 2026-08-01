@@ -1,10 +1,10 @@
 # Running And Shipping
 
-Aurora has two execution paths: the MIR runtime behind `aura run`, and the native code generator behind `aura build`. They target the same language surface and are exercised by the same test suite, but they fit slightly different moments in a project.
+Aura has two execution paths: the MIR runtime behind `aura run`, and the native code generator behind `aura build`. They target the same language surface and are exercised by the same test suite, but they fit slightly different moments in a project.
 
 ## `aura run`
 
-`aura run` parses, type-checks, lowers the program to Aurora's mid-level intermediate representation, and executes that representation. It is fast to start and shares code paths with the rest of the tooling, so compiler diagnostics, traces, and editor integrations behave the same as the code you are editing.
+`aura run` parses, type-checks, lowers the program to Aura's mid-level intermediate representation, and executes that representation. It is fast to start and shares code paths with the rest of the tooling, so compiler diagnostics, traces, and editor integrations behave the same as the code you are editing.
 
 Use `run` for:
 

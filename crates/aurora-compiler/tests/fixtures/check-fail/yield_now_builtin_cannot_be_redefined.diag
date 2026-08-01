@@ -1,5 +1,0 @@
-error[AU2007]: `yield_now` is a builtin function name and cannot be redefined
- --> crates/aurora-compiler/tests/fixtures/check-fail/yield_now_builtin_cannot_be_redefined.au:1:1
-  |
-1 | def yield_now() -> None:
-  | ^

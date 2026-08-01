@@ -1,8 +1,0 @@
-error[AU3002]: cannot move borrowed value `value`
- --> crates/aurora-compiler/tests/fixtures/check-fail/comprehension_shared_element_requires_clone.au:3:15
-  |
-3 |     copied = [value for value in values]
-  |               ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/comprehension_shared_element_requires_clone.au:3:25: value is borrowed here
-  = help: comprehensions store owned values; call `.clone()` on this shared value, or use an explicit consuming loop when the source should be transferred
-  = fix: replace crates/aurora-compiler/tests/fixtures/check-fail/comprehension_shared_element_requires_clone.au:3:20-3:20 with `.clone()`

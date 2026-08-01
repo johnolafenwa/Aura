@@ -22,6 +22,6 @@ def main() -> int32:
 
     mut names: Set[String] = Set[String]()
     print_bool(names.is_empty())
-    print_bool(names.insert("aurora"))
+    print_bool(names.insert("aura"))
     print(names.len())
     return 0

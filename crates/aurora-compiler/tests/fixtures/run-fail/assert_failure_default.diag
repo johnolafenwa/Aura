@@ -1,6 +1,0 @@
-error[AU4001]: assertion failed
- --> crates/aurora-compiler/tests/fixtures/run-fail/assert_failure_default.au:1:1
-  |
-1 | assert false
-  | ^
-  = note: Aurora call chain (innermost first): __script at 1:1

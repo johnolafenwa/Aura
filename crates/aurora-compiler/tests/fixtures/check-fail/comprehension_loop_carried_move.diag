@@ -1,5 +1,0 @@
-error[AU2999]: `comprehension` loop body moves `token` and may execute more than once
- --> crates/aurora-compiler/tests/fixtures/check-fail/comprehension_loop_carried_move.au:6:27
-  |
-6 |     values = [take(token) for value in range(0, 2)]
-  |                           ^

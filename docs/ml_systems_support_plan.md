@@ -1,16 +1,18 @@
-# Aurora ML Systems Support Plan
+# Aura ML Systems Support Plan
 
-Status: Phase 1 control-plane baseline implemented; later phases remain forward-looking.
+Status: the control-plane baseline and contiguous numeric `Array` subset are
+implemented. Other sections describe design objectives outside the current
+language contract.
 
-This document describes how Aurora can become a strong ML systems language without trying to replace Python or PyTorch for model training.
+This document describes how Aura can become a strong ML systems language without trying to replace Python or PyTorch for model training.
 
 The intended split is:
 
-- Aurora owns orchestration, serving, supervision, transport, artifact movement, observability, and systems composition.
-- Aurora should also be able to handle moderate local numeric and data-processing work directly, especially for preprocessing, postprocessing, evaluation glue, and batch shaping.
+- Aura owns orchestration, serving, supervision, transport, artifact movement, observability, and systems composition.
+- Aura should also be able to handle moderate local numeric and data-processing work directly, especially for preprocessing, postprocessing, evaluation glue, and batch shaping.
 - Python and existing accelerator-aware runtimes continue to own most training, large tensor-heavy model execution, and vendor-specific kernel stacks.
 
-Aurora already has useful foundations for that direction:
+Aura already has useful foundations for that direction:
 
 - queue/task concurrency and scheduler-backed waits
 - file, socket, HTTP, WebSocket, Unix-socket, and TLS I/O
@@ -32,7 +34,7 @@ See:
 
 ## Goal
 
-Make Aurora excellent for ML systems work such as:
+Make Aura excellent for ML systems work such as:
 
 - inference serving and routing
 - embedding pipelines
@@ -44,11 +46,11 @@ Make Aurora excellent for ML systems work such as:
 - accelerator-aware service composition
 - distributed job control and failure handling
 
-without turning Aurora into a PyTorch clone or requiring Aurora-native training APIs first.
+without turning Aura into a PyTorch clone or requiring Aura-native training APIs first.
 
 ## Non-goals
 
-This roadmap does not aim to make Aurora the first place users write:
+This roadmap does not aim to make Aura the first place users write:
 
 - autograd engines
 - optimizer implementations
@@ -60,7 +62,7 @@ Those may become future integrations, but they are not the first milestone.
 
 ## Problem Statement
 
-Aurora now has a usable first control-plane boundary, but it is still missing the data-plane and exporter depth a production ML systems language needs:
+Aura now has a usable first control-plane boundary, but it is still missing the data-plane and exporter depth a production ML systems language needs:
 
 - no maintained host-side dense-array surface for local numeric work
 - no maintained shared-memory or copy-avoiding borrowed-buffer transport surface
@@ -68,24 +70,24 @@ Aurora now has a usable first control-plane boundary, but it is still missing th
 - no external metrics exporter, scoped trace spans, or profiler integration
 - no public tensor or device handle model for the later accelerator-aware path
 
-That means Aurora can already act as a control-plane language, but it cannot yet act as a strong local ML runtime boundary between Python workers, model servers, accelerators, and artifact pipelines.
+That means Aura can already act as a control-plane language, but it cannot yet act as a strong local ML runtime boundary between Python workers, model servers, accelerators, and artifact pipelines.
 
 ## Design Principles
 
 1. Do not replace Python training.
-   Aurora should interoperate with Python workers and model runtimes rather than competing with them immediately.
+   Aura should interoperate with Python workers and model runtimes rather than competing with them immediately.
 
 2. Make system boundaries first-class.
    Process supervision, transport, observability, deadlines, and structured failure handling are the first priorities.
 
-3. Let Aurora do useful local numeric work itself.
-   Basic array-style operations for dense CPU-side data should be part of Aurora's maintained surface so small preprocessing and evaluation steps do not always require a Python hop.
+3. Let Aura do useful local numeric work itself.
+   Basic array-style operations for dense CPU-side data should be part of Aura's maintained surface so small preprocessing and evaluation steps do not always require a Python hop.
 
 4. Stage tensor ambition deliberately.
    Start with host-side dense arrays for NumPy-style data processing. Add tensor and device handles next. Treat full tensor placement, accelerator execution, and distributed semantics as later phases.
 
 5. Prefer capability-based placement over universal device residency.
-   Not every Aurora value should live on every accelerator. Tensors, numeric buffers, and device-capable plain data should be placeable; sockets, files, queues, and many service handles should remain host-bound.
+   Not every Aura value should live on every accelerator. Tensors, numeric buffers, and device-capable plain data should be placeable; sockets, files, queues, and many service handles should remain host-bound.
 
 6. Keep semantics explicit.
    Cross-device transfer, copy-avoiding borrowing, ownership handoff, and distributed collectives should be explicit in the type system and runtime protocol.
@@ -94,7 +96,7 @@ That means Aurora can already act as a control-plane language, but it cannot yet
 
 ```mermaid
 flowchart LR
-    A["Aurora service / job runtime"] --> B["Process supervision"]
+    A["Aura service / job runtime"] --> B["Process supervision"]
     A --> C["Host arrays / tensor-lite"]
     A --> D["Serialization + schemas"]
     A --> E["Observability"]
@@ -111,20 +113,20 @@ flowchart LR
 
 The long-term idea is:
 
-- Aurora manages the workflow and runtime envelope.
-- Aurora can directly handle ordinary CPU-side array transforms and data shaping.
+- Aura manages the workflow and runtime envelope.
+- Aura can directly handle ordinary CPU-side array transforms and data shaping.
 - Python or native model runtimes execute the tensor-heavy and accelerator-heavy work.
-- Tensor, device, and transport metadata eventually become visible to Aurora, even when Aurora does not own the kernel implementation.
+- Tensor, device, and transport metadata eventually become visible to Aura, even when Aura does not own the kernel implementation.
 
 ## Core Feature Pillars
 
 ## 1. Subprocess And Process Supervision
 
-Aurora needs a maintained process API for local Python workers, tokenizers, converters, model servers, and artifact tools.
+Aura needs a maintained process API for local Python workers, tokenizers, converters, model servers, and artifact tools.
 
 ### Why this matters
 
-Without a public process model, Aurora has to treat Python as only a network service. That is too weak for many local or single-host ML systems workflows.
+Without a public process model, Aura has to treat Python as only a network service. That is too weak for many local or single-host ML systems workflows.
 
 ### Required surface
 
@@ -147,7 +149,7 @@ Without a public process model, Aurora has to treat Python as only a network ser
 - scheduler integration for nonblocking local I/O
 - runtime diagnostics for spawn failures, timeouts, and abnormal exits
 
-### Examples Aurora should eventually support
+### Examples Aura should eventually support
 
 - supervise a pool of Python embedding workers
 - launch a tokenizer sidecar and stream requests over stdin/stdout or Unix sockets
@@ -155,7 +157,7 @@ Without a public process model, Aurora has to treat Python as only a network ser
 
 ## 2. Host-Side Array / Tensor-Lite Support
 
-Aurora should gain a small maintained dense-array surface for ordinary numeric data processing even if Python remains the place for training and accelerator-heavy execution.
+Aura should gain a small maintained dense-array surface for ordinary numeric data processing even if Python remains the place for training and accelerator-heavy execution.
 
 ### Why this matters
 
@@ -194,7 +196,7 @@ first-axis owned-copy slicing, mapping, and basic reductions.
 
 ## 3. Structured Serialization
 
-Aurora needs a maintained serialization story for service requests, manifests, evaluation outputs, and artifact metadata.
+Aura needs a maintained serialization story for service requests, manifests, evaluation outputs, and artifact metadata.
 
 ### Required formats
 
@@ -207,7 +209,7 @@ Aurora needs a maintained serialization story for service requests, manifests, e
 
 - implemented: recursive `json.Value`, typed `json.Error`, exact accessors,
   deterministic dumping, and fixed resource limits
-- schema-derived encoding and decoding for Aurora classes and enums
+- schema-derived encoding and decoding for Aura classes and enums
 - streaming encoders and decoders
 - typed error reporting for schema mismatches
 - versioning and compatibility rules for evolving message contracts
@@ -224,7 +226,7 @@ Structured serialization should be treated as part of the ML systems runtime pla
 
 ## 4. Observability
 
-Aurora needs first-class observability so ML systems built in Aurora can be debugged and operated under load.
+Aura needs first-class observability so ML systems built in Aura can be debugged and operated under load.
 
 ### Required surface
 
@@ -252,11 +254,15 @@ Aurora needs first-class observability so ML systems built in Aurora can be debu
 
 ## 5. Shared-Memory And Copy-Avoiding Transport
 
-Aurora needs a real local data plane, not only strings and copied byte buffers.
+Aura needs a real local data plane, not only strings and copied byte buffers.
 
 ### Why this matters
 
-Without a maintained shared-memory, copy-avoiding transport, Aurora remains a copying boundary between Python and accelerator-aware runtimes. That is acceptable for orchestration, but weak for high-throughput inference, embedding systems, and local array-heavy pipelines. This section is a future design target, not a claim about Aurora 0.1.
+Without a maintained shared-memory, copy-avoiding transport, Aura remains a
+copying boundary between Python and accelerator-aware runtimes. That is
+acceptable for orchestration, but weak for high-throughput inference,
+embedding systems, and local array-heavy pipelines. Shared-memory transport is
+outside the current public API.
 
 ### Required surface
 
@@ -285,7 +291,7 @@ Without a maintained shared-memory, copy-avoiding transport, Aurora remains a co
 
 ## 6. Tensor And Device Handle Interop
 
-Aurora should gain first-class awareness of tensors, devices, accelerators, and execution placement without requiring Aurora-native training code first.
+Aura should gain first-class awareness of tensors, devices, accelerators, and execution placement without requiring Aura-native training code first.
 
 ### Minimum model
 
@@ -300,7 +306,7 @@ Aurora should gain first-class awareness of tensors, devices, accelerators, and 
 
 ### Important rule
 
-These should begin as foreign or runtime-managed handles, not necessarily as fully materialized Aurora-native tensor values with rich shape inference and kernel lowering on day one.
+These should begin as foreign or runtime-managed handles, not necessarily as fully materialized Aura-native tensor values with rich shape inference and kernel lowering on day one.
 
 ### Required semantics
 
@@ -318,9 +324,10 @@ These should begin as foreign or runtime-managed handles, not necessarily as ful
 - analysis/completion support for tensor and device APIs
 - MIR operations or runtime intrinsics for transfer, synchronization, and handle inspection
 
-## Future Work: Full Tensor, Accelerator, And Distributed Support
+## Full Tensor, Accelerator, And Distributed Boundary
 
-If Aurora eventually grows beyond host-side arrays and foreign tensor handles, that should be a deliberate later effort, not the first milestone.
+Full tensor placement, accelerator execution, and distributed collectives are
+outside the current language contract.
 
 ### Full tensor support would likely include
 
@@ -340,7 +347,7 @@ If Aurora eventually grows beyond host-side arrays and foreign tensor handles, t
 
 ### Important scoping rule
 
-Aurora should only take on this broader tensor and distributed surface after the smaller host-side array layer, process supervision, serialization, observability, and local high-throughput transport are stable.
+Aura should only take on this broader tensor and distributed surface after the smaller host-side array layer, process supervision, serialization, observability, and local high-throughput transport are stable.
 
 ## Language And Runtime Changes Needed
 
@@ -348,7 +355,7 @@ The feature pillars above imply several cross-cutting changes.
 
 ## Type System
 
-Aurora should first grow a clear host-side numeric capability model, then later expand that model to placement-aware execution:
+Aura should first grow a clear host-side numeric capability model, then later expand that model to placement-aware execution:
 
 - host-side numeric arrays
 - host-only values
@@ -357,14 +364,14 @@ Aurora should first grow a clear host-side numeric capability model, then later 
 
 That does not mean every type can live on every device. A better model is:
 
-- host-side arrays remain ordinary Aurora-managed values
+- host-side arrays remain ordinary Aura-managed values
 - `TensorHandle`, `DeviceBuffer`, and selected plain-data aggregates are placeable later
 - `File`, `TcpStream`, `HttpExchange`, `Queue[T]`, and similar runtime resources remain host-bound
 - transferability and distributability are explicit capabilities, not universal assumptions
 
 ## Ownership And Borrowing
 
-Aurora's ownership model is a good fit for ML systems, but it needs extensions for both host-array views and foreign/device resources:
+Aura's ownership model is a good fit for ML systems, but it needs extensions for both host-array views and foreign/device resources:
 
 - borrowed access to array slices and views
 - borrowed access to shared-memory buffers
@@ -375,7 +382,7 @@ Aurora's ownership model is a good fit for ML systems, but it needs extensions f
 
 ## MIR And Runtime
 
-Aurora's execution model will need new intrinsics or runtime calls for:
+Aura's execution model will need new intrinsics or runtime calls for:
 
 - process spawn/wait/kill
 - host-array allocation, slicing, reductions, and matmul
@@ -395,7 +402,7 @@ The direct runtime will need a broader foreign-resource model:
 - opaque shared-buffer handles
 - opaque tensor/device handles
 - explicit retain/release semantics
-- stable ABI boundaries for future native plugins and runtime adapters
+- stable ABI boundaries for native plugins and runtime adapters
 
 ## Compiler-Backed Tooling
 
@@ -413,9 +420,9 @@ That means completions, hover text, diagnostics, and definition links must stay 
 
 ## Phase 1: ML Control-Plane Foundation
 
-Status: baseline complete in Aurora 0.1.
+Status: baseline complete in Aura 0.1.
 
-Primary goal: make Aurora strong for service orchestration and Python worker supervision.
+Primary goal: make Aura strong for service orchestration and Python worker supervision.
 
 Deliverables:
 
@@ -434,30 +441,31 @@ HTTP behavior, and higher-level custom-CA HTTP configuration.
 
 Success criteria:
 
-- Aurora can supervise local Python worker pools robustly
-- Aurora services can expose machine-readable telemetry
-- Aurora can stream structured requests and responses without shell-script glue
+- Aura can supervise local Python worker pools robustly
+- Aura services can expose machine-readable telemetry
+- Aura can stream structured requests and responses without shell-script glue
 
 ## Phase 2: Host-Side Array / Tensor-Lite Layer
 
-Status: first contiguous numeric Array subset complete in Phase 7.3; broader
-tensor-lite operations remain future work.
+Status: the first contiguous numeric `Array` subset is complete; broader
+tensor operations are outside the current public API.
 
-Primary goal: let Aurora perform useful local numeric data-processing work directly.
+Primary goal: let Aura perform useful local numeric data-processing work directly.
 
 Deliverables:
 
 - implemented: dense host-side `Array[T]` values with four maintained dtypes
 - implemented: exact-shape arithmetic, first-axis owned slices, and basic
   reductions
-- planned: broadcasting, reshape, transpose, additional reductions, and views
+- outside the current API: broadcasting, reshape, transpose, additional
+  reductions, and views
 - matrix multiply for local CPU-side transforms
 - examples for preprocessing, postprocessing, and evaluation helpers
 
 Success criteria:
 
-- Aurora can express common numeric data-shaping steps without immediately delegating to Python
-- small ML systems tasks such as masking, normalization, batching, and statistics are practical directly in Aurora
+- Aura can express common numeric data-shaping steps without immediately delegating to Python
+- small ML systems tasks such as masking, normalization, batching, and statistics are practical directly in Aura
 
 ## Phase 3: Local High-Throughput Interop
 
@@ -473,12 +481,12 @@ Deliverables:
 
 Success criteria:
 
-- Aurora can coordinate local Python workers using shared memory plus control sockets
+- Aura can coordinate local Python workers using shared memory plus control sockets
 - large payloads no longer require repeated string or byte copying through ad hoc layers
 
 ## Phase 4: Tensor And Device Handle Core
 
-Primary goal: make tensors and accelerators visible to Aurora as first-class runtime concepts.
+Primary goal: make tensors and accelerators visible to Aura as first-class runtime concepts.
 
 Deliverables:
 
@@ -489,8 +497,8 @@ Deliverables:
 
 Success criteria:
 
-- Aurora can move tensor-backed work units across service boundaries without losing device metadata
-- Aurora can coordinate Python and native model runtimes using a shared placement model
+- Aura can move tensor-backed work units across service boundaries without losing device metadata
+- Aura can coordinate Python and native model runtimes using a shared placement model
 
 ## Phase 5: Full Tensor And Placement-Aware Execution
 
@@ -506,12 +514,12 @@ Deliverables:
 
 Success criteria:
 
-- Aurora code can express ML systems control logic that is aware of host/device placement directly
+- Aura code can express ML systems control logic that is aware of host/device placement directly
 - common device mistakes surface as compile-time or structured runtime diagnostics
 
 ## Phase 6: Distributed Runtime Primitives
 
-Primary goal: make Aurora a strong distributed ML systems control language.
+Primary goal: make Aura a strong distributed ML systems control language.
 
 Deliverables:
 
@@ -523,11 +531,11 @@ Deliverables:
 
 Success criteria:
 
-- Aurora can orchestrate multi-host evaluation, inference, and artifact workflows with first-class distributed concepts
+- Aura can orchestrate multi-host evaluation, inference, and artifact workflows with first-class distributed concepts
 
 ## Testing And Verification Strategy
 
-When these features become real implementation work, Aurora should treat them like the rest of the maintained language surface:
+When these features become real implementation work, Aura should treat them like the rest of the maintained language surface:
 
 - compiler tests for new syntax and type rules
 - MIR and native backend parity tests for new runtime intrinsics
@@ -536,7 +544,7 @@ When these features become real implementation work, Aurora should treat them li
 - language-server regression tests for the new public APIs
 - updated tutorials and README sections only for features that are actually implemented
 
-Suggested future example categories:
+Examples required before admitting additional surface:
 
 - `examples/ml/process_pool/`
 - `examples/ml/arrays/`
@@ -547,7 +555,7 @@ Suggested future example categories:
 
 ## Recommended Priorities
 
-If Aurora can only fund a small number of milestones first, the recommended order is:
+If Aura can only fund a small number of milestones first, the recommended order is:
 
 1. host-side array / tensor-lite support
 2. schema-derived and binary serialization depth
@@ -556,11 +564,11 @@ If Aurora can only fund a small number of milestones first, the recommended orde
 5. tensor/device handle interop
 6. full tensor, placement-aware execution, and distributed runtime work
 
-That order intentionally makes Aurora strong at ML systems operations and practical local data processing before Aurora becomes ambitious about full accelerator-native tensor execution.
+That order intentionally makes Aura strong at ML systems operations and practical local data processing before Aura becomes ambitious about full accelerator-native tensor execution.
 
 ## Summary
 
-Aurora does not need to replace Python training to become a strong ML systems language.
+Aura does not need to replace Python training to become a strong ML systems language.
 
 It does need to become excellent at:
 
@@ -570,4 +578,4 @@ It does need to become excellent at:
 - exposing logs, metrics, and traces as first-class runtime concepts
 - understanding tensor, device, and accelerator handles as real language-level resources later on
 
-If Aurora gets those boundaries right, it can become a serious ML systems language while still using Python and existing runtimes for the tensor-heavy parts that already work well today.
+If Aura gets those boundaries right, it can become a serious ML systems language while still using Python and existing runtimes for the tensor-heavy parts that already work well today.

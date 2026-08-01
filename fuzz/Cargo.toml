@@ -1,5 +1,5 @@
 [package]
-name = "aurora-fuzz"
+name = "aura-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
@@ -8,7 +8,7 @@ edition = "2021"
 cargo-fuzz = true
 
 [dependencies]
-aurora-compiler = { path = "../crates/aurora-compiler" }
+aura-compiler = { path = "../crates/aura-compiler" }
 libfuzzer-sys = "0.4"
 serde_json = "1"
 

@@ -50,7 +50,7 @@ See [examples/enums/explicit_type_args.au](../examples/enums/explicit_type_args.
 
 ## Exhaustive `match`
 
-Aurora's `match` requires you to handle every variant. If you miss one, the compiler reports an error:
+Aura's `match` requires you to handle every variant. If you miss one, the compiler reports an error:
 
 ```python
 def value_or_zero(result: own ParseResult) -> int32:

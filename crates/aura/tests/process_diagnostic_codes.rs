@@ -67,9 +67,9 @@ fn process_completed_text_decoding_is_au4005_on_mir_and_direct_backends() {
         let source = format!(
             "import process\n\ndef decode() -> Result[None, process.Error]:\n    completed = try process.run([\"/usr/bin/env\", \"python3\", \"-c\", \"{python}\"], stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)\n    text = completed.{method}()\n    print(text)\n    return Result.Ok(None)\n\ndef main() -> int32:\n    match decode():\n        case Result.Ok(_):\n            return 0\n        case Result.Err(error):\n            print(error)\n            return 1\n"
         );
-        let temp = TempDir::new(&format!("aurora-process-{method}-diagnostic"));
+        let temp = TempDir::new(&format!("aura-process-{method}-diagnostic"));
         let source_path = temp.path.join("main.au");
-        fs::write(&source_path, source).expect("temporary Aurora source should write");
+        fs::write(&source_path, source).expect("temporary Aura source should write");
 
         let mir = Command::new(aura_bin())
             .arg("run")

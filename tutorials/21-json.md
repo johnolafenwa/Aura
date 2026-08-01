@@ -1,6 +1,6 @@
 # Working With JSON Values
 
-Aurora's JSON surface gives untrusted JSON its own recursive value and
+Aura's JSON surface gives untrusted JSON its own recursive value and
 typed parse-error enums. It keeps parsing failures recoverable while making
 serialization deterministic enough for service messages, fixtures, and cache
 keys.
@@ -15,7 +15,7 @@ examples described here are implemented.
 ```python
 import json
 
-result = json.parse("{\"name\":\"aurora\",\"workers\":3}")
+result = json.parse("{\"name\":\"aura\",\"workers\":3}")
 
 match result:
     case Result.Ok(value):
@@ -29,7 +29,7 @@ variants: `Null`, `Bool`, `Int`, `Float`, `String`, `Array`, or `Object`.
 Ordinary exhaustive `match` can distinguish them.
 
 Parse errors are values too. `Syntax` contains a message and location;
-`NumberOutOfRange` identifies a number Aurora cannot preserve as `int64` or a
+`NumberOutOfRange` identifies a number Aura cannot preserve as `int64` or a
 finite `float64`; `NestingTooDeep` and `InputTooLarge` report their limits.
 Lines and columns start at one, and a column counts Unicode scalar values
 rather than UTF-8 bytes.
@@ -163,7 +163,7 @@ infinities.
 application code.
 
 Derived class/enum schemas and generated codecs remain deferred beyond Phase 6.
-Aurora also has no streaming JSON API or arbitrary-precision number type.
+Aura also has no streaming JSON API or arbitrary-precision number type.
 
 The older `json.is_valid`, `json.stringify_map`, and
 `json.parse_string_map` helpers remain available for existing flat

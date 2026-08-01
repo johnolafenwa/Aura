@@ -1,0 +1,7 @@
+error[AU3002]: cannot consume `values` while `values` remains shared-borrowed by the method receiver
+ --> crates/aura-compiler/tests/fixtures/check-fail/retained_receiver_nested_consumption_repro.au:8:26
+  |
+8 |     print(values.get(eat(values)))
+  |                          ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/retained_receiver_nested_consumption_repro.au:8:11: shared access for the method receiver begins here
+  = help: call `.clone()` before the expression when an independent value is intended, or perform the consumption in a separate statement first

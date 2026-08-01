@@ -1,12 +1,12 @@
-# Aurora Examples
+# Aura Examples
 
-This directory contains runnable Aurora programs for the current compiler bootstrap.
+This directory contains runnable Aura programs for the current compiler bootstrap.
 
 The examples are organized by topic so they can serve both as quick references and as a companion to the `tutorials/` directory.
 
-Concurrency examples run on Aurora's pinned-worker scheduler on both maintained
+Concurrency examples run on Aura's pinned-worker scheduler on both maintained
 backends. The runtime uses the host's available cores by default; the
-provisional `AURORA_WORKERS=<positive integer>` environment override selects a
+provisional `AURA_WORKERS=<positive integer>` environment override selects a
 specific worker count for testing or deployment. A task is assigned when it is
 spawned and its coroutine stack never migrates or participates in work
 stealing. Queue and Task handles are the maintained cross-worker channels;
@@ -48,7 +48,7 @@ printed-output order unless they explicitly coordinate that order.
   - named arguments on functions, instance methods, and associated methods,
     including an explicit `own` constructor parameter
   - prints:
-    - `hello, aurora`
+    - `hello, aura`
     - `7`
 - `named_builtin_arguments.au`
   - named arguments on supported builtins like `print(...)` and `range(...)`
@@ -57,7 +57,7 @@ printed-output order unless they explicitly coordinate that order.
   - shared-borrow default parameter values evaluated freshly on each call
   - prints:
     - `hello world`
-    - `hello aurora`
+    - `hello aura`
     - `6`
     - `12`
 - `function_values.au`
@@ -92,13 +92,13 @@ printed-output order unless they explicitly coordinate that order.
     - `41`
     - `42`
     - `42`
-- `borrowed_returns.au`
-  - ordinary owned `int32` copies returned from shared class input
+- `copy_field_returns.au`
+  - owned `int32` copies returned from shared class input
   - prints:
     - `7`
     - `7`
-- `borrowed_lifetime_labels.au`
-  - choosing and forwarding ordinary owned copies without return-source labels
+- `copy_return_selection.au`
+  - choosing and forwarding owned Copy values
   - prints `7`
 - `pass_keyword.au`
   - the `pass` no-op statement in empty classes and functions
@@ -132,7 +132,7 @@ printed-output order unless they explicitly coordinate that order.
     same-type recursive `==` and `!=` that retain both operands; ordering
     remains rejected
   - prints:
-    - `Aurora`
+    - `Aura`
     - `7`
     - `20`
     - `ready:2`
@@ -224,7 +224,7 @@ printed-output order unless they explicitly coordinate that order.
     - `1`
     - `1`
     - `5`
-    - `aurora`
+    - `aura`
     - `3`
     - `3`
     - `3`
@@ -335,12 +335,12 @@ printed-output order unless they explicitly coordinate that order.
     data with canonical base64, renders lowercase hex, computes raw SHA-256,
     and demonstrates that shared inputs remain reusable
   - prints:
-    - `4175726f726120f09f8c8c`
-    - `Aurora 🌌`
+    - `4175726120f09f8c8c`
+    - `Aura 🌌`
     - `AAH+/w==`
     - `0001feff`
     - `ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad`
-    - `4175726f726120f09f8c8c`
+    - `4175726120f09f8c8c`
     - `[0, 1, 254, 255]`
 
 ### `control_flow/`
@@ -464,7 +464,7 @@ printed-output order unless they explicitly coordinate that order.
 - `bounded_types.au`
   - trait bounds on generic class and enum type parameters
   - prints:
-    - `aurora`
+    - `aura`
     - `empty`
 - `clone_safety_obligations.au`
   - inferred clone-safety obligations on a generic clone helper and a
@@ -476,8 +476,8 @@ printed-output order unless they explicitly coordinate that order.
 - `greeter.au`
   - trait declarations, `impl Trait for Type`, and bounded generic calls
   - prints:
-    - `hello aurora`
-    - `hello aurora`
+    - `hello aura`
+    - `hello aura`
 - `generic_dispatch_multiple_types.au`
   - bounded generic trait dispatch across multiple concrete implementors
   - prints:
@@ -492,8 +492,8 @@ printed-output order unless they explicitly coordinate that order.
 - `supertraits.au`
   - supertrait declarations, inherited bounds, and default methods that call through a parent trait
   - prints:
-    - `name=aurora`
-    - `aurora`
+    - `name=aura`
+    - `aura`
 - `self_parameters.au`
   - trait methods that use `Self` in parameter and return positions
   - prints `9`
@@ -519,7 +519,7 @@ printed-output order unless they explicitly coordinate that order.
 - `default_trait_methods.au`
   - default trait method bodies with per-impl overrides
   - prints:
-    - `name=aurora`
+    - `name=aura`
     - `team=infra`
 - `operator_traits.au`
   - operator traits for `+` and unary `-` through `Add[...]` and `Neg[...]`
@@ -578,12 +578,12 @@ Helper modules under `modules/pkg/` support the maintained module examples above
 ### `packages/`
 
 - `local_path_dependencies/app/`
-  - `Aurora.toml`, `src/`, a sibling path dependency, and a package-local helper module
+  - `Aura.toml`, `src/`, a sibling path dependency, and a package-local helper module
   - run it with:
     - `cargo run -p aura -- run examples/packages/local_path_dependencies/app/src/main.au`
   - prints `12`
 - `workspace/app/`
-  - a workspace-root `Aurora.toml`, member packages, and a sibling path dependency resolved through the member package manifest
+  - a workspace-root `Aura.toml`, member packages, and a sibling path dependency resolved through the member package manifest
   - run it with:
     - `cargo run -p aura -- run examples/packages/workspace/app/src/main.au`
   - prints `8`
@@ -596,11 +596,11 @@ Helper modules under `modules/pkg/` support the maintained module examples above
   - both runs print `true`
 
 Package examples are package trees rather than standalone single-file
-entrypoints. Their committed `Aurora.lock` files, where dependency resolution
+entrypoints. Their committed `Aura.lock` files, where dependency resolution
 creates one, are part of the maintained surface. FFI examples additionally
 pin their explicit unsafe package authorization.
 
-Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, or `branch`, defaulting to `main`. Those are covered by compiler, CLI, and language-server regression tests rather than a committed runnable example tree, because they resolve through cached git checkouts instead of a static in-repo package directory.
+Git dependencies are also supported in `Aura.toml` with `git`, `rev`, `tag`, or `branch`, defaulting to `main`. Those are covered by compiler, CLI, and language-server regression tests rather than a committed runnable example tree, because they resolve through cached git checkouts instead of a static in-repo package directory.
 
 ### `error_handling/`
 
@@ -637,7 +637,7 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
 - `process_run.au`
   - shell-free `process.run(..., group=true)`, UTF-8/raw captured stdout/stderr, and `process.Completed.check()`
   - prints:
-    - `aurora process`
+    - `aura process`
     - `15`
     - `0`
     - `ExitStatus.Exited(0)`
@@ -857,10 +857,10 @@ single task-result right on the first attempt.
 
 - `greeting.au`
   - string concatenation and equality
-  - prints `hello, aurora`
+  - prints `hello, aura`
 - `string_clone.au`
   - `String.clone()` on owned strings
-  - prints `aurora`
+  - prints `aura`
 - `string_methods.au`
   - single-quoted strings, an owned `Option[String]` match helper, and the
     maintained `String` method surface: `int64` Unicode-scalar `len()`,
@@ -873,16 +873,16 @@ single task-result right on the first attempt.
     - `true`
     - `true`
     - `true`
-    - `aurora repo`
+    - `aura repo`
     - `2`
-    - `aurora`
+    - `aura`
     - `repo`
-    - `aurora lang`
-    - `aurora repo`
-    - `AURORA REPO`
+    - `aura lang`
+    - `aura repo`
+    - `AURA REPO`
     - `repo`
     - `none`
-    - `aurora`
+    - `aura`
     - `none`
     - `11`
 - `string_parsing_and_formatting.au`
@@ -892,7 +892,7 @@ single task-result right on the first attempt.
     - `-9000000000`
     - `3.5`
     - `true`
-    - `aurora-lang-tests`
+    - `aura-lang-tests`
     - `true`
     - `12`
     - `4`
@@ -900,10 +900,10 @@ single task-result right on the first attempt.
     - `3.0`
 - `borrow_str.au`
   - borrowed string parameters with `str`
-  - prints `Hello, Aurora`
+  - prints `Hello, Aura`
 - `f_strings.au`
   - interpolated `f"..."` strings producing owned `String` values
-  - prints `Hello, Aurora 42`
+  - prints `Hello, Aura 42`
 
 ## Stable Bootstrap Examples
 
@@ -1001,20 +1001,20 @@ cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au
 The CLI can also package a runnable standalone native binary for a checked program:
 
 ```bash
-cargo run -p aura -- build -o ./target/aurora-point examples/point.au
-./target/aurora-point
-cargo run -p aura -- build --backend direct -o ./target/aurora-direct examples/basic_addition.au
-./target/aurora-direct
+cargo run -p aura -- build -o ./target/aura-point examples/point.au
+./target/aura-point
+cargo run -p aura -- build --backend direct -o ./target/aura-direct examples/basic_addition.au
+./target/aura-direct
 ```
 
 `aura build` now supports:
 
 - `--backend auto`
   - default
-  - uses the direct native backend for the maintained Aurora surface
+  - uses the direct native backend for the maintained Aura surface
 - `--backend direct`
   - forces the current direct native backend
-  - now covers the full currently implemented Aurora language surface
+  - now covers the full currently implemented Aura language surface
 
 The built binary does not depend on the original `.au` source file at runtime, but the build step still needs Cargo/Rust and a host C compiler.
 

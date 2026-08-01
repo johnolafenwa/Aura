@@ -1,6 +1,0 @@
-error[AU2006]: trait method `len` collides with builtin method `Vec.len`
- --> crates/aurora-compiler/tests/fixtures/check-fail/builtin_vec_trait_method_collision.au:5:5
-  |
-5 |     def len(self) -> int64:
-  |     ^
-  = help: rename the trait method; builtin methods cannot be shadowed by trait implementations

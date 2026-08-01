@@ -1,0 +1,6 @@
+error[AU2002]: all Queue sources in one `select` call must have the same payload type `int32`, found `Queue[String]` at source 1
+ --> crates/aura-compiler/tests/fixtures/check-fail/select_mixed_queue_payloads.au:4:27
+  |
+4 |     print(select(numbers, labels))
+  |                           ^
+  = help: wrap heterogeneous queue payloads in one explicit enum before selecting

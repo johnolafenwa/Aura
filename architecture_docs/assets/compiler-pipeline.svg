@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="360" viewBox="0 0 1400 360" role="img" aria-labelledby="title desc">
-  <title id="title">Aurora compiler pipeline</title>
+  <title id="title">Aura compiler pipeline</title>
   <desc id="desc">Source text flows through lexing, parsing, semantic analysis, MIR lowering, then either the MIR runtime or native code generation.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -20,7 +20,7 @@
   </defs>
 
   <rect class="bg" x="0" y="0" width="1400" height="360" />
-  <text class="title" x="40" y="42">Aurora End-to-End Compilation Pipeline</text>
+  <text class="title" x="40" y="42">Aura End-to-End Compilation Pipeline</text>
 
   <rect class="box accent" x="40" y="90" width="170" height="88" />
   <text class="label" x="85" y="126">Source Text</text>
@@ -68,6 +68,6 @@
   <line class="line" x1="910" y1="284" x2="980" y2="284" />
   <line class="line" x1="910" y1="284" x2="1190" y2="284" />
 
-  <text class="text" x="58" y="214">Compiler entrypoints in `crates/aurora-compiler/src/lib.rs` orchestrate these stages.</text>
+  <text class="text" x="58" y="214">Compiler entrypoints in `crates/aura-compiler/src/lib.rs` orchestrate these stages.</text>
   <text class="text" x="58" y="236">The public execution architecture is now MIR runtime for `run` and direct native code generation for `build`.</text>
 </svg>

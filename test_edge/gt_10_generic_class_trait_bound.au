@@ -1,5 +1,5 @@
 ## Test 10: Generic class with trait bound on type parameter
-## Expects: "aurora" then "empty"
+## Expects: "aura" then "empty"
 
 trait Named:
     def name(self) -> String
@@ -22,7 +22,7 @@ enum MaybeNamed[T: Named]:
     Absent
 
 def main() -> int32:
-    c = Container(item=User(label="aurora"))
+    c = Container(item=User(label="aura"))
     print(c.display())
 
     val: MaybeNamed[User] = MaybeNamed.Absent

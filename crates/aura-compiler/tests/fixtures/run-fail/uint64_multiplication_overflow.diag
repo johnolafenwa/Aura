@@ -1,0 +1,6 @@
+error[AU4002]: integer value `36893488147419103230` does not fit in `uint64`
+ --> crates/aura-compiler/tests/fixtures/run-fail/uint64_multiplication_overflow.au:4:11
+  |
+4 |     print(maximum * two)
+  |           ^
+  = note: Aura call chain (innermost first): main at 1:1

@@ -1,0 +1,259 @@
+{
+  "scopeName": "source.aura",
+  "name": "Aura",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#attributes"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#declarations"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#operators"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.aura",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "storage.modifier.attribute.aura",
+          "match": "@[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.interpolated.double.aura",
+          "begin": "f\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.aura"
+            }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.aura"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.aura",
+              "match": "\\\\."
+            },
+            {
+              "name": "meta.interpolation.aura",
+              "begin": "\\{",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.section.interpolation.begin.aura"
+                }
+              },
+              "end": "\\}",
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.section.interpolation.end.aura"
+                }
+              },
+              "patterns": [
+                {
+                  "include": "#strings"
+                },
+                {
+                  "include": "#keywords"
+                },
+                {
+                  "include": "#types"
+                },
+                {
+                  "include": "#numbers"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.aura",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.aura"
+            }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.aura"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.aura",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.aura",
+          "begin": "'",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.aura"
+            }
+          },
+          "end": "'",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.aura"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.aura",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.aura",
+          "match": "\\b\\d+(?:\\.\\d+)?(?:ms|s|m)?\\b"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "name": "meta.definition.ffi.opaque.aura",
+          "match": "\\b(extern)\\s+(\"C\")\\s+(opaque)\\s+(class)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.ffi.aura"
+            },
+            "2": {
+              "name": "string.quoted.double.aura"
+            },
+            "3": {
+              "name": "keyword.declaration.ffi.aura"
+            },
+            "4": {
+              "name": "keyword.declaration.aura"
+            },
+            "5": {
+              "name": "entity.name.type.aura"
+            }
+          }
+        },
+        {
+          "name": "meta.definition.ffi.function.aura",
+          "match": "\\b(extern)\\s+(\"C\")\\s+(def)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.ffi.aura"
+            },
+            "2": {
+              "name": "string.quoted.double.aura"
+            },
+            "3": {
+              "name": "keyword.declaration.function.aura"
+            },
+            "4": {
+              "name": "entity.name.function.aura"
+            }
+          }
+        },
+        {
+          "name": "meta.definition.class.aura",
+          "match": "\\b(class|enum|trait)\\s+([A-Z][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.aura"
+            },
+            "2": {
+              "name": "entity.name.type.aura"
+            }
+          }
+        },
+        {
+          "name": "meta.definition.function.aura",
+          "match": "\\bdef\\s+([a-zA-Z_][A-Za-z0-9_]*)",
+          "captures": {
+            "0": {
+              "name": "keyword.declaration.function.aura"
+            },
+            "1": {
+              "name": "entity.name.function.aura"
+            }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.declaration.ffi.aura",
+          "match": "\\b(extern|opaque)\\b"
+        },
+        {
+          "name": "keyword.control.aura",
+          "match": "\\b(import|return|assert|if|elif|else|while|for|in|match|case|with|try|lambda|and|or|not|break|continue|pass|impl|as)\\b"
+        },
+        {
+          "name": "storage.modifier.aura",
+          "match": "\\b(public|mut|own|indirect|copy)\\b"
+        },
+        {
+          "name": "invalid.deprecated.aura",
+          "match": "\\bborrow\\b"
+        },
+        {
+          "name": "constant.language.aura",
+          "match": "\\b(None|Some|true|false|self|Self)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.aura",
+          "match": "\\b(bool|int|int8|int16|int32|int64|int128|intsize|uint8|uint16|uint32|uint64|uint128|uintsize|float32|float64|String|Duration|Option|Result|SendError|Queue|QueueReceive|Task|TaskResult|TaskGroup|SelectOutcome|WaitAny|WaitAll|Vec|Map|MapEntry|Set|Array|process\\.Child|fs\\.File|net\\.TcpStream)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.aura",
+          "match": "->|//=|\\+=|-=|\\*=|/=|%=|==|!=|<=|>=|//|\\+|-|\\*|/|%|=|<|>|\\."
+        }
+      ]
+    }
+  }
+}

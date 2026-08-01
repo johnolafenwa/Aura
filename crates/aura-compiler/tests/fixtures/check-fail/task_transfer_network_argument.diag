@@ -1,0 +1,7 @@
+error[AU3008]: task argument `listener` cannot cross a task boundary because `net.TcpListener` is a host resource and is not Transfer
+ --> crates/aura-compiler/tests/fixtures/check-fail/task_transfer_network_argument.au:7:31
+  |
+7 |     group.start_soon(consume, listener)
+  |                               ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/task_transfer_network_argument.au:3:13: task parameter `listener` is declared here
+  = help: send owned data made only from Transfer components; keep capabilities and host resources on their owning worker

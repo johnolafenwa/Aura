@@ -22,7 +22,7 @@ def main():
     unique_count: int64 = unique_hosts.len()
     assert len(unique_hosts) == unique_count
 
-    print(len("aurora"))
+    print(len("aura"))
 
     summary = str(host_count)
     print(summary)

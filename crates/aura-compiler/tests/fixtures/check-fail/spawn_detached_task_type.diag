@@ -1,0 +1,5 @@
+error[AU1101]: expected Newline
+ --> crates/aura-compiler/tests/fixtures/check-fail/spawn_detached_task_type.au:7:30
+  |
+7 |     task: Task[None] = spawn detached producer(ch)
+  |                              ^

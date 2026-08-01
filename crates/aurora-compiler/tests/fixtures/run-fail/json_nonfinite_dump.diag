@@ -1,3 +1,0 @@
-error[AU4001]: JSON cannot encode NaN or an infinite float
- --> crates/aurora-compiler/tests/fixtures/run-fail/json_nonfinite_dump.au
-  = note: Aurora call chain (innermost first): main at 3:1

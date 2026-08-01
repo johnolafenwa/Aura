@@ -1,6 +1,0 @@
-error[AU4002]: integer value `9007199254740993` cannot be represented exactly as `float64`
- --> crates/aurora-compiler/tests/fixtures/run-fail/int64_to_float64_cast_inexact_boundary.au:3:22
-  |
-3 |     value: float64 = source as float64
-  |                      ^
-  = note: Aurora call chain (innermost first): main at 1:1

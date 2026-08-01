@@ -1,5 +1,5 @@
 ## Test 05: Basic trait definition and implementation
-## Expects: "Hello, Aurora"
+## Expects: "Hello, Aura"
 
 trait Greetable:
     def greet(self) -> String
@@ -12,6 +12,6 @@ impl Greetable for Person:
         return "Hello, " + self.name
 
 def main() -> int32:
-    p = Person(name="Aurora")
+    p = Person(name="Aura")
     print(p.greet())
     return 0

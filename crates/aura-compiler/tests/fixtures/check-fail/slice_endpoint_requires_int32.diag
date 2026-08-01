@@ -1,0 +1,5 @@
+error[AU2002]: slice endpoints must have type `int32`, found `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/slice_endpoint_requires_int32.au:2:18
+  |
+2 |     print(values[endpoint:])
+  |                  ^

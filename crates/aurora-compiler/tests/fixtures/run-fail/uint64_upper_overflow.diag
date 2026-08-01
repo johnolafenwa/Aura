@@ -1,6 +1,0 @@
-error[AU4002]: integer value `18446744073709551616` does not fit in `uint64`
- --> crates/aurora-compiler/tests/fixtures/run-fail/uint64_upper_overflow.au:4:11
-  |
-4 |     print(maximum + one)
-  |           ^
-  = note: Aurora call chain (innermost first): main at 1:1

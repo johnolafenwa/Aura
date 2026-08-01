@@ -1,6 +1,6 @@
 # Control Flow
 
-Aurora supports the standard control-flow constructs: conditionals, loops, pattern matching, and early exit.
+Aura supports the standard control-flow constructs: conditionals, loops, pattern matching, and early exit.
 
 ## `if`, `elif`, and `else`
 
@@ -15,11 +15,11 @@ else:
     print("high")
 ```
 
-Conditions must evaluate to `bool`. Unlike Python, Aurora does not support truthy or falsy coercions -- you must write explicit comparisons.
+Conditions must evaluate to `bool`. Unlike Python, Aura does not support truthy or falsy coercions -- you must write explicit comparisons.
 
 See [examples/control_flow/if_elif_else.au](../examples/control_flow/if_elif_else.au).
 
-Aurora supports boolean operators in conditions:
+Aura supports boolean operators in conditions:
 
 ```python
 if ready and not blocked:
@@ -38,7 +38,7 @@ Use `value if condition else alternative` when a branch chooses one value:
 label = "ready" if ready else "waiting"
 ```
 
-The condition is evaluated first and must be `bool`. Aurora then evaluates
+The condition is evaluated first and must be `bool`. Aura then evaluates
 exactly one arm. Both arms must produce the same static type; an expected type
 from a return, annotation, or call argument is used to type literals in both
 arms.
@@ -75,7 +75,7 @@ The container decides what the test means and what the value must be:
 | `String` | substring containment | `String` |
 
 Membership reads both operands and moves neither, so a non-copy container and
-a non-copy value are both still usable afterwards. A container Aurora cannot
+a non-copy value are both still usable afterwards. A container Aura cannot
 test reports `AU2003`, and a value of the wrong type reports `AU2002`.
 
 ## Chained Comparisons
@@ -169,7 +169,7 @@ See [examples/control_flow/for_range.au](../examples/control_flow/for_range.au).
 
 ## `for` Over Collections
 
-Vectors and sets can be iterated in three ownership modes. The choice matters because of Aurora's ownership model (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
+Vectors and sets can be iterated in three ownership modes. The choice matters because of Aura's ownership model (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
 
 **Bare/default** -- reads through a shared borrow. The collection stays valid:
 

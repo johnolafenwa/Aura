@@ -1,6 +1,6 @@
 # Packages And Module Loading
 
-This chapter explains how Aurora resolves imports, packages, workspaces, and dependencies.
+This chapter explains how Aura resolves imports, packages, workspaces, and dependencies.
 
 ## Why this layer exists
 
@@ -12,10 +12,10 @@ Real languages do not compile single files in isolation forever. They need a way
 - how are git dependencies pinned?
 - how do editor buffers resolve imports without being saved as the final file yet?
 
-Aurora handles that through two cooperating pieces:
+Aura handles that through two cooperating pieces:
 
-- `ModuleLoader` in [`lib.rs`](../crates/aurora-compiler/src/lib.rs)
-- `PackageGraph` and related helpers in [`package.rs`](../crates/aurora-compiler/src/package.rs)
+- `ModuleLoader` in [`lib.rs`](../crates/aura-compiler/src/lib.rs)
+- `PackageGraph` and related helpers in [`package.rs`](../crates/aura-compiler/src/package.rs)
 
 ## The responsibilities are split on purpose
 
@@ -35,8 +35,8 @@ Aurora handles that through two cooperating pieces:
 `PackageGraph` is the package/dependency model. It:
 
 - discovers the enclosing package or workspace
-- loads `Aurora.toml`
-- loads `Aurora.lock`
+- loads `Aura.toml`
+- loads `Aura.lock`
 - resolves path dependencies
 - resolves git dependencies and materializes checkouts
 - maps file paths to logical module names
@@ -57,7 +57,7 @@ flowchart TD
 
 ## Builtin modules look like modules on purpose
 
-Aurora's builtin namespaces `io`, `fs`, and `net` are modeled through [`builtin_modules.rs`](../crates/aurora-compiler/src/builtin_modules.rs).
+Aura's builtin namespaces `io`, `fs`, and `net` are modeled through [`builtin_modules.rs`](../crates/aura-compiler/src/builtin_modules.rs).
 
 That means:
 
@@ -67,26 +67,26 @@ That means:
 
 This is a strong architectural choice because it prevents builtin behavior from becoming scattered special cases.
 
-## How Aurora discovers package context
+## How Aura discovers package context
 
-When checking a path, Aurora first tries to discover whether that file lives inside an Aurora package or workspace.
+When checking a path, Aura first tries to discover whether that file lives inside an Aura package or workspace.
 
 Important concepts:
 
-- `Aurora.toml`
+- `Aura.toml`
   package or workspace manifest
-- `Aurora.lock`
+- `Aura.lock`
   dependency resolution state
 - `src/`
   package source root
 - workspace members
   packages listed in a workspace manifest
 
-If no package manifest applies, Aurora falls back to a looser file-based module root inference.
+If no package manifest applies, Aura falls back to a looser file-based module root inference.
 
 ## Git dependencies
 
-Aurora's package layer supports git dependencies with:
+Aura's package layer supports git dependencies with:
 
 - `rev`
 - `tag`
@@ -98,13 +98,13 @@ Notable implementation details:
 - interactive git credential prompts are disabled
 - checkout cache paths are hashed from the source URL/path
 - cached trees are checked for hostile symlinks
-- resolved revisions are written into `Aurora.lock`
+- resolved revisions are written into `Aura.lock`
 
 This is more than convenience. It is part of the repo's hardening story.
 
 ## Export qualification
 
-When Aurora exports types and items from imported modules, it qualifies their names so later consumers can distinguish:
+When Aura exports types and items from imported modules, it qualifies their names so later consumers can distinguish:
 
 - local items
 - imported items
@@ -134,7 +134,7 @@ fn resolve_import_path(package_root: &Path, module_path: &[&str]) -> Result<Path
 }
 ```
 
-Aurora's real implementation is more careful because it also needs to:
+Aura's real implementation is more careful because it also needs to:
 
 - protect against path escape
 - support package graphs and dependency aliases
@@ -159,9 +159,9 @@ That is why the compiler library exposes `check_path_with_source` and related st
 
 ## Files to study
 
-- [`lib.rs`](../crates/aurora-compiler/src/lib.rs)
-- [`package.rs`](../crates/aurora-compiler/src/package.rs)
-- [`builtin_modules.rs`](../crates/aurora-compiler/src/builtin_modules.rs)
+- [`lib.rs`](../crates/aura-compiler/src/lib.rs)
+- [`package.rs`](../crates/aura-compiler/src/package.rs)
+- [`builtin_modules.rs`](../crates/aura-compiler/src/builtin_modules.rs)
 
 ## What comes next
 

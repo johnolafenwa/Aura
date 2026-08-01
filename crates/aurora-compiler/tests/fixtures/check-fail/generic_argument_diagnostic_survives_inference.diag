@@ -1,5 +1,0 @@
-error[AU2001]: unknown name `missing`
- --> crates/aurora-compiler/tests/fixtures/check-fail/generic_argument_diagnostic_survives_inference.au:5:13
-  |
-5 |     consume(missing)
-  |             ^

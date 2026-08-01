@@ -1,6 +1,6 @@
 # Lexer
 
-This chapter explains what a lexer is, what Aurora's lexer does, and how you could build a small Aurora-style lexer in Rust.
+This chapter explains what a lexer is, what Aura's lexer does, and how you could build a small Aura-style lexer in Rust.
 
 ## What a lexer does
 
@@ -8,7 +8,7 @@ A lexer turns raw text into a sequence of tokens.
 
 Example:
 
-```aurora
+```aura
 return total + 1
 ```
 
@@ -22,11 +22,11 @@ becomes something like:
 
 The parser works on tokens because tokens are simpler and more regular than arbitrary text.
 
-## Why Aurora's lexer matters
+## Why Aura's lexer matters
 
-Aurora is indentation-sensitive, so its lexer does more than recognize words and punctuation.
+Aura is indentation-sensitive, so its lexer does more than recognize words and punctuation.
 
-Aurora's lexer in [`lexer.rs`](../crates/aurora-compiler/src/lexer.rs) is responsible for:
+Aura's lexer in [`lexer.rs`](../crates/aura-compiler/src/lexer.rs) is responsible for:
 
 - rejecting tabs for indentation
 - skipping blank lines and comment-only lines
@@ -41,9 +41,9 @@ Aurora's lexer in [`lexer.rs`](../crates/aurora-compiler/src/lexer.rs) is respon
 
 That means the parser does not have to infer indentation itself. It just consumes block tokens.
 
-## Aurora's lexing loop
+## Aura's lexing loop
 
-At a high level, Aurora lexes line by line:
+At a high level, Aura lexes line by line:
 
 ```mermaid
 flowchart TD
@@ -62,7 +62,7 @@ flowchart TD
 
 ## Important token categories
 
-Aurora's `TokenKind` includes:
+Aura's `TokenKind` includes:
 
 - structural tokens
   `Newline`, `Indent`, `Dedent`, `Eof`
@@ -75,7 +75,7 @@ Aurora's `TokenKind` includes:
 - literals
   integers, floats, durations, booleans, strings, f-strings
 
-## Aurora-specific design choices
+## Aura-specific design choices
 
 ### 1. Indentation is explicit after lexing
 
@@ -85,7 +85,7 @@ That is the key to making an off-side language parse cleanly with a hand-written
 
 ### 2. Comments are stripped early
 
-Aurora treats `#` as the start of a comment when it appears outside strings. Comment-only lines do not produce tokens.
+Aura treats `#` as the start of a comment when it appears outside strings. Comment-only lines do not produce tokens.
 
 ### 3. Duration literals are normalized at lex time
 
@@ -93,7 +93,7 @@ Aurora treats `#` as the start of a comment when it appears outside strings. Com
 
 ### 4. F-strings are lexed as one token first
 
-Aurora stores the raw inside of an f-string as `FStringLiteral(String)`. The parser later splits it into literal and expression segments.
+Aura stores the raw inside of an f-string as `FStringLiteral(String)`. The parser later splits it into literal and expression segments.
 
 Ordinary strings use either matching single or double quote delimiters and
 produce the same `StringLiteral(String)` token. While the lexer is collecting
@@ -118,12 +118,12 @@ delimiter, its arm block becomes a layout island so the parser still receives
 the match grammar's real layout tokens. This is why the implementation cannot
 be a blanket “drop every newline at delimiter depth greater than zero” filter.
 
-## A tiny Aurora-like lexer in Rust
+## A tiny Aura-like lexer in Rust
 
-The real Aurora lexer is much richer than this, but this example shows the core
+The real Aura lexer is much richer than this, but this example shows the core
 idea: tokenize one line and emit a `Newline`. This deliberately pedagogical
 `lex_line` function has no cross-line delimiter state and is not a complete
-implementation of Aurora's current lexer.
+implementation of Aura's current lexer.
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
@@ -204,9 +204,9 @@ fn lex_line(line: &str, line_no: usize) -> Result<Vec<Token>, String> {
 }
 ```
 
-## How Aurora extends the tiny lexer
+## How Aura extends the tiny lexer
 
-Aurora's real lexer adds:
+Aura's real lexer adds:
 
 - the full keyword set
 - indentation tracking
@@ -219,10 +219,10 @@ Aurora's real lexer adds:
 
 You can inspect those details in:
 
-- [`lexer.rs`](../crates/aurora-compiler/src/lexer.rs)
-- [`lexer_tests.rs`](../crates/aurora-compiler/src/lexer_tests.rs)
+- [`lexer.rs`](../crates/aura-compiler/src/lexer.rs)
+- [`lexer_tests.rs`](../crates/aura-compiler/src/lexer_tests.rs)
 
-## Practical lessons from Aurora's lexer
+## Practical lessons from Aura's lexer
 
 - Keep indentation handling in the lexer, not the parser.
 - Normalize obvious literal forms early when it simplifies later stages.
@@ -231,4 +231,4 @@ You can inspect those details in:
 
 ## What comes next
 
-Once Aurora has a token stream, the parser turns it into an AST. Read [04-parser.md](04-parser.md).
+Once Aura has a token stream, the parser turns it into an AST. Read [04-parser.md](04-parser.md).

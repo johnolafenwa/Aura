@@ -1,3 +1,0 @@
-error[AU4001]: result(timeout=...) must be non-negative
- --> crates/aurora-compiler/tests/fixtures/run-fail/duration_negative_task_result_timeout.au
-  = note: Aurora call chain (innermost first): main at 4:1

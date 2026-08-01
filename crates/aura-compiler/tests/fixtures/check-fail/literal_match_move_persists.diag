@@ -1,0 +1,8 @@
+error[AU3001]: use of moved value `text`
+ --> crates/aura-compiler/tests/fixtures/check-fail/literal_match_move_persists.au:9:11
+  |
+9 |     print(text)
+  |           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/literal_match_move_persists.au:5:21: value moved here
+  = help: pass shared access when ownership is not needed, or call `.clone()` at the move site when an independent value is required
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/literal_match_move_persists.au:5:25-5:25 with `.clone()`

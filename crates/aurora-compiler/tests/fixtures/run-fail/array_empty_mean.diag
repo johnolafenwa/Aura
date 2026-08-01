@@ -1,3 +1,0 @@
-error[AU4007]: cannot compute array mean over an empty array
- --> crates/aurora-compiler/tests/fixtures/run-fail/array_empty_mean.au
-  = note: Aurora call chain (innermost first): main at 1:1

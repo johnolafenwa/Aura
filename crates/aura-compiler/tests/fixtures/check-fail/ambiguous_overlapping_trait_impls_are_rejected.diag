@@ -1,0 +1,5 @@
+error[AU2002]: method `show` is ambiguous for type `Pair[int32, int32]` because multiple trait impls match with the same specificity
+ --> crates/aura-compiler/tests/fixtures/check-fail/ambiguous_overlapping_trait_impls_are_rejected.au:18:16
+   |
+18 |     print(pair.show())
+   |                ^

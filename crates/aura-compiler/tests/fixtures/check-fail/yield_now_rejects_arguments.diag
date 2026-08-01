@@ -1,0 +1,5 @@
+error[AU2004]: `yield_now` expects 0 arguments, found 1
+ --> crates/aura-compiler/tests/fixtures/check-fail/yield_now_rejects_arguments.au:2:5
+  |
+2 |     yield_now(1)
+  |     ^

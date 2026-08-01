@@ -8,20 +8,20 @@ would add more ceremony than meaning.
 
 A comma inside parentheses makes a tuple:
 
-```aurora
-pair = ("Aurora", 7)
+```aura
+pair = ("Aura", 7)
 only = (true,)
 ```
 
 `(value)` still means grouping. The comma in `(value,)` is therefore required
-for a singleton. Aurora has no empty tuple, and a tuple with two or more
+for a singleton. Aura has no empty tuple, and a tuple with two or more
 elements does not take a trailing comma.
 
 Tuple types mirror tuple values:
 
-```aurora
+```aura
 def version() -> (String, int64):
-    return ("Aurora", 7)
+    return ("Aura", 7)
 ```
 
 The order and number of element types matter. `(String, int64)` and
@@ -31,7 +31,7 @@ The order and number of element types matter. `(String, int64)` and
 
 Use a comma-separated target to give each result a name:
 
-```aurora
+```aura
 name, number = version()
 print(name)
 print(number)
@@ -41,7 +41,7 @@ Tuple value expressions require parentheses, but the top-level assignment
 target does not: write `name, number = pair`, not a naked tuple expression.
 Nested targets use parentheses:
 
-```aurora
+```aura
 label, (x, y) = ("point", (3, 4))
 ```
 
@@ -52,7 +52,7 @@ the target.
 
 A tuple is a copy value only when every element is a copy value:
 
-```aurora
+```aura
 point = (3, 4)
 x, y = point
 print(point[0]) # point is still usable
@@ -61,14 +61,14 @@ print(point[0]) # point is still usable
 A tuple containing `String`, `Vec`, or another move value is itself a move
 value. Unpacking it moves the whole source and gives owned leaf bindings:
 
-```aurora
-record = ("Aurora", 7)
+```aura
+record = ("Aura", 7)
 name, number = record
 print(name)
 # print(record) would be a use-after-move error
 ```
 
-Aurora deliberately reports reuse of the original tuple instead of exposing
+Aura deliberately reports reuse of the original tuple instead of exposing
 independent positional partial moves.
 
 ## Structural Equality
@@ -76,10 +76,10 @@ independent positional partial moves.
 `==` and `!=` compare tuples recursively, element by element. Both operands
 must have exactly the same tuple type, and every element must support equality:
 
-```aurora
-baseline = ("Aurora", (7, true))
-same = ("Aurora", (7, true))
-changed = ("Aurora", (8, true))
+```aura
+baseline = ("Aura", (7, true))
+same = ("Aura", (7, true))
+changed = ("Aura", (8, true))
 
 assert baseline == same
 assert baseline != changed
@@ -97,7 +97,7 @@ for tuple operands; compare the intended elements explicitly instead.
 
 Indexing is available for the small read-only case:
 
-```aurora
+```aura
 point = (3, 4)
 print(point[1])
 ```
@@ -110,7 +110,7 @@ Unpack the tuple when you need ownership of a non-copy element.
 
 A `for` target may recursively unpack tuple items:
 
-```aurora
+```aura
 for label, count in [("ready", 2), ("done", 3)]:
     print(f"{label}:{count}")
 ```
@@ -125,7 +125,7 @@ reconstruct and write a changed tuple back into the collection.
 
 Tuple patterns use the same fixed shape:
 
-```aurora
+```aura
 match ((1, 2), true):
     case ((left, right), flag):
         print(left + right)
@@ -151,7 +151,7 @@ cargo run -p aura -- run examples/basics/tuples.au
 It prints:
 
 ```text
-Aurora
+Aura
 7
 20
 ready:2

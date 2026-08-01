@@ -125,7 +125,7 @@ fn assert_failure(output: &Output, backend: &str) {
     );
 }
 
-fn escaped_aurora_path(path: &Path) -> String {
+fn escaped_aura_path(path: &Path) -> String {
     path.display()
         .to_string()
         .replace('\\', "\\\\")
@@ -134,8 +134,8 @@ fn escaped_aurora_path(path: &Path) -> String {
 
 #[test]
 fn retry_reaches_a_later_success_and_doubles_delays_on_both_backends() {
-    let temp = TempDir::new("aurora-control-retry-later-success");
-    let state = escaped_aurora_path(&temp.path.join("state.txt"));
+    let temp = TempDir::new("aura-control-retry-later-success");
+    let state = escaped_aura_path(&temp.path.join("state.txt"));
     let source = format!(
         r#"
 import control
@@ -221,7 +221,7 @@ fn assert_retry_timing_and_output(stdout: &[u8], backend: &str) {
 
 #[test]
 fn specialized_retry_function_value_preserves_retry_semantics_on_both_backends() {
-    let temp = TempDir::new("aurora-control-retry-function-value");
+    let temp = TempDir::new("aura-control-retry-function-value");
     let source = r#"
 import control
 
@@ -273,9 +273,9 @@ fn retry_validates_arguments_before_invoking_the_worker_on_both_backends() {
     ];
 
     for (label, arguments, expected_diagnostic) in cases {
-        let temp = TempDir::new(&format!("aurora-control-retry-{label}"));
+        let temp = TempDir::new(&format!("aura-control-retry-{label}"));
         let marker = temp.path.join("worker-was-called");
-        let marker_source = escaped_aurora_path(&marker);
+        let marker_source = escaped_aura_path(&marker);
         let source = format!(
             r#"
 import control
@@ -328,7 +328,7 @@ fn assert_diagnostic_contains(output: &Output, needles: &[&str], backend: &str) 
 
 #[test]
 fn retry_propagates_worker_traps_without_retrying_on_both_backends() {
-    let temp = TempDir::new("aurora-control-retry-trap");
+    let temp = TempDir::new("aura-control-retry-trap");
     let source = r#"
 import control
 
@@ -366,7 +366,7 @@ fn assert_retry_trap(output: &Output, backend: &str) {
 
 #[test]
 fn retry_propagates_task_cancellation_instead_of_returning_the_last_error() {
-    let temp = TempDir::new("aurora-control-retry-cancel");
+    let temp = TempDir::new("aura-control-retry-cancel");
     let source = r#"
 import control
 
@@ -474,7 +474,7 @@ def invalid_worker() -> int32:
     ];
 
     for (label, declaration, worker, expected_contract, found_type) in cases {
-        let temp = TempDir::new(&format!("aurora-control-retry-worker-{label}"));
+        let temp = TempDir::new(&format!("aura-control-retry-worker-{label}"));
         let source = format!(
             r#"
 import control

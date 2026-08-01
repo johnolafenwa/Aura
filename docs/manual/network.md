@@ -17,9 +17,9 @@ import io
 Most operations return `Result[..., io.Error]`. Waiting operations usually accept `timeout: Duration = ...`; omitting it means no caller deadline unless a protocol-specific hard limit is stated below. Pass explicit timeouts for services that need bounded latency or clean shutdown behavior. An explicit timeout must be non-negative, fit the host timer range, and produce a representable deadline; otherwise the operation returns `io.Error.InvalidInput`. Deadline overflow never means no deadline. This input policy is accepted under ADR-0019.
 
 Hostname resolution, socket binding, UDP destination resolution, and blocking
-TCP or Unix connect syscalls run on Aurora's generic blocking-I/O pool rather
+TCP or Unix connect syscalls run on Aura's generic blocking-I/O pool rather
 than on the lightweight-task scheduler. The pool has a configurable worker
-count and optional pending-queue bound; a full bounded queue parks Aurora
+count and optional pending-queue bound; a full bounded queue parks Aura
 callers through FIFO scheduler-aware admission. A connect timeout is one
 end-to-end budget: it includes admission and DNS resolution, is shared by every
 resolved-address attempt, and then covers any remaining TLS, HTTP, or
@@ -172,7 +172,7 @@ Use byte request and response APIs for binary payloads or unknown encodings. Cli
 | `accept` | `accept(timeout: Duration = ...) -> Result[net.WebSocket, io.Error]` | Waits for the next WebSocket connection. |
 | `local_addr` | `local_addr() -> Result[String, io.Error]` | Returns the bound local address. |
 
-`net.WebSocketListener` has no explicit `close()` member in Aurora 0.2. It is released when its value is dropped, but it cannot currently be used as a user-defined `with` resource. This is a known resource-surface limitation.
+`net.WebSocketListener` has no explicit `close()` member in Aura 0.2. It is released when its value is dropped, but it cannot currently be used as a user-defined `with` resource. This is a known resource-surface limitation.
 
 `net.WebSocket`:
 
@@ -245,7 +245,7 @@ def show_addr() -> Result[None, io.Error]:
     return Result.Ok(None)
 ```
 
-When a resource is not scoped with `with`, call its `close()` method when one is provided by the type. Cancellation stops Aurora's wait but cannot roll back host I/O that already completed.
+When a resource is not scoped with `with`, call its `close()` method when one is provided by the type. Cancellation stops Aura's wait but cannot roll back host I/O that already completed.
 
 ## Grammar
 
@@ -268,7 +268,7 @@ work. Before host work begins, the runtime rejects a negative,
 host-unrepresentable, or deadline-overflowing timeout as
 `io.Error.InvalidInput`; it never treats such a value as omission. TCP, Unix,
 TLS, HTTP, and WebSocket waiting failures return typed errors as specified;
-UDP receive timeout returns `Ok(None)`. Cancellation ends the Aurora wait and
+UDP receive timeout returns `Ok(None)`. Cancellation ends the Aura wait and
 returns `io.Error.Cancelled` on cancellation-aware operations. Before pool
 acceptance it prevents submission; after acceptance, host work may complete
 later and its result is discarded.
@@ -306,6 +306,6 @@ WebSocket messages are capped at 64 MiB; frames and the write buffer are capped 
 
 ## Status
 
-The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aurora 0.2. Nonblocking descriptors remain registered with the persistent reactor across scheduler turns; timeout deadlines share its timer heap, and an idle scheduler blocks until readiness, another runtime event, or the next deadline without a periodic tick. The fixed resource-cap policy recorded by ADR-0018 is Accepted, as is the invalid host-timer policy recorded by ADR-0019.
+The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aura 0.2. Nonblocking descriptors remain registered with the persistent reactor across scheduler turns; timeout deadlines share its timer heap, and an idle scheduler blocks until readiness, another runtime event, or the next deadline without a periodic tick. The fixed resource-cap policy recorded by ADR-0018 is Accepted, as is the invalid host-timer policy recorded by ADR-0019.
 
-The repeated-header representation, missing WebSocket-listener close operation, incomplete WebSocket cancellation, and discarded WebSocket close errors are documented current limitations. Protocol additions and richer APIs listed above are unavailable future work and are non-normative.
+The repeated-header representation, missing WebSocket-listener close operation, incomplete WebSocket cancellation, and discarded WebSocket close errors are documented current limitations. The protocol surface is exactly the API documented on this page.

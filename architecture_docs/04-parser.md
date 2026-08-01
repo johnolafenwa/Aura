@@ -1,6 +1,6 @@
 # Parser
 
-This chapter explains what a parser is, how Aurora's parser works, and how to build a small Aurora-style recursive descent parser in Rust.
+This chapter explains what a parser is, how Aura's parser works, and how to build a small Aura-style recursive descent parser in Rust.
 
 ## What a parser does
 
@@ -21,9 +21,9 @@ the parser decides that this means:
 
 That is the parser's job: recovering structure from token order.
 
-## Aurora uses a hand-written recursive descent parser
+## Aura uses a hand-written recursive descent parser
 
-Aurora's parser is implemented in [`parser.rs`](../crates/aurora-compiler/src/parser.rs).
+Aura's parser is implemented in [`parser.rs`](../crates/aura-compiler/src/parser.rs).
 
 It is not generated from a parser generator. Instead, it uses ordinary Rust functions such as:
 
@@ -44,15 +44,15 @@ It is not generated from a parser generator. Instead, it uses ordinary Rust func
 
 This style is especially readable when the language is still evolving quickly.
 
-## Aurora's parsing strategy
+## Aura's parsing strategy
 
-Aurora combines three ideas:
+Aura combines three ideas:
 
 - top-down recursive descent for declarations and statements
 - precedence climbing by function layering for expressions
 - explicit `Indent` / `Dedent` tokens for block structure
 
-### Expression precedence in Aurora
+### Expression precedence in Aura
 
 ```mermaid
 flowchart TD
@@ -69,9 +69,9 @@ flowchart TD
 
 This is a standard, clean way to encode precedence in a hand-written parser.
 
-## What Aurora's parser has to recognize
+## What Aura's parser has to recognize
 
-Aurora's parser covers a large surface:
+Aura's parser covers a large surface:
 
 - imports
 - classes, enums, functions, traits, impl blocks
@@ -83,11 +83,11 @@ Aurora's parser covers a large surface:
 - patterns for `match`
 - f-string interpolation parsing
 
-It also keeps a recursion counter and enforces the conservative limit in [`limits.rs`](../crates/aurora-compiler/src/limits.rs).
+It also keeps a recursion counter and enforces the conservative limit in [`limits.rs`](../crates/aura-compiler/src/limits.rs).
 
 ## Why `Indent` and `Dedent` help so much
 
-Without explicit block tokens, the parser would need to keep re-measuring whitespace from the raw source. Aurora avoids that by doing layout work once in the lexer.
+Without explicit block tokens, the parser would need to keep re-measuring whitespace from the raw source. Aura avoids that by doing layout work once in the lexer.
 
 So a function body parse is conceptually just:
 
@@ -97,7 +97,7 @@ So a function body parse is conceptually just:
 
 That is much simpler and more robust.
 
-## A tiny Aurora-like parser in Rust
+## A tiny Aura-like parser in Rust
 
 This example parses a tiny subset:
 
@@ -196,9 +196,9 @@ That is the core parser pattern:
 - structure precedence explicitly
 - return syntax trees, not semantic answers
 
-## How Aurora's real parser goes beyond the toy example
+## How Aura's real parser goes beyond the toy example
 
-Aurora's real parser adds:
+Aura's real parser adds:
 
 - module-level declaration parsing
 - indentation-based block parsing
@@ -209,7 +209,7 @@ Aurora's real parser adds:
 - postfix parsing for calls, member access, indexing, casts, and specialization
 - f-string interpolation by recursively invoking expression parsing on the embedded text
 
-## Aurora-specific parser details worth studying
+## Aura-specific parser details worth studying
 
 ### 1. Receiver recognition
 
@@ -226,7 +226,7 @@ instance method.
 
 ### 2. `parse_stmt` vs `is_assignment_stmt`
 
-Aurora allows both:
+Aura allows both:
 
 - expression statements
 - assignment statements
@@ -235,7 +235,7 @@ Those can begin with similar tokens, so the parser uses lookahead logic in `is_a
 
 ### 3. `parse_postfix`
 
-Aurora treats many suffix forms uniformly:
+Aura treats many suffix forms uniformly:
 
 - `value[index]`
 - `value.field`
@@ -256,11 +256,11 @@ embedded text goes through the ordinary expression lexer and parser.
 
 ### 4. Explicit recursion limits
 
-Aurora still uses real Rust recursion for several nested constructs, so the parser tracks recursion depth and fails with a diagnostic before the host stack blows up.
+Aura still uses real Rust recursion for several nested constructs, so the parser tracks recursion depth and fails with a diagnostic before the host stack blows up.
 
-## How this connects to Aurora's checker
+## How this connects to Aura's checker
 
-After parsing, Aurora has structure but not meaning.
+After parsing, Aura has structure but not meaning.
 
 The checker in `sema.rs` answers questions like:
 

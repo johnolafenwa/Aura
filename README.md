@@ -1,6 +1,6 @@
-# Aurora
+# Aura
 
-Aurora is a statically typed, compiled language for agent control planes. Its
+Aura is a statically typed, compiled language for agent control planes. Its
 wedge is Python-shaped source with deterministic ownership, structured
 concurrency, and typed failure across files, processes, networking, retries,
 and supervision.
@@ -9,21 +9,20 @@ Deterministic ownership means that shared access, exclusive mutation, transfer,
 and scope cleanup follow language rules. It does **not** mean deterministic task
 scheduling: concurrent completion and output order are deliberately unspecified.
 
-Aurora 0.2.0 is a technical preview, not a production release. Read
-[Why Aurora](docs/positioning.md) for the measured positioning against adjacent
+Aura 0.2.0 is a technical preview, not a production release. Read
+[Why Aura](docs/positioning.md) for the measured positioning against adjacent
 languages. The canonical implemented contract begins with the normative
 [Language Specification](docs/manual/language-specification.md),
-[complete grammar](docs/manual/grammar.md), and Manual; the original language
-proposal is historical design material. Supported hosts and pinned tools are
+[complete grammar](docs/manual/grammar.md), and Manual. Supported hosts and pinned tools are
 listed in [SUPPORTED_PLATFORMS.md](SUPPORTED_PLATFORMS.md).
 
 ## Measured snapshot, not a general performance claim
 
 On one post-reboot Mac14,9 (M2 Pro, 10 cores, 16 GiB), the release benchmark
 recorded these protocol-window medians against CPython 3.9.6. Lower is faster;
-the ratio is Aurora divided by CPython.
+the ratio is Aura divided by CPython.
 
-| exact workload | Aurora | CPython | Aurora / CPython |
+| exact workload | Aura | CPython | Aura / CPython |
 | --- | ---: | ---: | ---: |
 | naive recursive `fib(30)` | 93.875250 ms | 158.491666 ms | 0.592304 |
 | create and join 10,000 tasks | 101.743042 ms | 51.950667 ms | 1.958455 |
@@ -37,7 +36,7 @@ numeric-Array comparison, and workload caveats.
 
 ## Monorepo layout
 
-This repository is intended to evolve as a monorepo for the Aurora language and its associated tools.
+This repository is intended to evolve as a monorepo for the Aura language and its associated tools.
 
 - `crates/`
   - Rust compiler, runtime, and CLI tooling
@@ -46,18 +45,18 @@ This repository is intended to evolve as a monorepo for the Aurora language and 
 - `package.json`
   - npm workspace manifest for repo-managed tools
 - `examples/`
-  - categorized sample Aurora programs
+  - categorized sample Aura programs
 - `tutorials/`
   - Markdown tutorials covering the implemented language subset
 - `docs/`
   - VitePress book, language proposal, and supporting documentation
 - `architecture_docs/`
-  - implementation-focused architecture and component deep dives for the current Aurora system
+  - implementation-focused architecture and component deep dives for the current Aura system
 - `work/`
   - persistent task board and implementation notes
 
 Compiler build and direct binary usage are documented in [crates/aura/README.md](crates/aura/README.md).
-Compiler library testing notes live in [crates/aurora-compiler/README.md](crates/aurora-compiler/README.md).
+Compiler library testing notes live in [crates/aura-compiler/README.md](crates/aura-compiler/README.md).
 The categorized example library is documented in [examples/README.md](examples/README.md).
 The tutorial track lives in [tutorials/README.md](tutorials/README.md).
 The VitePress book lives in [docs/index.md](docs/index.md) and includes the guided Learn track plus the normative language and API reference.
@@ -67,10 +66,10 @@ The implementation architecture guide lives in [architecture_docs/README.md](arc
 
 Current editor tooling:
 
-- `tools/vscode-aurora`
-  - VS Code extension for Aurora syntax highlighting and LSP client integration
-- `tools/aurora-language-server`
-  - Aurora Language Server Protocol implementation
+- `tools/vscode-aura`
+  - VS Code extension for Aura syntax highlighting and LSP client integration
+- `tools/aura-language-server`
+  - Aura Language Server Protocol implementation
 
 Current compiler workflow:
 
@@ -134,7 +133,7 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/packages/local_path_dependencies/app/src/main.au`
   - execute a manifest-rooted package with `src/`, a sibling path dependency, and package-local helpers
 - `cargo run -p aura -- run examples/packages/workspace/app/src/main.au`
-  - execute a workspace member package with a workspace-root `Aurora.toml`
+  - execute a workspace member package with a workspace-root `Aura.toml`
 - `cargo run -p aura -- run --backend mir examples/packages/ffi_getpid/src/main.au`
   - execute an explicitly authorized FFI v0 package that calls the
     process-global C `getpid` symbol on a Unix-family host; use
@@ -217,9 +216,9 @@ Current compiler workflow:
 - `cargo run -p aura -- new agent-app`
   - create a manifest-rooted project without overwriting existing files
 - `cargo run -p aura -- fmt --check agent-app`
-  - verify Aurora source normalization
+  - verify Aura source normalization
 - `cargo run -p aura -- test agent-app/tests`
-  - run package-aware Aurora test programs
+  - run package-aware Aura test programs
 - `cargo run -p aura -- run examples/resources/with_resource.au`
   - execute deterministic scoped cleanup with `with`
 - `cargo run -p aura -- run examples/concurrency/task_group_start.au`
@@ -237,10 +236,10 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/concurrency/typed_select.au`
   - execute typed heterogeneous Queue, Task, and relative-deadline selection
     with deterministic source indexes on both maintained backends
-- `cargo run -p aura -- build -o ./target/aurora-point examples/point.au`
+- `cargo run -p aura -- build -o ./target/aura-point examples/point.au`
   - compile a standalone native binary through the default auto backend
-- `cargo run -p aura -- build --backend direct -o ./target/aurora-direct ./examples/basic_addition.au`
-  - force the direct native backend for the full currently implemented Aurora language surface
+- `cargo run -p aura -- build --backend direct -o ./target/aura-direct ./examples/basic_addition.au`
+  - force the direct native backend for the full currently implemented Aura language surface
 - `cargo run -p aura -- ast examples/classes/point_distance.au`
   - print the parsed syntax tree
 - `cargo run -p aura -- ast-json examples/classes/point_distance.au`
@@ -269,9 +268,9 @@ Current compiler workflow:
 - `cat examples/modules/simple_import.au | cargo run -p aura -- run --stdin "$(pwd)/examples/modules/simple_import.au"`
   - execute an editor-style buffer while still resolving local imports relative to the supplied path
 - `cargo run -p aura -- check examples/packages/local_path_dependencies/app/src/main.au`
-  - type-check a package entrypoint using `Aurora.toml`, `src/`, local path dependencies, and git dependencies
+  - type-check a package entrypoint using `Aura.toml`, `src/`, local path dependencies, and git dependencies
 - `cargo run -p aura -- deps update`
-  - refresh all branch/tag/default-main git dependencies for the current package or workspace and rewrite `Aurora.lock`
+  - refresh all branch/tag/default-main git dependencies for the current package or workspace and rewrite `Aura.lock`
 - `cargo run -p aura -- deps update util`
   - refresh only the `util` git dependency for the current package or workspace
 - `cat examples/modules/simple_import.au | cargo run -p aura -- check --stdin "$(pwd)/examples/modules/simple_import.au"`
@@ -293,9 +292,9 @@ Current compiler workflow:
 - `npm run check:hygiene`
   - reject whitespace errors, tracked generated executables, editor metadata, and scratch evaluation corpora
 - `npm run docs:dev`
-  - start the VitePress Aurora book locally
+  - start the VitePress Aura book locally
 - `npm run docs:build`
-  - build the VitePress Aurora book
+  - build the VitePress Aura book
 - `npm run check:reference`
   - verify that the normative language-reference pages, navigation, and core conformance statements stay present
 - `npm run ci`
@@ -317,24 +316,24 @@ Current `build` status:
 - `aura build` now accepts `--backend auto|direct`
 - `aura build` defaults to `auto`
 - `auto` first tries the direct native backend and may fall back to a standalone embedded-MIR launcher when direct emission is unavailable
-- `direct` now performs true low-level native code generation for the full currently implemented Aurora language surface
+- `direct` now performs true low-level native code generation for the full currently implemented Aura language surface
 - the built binary no longer reparses source or compiles a generated Rust runner at build time
 - the built binary no longer depends on the original `.au` source files at runtime
 - built binaries now render runtime failures with file, line, caret, typed
-  Aurora call-chain, and child-task ancestry context from embedded source
-- release archives include the Aurora native runtime and do not require Cargo or a source checkout; `aura build` still requires a host C compiler
-- manifest-aware commands now resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aurora.toml`
+  Aura call-chain, and child-task ancestry context from embedded source
+- release archives include the Aura native runtime and do not require Cargo or a source checkout; `aura build` still requires a host C compiler
+- manifest-aware commands now resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aura.toml`
 - git dependencies support `git = "..."` with `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
-- the current package-system milestone writes a local `Aurora.lock` at the package root or workspace root, pinning resolved git revisions and recording relative paths for local path dependencies
+- the current package-system milestone writes a local `Aura.lock` at the package root or workspace root, pinning resolved git revisions and recording relative paths for local path dependencies
 - both maintained execution paths now cover the builtin `io`, `fs`, `net`, and `process` module surface for scheduler-aware text/binary file I/O, reactor-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, shell-free subprocess execution with captured pipes, and supervised child processes with restart policy support
 
 Current `run` status:
 
-- `aura run` defaults to the MIR runtime for the current implemented Aurora surface; `--backend direct` requires native execution and `--backend auto` prefers it with visible fallback
+- `aura run` defaults to the MIR runtime for the current implemented Aura surface; `--backend direct` requires native execution and `--backend auto` prefers it with visible fallback
 - queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, the maintained reactor-driven socket networking surface, and the shell-free `process` module now run through the same MIR-backed public execution path
 - task bodies use pinned scheduler workers: the default worker count is the
   available parallelism reported by the host, and the provisional
-  `AURORA_WORKERS=<positive integer>` override selects an explicit count; each
+  `AURA_WORKERS=<positive integer>` override selects an explicit count; each
   child keeps its
   spawn-time worker for its lifetime, with no stack migration or work stealing
 - scheduler waits use persistent descriptor registrations, a timer heap, and
@@ -342,10 +341,10 @@ Current `run` status:
   cross-worker wakes; an idle worker blocks until local work, a notification,
   an event, or a deadline without a periodic tick
 - blocking host operations use a separate lazy process-wide pool:
-  `AURORA_BLOCKING_WORKERS=<positive integer>` selects an exact worker count
+  `AURA_BLOCKING_WORKERS=<positive integer>` selects an exact worker count
   without clamping, while the absent default derives `2..=8` workers from host
   parallelism with fallback `4`;
-  `AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally bounds
+  `AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` optionally bounds
   accepted pending jobs only, with FIFO scheduler-aware admission and an
   unbounded compatibility default
 - invalid blocking-pool settings fail with `AU4006` before user code under
@@ -353,7 +352,7 @@ Current `run` status:
   one immutable process-lifetime configuration, but starts no blocking-pool
   worker threads
 - first blocking submission creates the complete worker set, which production
-  reuses until process exit without an Aurora shutdown/join surface;
+  reuses until process exit without an Aura shutdown/join surface;
   pre-acceptance timeout/cancellation prevents submission, and accepted host
   work remains non-retractable, so a queue bound cannot guarantee progress
   for unrelated blocking I/O while every worker is stuck
@@ -369,7 +368,7 @@ Current `run` status:
   results share-nothing, and cancellation and diagnostic context remain
   isolated per task
 - MIR execution and direct native execution use the same pinned-worker
-  contract; this is a multicore claim for Aurora task execution, not a promise
+  contract; this is a multicore claim for Aura task execution, not a promise
   of preemption, work stealing, detached tasks, worker introspection, or
   parallel speedup for every workload
 - every loop backedge includes a compiler-inserted cooperative scheduling
@@ -385,14 +384,14 @@ The extension has two server pieces:
 - the compiler-owned semantic service started as `aura lsp`
 
 Build both pieces before installing from this checkout. In particular, do not
-reuse an existing `tools/vscode-aurora/aurora-language.vsix` after the language
+reuse an existing `tools/vscode-aura/aura-language.vsix` after the language
 server changes; that ignored local artifact may contain an older server bundle.
 
 Install the current server and extension:
 
 1. Run `npm ci` from the repo root.
 2. Build the repo-local compiler service with `cargo build -p aura`. To install
-   the actual `aura lsp` server binary on your `PATH` for every Aurora
+   the actual `aura lsp` server binary on your `PATH` for every Aura
    workspace, also run:
 
    ```bash
@@ -407,7 +406,7 @@ Install the current server and extension:
 4. Install that newly generated package:
 
    ```bash
-   code --install-extension tools/vscode-aurora/aurora-language.vsix --force
+   code --install-extension tools/vscode-aura/aura-language.vsix --force
    ```
 
    If the `code` shell command is unavailable, use **Extensions → … → Install
@@ -417,11 +416,11 @@ Install the current server and extension:
 The language server keeps one persistent `aura lsp` compiler service for
 diagnostics, document symbols, hover, go-to-definition, and completions. In
 this repository it discovers `target/debug/aura` or `target/release/aura`.
-For an Aurora workspace elsewhere, put `aura` on `PATH` or launch VS Code with
-`AURORA_LSP_AURA_PATH` set to the absolute compiler path:
+For an Aura workspace elsewhere, put `aura` on `PATH` or launch VS Code with
+`AURA_LSP_AURA_PATH` set to the absolute compiler path:
 
 ```bash
-AURORA_LSP_AURA_PATH="/absolute/path/to/aura" code /path/to/aurora-project
+AURA_LSP_AURA_PATH="/absolute/path/to/aura" code /path/to/aura-project
 ```
 
 Compiler diagnostics retain their stable `AU####` code, related spans, notes,
@@ -430,4 +429,4 @@ instead of being reimplemented in JavaScript. If the compiler process is
 unavailable, a small lexical recovery layer provides basic declarations and
 top-level completions.
 
-Full extension install and packaging steps are documented in [tools/vscode-aurora/INSTALL.md](tools/vscode-aurora/INSTALL.md).
+Full extension install and packaging steps are documented in [tools/vscode-aura/INSTALL.md](tools/vscode-aura/INSTALL.md).

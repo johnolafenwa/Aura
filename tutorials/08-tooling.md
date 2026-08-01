@@ -1,10 +1,10 @@
 # Tooling
 
-Aurora ships with compiler and editor tooling inside the monorepo.
+Aura ships with compiler and editor tooling inside the monorepo.
 
 ## CLI
 
-The `aura` CLI is the primary interface for working with Aurora programs:
+The `aura` CLI is the primary interface for working with Aura programs:
 
 ```bash
 cargo run -p aura -- check myfile.au     # type-check without running
@@ -32,8 +32,8 @@ The categorized example library under `examples/` is part of the development wor
 
 The repo includes:
 
-- a VS Code extension under `tools/vscode-aurora`
-- an Aurora language server under `tools/aurora-language-server`
+- a VS Code extension under `tools/vscode-aura`
+- an Aura language server under `tools/aura-language-server`
 
 ### Editor Features
 
@@ -56,7 +56,7 @@ For development:
 4. Press `F5` to launch an Extension Development Host
 5. Open any `.au` file
 
-For a packaged install, see [tools/vscode-aurora/INSTALL.md](../tools/vscode-aurora/INSTALL.md).
+For a packaged install, see [tools/vscode-aura/INSTALL.md](../tools/vscode-aura/INSTALL.md).
 
 ## Keeping Tutorials Current
 

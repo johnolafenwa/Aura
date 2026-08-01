@@ -1,6 +1,6 @@
 # Status And Compatibility
 
-Aurora 0.2 is an advanced technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments; it is not yet a production systems-language release or a security boundary for untrusted programs.
+Aura 0.2 is an advanced technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments; it is not yet a production systems-language release or a security boundary for untrusted programs.
 
 ## Canonical Contract
 
@@ -12,11 +12,9 @@ The maintained language contract consists of:
 4. categorized examples and Learn chapters as teaching material
 
 The Manual and executable suite are expected to agree. A divergence is a
-project defect, not an alternate language rule. The historical proposal is
-design history. Features mentioned only there—including `Channel`,
-statement-form `select`, detached spawn, attributes, and registry
-publishing—are not part of Aurora 0.2. Accepted ADR-0034 instead adds the
-ordinary builtin call `select(source, ...)`; it adds no statement syntax.
+project defect, not an alternate language rule. Aura provides the ordinary
+builtin call `select(source, ...)` under Accepted ADR-0034 and no statement
+form.
 That addition reserves both the builtin function name `select` and builtin
 enum name `SelectOutcome`; existing user declarations with either name must
 be renamed.
@@ -51,13 +49,12 @@ Vec member names are part of the builtin no-shadowing surface. Callback
 capabilities are exact: code must pass bare/shared element callbacks rather
 than relying on adaptation from `mut` or `own`.
 
-Phase 6.3 adds contextually typed `lambda parameters: expression` closures
-under Accepted ADR-0037. Captures are by value: Copy values are copied,
+Contextually typed `lambda parameters: expression` closures follow Accepted
+ADR-0037. Captures are by value: Copy values are copied,
 owned non-Copy values move at creation, read-only capture use is repeatable,
 and consuming capture use makes the closure single-use. A closure is Transfer
 only when every capture is Transfer. Shared or mutable capability capture and
-mutable captured state remain unavailable in 0.2; accepted ADR-0038 designs
-that surface for Aurora 0.3. Zero-parameter lambdas may infer their result
+mutable captured state are unavailable. Zero-parameter lambdas may infer their result
 without a contextual callable type. Capturing closures retain compiler
 metadata and therefore do not cross arbitrary written-`def` parameter, field,
 collection, or annotated return boundaries.
@@ -116,13 +113,13 @@ Compiler coverage is held at the current non-regression floor rather than being 
 
 Seeded randomness has an additional observable-data promise: the algorithm,
 seed mapping, integer and floating mappings, and shuffle order documented in
-[Randomness Module](/manual/randomness) remain stable throughout Aurora 0.2.x.
+[Randomness Module](/manual/randomness) remain stable throughout Aura 0.2.x.
 A later compatibility series may change them only with an explicit decision
 and new conformance vectors. OS-secure outputs are intentionally not stable.
 
 ## Maintained Concurrency Surface
 
-Aurora 0.2 uses structured concurrency:
+Aura 0.2 uses structured concurrency:
 
 - `TaskGroup()` owns child tasks inside `with`
 - `TaskGroup.start(...)` returns a `Task[T]`
@@ -142,7 +139,7 @@ task. `select(...)` is an ordinary builtin call; it does not add branch syntax.
 Task bodies execute on pinned cooperative scheduler workers on both maintained
 backends. The default worker count is the available parallelism reported by
 the host; the
-provisional `AURORA_WORKERS=<positive integer>` override selects an explicit
+provisional `AURA_WORKERS=<positive integer>` override selects an explicit
 count. A child receives a stable worker assignment when it is spawned. Its
 coroutine stack never migrates, work is not stolen, and `yield_now()` yields
 only to runnable work on that worker.
@@ -162,11 +159,11 @@ Under Accepted ADR-0035, the separate process-wide blocking-I/O pool is
 lazily initialized. The first runtime preflight reads its settings once and
 keeps that configuration immutable for the process lifetime without starting
 worker threads. First blocking submission creates the complete worker set;
-production reuses it until process exit and exposes no Aurora shutdown/join
+production reuses it until process exit and exposes no Aura shutdown/join
 surface.
-`AURORA_BLOCKING_WORKERS` selects an exact positive worker count; without it,
+`AURA_BLOCKING_WORKERS` selects an exact positive worker count; without it,
 the runtime derives and clamps a `2..=8` default from host parallelism with
-fallback `4`. `AURORA_BLOCKING_QUEUE_CAPACITY` optionally bounds accepted
+fallback `4`. `AURA_BLOCKING_QUEUE_CAPACITY` optionally bounds accepted
 pending jobs only, while omission preserves the unbounded compatibility mode.
 Full-queue admission is FIFO and scheduler-aware. MIR, direct, and standalone
 execution reject invalid values with `AU4006` before user code. Cancellation
@@ -187,7 +184,7 @@ speedup for every program. See [Execution Model](/manual/execution-model) and
 [Current Limits](/manual/current-limits).
 
 Accepted ADR-0036 defines complete typed runtime frames on both maintained
-backends. Diagnostics carry innermost-first Aurora call frames and
+backends. Diagnostics carry innermost-first Aura call frames and
 youngest-first task ancestry. Each public schema-version-1 frame span has its
 own required source `path`; the analysis/LSP editor shape permits an optional
 `file_path` for source-only analysis. The public diagnostic schema remains
@@ -198,6 +195,6 @@ forwards the same records.
 
 ## Platform And Distribution Support
 
-Release archives target glibc Linux x86-64 and macOS x86-64/Apple silicon. Each archive includes the native runtime and linker manifest used by `aura build`; Cargo and the Aurora source checkout are not runtime dependencies of an installed archive. A host C compiler is still required.
+Release archives target glibc Linux x86-64 and macOS x86-64/Apple silicon. Each archive includes the native runtime and linker manifest used by `aura build`; Cargo and the Aura source checkout are not runtime dependencies of an installed archive. A host C compiler is still required.
 
 See the repository `SUPPORTED_PLATFORMS.md` for the exact matrix and pinned toolchain.

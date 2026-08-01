@@ -21,7 +21,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 
 [[package]]
-name = "aurora-compiler"
+name = "aura-compiler"
 version = "0.2.0"
 dependencies = [
  "base64",
@@ -46,10 +46,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "aurora-fuzz"
+name = "aura-fuzz"
 version = "0.0.0"
 dependencies = [
- "aurora-compiler",
+ "aura-compiler",
  "libfuzzer-sys",
  "serde_json",
 ]

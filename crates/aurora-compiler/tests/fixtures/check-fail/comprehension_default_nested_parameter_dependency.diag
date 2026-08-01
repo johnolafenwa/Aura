@@ -1,5 +1,0 @@
-error[AU2004]: default argument for parameter `copied` may not reference parameter `limit`
- --> crates/aurora-compiler/tests/fixtures/check-fail/comprehension_default_nested_parameter_dependency.au:3:33
-  |
-3 |     copied: Map[int64, int64] = {
-  |                                 ^

@@ -1,5 +1,0 @@
-error[AU2002]: `assert` message must have type `String`, found `int64`
- --> crates/aurora-compiler/tests/fixtures/check-fail/assert_message_must_be_string.au:2:5
-  |
-2 |     assert false, 1
-  |     ^

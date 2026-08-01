@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-runs="${AURORA_STRESS_RUNS:-25}"
+runs="${AURA_STRESS_RUNS:-25}"
 tests=(
   "queue_consumers_share_work_without_starvation"
   "cancelled_sleeping_children_resume_and_can_observe_cancellation"

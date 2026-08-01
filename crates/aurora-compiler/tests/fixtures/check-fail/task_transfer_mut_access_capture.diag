@@ -1,7 +1,0 @@
-error[AU3002]: cannot move borrowed value `value`
- --> crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_mut_access_capture.au:8:31
-  |
-8 |     group.start_soon(consume, value)
-  |                               ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/task_transfer_mut_access_capture.au:7:30: value is borrowed here
-  = help: take `value` as `own Counter` when ownership of this non-cloneable value is required

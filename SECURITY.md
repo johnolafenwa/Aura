@@ -1,6 +1,6 @@
 # Security Policy
 
-Aurora is an early technical preview. It has not received an independent security audit and must not yet be treated as a hardened sandbox for untrusted Aurora programs.
+Aura is an early technical preview. It has not received an independent security audit and must not yet be treated as a hardened sandbox for untrusted Aura programs.
 
 ## Supported Version
 

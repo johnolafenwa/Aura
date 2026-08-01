@@ -81,7 +81,7 @@ def push_name(names: mut Vec[String], name: own String):
 ```
 
 The modifier is written in the declaration after the colon. Calls pass the
-expression directly; Aurora has no call-site capability prefix:
+expression directly; Aura has no call-site capability prefix:
 
 ```python
 mut names = Vec[String]()
@@ -110,9 +110,9 @@ Calls accept positional arguments followed by named arguments:
 def render(name: String, count: int32 = 1):
     print(name)
 
-render("Aurora")
-render("Aurora", 2)
-render(name="Aurora", count=2)
+render("Aura")
+render("Aura", 2)
+render(name="Aura", count=2)
 ```
 
 Binding is deterministic:
@@ -126,7 +126,7 @@ Binding is deterministic:
 
 Positional arguments cannot follow a named argument. Parameter and argument
 lists may span physical lines while their parentheses remain open, but they do
-not accept trailing commas in Aurora 0.2.
+not accept trailing commas in Aura 0.2.
 
 ## Default Arguments
 
@@ -226,11 +226,7 @@ A bare or `mut` parameter grants access but does not give the function
 ownership of a non-copy value stored behind that access. Moving such a value
 into the result is rejected; use one of the owned-result patterns above.
 
-Aurora has no return-source modifier, mutable-return capability, or
-signature-level return label. Retired spellings receive migration diagnostics
-instead of reserving a hidden provenance contract. If Aurora later adds
-first-class loans or views, that feature will define its types, lifetimes,
-storage, and call rules from scratch. See [Ownership And
+Every result is an owned value. See [Ownership And
 Borrowing](/manual/ownership-and-borrowing#owned-returns).
 
 ## Generic Functions
@@ -413,7 +409,7 @@ not satisfy a callable clone-safety obligation. `AU4001` means a
 call-depth or general call trap. A callee's `AU4002` means arithmetic overflow
 or underflow, `AU4003` means bounds or lookup violation, `AU4004` means zero divisor, and
 `AU4005` means a trapping resource or I/O failure; each retains the same typed
-Aurora call frames and task ancestry on MIR and direct-native execution.
+Aura call frames and task ancestry on MIR and direct-native execution.
 
 ## Backend Support
 
@@ -426,14 +422,14 @@ resolved signature metadata, including inferred clone-safety obligations.
 
 ## Limits And Implementation-Defined Behavior
 
-Aurora has no method values, trait-object function interactions, Aurora
+Aura has no method values, trait-object function interactions, Aura
 variadic functions,
 overloads, nested functions, or mutable-parameter task targets. Expression
 lambdas are specified by [Closures](/manual/closures); they do not add nested
 item declarations. Written function types express bare shared, `mut`, and `own`
-parameter contracts. Runtime calls are limited to 256 nested Aurora frames. Host
+parameter contracts. Runtime calls are limited to 256 nested Aura frames. Host
 process exit representation may narrow the requested `int32` after it leaves
-Aurora; function binding and evaluation order are otherwise not
+Aura; function binding and evaluation order are otherwise not
 implementation-defined.
 
 ## Status
@@ -445,9 +441,8 @@ evaluation and argument capture follow
 `architecture_docs/decisions/0015-explicit-and-default-argument-order.md`,
 which is **Accepted**. The rules are pinned
 by
-`crates/aurora-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au`
-on both backends. Return values are owned; no return-source or label contract
-is reserved. By-value expression closures are implemented under Accepted
-ADR-0037. First-class loan/view values are unavailable. FFI v0 adds bodyless
-direct-call-only `extern "C" def` declarations; they are not function values
-and their restricted signatures are specified by [FFI v0](/manual/ffi).
+`crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au`
+on both backends. Return values are owned. By-value expression closures are
+implemented under Accepted ADR-0037. FFI v0 adds bodyless direct-call-only
+`extern "C" def` declarations; they are not function values and their
+restricted signatures are specified by [FFI v0](/manual/ffi).

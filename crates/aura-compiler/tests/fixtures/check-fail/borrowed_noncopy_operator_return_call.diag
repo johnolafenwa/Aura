@@ -1,0 +1,8 @@
+error[AU3002]: cannot move non-copy field `value` out of borrowed value `self`
+ --> crates/aura-compiler/tests/fixtures/check-fail/borrowed_noncopy_operator_return_call.au:9:21
+  |
+9 |         return self.value
+  |                     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/borrowed_noncopy_operator_return_call.au:8:5: `self` is borrowed here
+  = help: take `self` as `own Label` when the field should be moved, or call `.clone()` on the field to return an independent value
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/borrowed_noncopy_operator_return_call.au:9:26-9:26 with `.clone()`

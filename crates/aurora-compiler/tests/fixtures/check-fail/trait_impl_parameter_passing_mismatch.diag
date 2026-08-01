@@ -1,5 +1,0 @@
-error[AU2999]: method `show` in impl of `Show` does not match the trait signature
- --> crates/aurora-compiler/tests/fixtures/check-fail/trait_impl_parameter_passing_mismatch.au:8:5
-  |
-8 |     def show(self, text: own String) -> int32:
-  |     ^

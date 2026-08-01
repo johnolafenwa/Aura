@@ -1,7 +1,0 @@
-error[AU3002]: cannot create local alias `alias` from mutable access to `user`; local mutable aliases do not write through to their source
- --> crates/aurora-compiler/tests/fixtures/check-fail/mutable_loop_local_alias_rejected.au:7:17
-  |
-7 |         alias = user
-  |                 ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/mutable_loop_local_alias_rejected.au:6:9: mutable access to `user` begins here
-  = help: mutate `user` directly, or pass it to another `mut` parameter

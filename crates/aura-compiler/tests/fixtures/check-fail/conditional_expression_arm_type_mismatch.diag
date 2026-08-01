@@ -1,0 +1,5 @@
+error[AU2002]: conditional expression arms must have one type; expected `int64`, found `String`
+ --> crates/aura-compiler/tests/fixtures/check-fail/conditional_expression_arm_type_mismatch.au:2:28
+  |
+2 |     value = 1 if true else "no"
+  |                            ^

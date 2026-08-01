@@ -33,4 +33,4 @@ tracking in Phase 6.
 - Semantic check-fail fixtures for shared/mutable non-copy borrowed calls and exact hints.
 - Check/run fixtures preserving copy borrowed-return behavior.
 - Escape/container/task cases and forced-backend product tests.
-- `examples/basics/borrowed_returns.au`, ownership tutorials, Manual, and conformance status.
+- `examples/basics/copy_field_returns.au`, ownership tutorials, Manual, and conformance status.

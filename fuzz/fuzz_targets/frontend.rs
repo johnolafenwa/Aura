@@ -1,6 +1,6 @@
 #![no_main]
 
-use aurora_compiler::{
+use aura_compiler::{
     analyze_source, check_source, emit_host_native_object, lower_source_to_mir, parse_source,
 };
 use libfuzzer_sys::fuzz_target;

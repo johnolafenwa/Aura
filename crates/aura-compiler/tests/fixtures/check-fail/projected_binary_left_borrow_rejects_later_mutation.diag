@@ -1,0 +1,7 @@
+error[AU3002]: cannot mutably borrow `holder` while `holder.text` remains shared-borrowed by the left operand
+ --> crates/aura-compiler/tests/fixtures/check-fail/projected_binary_left_borrow_rejects_later_mutation.au:10:44
+   |
+10 |     print(holder.text + replace_and_return(holder))
+   |                                            ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/projected_binary_left_borrow_rejects_later_mutation.au:10:18: shared access for the left operand begins here
+  = help: call `.clone()` before the expression when an independent value is intended, or perform the mutation in a separate statement first

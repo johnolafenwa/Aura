@@ -1,6 +1,6 @@
 # MIR
 
-This chapter explains what MIR is, why Aurora uses it, and how Aurora lowers checked programs into it.
+This chapter explains what MIR is, why Aura uses it, and how Aura lowers checked programs into it.
 
 ## What MIR is
 
@@ -11,9 +11,9 @@ It sits between:
 - the high-level checked program (`Program`)
 - the concrete execution backends (MIR runtime and native codegen)
 
-Aurora's MIR is defined in [`mir.rs`](../crates/aurora-compiler/src/mir.rs).
+Aura's MIR is defined in [`mir.rs`](../crates/aura-compiler/src/mir.rs).
 
-## Why Aurora does not execute the AST directly
+## Why Aura does not execute the AST directly
 
 The AST is good for representing source syntax. It is not ideal for execution or code generation because it still contains:
 
@@ -25,7 +25,7 @@ MIR solves that by turning checked programs into a more execution-shaped form.
 
 ## The main MIR data structures
 
-Aurora's MIR centers around these types:
+Aura's MIR centers around these types:
 
 | Type | Purpose |
 | --- | --- |
@@ -37,7 +37,7 @@ Aurora's MIR centers around these types:
 | `Operand` | A place or literal already ready to use |
 | `Terminator` | Control-flow transfer such as `Goto`, `Branch`, `Match`, `Select`, `Return` |
 
-## Aurora's MIR shape
+## Aura's MIR shape
 
 ```mermaid
 flowchart TD
@@ -50,9 +50,9 @@ flowchart TD
     G --> H["Call / Binary / Unary / Spawn / Construct / EnumVariant / Member"]
 ```
 
-## What Aurora lowers into MIR
+## What Aura lowers into MIR
 
-Aurora lowers:
+Aura lowers:
 
 - ordinary functions
 - class methods
@@ -64,7 +64,7 @@ That matters because both execution paths need a unified view of everything call
 
 ## How lowering works
 
-Aurora's `lower(program: &Program) -> MirModule` does three high-level jobs:
+Aura's `lower(program: &Program) -> MirModule` does three high-level jobs:
 
 1. create MIR functions for functions, methods, trait impl methods, and top-level statements
 2. create MIR metadata for classes and trait impl dispatch
@@ -72,7 +72,7 @@ Aurora's `lower(program: &Program) -> MirModule` does three high-level jobs:
 
 ## The `Lowerer`
 
-`Lowerer` is Aurora's core MIR builder. It carries state such as:
+`Lowerer` is Aura's core MIR builder. It carries state such as:
 
 - current block
 - block counter and temp counter
@@ -97,7 +97,7 @@ That is much easier for both the MIR runtime and native codegen to execute.
 
 ## Example: `with` lowering
 
-Aurora lowers `with` by explicitly managing cleanup instructions:
+Aura lowers `with` by explicitly managing cleanup instructions:
 
 - assign the resource into the bound place
 - `PushCleanup { place }`
@@ -105,7 +105,7 @@ Aurora lowers `with` by explicitly managing cleanup instructions:
 - emit `PopCleanup` on normal exit
 - unwind cleanup stack on `return`, `break`, `continue`, or exceptional early exits such as `try`
 
-That is one of the most important architectural uses of MIR in Aurora: turning structured resource management into explicit runtime operations.
+That is one of the most important architectural uses of MIR in Aura: turning structured resource management into explicit runtime operations.
 
 ## A tiny MIR example in Rust
 
@@ -154,15 +154,15 @@ fn lower_add_function() -> BasicBlock {
 }
 ```
 
-That example is much smaller than Aurora's real MIR, but it captures the idea:
+That example is much smaller than Aura's real MIR, but it captures the idea:
 
 - complex expressions become named temporaries
 - work happens in straight-line instructions
 - control flow is explicit at block boundaries
 
-## Aurora-specific MIR features
+## Aura-specific MIR features
 
-Aurora's real MIR goes well beyond the toy example. It includes:
+Aura's real MIR goes well beyond the toy example. It includes:
 
 - `Try`
   `Result` propagation at the IR level
@@ -181,7 +181,7 @@ Aurora's real MIR goes well beyond the toy example. It includes:
 
 ## Why both backends benefit from MIR
 
-Aurora uses the same MIR for:
+Aura uses the same MIR for:
 
 - `mir_runtime.rs`
 - `native_codegen.rs`
@@ -194,11 +194,11 @@ That gives the project a strong architectural advantage:
 
 ## Files worth studying
 
-- [`mir.rs`](../crates/aurora-compiler/src/mir.rs)
-- [`mir_tests.rs`](../crates/aurora-compiler/src/mir_tests.rs)
-- [`mir_runtime.rs`](../crates/aurora-compiler/src/mir_runtime.rs)
-- [`native_codegen.rs`](../crates/aurora-compiler/src/native_codegen.rs)
+- [`mir.rs`](../crates/aura-compiler/src/mir.rs)
+- [`mir_tests.rs`](../crates/aura-compiler/src/mir_tests.rs)
+- [`mir_runtime.rs`](../crates/aura-compiler/src/mir_runtime.rs)
+- [`native_codegen.rs`](../crates/aura-compiler/src/native_codegen.rs)
 
 ## What comes next
 
-Read [07-mir-runtime.md](07-mir-runtime.md) to see how Aurora executes MIR directly.
+Read [07-mir-runtime.md](07-mir-runtime.md) to see how Aura executes MIR directly.

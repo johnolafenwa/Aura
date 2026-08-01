@@ -1,0 +1,5 @@
+error[AU2002]: cannot infer type parameter `T` for enum variant `Option.None`
+ --> crates/aura-compiler/tests/fixtures/check-fail/builtin_option_none_without_context.au:2:16
+  |
+2 |     x = Option.None
+  |                ^

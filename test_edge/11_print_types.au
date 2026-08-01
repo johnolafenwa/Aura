@@ -13,7 +13,7 @@ def main() -> int32:
     x: int32 = 100
     y: float64 = 9.81
     z: bool = true
-    s: String = "aurora"
+    s: String = "aura"
     print(x)
     print(y)
     print(z)

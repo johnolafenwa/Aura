@@ -3,7 +3,7 @@
 
 This tool deliberately separates evidence into three levels:
 
-* syntax-aware evidence from Aurora AST JSON and token-aware source scans;
+* syntax-aware evidence from Aura AST JSON and token-aware source scans;
 * deterministic compiler-source evidence for builtin declarations, rendered
   signatures, and passing metadata;
 * explicit review queues where AST JSON does not contain enough checked type
@@ -11,7 +11,7 @@ This tool deliberately separates evidence into three levels:
 
 The distinction matters. An unresolved imported type is not silently treated
 as non-copy, an unparsed fixture is not hidden behind a sample count, and a
-Rust string that contains the English word "borrow" is not called Aurora
+Rust string that contains the English word "borrow" is not called Aura
 syntax. Every record is sorted and carries a path and source location so the
 inventory is a reviewable ledger rather than a collection of totals.
 """
@@ -90,23 +90,23 @@ KNOWN_TYPE_CONSTRUCTORS = (
     | {"Tuple", "number"}
 )
 
-# These are the only Aurora files in which a live `borrow` token is expected:
+# These are the only Aura files in which a live `borrow` token is expected:
 # each exists to prove that the retired spelling is diagnosed.
 RETIREMENT_FIXTURES = {
     PurePosixPath(
-        "crates/aurora-compiler/tests/fixtures/check-fail/"
+        "crates/aura-compiler/tests/fixtures/check-fail/"
         "borrow_call_argument_not_supported.au"
     ),
     PurePosixPath(
-        "crates/aurora-compiler/tests/fixtures/parse-fail/"
+        "crates/aura-compiler/tests/fixtures/parse-fail/"
         "borrowed_return_label_in_trait_was_removed.au"
     ),
     PurePosixPath(
-        "crates/aurora-compiler/tests/fixtures/parse-fail/"
+        "crates/aura-compiler/tests/fixtures/parse-fail/"
         "borrowed_return_was_removed.au"
     ),
     PurePosixPath(
-        "crates/aurora-compiler/tests/fixtures/parse-fail/"
+        "crates/aura-compiler/tests/fixtures/parse-fail/"
         "prefix_borrow_param_not_supported.au"
     ),
 }
@@ -170,8 +170,8 @@ def maintained_tracked(pattern: str | None = None) -> tuple[list[Path], list[dic
     return included, excluded
 
 
-def strip_aurora(source: str) -> str:
-    """Blank Aurora comments and string bodies while preserving offsets."""
+def strip_aura(source: str) -> str:
+    """Blank Aura comments and string bodies while preserving offsets."""
     out = list(source)
     i, length = 0, len(source)
     while i < length:
@@ -253,7 +253,7 @@ def _line_column(text: str, offset: int) -> tuple[int, int]:
 def borrow_occurrence_classification(
     path: PurePosixPath, surface: str
 ) -> str:
-    if surface == "aurora" and path in RETIREMENT_FIXTURES:
+    if surface == "aura" and path in RETIREMENT_FIXTURES:
         return "retirement_fixture"
     if path.parts[:2] == ("architecture_docs", "decisions"):
         return "historical_decision_context"
@@ -261,16 +261,16 @@ def borrow_occurrence_classification(
         return "explicit_migration_documentation"
     if surface == "markdown":
         return "maintained_documentation_review"
-    if surface == "aurora":
-        return "maintained_aurora_source_review"
+    if surface == "aura":
+        return "maintained_aura_source_review"
     return "supplementary_text_review"
 
 
 def borrow_occurrence_records(
     path: PurePosixPath, source: str, surface: str
 ) -> list[dict]:
-    if surface == "aurora":
-        scanned = strip_aurora(source)
+    if surface == "aura":
+        scanned = strip_aura(source)
     elif surface == "markdown":
         scanned = markdown_code(source)
     else:
@@ -1247,7 +1247,7 @@ def collect_builtin_variant_coverage(source: str) -> dict[str, list | dict]:
     rendered = {
         record["variant"]
         for record in collect_rendered_builtin_signatures(
-            source, PurePosixPath("crates/aurora-compiler/src/call.rs")
+            source, PurePosixPath("crates/aura-compiler/src/call.rs")
         )
     }
     links = set(_call_shape_links(source))
@@ -1454,7 +1454,7 @@ def _git_dirty() -> bool:
 
 
 def _semantic_interface_version() -> int | None:
-    source = (ROOT / "crates/aurora-compiler/src/lib.rs").read_text(
+    source = (ROOT / "crates/aura-compiler/src/lib.rs").read_text(
         errors="replace"
     )
     match = re.search(
@@ -1497,7 +1497,7 @@ def build_inventory() -> dict:
     for path in au_files:
         source = path.read_text(errors="replace")
         au_borrow_records.extend(
-            borrow_occurrence_records(_relative(path), source, "aurora")
+            borrow_occurrence_records(_relative(path), source, "aura")
         )
     for path in md_files:
         source = path.read_text(errors="replace")
@@ -1595,7 +1595,7 @@ def build_inventory() -> dict:
         trait_impls.extend(evidence["trait_impls"])
         bare_matches.extend(evidence["bare_matches"])
 
-    call_path = ROOT / "crates/aurora-compiler/src/call.rs"
+    call_path = ROOT / "crates/aura-compiler/src/call.rs"
     call_source = call_path.read_text(errors="replace")
     rendered_builtins = collect_rendered_builtin_signatures(
         call_source, _relative(call_path)
@@ -1604,14 +1604,14 @@ def build_inventory() -> dict:
         call_source, _relative(call_path)
     )
     builtin_variant_coverage = collect_builtin_variant_coverage(call_source)
-    sema_path = ROOT / "crates/aurora-compiler/src/sema.rs"
+    sema_path = ROOT / "crates/aura-compiler/src/sema.rs"
     builtin_applications = collect_builtin_application_evidence(
         call_source,
         sema_path.read_text(errors="replace"),
         _relative(call_path),
         _relative(sema_path),
     )
-    module_path = ROOT / "crates/aurora-compiler/src/builtin_modules.rs"
+    module_path = ROOT / "crates/aura-compiler/src/builtin_modules.rs"
     module_builtins = collect_module_builtin_parameters(
         module_path.read_text(errors="replace"), _relative(module_path)
     )
@@ -1789,7 +1789,7 @@ def build_inventory() -> dict:
         },
         "scope": {
             "policy": (
-                "all git-tracked text is supplementary evidence; Aurora and "
+                "all git-tracked text is supplementary evidence; Aura and "
                 "Markdown receive syntax-aware scans; only generated, dependency, "
                 "build, and VCS trees are excluded"
             ),
@@ -1799,7 +1799,7 @@ def build_inventory() -> dict:
         # Legacy flat totals remain for work-note consumers of the original tool.
         **summary,
         "evidence": {
-            "borrow_aurora": sorted_records(au_borrow_records),
+            "borrow_aura": sorted_records(au_borrow_records),
             "borrow_markdown_code": sorted_records(md_borrow_records),
             "borrow_supplementary_text": sorted_records(supplementary_records),
             "borrow_uppercase_identifiers": sorted_records(
@@ -1818,7 +1818,7 @@ def build_inventory() -> dict:
             "builtin_variant_coverage": builtin_variant_coverage,
         },
         "review_queue": {
-            "unparsed_aurora_files": sorted_records(unparsed),
+            "unparsed_aura_files": sorted_records(unparsed),
             "bare_matches_without_checked_scrutinee_type": sorted_records(
                 [
                     record
@@ -1857,7 +1857,7 @@ def build_inventory() -> dict:
             ),
             (
                 "Supplementary text occurrences are exhaustive token evidence, "
-                "not claims that every occurrence is accepted Aurora syntax"
+                "not claims that every occurrence is accepted Aura syntax"
             ),
         ],
     }
@@ -1869,7 +1869,7 @@ def main(argv: list[str] | None = None) -> int:
         "--check",
         action="store_true",
         help=(
-            "fail for active Aurora retired tokens or definite rendered/metadata "
+            "fail for active Aura retired tokens or definite rendered/metadata "
             "builtin capability mismatches, omissions, or unlinked signatures"
         ),
     )
@@ -1880,7 +1880,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     active_tokens = [
         record
-        for record in inventory["evidence"]["borrow_aurora"]
+        for record in inventory["evidence"]["borrow_aura"]
         if record["classification"] != "retirement_fixture"
     ]
     mismatches = inventory["evidence"]["builtin_capability_consistency"][
@@ -1905,7 +1905,7 @@ def main(argv: list[str] | None = None) -> int:
     ):
         print(
             "capability inventory check failed: "
-            f"{len(active_tokens)} active retired Aurora token(s), "
+            f"{len(active_tokens)} active retired Aura token(s), "
             f"{len(mismatches)} builtin capability metadata mismatch(es), "
             f"{len(application_mismatches)} missing builtin sibling-retention "
             f"application(s), {len(missing_variants)} builtin variant(s) without "

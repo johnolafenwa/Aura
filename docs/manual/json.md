@@ -1,6 +1,6 @@
 # JSON Module
 
-Aurora's `json` module represents arbitrary JSON data with one recursive enum.
+Aura's `json` module represents arbitrary JSON data with one recursive enum.
 Parsing reports malformed or unsupported input as typed data; dumping produces
 one deterministic JSON string or traps when the supplied value cannot satisfy
 the serializer contract.
@@ -117,7 +117,7 @@ scalar order under that comparison. The result therefore does not depend on
 object insertion order.
 
 `Value.Int` uses an ordinary base-ten integer spelling with no decimal point.
-A finite `Value.Float` uses Aurora's maintained shortest binary64 spelling
+A finite `Value.Float` uses Aura's maintained shortest binary64 spelling
 that round-trips to the same binary64 value. An integral finite float retains
 a decimal or exponent marker, and negative zero remains `-0.0`. Parsing that
 text still applies the exact mathematical-integer rule, so
@@ -154,7 +154,7 @@ This executable example parses a dynamic object, inspects an exact integer
 variant, constructs a mixed nested tree, and prints deterministic compact and
 pretty output:
 
-```aurora
+```aura
 import json
 
 def main():
@@ -181,7 +181,7 @@ The module adds no source-language grammar. Imports, qualified enum variants,
 variant construction, method calls, `Result` and `Option` matching, maps,
 vectors, and named/default arguments use the ordinary grammar defined
 elsewhere in this Manual. JSON text is runtime `String` data; JSON object,
-array, string, number, Boolean, and null syntax is not Aurora source syntax.
+array, string, number, Boolean, and null syntax is not Aura source syntax.
 
 ## Typing Rules
 
@@ -192,7 +192,7 @@ payloads. `json.Error` is also a move type because `Syntax` contains a String.
 
 Every variant payload uses the normal owned enum-construction rule.
 `json.parse` and `json.dumps` use ordinary bare parameters, which are
-shared borrows under Aurora's declaration-stable parameter policy.
+shared borrows under Aura's declaration-stable parameter policy.
 `indent=None` is an `Option[int64]` default evaluated at the call boundary.
 
 An accessor's `value` parameter mode is part of its type. Inspecting accessors
@@ -200,11 +200,11 @@ do not change ownership. Each `into_*` call consumes its argument even when
 the runtime variant does not match. No accessor converts Int to Float, Float
 to Int, or a scalar to text.
 
-The legacy string-map helpers keep their existing types. They are not aliases
+The string-map helpers have their own exact types. They are not aliases
 for `parse` and `dumps`, and the dynamic API does not broaden
-`parse_string_map` to accept nested or non-string values. The legacy
+`parse_string_map` to accept nested or non-string values. The
 `json.is_valid` and `json.parse_string_map` parsers remain bounded caller-side
-compatibility operations; neither is submitted to the dynamic-parse codec
+operations; neither is submitted to the dynamic-parse codec
 service. `json.stringify_map` likewise remains caller-side.
 
 ## Runtime Semantics
@@ -217,7 +217,7 @@ exhaustion of the 262,144-node materialization budget, traps with `AU4005`; it
 is not malformed-input data and does not become a `json.Error` variant.
 
 The dependency-owned recursive parse used by dynamic `json.parse` runs on
-Aurora's dedicated JSON codec service rather than on a lightweight task's
+Aura's dedicated JSON codec service rather than on a lightweight task's
 coroutine stack. The service is process-global and independent of the protocol
 and generic blocking-I/O pools. It has two workers with 2 MiB native stacks
 and a total in-flight capacity of two operations, including work that has
@@ -292,7 +292,7 @@ The MIR runtime and direct native backend use the same recursive enum
 identity, numeric classification, error positions, duplicate-key behavior,
 depth, node, and byte limits, key order, number spelling, escaping, indentation,
 and diagnostic categories. For one input or value, both backends MUST produce
-the same Aurora result and exact dump bytes.
+the same Aura result and exact dump bytes.
 
 Both backends use the same bounded codec service for `json.parse`. The direct
 backend holds value-table read access only long enough to validate and copy
@@ -321,7 +321,7 @@ keys.
 
 The dynamic-`json.parse` codec service admits two operations process-wide. Its
 two 2 MiB-stack workers are initialized lazily and intentionally live until
-process exit; Aurora 0.2 has no codec-service shutdown, join, sizing, or
+process exit; Aura 0.2 has no codec-service shutdown, join, sizing, or
 capacity configuration API. The service capacity does not govern
 `json.is_valid`, `json.parse_string_map`, or `json.stringify_map`.
 
@@ -337,8 +337,8 @@ claim that every possible host out-of-memory condition is catchable.
 ## Status
 
 The recursive value/error model, parse/dump surface, accessors, ordering,
-formatting, and resource boundary are implemented Aurora 0.2 behavior. Their
+formatting, and resource boundary are implemented Aura 0.2 behavior. Their
 exact gap-fill semantics are accepted under ADR-0021.
 
-The older `is_valid`, `stringify_map`, and `parse_string_map` helpers remain
-implemented compatibility surface. Streaming codecs remain future work.
+`is_valid`, `stringify_map`, and `parse_string_map` are maintained bounded
+string-map operations. Aura 0.2 has no streaming JSON codec.

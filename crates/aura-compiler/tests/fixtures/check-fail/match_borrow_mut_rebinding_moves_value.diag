@@ -1,0 +1,8 @@
+error[AU3001]: use of moved value `b`
+ --> crates/aura-compiler/tests/fixtures/check-fail/match_borrow_mut_rebinding_moves_value.au:10:11
+   |
+10 |     print(b.len())
+   |           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/match_borrow_mut_rebinding_moves_value.au:6:17: value moved here
+  = help: pass shared access when ownership is not needed, or call `.clone()` at the move site when an independent value is required
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/match_borrow_mut_rebinding_moves_value.au:6:18-6:18 with `.clone()`

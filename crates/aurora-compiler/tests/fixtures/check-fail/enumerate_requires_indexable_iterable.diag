@@ -1,6 +1,0 @@
-error[AU2002]: `enumerate` requires a `Vec[T]` or `Set[T]` iterable, found `Range`
- --> crates/aurora-compiler/tests/fixtures/check-fail/enumerate_requires_indexable_iterable.au:2:35
-  |
-2 |     for index, value in enumerate(range(3)):
-  |                                   ^
-  = help: these loop forms read collections by position; iterate a `Range` or `Queue[T]` with the bare `for` form

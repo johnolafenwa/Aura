@@ -27,7 +27,7 @@ class TokenAwarenessTests(unittest.TestCase):
                 return note
             '''
         )
-        migrated = migrate.migrate_aurora(original)
+        migrated = migrate.migrate_aura(original)
         self.assertIn("# borrow self is retired", migrated)
         self.assertIn('"borrow mut String"', migrated)
         self.assertIn("'borrow[label] T'", migrated)
@@ -43,7 +43,7 @@ class TokenAwarenessTests(unittest.TestCase):
             """
             '''
         )
-        self.assertEqual(migrate.migrate_aurora(original), original)
+        self.assertEqual(migrate.migrate_aura(original), original)
 
     def test_identifiers_containing_borrow_are_not_rewritten(self) -> None:
         original = source(
@@ -53,7 +53,7 @@ class TokenAwarenessTests(unittest.TestCase):
                 return borrowed
             """
         )
-        migrated = migrate.migrate_aurora(original)
+        migrated = migrate.migrate_aura(original)
         self.assertIn("borrowed: String", migrated)
         self.assertIn("reborrow: String", migrated)
         self.assertIn("borrow_count = 1", migrated)
@@ -62,32 +62,32 @@ class TokenAwarenessTests(unittest.TestCase):
 class ReceiverTests(unittest.TestCase):
     def test_shared_receiver_loses_the_keyword(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("def read(borrow self) -> int32:\n"),
+            migrate.migrate_aura("def read(borrow self) -> int32:\n"),
             "def read(self) -> int32:\n",
         )
 
     def test_mutable_receiver_becomes_mut_self(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("def bump(borrow mut self):\n"),
+            migrate.migrate_aura("def bump(borrow mut self):\n"),
             "def bump(mut self):\n",
         )
 
     def test_owning_receiver_is_unchanged(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("def close(own self):\n"),
+            migrate.migrate_aura("def close(own self):\n"),
             "def close(own self):\n",
         )
 
     def test_already_bare_receiver_is_unchanged(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("def read(self) -> int32:\n"),
+            migrate.migrate_aura("def read(self) -> int32:\n"),
             "def read(self) -> int32:\n",
         )
 
 
 class ParameterTests(unittest.TestCase):
     def test_bare_copy_parameter_is_flagged_for_snapshot_review(self) -> None:
-        result = migrate.analyze_aurora(
+        result = migrate.analyze_aura(
             "def add(left: int32, right: String):\n",
             path="sample.au",
         )
@@ -104,7 +104,7 @@ class ParameterTests(unittest.TestCase):
 
     def test_structural_copy_parameter_is_also_inspected(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora(
+            migrate.migrate_aura(
                 "def inspect(value: Option[(int32, bool)]):\n"
             ),
             "def inspect(value: Option[(int32, bool)]):\n",
@@ -114,42 +114,42 @@ class ParameterTests(unittest.TestCase):
         original = (
             "def inspect(a: own int32, b: mut int32, c: String, d: T):\n"
         )
-        self.assertEqual(migrate.migrate_aurora(original), original)
+        self.assertEqual(migrate.migrate_aura(original), original)
 
     def test_shared_parameter_loses_the_keyword(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("def f(value: borrow String):\n"),
+            migrate.migrate_aura("def f(value: borrow String):\n"),
             "def f(value: String):\n",
         )
 
     def test_mutable_parameter_becomes_mut(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("def f(value: borrow mut String):\n"),
+            migrate.migrate_aura("def f(value: borrow mut String):\n"),
             "def f(value: mut String):\n",
         )
 
     def test_mutable_tuple_parameter_keeps_its_type(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("def f(value: borrow mut (String,)):\n"),
+            migrate.migrate_aura("def f(value: borrow mut (String,)):\n"),
             "def f(value: mut (String,)):\n",
         )
 
     def test_labelled_parameter_drops_the_retired_label(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("def f(value: borrow[src] String):\n"),
+            migrate.migrate_aura("def f(value: borrow[src] String):\n"),
             "def f(value: String):\n",
         )
 
     def test_owning_parameter_is_unchanged(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("def f(value: own String):\n"),
+            migrate.migrate_aura("def f(value: own String):\n"),
             "def f(value: own String):\n",
         )
 
 
 class ReturnAnnotationTests(unittest.TestCase):
     def test_labelled_borrowed_return_becomes_an_ordinary_return(self) -> None:
-        result = migrate.analyze_aurora(
+        result = migrate.analyze_aura(
             "def score_ref(user: borrow User) -> borrow[user] int32:\n",
             path="score.au",
         )
@@ -159,7 +159,7 @@ class ReturnAnnotationTests(unittest.TestCase):
 
     def test_noncopy_borrowed_return_is_not_blindly_rewritten(self) -> None:
         original = "def pick(a: borrow String) -> borrow String:\n"
-        result = migrate.analyze_aurora(original, path="pick.au")
+        result = migrate.analyze_aura(original, path="pick.au")
         self.assertEqual(result.text, "def pick(a: String) -> borrow String:\n")
         self.assertEqual(len(result.findings), 1)
         self.assertEqual(result.findings[0]["kind"], "borrowed_return_redesign")
@@ -167,7 +167,7 @@ class ReturnAnnotationTests(unittest.TestCase):
         self.assertIn("owned result, clone, index, handle, or owner operation", result.findings[0]["message"])
 
     def test_unresolved_borrowed_return_requires_review(self) -> None:
-        result = migrate.analyze_aurora(
+        result = migrate.analyze_aura(
             "def pick[T](a: borrow T) -> borrow T:\n",
             path="pick.au",
         )
@@ -178,19 +178,19 @@ class ReturnAnnotationTests(unittest.TestCase):
 class LoopTests(unittest.TestCase):
     def test_shared_iteration_becomes_bare(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("for value in borrow values:\n"),
+            migrate.migrate_aura("for value in borrow values:\n"),
             "for value in values:\n",
         )
 
     def test_mutable_iteration_becomes_mut(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("for value in borrow mut values:\n"),
+            migrate.migrate_aura("for value in borrow mut values:\n"),
             "for value in mut values:\n",
         )
 
     def test_owning_iteration_is_unchanged(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("for value in own values:\n"),
+            migrate.migrate_aura("for value in own values:\n"),
             "for value in own values:\n",
         )
 
@@ -198,11 +198,11 @@ class LoopTests(unittest.TestCase):
         # ADR-0022's additional ruling: range yields copy values, so `mut` and
         # `own` are rejected rather than preserved as no-ops.
         self.assertEqual(
-            migrate.migrate_aurora("for index in mut range(0, 3):\n"),
+            migrate.migrate_aura("for index in mut range(0, 3):\n"),
             "for index in range(0, 3):\n",
         )
         self.assertEqual(
-            migrate.migrate_aurora("for index in own range(0, 3):\n"),
+            migrate.migrate_aura("for index in own range(0, 3):\n"),
             "for index in range(0, 3):\n",
         )
 
@@ -210,13 +210,13 @@ class LoopTests(unittest.TestCase):
 class MatchTests(unittest.TestCase):
     def test_shared_match_becomes_bare(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("match borrow value:\n"),
+            migrate.migrate_aura("match borrow value:\n"),
             "match value:\n",
         )
 
     def test_mutable_match_becomes_match_mut(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("match borrow mut value:\n"),
+            migrate.migrate_aura("match borrow mut value:\n"),
             "match mut value:\n",
         )
 
@@ -231,7 +231,7 @@ class MatchTests(unittest.TestCase):
                         pass
             """
         )
-        self.assertIn("match own holder:", migrate.migrate_aurora(original))
+        self.assertIn("match own holder:", migrate.migrate_aura(original))
 
     def test_bare_match_over_a_temporary_stays_bare_and_is_flagged(self) -> None:
         # The call result has no surviving owner, but nested payload transfer
@@ -246,7 +246,7 @@ class MatchTests(unittest.TestCase):
                         pass
             """
         )
-        result = migrate.analyze_aurora(original, path="temporary.au")
+        result = migrate.analyze_aura(original, path="temporary.au")
         self.assertIn("match compute():", result.text)
         self.assertNotIn("match own", result.text)
         self.assertEqual(result.findings[0]["kind"], "bare_match")
@@ -262,7 +262,7 @@ class MatchTests(unittest.TestCase):
                     print("none")
             """
         )
-        self.assertIn("match own holder:", migrate.migrate_aurora(original))
+        self.assertIn("match own holder:", migrate.migrate_aura(original))
 
     def test_every_bare_place_match_is_recorded_per_occurrence(self) -> None:
         original = source(
@@ -281,7 +281,7 @@ class MatchTests(unittest.TestCase):
                     pass
             """
         )
-        result = migrate.analyze_aurora(original, path="matches.au")
+        result = migrate.analyze_aura(original, path="matches.au")
         self.assertIn("match own holder:", result.text)
         self.assertIn("match own holder.value:", result.text)
         self.assertIn("match own items[index]:", result.text)
@@ -314,7 +314,7 @@ class MatchTests(unittest.TestCase):
                     case Option.None: 0
             """
         )
-        result = migrate.analyze_aurora(original, path="expressions.au")
+        result = migrate.analyze_aura(original, path="expressions.au")
         self.assertIn("return match own value:", result.text)
         self.assertIn("return match compute():", result.text)
         self.assertEqual(
@@ -343,7 +343,7 @@ class MatchTests(unittest.TestCase):
                         pass
             """
         )
-        migrated = migrate.migrate_aurora(original)
+        migrated = migrate.migrate_aura(original)
         self.assertIn("match holder:", migrated)
         self.assertNotIn("match own", migrated)
 
@@ -358,13 +358,13 @@ class MatchTests(unittest.TestCase):
                         pass
             """
         )
-        migrated = migrate.migrate_aurora(original)
+        migrated = migrate.migrate_aura(original)
         self.assertIn("match mut holder:", migrated)
         self.assertNotIn("match own", migrated)
 
     def test_match_own_is_unchanged(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora("match own value:\n"),
+            migrate.migrate_aura("match own value:\n"),
             "match own value:\n",
         )
 
@@ -404,18 +404,18 @@ class IdempotenceTests(unittest.TestCase):
     )
 
     def test_second_application_is_a_no_op(self) -> None:
-        once = migrate.migrate_aurora(self.CORPUS)
-        twice = migrate.migrate_aurora(once)
+        once = migrate.migrate_aura(self.CORPUS)
+        twice = migrate.migrate_aura(once)
         self.assertEqual(once, twice)
 
     def test_migrated_source_has_no_borrow_keyword_left(self) -> None:
-        migrated = migrate.migrate_aurora(self.CORPUS)
+        migrated = migrate.migrate_aura(self.CORPUS)
         self.assertEqual(migrate.count_borrow_keywords(migrated), 0)
 
     def test_migration_is_deterministic(self) -> None:
         self.assertEqual(
-            migrate.migrate_aurora(self.CORPUS),
-            migrate.migrate_aurora(self.CORPUS),
+            migrate.migrate_aura(self.CORPUS),
+            migrate.migrate_aura(self.CORPUS),
         )
 
 
@@ -423,7 +423,7 @@ class MarkdownTests(unittest.TestCase):
     def test_only_fenced_and_inline_code_is_migrated(self) -> None:
         original = source(
             """
-            Aurora used to spell a shared loan `borrow T`. Borrowing is still
+            Aura used to spell a shared loan `borrow T`. Borrowing is still
             the word we use when teaching it.
 
             ```python
@@ -596,8 +596,8 @@ class RetiredSyntaxGateTests(unittest.TestCase):
         path.write_text(source(text))
         return path
 
-    def test_clean_aurora_and_explanatory_borrow_words_pass(self) -> None:
-        aurora = self.write(
+    def test_clean_aura_and_explanatory_borrow_words_pass(self) -> None:
+        aura = self.write(
             "example.au",
             '''
             # A shared borrow does not consume the value.
@@ -614,24 +614,24 @@ class RetiredSyntaxGateTests(unittest.TestCase):
             """,
         )
         self.assertEqual(
-            migrate.find_retired_syntax(self.root, [aurora, manual], {}),
+            migrate.find_retired_syntax(self.root, [aura, manual], {}),
             [],
         )
 
-    def test_retired_keyword_in_aurora_source_fails(self) -> None:
-        aurora = self.write(
+    def test_retired_keyword_in_aura_source_fails(self) -> None:
+        aura = self.write(
             "example.au",
             """
             def read(value: borrow String):
                 print(value)
             """,
         )
-        findings = migrate.find_retired_syntax(self.root, [aurora], {})
+        findings = migrate.find_retired_syntax(self.root, [aura], {})
         self.assertEqual(len(findings), 1)
         self.assertIn("example.au:1", findings[0])
         self.assertIn("retired `borrow` keyword", findings[0])
 
-    def test_aurora_retirement_fixture_requires_an_exact_counted_exemption(self) -> None:
+    def test_aura_retirement_fixture_requires_an_exact_counted_exemption(self) -> None:
         fixture = self.write(
             "fixtures/retired.au",
             """

@@ -1,0 +1,15 @@
+def print_bool(value: bool):
+    match own value:
+        case true:
+            print("true")
+        case false:
+            print("false")
+
+def main() -> int32:
+    text = "  aura agents  "
+    print(text.len())
+    print_bool(text.contains("aura"))
+    print_bool(text.starts_with("  au"))
+    print_bool(text.ends_with("ts  "))
+    print(text.trim())
+    return 0

@@ -1,0 +1,5 @@
+error[AU2999]: cannot index non-Array, vector, or map value `String`
+ --> crates/aura-compiler/tests/fixtures/check-fail/string_integer_indexing_unavailable.au:3:11
+  |
+3 |     print(text[0])
+  |           ^

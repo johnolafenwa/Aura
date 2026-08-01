@@ -1,5 +1,0 @@
-error[AU2002]: `wrapping_add` expects `int32`, found `int64`
- --> crates/aurora-compiler/tests/fixtures/check-fail/integer_arithmetic_mode_requires_same_dtype.au:4:29
-  |
-4 |     print(left.wrapping_add(rhs=right))
-  |                             ^

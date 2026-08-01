@@ -1,6 +1,6 @@
 # Bindings And Types
 
-In Aurora, every value has a type known at compile time. Bindings are introduced with assignment -- no `let` keyword is needed.
+In Aura, every value has a type known at compile time. Bindings are introduced with assignment -- no `let` keyword is needed.
 
 ## Inferred Bindings
 
@@ -53,7 +53,7 @@ Reusing an existing name updates that binding. The current compiler does not cre
 
 ## `None` Is The Unit Type And Value
 
-Aurora uses `None` as both the unit type and the sole unit value:
+Aura uses `None` as both the unit type and the sole unit value:
 
 ```python
 status: None = None
@@ -63,7 +63,7 @@ Functions that omit a return type annotation implicitly return `None`. You will 
 
 ## Builtin Scalar Types
 
-Aurora has a rich set of numeric types. If you are not sure which to use, start with `int` for integers and `float64` for decimals:
+Aura has a rich set of numeric types. If you are not sure which to use, start with `int` for integers and `float64` for decimals:
 
 | Type | Description | When to use |
 |------|-------------|-------------|
@@ -99,7 +99,7 @@ That context applies to the literal expression itself, not to a binding created 
 
 ## Builtin Container Types
 
-Aurora provides three owned collection types and several runtime types:
+Aura provides three owned collection types and several runtime types:
 
 | Type | Description |
 |------|-------------|
@@ -204,7 +204,7 @@ copy = values[:]      # an independent Vec
 
 Every written endpoint is exactly `int32`, negatives normalize once, and both
 effective bounds must be in `0..=len`. A start greater than end is also an
-`AU4003` runtime error. Aurora does not copy Python's clamping or
+`AU4003` runtime error. Aura does not copy Python's clamping or
 reversed-range-as-empty behavior. Slicing copies Copy elements and clones
 clone-safe non-Copy elements; it never creates a view.
 
@@ -287,7 +287,7 @@ For integer types, the runtime enforces the annotated width. A binding like `val
 Create a map with a literal:
 
 ```python
-mut counts = {"aurora": 1, "codex": 2}
+mut counts = {"aura": 1, "codex": 2}
 ```
 
 Or with the explicit empty constructor:
@@ -306,14 +306,14 @@ Maps support indexed reads when the value type is copy, and indexed writes for
 all value types:
 
 ```python
-counts["aurora"] = 5
-print(counts["aurora"])
+counts["aura"] = 5
+print(counts["aura"])
 ```
 
 Map lookups work inside larger expressions including f-strings:
 
 ```python
-print(f"value: {counts['aurora']}")
+print(f"value: {counts['aura']}")
 ```
 
 For a non-copy value type, direct `map[key]` is rejected rather than performing
@@ -387,7 +387,7 @@ names = ["Ada", "Grace"]
 names_copy = [name.clone() for name in names]
 ```
 
-Aurora does not silently clone. Queue is the existing exception: a bare Queue
+Aura does not silently clone. Queue is the existing exception: a bare Queue
 clause receives each item already owned, so that item may move directly into
 the result. The result collection is always owned and eager.
 

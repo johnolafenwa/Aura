@@ -1,10 +1,10 @@
 # Error Propagation
 
-When functions return `Result[T, E]`, chaining multiple fallible operations with `match` can get deeply nested. Aurora provides `try expr` to flatten this pattern.
+When functions return `Result[T, E]`, chaining multiple fallible operations with `match` can get deeply nested. Aura provides `try expr` to flatten this pattern.
 
 ## `try expr`
 
-`try expr` evaluates the expression, which must produce a `Result[T, E]`. If the result is `Ok(value)`, `try` unwraps it and the expression evaluates to the inner value. If the result is `Err(e)`, Aurora returns that error from the current function immediately.
+`try expr` evaluates the expression, which must produce a `Result[T, E]`. If the result is `Ok(value)`, `try` unwraps it and the expression evaluates to the inner value. If the result is `Err(e)`, Aura returns that error from the current function immediately.
 
 ```python
 def divide(a: int32, b: int32) -> Result[int32, String]:

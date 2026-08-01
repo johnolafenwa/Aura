@@ -1,7 +1,0 @@
-error[AU3002]: `select` consumes every non-repeatable Task source at call entry, but `task` is available only through shared access
- --> crates/aurora-compiler/tests/fixtures/check-fail/select_shared_nonrepeatable_task.au:2:18
-  |
-2 |     print(select(task))
-  |                  ^
-  = related crates/aurora-compiler/tests/fixtures/check-fail/select_shared_nonrepeatable_task.au:1:13: parameter `task` is borrowed here
-  = help: pass the Task through owned access; losing observation rights are deliberately abandoned and cannot be cloned

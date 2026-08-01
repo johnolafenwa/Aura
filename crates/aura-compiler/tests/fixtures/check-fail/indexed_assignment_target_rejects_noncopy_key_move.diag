@@ -1,0 +1,7 @@
+error[AU3002]: cannot consume `node` while `node.table` remains mutably borrowed by the indexed assignment target
+ --> crates/aura-compiler/tests/fixtures/check-fail/indexed_assignment_target_rejects_noncopy_key_move.au:6:16
+  |
+6 |     node.table[node] = 1
+  |                ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/indexed_assignment_target_rejects_noncopy_key_move.au:6:5: mutable borrow for the indexed assignment target begins here
+  = help: call `.clone()` before the expression when an independent value is intended, or perform the consumption in a separate statement first

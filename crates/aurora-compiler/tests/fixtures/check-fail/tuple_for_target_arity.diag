@@ -1,5 +1,0 @@
-error[AU2999]: tuple binding has 2 elements but the value has 3
- --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_for_target_arity.au:3:9
-  |
-3 |     for left, right in rows:
-  |         ^

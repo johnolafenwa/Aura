@@ -1,5 +1,0 @@
-error[AU2002]: argument type mismatch for function `identity`: conflicting inferred types for `T`: `int32` and `int64`
- --> crates/aurora-compiler/tests/fixtures/check-fail/generic_expected_int32_does_not_narrow_variable.au:6:32
-  |
-6 |     narrowed: int32 = identity(value=defaulted)
-  |                                ^

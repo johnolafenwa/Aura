@@ -2,7 +2,7 @@
 import modules.nested.deep.utils
 
 def main() -> int32:
-    msg = modules.nested.deep.utils.greet(name="Aurora")
+    msg = modules.nested.deep.utils.greet(name="Aura")
     print(msg)
     sq = modules.nested.deep.utils.square(n=7)
     print(sq)

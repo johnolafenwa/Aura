@@ -1,0 +1,6 @@
+def display(text: String):
+    print(text)
+
+def main():
+    text = "Aura"
+    display(mut text)

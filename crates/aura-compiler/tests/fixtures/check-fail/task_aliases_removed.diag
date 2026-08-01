@@ -1,0 +1,5 @@
+error[AU2999]: unsupported method call `join` on `Task[int32]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/task_aliases_removed.au:7:20
+  |
+7 |         print(task.join())
+  |                    ^

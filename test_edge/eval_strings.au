@@ -2,6 +2,6 @@ def greet(name: str) -> String:
     return f"Hello, {name}"
 
 def main() -> int32:
-    s = greet("Aurora")
+    s = greet("Aura")
     print(s)
     return 0

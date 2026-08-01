@@ -1,6 +1,0 @@
-error[AU4004]: array division has a zero divisor at flat index 0
- --> crates/aurora-compiler/tests/fixtures/run-fail/array_division_by_zero.au:3:11
-  |
-3 |     print(values / 0.0)
-  |           ^
-  = note: Aurora call chain (innermost first): main at 1:1

@@ -25,7 +25,7 @@ fn git_path(repository: &Path, name: &str) -> Option<PathBuf> {
 }
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=AURORA_BUILD_COMMIT");
+    println!("cargo:rerun-if-env-changed=AURA_BUILD_COMMIT");
 
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let repository = manifest.join("../..");
@@ -41,7 +41,7 @@ fn main() {
         }
     }
 
-    let commit = env::var("AURORA_BUILD_COMMIT").ok().or_else(|| {
+    let commit = env::var("AURA_BUILD_COMMIT").ok().or_else(|| {
         git_output(
             &repository,
             &["rev-parse", "--verify", "--short=12", "HEAD^{commit}"],
@@ -49,13 +49,13 @@ fn main() {
     });
     let commit = commit.unwrap_or_else(|| {
         panic!(
-            "Aurora builds require a Git commit identity; build in a Git checkout or set AURORA_BUILD_COMMIT"
+            "Aura builds require a Git commit identity; build in a Git checkout or set AURA_BUILD_COMMIT"
         )
     });
     let commit = commit.trim();
     assert!(
         commit.len() >= 12 && commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
-        "AURORA_BUILD_COMMIT must contain at least 12 hexadecimal digits"
+        "AURA_BUILD_COMMIT must contain at least 12 hexadecimal digits"
     );
-    println!("cargo:rustc-env=AURORA_BUILD_COMMIT={}", &commit[..12]);
+    println!("cargo:rustc-env=AURA_BUILD_COMMIT={}", &commit[..12]);
 }

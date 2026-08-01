@@ -60,7 +60,7 @@ class MaintainedSourcePolicyTests(unittest.TestCase):
 
 
 class BorrowOccurrenceTests(unittest.TestCase):
-    def test_aurora_occurrences_are_token_aware_and_have_locations(self) -> None:
+    def test_aura_occurrences_are_token_aware_and_have_locations(self) -> None:
         source = """\
 def inspect(value: borrow String):
     # borrow mut String
@@ -68,7 +68,7 @@ def inspect(value: borrow String):
     borrowed = value
 """
         records = inventory.borrow_occurrence_records(
-            PurePosixPath("example.au"), source, "aurora"
+            PurePosixPath("example.au"), source, "aura"
         )
         self.assertEqual(
             [(record["line"], record["column"]) for record in records],
@@ -81,7 +81,7 @@ Borrow is useful prose.
 
 `borrow self`
 
-```aurora
+```aura
 def rename(borrow mut self):
     pass
 ```

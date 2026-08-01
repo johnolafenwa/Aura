@@ -1,0 +1,6 @@
+error[AU2002]: `len(...)` expects a value with a `len()` member, found `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/len_requires_a_len_member.au:2:15
+  |
+2 |     print(len(1))
+  |               ^
+  = help: `len` delegates to the value's own `len()`; `String`, `Vec[T]`, `Map[K, V]`, and `Set[T]` provide it

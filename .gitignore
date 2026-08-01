@@ -5,9 +5,9 @@ node_modules/
 .playwright-cli/
 
 # Historical evaluation output belongs in fixtures or external archives, not Git.
-eval_aurora/
+eval_aura/
 /release/
-/aurora-*.tar.gz
+/aura-*.tar.gz
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -61,8 +61,8 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
-tools/aurora-language-server/coverage/tmp/
-tools/aurora-language-server/coverage/coverage-summary.json
+tools/aura-language-server/coverage/tmp/
+tools/aura-language-server/coverage/coverage-summary.json
 
 # Translations
 *.mo
@@ -85,7 +85,7 @@ instance/
 docs/_build/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
-tools/aurora-language-server/coverage/coverage-final.json
+tools/aura-language-server/coverage/coverage-final.json
 
 # PyBuilder
 .pybuilder/

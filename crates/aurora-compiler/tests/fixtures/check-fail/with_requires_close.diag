@@ -1,5 +1,0 @@
-error[AU3002]: class `PlainValue` cannot be used with `with` because it does not define `close(mut self)`
- --> crates/aurora-compiler/tests/fixtures/check-fail/with_requires_close.au:5:5
-  |
-5 |     with item = PlainValue(value=1):
-  |     ^

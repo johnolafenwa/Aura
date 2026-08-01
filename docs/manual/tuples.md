@@ -1,6 +1,6 @@
 # Tuples
 
-Tuples are fixed-size, heterogeneous product values. Aurora's minimal tuple
+Tuples are fixed-size, heterogeneous product values. Aura's minimal tuple
 surface is intended for returning, passing, unpacking, and pattern-matching a
 known number of values. Tuples are not variable-size collections.
 
@@ -36,7 +36,7 @@ Tuple value expressions are always parenthesized. `(value)` remains grouping,
 while `(value,)` is a singleton tuple. `()` is not a tuple value. A
 multi-element tuple has no trailing comma:
 
-```aurora
+```aura
 pair = ("north", 7)
 singleton = (true,)
 nested = (pair, (2, 3))
@@ -50,7 +50,7 @@ are parenthesized.
 
 A tuple type records one exact element type at each position:
 
-```aurora
+```aura
 def location() -> (String, int64):
     return ("north", 7)
 
@@ -66,7 +66,7 @@ Tuple value `==` and `!=` require both operands to have the same static tuple
 type. Equality then compares corresponding element values recursively.
 When one operand is a tuple literal and the other has a known tuple type, that
 exact type contextually types the literal recursively; this rule is symmetric.
-`<`, `<=`, `>`, and `>=` are not defined for tuples; Aurora does not infer a
+`<`, `<=`, `>`, and `>=` are not defined for tuples; Aura does not infer a
 lexicographic ordering.
 
 The ordinary optional-type suffix applies to a complete tuple type:
@@ -123,19 +123,19 @@ link, and evaluates `last` only when that link is true. Each evaluated operand,
 including `middle`, is evaluated once. Tuple ordering remains a static error.
 
 Tuple rendering uses parentheses, `, ` between elements, and one final comma
-for a singleton: `(1, 2)` and `(1,)`. Each element uses its ordinary Aurora
+for a singleton: `(1, 2)` and `(1,)`. Each element uses its ordinary Aura
 rendering, so a contained `String` is not quoted. `print`, f-string
 interpolation, and backend diagnostics use this same format. Rendering is not
 part of tuple equality, and it does not define tuple ordering.
 
-```aurora
+```aura
 def make_record() -> (String, int64):
-    return ("Aurora", 7)
+    return ("Aura", 7)
 
 def main():
     record = make_record()
-    assert record == ("Aurora", 7)
-    assert record != ("Aurora", 8)
+    assert record == ("Aura", 7)
+    assert record != ("Aura", 8)
     name, version = record
     print(name)
     print(version)
@@ -157,7 +157,7 @@ def main():
 ```
 
 ```text
-Aurora
+Aura
 7
 20
 ready:2
@@ -174,7 +174,7 @@ or move rule for the tuple as a whole.
 
 Unpacking a copy tuple copies its elements and leaves the source usable.
 Unpacking a non-copy tuple consumes the whole source exactly once and gives
-owned leaf bindings. Aurora does not turn positional fields into independently
+owned leaf bindings. Aura does not turn positional fields into independently
 reusable partial-move places; any later source use is diagnosed as use after
 move.
 
@@ -190,7 +190,7 @@ yielded element:
 - `own` iteration consumes the collection and gives owned leaves
 - bare Queue iteration receives an owned tuple item and gives owned leaves
 
-Mutable-borrow iteration with a tuple target is rejected. Aurora does not
+Mutable-borrow iteration with a tuple target is rejected. Aura does not
 reconstruct and write a recursively unpacked tuple back into a collection
 element.
 
@@ -223,7 +223,7 @@ diagnostics.
 
 ## Limits And Implementation-Defined Behavior
 
-Aurora 0.2 has no empty tuple, multi-element trailing tuple comma, tuple
+Aura 0.2 has no empty tuple, multi-element trailing tuple comma, tuple
 iteration, tuple methods, tuple ordering, named tuple elements, rest/star
 unpacking, mutable tuple-target writeback, tuple slicing, or dynamic tuple
 indexing. A tuple is not implicitly converted to or from `Vec`.

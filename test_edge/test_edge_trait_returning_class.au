@@ -22,7 +22,7 @@ def show_location[T: Locatable](item: T):
     print(p.y)
 
 def main() -> int32:
-    c = City(name="Aurora", px=10, py=20)
+    c = City(name="Aura", px=10, py=20)
     show_location(item=c)
 
     # Also direct call

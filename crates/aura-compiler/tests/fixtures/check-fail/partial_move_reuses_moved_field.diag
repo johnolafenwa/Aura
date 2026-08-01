@@ -1,0 +1,7 @@
+error[AU3001]: use of moved field `first` from `pair`
+ --> crates/aura-compiler/tests/fixtures/check-fail/partial_move_reuses_moved_field.au:9:16
+  |
+9 |     print(pair.first)
+  |                ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/partial_move_reuses_moved_field.au:7:18: field moved here
+  = help: use shared access to the field when ownership is not needed, or call `.clone()` before moving it when an independent value is required

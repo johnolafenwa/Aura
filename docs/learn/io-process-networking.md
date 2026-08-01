@@ -1,6 +1,6 @@
 # Talking To The World
 
-Programs eventually need to speak to something outside themselves — a file, a subprocess, a socket, a supervised service. Aurora exposes that surface through four built-in modules: `io` for standard streams, `fs` for files and directories, `process` for subprocesses and supervisors, and `net` for sockets, HTTP, and WebSockets.
+Programs eventually need to speak to something outside themselves — a file, a subprocess, a socket, a supervised service. Aura exposes that surface through four built-in modules: `io` for standard streams, `fs` for files and directories, `process` for subprocesses and supervisors, and `net` for sockets, HTTP, and WebSockets.
 
 The APIs in these modules share a shape. Operations that can fail return `Result`. Resources cleaned up by the runtime are meant to live inside a `with` block. Waits that might block indefinitely accept a `timeout` argument and tell the caller explicitly when that timeout fires. Everything works together with `match`, `try`, `with`, and `TaskGroup`.
 
@@ -21,7 +21,7 @@ match fs.read_to_string(path):
         print(error)
 ```
 
-One-shot `fs.read_to_string` and `fs.read_bytes` are capped at 256 MiB. The same cap applies to the remaining contents read by `fs.File.read_all()` and `fs.File.read_bytes()`: an accidental "read the whole file" against a log that turned out to be gigabytes should fail loudly rather than allocate without bound. Larger files need a host helper or pre-splitting because Aurora 0.2 has no incremental file-read member.
+One-shot `fs.read_to_string` and `fs.read_bytes` are capped at 256 MiB. The same cap applies to the remaining contents read by `fs.File.read_all()` and `fs.File.read_bytes()`: an accidental "read the whole file" against a log that turned out to be gigabytes should fail loudly rather than allocate without bound. Larger files need a host helper or pre-splitting because Aura 0.2 has no incremental file-read member.
 
 ```python
 import fs
@@ -68,7 +68,7 @@ match io.read_line():
 ```python
 import process
 
-completed = try process.run(command=["/bin/echo", "aurora process"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s, group=true)
+completed = try process.run(command=["/bin/echo", "aura process"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s, group=true)
 
 try completed.check()
 print(completed.stdout().trim())
@@ -162,15 +162,15 @@ with listener = try net.listen("127.0.0.1:0"):
 ```
 
 Hostname lookup and blocking connect syscalls are sent to the generic
-blocking-I/O pool, so they do not freeze sibling Aurora tasks. The `1s`
+blocking-I/O pool, so they do not freeze sibling Aura tasks. The `1s`
 timeout above is a single budget for queue admission, DNS, and all candidate
 addresses rather than a fresh second for every address. Task-group
 cancellation stops waiting promptly. Before pool acceptance it prevents
 submission; after acceptance, the host resolver cannot generally be
 interrupted and its eventual result is discarded.
 
-Operators may set `AURORA_BLOCKING_WORKERS` to an exact positive worker count
-and `AURORA_BLOCKING_QUEUE_CAPACITY` to a positive bound on accepted pending
+Operators may set `AURA_BLOCKING_WORKERS` to an exact positive worker count
+and `AURA_BLOCKING_QUEUE_CAPACITY` to a positive bound on accepted pending
 jobs. The absent worker setting derives `2..=8` workers from host parallelism,
 with fallback `4`; the absent queue setting is unbounded. Full-queue admission
 is FIFO and scheduler-aware. A queue bound limits accepted pending backlog, not
@@ -222,7 +222,7 @@ WebSocket APIs follow the same resource style: create or accept a socket, send a
 
 ## The Common Shape
 
-Most system-facing Aurora code has the same outline:
+Most system-facing Aura code has the same outline:
 
 ```python
 import fs

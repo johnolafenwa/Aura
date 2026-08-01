@@ -6,7 +6,7 @@ It is intentionally implementation-facing. Use the earlier chapters to learn the
 
 ## Top-Level Items
 
-Aurora currently supports these top-level declarations:
+Aura currently supports these top-level declarations:
 
 - `public class`
 - `public enum`
@@ -117,15 +117,15 @@ These built-in type names are reserved and cannot be reused for user-defined cla
 
 ## Packages And Workspaces
 
-Aurora now supports a first local package-system milestone:
+Aura now supports a first local package-system milestone:
 
-- `Aurora.toml` package manifests with `[package]`
+- `Aura.toml` package manifests with `[package]`
 - package source roots under `src/`
 - local path dependencies under `[dependencies]`
 - git dependencies under `[dependencies]`
 - workspace roots with `[workspace] members = [...]`
 - package-aware `check`, `run`, `build`, `analyze`, and `complete`
-- a local `Aurora.lock` written at the package root or workspace root
+- a local `Aura.lock` written at the package root or workspace root
 - FFI v0 authorization through `[package] allow_ffi = true`, with every
   reachable FFI-enabled dependency named exactly in the root package's
   `[ffi] dependencies` report
@@ -156,7 +156,7 @@ Current package-system limits:
 - import roots for dependencies are package-name-prefixed, such as `import util.math`
 - version-only registry dependencies like `util = "0.1.0"` are rejected with a clear diagnostic
 - git dependencies support `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
-- git dependencies are materialized from a local cache and pinned by exact revision in `Aurora.lock`
+- git dependencies are materialized from a local cache and pinned by exact revision in `Aura.lock`
 - `aura deps update` refreshes all branch/tag/default-main git dependencies for the current package or workspace
 - `aura deps update util` refreshes just the named git dependency
 - there are still no registry or publish/install flows yet
@@ -173,7 +173,7 @@ and explicit library loading are not implemented. See
 
 ## Ownership And Borrowing
 
-Aurora uses an ownership model with no garbage collector. See [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for the full tutorial.
+Aura uses an ownership model with no garbage collector. See [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for the full tutorial.
 
 Copy types (all numeric types, `bool`, `Duration`, and `Queue[T]`) are
 duplicated on assignment. `Task[T]` is copyable only when `T` is copyable, a
@@ -202,9 +202,8 @@ capability:
 - `match mut value:` -- mutable pattern matching with writeback
 - `match own value:` -- consuming pattern matching
 
-The `borrow` keyword is retired and reserved. Writing it produces a diagnostic
-naming the exact replacement. For example, a retired `borrow mut T` parameter
-receives guidance to write `mut T`.
+`borrow` is reserved and is not accepted capability syntax. A diagnostic names
+the accepted bare, `mut`, or `own` spelling for the position where it appears.
 
 Mutable arguments must be mutable places. Overlapping `mut` arguments with
 other shared access to the same value are rejected. Non-copy fields cannot be
@@ -264,7 +263,7 @@ The current compiler supports these expression forms:
 - integer `.to_float() -> float64`, which uses nearest-even conversion and may round
 - shortest-roundtrip `float32`/`float64` rendering through `print`, preserving integral `.0` and signed zero
 - list literals such as `[1, 2, 3]`
-- map literals such as `{"aurora": 1}`
+- map literals such as `{"aura": 1}`
 - set literals such as `{1, 2, 3}`
 - eager owned list, set, and map comprehensions such as
   `[value * 2 for value in values if value > 0]`; nested clauses are
@@ -491,7 +490,7 @@ Current builtin I/O, networking, and process surface:
 - `fs.File.write_bytes(...)`
 - `fs.File.flush()`
 - `fs.File.close()`
-- one-shot and `fs.File` whole-file reads are capped at 256 MiB of remaining content in both `aura run` and built binaries; Aurora 0.2 has no chunked file-read API
+- one-shot and `fs.File` whole-file reads are capped at 256 MiB of remaining content in both `aura run` and built binaries; Aura 0.2 has no chunked file-read API
 - process capture/pipe reads and TCP, Unix, and TLS whole or bounded reads are
   capped at 64 MiB; TLS certificate, private-key, and CA-file loading uses the
   same independent 64 MiB ceiling
@@ -692,7 +691,7 @@ Current builtin member methods include:
 Import `random` for two deliberately separate surfaces. A mutable
 `random.Rng(seed)` is a deterministic, move-only xoshiro256** stream with
 half-open `next_int`, `[0.0, 1.0)` `next_float`, and in-place generic Vec
-shuffle. Seed mapping and sequences are stable throughout Aurora 0.2.x and
+shuffle. Seed mapping and sequences are stable throughout Aura 0.2.x and
 identical through MIR and direct execution.
 
 `random.secure_int(lo, hi)` and `random.secure_bytes(n)` use only the host
@@ -751,10 +750,10 @@ The current bootstrap concurrency surface includes:
 - signed i128-nanosecond Duration values with `ms`, `s`, and `m` literals,
   integer constructors, checked arithmetic, conversions, and comparisons
 
-Aurora 0.2 executes task bodies on cooperative pinned scheduler workers on
+Aura 0.2 executes task bodies on cooperative pinned scheduler workers on
 both maintained backends. The default count is the available parallelism
 reported by the host; the
-provisional `AURORA_WORKERS=<positive integer>` override selects an explicit
+provisional `AURA_WORKERS=<positive integer>` override selects an explicit
 count. Each child receives a stable assignment at spawn time. Coroutine stacks
 never migrate, work is not stolen, and `yield_now()` yields only to runnable
 work on the local worker.
@@ -768,7 +767,7 @@ request a guarded 512 KiB coroutine stack. The two explicit stack-start
 methods accept an exact `int64` byte request from 256 KiB through 64 MiB
 inclusive, reject out-of-range values without clamping, and page-round
 accepted requests. The 256 KiB lower bound is for measured shallow tasks, not
-the generally safe default. The complete compiled Aurora HTTP example requires
+the generally safe default. The complete compiled Aura HTTP example requires
 the 512 KiB default; an isolated runtime round trip can use 256 KiB protocol
 callers because it excludes the compiled program's language-execution frames
 and keeps deep host protocol frames on service workers.
@@ -791,7 +790,7 @@ Queue and Task handle state is synchronized across workers. All other task
 captures and results remain owned `Transfer` data, preserving a share-nothing
 boundary. Cancellation and diagnostic context stay per task, while task
 scheduling, independent completion, and output order remain unspecified.
-Aurora exposes no worker-introspection API and promises neither work stealing
+Aura exposes no worker-introspection API and promises neither work stealing
 nor parallel speedup for every workload.
 
 Task results are repeatable only for copy `T`, `Queue[...]`, or recursively
@@ -819,7 +818,7 @@ Phase 5.10 report, three 10,000-sleeper runs peaked at 207,798,272,
 512 MiB bound. Standalone 1,000-timer controls passed with a 6 ms maximum arm
 span and 1 ms worst p99 overshoot.
 
-Aurora does not maintain a “100,000 tasks in 1.5 GiB” claim. Three clean runs
+Aura does not maintain a “100,000 tasks in 1.5 GiB” claim. Three clean runs
 of 100,000 sleepers plus 1,000 timers peaked at 1,170,735,104, 1,921,531,904,
 and 2,001,305,600 bytes; two exceeded the proposed limit while timer behavior
 remained stable at a 3 ms maximum arm span and 2 ms worst p99 overshoot.
@@ -838,9 +837,9 @@ listener binding use the generic blocking-I/O pool. Only subsequent PEM
 parsing and rustls construction use protocol workers for TLS assets.
 
 The generic pool accepts two process settings:
-`AURORA_BLOCKING_WORKERS=<positive integer>` selects an exact, unclamped worker
+`AURA_BLOCKING_WORKERS=<positive integer>` selects an exact, unclamped worker
 count, while the absent default derives `2..=8` workers from host parallelism
-with fallback `4`; `AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` bounds
+with fallback `4`; `AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` bounds
 accepted pending jobs only, while omission preserves the unbounded queue.
 Full-queue admission is FIFO and scheduler-aware. Expiry or cancellation before
 queue insertion prevents submission. Accepted work still runs once and has
@@ -863,7 +862,7 @@ Current collection notes:
   `sort_by` evaluates one shared key per element from left to right before
   mutating, so a key trap leaves the source unchanged
 - built-in Vec ordering covers all integer types, `float32`, `float64`, and
-  `Duration`; `String` has no built-in `Ord[String]` in Aurora 0.2, so preserve
+  `Duration`; `String` has no built-in `Ord[String]` in Aura 0.2, so preserve
   insertion order, use `sort_by` with an orderable key/index, or define a
   nominal application type with the required `Ord` behavior
 - `Vec.map(f)` and `Vec.filter(f)` are eager shared traversals that retain the
@@ -934,7 +933,7 @@ Current backend/tooling notes:
 
 - `build` accepts `--backend auto|direct`
 - `auto` is the default
-- `direct` now covers the full currently implemented Aurora language surface
+- `direct` now covers the full currently implemented Aura language surface
 - compiler-backed editor state is invalidated across open documents when imported files change
 - `file://` URI handling now preserves both Windows drive-letter paths and UNC workspaces
 
@@ -946,16 +945,14 @@ The current VS Code tooling is compiler-backed for:
 - go-to-definition
 - completions
 
-## Still Outside The Bootstrap Compiler
+## Current Boundaries
 
-Not yet implemented:
+The current compiler does not support:
 
 - non-numeric casts
 - direct recursive fields without `indirect`
-- first-class loan or view values; the current return syntax reserves no future
-  aliasing contract
-- method values, statement-bodied closures, mutable captures, and in-loan
-  captures
+- method values, statement-bodied closures, shared parameter captures, or
+  mutable captured state
 
 Current module/import limitations:
 
@@ -963,8 +960,8 @@ Current module/import limitations:
 - directly checking or analyzing a nested package file now infers the nearest package root that satisfies its imports
 - `import a.b` exposes module namespaces for calls like `a.b.func(...)`, `a.b.Type(...)`, and `a.b.Enum.Variant`
 - type annotations may use namespace-imported types such as `a.b.Type`
-- both maintained execution paths stop with a friendly recursion-depth diagnostic after 256 nested Aurora calls
-- MIR and direct-native runtime failures preserve matching typed Aurora call
+- both maintained execution paths stop with a friendly recursion-depth diagnostic after 256 nested Aura calls
+- MIR and direct-native runtime failures preserve matching typed Aura call
   frames and child-task ancestry; JSON tooling receives them as always-present
   `call_frames` and `task_ancestry` arrays
 - package manifests, local path dependencies, and git dependencies are now implemented
@@ -992,7 +989,7 @@ Current expression/ergonomics limitations:
   and cancellation propagate
 - queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all
   use the pinned-worker evented runtime scheduler
-- Aurora tasks are pinned-worker scheduler-backed lightweight tasks, and
+- Aura tasks are pinned-worker scheduler-backed lightweight tasks, and
   ordinary file I/O offloads through that runtime instead of pinning a task on
   a blocking host thread
 - Unix domain sockets require a Unix host at runtime

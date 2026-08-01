@@ -18,7 +18,7 @@ def describe_flag(flag: bool) -> String:
 
 def describe_name(name: String) -> String:
     match name:
-        case "aurora":
+        case "aura":
             return "repo"
         case _:
             return "other"
@@ -29,6 +29,6 @@ def main() -> int32:
     print(describe_number(3))
     print(describe_flag(true))
     print(describe_flag(false))
-    print(describe_name("aurora"))
+    print(describe_name("aura"))
     print(describe_name("codex"))
     return 0

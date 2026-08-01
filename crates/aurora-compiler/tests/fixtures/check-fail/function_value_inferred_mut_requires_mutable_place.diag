@@ -1,5 +1,0 @@
-error[AU2004]: argument for parameter `counter` in function value must be a mutable place
- --> crates/aurora-compiler/tests/fixtures/check-fail/function_value_inferred_mut_requires_mutable_place.au:10:10
-   |
-10 |     call(counter)
-   |          ^

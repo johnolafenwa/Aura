@@ -1,0 +1,6 @@
+error[AU4002]: duration overflow
+ --> crates/aura-compiler/tests/fixtures/run-fail/duration_subtraction_overflow.au:3:11
+  |
+3 |     print(minimum - (1ms // 1000000))
+  |           ^
+  = note: Aura call chain (innermost first): main at 1:1

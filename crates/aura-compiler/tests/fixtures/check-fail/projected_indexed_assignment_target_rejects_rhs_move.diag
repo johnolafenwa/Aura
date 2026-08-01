@@ -1,0 +1,7 @@
+error[AU3002]: cannot consume `node` while `node.children` remains mutably borrowed by the indexed assignment target
+ --> crates/aura-compiler/tests/fixtures/check-fail/projected_indexed_assignment_target_rejects_rhs_move.au:6:24
+  |
+6 |     node.children[0] = node
+  |                        ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/projected_indexed_assignment_target_rejects_rhs_move.au:6:5: mutable borrow for the indexed assignment target begins here
+  = help: call `.clone()` before the expression when an independent value is intended, or perform the consumption in a separate statement first

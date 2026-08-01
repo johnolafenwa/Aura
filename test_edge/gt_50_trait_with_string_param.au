@@ -1,5 +1,5 @@
 ## Test 50: Trait method that takes a String parameter
-## Expects: "greeting: hi aurora"
+## Expects: "greeting: hi aura"
 
 trait Formatter:
     def format(self, prefix: String) -> String
@@ -15,6 +15,6 @@ def render[T: Formatter](item: T, prefix: String):
     print(item.format(prefix))
 
 def main() -> int32:
-    n = Name(text="aurora")
+    n = Name(text="aura")
     render(item=n, prefix="greeting: hi")
     return 0

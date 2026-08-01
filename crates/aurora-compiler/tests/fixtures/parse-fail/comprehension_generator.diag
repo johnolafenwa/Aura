@@ -1,5 +1,0 @@
-error[AU2005]: generator expressions are unavailable; use an eager owned list comprehension or an explicit loop
- --> crates/aurora-compiler/tests/fixtures/parse-fail/comprehension_generator.au:3:24
-  |
-3 |     generated = (value for value in values)
-  |                        ^

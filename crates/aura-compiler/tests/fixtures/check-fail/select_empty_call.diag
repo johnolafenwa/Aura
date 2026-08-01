@@ -1,0 +1,5 @@
+error[AU2004]: `select` expects at least one positional source
+ --> crates/aura-compiler/tests/fixtures/check-fail/select_empty_call.au:2:11
+  |
+2 |     print(select())
+  |           ^

@@ -1,6 +1,0 @@
-error[AU4002]: array addition overflowed at flat index 0
- --> crates/aurora-compiler/tests/fixtures/run-fail/array_checked_overflow.au:3:24
-  |
-3 |     print(Array[int32].from_vec(values, [2]) + 1)
-  |                        ^
-  = note: Aurora call chain (innermost first): main at 1:1

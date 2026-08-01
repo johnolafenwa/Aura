@@ -1,0 +1,6 @@
+error[AU3009]: cannot use `Vec slice` because duplicating `Task[String]` would create a second observation right for non-repeatable task result `String`
+ --> crates/aura-compiler/tests/fixtures/check-fail/vec_slice_duplicates_nonrepeatable_task.au:2:19
+  |
+2 |     return values[:]
+  |                   ^
+  = help: transfer the unique Task handle instead; only copy-result tasks and synchronized Queue or repeatable Task results may have multiple observers

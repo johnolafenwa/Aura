@@ -1,5 +1,0 @@
-error[AU2004]: `to_bytes` expects 0 arguments, found 1
- --> crates/aurora-compiler/tests/fixtures/check-fail/string_to_bytes_named_encoding_reserved.au:3:15
-  |
-3 |     payload = text.to_bytes(encoding="utf-8")
-  |               ^

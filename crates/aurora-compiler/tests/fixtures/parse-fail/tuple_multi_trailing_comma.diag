@@ -1,5 +1,0 @@
-error[AU1101]: trailing commas are only allowed for singleton tuple literals
- --> crates/aurora-compiler/tests/fixtures/parse-fail/tuple_multi_trailing_comma.au:2:19
-  |
-2 |     value = (1, 2,)
-  |                   ^

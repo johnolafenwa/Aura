@@ -1,8 +1,8 @@
 # Results, Options, And `try`
 
-A program that runs for any length of time has to deal with two uncomfortable facts: values can be absent, and operations can fail. Aurora represents both in the type system so the code is honest about which calls might go wrong and how.
+A program that runs for any length of time has to deal with two uncomfortable facts: values can be absent, and operations can fail. Aura represents both in the type system so the code is honest about which calls might go wrong and how.
 
-This chapter introduces `Option[T]`, `Result[T, E]`, the `try` expression, and the outcome enums the runtime uses for queues, tasks, and I/O. Together they are how Aurora replaces exceptions, null pointers, and sentinel values with ordinary control flow.
+This chapter introduces `Option[T]`, `Result[T, E]`, the `try` expression, and the outcome enums the runtime uses for queues, tasks, and I/O. Together they are how Aura replaces exceptions, null pointers, and sentinel values with ordinary control flow.
 
 ## `Option[T]`: A Value May Be Missing
 
@@ -63,7 +63,7 @@ The signature is honest: the caller will receive either an `int32` or a `String`
 
 ## `try`: Propagate Failure
 
-That last function has a familiar shape. It calls a sub-operation, checks whether it failed, and if it did, hands the same error back to its caller. That pattern is common enough to deserve a short form, so Aurora provides one: **`try`**.
+That last function has a familiar shape. It calls a sub-operation, checks whether it failed, and if it did, hands the same error back to its caller. That pattern is common enough to deserve a short form, so Aura provides one: **`try`**.
 
 `try expr` evaluates `expr`. If the result is `Result.Ok(value)`, the expression produces `value` and execution continues. If the result is `Result.Err(error)`, the current function returns that error immediately.
 
@@ -94,7 +94,7 @@ Two constraints on `try`:
 
 ## Domain-Specific Outcomes
 
-Not every failure is well-described by a plain `Result[T, String]`. Aurora APIs use richer enums when the caller benefits from distinguishing outcomes.
+Not every failure is well-described by a plain `Result[T, String]`. Aura APIs use richer enums when the caller benefits from distinguishing outcomes.
 
 | API family | Outcome type | Why this shape |
 | --- | --- | --- |

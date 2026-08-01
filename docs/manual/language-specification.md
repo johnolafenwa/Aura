@@ -1,8 +1,8 @@
 # Language Specification
 
-This Manual is the normative specification of the implemented Aurora 0.2 language. It defines the source language, static rules, ownership model, execution behavior, maintained runtime APIs, package model, and tool contracts that a conforming implementation must provide.
+This Manual is the normative specification of the implemented Aura 0.2 language. It defines the source language, static rules, ownership model, execution behavior, maintained runtime APIs, package model, and tool contracts that a conforming implementation must provide.
 
-The specification describes the language that exists in this repository. It does not promote ideas from the historical proposal into the language merely because they were once discussed.
+The specification describes exactly the language implemented in this repository.
 
 ## Scope
 
@@ -15,7 +15,7 @@ The specification covers:
 - module loading, packages, entry modules, top-level execution, and `main`
 - evaluation order, control flow, runtime failures, cleanup, tasks, cancellation, and backend equivalence
 - maintained builtin functions, enums, modules, resources, and CLI/editor contracts
-- implementation limits that are observable by valid or invalid Aurora programs
+- implementation limits that are observable by valid or invalid Aura programs
 
 The specification does not define the compiler's private Rust data structures, MIR encoding, native ABI, object-file layout, or internal optimization choices except where they affect an observable language or tool contract.
 
@@ -31,7 +31,7 @@ Ordinary present-tense statements are normative when they describe accepted synt
 
 ## Specification Version
 
-This reference describes Aurora 0.2 as implemented by the repository containing it. Aurora 0.2 is an advanced technical preview, so source and API compatibility may still change before a tagged stable release. Any behavior change MUST update the relevant reference page, conformance tests, examples, tutorials, and work record in the same pass.
+This reference describes Aura 0.2 as implemented by the repository containing it. Aura 0.2 is an advanced technical preview, so source and API compatibility may still change before a tagged stable release. Any behavior change MUST update the relevant reference page, conformance tests, examples, tutorials, and work record in the same pass.
 
 The repository commit identifies the precise revision of the specification.
 The rendered Manual is stamped with source version 0.2.0 (technical preview)
@@ -47,7 +47,6 @@ The normative Manual and its executable conformance suite jointly define the mai
 2. Compiler fixtures and regression tests make the rule executable.
 3. The compiler, runtime, CLI, and language server are implementations of that rule.
 4. Categorized examples and Learn chapters teach the rule without extending it.
-5. The historical proposal records design history and is non-normative.
 
 If the Manual, tests, and implementation disagree, the disagreement is a project defect. It must be resolved deliberately; undocumented behavior does not silently become a language feature, and proposal-only behavior does not override the maintained reference.
 
@@ -74,7 +73,7 @@ A failure in phases 1–4 is a compile-time diagnostic. A checked program may st
 : The source file selected by a run, build, check, test, analysis, or completion command. Entrypoint-only rules such as the `main` signature apply to this module.
 
 **Item**
-: A top-level class, enum, Aurora function, extern function, extern opaque
+: A top-level class, enum, Aura function, extern function, extern opaque
   handle, trait, or trait implementation declaration.
 
 **Binding**
@@ -96,7 +95,7 @@ A failure in phases 1–4 is a compile-time diagnostic. A checked program may st
 
 **Clone-safety obligation**
 : An inferred callable requirement that a substituted type must not duplicate
-  non-cloneable state through a clone-producing operation. Aurora 0.2 protects
+  non-cloneable state through a clone-producing operation. Aura 0.2 protects
   `random.Rng` state under this contract.
 
 **Borrow**
@@ -121,7 +120,7 @@ A failure in phases 1–4 is a compile-time diagnostic. A checked program may st
 
 ## Defined, Implementation-Defined, And Unspecified Behavior
 
-Aurora aims to avoid undefined behavior at the language level. Programs that violate a static rule MUST be rejected. Checked operations that fail MUST produce the documented typed outcome or runtime diagnostic rather than memory-unsafe behavior.
+Aura aims to avoid undefined behavior at the language level. Programs that violate a static rule MUST be rejected. Checked operations that fail MUST produce the documented typed outcome or runtime diagnostic rather than memory-unsafe behavior.
 
 Some behavior is intentionally platform-dependent:
 
@@ -130,7 +129,7 @@ Some behavior is intentionally platform-dependent:
 - ordering of external events and concurrently ready tasks is not a deterministic language guarantee unless an API states otherwise.
 - map and set iteration follow the maintained runtime's insertion-oriented representation today, but programs should rely only on ordering explicitly promised by the relevant API contract.
 
-Implementation-defined or platform-dependent behavior MUST remain within the constraints documented by the relevant Manual page. Behavior not granted by the specification, especially dependence on object layout, task scheduling order, hash identity, native symbol names, or diagnostic byte offsets, is unspecified and must not be required for portable Aurora programs.
+Implementation-defined or platform-dependent behavior MUST remain within the constraints documented by the relevant Manual page. Behavior not granted by the specification, especially dependence on object layout, task scheduling order, hash identity, native symbol names, or diagnostic byte offsets, is unspecified and must not be required for portable Aura programs.
 
 ## Reference Organization
 

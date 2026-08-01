@@ -1,5 +1,0 @@
-error[AU1101]: expected Newline
- --> crates/aurora-compiler/tests/fixtures/check-fail/select_after_binding.au:2:11
-  |
-2 |     select:
-  |           ^

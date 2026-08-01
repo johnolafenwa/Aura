@@ -1,16 +1,16 @@
-# Aurora Language Reference
+# Aura Language Reference
 
-The source version for this Manual is **Aurora 0.2.0 (technical preview)**.
+The source version for this Manual is **Aura 0.2.0 (technical preview)**.
 The release stamp below records the rendered implementation baseline commit.
 
 <ReleaseStamp />
 
-Release builders set `AURORA_DOCS_COMMIT`; GitHub builds use `GITHUB_SHA`; a
+Release builders set `AURA_DOCS_COMMIT`; GitHub builds use `GITHUB_SHA`; a
 clean local build falls back to the checkout's committed `HEAD`. A dirty or
 Git-free build says `local-uncommitted-checkout` instead of inventing a commit
 or writing a self-referential hash into this source page.
 
-This Manual is the normative reference for the implemented Aurora language and runtime. It is written so a reader can reconstruct the language accurately: complete syntax, name and type rules, ownership behavior, execution, module APIs, diagnostics, limits, and tool contracts.
+This Manual is the normative reference for the implemented Aura language and runtime. It is written so a reader can reconstruct the language accurately: complete syntax, name and type rules, ownership behavior, execution, module APIs, diagnostics, limits, and tool contracts.
 
 The Learn track tells a story. A future book may build a longer learning sequence from this material. The reference defines the facts that those teaching materials must preserve.
 
@@ -78,7 +78,7 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 
 ## Conventions Used In This Manual
 
-Code blocks marked `python` contain Aurora code using Python highlighting until the documentation theme ships a dedicated highlighter. The language grammar itself is defined by [Complete Grammar](/manual/grammar). Shell blocks contain repository commands.
+Code blocks marked `python` contain Aura code using Python highlighting until the documentation theme ships a dedicated highlighter. The language grammar itself is defined by [Complete Grammar](/manual/grammar). Shell blocks contain repository commands.
 
 Signatures use `Duration = ...` for optional timeout parameters whose default is documented in the relevant API section. In general:
 

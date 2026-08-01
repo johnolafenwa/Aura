@@ -1,3 +1,0 @@
-error[AU4003]: random bounds require `lo < hi`, found `4 >= 4`
- --> crates/aurora-compiler/tests/fixtures/run-fail/random_invalid_deterministic_bounds.au
-  = note: Aurora call chain (innermost first): main at 3:1

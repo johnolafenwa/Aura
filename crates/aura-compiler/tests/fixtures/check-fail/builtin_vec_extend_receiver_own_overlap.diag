@@ -1,0 +1,7 @@
+error[AU3002]: cannot consume `values` while `values` remains mutably borrowed by the method receiver
+ --> crates/aura-compiler/tests/fixtures/check-fail/builtin_vec_extend_receiver_own_overlap.au:3:19
+  |
+3 |     values.extend(values)
+  |                   ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/builtin_vec_extend_receiver_own_overlap.au:3:5: mutable borrow for the method receiver begins here
+  = help: call `.clone()` before the expression when an independent value is intended, or perform the consumption in a separate statement first

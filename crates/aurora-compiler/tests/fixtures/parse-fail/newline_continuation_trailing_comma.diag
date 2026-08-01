@@ -1,5 +1,0 @@
-error[AU1101]: unexpected token in expression: RBracket
- --> crates/aurora-compiler/tests/fixtures/parse-fail/newline_continuation_trailing_comma.au:4:5
-  |
-4 |     ]
-  |     ^

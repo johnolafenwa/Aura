@@ -1,6 +1,0 @@
-error[AU2002]: `assert` condition must have type `bool`, found `int64`
- --> crates/aurora-compiler/tests/fixtures/check-fail/assert_condition_must_be_bool.au:2:5
-  |
-2 |     assert 1
-  |     ^
-  = help: Aurora has no implicit truthiness; compare the value explicitly, for example `value != 0`

@@ -1,0 +1,5 @@
+error[AU2002]: type `int32` is not optional; only `Option[T]` values can be compared with `None`
+ --> crates/aura-compiler/tests/fixtures/check-fail/non_optional_none_comparison_rejected.au:2:12
+  |
+2 |     return value == None
+  |            ^

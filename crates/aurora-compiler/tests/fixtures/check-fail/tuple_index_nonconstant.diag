@@ -1,5 +1,0 @@
-error[AU2003]: tuple indices must be non-negative integer literals
- --> crates/aurora-compiler/tests/fixtures/check-fail/tuple_index_nonconstant.au:4:16
-  |
-4 |     print(pair[index])
-  |                ^

@@ -29,8 +29,8 @@ aura check app.au
 | `aura analyze file.au` | Emit diagnostics, symbols, hover data, and definition data. |
 | `aura complete --line N --character C --trigger . file.au` | Emit completion items. |
 | `aura deps update [name]` | Refresh all git dependencies or one named dependency. |
-| `aura new path` | Create `Aurora.toml` and `src/main.au` without overwriting an existing path. |
-| `aura fmt [--check] [paths...]` | Normalize Aurora source whitespace or verify formatting. |
+| `aura new path` | Create `Aura.toml` and `src/main.au` without overwriting an existing path. |
+| `aura fmt [--check] [paths...]` | Normalize Aura source whitespace or verify formatting. |
 | `aura test [--timeout-ms N] [paths...]` | Run package-aware `.au` tests, one result per `def test_*()` function or per file when a file declares none; defaults to `tests/` and a 30-second per-test timeout. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
@@ -58,10 +58,10 @@ Runtime diagnostics include source context where possible.
 
 Task execution uses the available parallelism reported by the host by default.
 The provisional
-`AURORA_WORKERS` environment override accepts a positive integer, including a
+`AURA_WORKERS` environment override accepts a positive integer, including a
 count larger than the host's available-core count. For example,
-`AURORA_WORKERS=4 aura run app.au` selects four pinned task workers.
-`AURORA_WORKERS=1` preserves single-worker cooperative execution through the
+`AURA_WORKERS=4 aura run app.au` selects four pinned task workers.
+`AURA_WORKERS=1` preserves single-worker cooperative execution through the
 same pinned-worker architecture.
 
 MIR runs, forced-direct runs, and standalone direct binaries use the same
@@ -72,10 +72,10 @@ Checking, analysis, completion, and formatting do not start the task runtime.
 Blocking host operations use a separate process-wide pool. Its operational
 settings are:
 
-- `AURORA_BLOCKING_WORKERS=<positive integer>` requests that exact blocking
+- `AURA_BLOCKING_WORKERS=<positive integer>` requests that exact blocking
   worker count without clamping. When absent, the runtime uses available host
   parallelism, falls back to `4`, and clamps that derived default to `2..=8`.
-- `AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>` bounds accepted jobs
+- `AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` bounds accepted jobs
   waiting in the pool's FIFO queue. Running jobs and callers waiting for
   admission do not consume this capacity. When absent, the pending queue is
   unbounded.
@@ -88,7 +88,7 @@ value is displayed lossily. The first runtime preflight reads both settings
 once, and the resulting configuration is immutable for the process lifetime.
 Valid preflight creates no blocking worker threads. First submission creates
 the complete configured set, which production reuses until process exit
-without an Aurora shutdown/join surface. A full bounded queue parks a
+without an Aura shutdown/join surface. A full bounded queue parks a
 lightweight task through the scheduler; timeout or cancellation before queue
 insertion prevents submission. Once inserted, host work cannot be retracted
 and any late result is discarded. A bound limits accepted pending backlog, not
@@ -104,7 +104,7 @@ cargo run -p aura -- build --backend direct -o ./target/app app.au
 
 `auto` is the default. It first attempts the maintained direct backend and may fall back to a native launcher that embeds serialized MIR and the MIR runtime when direct emission is unavailable. `--backend direct` forbids that fallback. Both forms are standalone executables and must implement the same checked language behavior.
 
-An installed release archive resolves its native runtime relative to `bin/aura`, under `lib/aurora`, and needs only a host C compiler for the final link. A source-checkout binary falls back to Cargo-built runtime artifacts for contributor convenience.
+An installed release archive resolves its native runtime relative to `bin/aura`, under `lib/aura`, and needs only a host C compiler for the final link. A source-checkout binary falls back to Cargo-built runtime artifacts for contributor convenience.
 
 ## Stdin Buffers
 
@@ -152,7 +152,7 @@ The JSON result is an array of `{ "name": String, "kind": String, "detail": Stri
 
 ## Machine-Readable And Inspection Formats
 
-`ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aurora 0.2. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
+`ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aura 0.2. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
 
 `aura lsp` is a persistent JSON-lines compiler service. Each input line is an object with an optional `id`, `method`, `path`, and `source`. Supported requests are:
 
@@ -235,7 +235,7 @@ Validate the normative reference structure and navigation with:
 npm run check:reference
 ```
 
-GitHub Pages builds use the same command with `VITEPRESS_BASE=/Aurora/` so project-page asset URLs are rooted correctly.
+GitHub Pages builds use the same command with `VITEPRESS_BASE=/Aura/` so project-page asset URLs are rooted correctly.
 
 ## Repository Gates
 
@@ -251,9 +251,9 @@ GitHub Actions runs the repo gate on Linux and macOS. The release workflow publi
 
 ## Grammar
 
-The command line is a tooling protocol, not part of Aurora source grammar. Its maintained invocation forms are the command forms in the table above and the usage text printed by `aura help`. The single-source compiler commands use either one `.au` path or their documented `--stdin <virtual-path>` form; the virtual path supplies module and package context while standard input supplies the source text. `fmt` and `test` instead accept their documented path lists. `aura run` alone accepts program arguments after `--`. `--format human|json` is accepted by `check`, `run`, and `build` and does not change source-language parsing.
+The command line is a tooling protocol, not part of Aura source grammar. Its maintained invocation forms are the command forms in the table above and the usage text printed by `aura help`. The single-source compiler commands use either one `.au` path or their documented `--stdin <virtual-path>` form; the virtual path supplies module and package context while standard input supplies the source text. `fmt` and `test` instead accept their documented path lists. `aura run` alone accepts program arguments after `--`. `--format human|json` is accepted by `check`, `run`, and `build` and does not change source-language parsing.
 
-Aurora source accepted by these commands is governed by the [Grammar](/manual/grammar), not by this page. Command names, options, output formats, and exit statuses are case-sensitive.
+Aura source accepted by these commands is governed by the [Grammar](/manual/grammar), not by this page. Command names, options, output formats, and exit statuses are case-sensitive.
 
 ## Typing Rules
 
@@ -269,7 +269,7 @@ Human-format `check` success writes exactly `ok` followed by a newline. JSON-for
 
 ## Ownership And Evaluation Order
 
-Selecting a CLI command or output format does not alter Aurora ownership, borrowing, cleanup, or evaluation order. `run`, a directly built program, and a MIR-launcher build must observe the same left-to-right source evaluation and the same resource cleanup rules.
+Selecting a CLI command or output format does not alter Aura ownership, borrowing, cleanup, or evaluation order. `run`, a directly built program, and a MIR-launcher build must observe the same left-to-right source evaluation and the same resource cleanup rules.
 
 Tool-side mutations are explicit: `fmt` without `--check`, `deps update`, and successful lockfile-producing package commands may write files; `analyze --stdin` and `complete --stdin` do not write a lockfile. Source received through `--stdin` is not retained after the command or service request, but its virtual path remains semantically significant for imports, module identity, and diagnostic locations.
 
@@ -284,16 +284,16 @@ duplicated in the structured `notes` field. `--format json` emits the
 schema-version-1 report on standard error for a failing `check`, `run`, or
 `build`. Usage errors, missing command-line operands, and host failures that
 prevent the tool itself from starting are CLI errors rather than
-Aurora-language diagnostics; they print usage or a tool error and have no
+Aura-language diagnostics; they print usage or a tool error and have no
 `AU####` code.
 
 ## Backend Support
 
-The parser, checker, package resolver, diagnostic model, analysis engine, and MIR lowering are shared by all maintained execution routes. `aura run --backend mir` executes the lowered MIR and is the default. `aura run --backend direct` builds a native binary with the direct backend and executes it, reporting a build or launch failure as an error. For `--format json` on maintained Unix hosts, the CLI supplies a private trap-signal pipe plus a separate diagnostic-data pipe bounded to 1,048,576 bytes. A native child signals a trap and writes exactly one EOF-delimited compiler-owned diagnostic JSON record, suppressing human stderr only after that write succeeds. Native initialization owns both descriptors, marks them close-on-exec, and removes their internal environment entries before user code, so an Aurora-started subprocess cannot observe them or delay EOF. No signal or record is written for a normal `main` result, including status `1`, so the CLI does not infer a trap from a process status or parse human text. A trap signal without one valid record is a hard host execution failure. Human direct runs create no private protocol; the child renders its complete human diagnostic.
+The parser, checker, package resolver, diagnostic model, analysis engine, and MIR lowering are shared by all maintained execution routes. `aura run --backend mir` executes the lowered MIR and is the default. `aura run --backend direct` builds a native binary with the direct backend and executes it, reporting a build or launch failure as an error. For `--format json` on maintained Unix hosts, the CLI supplies a private trap-signal pipe plus a separate diagnostic-data pipe bounded to 1,048,576 bytes. A native child signals a trap and writes exactly one EOF-delimited compiler-owned diagnostic JSON record, suppressing human stderr only after that write succeeds. Native initialization owns both descriptors, marks them close-on-exec, and removes their internal environment entries before user code, so an Aura-started subprocess cannot observe them or delay EOF. No signal or record is written for a normal `main` result, including status `1`, so the CLI does not infer a trap from a process status or parse human text. A trap signal without one valid record is a hard host execution failure. Human direct runs create no private protocol; the child renders its complete human diagnostic.
 
-`aura run --backend auto` prefers the direct backend and degrades to the MIR runtime only when direct building or launching is unavailable. Once a direct child runs, an Aurora trap, signal termination, wait failure, or diagnostic-protocol failure is a final program/execution outcome and never triggers MIR fallback. Human mode prints an actual fallback reason on standard error before the MIR program runs; JSON mode includes it in the final structured report after execution. A forced `direct` run never degrades, so a parity or benchmark caller cannot silently measure the other backend. Every backend observes the same program arguments, standard output, exit code, and complete runtime diagnostic, including typed call frames and task ancestry.
+`aura run --backend auto` prefers the direct backend and degrades to the MIR runtime only when direct building or launching is unavailable. Once a direct child runs, an Aura trap, signal termination, wait failure, or diagnostic-protocol failure is a final program/execution outcome and never triggers MIR fallback. Human mode prints an actual fallback reason on standard error before the MIR program runs; JSON mode includes it in the final structured report after execution. A forced `direct` run never degrades, so a parity or benchmark caller cannot silently measure the other backend. Every backend observes the same program arguments, standard output, exit code, and complete runtime diagnostic, including typed call frames and task ancestry.
 
-The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v4`, compiler-owned semantic-interface schema version `3`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aurora quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aurora preserves the entry and reports or falls back according to the selected backend.
+The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `3`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
 
 On maintained Unix hosts, cache establishment is coordinated across processes. A short runtime-identity lock protects source-checkout runtime discovery, and a separate writer lock for each content key protects the miss/recheck/build/publish sequence. Therefore, N concurrent cold runs of the same program perform one build; after that publication, the other N-1 processes recheck and consume the verified entry. Existing verified hits take the optimistic read path and do not wait for a writer holding that key. Locks are released before linking output is executed, while atomic publication and invalidation continue to ensure that readers never observe a partial entry and a stale invalidator cannot delete a replacement published for the same key.
 
@@ -314,9 +314,9 @@ retains the direct failure and progress as diagnostic notes. Tools should
 therefore not expect real-time progress in JSON mode until a structured
 streaming contract is ratified.
 
-`AURORA_CACHE_DIR` selects the cache directory; the default is `~/.cache/aurora/native`. The directory is a trust boundary. Its colocated SHA-256 detects corruption but does not authenticate bytes written by a hostile account, so the root must be private to the current OS user and every writer with access to it must be trusted. On the maintained Unix hosts, Aurora rejects a root that is owned by another user or writable by group/other and creates or tightens accepted cache directories to mode `0700`. Private launch copies are removed after the child exits. Each launch carries an inherited exclusive lease, so later cleanup preserves the directory while either the `aura` parent or native child is still using it. Interrupted cache-publication, memo, and quarantine stages are collected only after their encoded 24-hour grace period and confirmation that their owner process is gone. An installed immutable runtime can still perform a direct build when caching is disabled or unavailable; no cache lock is required merely to build, and the uncached artifact is not retained.
+`AURA_CACHE_DIR` selects the cache directory; the default is `~/.cache/aura/native`. The directory is a trust boundary. Its colocated SHA-256 detects corruption but does not authenticate bytes written by a hostile account, so the root must be private to the current OS user and every writer with access to it must be trusted. On the maintained Unix hosts, Aura rejects a root that is owned by another user or writable by group/other and creates or tightens accepted cache directories to mode `0700`. Private launch copies are removed after the child exits. Each launch carries an inherited exclusive lease, so later cleanup preserves the directory while either the `aura` parent or native child is still using it. Interrupted cache-publication, memo, and quarantine stages are collected only after their encoded 24-hour grace period and confirmation that their owner process is gone. An installed immutable runtime can still perform a direct build when caching is disabled or unavailable; no cache lock is required merely to build, and the uncached artifact is not retained.
 
-ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. The Phase 4 measurements put a cold miss at about 1.3 seconds and a first touch of a fresh binary at about 0.8 seconds because a direct hello-world executable is roughly 57 MB of statically linked runtime. Per-hit integrity verification now also reads, hashes, and privately materializes the artifact, so the earlier resident-cache measurement is historical rather than a current latency guarantee. Workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `3`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross a compiler migration. The lexical fallback is recovery-only and is not a second language implementation.
+ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `3`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
 
 Backend parity is a release gate. A construct accepted by one maintained
 execution backend must have the same observable result or complete diagnostic
@@ -326,16 +326,15 @@ MIR-specific frame-note masking.
 
 ## Limits And Implementation-Defined Behavior
 
-Native linking requires a supported host C compiler and the installed Aurora runtime layout described above. `ast`, `ast-json`, and `mir` are inspection formats, not stable serialization APIs. The formatter currently normalizes the maintained whitespace surface; it is not a configurable style engine. `aura test` discovers tests by the `test_` name prefix rather than by annotation, and a timed-out worker cannot be forcibly stopped inside the CLI process.
+Native linking requires a supported host C compiler and the installed Aura runtime layout described above. `ast`, `ast-json`, and `mir` are inspection formats, not stable serialization APIs. The formatter currently normalizes the maintained whitespace surface; it is not a configurable style engine. `aura test` discovers tests by the `test_` name prefix rather than by annotation, and a timed-out worker cannot be forcibly stopped inside the CLI process.
 
 Filesystem path interpretation, process exit-code width, executable format, linker selection, and availability of Unix-only APIs follow the maintained host platform. Package graph, source-size, recursion, runtime, and backend limits are collected in [Current Limits](/manual/current-limits).
 
 ## Status
 
-The commands and contracts documented as maintained on this page are implemented in Aurora 0.2 and covered by CLI, compiler, LSP, extension, backend-parity, and repository-gate tests. `analyze`, `complete`, and diagnostic schema version `1` are maintained tooling contracts; internal AST and MIR layouts are intentionally unstable.
+The commands and contracts documented as maintained on this page are implemented in Aura 0.2 and covered by CLI, compiler, LSP, extension, backend-parity, and repository-gate tests. `analyze`, `complete`, and diagnostic schema version `1` are maintained tooling contracts; internal AST and MIR layouts are intentionally unstable.
 
-A package registry, publishing and installation workflow, Windows support, a
-configurable formatter, and annotation-based test discovery are unavailable.
-They are future work and are not part of this normative reference. Aurora has
-no second legacy execution engine alongside the maintained MIR runtime and
-direct native backend.
+Aura 0.2 has no package registry, publishing and installation workflow,
+Windows support, configurable formatter, or annotation-based test discovery.
+Its maintained execution engines are the MIR runtime and direct native
+backend.

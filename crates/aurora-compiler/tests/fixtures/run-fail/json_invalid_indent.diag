@@ -1,3 +1,0 @@
-error[AU4003]: JSON indent must be between 0 and 16, found 17
- --> crates/aurora-compiler/tests/fixtures/run-fail/json_invalid_indent.au
-  = note: Aurora call chain (innermost first): main at 3:1

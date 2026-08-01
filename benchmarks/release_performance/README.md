@@ -1,6 +1,6 @@
 # Batch 6 release-performance workloads
 
-This directory contains the paired Aurora and CPython inputs for Aurora 0.2's
+This directory contains the paired Aura and CPython inputs for Aura 0.2's
 post-reboot release measurement. The runner treats the results as exact-workload
 measurements, not portable performance claims or release gates.
 
@@ -13,7 +13,7 @@ measurements, not portable performance claims or release gates.
   `49995000`.
 - `tcp_fanout.au` and `tcp_fanout.py` run 20 concurrent loopback clients and
   20 delayed handlers. Each client receives `pong`, producing the checksum
-  `80`. Aurora uses 20 pre-bound ephemeral listeners because Aurora 0.2 does
+  `80`. Aura uses 20 pre-bound ephemeral listeners because Aura 0.2 does
   not permit transferring an accepted `TcpStream` to a handler task
   (`AU3008`); a single listener would serialize handler work rather than
   measure fan-out.
@@ -22,9 +22,9 @@ measurements, not portable performance claims or release gates.
   `429`, and exhausted `503` retries. A valid run serves 112 requests, has
   288 ms of specified retry delay, and produces the checksum `18112`.
 - `python_int_loop.py` and `python_startup.py` are the CPython counterparts to
-  the accepted Aurora V6 sources in `../direct_integer_loops/`. Python has one
+  the accepted Aura V6 sources in `../direct_integer_loops/`. Python has one
   arbitrary-precision integer lane, so the same Python loop is paired
-  separately with Aurora's `int32` and `int64` lanes.
+  separately with Aura's `int32` and `int64` lanes.
 
 The numeric-Array comparison is intentionally not rerun by this harness. Its
 separately qualified NumPy evidence is linked in the raw and summary reports
@@ -78,17 +78,17 @@ with no competing sustained-CPU process:
   --aura target/release/aura \
   --python /Applications/Xcode.app/Contents/Developer/usr/bin/python3 \
   --pairs 11 \
-  --raw-json /private/tmp/aurora-b6-release-performance-raw.json \
-  --summary-json /private/tmp/aurora-b6-release-performance-summary.json
+  --raw-json /private/tmp/aura-b6-release-performance-raw.json \
+  --summary-json /private/tmp/aura-b6-release-performance-summary.json
 ```
 
 The runner requires exactly 11 rotating pairs, performs one excluded warmup
-per lane, builds a fresh locked release compiler and all Aurora workload
+per lane, builds a fresh locked release compiler and all Aura workload
 binaries before timing, verifies CPython identity, clears known
 runtime-affecting environment overrides, and rechecks the repository and input
 hashes after timing. It records three quiet-host inventories, boot and hardware
 identity, commands, raw observations, hashes, median, MAD, nearest-rank p95,
-best, and paired Aurora/CPython ratios. The summary links the exact raw report
+best, and paired Aura/CPython ratios. The summary links the exact raw report
 by SHA-256.
 
 `--allow-competing-processes` exists only for explicitly non-contractual

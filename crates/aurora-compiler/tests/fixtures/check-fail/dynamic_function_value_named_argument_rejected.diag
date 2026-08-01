@@ -1,6 +1,0 @@
-error[AU2003]: this function value's named argument contract was erased at a written-type or mutable-storage boundary, or because its possible targets do not all agree
- --> crates/aurora-compiler/tests/fixtures/check-fail/dynamic_function_value_named_argument_rejected.au:12:11
-   |
-12 |     print(selected(value=20))
-   |           ^
-  = help: call it with the complete positional argument list, or keep one concrete named function value

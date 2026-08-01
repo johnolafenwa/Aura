@@ -1,0 +1,53 @@
+import bytes
+
+def main():
+    text = "Aura\0 café 🌌"
+    utf8 = text.to_bytes()
+    print(bytes.hex_encode(value=utf8))
+
+    match String.from_bytes(bytes=utf8):
+        case Result.Ok(decoded):
+            print(bytes.hex_encode(decoded.to_bytes()))
+        case Result.Err(error):
+            print(error)
+
+    binary: Vec[uint8] = [0, 1, 254, 255]
+    encoded_hex = bytes.hex_encode(binary)
+    print(encoded_hex)
+    match bytes.hex_decode(text="0001FeFf"):
+        case Result.Ok(decoded):
+            print(decoded)
+        case Result.Err(error):
+            print(error)
+
+    encoded_base64 = bytes.base64_encode(binary)
+    print(encoded_base64)
+    match bytes.base64_decode(text=encoded_base64):
+        case Result.Ok(decoded):
+            print(decoded)
+        case Result.Err(error):
+            print(error)
+
+    abc = "abc"
+    abc_bytes = abc.to_bytes()
+    digest = bytes.sha256(value=abc_bytes)
+    print(digest.len())
+    print(bytes.hex_encode(digest))
+    print(bytes.hex_encode(bytes.sha256_string(text=abc)))
+
+    empty: Vec[uint8] = []
+    match String.from_bytes(empty):
+        case Result.Ok(decoded):
+            print(f"empty-bytes:{decoded.byte_len()}")
+        case Result.Err(error):
+            print(error)
+    print(f"empty-hex:<{bytes.hex_encode(empty)}>")
+    print(f"empty-base64:<{bytes.base64_encode(empty)}>")
+    print(bytes.hex_encode(bytes.sha256(empty)))
+
+    print(text.byte_len())
+    print(bytes.hex_encode(utf8))
+    print(binary)
+    print(encoded_base64)
+    print(abc)
+    print(abc_bytes)

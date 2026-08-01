@@ -1,0 +1,6 @@
+error[AU4007]: array operands require the same shape and dtype, found [2] int32 and [3] int32
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_binary_shape_mismatch.au:4:11
+  |
+4 |     print(left + right)
+  |           ^
+  = note: Aura call chain (innermost first): main at 1:1

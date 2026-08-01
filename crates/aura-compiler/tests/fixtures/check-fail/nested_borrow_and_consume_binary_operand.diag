@@ -1,0 +1,5 @@
+error[AU3002]: cannot mix a move of `c` with a borrow of `c.name` in the same expression
+ --> crates/aura-compiler/tests/fixtures/check-fail/nested_borrow_and_consume_binary_operand.au:12:12
+   |
+12 |     return len_of(c.name) + consume_c(c)
+   |            ^

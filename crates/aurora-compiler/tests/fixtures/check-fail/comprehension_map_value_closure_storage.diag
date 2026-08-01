@@ -1,6 +1,0 @@
-error[AU2002]: capturing closures cannot be stored in collection literals in this language version
- --> crates/aurora-compiler/tests/fixtures/check-fail/comprehension_map_value_closure_storage.au:2:25
-  |
-2 |     callbacks = {value: lambda: value for value in range(0, 2)}
-  |                         ^
-  = help: keep the closure in an immutable local and call it directly, or use a named function or capture-free lambda

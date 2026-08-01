@@ -1,6 +1,6 @@
 # Current Limits
 
-This page documents known current limits of the Aurora compiler and runtime.
+This page documents known current limits of the Aura compiler and runtime.
 
 ## Language
 
@@ -14,8 +14,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Direct recursive fields require `indirect`.
 - Return values are always owned. Copy results are ordinary copies; a non-copy
   result must be constructed, cloned when clone-safe, moved from owned input,
-  or produced by an owner operation. First-class loan or view returns are not
-  part of Aurora 0.2, and current syntax reserves no future contract for them.
+  or produced by an owner operation.
 - Empty list, map, and set literals need an expected collection type.
 - Class field defaults cannot call user-defined functions in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `String(...)` is not a constructor; use string literals and string methods.
@@ -91,12 +90,12 @@ This page documents known current limits of the Aurora compiler and runtime.
   callback, variadic, raw-pointer arithmetic, returned view, nullable handle,
   foreign aggregate layout, automatic handle destructor, or async offload.
   Process-global lookup is currently supported on Unix-family hosts. A false C
-  signature or misbehaving native function remains outside Aurora's safety
+  signature or misbehaving native function remains outside Aura's safety
   guarantees and may terminate or corrupt the process.
 - Callable-powered Vec algorithms are eager. `map` and `filter` return owned
   vectors rather than iterators; `filter` requires clone-safe elements.
   Built-in natural sorting covers all integer types, `float32`, `float64`, and
-  `Duration`; `String` has no built-in `Ord[String]` in Aurora 0.2. Preserve
+  `Duration`; `String` has no built-in `Ord[String]` in Aura 0.2. Preserve
   insertion order, use `sort_by` with an orderable key/index, or define a
   nominal type with an application-specific `Ord` implementation when text
   records require ordering.
@@ -111,25 +110,25 @@ This page documents known current limits of the Aurora compiler and runtime.
 
 ## Runtime
 
-- MIR and native direct-backend traps carry the same typed Aurora call frames
+- MIR and native direct-backend traps carry the same typed Aura call frames
   and task ancestry. Call frames are innermost first, task ancestry is youngest
   first, and every frame retains its own defining or spawning source path.
 - Human diagnostics synthesize the compact call-chain, task-entry, and
   task-ancestry note lines. Structured schema-version-1 diagnostics expose
   `call_frames` and `task_ancestry` arrays instead; generated frame prose is
   not duplicated in `notes`.
-- Aurora does not expose host Rust/Cranelift backtraces, debugger stack
+- Aura does not expose host Rust/Cranelift backtraces, debugger stack
   reflection, exception catching, or a standalone-binary JSON switch.
-- Aurora task code executes on pinned cooperative scheduler workers. The
+- Aura task code executes on pinned cooperative scheduler workers. The
   default count is the available parallelism reported by the host; the
-  `AURORA_WORKERS=<positive integer>` override selects an explicit count.
+  `AURA_WORKERS=<positive integer>` override selects an explicit count.
   Assignment happens when a child is spawned and remains stable for its
   lifetime: coroutine stacks never migrate and the runtime does not steal work
   between workers.
-- A positive `AURORA_WORKERS` value may exceed the host's available-core count.
+- A positive `AURA_WORKERS` value may exceed the host's available-core count.
   Empty, zero, signed, whitespace-padded, nonnumeric, and overflowing values
   are rejected before execution with `AU4006` and
-  ``invalid AURORA_WORKERS value `<raw>`: expected a positive integer``.
+  ``invalid AURA_WORKERS value `<raw>`: expected a positive integer``.
 - Scheduling is cooperative, not preemptive. The compiler checks every loop
   backedge and eventually yields from a tight loop, but only to runnable work
   assigned to that task's worker. One long loop body or long straight-line
@@ -147,7 +146,7 @@ This page documents known current limits of the Aurora compiler and runtime.
   when several workers execute MIR concurrently. Use the direct native backend
   for performance measurements.
 - Pinned task execution is maintained on the MIR and direct native backends.
-  Aurora does not promise work stealing, preemption, detached tasks, a
+  Aura does not promise work stealing, preemption, detached tasks, a
   particular parallel speedup, or broader automatic parallelism outside task
   execution.
 - Ordinary lightweight tasks request 512 KiB of writable coroutine stack.
@@ -156,10 +155,10 @@ This page documents known current limits of the Aurora compiler and runtime.
   are rounded upward to the host page size and guard-protected; smaller and
   larger requests are rejected rather than clamped. The MIR/direct runtime
   entry thread reserves 64 MiB, and maintained execution paths stop with a
-  friendly recursion-depth diagnostic after 256 nested Aurora calls. The
+  friendly recursion-depth diagnostic after 256 nested Aura calls. The
   override API is Provisional under ADR-0032. The 256 KiB lower bound is an
   opt-in minimum for measured shallow tasks, not the generally safe default;
-  the complete compiled Aurora HTTP example faulted when 256 KiB was the
+  the complete compiled Aura HTTP example faulted when 256 KiB was the
   global default and succeeds at 512 KiB. An isolated runtime protocol
   round trip succeeds with 256 KiB callers because it excludes compiled
   language-execution frames; it proves the service offload boundary, not a
@@ -168,7 +167,7 @@ This page documents known current limits of the Aurora compiler and runtime.
   sleepers used 207,798,272 bytes of worst whole-process RSS and 198,787,072
   bytes above the same-process pre-spawn baseline, passing the maintained
   512 MiB gate.
-- Aurora does not maintain a 100,000-sleeper claim. The final Phase 5.10
+- Aura does not maintain a 100,000-sleeper claim. The final Phase 5.10
   100,000-sleeper plus 1,000-timer repetitions peaked at 1,170,735,104,
   1,921,531,904, and 2,001,305,600 bytes. Two of three exceed the 1.5 GiB
   gate. On this 16 KiB-page host, one resident page for each of the 101,000
@@ -176,7 +175,7 @@ This page documents known current limits of the Aurora compiler and runtime.
   metadata or the root runtime. The Phase 5.9 passing observation was
   compression- and reclaim-dependent, not a robust capacity guarantee.
 - The ratified benchmark escape hatch retains the 100,000-sleeper result as
-  evidence without turning it into a product claim. Aurora 0.2's maintained
+  evidence without turning it into a product claim. Aura 0.2's maintained
   scale claim is limited to the contractual 10,000-sleeper bound plus the
   timer, idle, starvation, and multicore controls. All pass at Phase 5.10:
   the standalone timers had a 6 ms worst arm span and 1 ms p99 overshoot,
@@ -198,7 +197,7 @@ This page documents known current limits of the Aurora compiler and runtime.
   API. File reads, resolver work, and listener binding remain on the generic
   blocking-I/O pool; TLS asset bytes are read there before PEM parsing and
   rustls construction run on protocol workers.
-- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aurora 0.2 has no chunked file-read API.
+- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aura 0.2 has no chunked file-read API.
 - Process-pipe and captured-output reads plus TCP, Unix, and TLS whole/bounded reads remain capped at 64 MiB. TLS certificate, private-key, and CA-file loading uses the same independent 64 MiB ceiling. A bounded byte count of zero is invalid.
 - UDP receives accept `max_bytes` from 1 through 65,535.
 - Incoming HTTP parsing accepts at most 64 headers and 16 MiB of wire data per message, including the start line, headers, transfer framing, trailers, and body. Outbound HTTP writers have no separate size cap. The high-level map header model cannot preserve repeated equal field names losslessly.
@@ -223,9 +222,9 @@ This page documents known current limits of the Aurora compiler and runtime.
   lightweight tasks park through the scheduler. Once admitted, synchronous
   parse defers cancellation until codec completion. Runtime materialization,
   JSON-aware clone/render, and dumping use iterative traversals. The service is
-  process-lifetime and has no 0.2 sizing or shutdown API. The legacy
+  process-lifetime and has no 0.2 sizing or shutdown API. The bounded
   `json.is_valid` and `json.parse_string_map` helpers retain their bounded
-  caller-side compatibility paths and do not use that service; legacy JSON
+  caller-side paths and do not use that service; JSON
   string-map and TOML helpers remain restricted to typed
   `Map[String, String]`. JSON has no arbitrary-precision number, streaming
   codec, or derived class/enum schemas.
@@ -271,21 +270,21 @@ This page documents known current limits of the Aurora compiler and runtime.
   consume it on every outcome, and multi-task waits consume the complete task
   vector. A second runtime claim that reaches the atomic containment check
   traps with `AU4001` rather than returning or cloning the stored value.
-- Cancelling filesystem and other blocking-worker I/O cancels Aurora's wait,
+- Cancelling filesystem and other blocking-worker I/O cancels Aura's wait,
   not an accepted operating-system call. Before insertion into the pending
   queue, timeout or cancellation prevents submission; after insertion, the
   host operation runs exactly once and external side effects may still
   complete while its late result is discarded.
 - The process-wide blocking-I/O pool defaults from host parallelism with
   fallback `4` and a derived `2..=8` clamp.
-  `AURORA_BLOCKING_WORKERS=<positive integer>` instead requests that exact
-  count without clamping. `AURORA_BLOCKING_QUEUE_CAPACITY=<positive integer>`
+  `AURA_BLOCKING_WORKERS=<positive integer>` instead requests that exact
+  count without clamping. `AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>`
   bounds pending accepted jobs only; running jobs and admission waiters do not
   consume it, and omission preserves an unbounded queue. Full-queue admission
   is FIFO and scheduler-aware. The first runtime preflight reads the settings
   once and keeps them immutable for the process lifetime without starting
   workers. First submission creates the complete worker set; production reuses
-  it until process exit and has no Aurora shutdown/join surface. This bounds
+  it until process exit and has no Aura shutdown/join surface. This bounds
   accepted pending backlog, but not admission waiters, and cannot interrupt a
   stuck accepted call or guarantee unrelated blocking-I/O progress while every
   worker remains occupied.

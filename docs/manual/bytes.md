@@ -1,6 +1,6 @@
 # Bytes, Text Codecs, And SHA-256
 
-Aurora represents an owned sequence of bytes as `Vec[uint8]`. There is no
+Aura represents an owned sequence of bytes as `Vec[uint8]`. There is no
 separate `Bytes` nominal type and no implicit conversion between text and
 bytes. UTF-8 conversion is available on `String`; hexadecimal, base64, and
 SHA-256 operations live in the built-in `bytes` module.
@@ -26,7 +26,7 @@ input, and every returned collection or String is a fresh owned value.
 `String.from_bytes` is an associated String method, so it is called on the
 type, as in `String.from_bytes(payload)`. It is not a `String(...)`
 constructor. The `encoding` parameter name is reserved for a possible future
-extension; Aurora 0.2 accepts no encoding argument on either String conversion.
+extension; Aura 0.2 accepts no encoding argument on either String conversion.
 
 ## Error Model
 
@@ -48,7 +48,7 @@ For base64, an invalid alphabet byte reports that byte, a missing required
 padding byte reports `text.byte_len()`, and nonzero discarded bits report the
 last data symbol that contains them.
 
-If the exact malformed-data offset or length exceeds `2147483647`, Aurora
+If the exact malformed-data offset or length exceeds `2147483647`, Aura
 cannot construct the retained `int32` payload without losing information. That
 metadata overflow traps with `AU4005`; it is never truncated, clamped, or
 wrapped into a `bytes.Error`. Resource or allocation failure likewise is not a
@@ -110,11 +110,11 @@ any of those uses.
 
 ## Example
 
-```aurora
+```aura
 import bytes
 
 def main():
-    text = "Aurora 🌌"
+    text = "Aura 🌌"
     encoded = text.to_bytes()
     print(bytes.hex_encode(encoded))
 
@@ -139,7 +139,7 @@ The final line demonstrates that conversion did not consume `encoded`.
 The Bytes surface adds no source-language grammar. `Vec[uint8]`, `import
 bytes`, associated calls, method calls, module calls, named arguments, and
 `Result` patterns use the ordinary forms defined elsewhere in this Manual.
-Aurora 0.2 has no byte-string literal.
+Aura 0.2 has no byte-string literal.
 
 ## Typing Rules
 
@@ -240,14 +240,14 @@ Actual allocation success within the codec destination ceiling is
 host-dependent. SHA-256 output is always 32 bytes. Codec output, errors, and
 offsets are not host-dependent.
 
-Aurora 0.2 does not provide alternate text encodings, URL-safe or unpadded
+Aura 0.2 does not provide alternate text encodings, URL-safe or unpadded
 base64, streaming codecs, incremental hashing, HMAC, password hashing,
 constant-time digest comparison, a distinct mutable byte buffer, or implicit
 String conversion. The reserved `encoding` parameter is not implemented.
 
 ## Status
 
-`Vec[uint8]` is the implemented Aurora 0.2 bytes type. The conversion, codec,
+`Vec[uint8]` is the implemented Aura 0.2 bytes type. The conversion, codec,
 error, and hash policy on this page is implemented as the Phase 3 control-plane
 surface and is accepted under ADR-0023. Derived class/enum codecs and schemas
 remain deferred beyond Phase 6.

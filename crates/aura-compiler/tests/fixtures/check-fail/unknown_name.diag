@@ -1,0 +1,5 @@
+error[AU2001]: unknown name `missing`
+ --> crates/aura-compiler/tests/fixtures/check-fail/unknown_name.au:2:12
+  |
+2 |     return missing
+  |            ^

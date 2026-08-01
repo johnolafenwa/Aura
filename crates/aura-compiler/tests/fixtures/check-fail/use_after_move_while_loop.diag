@@ -1,0 +1,5 @@
+error[AU2999]: `while` loop body moves `token` and may execute more than once
+ --> crates/aura-compiler/tests/fixtures/check-fail/use_after_move_while_loop.au:10:5
+   |
+10 |     while keep_running:
+   |     ^

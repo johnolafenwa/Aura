@@ -1,10 +1,10 @@
-use aurora_compiler::diag::Span;
-use aurora_compiler::emit_host_native_object;
-use aurora_compiler::mir::{
+use aura_compiler::diag::Span;
+use aura_compiler::emit_host_native_object;
+use aura_compiler::mir::{
     BasicBlock, CallTarget, Instruction, MirArg, MirFunction, MirLocalType, MirModule, Operand,
     Rvalue, Terminator,
 };
-use aurora_compiler::sema::Type;
+use aura_compiler::sema::Type;
 
 fn object_mentions(object: &[u8], symbol: &str) -> bool {
     object
@@ -80,11 +80,11 @@ fn public_object_codegen_infers_host_and_wait_result_types() {
     let object =
         emit_host_native_object(&module).expect("valid inferred calls should emit an object");
     assert!(
-        object_mentions(&object, "aurora_direct_host_builtin"),
+        object_mentions(&object, "aura_direct_host_builtin"),
         "the host builtin call must lower through the runtime adapter"
     );
     assert!(
-        object_mentions(&object, "aurora_direct_wait_any"),
+        object_mentions(&object, "aura_direct_wait_any"),
         "the typed wait call must lower through the direct wait adapter"
     );
 }
