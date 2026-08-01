@@ -790,8 +790,8 @@ Queue and Task handle state is synchronized across workers. All other task
 captures and results remain owned `Transfer` data, preserving a share-nothing
 boundary. Cancellation and diagnostic context stay per task, while task
 scheduling, independent completion, and output order remain unspecified.
-Aura exposes no worker-introspection API and promises neither work stealing
-nor parallel speedup for every workload.
+Aura exposes no worker-introspection API or work stealing; parallel speedup
+depends on the workload.
 
 Task results are repeatable only for copy `T`, `Queue[...]`, or recursively
 repeatable `Task[...]`. `Task[T]` is always transferable but is copyable only
@@ -818,18 +818,16 @@ Phase 5.10 report, three 10,000-sleeper runs peaked at 207,798,272,
 512 MiB bound. Standalone 1,000-timer controls passed with a 6 ms maximum arm
 span and 1 ms worst p99 overshoot.
 
-Aura does not maintain a “100,000 tasks in 1.5 GiB” claim. Three clean runs
-of 100,000 sleepers plus 1,000 timers peaked at 1,170,735,104, 1,921,531,904,
+The runtime accepts larger task counts; 10,000 sleepers is the maintained
+memory-capacity bound. Three clean runs of 100,000 sleepers plus 1,000 timers
+peaked at 1,170,735,104, 1,921,531,904,
 and 2,001,305,600 bytes; two exceeded the proposed limit while timer behavior
 remained stable at a 3 ms maximum arm span and 2 ms worst p99 overshoot.
 Mac14,9 uses 16 KiB pages, giving those 101,000 stackful tasks a
 1,654,784,000-byte one-page floor before other runtime and process memory.
 The earlier Phase 5.9 below-gate sample depended on nondeterministic memory
-compression and is not a repeatable bound. The roadmap escape hatch therefore
-retains the measured result without publishing the massive-concurrency
-marketing claim. This does not impose a 100,000-task language limit. The
-current four-worker workload passes at a `1.039673x` paired median wall-time
-ratio with `396.73%` median four-task process CPU.
+compression. The current four-worker workload passes at a `1.039673x` paired
+median wall-time ratio with `396.73%` median four-task process CPU.
 
 The protocol service is lazily initialized and remains alive until process
 exit; it has no 0.2 shutdown or join surface. File reads, resolver work, and

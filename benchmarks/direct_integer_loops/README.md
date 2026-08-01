@@ -79,8 +79,8 @@ is not bypassed for scalar programs without evidence for a safe replacement.
 
 Under the alternate disposition permitted by B5.0-d, the clean Phase-5.10
 `37.436334 ms` / `15.005584 ms` whole-process pair is accepted as the
-reactor-era baseline. This is a baseline decision, not a claim that startup
-explains the entire regression. The startup split remains in the maintained
+reactor-era baseline. The available evidence does not isolate startup as the
+complete cause of the regression. The startup split remains in the maintained
 runner so future loop work can compare loop estimates separately from process
 entry cost.
 

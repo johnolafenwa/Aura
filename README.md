@@ -16,7 +16,7 @@ languages. The canonical implemented contract begins with the normative
 [complete grammar](docs/manual/grammar.md), and Manual. Supported hosts and pinned tools are
 listed in [SUPPORTED_PLATFORMS.md](SUPPORTED_PLATFORMS.md).
 
-## Measured snapshot, not a general performance claim
+## Measured snapshot
 
 On one post-reboot Mac14,9 (M2 Pro, 10 cores, 16 GiB), the release benchmark
 recorded these protocol-window medians against CPython 3.9.6. Lower is faster;
@@ -29,8 +29,7 @@ the ratio is Aura divided by CPython.
 | 20-client delayed loopback TCP fan-out | 104.505375 ms | 108.605459 ms | 0.962248 |
 | 16-cycle retrying HTTP worker | 429.291292 ms | 520.447791 ms | 0.824850 |
 
-These are exact-workload observations, not portable speed promises. The
-[positioning and methodology](docs/positioning.md#measured-snapshot) records
+The [positioning and methodology](docs/positioning.md#measured-snapshot) records
 the hardware, reboot, commit, evidence hashes, integer-loop measurements,
 numeric-Array comparison, and workload caveats.
 
@@ -368,9 +367,9 @@ Current `run` status:
   results share-nothing, and cancellation and diagnostic context remain
   isolated per task
 - MIR execution and direct native execution use the same pinned-worker
-  contract; this is a multicore claim for Aura task execution, not a promise
-  of preemption, work stealing, detached tasks, worker introspection, or
-  parallel speedup for every workload
+  contract and execute Aura tasks across multiple cores; preemption, work
+  stealing, detached tasks, and worker introspection are unavailable, while
+  parallel speedup depends on the workload
 - every loop backedge includes a compiler-inserted cooperative scheduling
   check; native concurrent code amortizes it with function-local fuel, while
   sequential native code elides checks when no sibling task can exist

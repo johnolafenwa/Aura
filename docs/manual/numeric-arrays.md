@@ -209,11 +209,10 @@ foreign-buffer aliasing.
 Shape metadata is dynamic; the checker does not prove shape compatibility.
 Allocation is limited by host memory and the maintained element-count checks.
 Floating arithmetic follows the existing host IEEE-754 contract. This surface
-does not claim NumPy API compatibility.
+is narrower than NumPy's API.
 
 The maintained one-million-element `float64` add/sum comparison records
-post-reboot measurements from one named Mac14,9 host. It has no
-Aura-versus-NumPy pass threshold and makes no portable performance claim.
+post-reboot measurements from one named Mac14,9 host.
 
 On the post-reboot Mac14,9 M2 Pro host at commit `0511adf`, across 11 paired
 single-thread observations, the direct native backend measured these medians
@@ -224,10 +223,9 @@ per one-million-element operation:
 | fresh owned `float64` add | 1.142461 ms | 0.251602 ms | 4.540751× |
 | existing-array `float64` sum | 1.150392 ms | 0.174065 ms | 6.608975× |
 
-These are measurements of the exact maintained workloads on that host, not a
-portable performance guarantee, a general NumPy comparison, or a claim of
-NumPy API compatibility. Release disassembly showed scalar floating-point
-instructions for these kernels; Aura 0.2 makes no vectorization claim.
+Release disassembly showed scalar floating-point instructions for these
+kernels. The table covers the two operations named above; Aura's Array API is
+narrower than NumPy's.
 
 ## Status
 

@@ -148,9 +148,9 @@ developed under the working name Aurora before its first publication.
   first-axis owned copying slices; map; sum/min/max/mean; exact-shape
   elementwise arithmetic; and scalar arithmetic.
 - Elementwise and reduction work runs in dtype-specialized contiguous native
-  runtime kernels. Aura makes no vectorization claim. The Manual records the
-  baseline-host one-million-element measurements as evidence, not as a portable
-  performance claim or gate.
+  runtime kernels. Release disassembly recorded scalar floating-point kernels.
+  The Manual records the baseline-host one-million-element measurements and
+  their provenance.
 - Arrays intentionally have no views, array-shape broadcasting, mixed-dtype
   promotion, equality, shape transformations, autograd, accelerators, or
   integer division. Use explicit casts and owned copies.
@@ -182,14 +182,15 @@ developed under the working name Aurora before its first publication.
 
 ### Current limits
 
-- Aura 0.2.0 is not a stable compatibility promise, production
-  systems release, sandbox, or security boundary for untrusted source.
+- Aura 0.2.0 is a technical preview whose compatibility may change. Production
+  systems, sandboxing, and untrusted-source security are outside this release's
+  scope.
 - Release archives support glibc Linux x86-64 and macOS x86-64/Apple silicon.
   Windows, musl Linux, other architectures, and cross-compilation are
   experimental source-build territory.
-- Structured concurrency is cooperative and pinned: it does not promise
-  preemption, migration, work stealing, detached tasks, deterministic sibling
-  order, or a speedup for every workload.
+- Structured concurrency is cooperative and pinned. Preemption, migration,
+  work stealing, and detached tasks are unavailable; sibling order is
+  unspecified, and speedup depends on the workload.
 - Owned copies are the only 0.2 slicing model. ADR-0038's place loans, returned
   views, mutable closure capture, and view-aware concurrency checks target 0.3.
 - Arrays are CPU-only and intentionally narrower than NumPy; externs are

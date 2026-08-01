@@ -106,7 +106,7 @@ The massive-concurrency gate is joint evidence: whole-process peak RSS must be
 at most 1.5 GiB, every timer arm span must be valid, and the worst valid-run
 p99 overshoot must be at most 5 ms. Incremental RSS remains in the report for
 per-task analysis, but does not replace the absolute Batch 4 gate. A
-memory-only pass does not qualify the claim.
+memory-only pass fails the joint gate.
 
 `1000-timers` first parks every worker on a release queue. The parent releases
 all workers, then waits until each has sent its monotonic start through the
@@ -210,8 +210,8 @@ inclusive at 1.6. The report also preserves every duration and order, the
 ratio of medians, median/MAD/p95/best summaries, and the indexes of
 individually passing and failing pairs.
 
-Multicore evidence is invalid, rather than failing or passing the performance
-claim, when the host has fewer than four qualified cores, the one-task median
+Multicore evidence is invalid before gate evaluation when the host has fewer
+than four qualified cores, the one-task median
 is below 250 ms, either shape has `MAD / median > 15%`, or the four-task
 median process CPU is below 150% of wall time. Exactly four cores, a 250 ms
 signal, 15% relative MAD, 150% CPU corroboration, and a 1.6 paired-median

@@ -78,8 +78,8 @@ This page documents known current limits of the Aura compiler and runtime.
   promotion, equality, views, reshape, transpose, matrix multiplication,
   multidimensional or step slicing, slice assignment, autograd, accelerator
   placement, distributed storage, or foreign-buffer aliasing. First-axis
-  slices are fresh owned copies. Maintained NumPy comparisons are exact
-  post-reboot measurements, not portable speed or compatibility claims.
+  slices are fresh owned copies. Maintained NumPy comparisons record exact
+  post-reboot workloads and provenance.
 - FFI v0 is package-only and requires `[package] allow_ffi = true`; a root
   package also reports every reachable FFI-enabled dependency under exact
   `[ffi] dependencies`. Calls resolve already-loaded process-global symbols
@@ -146,9 +146,9 @@ This page documents known current limits of the Aura compiler and runtime.
   when several workers execute MIR concurrently. Use the direct native backend
   for performance measurements.
 - Pinned task execution is maintained on the MIR and direct native backends.
-  Aura does not promise work stealing, preemption, detached tasks, a
-  particular parallel speedup, or broader automatic parallelism outside task
-  execution.
+  Work stealing, preemption, and detached tasks are unavailable. Parallel
+  speedup depends on the workload, and automatic parallelism applies only to
+  task execution.
 - Ordinary lightweight tasks request 512 KiB of writable coroutine stack.
   `TaskGroup.start_with_stack` and `start_soon_with_stack` accept exact
   `int64` requests from 256 KiB through 64 MiB inclusive. Accepted requests
@@ -167,22 +167,20 @@ This page documents known current limits of the Aura compiler and runtime.
   sleepers used 207,798,272 bytes of worst whole-process RSS and 198,787,072
   bytes above the same-process pre-spawn baseline, passing the maintained
   512 MiB gate.
-- Aura does not maintain a 100,000-sleeper claim. The final Phase 5.10
-  100,000-sleeper plus 1,000-timer repetitions peaked at 1,170,735,104,
+- The runtime accepts larger task counts; 10,000 sleepers is the maintained
+  memory-capacity bound. The final Phase 5.10 100,000-sleeper plus 1,000-timer
+  repetitions peaked at 1,170,735,104,
   1,921,531,904, and 2,001,305,600 bytes. Two of three exceed the 1.5 GiB
   gate. On this 16 KiB-page host, one resident page for each of the 101,000
   stackful child coroutines alone requires 1,654,784,000 bytes before task
-  metadata or the root runtime. The Phase 5.9 passing observation was
-  compression- and reclaim-dependent, not a robust capacity guarantee.
-- The ratified benchmark escape hatch retains the 100,000-sleeper result as
-  evidence without turning it into a product claim. Aura 0.2's maintained
-  scale claim is limited to the contractual 10,000-sleeper bound plus the
-  timer, idle, starvation, and multicore controls. All pass at Phase 5.10:
+  metadata or the root runtime. The Phase 5.9 passing observation depended on
+  compression and reclaim behavior.
+- The contractual 10,000-sleeper bound plus the timer, idle, starvation, and
+  multicore controls all pass at Phase 5.10:
   the standalone timers had a 6 ms worst arm span and 1 ms p99 overshoot,
   idle CPU was below 2%, starvation latency was 14 ms, and the four-worker
   control had a `1.039673x` paired median wall-time ratio with `396.73%`
-  median four-task process CPU. These are measured Mac14,9 results, not
-  portable capacity or speedup guarantees.
+  median four-task process CPU on the measured Mac14,9 host.
 - The scheduler uses persistent reactor registrations for nonblocking
   descriptors, a timer heap for deadlines, and direct Queue, task-completion,
   and blocking-pool notifications. When idle it blocks until an event or

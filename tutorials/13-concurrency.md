@@ -396,8 +396,8 @@ Both maintained backends render the same human call/task notes, and tooling
 receives the same records without parsing those notes.
 Scheduling, independent completion, and printed-output order are unspecified,
 and Aura exposes no worker-index or affinity-introspection API. Pinned
-workers enable multicore task execution; they do not promise work stealing,
-preemption, or parallel speedup for every workload.
+workers enable multicore task execution; work stealing and preemption are
+unavailable, and parallel speedup depends on the workload.
 
 Deep HTTP, TLS, and maintained Unix WebSocket library steps run on a distinct
 bounded protocol service with deep native worker stacks. Protocol state
@@ -408,19 +408,18 @@ before cancellation or reactor waiting resumes. On the clean Mac14,9 Phase
 512 MiB gate. Standalone 1,000-timer controls remained stable with a 6 ms
 maximum arm span and 1 ms worst p99 overshoot.
 
-The combined 100,000-sleeper plus 1,000-timer workload is not a maintained
-capacity claim. Its three clean runs peaked at 1,170,735,104, 1,921,531,904,
-and 2,001,305,600 bytes, so two runs exceeded 1.5 GiB even though their timers
-remained stable at a 3 ms maximum arm span and 2 ms worst p99 overshoot.
+The runtime accepts larger task counts; 10,000 sleepers is the maintained
+memory-capacity bound. Three clean runs of the 100,000-sleeper plus 1,000-timer
+workload peaked at 1,170,735,104,
+1,921,531,904, and 2,001,305,600 bytes, so two runs exceeded 1.5 GiB while
+their timers remained stable at a 3 ms maximum arm span and 2 ms worst p99
+overshoot.
 Mac14,9 uses 16 KiB pages: 101,000 stackful tasks therefore have a
 1,654,784,000-byte one-page floor before scheduler, program, and process
 metadata. The earlier Phase 5.9 below-gate sample depended on nondeterministic
-memory compression and does not establish a repeatable bound. Under the
-roadmap's measured-best escape hatch, Aura retains the result as benchmark
-evidence but makes no “100,000 tasks in 1.5 GiB” promise. This is not a hard
-100,000-task limit; it withdraws only that memory guarantee. The same current
-contractual report passes the four-worker scaling gate at a `1.039673x` paired
-median wall-time ratio with `396.73%` median four-task process CPU.
+memory compression. The same current contractual report passes the four-worker
+scaling gate at a `1.039673x` paired median wall-time ratio with `396.73%`
+median four-task process CPU.
 
 The protocol service starts lazily and lives until process exit; Aura 0.2
 does not expose a shutdown or join operation for it. File reads, resolver work,

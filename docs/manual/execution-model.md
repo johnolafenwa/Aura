@@ -461,8 +461,8 @@ Scheduling order among multiple ready tasks, completion order among
 independent tasks, and program-output order are not specified. Programs
 coordinate through queues, task results, cancellation, and other documented
 synchronization rather than timing assumptions. Aura exposes no worker
-identity or affinity API. The multicore guarantee applies to task execution;
-it does not promise preemption, work stealing, or speedup for every workload.
+identity or affinity API. Task execution is multicore; preemption and work
+stealing are unavailable, and speedup depends on the workload.
 
 Starting a child from a running task does not mutate the live scheduler
 through an alias. The runtime first prepares the child's guarded stack and
@@ -471,7 +471,7 @@ admission. If preparation fails, the start fails synchronously before a handle
 is returned and no child is admitted. A task may immediately wait on a
 successfully returned child handle, including inside a nested `TaskGroup`.
 The current admission broker preserves its own FIFO request order, but that is
-an internal safety property and does not promise FIFO child execution.
+an internal safety property; child execution order remains unspecified.
 
 Deep HTTP parsing/construction, TLS operations, and maintained Unix WebSocket
 protocol steps run on a distinct bounded protocol-step service. Its two named

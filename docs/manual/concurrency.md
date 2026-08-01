@@ -650,9 +650,9 @@ is Accepted. Phase 5.5 gives the scheduler driver unique mutable ownership,
 routes nested starts through an owned internal broker, makes preparation
 failure synchronous, and contains scheduler teardown across MIR and direct
 tasks. Phase 5.7 makes Queue and Task handle state cross-worker safe and runs
-task bodies on spawn-time pinned workers on both backends. This is a multicore
-task-execution contract, not a guarantee of work stealing, preemption,
-particular speedup, task/output order, or broader automatic parallelism.
+task bodies on spawn-time pinned workers on both backends. Task execution is
+multicore; work stealing and preemption are unavailable, task/output order is
+unspecified, and speedup depends on the workload.
 Accepted ADR-0034 implements the typed heterogeneous
 `select(source, ...)` builtin on both backends, using the shared persistent
 wait machinery for atomic registration, deterministic one-winner arbitration,
@@ -663,20 +663,18 @@ unavailable. On the clean Mac14,9 Phase 5.10 measurement at `181204b`,
 198,787,072 bytes above their same-process pre-spawn baseline, passing the
 512 MiB gate.
 
-Aura does not maintain a 100,000-sleeper claim. The final Phase 5.10
-100,000-sleeper plus 1,000-timer repetitions peaked at 1,170,735,104,
+The runtime accepts larger task counts; 10,000 sleepers is the maintained
+memory-capacity bound. The final Phase 5.10 100,000-sleeper plus 1,000-timer
+repetitions peaked at 1,170,735,104,
 1,921,531,904, and 2,001,305,600 bytes, so two of three exceeded the 1.5 GiB
 gate. On this 16 KiB-page host, one resident page for each of the 101,000
 stackful child coroutines alone requires 1,654,784,000 bytes before task
-metadata or the root runtime. The earlier Phase 5.9 pass was therefore
-compression- and reclaim-dependent rather than a robust capacity guarantee.
-Under the ratified benchmark escape hatch, that result is retained as evidence
-without becoming a product claim. The maintained scale claim is limited to
-the contractual 10,000-sleeper bound plus the timer, idle, starvation, and
-multicore controls, all of which pass at Phase 5.10. The four-worker control
+metadata or the root runtime. The earlier Phase 5.9 pass depended on memory
+compression and reclaim behavior. The contractual 10,000-sleeper bound plus
+the timer, idle, starvation, and multicore controls all pass at Phase 5.10.
+The four-worker control
 has a `1.039673x` paired median wall-time ratio and `396.73%` median four-task
-process CPU; these are measured Mac14,9 results, not portable speedup
-guarantees.
+process CPU on the measured Mac14,9 host.
 The Queue capacity boundary is pinned by
 `crates/aura-compiler/tests/fixtures/run-fail/queue_zero_capacity.au` and
 `crates/aura-compiler/tests/fixtures/run-fail/queue_negative_capacity.au` on

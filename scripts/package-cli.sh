@@ -12,7 +12,7 @@ if [[ ! "$archive_name" =~ ^aura-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?-(x86_
   exit 2
 fi
 archive_root="release/$archive_name"
-native_static_libs="$(cargo rustc -q -p aura-compiler --lib --release --locked -- --print native-static-libs 2>&1 >/dev/null)"
+native_static_libs="$(CARGO_TERM_COLOR=never cargo rustc -q -p aura-compiler --lib --release --locked -- --print native-static-libs 2>&1 >/dev/null)"
 rm -rf "$archive_root"
 mkdir -p "$archive_root/bin" "$archive_root/lib/aura" "$archive_root/examples/agents"
 cp target/release/aura "$archive_root/bin/aura"
@@ -22,22 +22,7 @@ cp examples/agents/retrying_network_worker.au "$archive_root/examples/agents/ret
 
 NATIVE_STATIC_LIBS="$native_static_libs" \
   ARCHIVE_ROOT="$archive_root" \
-  python3 - <<'PY'
-import json
-import os
-from pathlib import Path
-
-marker = "native-static-libs:"
-matching = [
-    line.split(marker, 1)[1].strip()
-    for line in os.environ["NATIVE_STATIC_LIBS"].splitlines()
-    if marker in line
-]
-if not matching:
-    raise SystemExit("rustc did not report native-static-libs")
-target = Path(os.environ["ARCHIVE_ROOT"]) / "lib/aura/native-link-args.json"
-target.write_text(json.dumps(matching[-1].split()) + "\n", encoding="utf-8")
-PY
+  python3 scripts/write-native-link-args.py
 
 cp README.md LICENSE "$archive_root/"
 cp crates/aura/README.md "$archive_root/AURA_CLI_README.md"

@@ -1,8 +1,8 @@
 # Batch 6 release-performance workloads
 
 This directory contains the paired Aura and CPython inputs for Aura 0.2's
-post-reboot release measurement. The runner treats the results as exact-workload
-measurements, not portable performance claims or release gates.
+post-reboot release measurement. The runner records exact-workload results with
+their host and repository provenance.
 
 ## Workloads
 

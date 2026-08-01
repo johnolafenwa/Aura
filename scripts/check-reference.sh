@@ -473,11 +473,11 @@ grep -Fq 'and file reads use the generic blocking-I/O pool.' docs/manual/executi
 grep -Fq 'PEM parsing and rustls construction run on protocol workers' docs/manual/execution-model.md
 grep -Fq 'Phase 5.10 measurement at `181204b`' docs/manual/current-limits.md
 grep -Fq '207,798,272 bytes of worst whole-process RSS and 198,787,072' docs/manual/current-limits.md
-grep -Fq 'Aura does not maintain a 100,000-sleeper claim.' docs/manual/current-limits.md
+grep -Fq 'The runtime accepts larger task counts; 10,000 sleepers is the maintained' docs/manual/current-limits.md
 grep -Fq '1,170,735,104,' docs/manual/current-limits.md
 grep -Fq '1,921,531,904, and 2,001,305,600 bytes. Two of three exceed the 1.5 GiB' docs/manual/current-limits.md
-grep -Fq 'compression- and reclaim-dependent, not a robust capacity guarantee.' docs/manual/current-limits.md
-grep -Fq 'The ratified benchmark escape hatch retains the 100,000-sleeper result as' docs/manual/current-limits.md
+grep -Fq 'The Phase 5.9 passing observation depended on' docs/manual/current-limits.md
+grep -Fq 'The contractual 10,000-sleeper bound plus the timer, idle, starvation, and' docs/manual/current-limits.md
 grep -Fq '`1.039673x` paired median wall-time ratio with `396.73%`' docs/manual/current-limits.md
 grep -Fq 'A dynamic value outside that range and a stack-allocation or' docs/manual/diagnostics.md
 grep -Fq '## Choosing A Custom Task Stack' docs/learn/concurrency.md
@@ -1002,7 +1002,7 @@ test -s scripts/bench-numeric-arrays.py
 test -s scripts/test_bench_numeric_arrays.py
 grep -Fq '"bench:numeric-arrays"' package.json
 grep -Fq '"test:bench-numeric-arrays"' package.json
-grep -Fq 'performance gate and not a general claim' benchmarks/numeric_arrays/README.md
+grep -Fq 'single-thread environment and records release evidence.' benchmarks/numeric_arrays/README.md
 grep -Fq '`scripts/benchmark_process.py`, which owns process-group launch,' benchmarks/numeric_arrays/README.md
 grep -Fq 'process that remains at or above 50% CPU in two snapshots 0.25 seconds apart,' benchmarks/numeric_arrays/README.md
 python3 -m unittest scripts/test_bench_numeric_arrays.py

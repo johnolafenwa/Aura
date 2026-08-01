@@ -19,16 +19,14 @@ unspecified. See [Ownership And Borrowing](/manual/ownership-and-borrowing),
 [Concurrency](/manual/concurrency), and
 [Control-Plane Modules](/manual/control-plane) for the normative contracts.
 
-The useful claim is therefore narrow: Aura is exploring whether familiar
+Aura explores whether familiar
 Python-shaped code can make resource lifetime, child-task lifetime, and
-recoverable control-plane failure visible in one language contract. It is not
-claiming feature parity with Python, general superiority over another
-language, or portable benchmark leadership.
+recoverable control-plane failure visible in one language contract. Its 0.2
+surface is the technical preview documented in the Manual.
 
 ## Measured Snapshot
 
-The tables below are measurements of exact programs, not broad performance
-claims and not release gates. They were collected from a clean detached
+The tables below were collected from exact programs in a clean detached
 checkout at commit `18c45ac` on one post-reboot Mac14,9 with an Apple M2 Pro
 (10 cores) and 16 GiB of memory. The recorded boot was 30 July 2026 at
 23:02:25. The comparison interpreter was Xcode CPython 3.9.6; it was **not** a
@@ -50,8 +48,7 @@ transferring an accepted `TcpStream` into a handler task (`AU3008`), and using
 one listener would have serialized the handlers instead of measuring fan-out.
 The task measurement includes creating and joining all 10,000 tasks after
 `GO`. The retry measurement executes the same status and delay schedule in
-both programs. Those choices make the pairs reproducible; they do not make
-them representative of every application.
+both programs. Those choices make the pairs reproducible.
 
 The V6 integer loops remain whole-process measurements. Startup-adjusted
 values subtract a same-repetition startup control and are estimates rather
@@ -63,8 +60,7 @@ than directly timed protocol windows.
 | Aura `int64` / CPython integer | 13.724042 ms | 321.096625 ms | 7.7378125 ms (10/11 valid) | 296.966042 ms (10 aligned pairs) |
 
 Python has one arbitrary-precision integer lane, so the same CPython program is
-shown against Aura's two fixed-width lanes. These numbers do not imply that
-all integer work has the same relationship.
+shown against Aura's two fixed-width lanes.
 
 Numeric Arrays were measured separately with NumPy 2.0.2 using one million
 `float64` elements and 11 paired single-thread observations on the same host.
@@ -74,9 +70,8 @@ Numeric Arrays were measured separately with NumPy 2.0.2 using one million
 | fresh owned elementwise add | 1.142461 ms | 0.251602 ms | 4.540751 |
 | existing-array sum reduction | 1.150392 ms | 0.174065 ms | 6.608975 |
 
-This is an initial numeric-runtime result, not a claim of NumPy API
-compatibility or competitive parity. The [Numeric Arrays](/manual/numeric-arrays)
-chapter records the exact Array methodology and limitations.
+The [Numeric Arrays](/manual/numeric-arrays) chapter records the exact Array
+methodology and Aura's current API limits.
 
 The release-performance raw evidence has SHA-256
 `06cc1223630b1063c8a6806bf590449d6121a3be8d33e8dc1b0ffd17cee93ccb`.
@@ -100,9 +95,9 @@ ownership. Its current roadmap centers
 Its ownership documentation gives each value one owner and defines
 [default immutable, `mut`, and `var` argument conventions](https://mojolang.org/docs/manual/values/ownership/).
 
-Aura 0.2 is narrower. It does not claim GPU programming, heterogeneous
-hardware support, or Python-library interoperability. Its present center is
-the application control plane around agents: scoped child tasks, transferable
+Aura 0.2 is narrower: GPU programming, heterogeneous hardware support, and
+Python-library interoperability are unavailable. Its present center is the
+application control plane around agents: scoped child tasks, transferable
 messages, typed I/O and process failures, timeouts, retries, and supervision.
 
 ### Nim
@@ -119,7 +114,7 @@ Aura is not differentiated merely by deterministic destruction—Nim already
 has a strong story there. Aura fixes one smaller integrated contract around
 call-boundary capabilities, structurally transferable task values,
 `TaskGroup` scope, and typed control-plane APIs. Nim's metaprogramming,
-backend, ecosystem, and portability breadth are outside Aura 0.2's claim.
+backend, ecosystem, and portability breadth are outside Aura 0.2's surface.
 
 ### Go
 
@@ -133,8 +128,7 @@ that the standard toolchain ships a
 Aura shares Go's preference for visible failure and communication, but
 chooses a different lifetime contract: non-copy task captures and messages
 must satisfy structural `Transfer`, resources have owners, and child tasks are
-normally accounted for by the `TaskGroup` that starts them. This is a semantic
-positioning statement, not a performance claim about Go; Go was not part of
+normally accounted for by the `TaskGroup` that starts them. Go was not part of
 the Batch 6 benchmark.
 
 ### Free-threaded Python 3.13+
@@ -148,15 +142,12 @@ threading changes execution, not Python into an ownership language.
 
 Aura instead checks ownership and task-transfer boundaries before execution
 and gives common control-plane failures concrete result types. That trades away
-Python's runtime flexibility and ecosystem compatibility. The CPython 3.9.6
-numbers above must not be presented as measurements of free-threaded Python;
-no such comparison was run.
+Python's runtime flexibility and ecosystem compatibility. The benchmark above
+used CPython 3.9.6; no free-threaded Python comparison was run.
 
-## What Aura Does Not Claim Yet
+## Current Technical Preview Scope
 
-Aura 0.2 does not claim production stability, a stable package ecosystem,
-general Python compatibility, GPU or accelerator execution, borrowed Array
-views, preemptive scheduling, work stealing, detached tasks, deterministic
-concurrent output, or portable performance leadership. The technical preview
-is evidence that the language wedge is coherent and executable. Those wider
-claims require separate evidence and are not part of the preview.
+Aura 0.2 is an executable technical preview. Production stability, a stable
+package ecosystem, general Python compatibility, GPU or accelerator execution,
+borrowed Array views, preemptive scheduling, work stealing, detached tasks,
+and deterministic concurrent output are outside its current surface.

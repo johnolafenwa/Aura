@@ -338,8 +338,9 @@ Queue and Task handles are the cross-worker channels. Other captures and
 results remain owned `Transfer` values, so the model stays share-nothing.
 Cancellation and diagnostics remain per task. Scheduling, independent task
 completion, and printed-output order are unspecified; Aura exposes no worker
-identity or affinity API. Pinned workers enable multicore task execution, but
-do not promise preemption, work stealing, or speedup for every workload.
+identity or affinity API. Pinned workers enable multicore task execution;
+preemption and work stealing are unavailable, and speedup depends on the
+workload.
 
 Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a bounded
 protocol-step service with deep native worker stacks. Each step is bounded and
@@ -368,22 +369,21 @@ pending backlog, not admission waiters or a stuck OS call, so unrelated
 blocking-I/O host work still cannot run until some worker returns when every
 worker is occupied.
 
-The clean Mac14,9 Phase 5.10 measurement at `181204b` does not support a
-maintained 100,000-task memory claim. The three 100,000-sleeper plus
-1,000-timer runs peaked at 1,170,735,104, 1,921,531,904, and 2,001,305,600
-bytes of whole-process RSS. The Phase 5 massive-RSS escape hatch therefore
-applies and the earlier “at most 1.5 GiB” claim is withdrawn. On this host, one
-16 KiB resident page for each of the 101,000 stackful children alone requires
+The runtime accepts larger task counts; 10,000 sleepers is the maintained
+memory-capacity bound. In the clean Mac14,9 Phase 5.10 measurement at `181204b`,
+three 100,000-sleeper plus 1,000-timer runs peaked at 1,170,735,104,
+1,921,531,904, and 2,001,305,600 bytes of whole-process RSS. Two runs exceeded
+the proposed 1.5 GiB bound. On this host, one 16 KiB resident page for each of
+the 101,000 stackful children alone requires
 1,654,784,000 bytes before scheduler metadata or the root runtime. The lower
-Phase 5.9 result depended on macOS memory compression and is not a stable
-contract. The 10,000-sleeper, standalone-timer, idle-CPU, starvation, and
+Phase 5.9 result depended on macOS memory compression. The 10,000-sleeper,
+standalone-timer, idle-CPU, starvation, and
 mandatory multicore gates all pass.
 
 MIR execution checks every loop backedge and yields every 8 backedges. Native
 concurrent programs use a function-local 4,096-iteration fuel budget, and
 sequential native programs remove checks that cannot have a sibling to
-schedule. These implementation
-choices do not promise an interleaving or ready-task order.
+schedule. Interleaving and ready-task order remain unspecified.
 
 `yield_now()` adds an explicit cooperative scheduling point between
 application-chosen chunks:

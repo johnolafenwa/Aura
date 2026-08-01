@@ -6,9 +6,7 @@ This benchmark measures two exact one-million-element `float64` workloads:
 - reduction of one existing contiguous array with `sum()`
 
 It compares Aura's direct native backend with NumPy under the same explicit
-single-thread environment. The comparison is release evidence, not a CI
-performance gate and not a general claim of NumPy performance or API
-compatibility.
+single-thread environment and records release evidence.
 
 The add lane allocates and releases a fresh result on every measured
 operation. Both implementations prepare their two inputs before the clock
@@ -80,8 +78,5 @@ The measured release `aura` binary hash is
 
 Release disassembly of the float64 add kernel emitted scalar `fadd d`
 instructions, and the deterministic floating reductions likewise remained
-scalar. No floating-kernel vectorization claim is made.
-
-These are measurements of these exact workloads on this host, not a portable
-performance guarantee, general NumPy comparison, or claim of NumPy API
-compatibility.
+scalar. Aura's Array API and NumPy cover different surfaces; the workloads
+above are the operations compared by this benchmark.

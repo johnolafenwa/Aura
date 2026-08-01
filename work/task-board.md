@@ -2,7 +2,39 @@
 
 Last updated: 2026-08-01
 
-## Aura identity migration (release packaging in progress)
+## Hosted CI hotfix and voice cleanup (source complete; local release handoff in progress)
+
+- Authorized target: close ANSI-contaminated native-link capture under hosted
+  `CARGO_TERM_COLOR=always`, make the archive smoke test portable to Dash,
+  harden workflows, record hosted-runner results as a definition-of-done gate,
+  and remove defensive disclaimer riders from maintained user-facing prose.
+- Hosted audit: every CI push run from 29 July through the preview-tag push was
+  red while local gates were reported green. H1 affected the hosted macOS
+  matrix and all release CLI archives; H2 affected Ubuntu's archive-smoke test.
+  The release publish job was skipped and GitHub has no published release.
+- H1-H3 focused status: Aura-spawned and packaging Cargo captures force
+  terminal color off; ANSI parsing and control-token rejection are pinned;
+  the smoke test double is POSIX `sh` and Dash-checked; CI/release workflows
+  set color off; Docs uses the official Node 24 deploy-pages v5 pin.
+- H5 sweep: 59 disclaimer sentences were removed or rewritten while retaining
+  measurement provenance and factual scope: README 2, docs 36, tutorials 10,
+  CHANGELOG 4, benchmark pages 7, and zero in examples, release notes, or
+  llms/marketplace copy. The README heading qualifier was also removed.
+- Focused compiler, packaging, identity, reference, docs, workflow, formatting,
+  and diff gates are green. The exact full local CI gate is also green: 336
+  CLI/runtime tests, 1,499 compiler-library tests, the complete forced
+  MIR/direct matrix, 101 LSP tests, 19 extension tests, compiler coverage at
+  96.28% lines / 97.21% functions / 94.62% regions, 100% LSP coverage,
+  reference integrity, docs, audits, warning-denied Clippy, and hygiene.
+  Remaining local handoff steps: one commit, stale remote-tag deletion, local
+  retag, artifact/checksum rebuild, cleanup, and the final report.
+- Hosted verification of the fixed commit remains pending because this task
+  stops before pushing. After a future branch push, every expected run must be
+  watched and audited with `gh run list` before completion is reported.
+- Work note: `work/2026-08-01-hosted-ci-hotfix-and-voice-cleanup.md`.
+- Protected user files and untracked files remain untouched.
+
+## Aura identity migration (completed)
 
 - Authorized target: atomically rename the product and language from Aurora to
   Aura before the first public `v0.2.0-preview` release. The `aura` CLI and
@@ -31,9 +63,10 @@ Last updated: 2026-08-01
   94.62% regions, LSP coverage at 100%, reference integrity over 37 pages and
   260 fences, all 683 manifests, docs, audits, warning-denied Clippy, and
   hygiene.
-- Remaining: atomic commit, final local tag movement, artifact rebuild,
-  checksum verification, and local-only handoff report.
-- Nothing will be pushed or published. Protected user files remain untouched.
+- Completed at `5d181e1`: atomic commit, local tag movement, native macOS/Linux
+  archives, VSIX/docs artifacts, smoke validation, and `SHA256SUMS`. The hosted
+  hotfix above supersedes that tag target before publication.
+- Nothing was published. Protected user files remained untouched.
 
 ## v0.2.0-preview pre-publish patch
 

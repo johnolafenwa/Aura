@@ -178,9 +178,9 @@ Copy and statically single-consumer non-repeatable results. Queue and Task
 handles are the maintained cross-worker channels; all other boundary values
 remain owned and share-nothing through `Transfer`. Cancellation and diagnostic
 context stay per task. Scheduling, completion, and program-output order are
-unspecified. This is a multicore guarantee for task execution, not a guarantee
-of preemption, work stealing, worker introspection, detached tasks, or parallel
-speedup for every program. See [Execution Model](/manual/execution-model) and
+unspecified. Task execution is multicore; preemption, work stealing, worker
+introspection, and detached tasks are unavailable, while parallel speedup
+depends on the program. See [Execution Model](/manual/execution-model) and
 [Current Limits](/manual/current-limits).
 
 Accepted ADR-0036 defines complete typed runtime frames on both maintained

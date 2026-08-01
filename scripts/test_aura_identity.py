@@ -158,6 +158,107 @@ class AuraIdentityTests(unittest.TestCase):
             "stale feature-history narrative:\n" + "\n".join(stale),
         )
 
+    def test_public_measurements_use_plain_factual_voice(self) -> None:
+        roots = (
+            ROOT / "README.md",
+            ROOT / "CHANGELOG.md",
+            ROOT / "docs",
+            ROOT / "tutorials",
+            ROOT / "examples",
+            ROOT / "benchmarks",
+            ROOT / "llms",
+            ROOT / "marketplace",
+            ROOT / "release-notes",
+        )
+        patterns = (
+            re.compile(r"\bmeasured snapshot,\s+not\b", re.IGNORECASE),
+            re.compile(
+                r"\b(?:observations?|measurements?|results?|numbers?)\b"
+                r"[^.]{0,180}\bnot (?:an? )?(?:portable|general|broad)\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\bnot (?:an? )?(?:portable|general|broad)\s+"
+                r"(?:performance|speed|capacity|benchmark)\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\bnot (?:an? )?(?:CI\s+)?(?:performance|benchmark|release)\s+"
+                r"(?:claim|promise|gate)\b",
+                re.IGNORECASE,
+            ),
+            re.compile(r"\bno (?:floating-kernel )?vectorization claim\b", re.IGNORECASE),
+            re.compile(
+                r"\bmakes? no (?:portable )?"
+                r"(?:performance|benchmark|vectorization)[^\n.]{0,40}\bclaim\b",
+                re.IGNORECASE,
+            ),
+            re.compile(r"\bmust not be presented as\s+measurements?\b", re.IGNORECASE),
+            re.compile(r"\bshould not be treated as\b", re.IGNORECASE),
+            re.compile(r"\bmust not be presented as\b", re.IGNORECASE),
+            re.compile(
+                r"\bnot an? (?:portable claim|benchmark promise)\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\b(?:observations?|measurements?|results?|numbers?)\b"
+                r"[^.]{0,180}\bnot an? guarantee\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\bwithout (?:becoming|turning it into) an? "
+                r"(?:product|performance|marketing) claim\b",
+                re.IGNORECASE,
+            ),
+            re.compile(r"\bnot representative of every application\b", re.IGNORECASE),
+            re.compile(r"\bnot a robust capacity guarantee\b", re.IGNORECASE),
+            re.compile(r"\b(?:do|does) not imply that\s+all integer work\b", re.IGNORECASE),
+            re.compile(r"\bnot a claim of NumPy\b", re.IGNORECASE),
+            re.compile(r"\bnot a stable\s+contract\b", re.IGNORECASE),
+            re.compile(
+                r"\b(?:does not|do not) (?:support|maintain)\s+"
+                r"(?:an? )?[^.]{0,60}\bclaim\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\bmakes? no\s+[^.]{0,60}\b(?:claim|promise)\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\b(?:not claiming|does not claim)\s+"
+                r"(?:feature parity|production stability|GPU programming)",
+                re.IGNORECASE,
+            ),
+            re.compile(r"\bWhat Aura Does Not Claim Yet\b", re.IGNORECASE),
+            re.compile(r"\bThose wider claims require separate evidence\b", re.IGNORECASE),
+        )
+        files: set[Path] = set()
+        for root in roots:
+            if root.is_file():
+                files.add(root)
+            elif root.exists():
+                files.update(root.rglob("*.md"))
+                files.update(root.rglob("*.txt"))
+        files.discard(ROOT / f"docs/{OLD_LOWER}_language_proposal.md")
+        stale: list[str] = []
+        for path in sorted(files):
+            text = path.read_text(encoding="utf-8")
+            seen: set[tuple[int, str]] = set()
+            for pattern in patterns:
+                for match in pattern.finditer(text):
+                    number = text.count("\n", 0, match.start()) + 1
+                    line = text.splitlines()[number - 1].strip()
+                    seen.add((number, line))
+            stale.extend(
+                f"{path.relative_to(ROOT)}:{number}: {line}"
+                for number, line in sorted(seen)
+            )
+        self.assertEqual(
+            stale,
+            [],
+            "defensive measurement disclaimers:\n" + "\n".join(stale),
+        )
+
     def test_required_aura_identity_surfaces_exist(self) -> None:
         required = (
             ROOT / "crates/aura-compiler/Cargo.toml",

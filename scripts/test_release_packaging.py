@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import runpy
+import shutil
 import signal
 import subprocess
 import tarfile
@@ -15,8 +17,11 @@ import unittest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+DOCS_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "docs.yml"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 PACKAGE_SCRIPT = REPO_ROOT / "scripts" / "package-cli.sh"
+LINK_ARG_WRITER = REPO_ROOT / "scripts" / "write-native-link-args.py"
 SMOKE_SCRIPT = REPO_ROOT / "scripts" / "smoke-cli-archive.sh"
 FINAL_REPORT = REPO_ROOT / "work" / "2026-07-31-batch6-final-report.md"
 
@@ -38,6 +43,22 @@ exhaust request 3
 exhaust result 503
 requests 7
 """
+
+
+class HostedWorkflowHardeningTests(unittest.TestCase):
+    def test_cargo_color_is_disabled_at_workflow_scope(self) -> None:
+        for workflow_path in (CI_WORKFLOW, RELEASE_WORKFLOW):
+            with self.subTest(workflow=workflow_path.name):
+                workflow = workflow_path.read_text(encoding="utf-8")
+                workflow_scope = workflow.split("\njobs:\n", 1)[0]
+                self.assertIn("\nenv:\n  CARGO_TERM_COLOR: never\n", workflow_scope)
+
+    def test_docs_use_node24_deploy_pages_release(self) -> None:
+        workflow = DOCS_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0",
+            workflow,
+        )
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
@@ -184,8 +205,8 @@ class ArchiveLayoutTests(unittest.TestCase):
             'cp examples/basic_addition.au "$archive_root/examples/basic_addition.au"',
             'cp examples/agents/retrying_network_worker.au '
             '"$archive_root/examples/agents/retrying_network_worker.au"',
-            'Path(os.environ["ARCHIVE_ROOT"]) / '
-            '"lib/aura/native-link-args.json"',
+            'CARGO_TERM_COLOR=never cargo rustc',
+            'python3 scripts/write-native-link-args.py',
             'cp README.md LICENSE "$archive_root/"',
             'cp crates/aura/README.md "$archive_root/AURA_CLI_README.md"',
             'tar -czf "$archive_name.tar.gz" -C release "$archive_name"',
@@ -206,6 +227,91 @@ class ArchiveLayoutTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("invalid release archive name", result.stderr)
+
+    def test_packaged_native_link_args_strip_ansi_and_contain_no_controls(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="aura-link-args-") as temp:
+            archive_root = Path(temp)
+            result = subprocess.run(
+                ["python3", str(LINK_ARG_WRITER)],
+                cwd=REPO_ROOT,
+                env={
+                    **os.environ,
+                    "ARCHIVE_ROOT": str(archive_root),
+                    "NATIVE_STATIC_LIBS": (
+                        "note: colored cargo output\n"
+                        "native-static-libs: -lc\x1b[0m -lm\x1b[1;32m\x1b[0m\n"
+                    ),
+                },
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = archive_root / "lib" / "aura" / "native-link-args.json"
+            contents = manifest.read_text(encoding="utf-8")
+            self.assertEqual(contents, '["-lc", "-lm"]\n')
+            self.assertFalse(
+                any(
+                    ord(character) < 32 or ord(character) == 127
+                    for character in contents.rstrip("\n")
+                )
+            )
+
+    def test_packaged_native_link_args_reject_control_characters_before_write(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="aura-link-args-invalid-") as temp:
+            archive_root = Path(temp)
+            result = subprocess.run(
+                ["python3", str(LINK_ARG_WRITER)],
+                cwd=REPO_ROOT,
+                env={
+                    **os.environ,
+                    "ARCHIVE_ROOT": str(archive_root),
+                    "NATIVE_STATIC_LIBS": "native-static-libs: -lc\x7f-tainted\n",
+                },
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("'-lc\\x7f-tainted'", result.stderr)
+            self.assertIn("control character", result.stderr)
+            self.assertFalse(
+                (archive_root / "lib" / "aura" / "native-link-args.json").exists()
+            )
+
+    def test_packaged_link_arg_parser_rejects_malformed_ansi_sequences(self) -> None:
+        native_link_args = runpy.run_path(str(LINK_ARG_WRITER))["native_link_args"]
+        for cargo_output, rendered_prefix, rendered_control in (
+            ("native-static-libs: -lc\x1b[\x00m", "'-lc", "\\x00"),
+            (
+                "native-static-libs: -lm\x1b]title\x01\x07",
+                "'-lm",
+                "\\x01",
+            ),
+        ):
+            with self.subTest(cargo_output=repr(cargo_output)):
+                with self.assertRaises(SystemExit) as raised:
+                    native_link_args(cargo_output)
+                self.assertIn(rendered_prefix, str(raised.exception))
+                self.assertIn(rendered_control, str(raised.exception))
+                self.assertIn("control character", str(raised.exception))
+
+    def test_packaged_link_arg_parser_strips_complete_ansi_string_controls(self) -> None:
+        native_link_args = runpy.run_path(str(LINK_ARG_WRITER))["native_link_args"]
+        for introducer in ("P", "X", "^", "_"):
+            with self.subTest(introducer=introducer):
+                cargo_output = (
+                    f"native-static-libs: -lc\x1b{introducer}payload\x1b\\ -lm"
+                )
+                self.assertEqual(native_link_args(cargo_output), ["-lc", "-lm"])
+        for terminator in ("\x07", "\x1b\\"):
+            with self.subTest(osc_terminator=repr(terminator)):
+                cargo_output = f"native-static-libs: -lc\x1b]title{terminator} -lm"
+                self.assertEqual(native_link_args(cargo_output), ["-lc", "-lm"])
 
 
 class InstalledArchiveSmokeTests(unittest.TestCase):
@@ -236,40 +342,68 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
             binary.write_text(
                 textwrap.dedent(
                     f"""\
-                    #!/usr/bin/env bash
-                    set -euo pipefail
+                    #!/bin/sh
+                    set -eu
                     printf 'cwd=%s\\n' "$PWD" >> "$AURA_SMOKE_TEST_LOG"
                     printf 'cargo=%s\\n' "${{CARGO:-}}" >> "$AURA_SMOKE_TEST_LOG"
                     printf 'args=%s\\n' "$*" >> "$AURA_SMOKE_TEST_LOG"
                     printf 'cache-args=%s|%s\\n' \
                       "${{AURA_CACHE_DIR:-}}" "$*" >> "$AURA_SMOKE_TEST_LOG"
-                    if [[ -e "${{CARGO:-}}" ]]; then
+                    if [ -f "${{CARGO:-}}" ]; then
                       echo "CARGO unexpectedly exists" >&2
                       exit 90
                     fi
-                    if [[ "${{1:-}}" == "--version" ]]; then
-                      echo "aura 0.2.0-preview ({commit})"
-                    elif [[ "$*" == *"basic_addition.au" ]]; then
-                      test -f "${{@: -1}}"
-                      mkdir -p "$AURA_CACHE_DIR"
-                      echo "16"
-                    elif [[ "$*" == *"retrying_network_worker.au" ]]; then
-                      test -f "${{@: -1}}"
-                      test -d "$AURA_CACHE_DIR"
-                      if [[ -n "${{AURA_SMOKE_STUBBORN_PID:-}}" ]]; then
-                        (trap '' TERM; exec sleep 300) >/dev/null 2>&1 &
-                        printf '%s\n' "$!" > "$AURA_SMOKE_STUBBORN_PID"
-                      fi
-                      printf '%b' {RETRY_STDOUT!r}
-                    else
-                      echo "unexpected arguments: $*" >&2
-                      exit 91
-                    fi
+                    case "${{1:-}}" in
+                      --version)
+                        echo "aura 0.2.0-preview ({commit})"
+                        ;;
+                      *)
+                        last_argument=
+                        for argument in "$@"; do
+                          last_argument=$argument
+                        done
+                        case "$*" in
+                          *basic_addition.au*)
+                            test -f "$last_argument"
+                            mkdir -p "$AURA_CACHE_DIR"
+                            echo "16"
+                            ;;
+                          *retrying_network_worker.au*)
+                            test -f "$last_argument"
+                            test -d "$AURA_CACHE_DIR"
+                            if [ -n "${{AURA_SMOKE_STUBBORN_PID:-}}" ]; then
+                              (trap '' TERM; exec sleep 300) >/dev/null 2>&1 &
+                              printf '%s\\n' "$!" > "$AURA_SMOKE_STUBBORN_PID"
+                            fi
+                            printf '%b' {RETRY_STDOUT!r}
+                            ;;
+                          *)
+                            echo "unexpected arguments: $*" >&2
+                            exit 91
+                            ;;
+                        esac
+                        ;;
+                    esac
                     """
                 ),
                 encoding="utf-8",
             )
             binary.chmod(0o755)
+            wrapper_source = binary.read_text(encoding="utf-8")
+            self.assertEqual(wrapper_source.splitlines()[0], "#!/bin/sh")
+            self.assertNotIn("pipefail", wrapper_source)
+            dash = shutil.which("dash")
+            if dash is not None:
+                dash_syntax = subprocess.run(
+                    [dash, "-n", str(binary)],
+                    cwd=REPO_ROOT,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(dash_syntax.returncode, 0, dash_syntax.stderr)
             archive = root / "aura-vtest-aarch64-apple-darwin.tar.gz"
             with tarfile.open(archive, "w:gz") as handle:
                 handle.add(archive_root, arcname=archive_root.name)

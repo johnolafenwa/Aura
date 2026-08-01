@@ -33,11 +33,10 @@ features:
 Aura is a compiled language for programs that manage resources on purpose: files, subprocesses, sockets, worker tasks, and the data that moves between them. It is statically typed, has no garbage collector, and carries its ownership and concurrency rules into ordinary application code rather than hiding them behind convention.
 
 That combination is Aura's current wedge: deterministic ownership,
-structured concurrency, and typed failure for agent control planes. It is not a
-claim that task schedules are deterministic, nor a claim to beat another
-language in general. [Why Aura](/positioning) compares the 0.2 technical
-preview with Mojo, Nim, Go, and free-threaded Python 3.13+, and publishes the
-exact measured workloads behind the performance snapshot.
+structured concurrency, and typed failure for agent control planes. Task
+schedules remain deliberately unspecified. [Why Aura](/positioning) compares
+the 0.2 technical preview with Mojo, Nim, Go, and free-threaded Python 3.13+,
+and publishes the exact measured workloads behind the performance snapshot.
 
 Three commitments shape every page of this book:
 
@@ -63,8 +62,7 @@ is faster; the ratio is Aura divided by CPython.
 | 20-client delayed loopback TCP fan-out | 104.505375 ms | 108.605459 ms | 0.962248 |
 | 16-cycle retrying HTTP worker | 429.291292 ms | 520.447791 ms | 0.824850 |
 
-These are exact-workload observations, not portable performance promises or a
-release gate. See [Why Aura](/positioning#measured-snapshot) for methodology,
+See [Why Aura](/positioning#measured-snapshot) for methodology,
 provenance, integer-loop results, numeric-Array measurements, and limitations.
 
 ## A First Program

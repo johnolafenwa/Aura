@@ -3515,6 +3515,12 @@ fn resolve_installed_runtime_artifacts_from_executable(
                 error
             )
         })?;
+    let native_link_args = validate_native_link_args(native_link_args).map_err(|error| {
+        format!(
+            "invalid Aura runtime link manifest `{}`: {error}",
+            manifest.display()
+        )
+    })?;
 
     Ok(Some(NativeRuntimeArtifacts {
         staticlib,
@@ -3584,12 +3590,15 @@ fn query_native_runtime_link_args() -> std::result::Result<Vec<String>, String> 
         ));
     }
 
-    Ok(parse_native_static_libs(&String::from_utf8_lossy(
-        &output.stderr,
-    )))
+    parse_native_static_libs(&String::from_utf8_lossy(&output.stderr))
 }
 
 fn configure_native_runtime_cargo(command: &mut Command, coverage_active: bool) {
+    // Cargo's inherited terminal-color setting affects even captured output.
+    // Link arguments are machine-readable inputs, so every runtime Cargo
+    // subprocess must produce deterministic, uncolored output.
+    command.env("CARGO_TERM_COLOR", "never");
+
     if !coverage_active {
         return;
     }
@@ -3734,8 +3743,126 @@ fn resolve_static_library_path_in_target_dir(
     ))
 }
 
-fn parse_native_static_libs(output: &str) -> Vec<String> {
-    output
+fn strip_ansi_escape_sequences(output: &str) -> String {
+    let bytes = output.as_bytes();
+    let mut clean = Vec::with_capacity(bytes.len());
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if bytes[cursor] != 0x1b {
+            clean.push(bytes[cursor]);
+            cursor += 1;
+            continue;
+        }
+
+        let escape_start = cursor;
+        cursor += 1;
+        let Some(introducer) = bytes.get(cursor).copied() else {
+            clean.push(0x1b);
+            break;
+        };
+        cursor += 1;
+        let sequence_end = match introducer {
+            // CSI grammar: parameter bytes, then intermediate bytes, then one
+            // final byte. Anything else is malformed and must survive for
+            // control-character validation.
+            b'[' => {
+                while bytes
+                    .get(cursor)
+                    .is_some_and(|byte| (0x30..=0x3f).contains(byte))
+                {
+                    cursor += 1;
+                }
+                while bytes
+                    .get(cursor)
+                    .is_some_and(|byte| (0x20..=0x2f).contains(byte))
+                {
+                    cursor += 1;
+                }
+                bytes
+                    .get(cursor)
+                    .filter(|&&byte| (0x40..=0x7e).contains(&byte))
+                    .map(|_| cursor + 1)
+            }
+            // OSC can end with BEL or ST. The other ANSI string controls end
+            // with ST. Embedded controls or a non-terminating ESC make the
+            // sequence malformed rather than content to discard.
+            b']' | b'P' | b'X' | b'^' | b'_' => {
+                let allow_bel = introducer == b']';
+                let payload_start = cursor;
+                let mut end = None;
+                while cursor < bytes.len() {
+                    if bytes[cursor] == 0x1b {
+                        if bytes.get(cursor + 1) == Some(&b'\\') {
+                            let valid_payload = output
+                                .get(payload_start..cursor)
+                                .is_some_and(|payload| !payload.chars().any(char::is_control));
+                            if valid_payload {
+                                end = Some(cursor + 2);
+                            }
+                        }
+                        break;
+                    }
+                    if bytes[cursor] == 0x07 {
+                        if allow_bel {
+                            let valid_payload = output
+                                .get(payload_start..cursor)
+                                .is_some_and(|payload| !payload.chars().any(char::is_control));
+                            if valid_payload {
+                                end = Some(cursor + 1);
+                            }
+                        }
+                        break;
+                    }
+                    cursor += 1;
+                }
+                end
+            }
+            // A general ANSI escape may contain zero or more intermediate
+            // bytes followed by one final byte.
+            0x20..=0x2f => {
+                while bytes
+                    .get(cursor)
+                    .is_some_and(|byte| (0x20..=0x2f).contains(byte))
+                {
+                    cursor += 1;
+                }
+                bytes
+                    .get(cursor)
+                    .filter(|&&byte| (0x30..=0x7e).contains(&byte))
+                    .map(|_| cursor + 1)
+            }
+            0x30..=0x7e => Some(cursor),
+            _ => None,
+        };
+        if let Some(sequence_end) = sequence_end {
+            cursor = sequence_end;
+        } else {
+            // Preserve the ESC and rescan the rest as ordinary text. That
+            // guarantees malformed input reaches link-argument validation.
+            clean.push(bytes[escape_start]);
+            cursor = escape_start + 1;
+        }
+    }
+    String::from_utf8(clean).expect("removing ASCII escape sequences preserves UTF-8")
+}
+
+fn validate_native_link_args(
+    native_link_args: Vec<String>,
+) -> std::result::Result<Vec<String>, String> {
+    if let Some(argument) = native_link_args
+        .iter()
+        .find(|argument| argument.chars().any(char::is_control))
+    {
+        return Err(format!(
+            "Aura runtime link argument {argument:?} contains a control character"
+        ));
+    }
+    Ok(native_link_args)
+}
+
+fn parse_native_static_libs(output: &str) -> std::result::Result<Vec<String>, String> {
+    let output = strip_ansi_escape_sequences(output);
+    let native_link_args = output
         .lines()
         .rev()
         .find_map(|line| line.split_once("native-static-libs:"))
@@ -3744,7 +3871,8 @@ fn parse_native_static_libs(output: &str) -> Vec<String> {
                 .map(|item| item.to_string())
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    validate_native_link_args(native_link_args)
 }
 
 fn write_stdout(text: &str) {
@@ -3816,8 +3944,9 @@ mod tests {
         cleanup_stale_native_cache_artifacts_at, cleanup_stale_verified_native_directories,
         configure_native_runtime_cargo, create_private_cache_directory_all, lsp_response_for_line,
         native_cache_key, native_cache_key_for_semantic_schema, native_execution_failure,
-        native_launch_error_invalidates_cache, native_runtime_identity_material, parse_run_backend,
-        parse_static_library_artifact_path, remove_native_cache_entry_if_unchanged,
+        native_launch_error_invalidates_cache, native_runtime_identity_material,
+        parse_native_static_libs, parse_run_backend, parse_static_library_artifact_path,
+        query_native_runtime_link_args, remove_native_cache_entry_if_unchanged,
         resolve_installed_runtime_artifacts_from_executable, resolve_static_library_path,
         runtime_archive_memo_stamp, select_build_backend, select_run_outcome,
         verified_native_execution_failure, write_unique_temp_file,
@@ -4432,6 +4561,7 @@ mod tests {
     #[test]
     fn coverage_builds_isolate_uninstrumented_native_runtime_artifacts() {
         let mut command = Command::new("cargo");
+        command.env("CARGO_TERM_COLOR", "always");
         command.env("LLVM_PROFILE_FILE", "coverage.profraw");
         command.env("RUSTC_WRAPPER", "cargo-llvm-cov");
         configure_native_runtime_cargo(&mut command, true);
@@ -4447,10 +4577,115 @@ mod tests {
             .collect::<std::collections::BTreeMap<_, _>>();
         assert_eq!(environments.get("LLVM_PROFILE_FILE"), Some(&None));
         assert_eq!(environments.get("RUSTC_WRAPPER"), Some(&None));
+        assert_eq!(
+            environments
+                .get("CARGO_TERM_COLOR")
+                .and_then(Option::as_ref)
+                .map(String::as_str),
+            Some("never")
+        );
         assert!(environments
             .get("CARGO_TARGET_DIR")
             .and_then(Option::as_ref)
             .is_some_and(|path| path.ends_with("target/native-runtime-uninstrumented")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_link_arg_capture_overrides_inherited_always_color_and_strips_ansi() {
+        const CHILD_MARKER: &str = "AURA_NATIVE_LINK_CAPTURE_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_some() {
+            assert_eq!(
+                query_native_runtime_link_args().expect("fake Cargo capture should succeed"),
+                vec!["-lc", "-lm"]
+            );
+            return;
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("native-link-color");
+        let fake_cargo = root.join("cargo");
+        fs::write(
+            &fake_cargo,
+            b"#!/bin/sh\n\
+if [ \"${CARGO_TERM_COLOR:-}\" != never ]; then\n\
+  echo \"capture inherited CARGO_TERM_COLOR=${CARGO_TERM_COLOR:-unset}\" >&2\n\
+  exit 71\n\
+fi\n\
+printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
+        )
+        .expect("fake Cargo should write");
+        fs::set_permissions(&fake_cargo, fs::Permissions::from_mode(0o755))
+            .expect("fake Cargo should be executable");
+
+        let output = Command::new(std::env::current_exe().expect("test executable should resolve"))
+            .arg("--exact")
+            .arg("tests::native_link_arg_capture_overrides_inherited_always_color_and_strips_ansi")
+            .arg("--nocapture")
+            .env(CHILD_MARKER, "1")
+            .env("CARGO", &fake_cargo)
+            .env("CARGO_TERM_COLOR", "always")
+            .output()
+            .expect("capture regression child should run");
+        assert!(
+            output.status.success(),
+            "capture regression child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn native_link_arg_capture_rejects_remaining_control_characters_by_token() {
+        for (output, rendered_token) in [
+            ("native-static-libs: -lc\0-tainted", "\"-lc\\0-tainted\""),
+            ("native-static-libs: -lm\x1b", "\"-lm\\u{1b}\""),
+        ] {
+            let error = parse_native_static_libs(output)
+                .expect_err("non-ANSI control characters must never become linker inputs");
+            assert!(error.contains(rendered_token), "{error}");
+            assert!(error.contains("control character"), "{error}");
+        }
+    }
+
+    #[test]
+    fn native_link_arg_capture_rejects_malformed_ansi_sequences() {
+        for (output, rendered_prefix, rendered_control) in [
+            ("native-static-libs: -lc\x1b[\0m", "\"-lc", "\\0"),
+            (
+                "native-static-libs: -lm\x1b]title\x01\x07",
+                "\"-lm",
+                "\\u{1}",
+            ),
+        ] {
+            let error = parse_native_static_libs(output)
+                .expect_err("malformed ANSI must remain visible to link-arg validation");
+            assert!(error.contains(rendered_prefix), "{error}");
+            assert!(error.contains(rendered_control), "{error}");
+            assert!(error.contains("control character"), "{error}");
+        }
+    }
+
+    #[test]
+    fn native_link_arg_capture_strips_complete_ansi_string_controls() {
+        for introducer in ['P', 'X', '^', '_'] {
+            let output = format!("native-static-libs: -lc\x1b{introducer}payload\x1b\\ -lm");
+            assert_eq!(
+                parse_native_static_libs(&output).expect("complete ANSI string should be stripped"),
+                vec!["-lc", "-lm"],
+                "introducer {introducer:?}"
+            );
+        }
+        for terminator in ["\x07", "\x1b\\"] {
+            let output = format!("native-static-libs: -lc\x1b]title{terminator} -lm");
+            assert_eq!(
+                parse_native_static_libs(&output).expect("complete OSC should be stripped"),
+                vec!["-lc", "-lm"]
+            );
+        }
     }
 
     #[test]
