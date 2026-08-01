@@ -41,6 +41,12 @@ Last updated: 2026-08-01
   limit for flattened mutable writeback and macOS exposed whole-suite timing
   contention. The x86 correction enables Cranelift's internal stack-return
   area and pins the three-result receiver shape; focused regressions are green.
+- Corrective branch run `30717422681` proved the x86-64 regression green, then
+  exposed a real package-command timeout defect on Ubuntu: killing the direct
+  shell left its sleeping helper alive with inherited output pipes, so reader
+  joins waited for the descendant. Timed package commands now run in a fresh
+  Unix process group and timeout/error cleanup kills and reaps the whole tree;
+  the regression uses a ten-second descendant and completes in about 60 ms.
 - Remaining: prove the corrective branch with the full local gate and three
   consecutive hosted CI runs on Linux and macOS, then land the proven tree on
   main. Publishing remains a separate user dispatch after this gate.

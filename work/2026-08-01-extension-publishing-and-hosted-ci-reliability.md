@@ -167,3 +167,18 @@ environment-dependent facts:
 
 The user authorized an isolated branch for faster hosted proof. The correction
 is being validated on `codex/hosted-ci-x64-writeback` before main moves again.
+
+Corrective branch run
+[30717422681](https://github.com/johnolafenwa/Aura/actions/runs/30717422681)
+then proved the x86-64 regression itself green. Ubuntu progressed through all
+1,501 compiler tests except
+`package::tests::command_timeout_terminates_hung_git_helpers`. That failure was
+a product defect rather than a timing-margin flake: timeout cleanup killed the
+direct `sh`, but its `sleep` descendant retained the captured stdout/stderr
+pipes, so joining the reader threads waited for the helper to exit naturally.
+
+Timed package commands now enter a fresh Unix process group before exec.
+Timeout and wait-error cleanup signal the entire group, retain a direct-child
+kill fallback, reap the child, and only then join its output readers. The
+regression now uses a ten-second helper with a five-second anti-wait ceiling;
+the repaired path completes in roughly 60 ms and leaves no descendant process.

@@ -639,14 +639,14 @@ fn configured_git_command_disables_interactive_prompts() {
 fn command_timeout_terminates_hung_git_helpers() {
     let _timing_guard = crate::serialize_timing_assertion();
     let mut command = Command::new("sh");
-    command.args(["-c", "sleep 5"]);
+    command.args(["-c", "sleep 10"]);
     let started = Instant::now();
     let error = run_command_with_timeout(command, "git test-timeout", StdDuration::from_millis(50))
         .expect_err("hung commands should time out");
     assert!(error.message.contains("timed out"));
     assert!(
-        started.elapsed() < StdDuration::from_secs(2),
-        "timeout helper should not wait for the child sleep to finish"
+        started.elapsed() < StdDuration::from_secs(5),
+        "timeout helper should kill descendants that inherited its pipes"
     );
 }
 

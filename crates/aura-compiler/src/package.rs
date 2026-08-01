@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
@@ -1472,12 +1472,42 @@ fn join_command_pipe(
         })
 }
 
+fn terminate_command_tree(child: &mut Child) {
+    #[cfg(unix)]
+    if let Ok(process_group_id) = i32::try_from(child.id()) {
+        // SAFETY: the child was placed in a fresh process group whose id is
+        // its still-live, unreaped pid. A negative pid targets that group and
+        // closes pipes inherited by helper descendants before reader joins.
+        let _ = unsafe { libc::kill(-process_group_id, libc::SIGKILL) };
+    }
+    // Keep the direct-child kill as a portable fallback and always reap it.
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn run_command_with_timeout(
     mut command: Command,
     display_name: &str,
     timeout: StdDuration,
 ) -> Result<Output> {
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        // SAFETY: this child-only hook calls the async-signal-safe setpgid
+        // operation immediately before exec. Timeout cleanup can then kill
+        // Git plus any credential, transport, or shell helpers it spawned.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) < 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+    }
     let mut child = command
         .spawn()
         .map_err(|error| Diagnostic::new(format!("failed to run `{}`: {}", display_name, error)))?;
@@ -1505,8 +1535,7 @@ fn run_command_with_timeout(
             }
             Ok(None) => {}
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_command_tree(&mut child);
                 let _ = stdout_handle.join();
                 let _ = stderr_handle.join();
                 return Err(Diagnostic::new(format!(
@@ -1516,8 +1545,7 @@ fn run_command_with_timeout(
             }
         }
         if started.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_command_tree(&mut child);
             let _ = stdout_handle.join();
             let _ = stderr_handle.join();
             return Err(Diagnostic::new(format!(
