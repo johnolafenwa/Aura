@@ -968,6 +968,7 @@ mod tests {
 
     #[test]
     fn control_notification_before_poll_is_durable_without_a_wait_key() {
+        let _timing_guard = crate::serialize_timing_assertion();
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<ReactorHandle>();
 
@@ -987,6 +988,7 @@ mod tests {
 
     #[test]
     fn control_notification_during_poll_wakes_without_fabricating_readiness() {
+        let _timing_guard = crate::serialize_timing_assertion();
         let mut reactor = RuntimeReactor::new().unwrap();
         let handle = reactor.handle();
         let sender = thread::spawn(move || {
@@ -1008,6 +1010,7 @@ mod tests {
 
     #[test]
     fn repeated_control_notifications_coalesce_into_one_scheduler_turn() {
+        let _timing_guard = crate::serialize_timing_assertion();
         let mut reactor = RuntimeReactor::new().unwrap();
         let handle = reactor.handle();
         for _ in 0..32 {

@@ -16,6 +16,47 @@ test("extension bundle contains built extension and language server files", () =
   }
 });
 
+test("extension manifest and listing are ready for both public marketplaces", () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(extensionRoot, "package.json"), "utf8")
+  );
+  const readme = fs.readFileSync(path.join(extensionRoot, "README.md"), "utf8");
+
+  assert.equal(manifest.publisher, "JohnOlafenwa");
+  assert.equal(manifest.displayName, "Aura Programming Language");
+  assert.equal(manifest.version, "0.2.0");
+  assert.equal(manifest.preview, true);
+  assert.equal(manifest.private, undefined);
+  assert.equal(manifest.icon, "images/aura.png");
+  assert.deepEqual(manifest.categories, ["Programming Languages"]);
+  assert.deepEqual(manifest.keywords, [
+    "aura",
+    "systems programming",
+    "python-like",
+    "structured concurrency",
+    "lsp"
+  ]);
+  assert.deepEqual(manifest.repository, {
+    type: "git",
+    url: "https://github.com/johnolafenwa/Aura.git",
+    directory: "tools/vscode-aura"
+  });
+  assert.deepEqual(manifest.bugs, {
+    url: "https://github.com/johnolafenwa/Aura/issues"
+  });
+  assert.equal(manifest.homepage, "https://github.com/johnolafenwa/Aura#readme");
+  assert.ok(manifest.files.includes("LICENSE"));
+  assert.ok(manifest.files.includes("images/aura.png"));
+  assert.equal(fs.existsSync(path.join(extensionRoot, "LICENSE")), true);
+  assert.equal(fs.existsSync(path.join(extensionRoot, manifest.icon)), true);
+  assert.match(
+    readme.split("\n").slice(0, 5).join("\n"),
+    /Aura is a .* programming language[\s\S]*https:\/\/github\.com\/johnolafenwa\/Aura/i
+  );
+  assert.doesNotMatch(manifest.scripts["package:vsix"], /allow-missing-repository|skip-license/);
+});
+
 test("extension package includes the assertion-aware Aura grammar", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const manifest = JSON.parse(

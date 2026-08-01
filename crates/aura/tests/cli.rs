@@ -26,6 +26,18 @@ fn serialize_bounded_blocking_pool_watchdog() -> std::sync::MutexGuard<'static, 
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+fn serialize_timing_assertion() -> std::sync::MutexGuard<'static, ()> {
+    static TIMING_ASSERTION_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+        std::sync::OnceLock::new();
+
+    // The backend safepoint probes use calibrated latency windows. Shared CI
+    // runners must not make them measure one another's CPU and I/O load.
+    TIMING_ASSERTION_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(unix)]
 fn hold_native_runtime_build_locks(target_dir: &std::path::Path) -> Vec<fs::File> {
     use std::os::fd::AsRawFd;
@@ -10599,6 +10611,7 @@ def main() -> int32:
 
 #[test]
 fn loop_backedge_safepoints_prevent_timer_and_queue_starvation() {
+    let _timing_guard = serialize_timing_assertion();
     let source = r#"
 import sys
 
@@ -10644,6 +10657,7 @@ def main() -> int32:
 
 #[test]
 fn loop_backedge_safepoints_prevent_socket_readiness_starvation() {
+    let _timing_guard = serialize_timing_assertion();
     let source = r#"
 import io
 import net

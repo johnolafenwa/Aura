@@ -149,6 +149,21 @@ Compiler coverage now runs the full Rust workspace test surface while reporting 
 
 The GitHub Actions surface mirrors the local gate: CI runs on Linux and macOS, the docs workflow builds and deploys the VitePress book to GitHub Pages, and the release workflow builds platform CLI archives plus the VS Code extension and static docs archive for GitHub Releases.
 
+### Hosted Runner Reliability
+
+Local and hosted gates are complementary. A batch is not complete until the
+latest GitHub Actions runs have been inspected with `gh run list`; a local
+green gate cannot establish environment-conditional Linux or macOS behavior.
+
+Tests whose pass condition depends on a measured wall-clock margin use one
+shared serialization guard within each Rust test binary. This applies to the
+whole timing-assertion family: scheduler cancellation wakeups, bounded-queue
+ordering, safepoint latency, blocking-service timeout budgets, socket timing,
+and related reactor fairness probes. The policy preserves the real-hardware
+margins while preventing unrelated timing tests from competing on shared
+three-core macOS runners. Ordinary timeout values used only as deadlock guards
+remain parallel.
+
 ## Workflow For A New Feature
 
 When adding a new Aura feature:

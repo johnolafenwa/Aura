@@ -1,11 +1,21 @@
 {
   "name": "vscode-aura",
-  "displayName": "Aura Language",
-  "description": "VS Code support for the Aura programming language.",
+  "displayName": "Aura Programming Language",
+  "description": "Language support for Aura, the Python-familiar systems programming language: syntax highlighting, snippets, and compiler-backed LSP.",
   "version": "0.2.0",
-  "publisher": "aura-lang",
-  "private": true,
+  "publisher": "JohnOlafenwa",
+  "preview": true,
+  "icon": "images/aura.png",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/johnolafenwa/Aura.git",
+    "directory": "tools/vscode-aura"
+  },
+  "bugs": {
+    "url": "https://github.com/johnolafenwa/Aura/issues"
+  },
+  "homepage": "https://github.com/johnolafenwa/Aura#readme",
   "engines": {
     "vscode": "^1.91.0"
   },
@@ -14,8 +24,10 @@
   ],
   "files": [
     "INSTALL.md",
+    "LICENSE",
     "README.md",
     "dist/**",
+    "images/aura.png",
     "language-configuration.json",
     "snippets/**",
     "syntaxes/**"
@@ -61,13 +73,15 @@
   "scripts": {
     "build": "node ./scripts/build.js",
     "vscode:prepublish": "npm run build",
-    "package:vsix": "npm run build && npx @vscode/vsce package --out aura-language.vsix --no-dependencies --allow-missing-repository --skip-license",
+    "package:vsix": "npm run build && npx @vscode/vsce package --out aura-language.vsix --no-dependencies",
     "test": "npm run build && node --test ./test/*.test.js",
     "check": "npm run build && node --check ./src/extension.js && node --check ./scripts/build.js"
   },
   "keywords": [
     "aura",
-    "language",
-    "vscode"
+    "systems programming",
+    "python-like",
+    "structured concurrency",
+    "lsp"
   ]
 }

@@ -24,6 +24,8 @@ PACKAGE_SCRIPT = REPO_ROOT / "scripts" / "package-cli.sh"
 LINK_ARG_WRITER = REPO_ROOT / "scripts" / "write-native-link-args.py"
 SMOKE_SCRIPT = REPO_ROOT / "scripts" / "smoke-cli-archive.sh"
 FINAL_REPORT = REPO_ROOT / "work" / "2026-07-31-batch6-final-report.md"
+DOWNLOADS_DOC = REPO_ROOT / "docs" / "downloads.md"
+RELEASE_PROCESS_DOC = REPO_ROOT / "docs" / "release-process.md"
 
 
 RETRY_STDOUT = """\
@@ -72,6 +74,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "\npermissions:\n", 1
         )[0]
         self.assertIn(
+            "      source_ref:\n"
+            "        description: 'Optional commit, branch, or tag to build; defaults to release_tag'\n"
+            "        required: false\n"
+            "        default: ''\n"
+            "        type: string",
+            dispatch_inputs,
+        )
+        self.assertIn(
             "      publish:\n"
             "        description: 'Publish a GitHub Release after all artifacts pass (manual opt-in)'\n"
             "        required: true\n"
@@ -83,11 +93,54 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "if: ${{ github.event_name == 'push' || inputs.publish }}",
             self.workflow,
         )
+        self.assertIn(
+            "      publish_extension:\n"
+            "        description: 'Publish the VSIX to configured extension marketplaces'\n"
+            "        required: true\n"
+            "        default: false\n"
+            "        type: boolean",
+            dispatch_inputs,
+        )
+
+    def test_extension_publish_job_supports_tag_dispatch_and_secretless_skips(self) -> None:
+        self.assertIn("publish-extension:\n", self.workflow)
+        self.assertIn("name: Publish VS Code extension", self.workflow)
+        self.assertIn("name: Download VS Code extension", self.workflow)
+        self.assertIn("name: Download VSIX from existing GitHub Release", self.workflow)
+        self.assertIn("name: Confirm existing GitHub Release", self.workflow)
+        self.assertIn("VSCE_PAT: ${{ secrets.VSCE_PAT }}", self.workflow)
+        self.assertIn("OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}", self.workflow)
+        self.assertIn("if: env.VSCE_PAT != ''", self.workflow)
+        self.assertIn("if: env.VSCE_PAT == ''", self.workflow)
+        self.assertIn("if: env.OVSX_TOKEN != ''", self.workflow)
+        self.assertIn("if: env.OVSX_TOKEN == ''", self.workflow)
+        self.assertIn(
+            "npx @vscode/vsce publish --packagePath \"$VSIX_PATH\" -p \"$VSCE_PAT\"",
+            self.workflow,
+        )
+        self.assertIn(
+            "npx ovsx publish \"$VSIX_PATH\" -p \"$OVSX_TOKEN\"",
+            self.workflow,
+        )
+        self.assertIn("::notice::VSCE_PAT is not configured", self.workflow)
+        self.assertIn("::notice::OVSX_TOKEN is not configured", self.workflow)
+        self.assertIn("inputs.publish_extension", self.workflow)
+        self.assertIn(
+            'gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"',
+            self.workflow,
+        )
+
+    def test_extension_publish_job_validates_plain_marketplace_identity(self) -> None:
+        self.assertIn("name: Validate VSIX Marketplace identity", self.workflow)
+        self.assertIn("expected_version=\"${RELEASE_TAG#v}\"", self.workflow)
+        self.assertIn("expected_version=\"${expected_version%%-*}\"", self.workflow)
+        self.assertIn("JohnOlafenwa.vscode-aura", self.workflow)
+        self.assertIn("0.2.0", self.workflow)
 
     def test_manual_source_and_release_identity_are_separate(self) -> None:
         checkout_ref = (
             "ref: ${{ github.event_name == 'workflow_dispatch' "
-            "&& inputs.source_ref || github.ref }}"
+            "&& (inputs.source_ref || inputs.release_tag) || github.ref }}"
         )
         release_identity = (
             "${{ github.event_name == 'workflow_dispatch' "
@@ -191,6 +244,28 @@ class ReleaseWorkflowTests(unittest.TestCase):
         handoff = FINAL_REPORT.read_text(encoding="utf-8")
         self.assertIn("gh auth login", handoff)
         self.assertIn("gh auth status", handoff)
+
+    def test_downloads_and_release_process_cover_extension_distribution(self) -> None:
+        downloads = DOWNLOADS_DOC.read_text(encoding="utf-8")
+        release_process = RELEASE_PROCESS_DOC.read_text(encoding="utf-8")
+        self.assertIn(
+            "https://marketplace.visualstudio.com/items?itemName=JohnOlafenwa.vscode-aura",
+            downloads,
+        )
+        self.assertIn(
+            "https://open-vsx.org/extension/JohnOlafenwa/vscode-aura",
+            downloads,
+        )
+        self.assertIn("aura-language.vsix", downloads)
+        self.assertIn(
+            "VSCE_PAT: global PATs are unsupported after 2026-12-01; renew as an "
+            "org-scoped token (Marketplace -> Manage) and verify with "
+            "`npx @vscode/vsce verify-pat JohnOlafenwa`.",
+            release_process,
+        )
+        self.assertIn("OVSX_TOKEN", release_process)
+        self.assertIn("hosted CI", release_process)
+        self.assertIn("reliably green", release_process)
 
 
 class ArchiveLayoutTests(unittest.TestCase):

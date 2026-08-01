@@ -3650,6 +3650,7 @@ fn dropping_scheduler_removes_outstanding_source_subscriptions() {
 
 #[test]
 fn continuously_yielding_task_does_not_starve_reactor_wakeups() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let wake_queue = ChannelValue::new();
     let sender = wake_queue.clone();
     let stop = Arc::new(AtomicBool::new(false));
@@ -6443,6 +6444,7 @@ fn json_codec_service_bounds_admission_and_recovers_permits_after_failures() {
 
 #[test]
 fn json_codec_non_task_admission_waits_for_capacity_before_cloning() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let pool = super::JsonCodecPool::start_with_limits(1, 1);
     let release = Arc::new(AtomicBool::new(false));
     let worker_started = Arc::new(AtomicBool::new(false));
@@ -7089,6 +7091,7 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
 
 #[test]
 fn bounded_channel_waits_for_capacity_before_accepting_another_value() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let channel = ChannelValue::with_capacity(1);
     channel
         .send(Value::Int(IntegerValue::from_signed(1)))
@@ -7389,6 +7392,7 @@ fn lightweight_worker_runner_rejects_an_empty_pool_before_starting_work() {
 
 #[test]
 fn worker_coordinator_preserves_round_robin_admission_and_shutdown_accounting() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let workers = super::LightweightWorkerCoordinator::new(2);
     let first_reactor = RuntimeReactor::new().expect("first worker reactor should initialize");
     let second_reactor = RuntimeReactor::new().expect("second worker reactor should initialize");
@@ -8371,6 +8375,7 @@ fn phase58_select_rejects_a_deadline_that_overflows_after_source_validation() {
 
 #[test]
 fn phase58_select_captures_one_deadline_base_after_all_sources_validate() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let validation_finished_at = Arc::new(Mutex::new(None));
     let hook_timestamp = validation_finished_at.clone();
     install_after_select_source_validation_hook(move || {
@@ -8674,6 +8679,7 @@ fn phase58_select_check_subscribe_recheck_and_loser_cleanup_are_race_safe() {
 
 #[test]
 fn phase58_select_concurrent_queue_and_task_publication_enqueues_waiter_once() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let queue = ChannelValue::new();
     let publication_barrier = Arc::new(Barrier::new(3));
     let task_barrier = publication_barrier.clone();
@@ -9141,6 +9147,7 @@ fn non_unix_tls_listener_wait_timeout_keeps_short_slices_when_handshakes_are_pen
 
 #[test]
 fn runtime_scheduler_wakes_sleep_on_cancellation() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let parent = CancellationContext::default();
     let group = TaskGroupValue::new(&parent);
     let cancellation = group.child_cancellation();
@@ -9167,6 +9174,7 @@ fn runtime_scheduler_wakes_sleep_on_cancellation() {
 
 #[test]
 fn runtime_scheduler_wakes_select_wait_on_cancellation() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let parent = CancellationContext::default();
     let group = TaskGroupValue::new(&parent);
     let cancellation = group.child_cancellation();
@@ -11184,6 +11192,7 @@ fn lightweight_scheduler_handles_http_after_blocking_io_server_step() {
 
 #[test]
 fn lightweight_tasks_observe_blocking_io_completion_before_parent_timeout() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let timeout = StdDuration::from_millis(250);
     let start = Instant::now();
     let result = super::run_lightweight_root_task_with_worker_count(1, move || {
@@ -11359,6 +11368,7 @@ fn protocol_state_step_panics_return_owned_state_and_preserve_the_service() {
 
 #[test]
 fn protocol_step_deadlines_cover_queue_saturation_and_late_completion() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let pool = super::ProtocolStepPool::start();
     let release = Arc::new(AtomicBool::new(false));
     let release_guard = AtomicReleaseGuard(release.clone());
@@ -13153,6 +13163,7 @@ fn abandoned_blocking_io_discards_late_host_errors_and_panics_then_recovers() {
 
 #[test]
 fn tcp_connect_offloads_slow_resolution_without_starving_a_sibling_timer() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let listener = std::net::TcpListener::bind("127.0.0.1:0")
         .expect("loopback listener should bind for the injected resolver");
     let candidate = listener
@@ -13208,6 +13219,7 @@ fn tcp_connect_offloads_slow_resolution_without_starving_a_sibling_timer() {
 
 #[test]
 fn tcp_connect_timeout_budget_includes_resolution_wait() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let started = Instant::now();
     let result = run_lightweight_root_task(move || {
         let error = TcpStreamValue::connect_with_operations(
@@ -13240,6 +13252,7 @@ fn tcp_connect_timeout_budget_includes_resolution_wait() {
 
 #[test]
 fn tcp_connect_timeout_offloads_resolution_without_a_lightweight_task_context() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let started = Instant::now();
     let error = TcpStreamValue::connect_with_operations(
         "slow.host-entry.test:443",
@@ -14808,6 +14821,7 @@ fn network_resources_use_nonblocking_descriptors_internally() {
 #[cfg(unix)]
 #[test]
 fn socket_timeouts_honor_the_requested_budget() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp bind should succeed");
     let started = Instant::now();
     let error = listener
@@ -15116,6 +15130,7 @@ fn tls_listener_accept_skips_timed_out_handshakes_and_accepts_the_next_peer() {
 #[cfg(unix)]
 #[test]
 fn tls_listener_accept_is_not_linearly_delayed_by_multiple_stalled_peers() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let temp = TempDir::new("aura-runtime-tls-multi-slowloris");
     let certificate =
         generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");

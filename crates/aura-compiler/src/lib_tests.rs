@@ -3013,6 +3013,7 @@ def main() -> int32:
 
 #[test]
 fn cancellation_wakes_sleep_tasks_promptly() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let source = r#"
 def sleeper(started: Queue[String], finished: Queue[String]) -> None:
     started.put("sleep")
@@ -3055,6 +3056,7 @@ def main() -> int32:
 
 #[test]
 fn cancellation_wakes_queue_wait_tasks_promptly() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let source = r#"
 def waiter(started: Queue[String], jobs: Queue[int32], finished: Queue[String]) -> None:
     started.put("wait")
@@ -3108,6 +3110,7 @@ def main() -> int32:
 
 #[test]
 fn bounded_queue_blocks_second_put_until_capacity_frees() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let temp = TempDir::new("aura-bounded-queue");
     let before_path = temp.path().join("before.txt");
     let after_path = temp.path().join("after.txt");
@@ -3188,6 +3191,7 @@ def main() -> int32:
 #[cfg(unix)]
 #[test]
 fn async_file_io_keeps_the_scheduler_running_while_a_fifo_read_waits() {
+    let _timing_guard = crate::serialize_timing_assertion();
     let _guard = lock_io_example();
     let temp = TempDir::new("aura-async-file-io");
     let fifo_path = temp.path().join("events.fifo");

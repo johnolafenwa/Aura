@@ -2,6 +2,47 @@
 
 Last updated: 2026-08-01
 
+## Extension marketplaces and hosted-CI singleton reliability (in progress)
+
+- Authorized target: prepare `JohnOlafenwa.vscode-aura` for the Visual Studio
+  Marketplace and Open VSX; publish only from the Release workflow with
+  visible secretless skips and a tag-based manual dispatch; close the hosted
+  Linux diagnostic-channel test race and the macOS timing-margin flaky class;
+  then prove three consecutive hosted CI runs green on both operating systems.
+- E1-E4 implementation: the extension has the public publisher/display name,
+  preview metadata, exact requested categories/keywords and repository links,
+  standalone listing README, packaged MIT license, and a 256 px PNG rendered
+  from the byte-identical deployed `aura-mark.svg`. The release workflow now
+  validates the plain `0.2.0` VSIX identity and conditionally publishes to both
+  registries, with a dispatch-only path for the existing preview release.
+  Downloads and release-process pages are added and linked from the docs site.
+- F1 diagnosis: test-only. Hosted Ubuntu logs show Dash's `Bad fd number` from
+  the test helper's `eval ... >&$FD`; concurrent tests merely made the inherited
+  channel descriptor exceed Dash's single-digit redirection syntax. Production
+  writes to the inherited descriptor directly. The test now deliberately holds
+  descriptors above 9 and its POSIX shell helper writes through `/dev/fd`; the
+  focused high-thread macOS run and 100/100 Linux high-thread loop are green.
+- F2 policy: preserve the calibrated margins and serialize the complete
+  wall-clock timing-assertion family through shared guards. This covers both
+  safepoint CLI probes and every compiler test with an elapsed-time assertion,
+  plus the bounded-queue ordering and DNS/sibling-timer probes. Focused and
+  full gates remain pending.
+- Focused proof is green: `vsce ls`, `vsce package`, extension/workflow tests,
+  actionlint, both safepoint probes, all 1,499 compiler-library tests at 64
+  test threads, and 100/100 Linux high-thread runs of the F1 family. Both
+  required repository secret names are configured.
+- Exact full `npm run ci` is green: 336 CLI/runtime tests, 1,499 compiler
+  tests, the forced parity matrix, 101 LSP tests at 100% coverage, 20 extension
+  tests, compiler coverage at 96.28% lines / 97.21% functions / 94.62%
+  regions, reference integrity, docs, audits, warning-denied Clippy, and
+  hygiene.
+- Remaining: commit and push, then obtain and inspect three consecutive green
+  hosted CI runs on Linux and macOS. Publishing remains a separate user
+  dispatch after this gate.
+- Work note: `work/2026-08-01-extension-publishing-and-hosted-ci-reliability.md`.
+- Protected user files remain untouched: `personal/file_ops.au`, the untracked
+  ADR-0022 draft, and `fc2_direct.out`.
+
 ## Hosted CI hotfix and voice cleanup (source complete; local release handoff in progress)
 
 - Authorized target: close ANSI-contaminated native-link capture under hosted

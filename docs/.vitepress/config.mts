@@ -33,6 +33,7 @@ export default defineConfig({
     nav: [
       { text: 'Learn', link: '/learn/' },
       { text: 'Manual', link: '/manual/' },
+      { text: 'Downloads', link: '/downloads' },
       { text: 'Why Aura', link: '/positioning' },
       { text: 'Examples', link: '/learn/case-studies/log-analyzer' },
       { text: 'GitHub', link: 'https://github.com/johnolafenwa/Aura' }
@@ -115,6 +116,8 @@ export default defineConfig({
           items: [
             { text: 'Home', link: '/' },
             { text: 'Why Aura', link: '/positioning' },
+            { text: 'Downloads', link: '/downloads' },
+            { text: 'Release Process', link: '/release-process' },
             { text: 'Learn', link: '/learn/' },
             { text: 'Manual', link: '/manual/' }
           ]

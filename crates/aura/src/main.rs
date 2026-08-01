@@ -4242,6 +4242,16 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn hold_file_descriptors_above_posix_shell_redirection_limit() -> Vec<std::fs::File> {
+        (0..16)
+            .map(|_| {
+                std::fs::File::open("/dev/null")
+                    .expect("the high-descriptor regression needs /dev/null")
+            })
+            .collect()
+    }
+
+    #[cfg(unix)]
     #[test]
     fn private_native_diagnostic_channel_distinguishes_status_from_a_trap() {
         let ordinary = spawn_native_binary_with_diagnostic_mode(
@@ -4255,10 +4265,11 @@ mod tests {
             NativeExecutionOutcome::Exited(1)
         ));
 
+        let _high_descriptor_guard = hold_file_descriptors_above_posix_shell_redirection_limit();
         let record = r#"{"code":"AU4001","severity":"error","message":"native trap","primary_span":null,"secondary_spans":[],"notes":[],"help":[],"edits":[],"call_frames":[],"task_ancestry":[]}"#;
         let script = format!(
-            "eval \"printf '\\\\001' >&${}\"; \
-             eval \"printf '%s' \\\"\\$1\\\" >&${}\"; exit 1",
+            "printf '\\001' > \"/dev/fd/${}\"; \
+             printf '%s' \"$1\" > \"/dev/fd/${}\"; exit 1",
             aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
             aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
         );
@@ -4287,6 +4298,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn private_native_diagnostic_channel_rejects_malformed_multiple_and_oversized_records() {
+        let _high_descriptor_guard = hold_file_descriptors_above_posix_shell_redirection_limit();
         let malformed_cases = [
             ("malformed", "not-json".to_string()),
             (
@@ -4300,8 +4312,8 @@ mod tests {
         ];
         for (label, record) in malformed_cases {
             let script = format!(
-                "eval \"printf '\\\\001' >&${}\"; \
-                 eval \"printf '%s' \\\"\\$1\\\" >&${}\"; exit 1",
+                "printf '\\001' > \"/dev/fd/${}\"; \
+                 printf '%s' \"$1\" > \"/dev/fd/${}\"; exit 1",
                 aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
                 aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
             );
@@ -4323,8 +4335,8 @@ mod tests {
         }
 
         let script = format!(
-            "eval \"printf '\\\\001' >&${}\"; \
-             eval \"dd if=/dev/zero bs={} count=1 2>/dev/null >&${}\"; exit 1",
+            "printf '\\001' > \"/dev/fd/${}\"; \
+             dd if=/dev/zero bs={} count=1 of=\"/dev/fd/${}\" 2>/dev/null; exit 1",
             aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
             aura_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES + 1,
             aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
@@ -4348,14 +4360,14 @@ mod tests {
             (
                 "missing data after trap intent",
                 format!(
-                    "eval \"printf '\\\\001' >&${}\"; exit 1",
+                    "printf '\\001' > \"/dev/fd/${}\"; exit 1",
                     aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV
                 ),
             ),
             (
                 "data without trap intent",
                 format!(
-                    "eval \"printf '%s' \\\"\\$1\\\" >&${}\"; exit 1",
+                    "printf '%s' \"$1\" > \"/dev/fd/${}\"; exit 1",
                     aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV
                 ),
             ),
@@ -4394,8 +4406,8 @@ mod tests {
             ("multiple trap markers", "\\001\\001", 1),
         ] {
             let script = format!(
-                "eval \"printf '{marker}' >&${}\"; \
-                 eval \"printf '%s' \\\"\\$1\\\" >&${}\"; exit {exit_status}",
+                "printf '{marker}' > \"/dev/fd/${}\"; \
+                 printf '%s' \"$1\" > \"/dev/fd/${}\"; exit {exit_status}",
                 aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
                 aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
             );

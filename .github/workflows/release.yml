@@ -7,8 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: 'Commit, branch, or tag to build'
-        required: true
+        description: 'Optional commit, branch, or tag to build; defaults to release_tag'
+        required: false
+        default: ''
         type: string
       release_tag:
         description: 'Release identity used in artifact names, such as v0.2.0-preview'
@@ -16,6 +17,11 @@ on:
         type: string
       publish:
         description: 'Publish a GitHub Release after all artifacts pass (manual opt-in)'
+        required: true
+        default: false
+        type: boolean
+      publish_extension:
+        description: 'Publish the VSIX to configured extension marketplaces'
         required: true
         default: false
         type: boolean
@@ -38,7 +44,7 @@ jobs:
       - name: Checkout requested source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.source_ref || inputs.release_tag) || github.ref }}
 
       - name: Validate release identity
         shell: bash
@@ -72,6 +78,7 @@ jobs:
   cli:
     name: CLI (${{ matrix.name }})
     needs: release_identity
+    if: ${{ github.event_name == 'push' || inputs.publish || !inputs.publish_extension }}
     strategy:
       fail-fast: false
       matrix:
@@ -136,6 +143,7 @@ jobs:
   tools:
     name: VS Code extension and docs
     needs: release_identity
+    if: ${{ github.event_name == 'push' || inputs.publish || !inputs.publish_extension }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -238,3 +246,107 @@ jobs:
           generate_release_notes: true
           prerelease: true
           files: release-assets/*
+
+  publish-extension:
+    name: Publish VS Code extension
+    needs: [release_identity, tools, publish]
+    if: >-
+      ${{
+        always() &&
+        needs.release_identity.result == 'success' &&
+        (
+          (
+            needs.tools.result == 'success' &&
+            needs.publish.result == 'success'
+          ) ||
+          (
+            github.event_name == 'workflow_dispatch' &&
+            inputs.publish_extension &&
+            needs.tools.result == 'skipped' &&
+            needs.publish.result == 'skipped'
+          )
+        )
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      VSIX_PATH: extension-artifact/aura-language.vsix
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Confirm existing GitHub Release
+        if: ${{ needs.tools.result == 'skipped' }}
+        run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+      - name: Download VS Code extension
+        if: ${{ needs.tools.result == 'success' }}
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: aura-language-vsix
+          path: extension-artifact
+
+      - name: Download VSIX from existing GitHub Release
+        if: ${{ needs.tools.result == 'skipped' }}
+        shell: bash
+        run: |
+          mkdir -p extension-artifact
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern aura-language.vsix --dir extension-artifact
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22.14.0
+
+      - name: Validate VSIX Marketplace identity
+        shell: bash
+        run: |
+          expected_version="${RELEASE_TAG#v}"
+          expected_version="${expected_version%%-*}"
+          node - "$VSIX_PATH" "$expected_version" <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const [vsixPath, expectedVersion] = process.argv.slice(2);
+          const manifest = JSON.parse(
+            execFileSync("unzip", ["-p", vsixPath, "extension/package.json"], {
+              encoding: "utf8"
+            })
+          );
+          const identity = `${manifest.publisher}.${manifest.name}`;
+          if (identity !== "JohnOlafenwa.vscode-aura") {
+            throw new Error(`unexpected VSIX identity: ${identity}`);
+          }
+          if (!/^\d+\.\d+\.\d+$/.test(manifest.version)) {
+            throw new Error(`Marketplace version must be plain x.y.z: ${manifest.version}`);
+          }
+          if (manifest.version !== expectedVersion) {
+            throw new Error(
+              `VSIX version ${manifest.version} does not match release ${expectedVersion}`
+            );
+          }
+          console.log(`${identity} ${manifest.version}`);
+          NODE
+
+      - name: Publish to Visual Studio Marketplace
+        if: env.VSCE_PAT != ''
+        shell: bash
+        run: npx @vscode/vsce publish --packagePath "$VSIX_PATH" -p "$VSCE_PAT"
+
+      - name: Skip Visual Studio Marketplace publish
+        if: env.VSCE_PAT == ''
+        run: echo "::notice::VSCE_PAT is not configured; skipping Visual Studio Marketplace publish."
+
+      - name: Publish to Open VSX
+        if: env.OVSX_TOKEN != ''
+        shell: bash
+        run: npx ovsx publish "$VSIX_PATH" -p "$OVSX_TOKEN"
+
+      - name: Skip Open VSX publish
+        if: env.OVSX_TOKEN == ''
+        run: echo "::notice::OVSX_TOKEN is not configured; skipping Open VSX publish."

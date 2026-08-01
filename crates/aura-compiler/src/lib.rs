@@ -46,6 +46,21 @@ pub use native_codegen::{
 };
 pub use runtime_value::{RunOutput, Value};
 
+#[cfg(test)]
+pub(crate) fn serialize_timing_assertion() -> std::sync::MutexGuard<'static, ()> {
+    static TIMING_ASSERTION_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+        std::sync::OnceLock::new();
+
+    // These tests retain meaningful real-hardware timing margins, but a
+    // shared three-core CI runner can otherwise make unrelated wall-clock
+    // assertions measure one another's host contention. Keep the margins and
+    // serialize the complete timing-assertion family instead.
+    TIMING_ASSERTION_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[doc(hidden)]
 pub const INTERNAL_DIAGNOSTIC_FD_ENV: &str = "AURA_INTERNAL_DIAGNOSTIC_FD";
 #[doc(hidden)]
