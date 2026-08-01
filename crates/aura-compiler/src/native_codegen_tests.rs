@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use cranelift_codegen::ir::types;
 use cranelift_codegen::ir::InstBuilder;
+use cranelift_codegen::settings::Flags;
 use cranelift_codegen::Context;
 use cranelift_frontend::FunctionBuilderContext;
 use cranelift_object::object::{Object, ObjectSection, ObjectSymbol, RelocationTarget};
@@ -14,10 +15,10 @@ use super::{
     direct_type_to_type, emit_host_object, emit_host_object_with_metadata, ensure_direct_type,
     enum_variant_payload_types_for_target, infer_operand_type, infer_rvalue_type, infer_try_type,
     infer_variant_payload_type, is_numeric_type_name, main_signature, mangle_default_binder_symbol,
-    mangle_symbol, mangle_thunk_symbol, ordered_named_args, ordered_optional_named_args,
-    release_direct_call_results, release_direct_values, render_direct_type,
-    runtime_type_is_wildcard, signature_for, thunk_signature, thunk_string_constant,
-    unbox_thunk_value, validate_function, validate_operand, validate_rvalue,
+    mangle_symbol, mangle_thunk_symbol, native_codegen_flags, ordered_named_args,
+    ordered_optional_named_args, release_direct_call_results, release_direct_values,
+    render_direct_type, runtime_type_is_wildcard, signature_for, thunk_signature,
+    thunk_string_constant, unbox_thunk_value, validate_function, validate_operand, validate_rvalue,
     validate_tuple_projection_operand, validate_tuple_take_place, DirectType, NativeCodegen,
     PlainClassField, PlainClassType, ScalarKind,
 };
@@ -1355,6 +1356,37 @@ fn direct_backend_emits_object_for_supported_scalar_program() {
     let mir = lower_source_to_mir(source).expect("source should lower to MIR");
     let object = emit_host_object(&mir).expect("direct backend should emit an object");
 
+    assert!(!object.is_empty());
+}
+
+#[test]
+fn direct_backend_enables_stack_returns_for_flattened_mutable_writeback() {
+    let flags: Flags = native_codegen_flags().expect("native flags should configure");
+    assert!(
+        flags.enable_multi_ret_implicit_sret(),
+        "flattened mutable receiver writeback can exceed x86-64's return registers"
+    );
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn direct_backend_x86_64_emits_three_integer_results_for_mutable_receiver_writeback() {
+    let source = r#"
+class Probe:
+    condition_calls: int32
+    message_calls: int32
+
+    def condition(mut self) -> bool:
+        self.condition_calls += 1
+        return false
+
+def main():
+    mut probe = Probe(condition_calls=0, message_calls=0)
+    assert probe.condition()
+"#;
+    let mir = lower_source_to_mir(source).expect("mutable receiver source should lower");
+    let object = emit_host_object(&mir)
+        .expect("x86-64 should spill flattened writeback results through a return area");
     assert!(!object.is_empty());
 }
 

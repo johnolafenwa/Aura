@@ -89,6 +89,8 @@ Policy: preserve the calibrated timing margins and serialize the complete
 wall-clock assertion family. A shared compiler-test lock covers every test that
 asserts `Instant::elapsed()`, plus the bounded-queue ordering and DNS sibling
 progress probes. A matching CLI lock covers both safepoint latency probes.
+Hosted macOS additionally runs the complete Rust test surface with one test
+thread so unrelated suite work cannot load those measurements.
 Timeouts used only as deadlock guards remain parallel.
 
 This applies one criterion to the family instead of naming only the four tests
@@ -130,11 +132,38 @@ Green locally:
 
 Pending before completion:
 
-- commit and push
-- three consecutive hosted CI runs green on both Linux and macOS
+- complete the corrective branch's local gate
+- three consecutive corrective-tree hosted CI runs green on both Linux and macOS
+- land the proven correction on main
 
 ## Follow-Up
 
 After the hosted proof, the user can run the documented extension-only
 dispatch. Both required repository secrets are already configured. No local
 publishing is authorized.
+
+## First Hosted Attempt And Corrective Branch
+
+CI run [30716430428](https://github.com/johnolafenwa/Aura/actions/runs/30716430428)
+tested `24e048c2ef8c3af75b8de628485c0999aed3c354` on both hosted systems. It
+confirmed the Linux diagnostic-channel regression and the named macOS timing
+regressions were active in the real gate, then exposed two remaining
+environment-dependent facts:
+
+- Ubuntu x86-64 rejected direct functions whose mutable receiver writeback
+  flattened to three integer results. Cranelift's System V ABI has only two
+  integer return registers and reported that the overflow needed a structure
+  return area. Aura's generated-call ABI is private within one object, so the
+  native backend now enables Cranelift's implicit stack-return area for every
+  caller and callee. The setting has a failing-first unit pin, and an x86-64
+  object-emission regression reproduces the exact `bool` plus two-field
+  receiver-writeback shape. The two observable CLI cases from the hosted log
+  remain the end-to-end pins.
+- macOS still failed three timing assertions because the per-binary guard could
+  not isolate them from ordinary tests running concurrently in the same Rust
+  suite. Hosted macOS now sets `RUST_TEST_THREADS=1` before `npm run ci`, while
+  Linux remains parallel. A release-workflow regression pins that conditional
+  policy.
+
+The user authorized an isolated branch for faster hosted proof. The correction
+is being validated on `codex/hosted-ci-x64-writeback` before main moves again.

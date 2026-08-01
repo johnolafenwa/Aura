@@ -46,6 +46,25 @@ pub fn emit_host_object_with_metadata(
     context.emit()
 }
 
+fn native_codegen_flags() -> std::result::Result<settings::Flags, String> {
+    let mut flag_builder = settings::builder();
+    flag_builder
+        .set("is_pic", "true")
+        .map_err(|error| format!("failed to configure native backend: {error}"))?;
+    flag_builder
+        .set("unwind_info", "true")
+        .map_err(|error| format!("failed to configure native backend: {error}"))?;
+    // Aura's direct-call ABI is private to one generated object and flattens
+    // mutable receiver/parameter writeback into additional result values. On
+    // x86-64 that can exceed the two integer return registers. Cranelift must
+    // lower the overflow through its implicit return area so every Aura
+    // caller and callee keeps the same internal signature.
+    flag_builder
+        .set("enable_multi_ret_implicit_sret", "true")
+        .map_err(|error| format!("failed to configure native backend: {error}"))?;
+    Ok(settings::Flags::new(flag_builder))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScalarKind {
     Int32,
@@ -846,16 +865,7 @@ impl<'a> NativeCodegen<'a> {
         }
         let trait_impls = module.trait_impls.clone();
 
-        let mut flag_builder = settings::builder();
-        try_or_string_error!(
-            flag_builder.set("is_pic", "true"),
-            "failed to configure native backend: {}"
-        );
-        try_or_string_error!(
-            flag_builder.set("unwind_info", "true"),
-            "failed to configure native backend: {}"
-        );
-        let flags = settings::Flags::new(flag_builder);
+        let flags = native_codegen_flags()?;
         let isa_builder =
             try_or_string_error!(cranelift_native::builder(), "failed to detect host ISA: {}");
         let isa = try_or_string_error!(isa_builder.finish(flags), "failed to build host ISA: {}");

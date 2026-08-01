@@ -55,6 +55,11 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
                 workflow_scope = workflow.split("\njobs:\n", 1)[0]
                 self.assertIn("\nenv:\n  CARGO_TERM_COLOR: never\n", workflow_scope)
 
+    def test_macos_ci_isolates_wall_clock_assertions_from_the_full_rust_suite(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("if: runner.os == 'macOS'", workflow)
+        self.assertIn('echo "RUST_TEST_THREADS=1" >> "$GITHUB_ENV"', workflow)
+
     def test_docs_use_node24_deploy_pages_release(self) -> None:
         workflow = DOCS_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(

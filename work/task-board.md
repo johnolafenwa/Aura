@@ -23,10 +23,10 @@ Last updated: 2026-08-01
   descriptors above 9 and its POSIX shell helper writes through `/dev/fd`; the
   focused high-thread macOS run and 100/100 Linux high-thread loop are green.
 - F2 policy: preserve the calibrated margins and serialize the complete
-  wall-clock timing-assertion family through shared guards. This covers both
-  safepoint CLI probes and every compiler test with an elapsed-time assertion,
-  plus the bounded-queue ordering and DNS/sibling-timer probes. Focused and
-  full gates remain pending.
+  wall-clock timing-assertion family through shared guards. The first hosted
+  run proved per-binary guards insufficient against unrelated whole-suite load,
+  so hosted macOS now isolates the complete Rust suite with
+  `RUST_TEST_THREADS=1`. Linux retains normal parallel execution.
 - Focused proof is green: `vsce ls`, `vsce package`, extension/workflow tests,
   actionlint, both safepoint probes, all 1,499 compiler-library tests at 64
   test threads, and 100/100 Linux high-thread runs of the F1 family. Both
@@ -36,9 +36,14 @@ Last updated: 2026-08-01
   tests, compiler coverage at 96.28% lines / 97.21% functions / 94.62%
   regions, reference integrity, docs, audits, warning-denied Clippy, and
   hygiene.
-- Remaining: commit and push, then obtain and inspect three consecutive green
-  hosted CI runs on Linux and macOS. Publishing remains a separate user
-  dispatch after this gate.
+- First hosted attempt at `24e048c` was correctly treated as evidence, not a
+  completion: F1 passed, but Ubuntu exposed an x86-64-only direct-backend ABI
+  limit for flattened mutable writeback and macOS exposed whole-suite timing
+  contention. The x86 correction enables Cranelift's internal stack-return
+  area and pins the three-result receiver shape; focused regressions are green.
+- Remaining: prove the corrective branch with the full local gate and three
+  consecutive hosted CI runs on Linux and macOS, then land the proven tree on
+  main. Publishing remains a separate user dispatch after this gate.
 - Work note: `work/2026-08-01-extension-publishing-and-hosted-ci-reliability.md`.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.

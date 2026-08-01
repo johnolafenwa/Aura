@@ -159,10 +159,13 @@ Tests whose pass condition depends on a measured wall-clock margin use one
 shared serialization guard within each Rust test binary. This applies to the
 whole timing-assertion family: scheduler cancellation wakeups, bounded-queue
 ordering, safepoint latency, blocking-service timeout budgets, socket timing,
-and related reactor fairness probes. The policy preserves the real-hardware
-margins while preventing unrelated timing tests from competing on shared
-three-core macOS runners. Ordinary timeout values used only as deadlock guards
-remain parallel.
+and related reactor fairness probes. Hosted macOS additionally sets
+`RUST_TEST_THREADS=1` for the repository gate, because separate Rust test
+binaries and ordinary compiler tests can otherwise contend with that family on
+the shared three-core runner. The policy preserves the real-hardware margins
+while isolating their measurement from the complete concurrent Rust suite.
+Ordinary timeout values used only as deadlock guards remain parallel outside
+hosted macOS.
 
 ## Workflow For A New Feature
 
