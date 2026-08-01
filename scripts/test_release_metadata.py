@@ -142,6 +142,34 @@ class ReleaseMetadataTests(unittest.TestCase):
                     stale.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
         self.assertEqual(stale, [], "stale current-release prose:\n" + "\n".join(stale))
 
+    def test_prepublish_truth_polish_is_retained(self) -> None:
+        cli_tests = (ROOT / "crates/aura/tests/cli.rs").read_text()
+        cache_test = cli_tests.split(
+            "fn native_run_cache_serializes_concurrent_cold_runs_into_one_build_and_verified_hits()",
+            1,
+        )[1].split("\n#[", 1)[0]
+        self.assertIn("Duration::from_secs(120)", cache_test)
+        self.assertNotIn("Duration::from_secs(60)", cache_test)
+
+        parity = (ROOT / "crates/aura/tests/backend_parity.rs").read_text()
+        self.assertNotIn('root.join("target/debug/libaurora_compiler.a")', parity)
+        self.assertIn('"--message-format=json"', parity)
+        self.assertIn('"compiler-artifact"', parity)
+        self.assertIn('"native-static-libs:"', parity)
+
+        proposal = (ROOT / "docs/aurora_language_proposal.md").read_text()
+        self.assertIn("canonical 0.1/0.2 contract", proposal)
+        self.assertIn("maintained 0.1/0.2 sources win", proposal)
+        self.assertNotIn("canonical 0.1 contract", proposal)
+
+        build_script = (ROOT / "crates/aura/build.rs").read_text()
+        cli = (ROOT / "crates/aura/src/main.rs").read_text()
+        smoke = (ROOT / "scripts/smoke-cli-archive.sh").read_text()
+        self.assertIn("AURORA_BUILD_COMMIT", build_script)
+        self.assertIn("--short=12", build_script)
+        self.assertIn('"aura {}-preview ({})\\n"', cli)
+        self.assertIn('expected_version="aura 0.2.0-preview ($expected_commit)"', smoke)
+
 
 if __name__ == "__main__":
     unittest.main()

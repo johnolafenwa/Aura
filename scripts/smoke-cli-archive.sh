@@ -161,9 +161,19 @@ run_and_show() {
 
 cd "$work_root"
 
+expected_commit="${AURORA_EXPECTED_COMMIT:-}"
+if [[ -z "$expected_commit" ]]; then
+  expected_commit="$(git -C "$repo_root" rev-parse --verify --short=12 HEAD^{commit})"
+fi
+if [[ ! "$expected_commit" =~ ^[0-9a-fA-F]{12}$ ]]; then
+  echo "expected Aurora build commit must be exactly 12 hexadecimal digits" >&2
+  exit 2
+fi
+expected_version="aura 0.2.0-preview ($expected_commit)"
+
 run_and_show "$version_stdout" "$version_stderr" 15 \
   env CARGO="$missing_cargo" "$packaged" --version
-if ! grep -Fxq 'aura 0.2.0' "$version_stdout"; then
+if ! grep -Fxq "$expected_version" "$version_stdout"; then
   echo "packaged aura --version returned an unexpected value" >&2
   exit 1
 fi

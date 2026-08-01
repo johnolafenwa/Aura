@@ -80,6 +80,12 @@ experiments, not production deployment or execution of untrusted code.
 
 ### Runtime and structured concurrency
 
+- Fixed a queue-iteration livelock under oversubscription. Receive iteration
+  now subscribes only to producers that are still running; a producer that
+  has already completed can no longer keep every consumer in an immediate
+  scheduler-ready loop while CPU burners occupy the worker pool. The reported
+  iteration-consumer shape is pinned on MIR and direct at the default worker
+  count.
 - Replaced the periodic scheduler tick with persistent readiness registration,
   heap deadlines, cross-worker notifications, and loop-backedge fairness
   checks. Idle workers block until runnable work, I/O readiness, or a deadline.
@@ -150,6 +156,12 @@ experiments, not production deployment or execution of untrusted code.
 
 ### Tooling and diagnostics
 
+- `aura --version` now prints the preview channel and 12-hex-digit source
+  commit (`aura 0.2.0-preview (<commit>)`), so preview executables are
+  distinguishable from a future final 0.2.0. Release publication is marked as
+  a GitHub prerelease and includes a generated, verified `SHA256SUMS` asset.
+- Retired the last AU3002 diagnostic use of the old “shared borrowed values”
+  wording; it now says “shared values” and retains the explicit stable code.
 - Added `aura run --backend auto|mir|direct`, native builds with relocatable
   runtime/link manifests, a content-addressed native cache, function-level
   `aura test` discovery, recursive formatting/testing, package/workspace

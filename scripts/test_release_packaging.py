@@ -18,6 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 PACKAGE_SCRIPT = REPO_ROOT / "scripts" / "package-cli.sh"
 SMOKE_SCRIPT = REPO_ROOT / "scripts" / "smoke-cli-archive.sh"
+FINAL_REPORT = REPO_ROOT / "work" / "2026-07-31-batch6-final-report.md"
 
 
 RETRY_STDOUT = """\
@@ -158,6 +159,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIn("permissions:\n      contents: write", self.workflow)
 
+    def test_published_preview_is_prerelease_with_checksum_manifest(self) -> None:
+        self.assertIn("- name: Generate SHA256SUMS", self.workflow)
+        self.assertIn("sha256sum", self.workflow)
+        self.assertIn("sha256sum -c SHA256SUMS", self.workflow)
+        self.assertIn("prerelease: true", self.workflow)
+        self.assertIn("files: release-assets/*", self.workflow)
+
+    def test_handoff_documents_github_cli_authentication(self) -> None:
+        handoff = FINAL_REPORT.read_text(encoding="utf-8")
+        self.assertIn("gh auth login", handoff)
+        self.assertIn("gh auth status", handoff)
+
 
 class ArchiveLayoutTests(unittest.TestCase):
     def test_package_layout_is_stable_and_self_contained(self) -> None:
@@ -199,6 +212,13 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
     def test_archive_smoke_uses_copied_sources_without_cargo(self) -> None:
         with tempfile.TemporaryDirectory(prefix="aurora-release-test-") as temp:
             root = Path(temp)
+            commit = subprocess.run(
+                ["git", "rev-parse", "--verify", "--short=12", "HEAD^{commit}"],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                check=True,
+            ).stdout.strip()
             archive_root = root / "aurora-vtest-aarch64-apple-darwin"
             binary = archive_root / "bin" / "aura"
             binary.parent.mkdir(parents=True)
@@ -228,7 +248,7 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                       exit 90
                     fi
                     if [[ "${{1:-}}" == "--version" ]]; then
-                      echo "aura 0.2.0"
+                      echo "aura 0.2.0-preview ({commit})"
                     elif [[ "$*" == *"basic_addition.au" ]]; then
                       test -f "${{@: -1}}"
                       mkdir -p "$AURORA_CACHE_DIR"
@@ -271,7 +291,7 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("aura 0.2.0\n", result.stdout)
+            self.assertIn(f"aura 0.2.0-preview ({commit})\n", result.stdout)
             self.assertIn("16\n", result.stdout)
             self.assertTrue(result.stdout.endswith(RETRY_STDOUT), result.stdout)
             self.assertNotIn(
@@ -283,7 +303,7 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                 SMOKE_SCRIPT.read_text(encoding="utf-8"),
             )
             self.assertIn(
-                "grep -Fxq 'aura 0.2.0'",
+                'grep -Fxq "$expected_version"',
                 SMOKE_SCRIPT.read_text(encoding="utf-8"),
             )
 

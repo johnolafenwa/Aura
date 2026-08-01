@@ -49,6 +49,10 @@ export PATH="$PWD/target/release:$PATH"
 aura --version
 ```
 
+Preview builds identify both their channel and source commit, for example
+`aura 0.2.0-preview (0123456789ab)`. This distinguishes the approved preview
+from a future final `0.2.0` binary.
+
 On Unix shells, consider adding that export to your shell profile.
 
 ## Your First Program
@@ -101,7 +105,8 @@ The commands you will use day to day are:
 | `aura complete --line N --character M file.au` | Emit completion items at a source position. |
 | `aura deps update [name]` | Refresh git dependencies and rewrite `Aurora.lock`. |
 
-Use `aura help` for the full list and `aura --version` to confirm which build you are on.
+Use `aura help` for the full list and `aura --version` to confirm the preview
+channel and exact source revision you are running.
 
 `aura run` defaults to the MIR runtime for a fast edit-run loop. Use
 `--backend direct` to require native execution, or `--backend auto` to prefer

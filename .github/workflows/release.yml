@@ -107,6 +107,8 @@ jobs:
           toolchain: 1.95.0
 
       - name: Build release CLI
+        env:
+          AURORA_BUILD_COMMIT: ${{ needs.release_identity.outputs.implementation_commit }}
         run: cargo build -p aura --release --locked
 
       - name: Package CLI
@@ -210,10 +212,26 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      - name: Generate SHA256SUMS
+        shell: bash
+        working-directory: release-assets
+        run: |
+          mapfile -d '' assets < <(
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' |
+              LC_ALL=C sort -z
+          )
+          if (( ${#assets[@]} == 0 )); then
+            echo "no release assets were downloaded" >&2
+            exit 2
+          fi
+          sha256sum "${assets[@]}" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
       - name: Publish release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
           target_commitish: ${{ needs.release_identity.outputs.implementation_commit }}
           generate_release_notes: true
+          prerelease: true
           files: release-assets/*

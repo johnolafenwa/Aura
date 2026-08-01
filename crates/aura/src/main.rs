@@ -3793,7 +3793,11 @@ fn print_usage_and_exit(exit_code: i32) -> ! {
 }
 
 fn print_version_and_exit() -> ! {
-    write_stdout(&format!("aura {}\n", env!("CARGO_PKG_VERSION")));
+    write_stdout(&format!(
+        "aura {}-preview ({})\n",
+        env!("CARGO_PKG_VERSION"),
+        env!("AURORA_BUILD_COMMIT")
+    ));
     process::exit(0);
 }
 

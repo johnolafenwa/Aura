@@ -10491,9 +10491,10 @@ impl<'a> FunctionChecker<'a> {
                 return Err(diagnostic);
             }
             if borrowed.passing == ReceiverKind::Borrow && assign.mutable {
-                return Err(Diagnostic::at(
+                return Err(Diagnostic::coded_at(
+                    "AU3002",
                     assign.value.span,
-                    "shared borrowed values cannot be bound with `mut`",
+                    "shared values cannot be bound with `mut`",
                 ));
             }
             locals.insert(

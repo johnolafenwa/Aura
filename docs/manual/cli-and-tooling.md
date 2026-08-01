@@ -34,7 +34,7 @@ aura check app.au
 | `aura test [--timeout-ms N] [paths...]` | Run package-aware `.au` tests, one result per `def test_*()` function or per file when a file declares none; defaults to `tests/` and a 30-second per-test timeout. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
-| `aura version` / `aura --version` | Print version. |
+| `aura version` / `aura --version` | Print the preview channel and 12-hex-digit source commit, such as `aura 0.2.0-preview (0123456789ab)`. |
 
 ## Checking
 

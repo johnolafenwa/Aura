@@ -75,6 +75,10 @@ cargo run -p aura -- help
 cargo run -p aura -- --version
 ```
 
+The version command includes the release channel and a 12-hex-digit source
+commit, such as `aura 0.2.0-preview (0123456789ab)`, so a preview build is
+never mistaken for a future final `0.2.0` binary.
+
 Use `deps update` to refresh git dependencies without deleting `Aurora.lock` manually:
 
 ```bash

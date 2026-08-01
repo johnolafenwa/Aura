@@ -256,7 +256,8 @@ Current compiler workflow:
 - `cargo run -p aura -- help`
   - print CLI usage and exit successfully
 - `cargo run -p aura -- --version`
-  - print the current CLI version and exit successfully
+  - print the preview channel and the 12-hex-digit source commit, so preview
+    builds cannot be confused with a future final release
 - `cat examples/modules/simple_import.au | cargo run -p aura -- analyze --stdin "$(pwd)/examples/modules/simple_import.au"`
   - analyze an editor-style buffer while still resolving local imports relative to the supplied path
 - `cargo run -p aura -- complete --line 5 --character 11 --trigger . examples/point.au`

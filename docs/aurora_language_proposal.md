@@ -2,7 +2,7 @@
 
 **A readable, Python-inspired systems language with Rust-like memory safety and Go-like concurrency**
 
-> **Status: historical design proposal.** This document records the original target design and is not the implemented language specification. The canonical 0.1 contract is the maintained [Status and Compatibility](manual/status-and-compatibility.md) page plus the Manual and [Current Limits](manual/current-limits.md). When this proposal differs from those documents or the compiler fixtures, the maintained 0.1 sources win.
+> **Status: historical design proposal.** This document records the original target design and is not the implemented language specification. The canonical 0.1/0.2 contract is the maintained [Status and Compatibility](manual/status-and-compatibility.md) page plus the Manual and [Current Limits](manual/current-limits.md). When this proposal differs from those documents or the compiler fixtures, the maintained 0.1/0.2 sources win.
 
 ## Executive summary
 

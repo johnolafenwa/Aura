@@ -1346,6 +1346,72 @@ def main() -> int32:
 }
 
 #[test]
+fn queue_iteration_consumers_complete_with_more_cpu_burners_than_default_workers() {
+    let default_workers = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1);
+    let burner_count = default_workers.saturating_add(4);
+    let source = format!(
+        r#"import sys
+
+def burn_cpu() -> None:
+    started_at = sys.monotonic_time_ms()
+    mut value: int64 = 1
+    while sys.monotonic_time_ms() - started_at < 300:
+        value = (value * 1664525 + 1013904223) % 2147483647
+
+def produce(q: Queue[int32], base: int32) -> None:
+    for offset in range(250):
+        q.put(base + offset)
+
+def consume(q: Queue[int32], totals: Queue[int32]) -> None:
+    mut received: int32 = 0
+    for value in q:
+        if value >= 0:
+            received += 1
+    totals.put(received)
+
+def main() -> int32:
+    q = Queue[int32](capacity=64)
+    totals = Queue[int32](capacity=4)
+
+    with TaskGroup() as outer:
+        mut burner: int32 = 0
+        while burner < {burner_count}:
+            outer.start_soon(burn_cpu)
+            burner += 1
+
+        outer.start_soon(consume, q, totals)
+        outer.start_soon(consume, q, totals)
+        outer.start_soon(consume, q, totals)
+        outer.start_soon(consume, q, totals)
+
+        with TaskGroup() as producers:
+            producers.start_soon(produce, q, 0)
+            producers.start_soon(produce, q, 1000)
+            producers.start_soon(produce, q, 2000)
+            producers.start_soon(produce, q, 3000)
+
+        q.close()
+        mut consumed: int32 = 0
+        mut consumer: int32 = 0
+        while consumer < 4:
+            consumed += totals.get_or(-10000, timeout=10s)
+            consumer += 1
+        print(consumed)
+    return 0
+"#
+    );
+
+    assert_run_and_direct_source_stdout_with_timeout(
+        "aurora-queue-iteration-default-worker-contention",
+        &source,
+        std::time::Duration::from_secs(20),
+        "1000\n",
+    );
+}
+
+#[test]
 fn task_group_join_still_cancels_a_queue_wait_without_a_reachable_waker() {
     let source = r#"def wait_on_private_queue() -> None:
     private = Queue[int32]()
@@ -3878,10 +3944,10 @@ fn native_run_cache_serializes_concurrent_cold_runs_into_one_build_and_verified_
     let mut outputs = Vec::new();
     for (index, (child, stderr_reader)) in children.iter_mut().zip(stderr_readers).enumerate() {
         let status =
-            wait_with_timeout(child, std::time::Duration::from_secs(60)).unwrap_or_else(|| {
+            wait_with_timeout(child, std::time::Duration::from_secs(120)).unwrap_or_else(|| {
                 let _ = child.kill();
                 let _ = child.wait();
-                panic!("concurrent direct run {index} did not finish within 60 seconds")
+                panic!("concurrent direct run {index} did not finish within 120 seconds")
             });
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -5797,9 +5863,21 @@ fn version_flags_exit_successfully() {
             args,
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            format!("aura {}\n", env!("CARGO_PKG_VERSION"))
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let prefix = format!("aura {}-preview (", env!("CARGO_PKG_VERSION"));
+        let commit = stdout
+            .strip_prefix(&prefix)
+            .and_then(|value| value.strip_suffix(")\n"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "version path {:?} should print the preview channel and commit, stdout was:\n{}",
+                    args, stdout
+                )
+            });
+        assert_eq!(commit.len(), 12, "version commit should use 12 hex digits");
+        assert!(
+            commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "version commit should be hexadecimal, found `{commit}`"
         );
     }
 }

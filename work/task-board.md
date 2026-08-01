@@ -1,6 +1,50 @@
 # Task Board
 
-Last updated: 2026-07-31
+Last updated: 2026-08-01
+
+## v0.2.0-preview pre-publish patch
+
+- Authorized target: close the queue-iteration oversubscription livelock if
+  the scheduler repair is contained; stamp preview binaries with their source
+  commit; mark GitHub publication as a prerelease with a generated checksum
+  asset; close the listed release-truth polish; run exact full CI; move the
+  still-local tag; rebuild and verify every local artifact; then stop without
+  pushing or publishing.
+- Queue-iteration diagnosis and disposition: fixed. Registered-producer
+  iteration kept completed tasks in every scheduler wait. Once the first
+  producer finished, its permanently-ready result made consumers loop through
+  `wait_for_runtime_scheduler` without parking while other producers still
+  needed workers. Iteration now snapshots only still-running producers before
+  each wait. A failing-first CLI regression creates four more CPU burners than
+  the host's actual default worker count and verifies the iteration consumer
+  result on MIR and direct without overriding `AURORA_WORKERS`.
+- Release identity: `aura version`, `--version`, and `-V` print
+  `aura 0.2.0-preview (<12-hex-commit>)`. The build script derives the Git
+  commit or accepts an explicit validated `AURORA_BUILD_COMMIT`; the hosted
+  release job supplies its already-resolved immutable commit.
+- Workflow and truth polish: publication sets `prerelease: true`, generates
+  and verifies `SHA256SUMS` from the downloaded runner artifacts, and attaches
+  it with the release assets. Handoff commands require `gh auth login` and
+  `gh auth status`. The cold-cache concurrency test budget is 120 seconds.
+  Backend parity reads the actual compiler archive path from Cargo's JSON
+  artifact message. AU3002 says “shared values” with an explicit stable code.
+  The historical proposal points to the maintained 0.1/0.2 contract.
+- Tag signature decision: the repository has no configured signing key, GPG
+  secret key, or SSH-agent identity, so the replacement tag is annotated and
+  unsigned by choice.
+- Focused verification is green: the failing-first livelock regression on
+  both backends; version flags; the named cache-concurrency test; the
+  Cargo-reported parity package helper; check-fail diagnostics; 16 release
+  packaging/metadata tests; warning-denied Clippy; reference integrity over
+  37 pages, 260 fences, and 126 verified blocks; docs build; workflow YAML;
+  shell syntax; formatting; and scoped diff hygiene.
+- The exact clean full-CI replay, local tag movement, and clean-tag artifact
+  rebuild necessarily run after this commit exists. Their immutable SHA,
+  checksums, and smoke results belong in the final user handoff rather than a
+  self-referential source note. Nothing is pushed or published by this task.
+- Work note: `work/2026-08-01-v0.2.0-preview-prepublish.md`.
+- Protected user state remains outside the patch:
+  `personal/file_ops.au` and the untracked ADR-0022 draft.
 
 ## Batch 6 of 6 (completed)
 

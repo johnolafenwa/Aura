@@ -2,6 +2,11 @@
 
 Date: 2026-07-31
 
+> Historical checkpoint: the identities, artifact hashes, and gate counts in
+> this report describe the original `003ca88` Batch 6 candidate. The
+> 2026-08-01 pre-publish patch supersedes that candidate for publication; use
+> the current local `v0.2.0-preview^{commit}` as the release identity.
+
 ## Release verdict
 
 Aurora 0.2.0 technical preview is ready for the user's final remote-runner
@@ -424,6 +429,13 @@ after the commit is available remotely.
 
 Nothing below was executed during Batch 6.
 
+Authenticate the GitHub CLI before using any `gh` command:
+
+```bash
+gh auth login
+gh auth status
+```
+
 First make the implementation/report commits available, without pushing the
 tag:
 
@@ -436,8 +448,9 @@ git push origin main
 Then run the supported hosted matrix without publishing:
 
 ```bash
+release_commit="$(git rev-parse 'v0.2.0-preview^{commit}')"
 gh workflow run release.yml --ref main \
-  -f source_ref=003ca88502077ee1706686722de16cc01f4c8b96 \
+  -f source_ref="$release_commit" \
   -f release_tag=v0.2.0-preview \
   -f publish=false
 ```

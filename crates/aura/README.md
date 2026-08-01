@@ -129,7 +129,8 @@ aura deps update util
 - `aura help`
   - print CLI usage and exit successfully
 - `aura --version`
-  - print the current CLI version and exit successfully
+  - print the preview channel and 12-hex-digit source commit, for example
+    `aura 0.2.0-preview (0123456789ab)`, then exit successfully
 - `aura check <file.au>`
   - parse and type check a program
   - add `--format json` for the schema-versioned structured diagnostic document; human diagnostics remain the default

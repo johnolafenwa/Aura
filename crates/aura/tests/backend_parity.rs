@@ -96,10 +96,10 @@ fn packaged_test_aura(temp: &TempDir) -> PathBuf {
         .current_dir(&root)
         .args([
             "rustc",
-            "-q",
             "-p",
             "aurora-compiler",
             "--lib",
+            "--message-format=json",
             "--",
             "--print",
             "native-static-libs",
@@ -111,13 +111,36 @@ fn packaged_test_aura(temp: &TempDir) -> PathBuf {
         "runtime static library should build, stderr was:\n{}",
         String::from_utf8_lossy(&rustc.stderr)
     );
-    let stderr = String::from_utf8_lossy(&rustc.stderr);
-    let native_link_args = stderr
+    let stdout = String::from_utf8_lossy(&rustc.stdout);
+    let messages = stdout
         .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .collect::<Vec<_>>();
+    let native_link_args = messages
+        .iter()
         .rev()
-        .find_map(|line| line.split_once("native-static-libs:"))
+        .find(|message| message["reason"] == "compiler-message")
+        .and_then(|message| message["message"]["message"].as_str())
+        .and_then(|message| message.split_once("native-static-libs:"))
         .map(|(_, arguments)| arguments.split_whitespace().collect::<Vec<_>>())
         .expect("rustc should report native-static-libs");
+    let runtime_archive = messages
+        .iter()
+        .rev()
+        .find(|message| {
+            message["reason"] == "compiler-artifact"
+                && message["target"]["name"] == "aurora_compiler"
+        })
+        .and_then(|message| message["filenames"].as_array())
+        .and_then(|filenames| {
+            filenames.iter().find_map(|filename| {
+                let filename = filename.as_str()?;
+                filename
+                    .ends_with("libaurora_compiler.a")
+                    .then(|| PathBuf::from(filename))
+            })
+        })
+        .expect("Cargo should report the emitted aurora-compiler static archive");
 
     let prefix = temp.path.join("toolchain");
     let bin_dir = prefix.join("bin");
@@ -126,17 +149,27 @@ fn packaged_test_aura(temp: &TempDir) -> PathBuf {
     fs::create_dir_all(&runtime_dir).expect("packaged runtime dir should exist");
     let packaged = bin_dir.join("aura");
     fs::copy(aura_bin(), &packaged).expect("test aura should copy into package layout");
-    fs::copy(
-        root.join("target/debug/libaurora_compiler.a"),
-        runtime_dir.join("libaurora_compiler.a"),
-    )
-    .expect("debug native runtime should copy into package layout");
+    fs::copy(runtime_archive, runtime_dir.join("libaurora_compiler.a"))
+        .expect("debug native runtime should copy into package layout");
     fs::write(
         runtime_dir.join("native-link-args.json"),
         serde_json::to_vec(&native_link_args).expect("link arguments should serialize"),
     )
     .expect("runtime link manifest should write");
     packaged
+}
+
+#[test]
+fn packaged_parity_aura_uses_cargo_reported_runtime_archive() {
+    let temp = TempDir::new("aurora-packaged-parity-path");
+    let packaged = packaged_test_aura(&temp);
+    assert!(packaged.is_file());
+    assert!(
+        temp.path
+            .join("toolchain/lib/aurora/libaurora_compiler.a")
+            .is_file(),
+        "the Cargo-reported runtime archive should be copied into the test toolchain"
+    );
 }
 
 #[test]

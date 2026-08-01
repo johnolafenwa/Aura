@@ -7113,6 +7113,7 @@ impl ChannelValue {
         !lock_mutex(&self.inner.state).closed
     }
 
+    #[cfg(test)]
     fn all_registered_producer_tasks_completed(&self) -> bool {
         self.registered_producer_tasks()
             .iter()
@@ -13044,14 +13045,19 @@ pub(crate) fn recv_for_registered_producers_iteration(
             TryRecvResult::Closed => return RecvValueResult::Closed,
             TryRecvResult::Empty => {}
         }
-        if channel.all_registered_producer_tasks_completed() {
+        let running_producers = channel
+            .registered_producer_tasks()
+            .into_iter()
+            .filter(|task| task.completed_result().is_none())
+            .collect::<Vec<_>>();
+        if running_producers.is_empty() {
             return RecvValueResult::Closed;
         }
         match wait_for_runtime_scheduler(
             vec![channel.clone()],
             false,
             Vec::new(),
-            channel.registered_producer_tasks(),
+            running_producers,
             None,
             Some(cancellation),
         ) {
