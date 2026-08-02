@@ -196,3 +196,54 @@ the `Z` state as natural completion, while malformed RSS from a live process
 remains an error. The pure zombie-record regression and the original
 short-lived sleepers execution test both pass; the complete harness has 56
 green tests.
+
+Three standard-capacity proof runs were started from `b67c142`. Run
+[30719290315](https://github.com/johnolafenwa/Aura/actions/runs/30719290315)
+proved the revised macOS timing policy under hosted load: all 337 CLI tests
+passed, including the two safepoint probes and the deterministic bounded-queue
+case. It then exposed an independent test-isolation defect in
+`ffi_acceptance.rs`. Every temporary FFI package used only the process ID and
+wall-clock nanoseconds for its directory name. Parallel tests that observed the
+same macOS clock tick therefore shared `src/main.au`; the test-only program
+could overwrite the runnable program and produce AU4001 (`no main function`).
+
+Temporary FFI packages now include a process-local atomic sequence and claim
+their root with exclusive `create_dir`, retrying a stale-name collision. The
+regression injects an identical timestamp into two packages and verifies that
+their paths and source contents remain isolated. The focused five-test FFI
+acceptance binary is green with 16 test threads. This finding does not require
+larger runners: the standard-capacity timing family had already passed before
+the isolation failure.
+
+The first exact local gate on this correction passed every behavioral stage,
+including 337 CLI tests, 1,501 compiler tests, the 1,064-second forced parity
+matrix, 101 LSP tests, and 20 extension tests. Instrumented tests were also all
+green, but the report stopped on the frozen ratchet at 96.28% lines, 97.14%
+functions, and 94.61% regions. The new native flag configuration used three
+separate `map_err` closures around hard-coded, valid Cranelift settings; their
+dependency-invariant error paths cannot be reached behaviorally and were
+counted once per crate artifact. The code now routes all three settings through
+one exercised helper with one preserved defensive error arm. No synthetic
+coverage test was added.
+
+The behavior-focused coverage closure then removed two genuinely unreachable
+defensive shapes instead of manufacturing line-execution tests. Direct trait
+dispatch already resolves the exact concrete type before code generation; the
+class-name-only fallback could not be reached by valid lowered MIR and was
+removed while the observable specific-implementation and ordinary-dispatch
+tests stayed green. Package timeout cleanup was folded into its caller, and
+the child process group is now configured with `CommandExt::process_group(0)`
+instead of a child-side `pre_exec` closure that some linked artifacts could
+never execute. The ten-second descendant-kill regression still completes in
+about 60 ms. The exact instrumented replay is green with 337 CLI tests, five
+FFI acceptance tests, 1,500 compiler-library tests, and final coverage of
+96.29% lines, 97.21% functions, and 94.62% regions. No synthetic coverage test
+or coverage exclusion was added.
+
+The final exact `npm run ci` replay is green on the corrective tree: all 337
+CLI tests, five FFI acceptance tests, 1,500 compiler-library tests, the complete
+forced MIR/direct matrix (752.92 seconds), 101 LSP tests at 100% coverage, 20
+extension tests, the 96.29% / 97.21% / 94.62% compiler coverage ratchet,
+reference integrity, docs, audits, warning-denied Clippy, and hygiene passed.
+The repository remained on standard local and hosted capacity throughout this
+proof.

@@ -3,7 +3,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static NEXT_TEMP_PACKAGE_ID: AtomicU64 = AtomicU64::new(0);
 
 fn aura_bin() -> &'static str {
     env!("CARGO_BIN_EXE_aura")
@@ -15,16 +18,28 @@ struct TempPackage {
 
 impl TempPackage {
     fn new(allow_ffi: bool) -> Self {
-        let unique = format!(
-            "aura-ffi-acceptance-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("system clock should follow the Unix epoch")
-                .as_nanos()
-        );
-        let path = std::env::temp_dir().join(unique);
-        fs::create_dir_all(path.join("src"))
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should follow the Unix epoch")
+            .as_nanos();
+        Self::new_at_timestamp(allow_ffi, timestamp)
+    }
+
+    fn new_at_timestamp(allow_ffi: bool, timestamp: u128) -> Self {
+        let path = loop {
+            let sequence = NEXT_TEMP_PACKAGE_ID.fetch_add(1, Ordering::Relaxed);
+            let unique = format!(
+                "aura-ffi-acceptance-{}-{timestamp}-{sequence}",
+                std::process::id()
+            );
+            let candidate = std::env::temp_dir().join(unique);
+            match fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("FFI acceptance package directory should exist: {error}"),
+            }
+        };
+        fs::create_dir(path.join("src"))
             .expect("FFI acceptance package source directory should exist");
         let opt_in = if allow_ffi { "allow_ffi = true\n" } else { "" };
         fs::write(
@@ -42,6 +57,24 @@ impl TempPackage {
         fs::write(&path, source).expect("FFI acceptance source should be writable");
         path
     }
+}
+
+#[test]
+fn same_clock_tick_temp_packages_remain_isolated() {
+    let first = TempPackage::new_at_timestamp(false, 1);
+    let second = TempPackage::new_at_timestamp(false, 1);
+
+    assert_ne!(first.path, second.path);
+    let first_source = first.source("def main():\n    print(1)\n");
+    let second_source = second.source("def test_only():\n    pass\n");
+    assert_eq!(
+        fs::read_to_string(first_source).expect("first source should remain readable"),
+        "def main():\n    print(1)\n"
+    );
+    assert_eq!(
+        fs::read_to_string(second_source).expect("second source should remain readable"),
+        "def test_only():\n    pass\n"
+    );
 }
 
 impl Drop for TempPackage {

@@ -46,22 +46,27 @@ pub fn emit_host_object_with_metadata(
     context.emit()
 }
 
+fn set_native_codegen_flag(
+    flag_builder: &mut settings::Builder,
+    name: &str,
+    value: &str,
+) -> std::result::Result<(), String> {
+    match flag_builder.set(name, value) {
+        Ok(()) => Ok(()),
+        Err(error) => Err(format!("failed to configure native backend: {error}")),
+    }
+}
+
 fn native_codegen_flags() -> std::result::Result<settings::Flags, String> {
     let mut flag_builder = settings::builder();
-    flag_builder
-        .set("is_pic", "true")
-        .map_err(|error| format!("failed to configure native backend: {error}"))?;
-    flag_builder
-        .set("unwind_info", "true")
-        .map_err(|error| format!("failed to configure native backend: {error}"))?;
+    set_native_codegen_flag(&mut flag_builder, "is_pic", "true")?;
+    set_native_codegen_flag(&mut flag_builder, "unwind_info", "true")?;
     // Aura's direct-call ABI is private to one generated object and flattens
     // mutable receiver/parameter writeback into additional result values. On
     // x86-64 that can exceed the two integer return registers. Cranelift must
     // lower the overflow through its implicit return area so every Aura
     // caller and callee keeps the same internal signature.
-    flag_builder
-        .set("enable_multi_ret_implicit_sret", "true")
-        .map_err(|error| format!("failed to configure native backend: {error}"))?;
+    set_native_codegen_flag(&mut flag_builder, "enable_multi_ret_implicit_sret", "true")?;
     Ok(settings::Flags::new(flag_builder))
 }
 
@@ -8819,10 +8824,6 @@ impl<'a> FunctionCompiler<'a> {
                 .find_trait_method(&Type::named(class_name), field)
                 .cloned();
         }
-        if method.is_none() {
-            method =
-                find_trait_method_for_class_name(&self.trait_impls, class_name, field).cloned();
-        }
         let Some(method) = method else {
             return Err(format!(
                 "direct backend does not know method `{}.{}`",
@@ -14798,45 +14799,6 @@ fn infer_rvalue_type(
                 Some(DirectType::Scalar(ScalarKind::Unit))
             }
         }
-    }
-}
-
-fn find_trait_method_for_class_name<'a>(
-    trait_impls: &'a [MirTraitImpl],
-    class_name: &str,
-    field: &str,
-) -> Option<&'a MirMethod> {
-    let mut best = None;
-    let mut best_specificity = 0usize;
-    let mut ambiguous = false;
-    for trait_impl in trait_impls {
-        let Type::Named(name, _) = &trait_impl.for_type else {
-            continue;
-        };
-        if name != class_name {
-            continue;
-        }
-        let Some(method) = trait_impl
-            .methods
-            .iter()
-            .find(|method| method.name == field)
-        else {
-            continue;
-        };
-        let specificity =
-            crate::sema::trait_impl_specificity_parts(&trait_impl.for_type, &trait_impl.trait_args);
-        if best.is_none() || specificity > best_specificity {
-            best = Some(method);
-            best_specificity = specificity;
-            ambiguous = false;
-        } else if specificity == best_specificity {
-            ambiguous = true;
-        }
-    }
-    if ambiguous {
-        None
-    } else {
-        best
     }
 }
 

@@ -56,14 +56,35 @@ Last updated: 2026-08-01
   samples now use the same natural-completion path as a disappeared process;
   malformed live-process RSS remains a hard error. All 56 harness tests pass,
   including the exact zombie record and natural-completion regression.
-- Current focused proof: all 1,501 compiler-library tests pass under
+- Current focused proof: the complete compiler-library suite passes under
   `GITHUB_ACTIONS=true` with 64 test threads; the prior macOS failures, both
   CLI safepoint probes, deterministic queue ordering, x86 codegen pin, package
   process-tree timeout, 21 release-workflow tests, and 56 runtime-harness tests
   are green.
-- Remaining: prove the corrective branch with the full local gate and three
-  consecutive hosted CI runs on Linux and macOS, then land the proven tree on
-  main. Publishing remains a separate user dispatch after this gate.
+- Standard-capacity proof run `30719290315` passed all 337 macOS CLI tests,
+  including the complete timing family, then exposed an unrelated FFI
+  test-isolation race. Parallel FFI tests could receive the same process-ID /
+  clock-tick directory name and overwrite one another's `src/main.au`.
+  Temporary packages now add an atomic sequence, claim the root exclusively,
+  and have a deterministic same-timestamp isolation regression; all five FFI
+  acceptance tests pass with 16 test threads.
+- The first exact corrective-tree local gate passed every behavioral stage and
+  stopped only on the coverage floor at 96.28% lines / 97.14% functions /
+  94.61% regions. Coverage closure consolidated the hard-coded Cranelift flag
+  error paths, removed an unreachable class-name-only trait-dispatch fallback,
+  folded timeout cleanup into its caller, and replaced a child-side `pre_exec`
+  closure with direct process-group configuration. The exact instrumented
+  replay is green: 337 CLI tests, five FFI tests, 1,500 compiler tests, and
+  96.29% lines / 97.21% functions / 94.62% regions. No synthetic coverage test
+  or coverage exclusion was added.
+- The final exact `npm run ci` replay is green: 337 CLI tests, five FFI tests,
+  1,500 compiler tests, the 752.92-second forced parity matrix, 101 LSP tests at
+  100% coverage, 20 extension tests, compiler coverage at 96.29% lines /
+  97.21% functions / 94.62% regions, reference integrity, docs, audits,
+  warning-denied Clippy, and hygiene.
+- Remaining: prove three consecutive hosted CI runs on Linux and macOS at the
+  current standard capacity, then land the proven tree on main. Publishing
+  remains a separate user dispatch after this gate.
 - Work note: `work/2026-08-01-extension-publishing-and-hosted-ci-reliability.md`.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
