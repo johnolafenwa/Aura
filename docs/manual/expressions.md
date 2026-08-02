@@ -704,10 +704,15 @@ next interpolation begins:
 name = "aura"
 count = 3
 message = f"{name}: {count}"
+report = f"{name:<12s} {count:>8,d}"
 ```
 
-Interpolation contents are ordinary expressions. String spelling, escapes,
-literal braces, and unsupported formatting syntax are defined by
+Interpolation contents are ordinary expressions. A top-level colon introduces
+a statically checked format specification with fill, alignment, sign, width,
+decimal grouping, precision, and a closed set of string and numeric type codes.
+Formatting uses the interpolation value's exact static numeric width, so a
+`float32` is formatted from its binary32 value. String spelling, escapes,
+literal braces, and the complete format grammar are defined by
 [Lexical Structure](/manual/lexical-structure#f-strings).
 
 ## Match Expressions

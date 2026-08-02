@@ -477,6 +477,16 @@ fn handle_fmt_command(args: Vec<String>) {
 }
 
 fn format_aura_source(source: &str) -> String {
+    // Triple-quoted string contents are exact source data, including trailing
+    // spaces and tabs on physical lines. Until the formatter has a token-aware
+    // whitespace pass, preserve the entire file whenever one is present.
+    if source.contains("\"\"\"") || source.contains("'''") {
+        let mut formatted = source.trim_end_matches('\r').to_string();
+        if !formatted.is_empty() && !formatted.ends_with('\n') {
+            formatted.push('\n');
+        }
+        return formatted;
+    }
     let mut formatted = source
         .lines()
         .map(|line| line.trim_end_matches([' ', '\t', '\r']))

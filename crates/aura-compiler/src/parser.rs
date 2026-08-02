@@ -3017,9 +3017,22 @@ impl Parser {
             let mut expr_end = None;
             let mut brace_depth = 0usize;
             let mut string_quote = None;
+            let mut triple_quote = None;
             let mut escaped = false;
             while index < chars.len() {
                 let (candidate_offset, candidate) = chars[index];
+                if let Some(quote) = triple_quote {
+                    if candidate == quote
+                        && matches!(chars.get(index + 1), Some((_, next)) if *next == quote)
+                        && matches!(chars.get(index + 2), Some((_, next)) if *next == quote)
+                    {
+                        triple_quote = None;
+                        index += 3;
+                    } else {
+                        index += 1;
+                    }
+                    continue;
+                }
                 if let Some(quote) = string_quote {
                     if escaped {
                         escaped = false;
@@ -3032,6 +3045,14 @@ impl Parser {
                     continue;
                 }
                 match candidate {
+                    '"' | '\''
+                        if matches!(chars.get(index + 1), Some((_, next)) if *next == candidate)
+                            && matches!(chars.get(index + 2), Some((_, next)) if *next == candidate) =>
+                    {
+                        triple_quote = Some(candidate);
+                        index += 3;
+                        continue;
+                    }
                     '"' | '\'' => string_quote = Some(candidate),
                     '{' => brace_depth += 1,
                     '}' if brace_depth == 0 => {
@@ -3053,19 +3074,55 @@ impl Parser {
             if expr_text.is_empty() {
                 return Err(parse_error(span, "f-string interpolation cannot be empty"));
             }
-            let mut expr =
-                match parse_expression_with_recursion_depth(expr_text, self.recursion_depth) {
-                    Ok(expr) => expr,
-                    Err(error) => {
+            let complete_parse =
+                parse_expression_with_recursion_depth(expr_text, self.recursion_depth);
+            let (mut expr, format_spec) = match complete_parse {
+                Ok(expr) => (expr, None),
+                Err(complete_error) => {
+                    let mut parsed = None;
+                    for colon in top_level_format_colons(expr_text).into_iter().rev() {
+                        let expression_source = expr_text[..colon].trim_end();
+                        if expression_source.is_empty() {
+                            continue;
+                        }
+                        if let Ok(expr) = parse_expression_with_recursion_depth(
+                            expression_source,
+                            self.recursion_depth,
+                        ) {
+                            let spec = &expr_text[colon + 1..];
+                            if spec.contains(['{', '}']) {
+                                return Err(parse_error(
+                                    Span::new(span.line, span.column + expr_start + colon + 2),
+                                    "f-string format specifications cannot contain nested replacement fields",
+                                ));
+                            }
+                            parsed = Some((expr, colon, spec.to_string()));
+                            break;
+                        }
+                    }
+                    let Some((expr, colon, spec)) = parsed else {
                         return Err(parse_error(
                             span,
-                            format!("invalid f-string interpolation `{}`: {}", expr_text, error),
-                        ))
-                    }
-                };
+                            format!(
+                                "invalid f-string interpolation `{}`: {}",
+                                expr_text, complete_error
+                            ),
+                        ));
+                    };
+                    (expr, Some((colon, spec)))
+                }
+            };
             let column_offset = span.column + expr_start + leading_ws + 1;
             offset_expr_span(&mut expr, span.line, column_offset);
-            parts.push(FormatPart::Expr(expr));
+            if let Some((colon, spec)) = format_spec {
+                parts.push(FormatPart::Formatted {
+                    expr,
+                    spec,
+                    spec_span: Span::new(span.line, span.column + expr_start + colon + 2),
+                });
+            } else {
+                parts.push(FormatPart::Expr(expr));
+            }
             index += 1;
         }
 
@@ -3268,6 +3325,38 @@ impl Parser {
     }
 }
 
+/// Finds colons that are outside every nested expression delimiter. Parsing
+/// the complete interpolation is attempted first, so slice and dictionary
+/// colons remain expression syntax whenever the complete text is valid Aura.
+fn top_level_format_colons(source: &str) -> Vec<usize> {
+    let mut colons = Vec::new();
+    let mut delimiters = Vec::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, ch) in source.char_indices() {
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '(' | '[' | '{' => delimiters.push(ch),
+            ')' | ']' | '}' => {
+                delimiters.pop();
+            }
+            ':' if delimiters.is_empty() => colons.push(offset),
+            _ => {}
+        }
+    }
+    colons
+}
+
 fn specialization_target_name(expr: &Expr) -> Option<&str> {
     match &expr.kind {
         ExprKind::Name(name) => Some(name.as_str()),
@@ -3443,8 +3532,11 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
         | ExprKind::String(_) => {}
         ExprKind::FString(parts) => {
             for part in parts {
-                if let FormatPart::Expr(inner) = part {
-                    offset_expr_span(inner, line, column_offset);
+                match part {
+                    FormatPart::Expr(inner) | FormatPart::Formatted { expr: inner, .. } => {
+                        offset_expr_span(inner, line, column_offset);
+                    }
+                    FormatPart::Literal(_) => {}
                 }
             }
         }

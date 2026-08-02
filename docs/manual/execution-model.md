@@ -58,6 +58,9 @@ to both the conflicting access and the retained-borrow origin. This applies to
 name roots and projected member places, and no backend may insert a hidden deep
 clone. Each f-string interpolation is converted to its rendered `str` at
 its own position before the next interpolation begins.
+Each append preflights the maintained 64 MiB constructed-string limit. An
+oversized result reports `AU4005`, does not evaluate a later interpolation,
+and releases the partial output through ordinary failure cleanup.
 
 A list or str slice captures its base, then any written start, then any
 written end. A non-Copy base remains retained while the endpoint expressions

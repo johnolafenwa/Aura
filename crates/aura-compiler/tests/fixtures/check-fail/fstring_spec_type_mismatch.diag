@@ -1,0 +1,6 @@
+error[AU2002]: a format sign is valid only for numeric values
+ --> crates/aura-compiler/tests/fixtures/check-fail/fstring_spec_type_mismatch.au:3:19
+  |
+3 |     print(f"{label:+10s}")
+  |                   ^
+  = help: supported codes are d, f, e, x, X, b, o, %, and s; omit the code for ordinary rendering

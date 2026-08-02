@@ -776,13 +776,19 @@ impl<'a> AnalysisBuilder<'a> {
             }
             ExprKind::FString(parts) => {
                 for part in parts {
-                    if let crate::ast::FormatPart::Expr(part_expr) = part {
-                        self.extend_lambda_scope_from_expr(
-                            part_expr,
-                            target_line,
-                            character,
-                            scope,
-                        );
+                    match part {
+                        crate::ast::FormatPart::Expr(part_expr)
+                        | crate::ast::FormatPart::Formatted {
+                            expr: part_expr, ..
+                        } => {
+                            self.extend_lambda_scope_from_expr(
+                                part_expr,
+                                target_line,
+                                character,
+                                scope,
+                            );
+                        }
+                        crate::ast::FormatPart::Literal(_) => {}
                     }
                 }
             }
@@ -2229,8 +2235,12 @@ impl<'a> AnalysisBuilder<'a> {
             }
             ExprKind::FString(parts) => {
                 for part in parts {
-                    if let crate::ast::FormatPart::Expr(expr) = part {
-                        self.visit_expr(expr, scope);
+                    match part {
+                        crate::ast::FormatPart::Expr(expr)
+                        | crate::ast::FormatPart::Formatted { expr, .. } => {
+                            self.visit_expr(expr, scope);
+                        }
+                        crate::ast::FormatPart::Literal(_) => {}
                     }
                 }
             }
@@ -4751,7 +4761,10 @@ fn expression_end_line(expr: &Expr) -> usize {
         ExprKind::FString(parts) => parts
             .iter()
             .filter_map(|part| match part {
-                crate::ast::FormatPart::Expr(part_expr) => Some(expression_end_line(part_expr)),
+                crate::ast::FormatPart::Expr(part_expr)
+                | crate::ast::FormatPart::Formatted {
+                    expr: part_expr, ..
+                } => Some(expression_end_line(part_expr)),
                 crate::ast::FormatPart::Literal(_) => None,
             })
             .fold(expr.span.line, usize::max),

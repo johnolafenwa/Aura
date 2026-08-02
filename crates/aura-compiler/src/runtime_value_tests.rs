@@ -1,19 +1,20 @@
 use super::{
-    cancel_current_lightweight_task_boundary, cast_numeric_value, claim_task_result_observations,
-    create_dir_once, decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
-    finalize_task_execution, float_floor_divmod, float_power, io_decode_utf8, io_error, lock_mutex,
+    append_string_with_limit, cancel_current_lightweight_task_boundary, cast_numeric_value,
+    claim_task_result_observations, create_dir_once, decode_process_restart_policy,
+    decode_process_stdio, divmod_numeric_values, finalize_task_execution, float_floor_divmod,
+    float_power, format_runtime_value, io_decode_utf8, io_error, lock_mutex,
     next_retry_runtime_backoff, non_unix_tls_listener_wait_timeout, option_none, option_some,
-    process_error_cancelled, process_error_no_command, process_error_other, process_error_spawn,
-    process_error_timed_out, process_supervisor_event_failed, process_supervisor_wait_cancelled,
-    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
-    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, recv_for_task_group_iteration,
-    remove_file_checked, render_float, render_float32, result_err, result_ok, round_numeric_value,
-    run_blocking_io, run_lightweight_root_task, run_protocol_step, select_outcome_deadline,
-    select_outcome_queue, select_outcome_task, select_runtime_values, send_error_cancelled,
-    send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
-    slice_string_owned, slice_vec_owned, spawn_lightweight_task,
-    spawn_lightweight_task_with_cancellation,
+    parse_format_spec, process_error_cancelled, process_error_no_command, process_error_other,
+    process_error_spawn, process_error_timed_out, process_supervisor_event_failed,
+    process_supervisor_wait_cancelled, process_supervisor_wait_event,
+    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_failed,
+    process_wait_timed_out, queue_receive_cancelled, queue_receive_closed, queue_receive_item,
+    queue_receive_timed_out, recv_for_task_group_iteration, remove_file_checked, render_float,
+    render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
+    run_lightweight_root_task, run_protocol_step, select_outcome_deadline, select_outcome_queue,
+    select_outcome_task, select_runtime_values, send_error_cancelled, send_error_closed,
+    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned,
+    slice_vec_owned, spawn_lightweight_task, spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
     spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
     task_result_error, task_result_ready, task_result_timed_out, validate_read_line_capacity,
@@ -120,6 +121,135 @@ fn math_host_builtins_classify_every_exception_family() {
             .code,
         "AU4002"
     );
+}
+
+#[test]
+fn practical_format_specifications_are_unicode_aware_and_width_exact() {
+    let integer = Value::Int(crate::integer::IntegerValue::from_i64(-1_234_567));
+    assert_eq!(
+        format_runtime_value(&integer, &Type::named("int64"), "+15,d").unwrap(),
+        "     -1,234,567"
+    );
+    assert_eq!(
+        format_runtime_value(&integer, &Type::named("int64"), "*>12X").unwrap(),
+        "*****-12D687"
+    );
+    assert_eq!(
+        format_runtime_value(
+            &Value::String("aura✨".to_string()),
+            &Type::named("str"),
+            "·^9.4s",
+        )
+        .unwrap(),
+        "··aura···"
+    );
+}
+
+#[test]
+fn floating_formatting_preserves_binary32_identity_and_ieee_signs() {
+    let stored = Value::Float(1.234_567_890_123);
+    assert_eq!(
+        format_runtime_value(&stored, &Type::named("float32"), ".8f").unwrap(),
+        format!("{:.8}", 1.234_567_890_123_f64 as f32)
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(-0.0), &Type::named("float64"), "+.2f").unwrap(),
+        "-0.00"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(f64::INFINITY), &Type::named("float64"), "+f").unwrap(),
+        "+inf"
+    );
+    assert_eq!(
+        format_runtime_value(
+            &Value::Float(f64::NEG_INFINITY),
+            &Type::named("float64"),
+            " f",
+        )
+        .unwrap(),
+        "-inf"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(f64::NAN), &Type::named("float64"), " 8f").unwrap(),
+        "     nan"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(2.5), &Type::named("float64"), ".0f").unwrap(),
+        "2"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(3.5), &Type::named("float64"), ".0f").unwrap(),
+        "4"
+    );
+}
+
+#[test]
+fn format_width_and_precision_enforce_the_ratified_boundaries() {
+    assert_eq!(
+        parse_format_spec("1000000.1000000s").unwrap().width,
+        Some(1_000_000)
+    );
+    assert!(parse_format_spec("1000001s")
+        .unwrap_err()
+        .message
+        .contains("cannot exceed 1000000"));
+    assert!(parse_format_spec(".1000001s")
+        .unwrap_err()
+        .message
+        .contains("cannot exceed 1000000"));
+    assert!(parse_format_spec(",,d").is_err());
+    assert!(parse_format_spec("{width}d").is_err());
+
+    let widest = format_runtime_value(
+        &Value::String("x".to_string()),
+        &Type::named("str"),
+        "1000000s",
+    )
+    .unwrap();
+    assert_eq!(widest.chars().count(), 1_000_000);
+
+    let mut bounded = "abcd".to_string();
+    let error = append_string_with_limit(&mut bounded, "e", 4).unwrap_err();
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        bounded, "abcd",
+        "a failed preflight must not mutate the output"
+    );
+}
+
+#[test]
+fn integer_float_style_formats_do_not_round_through_binary64() {
+    let exact = Value::Int(
+        crate::integer::IntegerValue::from_typed_unsigned(
+            9_007_199_254_740_993,
+            IntegerKind::Uint64,
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        format_runtime_value(&exact, &Type::named("uint64"), ".0f").unwrap(),
+        "9007199254740993"
+    );
+    assert_eq!(
+        format_runtime_value(&exact, &Type::named("uint64"), ".2e").unwrap(),
+        "9.01e+15"
+    );
+    assert_eq!(
+        format_runtime_value(&exact, &Type::named("uint64"), ".0%").unwrap(),
+        "900719925474099300%"
+    );
+}
+
+#[test]
+fn impossible_runtime_format_contract_mismatches_are_diagnostics() {
+    let error = format_runtime_value(
+        &Value::String("not an integer".to_string()),
+        &Type::named("int64"),
+        "d",
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "AU4001");
+    assert!(error.message.contains("internal format contract mismatch"));
 }
 
 #[test]

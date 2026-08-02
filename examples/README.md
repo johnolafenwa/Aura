@@ -945,6 +945,11 @@ single task-result right on the first attempt.
 - `f_strings.au`
   - interpolated `f"..."` strings producing owned `str` values
   - prints `Hello, Aura 42`
+- `literal_forms_and_formatting.au`
+  - exact triple-quoted prompts, raw backslash-heavy paths, and statically
+    checked width, grouping, and percentage formatting
+  - demonstrates Unicode-aware formatting through the maintained f-string
+    grammar
 
 ## Stable Bootstrap Examples
 
@@ -1037,6 +1042,7 @@ cargo run -p aura -- run examples/numbers/unary_minus.au
 cargo run -p aura -- run examples/strings/string_clone.au
 cargo run -p aura -- run examples/strings/string_methods.au
 cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au
+cargo run -p aura -- run examples/strings/literal_forms_and_formatting.au
 ```
 
 ## Build Standalone Artifacts

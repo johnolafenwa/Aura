@@ -662,6 +662,11 @@ pub struct MirMapEntry {
 pub enum MirFormatPart {
     Literal(String),
     Value(Operand),
+    Formatted {
+        value: Operand,
+        spec: String,
+        value_type: Type,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -4614,9 +4619,9 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::FString(parts) => {
                 let temp = self.new_typed_temp(Type::named("str"));
-                let parts = parts
-                    .iter()
-                    .map(|part| match part {
+                let mut lowered_parts = Vec::with_capacity(parts.len());
+                for part in parts {
+                    let lowered = match part {
                         crate::ast::FormatPart::Literal(text) => {
                             MirFormatPart::Literal(text.clone())
                         }
@@ -4631,11 +4636,25 @@ impl<'a> Lowerer<'a> {
                             });
                             MirFormatPart::Value(Operand::Place(rendered))
                         }
-                    })
-                    .collect::<Vec<_>>();
+                        crate::ast::FormatPart::Formatted { expr, spec, .. } => {
+                            let value_type = self
+                                .infer_expr_type(expr)
+                                .unwrap_or_else(|| Type::named("Unknown"));
+                            let value = self.lower_expr_at_sequence_point(expr, None);
+                            MirFormatPart::Formatted {
+                                value,
+                                spec: spec.clone(),
+                                value_type,
+                            }
+                        }
+                    };
+                    lowered_parts.push(lowered);
+                }
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
-                    value: Rvalue::FormatString { parts },
+                    value: Rvalue::FormatString {
+                        parts: lowered_parts,
+                    },
                 });
                 Operand::Place(temp)
             }

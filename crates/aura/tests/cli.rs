@@ -914,6 +914,24 @@ fn new_fmt_and_test_commands_cover_the_project_workflow() {
 }
 
 #[test]
+fn fmt_preserves_triple_quoted_string_bytes() {
+    let temp = TempDir::new("aura-fmt-triple-string");
+    let source =
+        "def main():\n    message = \"\"\"first  \n\tsecond\t\n\"\"\"\n    print(message)\n";
+    let path = temp.path().join("triple.au");
+    fs::write(&path, source).expect("triple-string fixture should write");
+    let format = Command::new(aura_bin())
+        .args([
+            "fmt",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .output()
+        .expect("failed to run aura fmt");
+    assert!(format.status.success(), "aura fmt should succeed");
+    assert_eq!(fs::read_to_string(path).unwrap(), source);
+}
+
+#[test]
 fn fmt_is_idempotent_for_adr_0022_capability_syntax() {
     let temp = TempDir::new("aura-capability-format");
     let source_path = temp.path().join("capabilities.au");

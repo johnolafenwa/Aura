@@ -5,7 +5,8 @@ This page documents known current limits of the Aura compiler and runtime.
 ## Language
 
 - Identifiers are ASCII; Unicode is supported in string contents, not identifier spelling.
-- A physical tab anywhere on a source line is rejected, including inside a comment or string literal. Use `\t` to encode a tab in a string.
+- A physical tab outside a triple-quoted string is rejected. Inside a
+  triple-quoted string it is exact content. Use `\t` in an ordinary string.
 - Source lists do not accept trailing commas except the required comma in
   singleton tuple values, types, targets, and patterns. Multi-element tuples
   still reject a trailing comma.
@@ -22,16 +23,24 @@ This page documents known current limits of the Aura compiler and runtime.
 - Empty list, dictionary, and set literals need an expected collection type.
 - Class field defaults cannot call user-defined functions in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `str(...)` is not a constructor; use string literals and string methods.
-- Ordinary strings may use single or double quotes, but triple-quoted, raw, and byte-string literals are not implemented. F-strings remain double-quoted.
+- Ordinary and triple-quoted strings may use single or double quotes. Raw
+  strings are single-line. Raw triple strings, raw f-strings, and byte-string
+  literals are not implemented. F-strings remain double-quoted and use static
+  format specifications; dynamic width, nested fields, conversion flags,
+  locale formatting, and the `g`, `G`, `n`, `c`, `#`, `0`, and `=` forms are
+  not implemented.
 - `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned
   Unicode-scalar slicing, but no integer indexing, `chars()`, `ord()`, or
   `chr()`.
+- One concatenated or formatted `str` result is limited to 64 MiB. Aura
+  preflights the next append and reports `AU4005` without committing an
+  oversized partial result.
 - `list[uint8]` is the bytes type. UTF-8 conversion is explicit; the reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and HMAC are not implemented.
 - Physical newlines continue a logical line only while `(`, `[`, or `{`
   remains open. Continuation indentation is visual; delimiter kinds must
   match.
-- Backslash continuation is not implemented. Ordinary strings and f-strings
-  remain single-line.
+- Backslash continuation is not implemented. Ordinary, raw, and f-strings
+  remain single-line; triple-quoted ordinary strings may span physical lines.
 - Tuples have fixed structural types, recursive unpack targets and patterns,
   copy-only constant indexing, and non-consuming recursive `==` and `!=` for
   operands of the same static tuple type. There is no empty tuple,

@@ -575,7 +575,7 @@
       "stderr": ""
     },
     "docs/manual/expressions.md#aura-15": {
-      "sha256": "0c377ad9366ce37b72f097e492a7d2d27209e3982342a546e77b97ea54484806",
+      "sha256": "ca14eb57270f871e280e2ed7279720212ec6dc7be742f3378a17d585dfb0fcd8",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1053,6 +1053,11 @@
       "reason": "Reserved-keyword catalog, not an Aura compilation unit."
     },
     "docs/manual/grammar.md#text-2": {
+      "sha256": "953ca189239297b7ff2e8b211fd112b4a86e8aff8b1e6d371670bf0118f375ea",
+      "mode": "illustrative",
+      "reason": "Normative closed f-string format grammar interpreted by the surrounding prose, not an Aura compilation unit."
+    },
+    "docs/manual/grammar.md#text-3": {
       "sha256": "ec4646480bc146251e723c11048879bae30efc57d274f5274180a5493271511e",
       "mode": "illustrative",
       "reason": "Punctuation-and-operator token catalog, not an Aura compilation unit."
@@ -1110,15 +1115,33 @@
       "stderr": ""
     },
     "docs/manual/lexical-structure.md#aura-6": {
+      "sha256": "81e1e4d52d9deb52cd79c5d598d7eafc65e4bc6d17e2839694d5c010ed520ce7",
+      "mode": "check",
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/lexical-structure.md#aura-7": {
+      "sha256": "38a104227bf19eb3bba5b0a8e175384ed70ad87d78f917ca15b5300fc97f076a",
+      "mode": "check",
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/lexical-structure.md#aura-8": {
       "sha256": "cd45c33e224f546fc3d3fd91b85326ad0056ba422fcb410abfda9899ecf5a384",
       "mode": "run",
       "stdout": "hello aura\n",
       "stderr": ""
     },
-    "docs/manual/lexical-structure.md#aura-7": {
+    "docs/manual/lexical-structure.md#aura-9": {
       "sha256": "1da1248f109187333679251f8a4c4f44bb89a7cac3950538ecfdec5c0310b14a",
       "mode": "illustrative",
       "reason": "Escaped-brace fragment: name is an interpolation value supplied by the surrounding example."
+    },
+    "docs/manual/lexical-structure.md#aura-10": {
+      "sha256": "9c2610b6a412d0510f9e6cb83ff87cd0ec63863cf5f087feb2b70feeb48a8286",
+      "mode": "run",
+      "stdout": "   1,234,567\n+87.50%\n······Aura······\n",
+      "stderr": ""
     },
     "docs/manual/lexical-structure.md#ebnf-1": {
       "sha256": "b2f4a4344b8e16c0ba22d558b9ed9019a1a8d23f6b50b59051b187e6efa59dc6",

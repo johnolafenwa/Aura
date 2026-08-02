@@ -434,6 +434,7 @@ struct NativeCodegen<'a> {
     string_trim: FuncId,
     string_join: FuncId,
     stringify_value: FuncId,
+    format_value: FuncId,
     abs_value: FuncId,
     min_value: FuncId,
     max_value: FuncId,
@@ -935,6 +936,7 @@ impl<'a> NativeCodegen<'a> {
             string_trim => ("aura_direct_string_trim", [types::I64], Some(types::I64)),
             string_join => ("aura_direct_string_join", [types::I64, types::I64], Some(types::I64)),
             stringify_value => ("aura_direct_stringify_value", [types::I64], Some(types::I64)),
+            format_value => ("aura_direct_format_value", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             abs_value => ("aura_direct_abs", [types::I64], Some(types::I64)),
             min_value => ("aura_direct_min", [types::I64, types::I64], Some(types::I64)),
             max_value => ("aura_direct_max", [types::I64, types::I64], Some(types::I64)),
@@ -1370,6 +1372,7 @@ impl<'a> NativeCodegen<'a> {
             string_trim,
             string_join,
             stringify_value,
+            format_value,
             abs_value,
             min_value,
             max_value,
@@ -2078,6 +2081,9 @@ impl<'a> NativeCodegen<'a> {
         let stringify_value = self
             .object
             .declare_func_in_func(self.stringify_value, builder.func);
+        let format_value = self
+            .object
+            .declare_func_in_func(self.format_value, builder.func);
         let abs_value = self
             .object
             .declare_func_in_func(self.abs_value, builder.func);
@@ -3012,6 +3018,7 @@ impl<'a> NativeCodegen<'a> {
             string_trim,
             string_join,
             stringify_value,
+            format_value,
             abs_value,
             min_value,
             max_value,
@@ -3845,6 +3852,7 @@ struct FunctionCompiler<'a> {
     string_trim: cranelift_codegen::ir::FuncRef,
     string_join: cranelift_codegen::ir::FuncRef,
     stringify_value: cranelift_codegen::ir::FuncRef,
+    format_value: cranelift_codegen::ir::FuncRef,
     abs_value: cranelift_codegen::ir::FuncRef,
     min_value: cranelift_codegen::ir::FuncRef,
     max_value: cranelift_codegen::ir::FuncRef,
@@ -5935,6 +5943,25 @@ impl<'a> FunctionCompiler<'a> {
                         .builder
                         .ins()
                         .call(self.stringify_value, &[value.values[0]]);
+                    self.owned_opaque_result(
+                        self.builder.inst_results(call).to_vec(),
+                        Type::named("str"),
+                    )
+                }
+                MirFormatPart::Formatted {
+                    value,
+                    spec,
+                    value_type,
+                } => {
+                    let value = self.load_operand(value)?;
+                    let value = self.ensure_opaque(value)?;
+                    let (spec_ptr, spec_len) = self.string_constant(spec.as_bytes())?;
+                    let type_name = value_type.to_string();
+                    let (type_ptr, type_len) = self.string_constant(type_name.as_bytes())?;
+                    let call = self.builder.ins().call(
+                        self.format_value,
+                        &[value.values[0], spec_ptr, spec_len, type_ptr, type_len],
+                    );
                     self.owned_opaque_result(
                         self.builder.inst_results(call).to_vec(),
                         Type::named("str"),
@@ -14238,8 +14265,11 @@ fn validate_rvalue(
         }
         Rvalue::FormatString { parts } => {
             for part in parts {
-                if let MirFormatPart::Value(value) = part {
-                    validate_non_consuming_operand(value, "format-string interpolation")?;
+                match part {
+                    MirFormatPart::Value(value) | MirFormatPart::Formatted { value, .. } => {
+                        validate_non_consuming_operand(value, "format-string interpolation")?;
+                    }
+                    MirFormatPart::Literal(_) => {}
                 }
             }
             Ok(())

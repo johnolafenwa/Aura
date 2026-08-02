@@ -161,7 +161,7 @@ and a closer placed on its own line. See
 [Expressions](/manual/expressions#match-expressions) and
 [Grammar](/manual/grammar#match-expressions).
 
-Backslash continuation is not implemented. Ordinary strings and f-strings remain single-line;
+Backslash continuation is not implemented. Ordinary, raw, and f-strings remain single-line;
 delimiters inside them do not continue source, and an f-string interpolation
 cannot cross a physical newline.
 
@@ -286,9 +286,33 @@ Both delimiters produce a `str` and support the same escapes:
 | `\u{H...}` | Unicode scalar from one or more hexadecimal digits |
 
 Unknown escapes, invalid Unicode scalars, missing hexadecimal digits, and
-missing or mismatched closing quotes are lexical errors. Triple-quoted, raw,
-and byte-string literals are not part of Aura 0.2. A one-character literal
-such as `'x'` is a `str`, not a distinct character type.
+missing or mismatched closing quotes are lexical errors. A one-character
+literal such as `'x'` is a `str`, not a distinct character type.
+
+Three matching quotes create an exact multiline string:
+
+```python
+prompt = """Classify this request.
+Return one label and one reason.
+"""
+```
+
+The value contains every scalar between the delimiters. Aura performs no
+dedent, margin calculation, trimming, leading-newline removal, trailing-newline
+removal, or Unicode normalization. Escapes retain their ordinary meaning.
+Physical tabs inside the delimiters are content.
+
+A lowercase `r` creates a single-line raw string:
+
+```python
+path = r"C:\agents\run"
+pattern = r'\d+\.\d+'
+```
+
+Backslashes are content. A backslash may retain the active quote inside the
+value, and both characters remain. A raw string cannot end in an odd run of
+backslashes or contain a physical newline. Raw triple strings and byte strings
+are unavailable.
 
 A string literal has type `str`. See [Types](/manual/types) for ownership and [Execution Model](/manual/execution-model#evaluation-order) for expression evaluation order.
 
@@ -312,10 +336,33 @@ Use two consecutive opening braces for a literal opening brace. Two consecutive 
 print(f"{{name}} = {name}")
 ```
 
-F-strings support the same escapes as ordinary strings. F-strings themselves
-remain double-quoted: `f'...'` is not Aura 0.2 syntax. They do not support
-conversion flags such as `!r` or a format-specifier mini-language.
-Interpolations are evaluated from left to right and the result is an owned
+F-strings support the same escapes as ordinary strings and remain
+double-quoted. An interpolation accepts a static format specification after a
+top-level colon:
+
+```python
+def main():
+    count: int64 = 1234567
+    ratio: float32 = 0.875
+    label = "Aura"
+    print(f"{count:>12,d}")
+    print(f"{ratio:+.2%}")
+    print(f"{label:·^16.8s}")
+```
+
+The grammar is `[[fill]align][sign][width][,][.precision][type]`. Alignment is
+`<`, `^`, or `>` and type is `d`, `f`, `e`, `x`, `X`, `b`, `o`, `%`, or
+`s`. Strings default to left alignment and numbers to right alignment. Width
+counts Unicode scalars and never truncates. `s` precision is the maximum
+scalar count. Numeric precision uses ties-to-even rounding. Decimal grouping
+is available with `d`, `f`, and `%`. Width and precision are limited to
+`1_000_000`.
+
+Aura parses the complete interpolation expression before recognizing the
+top-level separator. Colons inside nested slices, dictionaries, calls, and
+collection literals remain part of the expression. Dynamic specifications,
+nested fields, conversion flags, and single-quoted f-strings are unavailable.
+Interpolations evaluate once from left to right and the result is an owned
 `str`.
 
 ## Complexity Limits
@@ -381,9 +428,10 @@ the same lexical language; there is no backend-specific lexer.
 
 ## Limits And Implementation-Defined Behavior
 
-Identifiers are ASCII, source is UTF-8, physical tabs are rejected,
+Identifiers are ASCII, source is UTF-8, physical tabs are rejected outside
+triple-quoted string content,
 continuation requires an unmatched source delimiter, ordinary lists reject
-trailing commas, backslash continuation and multiline ordinary/f-strings are
+trailing commas, backslash continuation and multiline f-strings are
 unavailable, and literal magnitude and parser-complexity caps are fixed by
 this chapter and [Current Limits](/manual/current-limits). Continuation
 indentation is not semantically significant, but delimiter matching, token
@@ -393,9 +441,7 @@ implementation choices.
 ## Status
 
 The forms described as accepted above are implemented. Delimiter continuation
-and its layout/diagnostic policy are accepted under ADR-0025. Raw, byte,
-triple-quoted, and single-quoted
-f-strings; alternate integer bases; digit separators; block comments;
-semicolons; ordinary trailing commas other than the required singleton-tuple
-comma; backslash continuation; and multiline string or f-string literals are
-unavailable, not partially implemented.
+and its layout/diagnostic policy are accepted under ADR-0025. Raw triple
+strings, raw f-strings, byte strings, single-quoted f-strings, block comments,
+semicolons, ordinary trailing commas other than the required singleton-tuple
+comma, backslash continuation, and multiline f-string literals are unavailable.

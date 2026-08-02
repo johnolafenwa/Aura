@@ -22,6 +22,20 @@
     ],
     "description": "Aura expression lambda"
   },
+  "Multiline string": {
+    "prefix": "triple",
+    "body": [
+      "\"\"\"${1:text}\"\"\""
+    ],
+    "description": "Aura exact multiline string"
+  },
+  "Formatted string": {
+    "prefix": "fstr",
+    "body": [
+      "f\"${1:label}: {${2:value}:${3:>10}}\""
+    ],
+    "description": "Aura formatted string with a static format specification"
+  },
   "Extern C function": {
     "prefix": "externc",
     "body": [

@@ -19,6 +19,7 @@ use crate::diag::{Diagnostic, Result};
 use crate::integer::{
     integer_type_bounds as integer_type_bounds_impl, IntegerBounds, IntegerValue,
 };
+use crate::runtime_value::{parse_format_spec, validate_format_spec_for_type, FormatSpecErrorKind};
 
 #[derive(Clone, Debug)]
 pub struct Program {
@@ -3856,7 +3857,7 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
         }
         ExprKind::FString(parts) => parts.iter().find_map(|part| match part {
             crate::ast::FormatPart::Literal(_) => None,
-            crate::ast::FormatPart::Expr(expr) => {
+            crate::ast::FormatPart::Expr(expr) | crate::ast::FormatPart::Formatted { expr, .. } => {
                 default_argument_references_param(expr, param_names)
             }
         }),
@@ -11067,8 +11068,12 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::FString(parts) => {
                 for part in parts {
-                    if let crate::ast::FormatPart::Expr(value) = part {
-                        Self::collect_lambda_capture_uses(value, bound, seen, captures);
+                    match part {
+                        crate::ast::FormatPart::Expr(value)
+                        | crate::ast::FormatPart::Formatted { expr: value, .. } => {
+                            Self::collect_lambda_capture_uses(value, bound, seen, captures);
+                        }
+                        crate::ast::FormatPart::Literal(_) => {}
                     }
                 }
             }
@@ -11706,8 +11711,33 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::String(_) => Ok(Type::named("str")),
             ExprKind::FString(parts) => {
                 for part in parts {
-                    if let crate::ast::FormatPart::Expr(expr) = part {
-                        self.type_of_expr(expr, locals)?;
+                    match part {
+                        crate::ast::FormatPart::Expr(expr) => {
+                            self.type_of_expr(expr, locals)?;
+                        }
+                        crate::ast::FormatPart::Formatted {
+                            expr,
+                            spec,
+                            spec_span,
+                        } => {
+                            let value_type = self.type_of_expr(expr, locals)?;
+                            let parsed = parse_format_spec(spec).map_err(|error| {
+                                Diagnostic::coded_at(
+                                    match error.kind {
+                                        FormatSpecErrorKind::Syntax => "AU1101",
+                                        FormatSpecErrorKind::Type => "AU2002",
+                                    },
+                                    *spec_span,
+                                    error.message,
+                                )
+                            })?;
+                            validate_format_spec_for_type(&parsed, &value_type).map_err(|error| {
+                                Diagnostic::coded_at("AU2002", *spec_span, error.message).with_help(
+                                    "supported codes are d, f, e, x, X, b, o, %, and s; omit the code for ordinary rendering",
+                                )
+                            })?;
+                        }
+                        crate::ast::FormatPart::Literal(_) => {}
                     }
                 }
                 Ok(Type::named("str"))
@@ -21440,8 +21470,12 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::FString(parts) => {
                 for part in parts {
-                    if let crate::ast::FormatPart::Expr(value) = part {
-                        self.collect_expr_call_places(value, locals, places, include_consumed)?;
+                    match part {
+                        crate::ast::FormatPart::Expr(value)
+                        | crate::ast::FormatPart::Formatted { expr: value, .. } => {
+                            self.collect_expr_call_places(value, locals, places, include_consumed)?;
+                        }
+                        crate::ast::FormatPart::Literal(_) => {}
                     }
                 }
                 Ok(())
@@ -21565,8 +21599,12 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::FString(parts) => {
                 for part in parts {
-                    if let crate::ast::FormatPart::Expr(value) = part {
-                        self.collect_expr_place_reads(value, locals, label, places);
+                    match part {
+                        crate::ast::FormatPart::Expr(value)
+                        | crate::ast::FormatPart::Formatted { expr: value, .. } => {
+                            self.collect_expr_place_reads(value, locals, label, places);
+                        }
+                        crate::ast::FormatPart::Literal(_) => {}
                     }
                 }
             }

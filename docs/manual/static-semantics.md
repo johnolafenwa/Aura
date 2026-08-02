@@ -34,7 +34,11 @@ Aura uses local, contextual inference rather than global inference. Public funct
 - A negative integer literal is parsed as unary `-` applied to a non-negative literal. It follows the same exact float-context rule, or must fit the selected signed integer type.
 - A floating literal adopts an expected `float32` or `float64`; otherwise it defaults to `float64`.
 - `true` and `false` have type `bool`.
-- A single-quoted or double-quoted ordinary string and an f-string each have type `str`; quote choice does not create a distinct type.
+- A single-quoted, double-quoted, triple-quoted, raw, or formatted string has
+  type `str`; delimiter and literal form do not create distinct types. Each
+  f-string format specification is checked against the interpolation's static
+  type. String-only, integer-only, numeric-only, sign, precision, and grouping
+  restrictions are compile-time errors under `AU2002`.
 - A duration literal has type `Duration`.
 - Bare `None` has type `None`, except in an expected `Option[T]` position where it denotes `Option.None` of that type. Expected-option context flows through grouping, annotated bindings, return positions, and argument positions. For `==` and `!=`, when either operand has static type `Option[T]`, a bare `None` on the other side is contextually typed as that same option specialization; this rule is symmetric. Unit `None == None` is `true` and unit `None != None` is `false`. A qualified `Option.None` with no expected specialization remains an inference error.
 

@@ -29,11 +29,12 @@ use crate::json_codec;
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
     cancel_current_lightweight_task_boundary, cast_numeric_value, claim_task_result_observations,
-    clone_json_codec_source, collect_queue_values, current_lightweight_task_cancellation,
-    current_lightweight_task_id, decode_process_restart_policy, decode_process_stdio,
-    divmod_numeric_values, embedded_nominal_runtime_type_name, evaluate_bytes_host_builtin_ref,
-    evaluate_host_builtin, fail_current_lightweight_task, float_floor_divmod, float_power,
-    io_error, io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
+    clone_json_codec_source, collect_queue_values, concat_strings_checked,
+    current_lightweight_task_cancellation, current_lightweight_task_id,
+    decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
+    embedded_nominal_runtime_type_name, evaluate_bytes_host_builtin_ref, evaluate_host_builtin,
+    fail_current_lightweight_task, float_floor_divmod, float_power, format_runtime_value, io_error,
+    io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
     json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_owned_to_runtime,
     nominal_runtime_base_name, option_none, option_some, poll_cancellation,
     prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
@@ -3258,7 +3259,9 @@ fn eval_binary_value_with_float_width(
                 None => Err(Diagnostic::new("integer overflow")),
             },
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left + right)),
-            (Value::String(left), Value::String(right)) => Ok(Value::String(left + &right)),
+            (Value::String(left), Value::String(right)) => {
+                Ok(Value::String(concat_strings_checked(left, &right)?))
+            }
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `+` operands `{}` and `{}`",
                 value_type_name(&left),
@@ -4002,6 +4005,25 @@ pub extern "C-unwind" fn aura_direct_stringify_value(value: *mut OpaqueValue) ->
     task_runtime_boundary(|| {
         let rendered = unsafe { value_ref(value) }.render();
         boxed_value(Value::String(rendered))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_format_value(
+    value: *mut OpaqueValue,
+    spec_ptr: *const u8,
+    spec_len: usize,
+    type_ptr: *const u8,
+    type_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let spec = decode_bytes(spec_ptr, spec_len);
+        let value_type = Type::named(decode_bytes(type_ptr, type_len));
+        let value = unsafe { value_ref(value) };
+        match format_runtime_value(&value, &value_type, &spec) {
+            Ok(rendered) => boxed_value(Value::String(rendered)),
+            Err(error) => runtime_diagnostic_error(error),
+        }
     })
 }
 

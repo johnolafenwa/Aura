@@ -147,6 +147,13 @@ struct LayoutIsland {
     indent_stack: Vec<usize>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingTripleString {
+    quote: char,
+    raw_content: String,
+    span: Span,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum LineLayout {
     Global,
@@ -159,6 +166,7 @@ struct LexState {
     delimiters: Vec<DelimiterFrame>,
     pending_delimited_matches: Vec<PendingDelimitedMatch>,
     layout_islands: Vec<LayoutIsland>,
+    triple_string: Option<PendingTripleString>,
 }
 
 impl LexState {
@@ -300,6 +308,9 @@ impl LexState {
     }
 
     fn should_emit_newline(&self) -> bool {
+        if self.triple_string.is_some() {
+            return false;
+        }
         match self.layout_islands.last() {
             Some(island) => self.delimiters.len() == island.container_depth,
             None => self.delimiters.is_empty(),
@@ -477,6 +488,62 @@ fn decode_escape(
     }
 }
 
+fn find_triple_terminator(source: &str, quote: char) -> Option<usize> {
+    let chars = source.char_indices().collect::<Vec<_>>();
+    let mut backslash_run = 0usize;
+    for index in 0..chars.len() {
+        let (offset, current) = chars[index];
+        if current == quote
+            && backslash_run.is_multiple_of(2)
+            && matches!(chars.get(index + 1), Some((_, next)) if *next == quote)
+            && matches!(chars.get(index + 2), Some((_, next)) if *next == quote)
+        {
+            return Some(offset);
+        }
+        if current == '\\' {
+            backslash_run += 1;
+        } else {
+            backslash_run = 0;
+        }
+    }
+    None
+}
+
+fn decode_triple_string(source: &str, span: Span) -> Result<String> {
+    let chars = source.char_indices().collect::<Vec<_>>();
+    let mut value = String::new();
+    let mut index = 0usize;
+    let mut line = span.line;
+    let mut column = span.column + 3;
+    while index < chars.len() {
+        let current = chars[index].1;
+        if current == '\\' {
+            let (decoded, next) =
+                decode_escape(&chars, index + 1, line, column, "triple-quoted string")?;
+            value.push(decoded);
+            for (_, consumed) in &chars[index..next] {
+                if *consumed == '\n' {
+                    line += 1;
+                    column = 1;
+                } else {
+                    column += consumed.len_utf8();
+                }
+            }
+            index = next;
+        } else {
+            value.push(current);
+            if current == '\n' {
+                line += 1;
+                column = 1;
+            } else {
+                column += current.len_utf8();
+            }
+            index += 1;
+        }
+    }
+    Ok(value)
+}
+
 pub fn lex(source: &str) -> Result<Vec<Token>> {
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut tokens = Vec::new();
@@ -486,16 +553,29 @@ pub fn lex(source: &str) -> Result<Vec<Token>> {
     for (index, raw_line) in source.lines().enumerate() {
         let line_no = index + 1;
 
-        if raw_line.contains('\t') {
+        let trimmed = raw_line.trim();
+        if state.triple_string.is_none()
+            && raw_line.contains('\t')
+            && (trimmed.is_empty() || trimmed.starts_with('#'))
+        {
             return Err(Diagnostic::coded_at(
                 "AU1001",
                 Span::new(line_no, 1),
                 "tabs are not supported for indentation; use spaces",
             ));
         }
+        if state.triple_string.is_none() && (trimmed.is_empty() || trimmed.starts_with('#')) {
+            continue;
+        }
 
-        let trimmed = raw_line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
+        if state.triple_string.is_some() {
+            tokenize_line(raw_line, line_no, 1, 0, &mut state, &mut tokens)?;
+            if state.should_emit_newline() {
+                tokens.push(Token {
+                    kind: TokenKind::Newline,
+                    span: Span::new(line_no, raw_line.len() + 1),
+                });
+            }
             continue;
         }
 
@@ -539,6 +619,12 @@ pub fn lex(source: &str) -> Result<Vec<Token>> {
     if let Some(error) = state.unclosed_delimiter_error(diagnostic_eof_span) {
         return Err(error);
     }
+    if let Some(pending) = state.triple_string {
+        return Err(lexical_error(
+            pending.span,
+            "unterminated triple-quoted string literal",
+        ));
+    }
 
     while indent_stack.len() > 1 {
         indent_stack.pop();
@@ -567,6 +653,27 @@ fn tokenize_line(
     let chars: Vec<(usize, char)> = content.char_indices().collect();
     let mut index = 0;
 
+    if let Some(mut pending) = state.triple_string.take() {
+        pending.raw_content.push('\n');
+        if let Some(close) = find_triple_terminator(content, pending.quote) {
+            pending.raw_content.push_str(&content[..close]);
+            let value = decode_triple_string(&pending.raw_content, pending.span)?;
+            tokens.push(Token {
+                kind: TokenKind::StringLiteral(value),
+                span: pending.span,
+            });
+            index = chars
+                .iter()
+                .position(|(offset, _)| *offset == close)
+                .expect("triple terminator starts at a character boundary")
+                + 3;
+        } else {
+            pending.raw_content.push_str(content);
+            state.triple_string = Some(pending);
+            return Ok(());
+        }
+    }
+
     while index < chars.len() {
         let (offset, ch) = chars[index];
         let column = base_column + offset;
@@ -575,7 +682,23 @@ fn tokenize_line(
             ' ' => {
                 index += 1;
             }
-            '#' => break,
+            '\t' => {
+                return Err(Diagnostic::coded_at(
+                    "AU1001",
+                    Span::new(line_no, column),
+                    "tabs are not supported for indentation; use spaces",
+                ));
+            }
+            '#' => {
+                if let Some(tab_offset) = content[offset..].find('\t') {
+                    return Err(Diagnostic::coded_at(
+                        "AU1001",
+                        Span::new(line_no, column + tab_offset),
+                        "physical tabs are allowed only inside triple-quoted strings",
+                    ));
+                }
+                break;
+            }
             '(' => {
                 state.open_delimiter(DelimiterKind::Parenthesis, Span::new(line_no, column))?;
                 tokens.push(simple(TokenKind::LParen, line_no, column));
@@ -792,10 +915,17 @@ fn tokenize_line(
                 let mut value = String::new();
                 let mut interpolation_depth = 0usize;
                 let mut interpolation_string_quote = None;
+                let mut interpolation_triple_quote = None;
                 let mut interpolation_escape = false;
 
                 while index < chars.len() {
                     let (_, current) = chars[index];
+                    if current == '\t' {
+                        return Err(lexical_error(
+                            Span::new(line_no, column),
+                            "physical tabs are allowed only inside triple-quoted strings",
+                        ));
+                    }
                     if interpolation_depth == 0 && current == '"' {
                         break;
                     }
@@ -826,7 +956,18 @@ fn tokenize_line(
                     }
                     value.push(current);
                     if interpolation_depth > 0 {
-                        if let Some(quote) = interpolation_string_quote {
+                        if let Some(quote) = interpolation_triple_quote {
+                            if current == quote
+                                && matches!(chars.get(index + 1), Some((_, next)) if *next == quote)
+                                && matches!(chars.get(index + 2), Some((_, next)) if *next == quote)
+                            {
+                                value.push(quote);
+                                value.push(quote);
+                                interpolation_triple_quote = None;
+                                index += 3;
+                                continue;
+                            }
+                        } else if let Some(quote) = interpolation_string_quote {
                             if interpolation_escape {
                                 interpolation_escape = false;
                             } else if current == '\\' {
@@ -836,6 +977,16 @@ fn tokenize_line(
                             }
                         } else {
                             match current {
+                                '"' | '\''
+                                    if matches!(chars.get(index + 1), Some((_, next)) if *next == current)
+                                        && matches!(chars.get(index + 2), Some((_, next)) if *next == current) =>
+                                {
+                                    value.push(current);
+                                    value.push(current);
+                                    interpolation_triple_quote = Some(current);
+                                    index += 3;
+                                    continue;
+                                }
                                 '"' | '\'' => interpolation_string_quote = Some(current),
                                 '{' => {
                                     if interpolation_depth >= RECURSION_LIMIT {
@@ -872,12 +1023,103 @@ fn tokenize_line(
                     span: Span::new(line_no, column),
                 });
             }
+            'r' if matches!(chars.get(index + 1), Some((_, '"' | '\''))) => {
+                let quote = chars[index + 1].1;
+                if matches!(chars.get(index + 2), Some((_, next)) if *next == quote)
+                    && matches!(chars.get(index + 3), Some((_, next)) if *next == quote)
+                {
+                    return Err(lexical_error(
+                        Span::new(line_no, column),
+                        "raw triple-quoted strings are not supported",
+                    ));
+                }
+                index += 2;
+                let mut value = String::new();
+                let mut backslash_run = 0usize;
+                let mut terminated = false;
+                while index < chars.len() {
+                    let (_, current) = chars[index];
+                    if current == '\t' {
+                        return Err(lexical_error(
+                            Span::new(line_no, column),
+                            "physical tabs are allowed only inside triple-quoted strings",
+                        ));
+                    }
+                    if current == quote {
+                        if backslash_run.is_multiple_of(2) {
+                            terminated = true;
+                            break;
+                        }
+                        value.push(current);
+                        backslash_run = 0;
+                        index += 1;
+                        continue;
+                    }
+                    value.push(current);
+                    if current == '\\' {
+                        backslash_run += 1;
+                    } else {
+                        backslash_run = 0;
+                    }
+                    index += 1;
+                }
+                if !terminated {
+                    let message = if backslash_run % 2 == 1 {
+                        "raw string cannot end in an odd run of backslashes"
+                    } else {
+                        "unterminated raw string literal; raw strings cannot contain a physical newline"
+                    };
+                    return Err(lexical_error(Span::new(line_no, column), message));
+                }
+                index += 1;
+                tokens.push(Token {
+                    kind: TokenKind::StringLiteral(value),
+                    span: Span::new(line_no, column),
+                });
+            }
             quote @ ('"' | '\'') => {
+                if matches!(chars.get(index + 1), Some((_, next)) if *next == quote)
+                    && matches!(chars.get(index + 2), Some((_, next)) if *next == quote)
+                {
+                    let start_span = Span::new(line_no, column);
+                    index += 3;
+                    let rest_offset = chars
+                        .get(index)
+                        .map_or(content.len(), |(offset, _)| *offset);
+                    let rest = &content[rest_offset..];
+                    if let Some(relative_close) = find_triple_terminator(rest, quote) {
+                        let value = decode_triple_string(&rest[..relative_close], start_span)?;
+                        tokens.push(Token {
+                            kind: TokenKind::StringLiteral(value),
+                            span: start_span,
+                        });
+                        let close_offset = rest_offset + relative_close;
+                        index = chars
+                            .iter()
+                            .position(|(offset, _)| *offset == close_offset)
+                            .expect("triple terminator starts at a character boundary")
+                            + 3;
+                    } else {
+                        state.triple_string = Some(PendingTripleString {
+                            quote,
+                            raw_content: rest.to_string(),
+                            span: start_span,
+                        });
+                        return Ok(());
+                    }
+                    continue;
+                }
                 index += 1;
                 let mut value = String::new();
 
                 while index < chars.len() {
                     let (_, current) = chars[index];
+                    if current == '\t' {
+                        return Err(lexical_error(
+                            Span::new(line_no, column),
+                            "physical tabs are allowed only inside triple-quoted strings",
+                        ));
+                    }
                     if current == quote {
                         break;
                     }

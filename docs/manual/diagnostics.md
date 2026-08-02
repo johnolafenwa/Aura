@@ -338,6 +338,15 @@ receive items for Queue. Related diagnostics
 cover missing `mut`, consuming calls, integer `/`, typed `self: Type`, tab
 indentation, and single-quoted f-strings.
 
+String literal and format diagnostics use the smallest proving location.
+`AU1001` reports malformed or unterminated ordinary, triple-quoted, and raw
+strings, including a later physical line that contains an invalid escape.
+`AU1101` reports malformed static format grammar, nested fields, unsupported
+codes, and width or precision above `1_000_000`. `AU2002` reports a valid
+specification that is incompatible with the interpolation's static type.
+Constructed string output above the 64 MiB limit reports `AU4005` before the
+oversized append mutates the partial result.
+
 Owned list and str slicing is implemented, but step syntax and slice
 assignment remain reserved. They use `AU2005` with these exact messages:
 

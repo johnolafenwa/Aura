@@ -4474,6 +4474,35 @@ test("compiler bridge analyzes single-quoted strings nested in f-string interpol
   }
 });
 
+test("compiler bridge analyzes exact string forms and typed format specifications", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-format-strings-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const source = [
+      "def main():",
+      "    prompt = \"\"\"first",
+      "second\"\"\"",
+      "    path = r\"C:\\\\agents\\\\run\"",
+      "    count: int64 = 1234567",
+      "    print(prompt)",
+      "    print(path)",
+      "    print(f\"{count:*>14,d}\")"
+    ].join("\n");
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.deepStrictEqual(analysis.diagnostics, []);
+    const count = analysis.occurrences.find(
+      (occurrence) => occurrence.line === 7 && occurrence.hover?.includes("count: int64")
+    );
+    assert.ok(count, "formatted interpolation should retain compiler-backed hover");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge recovers completions and symbols for dangling-dot EOF buffers", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-dangling-dot-"));
   try {

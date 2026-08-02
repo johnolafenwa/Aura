@@ -1,0 +1,5 @@
+error[AU1101]: unsupported format type `_`; supported codes are d, f, e, x, X, b, o, %, and s
+ --> crates/aura-compiler/tests/fixtures/check-fail/fstring_spec_malformed.au:3:19
+  |
+3 |     print(f"{value:1_000d}")
+  |                   ^

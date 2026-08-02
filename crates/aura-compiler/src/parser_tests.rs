@@ -1385,6 +1385,28 @@ fn d4_parser_accepts_single_quoted_expressions_patterns_and_fstring_arguments() 
 }
 
 #[test]
+fn parses_static_f_string_format_specifications_after_complete_expressions() {
+    let expression = parse_expression("f\"{values[1:3]} {count:*>+12,d}\"")
+        .expect("format specifications should follow complete interpolation expressions");
+    let ExprKind::FString(parts) = expression.kind else {
+        panic!("expected an f-string");
+    };
+    assert!(matches!(parts.first(), Some(FormatPart::Expr(_))));
+    assert!(matches!(
+        parts.last(),
+        Some(FormatPart::Formatted { spec, .. }) if spec == "*>+12,d"
+    ));
+}
+
+#[test]
+fn rejects_nested_f_string_format_fields() {
+    let error = parse_expression("f\"{value:{width}}\"")
+        .expect_err("format specifications must remain static source text");
+    assert_eq!(error.code, "AU1101");
+    assert!(error.message.contains("nested replacement fields"));
+}
+
+#[test]
 fn comparison_chains_keep_every_operator_at_one_precedence_level() {
     for (source, expected_ops, expected_columns) in [
         (

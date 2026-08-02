@@ -81,6 +81,15 @@
               },
               "patterns": [
                 {
+                  "name": "meta.format-spec.aura",
+                  "match": ":[^{}]*?(?=\\})",
+                  "captures": {
+                    "0": {
+                      "name": "storage.modifier.format.aura"
+                    }
+                  }
+                },
+                {
                   "include": "#strings"
                 },
                 {
@@ -95,6 +104,78 @@
               ]
             }
           ]
+        },
+        {
+          "name": "string.quoted.triple.double.aura",
+          "begin": "\"\"\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.aura"
+            }
+          },
+          "end": "\"\"\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.aura"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.aura",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.triple.single.aura",
+          "begin": "'''",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.aura"
+            }
+          },
+          "end": "'''",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.aura"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.aura",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.raw.double.aura",
+          "begin": "r\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.aura"
+            }
+          },
+          "end": "(?<!\\\\)(?:\\\\\\\\)*\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.aura"
+            }
+          }
+        },
+        {
+          "name": "string.quoted.raw.single.aura",
+          "begin": "r'",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.aura"
+            }
+          },
+          "end": "(?<!\\\\)(?:\\\\\\\\)*'",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.aura"
+            }
+          }
         },
         {
           "name": "string.quoted.double.aura",

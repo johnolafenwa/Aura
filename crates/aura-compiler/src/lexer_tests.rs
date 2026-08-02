@@ -108,6 +108,70 @@ fn lexes_strings_fstrings_numbers_and_durations() {
 }
 
 #[test]
+fn lexes_exact_triple_quoted_and_raw_string_values() {
+    let tokens = kinds(concat!(
+        "double = \"\"\"\n  first\\n\n\tsecond \"\" pair\n  \"\"\"\n",
+        "single = '''alpha ' and '' remain\nomega'''\n",
+        "raw_double = r\"C:\\agents\\run\"\n",
+        "raw_single = r'\\d+\\.\\d+'\n",
+        "raw_quote = r\"keep \\\" both\"\n",
+    ));
+    assert!(tokens.contains(&TokenKind::StringLiteral(
+        "\n  first\n\n\tsecond \"\" pair\n  ".to_string()
+    )));
+    assert!(tokens.contains(&TokenKind::StringLiteral(
+        "alpha ' and '' remain\nomega".to_string()
+    )));
+    assert!(tokens.contains(&TokenKind::StringLiteral("C:\\agents\\run".to_string())));
+    assert!(tokens.contains(&TokenKind::StringLiteral("\\d+\\.\\d+".to_string())));
+    assert!(tokens.contains(&TokenKind::StringLiteral("keep \\\" both".to_string())));
+}
+
+#[test]
+fn rejects_unterminated_triple_and_odd_terminal_raw_backslashes() {
+    let triple = lex("value = \"\"\"never closes\nsecond line\n")
+        .expect_err("unterminated triple strings must fail");
+    assert_eq!(triple.code, "AU1001");
+    assert!(triple.message.contains("unterminated triple-quoted string"));
+
+    let raw = lex(r#"value = r"ends with \"#)
+        .expect_err("a raw string cannot end in an odd backslash run");
+    assert_eq!(raw.code, "AU1001");
+    assert!(raw.message.contains("odd run of backslashes"));
+}
+
+#[test]
+fn physical_tabs_are_content_only_inside_triple_quoted_strings() {
+    let blank_tab = lex("def main():\n\t\n    pass\n")
+        .expect_err("a whitespace-only physical tab line must not bypass validation");
+    assert_eq!(blank_tab.code, "AU1001");
+    assert!(blank_tab.message.contains("tabs are not supported"));
+
+    let comment_tab =
+        lex("# comment\ttext\n").expect_err("comments do not make physical tabs valid");
+    assert_eq!(comment_tab.code, "AU1001");
+
+    let trailing_comment_tab = lex("value = 1 # comment\ttext\n")
+        .expect_err("trailing comments do not make physical tabs valid");
+    assert_eq!(trailing_comment_tab.code, "AU1001");
+
+    let triple = lex("value = \"\"\"first\n\tsecond\n\"\"\"\n")
+        .expect("a physical tab inside a triple string is exact content");
+    assert!(triple.iter().any(|token| {
+        matches!(&token.kind, TokenKind::StringLiteral(value) if value == "first\n\tsecond\n")
+    }));
+}
+
+#[test]
+fn multiline_triple_string_escape_errors_point_at_the_later_physical_line() {
+    let error = lex("value = \"\"\"first\nnext \\q\n\"\"\"\n")
+        .expect_err("an invalid escape inside multiline content must fail");
+    assert_eq!(error.code, "AU1001");
+    assert_eq!(error.span, Some(Span::new(2, 6)));
+    assert!(error.message.contains("unsupported escape sequence"));
+}
+
+#[test]
 fn lexes_integer_base_prefixes_and_between_digit_separators() {
     let tokens = kinds(concat!(
         "decimal = 1_000_000\n",

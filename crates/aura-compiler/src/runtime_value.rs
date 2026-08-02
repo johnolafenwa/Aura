@@ -6811,6 +6811,580 @@ pub(crate) fn render_float32(value: f32) -> String {
     format!("{value:?}")
 }
 
+pub(crate) const MAX_FORMAT_COMPONENT: usize = 1_000_000;
+pub(crate) const MAX_STRING_BYTES: usize = 64 * 1024 * 1024;
+
+fn append_string_with_limit(output: &mut String, text: &str, limit: usize) -> Result<()> {
+    let required = output
+        .len()
+        .checked_add(text.len())
+        .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
+    if required > limit {
+        return Err(Diagnostic::coded(
+            "AU4005",
+            format!("string output exceeds the maintained {limit}-byte allocation limit"),
+        ));
+    }
+    output
+        .try_reserve(text.len())
+        .map_err(|_| Diagnostic::coded("AU4005", "string allocation failed"))?;
+    output.push_str(text);
+    Ok(())
+}
+
+pub(crate) fn append_string_checked(output: &mut String, text: &str) -> Result<()> {
+    append_string_with_limit(output, text, MAX_STRING_BYTES)
+}
+
+pub(crate) fn concat_strings_checked(mut left: String, right: &str) -> Result<String> {
+    append_string_checked(&mut left, right)?;
+    Ok(left)
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FormatSpecErrorKind {
+    Syntax,
+    Type,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FormatSpecError {
+    pub(crate) kind: FormatSpecErrorKind,
+    pub(crate) message: String,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FormatAlignment {
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FormatSign {
+    Minus,
+    Plus,
+    Space,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ParsedFormatSpec {
+    pub(crate) fill: char,
+    pub(crate) alignment: Option<FormatAlignment>,
+    pub(crate) sign: Option<FormatSign>,
+    pub(crate) width: Option<usize>,
+    pub(crate) grouping: bool,
+    pub(crate) precision: Option<usize>,
+    pub(crate) ty: Option<char>,
+}
+
+fn format_syntax_error(message: impl Into<String>) -> FormatSpecError {
+    FormatSpecError {
+        kind: FormatSpecErrorKind::Syntax,
+        message: message.into(),
+    }
+}
+
+fn format_type_error(message: impl Into<String>) -> FormatSpecError {
+    FormatSpecError {
+        kind: FormatSpecErrorKind::Type,
+        message: message.into(),
+    }
+}
+
+pub(crate) fn parse_format_spec(
+    source: &str,
+) -> std::result::Result<ParsedFormatSpec, FormatSpecError> {
+    if source.contains(['{', '}']) {
+        return Err(format_syntax_error(
+            "format specifications cannot contain nested replacement fields",
+        ));
+    }
+    let chars = source.chars().collect::<Vec<_>>();
+    let mut index = 0usize;
+    let mut fill = ' ';
+    let mut alignment = None;
+    let alignment_for = |ch| match ch {
+        '<' => Some(FormatAlignment::Left),
+        '^' => Some(FormatAlignment::Center),
+        '>' => Some(FormatAlignment::Right),
+        _ => None,
+    };
+    if let Some(&first) = chars.first() {
+        if let Some(value) = alignment_for(first) {
+            alignment = Some(value);
+            index = 1;
+        } else if let Some(&second) = chars.get(1) {
+            if let Some(value) = alignment_for(second) {
+                fill = first;
+                alignment = Some(value);
+                index = 2;
+            }
+        }
+    }
+
+    let sign = match chars.get(index).copied() {
+        Some('+') => {
+            index += 1;
+            Some(FormatSign::Plus)
+        }
+        Some('-') => {
+            index += 1;
+            Some(FormatSign::Minus)
+        }
+        Some(' ') => {
+            index += 1;
+            Some(FormatSign::Space)
+        }
+        _ => None,
+    };
+
+    let width_start = index;
+    while chars.get(index).is_some_and(char::is_ascii_digit) {
+        index += 1;
+    }
+    let width = if index > width_start {
+        let value = chars[width_start..index]
+            .iter()
+            .collect::<String>()
+            .parse::<usize>()
+            .map_err(|_| format_syntax_error("format width is not a valid decimal integer"))?;
+        if value > MAX_FORMAT_COMPONENT {
+            return Err(format_syntax_error(format!(
+                "format width cannot exceed {MAX_FORMAT_COMPONENT}"
+            )));
+        }
+        Some(value)
+    } else {
+        None
+    };
+
+    let grouping = chars.get(index) == Some(&',');
+    if grouping {
+        index += 1;
+    }
+
+    let precision = if chars.get(index) == Some(&'.') {
+        index += 1;
+        let start = index;
+        while chars.get(index).is_some_and(char::is_ascii_digit) {
+            index += 1;
+        }
+        if start == index {
+            return Err(format_syntax_error(
+                "format precision requires decimal digits after `.`",
+            ));
+        }
+        let value = chars[start..index]
+            .iter()
+            .collect::<String>()
+            .parse::<usize>()
+            .map_err(|_| format_syntax_error("format precision is not a valid decimal integer"))?;
+        if value > MAX_FORMAT_COMPONENT {
+            return Err(format_syntax_error(format!(
+                "format precision cannot exceed {MAX_FORMAT_COMPONENT}"
+            )));
+        }
+        Some(value)
+    } else {
+        None
+    };
+
+    let ty = chars.get(index).copied();
+    if let Some(ty) = ty {
+        if !matches!(ty, 'd' | 'f' | 'e' | 'x' | 'X' | 'b' | 'o' | '%' | 's') {
+            return Err(format_syntax_error(format!(
+                "unsupported format type `{ty}`; supported codes are d, f, e, x, X, b, o, %, and s"
+            )));
+        }
+        index += 1;
+    }
+    if index != chars.len() {
+        return Err(format_syntax_error(format!(
+            "malformed format specification `{source}`"
+        )));
+    }
+    Ok(ParsedFormatSpec {
+        fill,
+        alignment,
+        sign,
+        width,
+        grouping,
+        precision,
+        ty,
+    })
+}
+
+fn format_type_family(ty: &Type) -> (&'static str, bool, bool, bool) {
+    match ty {
+        Type::Named(name, args) if args.is_empty() && name == "str" => ("str", true, false, false),
+        Type::Named(name, args)
+            if args.is_empty() && IntegerKind::from_runtime_type_name(name).is_some() =>
+        {
+            ("integer", false, true, true)
+        }
+        Type::Named(name, args)
+            if args.is_empty() && matches!(name.as_str(), "float32" | "float64") =>
+        {
+            ("float", false, false, true)
+        }
+        _ => ("value", false, false, false),
+    }
+}
+
+pub(crate) fn validate_format_spec_for_type(
+    spec: &ParsedFormatSpec,
+    value_type: &Type,
+) -> std::result::Result<(), FormatSpecError> {
+    let (family, is_string, is_integer, is_numeric) = format_type_family(value_type);
+    match spec.ty {
+        Some('s') if !is_string => {
+            return Err(format_type_error(format!(
+                "format code `s` requires `str`, found {family}"
+            )))
+        }
+        Some('d' | 'x' | 'X' | 'b' | 'o') if !is_integer => {
+            return Err(format_type_error(format!(
+                "integer format code requires an integer value, found {family}"
+            )))
+        }
+        Some('f' | 'e' | '%') if !is_numeric => {
+            return Err(format_type_error(format!(
+                "numeric format code requires an integer or floating value, found {family}"
+            )))
+        }
+        Some(_) | None => {}
+    }
+    if spec.sign.is_some() && !is_numeric {
+        return Err(format_type_error(
+            "a format sign is valid only for numeric values",
+        ));
+    }
+    if spec.grouping && !matches!(spec.ty, Some('d' | 'f' | '%')) {
+        return Err(format_type_error(
+            "the thousands separator is valid only with d, f, and %",
+        ));
+    }
+    if spec.precision.is_some() && !matches!(spec.ty, Some('s' | 'f' | 'e' | '%')) {
+        return Err(format_type_error(
+            "precision requires s, f, e, or %; integer precision is available only through f, e, and %",
+        ));
+    }
+    Ok(())
+}
+
+fn group_decimal_digits(value: &str) -> String {
+    let (head, tail) = value.split_once('.').unwrap_or((value, ""));
+    let mut grouped = String::with_capacity(value.len() + value.len() / 3);
+    let first = head.len() % 3;
+    let mut index = 0usize;
+    if first != 0 {
+        grouped.push_str(&head[..first]);
+        index = first;
+    }
+    while index < head.len() {
+        if !grouped.is_empty() {
+            grouped.push(',');
+        }
+        grouped.push_str(&head[index..index + 3]);
+        index += 3;
+    }
+    if !tail.is_empty() {
+        grouped.push('.');
+        grouped.push_str(tail);
+    }
+    grouped
+}
+
+fn normalize_scientific_exponent(rendered: String) -> String {
+    let Some((mantissa, exponent)) = rendered.split_once('e') else {
+        return rendered;
+    };
+    let parsed = exponent.parse::<i32>().unwrap_or(0);
+    format!("{mantissa}e{parsed:+03}")
+}
+
+fn integer_magnitude(value: IntegerValue, radix: u32, uppercase: bool) -> (bool, String) {
+    let (negative, magnitude) = match value.representation() {
+        crate::integer::IntegerRepresentation::Signed(value) if value < 0 => {
+            (true, value.unsigned_abs())
+        }
+        crate::integer::IntegerRepresentation::Signed(value) => (false, value as u128),
+        crate::integer::IntegerRepresentation::Unsigned(value) => (false, value),
+    };
+    let rendered = match (radix, uppercase) {
+        (2, _) => format!("{magnitude:b}"),
+        (8, _) => format!("{magnitude:o}"),
+        (16, false) => format!("{magnitude:x}"),
+        (16, true) => format!("{magnitude:X}"),
+        _ => magnitude.to_string(),
+    };
+    (negative, rendered)
+}
+
+fn apply_numeric_sign(mut magnitude: String, negative: bool, sign: Option<FormatSign>) -> String {
+    let prefix = if negative {
+        Some('-')
+    } else {
+        match sign {
+            Some(FormatSign::Plus) => Some('+'),
+            Some(FormatSign::Space) => Some(' '),
+            Some(FormatSign::Minus) | None => None,
+        }
+    };
+    if let Some(prefix) = prefix {
+        magnitude.insert(0, prefix);
+    }
+    magnitude
+}
+
+fn apply_format_width(rendered: String, spec: &ParsedFormatSpec, numeric: bool) -> Result<String> {
+    let width = spec.width.unwrap_or(0);
+    let length = rendered.chars().count();
+    if length >= width {
+        if rendered.len() > MAX_STRING_BYTES {
+            return Err(Diagnostic::coded(
+                "AU4005",
+                format!(
+                    "string output exceeds the maintained {MAX_STRING_BYTES}-byte allocation limit"
+                ),
+            ));
+        }
+        return Ok(rendered);
+    }
+    let padding = width - length;
+    let alignment = spec.alignment.unwrap_or(if numeric {
+        FormatAlignment::Right
+    } else {
+        FormatAlignment::Left
+    });
+    let (left, right) = match alignment {
+        FormatAlignment::Left => (0, padding),
+        FormatAlignment::Right => (padding, 0),
+        FormatAlignment::Center => (padding / 2, padding - padding / 2),
+    };
+    let padding_bytes = padding
+        .checked_mul(spec.fill.len_utf8())
+        .and_then(|bytes| bytes.checked_add(rendered.len()))
+        .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
+    if padding_bytes > MAX_STRING_BYTES {
+        return Err(Diagnostic::coded(
+            "AU4005",
+            format!(
+                "string output exceeds the maintained {MAX_STRING_BYTES}-byte allocation limit"
+            ),
+        ));
+    }
+    let mut output = String::new();
+    output
+        .try_reserve_exact(padding_bytes)
+        .map_err(|_| Diagnostic::coded("AU4005", "string allocation failed"))?;
+    output.extend(std::iter::repeat_n(spec.fill, left));
+    output.push_str(&rendered);
+    output.extend(std::iter::repeat_n(spec.fill, right));
+    Ok(output)
+}
+
+pub(crate) fn format_runtime_value(
+    value: &Value,
+    value_type: &Type,
+    source: &str,
+) -> Result<String> {
+    let spec = parse_format_spec(source).map_err(|error| {
+        Diagnostic::coded(
+            match error.kind {
+                FormatSpecErrorKind::Syntax => "AU1101",
+                FormatSpecErrorKind::Type => "AU2002",
+            },
+            error.message,
+        )
+    })?;
+    validate_format_spec_for_type(&spec, value_type)
+        .map_err(|error| Diagnostic::coded("AU2002", error.message))?;
+    let (family, _is_string, is_integer, is_numeric) = format_type_family(value_type);
+    let runtime_matches_static_family = match family {
+        "str" => matches!(value, Value::String(_)),
+        "integer" => matches!(value, Value::Int(_)),
+        "float" => matches!(value, Value::Float(_)),
+        _ => true,
+    };
+    if !runtime_matches_static_family {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "internal format contract mismatch: runtime value does not match static {family} type"
+            ),
+        ));
+    }
+
+    let rendered = match (spec.ty, value) {
+        (Some('s'), Value::String(text)) => {
+            if spec.precision.is_none() && text.len() > MAX_STRING_BYTES {
+                return Err(Diagnostic::coded(
+                    "AU4005",
+                    format!(
+                        "string output exceeds the maintained {MAX_STRING_BYTES}-byte allocation limit"
+                    ),
+                ));
+            }
+            text.chars()
+                .take(spec.precision.unwrap_or(usize::MAX))
+                .collect::<String>()
+        }
+        (Some(code @ ('d' | 'x' | 'X' | 'b' | 'o')), Value::Int(integer)) => {
+            let radix = match code {
+                'x' | 'X' => 16,
+                'b' => 2,
+                'o' => 8,
+                _ => 10,
+            };
+            let (negative, mut magnitude) = integer_magnitude(*integer, radix, code == 'X');
+            if spec.grouping {
+                magnitude = group_decimal_digits(&magnitude);
+            }
+            apply_numeric_sign(magnitude, negative, spec.sign)
+        }
+        (Some(code @ ('f' | 'e' | '%')), Value::Int(integer)) => {
+            format_numeric_integer(*integer, code, &spec)
+        }
+        (Some(code @ ('f' | 'e' | '%')), Value::Float(number)) => {
+            let mut number = if matches!(value_type, Type::Named(name, args) if name == "float32" && args.is_empty()) {
+                *number as f32 as f64
+            } else {
+                *number
+            };
+            if code == '%' {
+                number *= 100.0;
+            }
+            format_numeric_float(number, code, &spec)
+        }
+        (None, Value::Float(number)) => {
+            let rendered = if matches!(value_type, Type::Named(name, args) if name == "float32" && args.is_empty()) {
+                render_float32(*number as f32)
+            } else {
+                render_float(*number)
+            };
+            apply_numeric_sign(rendered.trim_start_matches('-').to_string(), number.is_sign_negative(), spec.sign)
+        }
+        (None, Value::Int(integer)) => {
+            let (negative, magnitude) = integer_magnitude(*integer, 10, false);
+            apply_numeric_sign(magnitude, negative, spec.sign)
+        }
+        (None, _) => value.render(),
+        (Some(code), _) => {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                format!(
+                    "internal format contract mismatch: runtime value does not support format code `{code}`"
+                ),
+            ))
+        }
+    };
+    apply_format_width(rendered, &spec, is_numeric || is_integer)
+}
+
+fn decimal_round_significant(mut digits: String, significant: usize) -> (String, bool) {
+    if digits.len() <= significant {
+        digits.extend(std::iter::repeat_n('0', significant - digits.len()));
+        return (digits, false);
+    }
+    let discarded = digits.as_bytes()[significant..].to_vec();
+    digits.truncate(significant);
+    let round_up = discarded[0] > b'5'
+        || (discarded[0] == b'5'
+            && (discarded[1..].iter().any(|digit| *digit != b'0')
+                || digits
+                    .as_bytes()
+                    .last()
+                    .is_some_and(|digit| (digit - b'0') % 2 == 1)));
+    if !round_up {
+        return (digits, false);
+    }
+    let mut bytes = digits.into_bytes();
+    for digit in bytes.iter_mut().rev() {
+        if *digit != b'9' {
+            *digit += 1;
+            return (
+                String::from_utf8(bytes).expect("decimal digits are UTF-8"),
+                false,
+            );
+        }
+        *digit = b'0';
+    }
+    bytes[0] = b'1';
+    (
+        String::from_utf8(bytes).expect("decimal digits are UTF-8"),
+        true,
+    )
+}
+
+fn format_numeric_integer(integer: IntegerValue, code: char, spec: &ParsedFormatSpec) -> String {
+    let (negative, mut digits) = integer_magnitude(integer, 10, false);
+    let precision = spec.precision.unwrap_or(6);
+    let mut rendered = if code == 'e' {
+        if digits == "0" {
+            let fraction = "0".repeat(precision);
+            if precision == 0 {
+                "0e+00".to_string()
+            } else {
+                format!("0.{fraction}e+00")
+            }
+        } else {
+            let mut exponent = digits.len() - 1;
+            let (rounded, carried) = decimal_round_significant(digits, precision + 1);
+            if carried {
+                exponent += 1;
+            }
+            let (first, rest) = rounded.split_at(1);
+            if precision == 0 {
+                format!("{first}e{exponent:+03}")
+            } else {
+                format!("{first}.{rest}e{exponent:+03}")
+            }
+        }
+    } else {
+        if code == '%' {
+            digits.push_str("00");
+        }
+        if spec.grouping {
+            digits = group_decimal_digits(&digits);
+        }
+        if precision == 0 {
+            digits
+        } else {
+            format!("{digits}.{}", "0".repeat(precision))
+        }
+    };
+    rendered = apply_numeric_sign(rendered, negative, spec.sign);
+    if code == '%' {
+        rendered.push('%');
+    }
+    rendered
+}
+
+fn format_numeric_float(number: f64, code: char, spec: &ParsedFormatSpec) -> String {
+    let negative = number.is_sign_negative();
+    let magnitude = number.abs();
+    let precision = spec.precision.unwrap_or(6);
+    let mut rendered = if magnitude.is_nan() {
+        "nan".to_string()
+    } else if magnitude.is_infinite() {
+        "inf".to_string()
+    } else if code == 'e' {
+        normalize_scientific_exponent(format!("{magnitude:.precision$e}"))
+    } else {
+        format!("{magnitude:.precision$}")
+    };
+    if spec.grouping && magnitude.is_finite() {
+        rendered = group_decimal_digits(&rendered);
+    }
+    rendered = apply_numeric_sign(rendered, negative, spec.sign);
+    if code == '%' {
+        rendered.push('%');
+    }
+    rendered
+}
+
 pub(crate) fn float_floor_divmod(left: f64, right: f64) -> (f64, f64) {
     let mut remainder = left % right;
     let mut quotient = (left - remainder) / right;

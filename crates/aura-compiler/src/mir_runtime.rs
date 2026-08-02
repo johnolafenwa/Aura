@@ -27,17 +27,18 @@ use crate::mir::{
 };
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
-    cast_numeric_value, catch_lightweight_task_failure, claim_task_result_observations,
-    clone_json_codec_source, decode_process_restart_policy, decode_process_stdio,
-    divmod_numeric_values, duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
+    append_string_checked, cast_numeric_value, catch_lightweight_task_failure,
+    claim_task_result_observations, clone_json_codec_source, concat_strings_checked,
+    decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
+    duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
     evaluate_bytes_host_builtin_ref, evaluate_host_builtin_with_program_args,
-    evaluate_string_to_bytes_host_ref, float_floor_divmod, float_power, host_process_args,
-    io_error, io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
-    json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_owned_to_runtime,
-    nominal_runtime_base_name, option_none, option_some, poll_cancellation,
-    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
-    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
-    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    evaluate_string_to_bytes_host_ref, float_floor_divmod, float_power, format_runtime_value,
+    host_process_args, io_error, io_read_line, json_array_metadata_is_exact,
+    json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
+    json_parse_owned_to_runtime, nominal_runtime_base_name, option_none, option_some,
+    poll_cancellation, prepare_json_codec_source, process_error_cancelled, process_error_io,
+    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
+    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
@@ -306,12 +307,12 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
         Rvalue::Closure { captures, .. } => captures
             .iter()
             .any(|capture| operand_is_process_run_function(&capture.value)),
-        Rvalue::FormatString { parts } => parts.iter().any(|part| {
-            matches!(
-                part,
-                crate::mir::MirFormatPart::Value(value)
-                    if operand_is_process_run_function(value)
-            )
+        Rvalue::FormatString { parts } => parts.iter().any(|part| match part {
+            crate::mir::MirFormatPart::Value(value)
+            | crate::mir::MirFormatPart::Formatted { value, .. } => {
+                operand_is_process_run_function(value)
+            }
+            crate::mir::MirFormatPart::Literal(_) => false,
         }),
         // `rvalue_uses_lightweight_tasks` recognizes every `StartTask` before
         // consulting this recursive materialization helper. Inspecting its
@@ -2842,9 +2843,19 @@ impl MirRuntime {
                 let mut rendered = String::new();
                 for part in parts {
                     match part {
-                        MirFormatPart::Literal(text) => rendered.push_str(text),
+                        MirFormatPart::Literal(text) => append_string_checked(&mut rendered, text)?,
                         MirFormatPart::Value(value) => {
-                            rendered.push_str(&self.evaluate_operand(value, env)?.render())
+                            let value = self.evaluate_operand(value, env)?.render();
+                            append_string_checked(&mut rendered, &value)?;
+                        }
+                        MirFormatPart::Formatted {
+                            value,
+                            spec,
+                            value_type,
+                        } => {
+                            let value = self.evaluate_operand(value, env)?;
+                            let formatted = format_runtime_value(&value, value_type, spec)?;
+                            append_string_checked(&mut rendered, &formatted)?;
                         }
                     }
                 }
@@ -8189,7 +8200,9 @@ impl MirRuntime {
                     }),
                 },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left + right)),
-                (Value::String(left), Value::String(right)) => Ok(Value::String(left + &right)),
+                (Value::String(left), Value::String(right)) => {
+                    Ok(Value::String(concat_strings_checked(left, &right)?))
+                }
                 (Value::Duration(left), Value::Duration(right)) => left
                     .checked_add(right)
                     .map(Value::Duration)

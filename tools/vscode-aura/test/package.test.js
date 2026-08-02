@@ -76,6 +76,28 @@ test("extension package includes the assertion-aware Aura grammar", () => {
   assert.match(packagedGrammar, /assert/);
 });
 
+test("extension grammar and snippets cover Aura 0.3 string forms", () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const grammar = JSON.parse(
+    fs.readFileSync(path.join(extensionRoot, "syntaxes", "aura.tmLanguage.json"), "utf8")
+  );
+  const names = grammar.repository.strings.patterns.map((pattern) => pattern.name);
+  assert.ok(names.includes("string.quoted.triple.double.aura"));
+  assert.ok(names.includes("string.quoted.triple.single.aura"));
+  assert.ok(names.includes("string.quoted.raw.double.aura"));
+  assert.ok(names.includes("string.quoted.raw.single.aura"));
+  const fstring = grammar.repository.strings.patterns.find(
+    (pattern) => pattern.name === "string.interpolated.double.aura"
+  );
+  assert.match(JSON.stringify(fstring), /meta\.format-spec\.aura/);
+
+  const snippets = JSON.parse(
+    fs.readFileSync(path.join(extensionRoot, "snippets", "aura.json"), "utf8")
+  );
+  assert.ok(snippets["Multiline string"]);
+  assert.ok(snippets["Formatted string"]);
+});
+
 test("language configuration indents block headers on enter without blank-line dedent", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const configurationPath = path.join(extensionRoot, "language-configuration.json");

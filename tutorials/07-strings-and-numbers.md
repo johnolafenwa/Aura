@@ -337,8 +337,27 @@ quotation = 'the compiler said "ready"'
 ```
 
 The supported escapes are `\n`, `\t`, `\"`, `\'`, `\\`, `\0`, `\xHH`, and
-`\u{H...}`. Triple-quoted, raw, and byte-string literals are not implemented,
-and a one-character literal remains a `str`. Aura has no character type.
+`\u{H...}`. A one-character literal remains a `str`. Aura has no character
+type.
+
+Use three matching quotes for exact multiline text. The compiler keeps the
+first newline, last newline, indentation, spaces, and physical tabs:
+
+```python
+prompt = """Summarize the request.
+Return JSON with a label and reason.
+"""
+```
+
+Use lowercase `r` for a single-line value where backslashes are data:
+
+```python
+model_dir = r"C:\models\agent"
+number_pattern = r'\d+\.\d+'
+```
+
+A raw string cannot end in an odd run of backslashes. Raw triple strings and
+byte strings are unavailable.
 
 ## F-Strings
 
@@ -349,6 +368,8 @@ Interpolated strings use the double-quoted `f"..."` form and produce an owned
 name: str = "Aura"
 answer: int32 = 42
 print(f"Hello, {name} {answer}")
+print(f"{name:·^16.8s} {answer:>8,d}")
+print(f"success rate: {0.875:+.1%}")
 ```
 
 Interpolations accept any expression, including indexed lookups:
@@ -356,6 +377,13 @@ Interpolations accept any expression, including indexed lookups:
 ```python
 print(f"value: {counts['key']}")
 ```
+
+A static format specification follows a top-level colon. It supports a
+one-scalar fill, `<`, `^`, and `>` alignment, numeric signs, minimum width,
+comma grouping, precision, and `d`, `f`, `e`, `x`, `X`, `b`, `o`, `%`, and
+`s` type codes. Width counts Unicode scalars. String precision truncates by
+Unicode scalar count. Numeric precision rounds ties to even. Specifications
+are checked against the interpolation's static type before execution.
 
 See [examples/strings/f_strings.au](../examples/strings/f_strings.au).
 

@@ -638,6 +638,11 @@ pub struct Argument {
 pub enum FormatPart {
     Literal(String),
     Expr(Expr),
+    Formatted {
+        expr: Expr,
+        spec: String,
+        spec_span: Span,
+    },
 }
 
 /// One parameter contract inside a structural `def(...) -> ...` type.

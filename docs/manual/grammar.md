@@ -82,9 +82,10 @@ meaning only in the positions defined below.
 
 ## Strings And F-Strings
 
-`STRING` is a single-line ordinary string delimited by a matching pair of
-single quotes or double quotes. Both forms produce the same token value and
-accept the same escapes:
+`STRING` is an ordinary, triple-quoted, or raw string. Ordinary strings use a
+matching pair of single or double quotes. Triple-quoted strings use three
+matching single or double quotes and may span physical lines. Ordinary and
+triple-quoted strings accept the same escapes:
 
 | Escape | Meaning |
 | --- | --- |
@@ -98,8 +99,15 @@ accept the same escapes:
 | `\u{H...}` | Unicode scalar from one or more hexadecimal digits |
 
 An invalid scalar, unknown escape, missing digit, or missing or mismatched
-closing quote is a lexical error. Triple-quoted, raw, and byte-string literals
-are not part of Aura 0.2. There is no separate character-literal token.
+closing quote is a lexical error. Triple-quoted values preserve every scalar
+between their delimiters. Aura does not trim the first or last newline, remove
+indentation, or normalize whitespace.
+
+Raw strings use lowercase `r` immediately followed by one single or double
+quote. Backslashes are content. A backslash may retain the active quote inside
+the value, with both characters preserved. A raw string cannot span a physical
+line or end in an odd run of backslashes. Raw triple strings, raw f-strings,
+and byte strings are not tokens. There is no separate character-literal token.
 
 `FSTRING` begins with `f"` and ends at the matching double quote.
 `{ expression }` interpolates an ordinary Aura expression. Two opening braces insert one
@@ -107,10 +115,24 @@ literal opening brace, and two closing braces insert one literal closing brace.
 A lone closing brace outside an interpolation is also literal in Aura 0.2.
 Interpolations may contain nested braces and ordinary single- or double-quoted
 strings; braces inside those strings do not change interpolation depth. Empty
-or invalid interpolations are rejected. Single-quoted f-strings, conversion
-flags, and format-specifier mini-languages are not supported.
+or invalid interpolations are rejected. An interpolation may end with one
+top-level `:` followed by this static format grammar:
 
-Although `\t` creates a tab in a decoded string, a literal physical tab character anywhere in a source line is rejected before tokenization, including inside a comment or string.
+```text
+[[fill]align] [sign] [width] [","] ["." precision] [type]
+```
+
+`align` is `<`, `^`, or `>`; `sign` is `+`, `-`, or a space; and `type` is
+`d`, `f`, `e`, `x`, `X`, `b`, `o`, `%`, or `s`. Width and precision are
+decimal values through `1_000_000`. The parser accepts a complete expression
+before looking for the separator, so colons inside slices, calls, dictionaries,
+and other nested delimiters remain expression syntax. Nested fields and dynamic
+specifications are rejected. Single-quoted f-strings and conversion flags are
+not supported.
+
+Although `\t` creates a tab in a decoded ordinary string, a physical tab is
+rejected outside a triple-quoted string. A physical tab inside a triple-quoted
+string is exact string content.
 
 ## Comments, Physical Lines, And Indentation
 
@@ -143,9 +165,10 @@ kind. A delimited expression-form `match` is a layout island: its header and
 arms retain the layout tokens required by the match productions even though an
 outer delimiter remains open.
 
-Backslash continuation is not part of Aura 0.2. Ordinary strings and
-f-strings remain single-line, and existing comma-separated forms do not gain a
-trailing comma.
+Backslash continuation is unavailable. Ordinary, raw, and f-strings remain
+single-line. Triple-quoted ordinary strings may span physical lines without
+creating layout tokens. Existing comma-separated forms do not gain a trailing
+comma.
 
 ## Punctuation And Operators
 
@@ -837,7 +860,7 @@ The grammar intentionally excludes:
 
 - semicolons and multiple statements on one physical line
 - backslash line continuation
-- multiline ordinary strings and f-strings
+- multiline f-strings; multiline ordinary text uses triple quotes
 - local item declarations, decorators, and attributes
 - wildcard/aliased/relative import syntax
 - ordinary trailing commas other than the required singleton-tuple comma

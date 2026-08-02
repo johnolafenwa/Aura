@@ -169,6 +169,9 @@ Current compiler workflow:
     `split`, `replace`, case conversion, and prefix/suffix stripping
 - `cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au`
   - execute parsing builtins, scalar/boolean `.to_string()`, and `str.join(...)`
+- `cargo run -p aura -- run examples/strings/literal_forms_and_formatting.au`
+  - execute exact multiline/raw strings and statically checked Unicode-aware
+    f-string formatting
 - `cargo run -p aura -- run examples/io/read_text_file.au`
   - execute the maintained builtin file I/O surface through `fs.exists(...)`, `fs.read_to_string(...)`, and `io.write(...)`
 - `cargo run -p aura -- run examples/io/bytes_file_io.au`

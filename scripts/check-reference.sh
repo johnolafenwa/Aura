@@ -85,7 +85,7 @@ grep -Fq 'retrying_network_worker_runs_with_computed_backoff_on_both_backends' d
 grep -Fq 'fn retrying_network_worker_runs_with_computed_backoff_on_both_backends()' crates/aura/tests/cli.rs
 grep -Fq 'Inside an unmatched `(`, `[`, or `{`, an ordinary physical newline does not' docs/manual/lexical-structure.md
 grep -Fq 'Backslash continuation is not implemented.' docs/manual/lexical-structure.md
-grep -Fq 'Ordinary strings and f-strings remain single-line' docs/manual/lexical-structure.md
+grep -Fq 'Ordinary, raw, and f-strings remain' docs/manual/lexical-structure.md
 grep -Fq 'it does not add a trailing comma to any list form' docs/manual/grammar.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0025-newline-continuation-and-delimited-layout.md
 grep -Fq '0025-newline-continuation-and-delimited-layout.md' architecture_docs/decisions/README.md
@@ -696,6 +696,18 @@ if rg -n 'Strings use double quotes|Strings are double-quoted|`STRING` is a doub
   echo "reference still describes ordinary strings as double-quoted only" >&2
   exit 1
 fi
+
+# Batch S1 S4.1/S4.6: exact string forms and the closed static formatting
+# grammar move with the compiler, both backends, teaching track, and editor.
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0046-string-literals-and-format-specifications.md
+grep -Fq 'Three matching quotes create an exact multiline string' docs/manual/lexical-structure.md
+grep -Fq 'The grammar is `[[fill]align][sign][width][,][.precision][type]`' docs/manual/lexical-structure.md
+grep -Fq 'Accepted ADR-0046 exact triple-quoted and raw string forms' docs/manual/conformance.md
+test -s examples/strings/literal_forms_and_formatting.au
+test -s crates/aura-compiler/tests/fixtures/run-pass/string_literal_forms_and_format_specs.au
+test -s crates/aura-compiler/tests/fixtures/check-fail/fstring_spec_type_mismatch.diag
+grep -Fq 'compiler bridge analyzes exact string forms and typed format specifications' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'extension grammar and snippets cover Aura 0.3 string forms' tools/vscode-aura/test/package.test.js
 
 if rg -n '`self` -- by-value|plain `self` receiver|`self` consumes|\| `self` \| Consume' \
   docs/manual \
