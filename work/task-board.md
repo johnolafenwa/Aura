@@ -2,6 +2,44 @@
 
 Last updated: 2026-08-02
 
+## Landing page, installer, and documentation voice (complete)
+
+- Authorized target: make the landing page explain Aura's benefits around
+  democratized systems programming, Python-like readability, Rust-style
+  safety, native compilation, static typing, deterministic ownership, no
+  garbage collector, and reliable ML/agent infrastructure; add a top-level
+  curl installation path and Python/Rust/Aura comparison; remove the landing
+  benchmark table; move performance evidence and forward optimization work to
+  the Manual; and remove unnecessary contraction-heavy comparison prose.
+- The hero now leads with “Python-like code with Rust-style safety,” followed
+  by the complete compiled/static/no-GC/ownership pitch for ML systems and
+  agents. The landing body explains the democratization goal, compares Python,
+  Rust, and Aura across seven dimensions, and names concrete model-serving,
+  agent-runtime, worker, tool, process, queue, and networking use cases.
+- The hero contains a responsive, accessible curl command bar with a tested
+  copy interaction. `docs/public/install.sh` is a real POSIX installer for
+  Linux x64, macOS x64, and macOS arm64. It selects the release archive,
+  downloads `SHA256SUMS`, verifies with `sha256sum` or `shasum`, and installs
+  the CLI plus its native runtime under `~/.local` or `AURA_INSTALL_PREFIX`.
+- Performance measurements are absent from the landing and root README. The
+  new Manual Performance chapter centralizes the current protocol, integer,
+  and Array evidence, calls out the measured task and Array gaps, and records
+  the optimization direction for later releases. It is classified as a
+  structural Manual page in the reference-integrity sidecar.
+- Voice sweep: the maintained reader surfaces began with two literal English
+  contractions and 81 `rather than` / `instead of` constructions. README,
+  landing, positioning, Downloads, Learn, tutorials, and the examples guide
+  now contain zero of either class. Normative Manual contrasts remain where
+  they distinguish exact semantic outcomes.
+- Verification is green: all 32 release-packaging/installer regressions,
+  `npm run docs:build`, full reference integrity over 38 Manual pages and 261
+  fences, identity/reference supporting tests, and owned-file diff hygiene.
+  Browser checks at 1280x720 and 390x844 covered the hero, copy state,
+  responsive comparison table, and Performance route/navigation.
+- Work note: `work/2026-08-02-landing-page-and-documentation-pitch.md`.
+- Protected user files remain untouched: `personal/file_ops.au`, the untracked
+  ADR-0022 draft, and `fc2_direct.out`.
+
 ## Extension marketplaces and hosted-CI singleton reliability (complete)
 
 - Authorized target: prepare `JohnOlafenwa.vscode-aura-lang` for the Visual Studio

@@ -31,8 +31,8 @@ Ordinary exhaustive `match` can distinguish them.
 Parse errors are values too. `Syntax` contains a message and location;
 `NumberOutOfRange` identifies a number Aura cannot preserve as `int64` or a
 finite `float64`; `NestingTooDeep` and `InputTooLarge` report their limits.
-Lines and columns start at one, and a column counts Unicode scalar values
-rather than UTF-8 bytes.
+Lines and columns start at one, and a column counts Unicode scalar values.
+UTF-8 byte offsets are not used for this field.
 
 ```python
 match json.parse("{\"ready\":"):

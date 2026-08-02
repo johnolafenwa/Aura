@@ -276,7 +276,7 @@ The current compiler supports these expression forms:
 - owned Vec/String slicing with `expr[start:end]`, `expr[:end]`,
   `expr[start:]`, and `expr[:]`
 - owned first-axis Array slicing with the same one-colon forms; the result is
-  a fresh Array rather than a view
+  a fresh Array, and views remain unavailable
 - function and method calls
 - explicit type arguments on call targets such as `Box[int32](...)` and `Result[int32, String].Ok(...)`
 - enum and built-in enum variant construction
@@ -323,8 +323,8 @@ cloned optional read, while `remove(key)` transfers any stored value.
 
 One-colon Vec and String slices return fresh owned copies. Written endpoints
 are exact `int32`, negatives normalize once, both effective endpoints must be
-in `0..=len`, and start must not exceed end. Invalid bounds trap with `AU4003`
-rather than clamping. String positions count Unicode scalar values and require
+in `0..=len`, and start must not exceed end. Invalid bounds trap with `AU4003`;
+Aura never clamps them. String positions count Unicode scalar values and require
 an O(n) scan. Integer String indexing, step syntax, slice assignment, and
 views remain unavailable.
 
@@ -459,8 +459,8 @@ Current bytes, text-codec, and hash surface:
   `bytes.base64_decode(...)`
 - raw 32-byte `bytes.sha256(...)` and `bytes.sha256_string(...)`
 - typed `bytes.Error` malformed-input variants with retained `int32` offsets and
-  lengths; required metadata above `2147483647` traps with `AU4005` rather than
-  being truncated or wrapped
+  lengths; required metadata above `2147483647` traps with `AU4005` and is never
+  truncated or wrapped
 - a fixed 2,147,483,647-byte safety ceiling for each fresh codec destination,
   independent of public String and `Vec` length domains; crossing it,
   destination-size arithmetic overflow, or allocation failure traps with
@@ -704,8 +704,8 @@ ceiling traps with `AU4005` before allocation or entropy, and entropy or
 allocation failure also traps with `AU4005`. There is no `random.Error` or
 secure floating function. See [20-randomness.md](20-randomness.md).
 
-Clone-producing generic bodies infer clone-safety obligations rather than
-rejecting unresolved type parameters. Requirements propagate through generic
+Clone-producing generic bodies infer clone-safety obligations for unresolved
+type parameters. Requirements propagate through generic
 calls, imports, trait/default/associated dispatch, operators, and `From`, then
 reject an unsafe concrete `random.Rng` specialization with `AU3007`. Queue
 handles remain clone barriers because copying a handle does not observe its
@@ -866,7 +866,7 @@ Current collection notes:
 - `Vec.map(f)` and `Vec.filter(f)` are eager shared traversals that retain the
   source and return fresh owned vectors; `filter` requires clone-safe `T`
 - Vec algorithm callbacks have exact bare/shared element parameters; `mut` and
-  `own` callback capabilities are rejected rather than adapted
+  `own` callback capabilities are rejected without adaptation
 - indexed reads from `Vec[T]` work directly only when `T` is copy; clone-safe non-copy element reads use `get(index)` for an explicit cloned read, while an element carrying `random.Rng` state is directed to `remove(index)` instead
 - module-level functions cannot redefine a builtin function name such as `len`, `str`, `abs`, or `print`; that rejection is `AU2007`
 - negative Vec indexes normalize once as `len + index` for direct reads/writes, `get`, `set`, `remove`, `swap`, and `insert`
@@ -879,7 +879,7 @@ Current collection notes:
   `insert(values.len() as int32, value)` appends through a checked narrowing,
   and out-of-range indexes are never clamped
 - `Vec[T]` supports equality and inequality when both sides have the same `Vec[T]` type
-- `Vec.insert(index, value)`, `Vec.set(index, value)`, `Vec.remove(index)`, and `Vec.swap(first, second)` now trap on out-of-bounds indices instead of silently ignoring the operation
+- `Vec.insert(index, value)`, `Vec.set(index, value)`, `Vec.remove(index)`, and `Vec.swap(first, second)` trap on out-of-bounds indices; they never ignore the operation
 - empty map literals still need an expected `Map[K, V]` type, or you can use `Map[K, V]()` explicitly
 - `Map[K, V]` supports literal construction, indexed writes for every `V`, direct indexed reads only when `V` is copy, and the maintained method surface `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, `values`, `items`, `entries`, `clear`, and `extend`; non-copy reads use `get` for an explicit clone or `remove` for ownership transfer
 - `Map.items()` and `Map.entries()` return `Vec[MapEntry[K, V]]`, where entry values expose `.key` and `.value`
@@ -974,7 +974,7 @@ Current expression/ergonomics limitations:
   the existing direct named-function and associated-method-without-`self`
   targets, using task-owned captures; every capture and target result must be
   structurally `Transfer` after specialization
-- `TaskGroup()` scope exit waits for started tasks and surfaces unread task failures instead of silently dropping them
+- `TaskGroup()` scope exit waits for started tasks and surfaces every unread task failure
 - `group.cancel()` wakes queue iteration over `Queue[T]` in the same `with TaskGroup()` scope so `for value in queue:` can exit cleanly
 - concurrency uses only the maintained `Queue[T]()`, `Task.result()`,
   `TaskGroup()`, its four start methods, `yield_now()`, `wait_any(...)`, and
@@ -988,7 +988,7 @@ Current expression/ergonomics limitations:
 - queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all
   use the pinned-worker evented runtime scheduler
 - Aura tasks are pinned-worker scheduler-backed lightweight tasks, and
-  ordinary file I/O offloads through that runtime instead of pinning a task on
+  ordinary file I/O offloads through that runtime, keeping the task free from
   a blocking host thread
 - Unix domain sockets require a Unix host at runtime
 - subprocess APIs are shell-free and use explicit argv vectors; process groups and restart supervision are implemented, while PTY support is not

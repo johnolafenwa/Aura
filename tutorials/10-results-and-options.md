@@ -135,7 +135,7 @@ The first attempt runs immediately. Later attempts wait for the initial
 backoff and then twice the previous delay. A zero delay skips sleeping. The
 last permitted `Err` is returned exactly, with no final sleep or unused
 multiply. Worker traps, backoff overflow, and task cancellation propagate
-rather than becoming `Err`.
+outside the returned `Err` value.
 
 This helper does not classify errors or add jitter. Write an explicit policy
 loop when only selected failures should retry. See

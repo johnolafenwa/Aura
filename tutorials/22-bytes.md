@@ -139,7 +139,7 @@ Malformed UTF-8, hex, and base64 are expected data problems, so they return a
 `bytes.Error` inside `Result` when the exact offset or length fits the retained
 `int32` payload. Match the variant and report, reject, or retry as the
 application requires. If required malformed-data metadata exceeds
-`2147483647`, Aura traps with `AU4005` rather than truncating or wrapping it.
+`2147483647`, Aura traps with `AU4005`. It never truncates or wraps the value.
 
 Each fresh codec destination has a fixed 2,147,483,647-byte safety ceiling
 independent of the public String and `Vec` length domains. Crossing that

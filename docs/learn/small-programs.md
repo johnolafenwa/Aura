@@ -52,7 +52,8 @@ counts: Map[String, int32] = {}
 seen: Set[String] = {}
 ```
 
-Annotations are also a useful discipline at module boundaries and in function signatures, where the type is part of the program's contract rather than a local detail.
+Annotations are also useful at module boundaries and in function signatures,
+where the type forms part of the program's public contract.
 
 ## Functions
 
@@ -197,7 +198,8 @@ For enums, `match` becomes even more useful: the compiler will tell you when a v
 
 ## Turning Text Into Numbers
 
-Aura expresses parsing with `Result`, so a bad input is ordinary control flow rather than an exception:
+Aura expresses parsing with `Result`, so a bad input becomes explicit control
+flow:
 
 ```python
 def parse_count(text: String) -> int32:

@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
+import platform
+import re
 import runpy
 import shutil
 import signal
@@ -27,6 +30,14 @@ FINAL_REPORT = REPO_ROOT / "work" / "2026-07-31-batch6-final-report.md"
 DOWNLOADS_DOC = REPO_ROOT / "docs" / "downloads.md"
 RELEASE_PROCESS_DOC = REPO_ROOT / "docs" / "release-process.md"
 AURA_COMPILER_BUILD = REPO_ROOT / "crates" / "aura-compiler" / "build.rs"
+INSTALL_SCRIPT = REPO_ROOT / "docs" / "public" / "install.sh"
+LANDING_DOC = REPO_ROOT / "docs" / "index.md"
+LANDING_INSTALL_COMPONENT = (
+    REPO_ROOT / "docs" / ".vitepress" / "theme" / "HomeInstall.vue"
+)
+MANUAL_INDEX = REPO_ROOT / "docs" / "manual" / "index.md"
+PERFORMANCE_DOC = REPO_ROOT / "docs" / "manual" / "performance.md"
+POSITIONING_DOC = REPO_ROOT / "docs" / "positioning.md"
 
 
 RETRY_STDOUT = """\
@@ -102,6 +113,166 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
             "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0",
             workflow,
         )
+
+
+class LandingAndInstallerTests(unittest.TestCase):
+    def test_landing_leads_with_aura_systems_and_agent_value(self) -> None:
+        landing = LANDING_DOC.read_text(encoding="utf-8")
+        required_copy = (
+            "Python-like code with Rust-style safety.",
+            "democratize systems programming",
+            "compiled systems language",
+            "ML systems and reliable agents",
+            "statically typed",
+            "no garbage collector",
+            "deterministic ownership",
+            "structured concurrency",
+            "typed failure",
+            "| | Python | Rust | Aura |",
+        )
+        for copy in required_copy:
+            with self.subTest(copy=copy):
+                self.assertIn(copy, landing)
+
+        self.assertNotIn("## Measured Snapshot", landing)
+        self.assertNotIn("Aura / CPython", landing)
+
+    def test_landing_install_command_is_in_the_hero_and_points_to_real_script(self) -> None:
+        component = LANDING_INSTALL_COMPONENT.read_text(encoding="utf-8")
+        theme = (REPO_ROOT / "docs" / ".vitepress" / "theme" / "index.ts").read_text(
+            encoding="utf-8"
+        )
+        command = "curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh"
+        self.assertIn(command, component)
+        self.assertIn("home-hero-info-after", theme)
+        self.assertTrue(INSTALL_SCRIPT.is_file())
+
+    def test_performance_evidence_has_a_dedicated_manual_page(self) -> None:
+        performance = PERFORMANCE_DOC.read_text(encoding="utf-8")
+        manual = MANUAL_INDEX.read_text(encoding="utf-8")
+        config = (REPO_ROOT / "docs" / ".vitepress" / "config.mts").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("# Performance", performance)
+        self.assertIn("## Current Measurements", performance)
+        self.assertIn("## Performance Direction", performance)
+        self.assertIn("Aura / CPython", performance)
+        self.assertIn("/manual/performance", manual)
+        self.assertIn("/manual/performance", config)
+
+    def test_public_pitch_uses_direct_voice(self) -> None:
+        contraction = re.compile(
+            r"\b(?:aren't|can't|couldn't|didn't|doesn't|don't|isn't|it's|"
+            r"that's|there's|they're|wasn't|weren't|what's|won't|wouldn't|"
+            r"you're|you've|we're|we've|we'll|we'd)\b",
+            re.IGNORECASE,
+        )
+        for path in (LANDING_DOC, POSITIONING_DOC):
+            with self.subTest(path=path.name):
+                source = path.read_text(encoding="utf-8")
+                self.assertIsNone(contraction.search(source))
+                self.assertNotIn(" rather than ", source.lower())
+                self.assertNotIn(" instead of ", source.lower())
+
+    def test_installer_is_posix_and_verifies_release_checksum(self) -> None:
+        installer = INSTALL_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(installer.splitlines()[0], "#!/bin/sh")
+        self.assertIn("v0.2.0-preview", installer)
+        self.assertIn("SHA256SUMS", installer)
+        self.assertIn("sha256sum", installer)
+        self.assertIn("shasum -a 256", installer)
+        self.assertIn("AURA_INSTALL_PREFIX", installer)
+        self.assertIn("AURA_INSTALL_BASE_URL", installer)
+        self.assertNotIn("sudo", installer)
+        dash = shutil.which("dash")
+        if dash is not None:
+            result = subprocess.run(
+                [dash, "-n", str(INSTALL_SCRIPT)],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_installer_places_binary_and_native_runtime_under_prefix(self) -> None:
+        system = platform.system()
+        machine = platform.machine().lower()
+        if system == "Darwin" and machine in {"arm64", "aarch64"}:
+            target = "aarch64-apple-darwin"
+        elif system == "Darwin" and machine == "x86_64":
+            target = "x86_64-apple-darwin"
+        elif system == "Linux" and machine in {"x86_64", "amd64"}:
+            target = "x86_64-unknown-linux-gnu"
+        else:
+            self.skipTest(f"installer has no release archive for {system} {machine}")
+
+        with tempfile.TemporaryDirectory(prefix="aura-install-test-") as temp:
+            root = Path(temp)
+            release = root / "release"
+            release.mkdir()
+            archive_name = f"aura-v0.2.0-preview-{target}"
+            archive_root = root / archive_name
+            (archive_root / "bin").mkdir(parents=True)
+            (archive_root / "lib" / "aura").mkdir(parents=True)
+            (archive_root / "examples").mkdir(parents=True)
+            binary = archive_root / "bin" / "aura"
+            binary.write_text("#!/bin/sh\necho aura-installer-test\n", encoding="utf-8")
+            binary.chmod(0o755)
+            (archive_root / "lib" / "aura" / "libaura_compiler.a").write_bytes(
+                b"runtime"
+            )
+            (archive_root / "lib" / "aura" / "native-link-args.json").write_text(
+                "[]\n", encoding="utf-8"
+            )
+            (archive_root / "examples" / "hello.au").write_text(
+                'print("hello")\n', encoding="utf-8"
+            )
+            (archive_root / "README.md").write_text("Aura\n", encoding="utf-8")
+            (archive_root / "LICENSE").write_text("MIT\n", encoding="utf-8")
+
+            archive = release / f"{archive_name}.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                handle.add(archive_root, arcname=archive_name)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            (release / "SHA256SUMS").write_text(
+                f"{digest}  {archive.name}\n", encoding="utf-8"
+            )
+
+            prefix = root / "prefix"
+            result = subprocess.run(
+                ["sh", str(INSTALL_SCRIPT)],
+                cwd=root,
+                env={
+                    **os.environ,
+                    "AURA_INSTALL_BASE_URL": release.as_uri(),
+                    "AURA_INSTALL_PREFIX": str(prefix),
+                },
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            installed = prefix / "bin" / "aura"
+            self.assertTrue(installed.is_file())
+            self.assertTrue(os.access(installed, os.X_OK))
+            self.assertEqual(
+                subprocess.run(
+                    [str(installed)],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    check=True,
+                ).stdout,
+                "aura-installer-test\n",
+            )
+            self.assertEqual(
+                (prefix / "lib" / "aura" / "libaura_compiler.a").read_bytes(),
+                b"runtime",
+            )
+            self.assertTrue((prefix / "share" / "aura" / "examples" / "hello.au").is_file())
 
 
 class ReleaseWorkflowTests(unittest.TestCase):

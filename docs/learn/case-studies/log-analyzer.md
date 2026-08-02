@@ -113,7 +113,8 @@ When a run produces the wrong output, the fix is nearly always visible in those 
 
 ## Why This Shape Scales
 
-Nothing in this program assumes a particular input size. If the tool later reads from a file instead of an inline list, the change is localised:
+Nothing in this program assumes a particular input size. Changing the input
+from an inline list to a file is localised:
 
 ```python
 import fs
@@ -133,6 +134,6 @@ The analyzer is small on purpose. A few directions you might push it:
 - Add a `Map[String, int32]` that counts services as well as levels.
 - Turn `level` into an enum — `LogLevel.Info`, `LogLevel.Warn`, `LogLevel.Error` — and treat unknown levels as skipped.
 - Print the most frequent service by iterating over `services` and looking up counts.
-- Read from standard input instead of a fixed vector, using `io.read_line()` in a loop.
+- Read from standard input with `io.read_line()` in a loop.
 
 Each extension should fit into the structure without rearranging it.

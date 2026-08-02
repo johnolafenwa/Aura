@@ -109,6 +109,10 @@
     "docs/manual/packages.md": {
       "kind": "feature"
     },
+    "docs/manual/performance.md": {
+      "kind": "structural",
+      "reason": "Cross-feature benchmark evidence and forward optimization direction; it defines no language semantics."
+    },
     "docs/manual/process.md": {
       "kind": "feature"
     },
@@ -134,6 +138,11 @@
     }
   },
   "blocks": {
+    "docs/manual/performance.md#bash-1": {
+      "sha256": "f894196f700b61a6d53ad6085b32491b8fcb1d5af79a3d966135f54573997a22",
+      "mode": "illustrative",
+      "reason": "Benchmark orchestration command that requires the pinned measurement host and a clean detached checkout."
+    },
     "docs/manual/assertions.md#aura-1": {
       "sha256": "0dc68e0a09781c0c434ce0f2a5a84c30592f9c8687e66aa901668f783a9c755d",
       "mode": "run",

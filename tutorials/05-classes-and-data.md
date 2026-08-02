@@ -69,7 +69,8 @@ See [examples/classes/default_fields.au](../examples/classes/default_fields.au).
 
 ## Recursive Fields With `indirect`
 
-Recursive class fields must be marked `indirect` so the value is stored out of line instead of inline:
+Recursive class fields must be marked `indirect`. This gives the child an
+out-of-line representation and keeps the parent size finite:
 
 ```python
 class Node:

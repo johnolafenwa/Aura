@@ -386,7 +386,7 @@ c = Counter.zero()
 | `self` | Read-only shared access, the default | getters, display, serialization |
 | `mut self` | Modify the instance in place | setters, increment, append |
 | `own self` | Consume the instance to extract data | `into_*` conversions, one-shot use |
-| no receiver | Factory methods, utilities that don't need an instance | `Counter.zero()` |
+| no receiver | Factory methods and utilities that do not need an instance | `Counter.zero()` |
 
 If you are not sure, start with bare `self`. Add `own` only when the method
 must consume the instance, or `mut` when it must mutate in place.

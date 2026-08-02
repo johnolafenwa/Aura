@@ -6,6 +6,17 @@ extension, reference manual, and source are distributed from the
 
 ## Aura CLI
 
+Install the current preview with one command on Linux x64, macOS x64, or macOS
+arm64:
+
+```bash
+curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+```
+
+The installer downloads the matching release archive, verifies it against the
+published `SHA256SUMS`, and installs Aura under `~/.local` by default. Set
+`AURA_INSTALL_PREFIX` to select another prefix.
+
 Download the archive for your platform from the
 [v0.2.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.2.0-preview).
 Each release includes Linux x64, macOS x64, and macOS arm64 archives together

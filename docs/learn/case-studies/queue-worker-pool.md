@@ -110,7 +110,7 @@ Avoid making every worker guess. The benefit of structured concurrency is knowin
 
 `Queue[Job](capacity=8)` limits how many jobs can be in flight at once. When workers are slower than the producer, `put` waits for space — which stops memory from growing without bound when the workload is bursty.
 
-When the producer should fail fast instead of waiting, use a timeout:
+Use a timeout when the producer should fail fast:
 
 ```python
 match jobs.put(Job(id=4, payload="notify"), timeout=100ms):

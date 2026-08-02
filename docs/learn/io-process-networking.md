@@ -21,7 +21,11 @@ match fs.read_to_string(path):
         print(error)
 ```
 
-One-shot `fs.read_to_string` and `fs.read_bytes` are capped at 256 MiB. The same cap applies to the remaining contents read by `fs.File.read_all()` and `fs.File.read_bytes()`: an accidental "read the whole file" against a log that turned out to be gigabytes should fail loudly rather than allocate without bound. Larger files need a host helper or pre-splitting because Aura 0.2 has no incremental file-read member.
+One-shot `fs.read_to_string` and `fs.read_bytes` are capped at 256 MiB. The same
+cap applies to the remaining contents read by `fs.File.read_all()` and
+`fs.File.read_bytes()`. An accidental whole-file read against a very large log
+fails at the cap. Larger files need a host helper or pre-splitting because Aura
+0.2 has no incremental file-read member.
 
 ```python
 import fs
@@ -74,7 +78,11 @@ try completed.check()
 print(completed.stdout().trim())
 ```
 
-Two things in that call site are worth explaining. `stdout=process.pipe()` captures the subprocess's output so the parent can read it; `stderr=process.pipe()` does the same for standard error. `group=true` places the child in its own process group on Unix hosts, which makes cleanup more reliable when a child spawns descendants — termination can target the whole group rather than only the leader.
+Two things in that call site are worth explaining. `stdout=process.pipe()`
+captures the subprocess's output so the parent can read it;
+`stderr=process.pipe()` does the same for standard error. `group=true` places
+the child in its own process group on Unix hosts, so termination reaches the
+leader and all descendants.
 
 Omitting `timeout` supplies no caller deadline through an internal absence
 marker. An explicit negative Duration is not that marker: invalid timeout or
@@ -144,7 +152,9 @@ with supervisor = process.supervisor():
             print("cancelled")
 ```
 
-Supervisor names are unique within a supervisor; starting a second child with the same name returns an error instead of silently replacing the first. Leaving the `with` block stops every child the supervisor still manages.
+Supervisor names are unique within a supervisor. Starting a second child with
+the same name returns an error and preserves the existing child. Leaving the
+`with` block stops every child the supervisor still manages.
 
 ## Networking: TCP
 
@@ -163,8 +173,8 @@ with listener = try net.listen("127.0.0.1:0"):
 
 Hostname lookup and blocking connect syscalls are sent to the generic
 blocking-I/O pool, so they do not freeze sibling Aura tasks. The `1s`
-timeout above is a single budget for queue admission, DNS, and all candidate
-addresses rather than a fresh second for every address. Task-group
+timeout above is one shared budget for queue admission, DNS, and every
+candidate address. Task-group
 cancellation stops waiting promptly. Before pool acceptance it prevents
 submission; after acceptance, the host resolver cannot generally be
 interrupted and its eventual result is discarded.

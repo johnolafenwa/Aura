@@ -35,7 +35,8 @@ Queues may also be bounded:
 jobs = Queue[int32](capacity=16)
 ```
 
-With a bounded queue, `put(...)` waits until capacity is available instead of letting the queue grow without bound.
+With a bounded queue, `put(...)` waits until capacity is available. The queue
+never grows beyond its configured bound.
 
 ### Receiving Values
 
@@ -169,14 +170,14 @@ execution. Queue and Task handle state is synchronized for cross-worker use;
 every other capture and result crosses as owned `Transfer` data.
 
 A bare target parameter still grants shared access, but it borrows from the
-child's owned capture rather than the caller's value. An `own` parameter may
+child's owned capture. It never borrows the caller's value. An `own` parameter may
 consume that capture. A `mut` target remains invalid because there is no
 caller-visible writeback.
 
 Generic task targets must be concrete at the boundary. Inference and defaults
 may provide the types, or the callable slot may use the narrow forms
 `function[Types]` and `Type.associated_method[Types]`. Aura rejects an
-unresolved type parameter instead of assuming it can cross.
+unresolved type parameter at the task boundary.
 
 ### Per-task Stack Overrides
 
@@ -192,7 +193,7 @@ with group = TaskGroup():
 
 Both size arguments have exact type `int64`. The accepted range is 262,144
 through 67,108,864 bytes inclusive (256 KiB through 64 MiB). Aura rejects
-out-of-range requests rather than clamping them. Accepted requests are rounded
+out-of-range requests and never clamps them. Accepted requests are rounded
 up to the host page size and protected by the platform stack allocator's guard
 pages. Use the ordinary start methods unless a real workload demonstrates the
 need for a custom capacity.
@@ -362,7 +363,9 @@ def worker(out: Queue[int32]):
 
 `sleep(...)` also wakes early when the group is cancelled, so task code after the sleep can call `cancelled()` and decide how to exit.
 
-If the current `with TaskGroup()` scope is iterating a `Queue[T]` from that scope with `for value in queue:`, `group.cancel()` also wakes that queue iteration so it can finish cleanly instead of parking forever.
+If the current `with TaskGroup()` scope is iterating a `Queue[T]` from that
+scope with `for value in queue:`, `group.cancel()` also wakes that queue
+iteration so it can finish cleanly.
 
 Cancellation is cooperative. Aura does not forcibly kill tasks.
 
@@ -384,8 +387,8 @@ lightweight task requests a guarded 512 KiB coroutine stack; the explicit
 stack-start methods accept requests through 64 MiB. Descriptor registrations
 persist across waits, deadlines use a timer heap, and Queue, task-completion,
 and blocking-pool events notify the responsible worker directly. With nothing
-ready locally, a worker blocks until work, an event, or a deadline rather than
-waking on a periodic tick.
+ready locally, a worker blocks until work, an event, or a deadline. It does not
+wake on a periodic tick.
 
 Queue and Task handles are the maintained cross-worker channels. Every other
 task capture and result stays owned and share-nothing through structural
@@ -488,7 +491,7 @@ sleep(100ms)
 Computed delays use the same signed Duration arithmetic as other expressions.
 For example, a runtime attempt count can scale a base delay with
 `attempt * 1ms`. A sleep or timeout must be non-negative and fit the host
-deadline; invalid values fail instead of becoming unlimited waits.
+deadline; invalid values fail. Only omission creates an unlimited wait.
 
 See [examples/concurrency/sleep_builtin.au](../examples/concurrency/sleep_builtin.au).
 For constructors, arithmetic, comparison, conversion, and sub-millisecond
@@ -561,9 +564,9 @@ The runtime is intentionally simple:
 - the scheduler keeps descriptor registrations persistent, orders deadlines in
   a timer heap, receives direct Queue/task-completion/blocking-pool
   notifications, and blocks without a periodic idle tick
-- cancellation is still cooperative rather than preemptive
+- cancellation is cooperative; preemptive cancellation is unavailable
 - loop backedges include compiler-inserted cooperative scheduling checks, but
   a single long body can still delay siblings
-- tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
+- tasks are scheduler-backed lightweight coroutines; each task does not require its own OS thread
 - task arguments are owned captures; bare shared and `own` target parameters
   are supported, while `mut` target parameters are rejected

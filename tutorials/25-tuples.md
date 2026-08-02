@@ -68,8 +68,8 @@ print(name)
 # print(record) would be a use-after-move error
 ```
 
-Aura deliberately reports reuse of the original tuple instead of exposing
-independent positional partial moves.
+Aura deliberately reports reuse of the original tuple. Positional partial
+moves are not exposed.
 
 ## Structural Equality
 
@@ -86,8 +86,8 @@ assert baseline != changed
 assert same != changed
 ```
 
-Tuple equality reads and retains both operands rather than moving them. This
-also applies to non-copy tuples such as these, which contain `String`: each
+Tuple equality reads and retains both operands. This also applies to non-copy
+tuples such as these, which contain `String`: each
 binding remains usable in a later comparison.
 
 Tuple ordering is deliberately separate. `<`, `<=`, `>`, and `>=` are rejected

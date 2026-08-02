@@ -182,9 +182,11 @@ narrowed = 1.25 as float32
 widened = 3 as float64
 ```
 
-Integer casts are range-checked at runtime -- `300 as int8` fails cleanly instead of silently wrapping.
+Integer casts are range-checked at runtime. `300 as int8` fails cleanly and
+never wraps.
 
-Integer-to-float casts are also exactness-checked at runtime -- Aura rejects casts that would silently lose integer precision instead of rounding them away.
+Integer-to-float casts are also exactness-checked at runtime. Aura rejects a
+cast that would lose integer precision.
 
 That strict cast is intentionally different from `.to_float()`. For the
 `9007199254740993` value above, `large.to_float()` returns the rounded
@@ -215,7 +217,8 @@ print(value)
 
 See [examples/numbers/uint128_values.au](../examples/numbers/uint128_values.au).
 
-Annotated integer widths are enforced at runtime. If a value exceeds its annotated type's range, Aura reports an error instead of silently widening.
+Annotated integer widths are enforced at runtime. If a value exceeds its
+annotated type's range, Aura reports an error and preserves the declared type.
 
 The bootstrap compiler also supports `float32` in typed contexts like class fields and function parameters:
 
@@ -242,7 +245,7 @@ quotation = 'the compiler said "ready"'
 
 The supported escapes are `\n`, `\t`, `\"`, `\'`, `\\`, `\0`, `\xHH`, and
 `\u{H...}`. Triple-quoted, raw, and byte-string literals are not implemented,
-and a one-character literal is still a `String` rather than a character type.
+and a one-character literal remains a `String`. Aura has no character type.
 
 ## F-Strings
 
@@ -311,8 +314,8 @@ print(text[-2:])   # 🎉Z
 print(text[:])     # A🎉Z
 ```
 
-Endpoints count Unicode scalar values, matching `len()`, rather than UTF-8
-bytes or grapheme clusters. Locating scalar boundaries scans the text, so
+Endpoints count Unicode scalar values, matching `len()`. They do not count
+UTF-8 bytes or grapheme clusters. Locating scalar boundaries scans the text, so
 String slicing is O(n). Written endpoints are exactly `int32`; negatives
 normalize once. Both effective endpoints must lie in `0..=len`, and start must
 not exceed end. Aura does not clamp invalid bounds like Python: invalid or

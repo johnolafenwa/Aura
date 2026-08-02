@@ -34,8 +34,8 @@ assert value == 4, explain(value)
 
 This program does not print `building failure message`.
 
-If evaluating the condition or message fails first, that earlier failure is
-reported instead of an assertion failure.
+If evaluating the condition or message fails first, Aura reports that earlier
+failure and never reaches the assertion result.
 
 ## Failure Behavior
 
