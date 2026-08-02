@@ -5468,7 +5468,7 @@ def main() -> int32:
 }
 
 #[test]
-fn numeric_array_nested_collection_clones_match_forced_mir_and_direct_backends() {
+fn numeric_array_nested_collection_copies_match_forced_mir_and_direct_backends() {
     let source = r#"
 class ArrayHolder:
     array: Array[int32]
@@ -5485,7 +5485,7 @@ def main() -> int32:
     source: list[int32] = [3, 4]
     arrays: list[Array[int32]] = [Array[int32].from_list(source, [2])]
     print_array(arrays.get(0))
-    arrays_copy = arrays.clone()
+    arrays_copy = arrays.copy()
     print_array(arrays_copy.get(0))
 
     map_source: list[int32] = [7, 8]
@@ -5497,11 +5497,11 @@ def main() -> int32:
     print_array(values.get(0))
     items = arrays_by_name.items()
     match own items.get(0):
-        case Some(entry):
-            print(entry.value)
+        case Some((_key, value)):
+            print(value)
         case None:
             print("missing item")
-    map_copy = arrays_by_name.clone()
+    map_copy = arrays_by_name.copy()
     print_array(map_copy.get("item"))
 
     holder_source: list[int32] = [11, 12]
@@ -5525,7 +5525,7 @@ def main() -> int32:
         "1\n",
     );
     assert_run_and_direct_source_stdout(
-        "aura-numeric-array-nested-collection-clones",
+        "aura-numeric-array-nested-collection-copies",
         source,
         expected,
     );
@@ -8440,15 +8440,15 @@ fn build_with_direct_backend_supports_list_literals_and_iteration() {
 }
 
 #[test]
-fn build_with_direct_backend_supports_vec_methods_and_constructor() {
+fn build_with_direct_backend_supports_list_methods_and_constructor() {
     let (_, run) = build_and_run_direct_source(
-        "aura-build-direct-vec-methods",
+        "aura-build-direct-list-methods",
         "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    values = list[int32]()\n    print(values.is_empty())\n    mut items: list[int32] = [1, 2, 3]\n    print(items.len())\n    print_int_option(items.get(1))\n    print(items.set(index=1, value=20))\n    print(items.pop(0))\n    items.append(99)\n    print(items.pop())\n    mut total: int32 = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
     );
 
     assert!(
         run.status.success(),
-        "vec direct-backend methods binary should exit successfully, stderr was:\n{}",
+        "list direct-backend methods binary should exit successfully, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(
@@ -8476,7 +8476,7 @@ fn build_with_direct_backend_supports_string_map_and_numeric_builtins() {
 }
 
 #[test]
-fn string_lengths_and_negative_vec_indices_match_run_and_direct_backends() {
+fn string_lengths_and_negative_list_indices_match_run_and_direct_backends() {
     let source = r#"
 def print_int_option(value: Option[int32]):
     match value:
@@ -8508,9 +8508,9 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_stdout(
-        "aura-string-lengths-negative-vec-indices",
+        "aura-string-lengths-negative-list-indices",
         source,
-        "4\n9\n40\n35\n10\n-999\n10\n35\nNone\nNone\nNone\n40\n20\n99\n11\n77\n",
+        "4\n9\n40\n35\n10\n-999\n10\n35\n\n\n\n40\n20\n99\n11\n77\n",
     );
 }
 
@@ -8524,7 +8524,7 @@ def main() -> int32:
 "#;
 
     assert_run_and_direct_source_failure_with_timeout(
-        "aura-too-negative-vec-index",
+        "aura-too-negative-list-index",
         source,
         std::time::Duration::from_secs(20),
         "",
@@ -10254,7 +10254,7 @@ def run() -> Result[None, io.Error]:
         http_task = group.start(serve_http, http_addresses)
         http_addr = try receive_address(http_addresses)
         headers: dict[str, str] = {{"X-Test": "ok"}}
-        response = try net.http_request_text("POST", "http://" + http_addr + "/hello", "body", headers.clone())
+        response = try net.http_request_text("POST", "http://" + http_addr + "/hello", "body", headers.copy())
         with http_response = response:
             print(http_response.status())
             print(try http_response.text())
@@ -10881,57 +10881,22 @@ def main() -> int32:
 }
 
 #[test]
-fn vec_insert_out_of_bounds_is_a_runtime_error() {
+fn list_insert_clamps_out_of_bounds_indices_on_run_and_direct_backends() {
     let source = r#"
 def main() -> int32:
     mut values = [1, 2, 3]
-    print("before")
-    print(values.insert(index=99, value=7))
-    print("after")
+    values.insert(index=99, value=7)
+    values.insert(index=-99, value=0)
+    values.insert(index=5, value=8)
+    values.insert(index=-1, value=6)
+    for value in values:
+        print(value)
     return 0
 "#;
-    let (temp, source_path) = write_temp_source("aura-vec-insert-oob", source);
-
-    let run = Command::new(aura_bin())
-        .arg("run")
-        .arg(&source_path)
-        .output()
-        .expect("failed to run aura run on vec insert source");
-    assert!(!run.status.success(), "run should fail for vec insert OOB");
-    assert_eq!(String::from_utf8_lossy(&run.stdout), "before\n");
-    assert!(
-        String::from_utf8_lossy(&run.stderr).contains("out of bounds"),
-        "run stderr should mention the out-of-bounds insert, stderr was:\n{}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-
-    let output_path = temp.path().join("out");
-    let build = Command::new(aura_bin())
-        .arg("build")
-        .arg("--backend")
-        .arg("direct")
-        .arg("-o")
-        .arg(&output_path)
-        .arg(&source_path)
-        .output()
-        .expect("failed to build direct vec insert source");
-    assert!(
-        build.status.success(),
-        "direct backend build should succeed, stderr was:\n{}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-    let direct = generated_binary(&output_path)
-        .output()
-        .expect("failed to run direct vec insert binary");
-    assert!(
-        !direct.status.success(),
-        "direct binary should fail for vec insert OOB"
-    );
-    assert_eq!(String::from_utf8_lossy(&direct.stdout), "before\n");
-    assert!(
-        String::from_utf8_lossy(&direct.stderr).contains("out of bounds"),
-        "direct stderr should mention the out-of-bounds insert, stderr was:\n{}",
-        String::from_utf8_lossy(&direct.stderr)
+    assert_run_and_direct_source_stdout(
+        "aura-list-insert-clamping",
+        source,
+        "0\n1\n2\n3\n7\n6\n8\n",
     );
 }
 

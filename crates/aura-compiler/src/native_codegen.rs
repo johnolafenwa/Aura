@@ -5964,7 +5964,12 @@ impl<'a> FunctionCompiler<'a> {
                     .ins()
                     .call(self.print_bool, &[argument.values[0]]);
             }
-            Some(ScalarKind::Unit) => {}
+            Some(ScalarKind::Unit) => {
+                let argument = self.ensure_opaque(argument)?;
+                self.builder
+                    .ins()
+                    .call(self.print_value, &[argument.values[0]]);
+            }
             None => {
                 let argument = self.ensure_opaque(argument)?;
                 self.builder
