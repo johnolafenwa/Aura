@@ -187,6 +187,37 @@ source-visible compatibility path.
   exceeded the 512 KiB lightweight-task stack before a blocking host call; the
   default is now 768 KiB and the full run-pass family is green.
 
+### S4 canonical paths and design adoption
+
+- Five public examples and 64 fixture stems now use canonical `list`, `dict`,
+  `set`, shared, and mutable terminology. The rewrite replaced 126 fixture and
+  oracle paths while preserving four legitimate Array `map` names.
+- Exact README, tutorial, Manual, compiler-test, CLI-test, and diagnostic-path
+  references moved with the files. The clean-slate identity suite now rejects
+  a reintroduced noncanonical example or fixture path.
+- ADR-0052 through ADR-0056 each record implementation dependencies, cache or
+  schema adoption, and completion conditions. The sections contain no alias,
+  shim, retired-spelling, compatibility-period, or old-to-new migration story.
+- Focused verification passed all 11 identity tests, all nine fixture
+  categories, example smoke/direct-codegen coverage, and 15 collection-focused
+  CLI example tests.
+
+### S4 scalar math functions
+
+- The builtin `math` module exposes exact `float64` contracts for `floor`,
+  `ceil`, `trunc`, `pow`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, and
+  `tan`. No implicit numeric conversion is introduced.
+- Shared runtime helpers classify finite overflow as `AU4002` and domain
+  failures as `AU4001`, while preserving the accepted NaN, infinity, signed
+  zero, and identity cases from ADR-0048. Integer-returning conversions enforce
+  the exact `int64` boundary despite binary64 rounding of `i64::MAX`.
+- Compiler analysis supplies module completion, exact signatures, and hover.
+  Focused unit tests, the maintained success fixture, and the domain-failure
+  fixture are byte-identical between MIR and direct execution.
+- `math.pi`, `math.e`, `math.inf`, and `math.nan` remain pending until the
+  generic module-constant storage and initialization plan lands. The math
+  documentation and editor surface are proceeding independently.
+
 ## Verification
 
 Current focused version-stamp evidence:
@@ -252,6 +283,11 @@ Current focused version-stamp evidence:
   and direct backends. Reference integrity is green across 38 Manual pages,
   264 fences, 206 Aura blocks, and 124 compiler-verified blocks; the docs build
   is green.
+- Canonical path closure — 5/5 public examples and 126/126 fixture/oracle paths
+  migrated; all identity, fixture, example, and focused CLI checks passed.
+- Scalar math function closure — five focused compiler tests passed; the
+  maintained success and failure programs match across forced MIR/direct
+  execution; production warning-denied Clippy passed.
 
 The opening full-gate attempt stopped at the expected old identity guard that
 classified “Aura 0.3” as future narration. That guard now advances to 0.4 and

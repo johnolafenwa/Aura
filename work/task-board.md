@@ -50,10 +50,16 @@ Last updated: 2026-08-02
   and `divmod` are implemented across checking, analysis, MIR, direct codegen,
   fixtures, examples, tutorials, and the Manual. Float power now executes at
   its destination width through one shared helper, including float32-only
-  overflow detection. The semantic tooling schema is version 4. Remaining S4
-  families are strings/format specs, match guards/or-patterns, module constants,
-  and the `math` module, followed by clean-slate naming closure and the five
-  design-paper adoption sections.
+  overflow detection. The semantic tooling schema is version 4. The public
+  example and fixture path inventory now uses canonical list/dict/set/shared/mut
+  names, with a permanent clean-slate filename gate. ADR-0052 through ADR-0056
+  contain implementation-adoption sections with no compatibility or migration
+  surface. The `math` module's eleven exact float64 functions and IEEE/domain/
+  overflow classification are implemented with focused MIR/direct parity;
+  its four constants wait on the generic module-constant foundation. Remaining
+  S4 compiler families are strings/format specs, match guards/or-patterns, and
+  module constants, followed by final math constants and integrated reference,
+  editor, cache, and checkpoint evidence.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
 - Work note: `work/2026-08-02-batch-s1-python-surface.md`.
