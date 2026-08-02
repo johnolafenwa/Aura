@@ -7,8 +7,18 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Serialize)]
 pub struct Module {
     pub imports: Vec<ImportDecl>,
+    pub constants: Vec<ConstantDecl>,
     pub items: Vec<Item>,
     pub top_level_stmts: Vec<Stmt>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ConstantDecl {
+    pub public: bool,
+    pub name: String,
+    pub annotation: Option<TypeRef>,
+    pub value: Expr,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, Serialize)]

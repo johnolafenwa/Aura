@@ -414,6 +414,7 @@ struct NativeCodegen<'a> {
     box_f64: FuncId,
     box_bool: FuncId,
     function_value: FuncId,
+    module_constant: FuncId,
     closure_value: FuncId,
     function_call: FuncId,
     function_bind_defaults: FuncId,
@@ -916,6 +917,7 @@ impl<'a> NativeCodegen<'a> {
             box_f64 => ("aura_direct_box_f64", [types::F64], Some(types::I64)),
             box_bool => ("aura_direct_box_bool", [types::I64], Some(types::I64)),
             function_value => ("aura_direct_function_value", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            module_constant => ("aura_direct_module_constant", [types::I64, types::I64, types::I64], Some(types::I64)),
             closure_value => ("aura_direct_closure_value", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             function_call => ("aura_direct_function_call", [types::I64, types::I64, types::I64], Some(types::I64)),
             function_bind_defaults => ("aura_direct_function_bind_defaults", [types::I64, types::I64, types::I64, types::I64], None),
@@ -1352,6 +1354,7 @@ impl<'a> NativeCodegen<'a> {
             box_f64,
             box_bool,
             function_value,
+            module_constant,
             closure_value,
             function_call,
             function_bind_defaults,
@@ -2021,6 +2024,9 @@ impl<'a> NativeCodegen<'a> {
         let function_value = self
             .object
             .declare_func_in_func(self.function_value, builder.func);
+        let module_constant = self
+            .object
+            .declare_func_in_func(self.module_constant, builder.func);
         let closure_value = self
             .object
             .declare_func_in_func(self.closure_value, builder.func);
@@ -2998,6 +3004,7 @@ impl<'a> NativeCodegen<'a> {
             box_f64,
             box_bool,
             function_value,
+            module_constant,
             closure_value,
             function_call,
             function_bind_defaults,
@@ -3372,6 +3379,36 @@ impl<'a> NativeCodegen<'a> {
         let release_value = self
             .object
             .declare_func_in_func(self.release_value, builder.func);
+
+        if matches!(function.name.as_str(), "main" | "__script") {
+            let module_constant = self
+                .object
+                .declare_func_in_func(self.module_constant, builder.func);
+            for constant in &self.module.constants {
+                let initializer =
+                    self.function_thunks
+                        .get(&constant.initializer)
+                        .ok_or_else(|| {
+                            format!(
+                                "direct backend cannot find module constant initializer `{}`",
+                                constant.initializer
+                            )
+                        })?;
+                let initializer = self.object.declare_func_in_func(*initializer, builder.func);
+                let initializer = builder.ins().func_addr(types::I64, initializer);
+                let (key_ptr, key_len) = declare_string_constant(
+                    &mut self.object,
+                    &mut self.string_data,
+                    &mut builder,
+                    constant.key.as_bytes(),
+                )?;
+                let call = builder
+                    .ins()
+                    .call(module_constant, &[key_ptr, key_len, initializer]);
+                let value = builder.inst_results(call)[0];
+                builder.ins().call(release_value, &[value]);
+            }
+        }
 
         let mut lowered_args = Vec::new();
         let param_types = self.function_param_types[&function.name].clone();
@@ -3832,6 +3869,7 @@ struct FunctionCompiler<'a> {
     box_f64: cranelift_codegen::ir::FuncRef,
     box_bool: cranelift_codegen::ir::FuncRef,
     function_value: cranelift_codegen::ir::FuncRef,
+    module_constant: cranelift_codegen::ir::FuncRef,
     closure_value: cranelift_codegen::ir::FuncRef,
     function_call: cranelift_codegen::ir::FuncRef,
     function_bind_defaults: cranelift_codegen::ir::FuncRef,
@@ -4538,6 +4576,24 @@ impl<'a> FunctionCompiler<'a> {
             Rvalue::Use(operand) => {
                 let integer_hint = target.scalar_kind().filter(|kind| kind.is_integer());
                 self.load_operand_with_integer_hint(operand, integer_hint)
+            }
+            Rvalue::ModuleConstant { key, initializer } => {
+                let thunk = *self.function_thunk_refs.get(initializer).ok_or_else(|| {
+                    format!(
+                        "direct backend cannot find module constant initializer `{initializer}`"
+                    )
+                })?;
+                let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk);
+                let (key_ptr, key_len) = self.string_constant(key.as_bytes())?;
+                let call = self
+                    .builder
+                    .ins()
+                    .call(self.module_constant, &[key_ptr, key_len, thunk_ptr]);
+                let value = self.owned_opaque_result(
+                    self.builder.inst_results(call).to_vec(),
+                    Type::named("Unknown"),
+                );
+                self.coerce_value(value, target)
             }
             Rvalue::Closure {
                 function,
@@ -14251,6 +14307,7 @@ fn validate_rvalue(
 ) -> std::result::Result<(), String> {
     match rvalue {
         Rvalue::Use(operand) => validate_operand(operand),
+        Rvalue::ModuleConstant { .. } => Ok(()),
         Rvalue::Closure {
             signature,
             captures,
@@ -14667,6 +14724,7 @@ fn infer_rvalue_type(
 ) -> Option<DirectType> {
     match rvalue {
         Rvalue::Use(operand) => infer_operand_type(operand, variable_types, classes),
+        Rvalue::ModuleConstant { .. } => None,
         Rvalue::Closure { signature, .. } => Some(DirectType::Opaque(signature.clone())),
         Rvalue::FormatString { .. } => Some(DirectType::Opaque(Type::named("str"))),
         Rvalue::Unary { op, value, .. } => {

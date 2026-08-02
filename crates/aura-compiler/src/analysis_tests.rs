@@ -45,6 +45,8 @@ fn analysis_resolves_canonical_enums_from_the_module_registry() {
     program.module_registry.insert(
         "json".to_string(),
         crate::sema::ModuleNamespace {
+            constants: BTreeMap::new(),
+            all_constants: BTreeMap::new(),
             name: "json".to_string(),
             path: "json".to_string(),
             source_path: None,
@@ -1988,6 +1990,32 @@ fn compiler_top_level_completion_includes_keywords_and_builtins() {
 }
 
 #[test]
+fn module_constants_are_symbols_hover_targets_and_completions() {
+    let source = "answer: int64 = 42\n\ndef main():\n    print(answer)\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert!(output
+        .symbols
+        .iter()
+        .any(|symbol| symbol.name == "answer" && symbol.kind == "constant"));
+    let occurrence = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 3 && occurrence.hover.contains("answer"))
+        .expect("constant use occurrence");
+    assert!(occurrence.hover.contains("module constant"));
+    assert_eq!(
+        occurrence.definition.as_ref().map(|range| range.line),
+        Some(0)
+    );
+
+    let completions = complete_source(source, 3, 4, None).expect("constant completion");
+    assert!(completions.iter().any(|completion| {
+        completion.name == "answer" && completion.kind == "constant" && completion.detail == "int64"
+    }));
+}
+
+#[test]
 fn compiler_analysis_infers_round_and_divmod_results_and_builtin_hover() {
     let analysis = analyze_source(
         r#"
@@ -3179,6 +3207,8 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     .join("\n");
     let remote_program = checked_program(&remote_source);
     let mut tools_namespace = crate::sema::ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "tools".to_string(),
         path: "pkg.tools".to_string(),
         source_path: None,
@@ -3203,6 +3233,8 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     tools_namespace.modules.insert(
         "inner".to_string(),
         crate::sema::ModuleNamespace {
+            constants: BTreeMap::new(),
+            all_constants: BTreeMap::new(),
             name: "inner".to_string(),
             path: "pkg.tools.inner".to_string(),
             source_path: None,
@@ -3228,6 +3260,8 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            constants: BTreeMap::new(),
+            all_constants: BTreeMap::new(),
             name: "pkg".to_string(),
             path: "pkg".to_string(),
             source_path: None,
@@ -4168,6 +4202,8 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            constants: BTreeMap::new(),
+            all_constants: BTreeMap::new(),
             name: "pkg".to_string(),
             path: "pkg".to_string(),
             source_path: None,
@@ -4176,6 +4212,8 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
             modules: std::collections::BTreeMap::from([(
                 "types".to_string(),
                 crate::sema::ModuleNamespace {
+                    constants: BTreeMap::new(),
+                    all_constants: BTreeMap::new(),
                     name: "types".to_string(),
                     path: "pkg.types".to_string(),
                     source_path: None,
@@ -4391,6 +4429,8 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     .join("\n");
     let remote_program = checked_program(&remote_source);
     let tools_namespace = crate::sema::ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "tools".to_string(),
         path: "pkg.tools".to_string(),
         source_path: None,
@@ -4415,6 +4455,8 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            constants: BTreeMap::new(),
+            all_constants: BTreeMap::new(),
             name: "pkg".to_string(),
             path: "pkg".to_string(),
             source_path: None,

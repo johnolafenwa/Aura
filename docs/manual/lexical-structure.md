@@ -55,8 +55,9 @@ also introduces a mutable local binding.
 def replace(from: str, to: str) -> str:
     return from + to
 
-mut from = "left"
-from = replace(from=from, to="right")
+def main():
+    mut from = "left"
+    from = replace(from=from, to="right")
 ```
 
 Several other spellings are lexed as ordinary identifiers and become special only in a defined context:

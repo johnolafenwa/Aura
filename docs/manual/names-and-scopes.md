@@ -17,12 +17,46 @@ One `.au` file defines one module scope. Its top-level item namespace contains:
 - functions
 - extern functions and extern opaque handle types
 - traits
+- module constants
 - imported names
 - imported module aliases
 
 These categories share the same top-level item name space. A local item cannot reuse a name already imported or declared as another item kind. Trait implementation blocks do not introduce a top-level name; they attach behavior to an existing trait/type combination.
 
 Imports are module-level regardless of their textual position in the file. They are resolved before static checking of function bodies and top-level statements.
+
+## Module Constants
+
+A bare binding at module level declares an immutable module constant. The
+initializer is required. The annotation is optional, and `public` exposes the
+constant to qualified imports and from-imports.
+
+    max_attempts: int64 = 5
+    service_name = "planner"
+    public default_region = "eu-west"
+
+    def main():
+        print(service_name)
+
+Functions and types are available to every constant initializer regardless of
+their textual item position. Constants become available in declaration order.
+An initializer may read an earlier constant in the same module. Reading itself
+or a later constant is `AU2001` use before initialization.
+
+Aura initializes reachable modules before entry execution. Dependencies run
+before importers, sibling dependencies follow first import order, and constants
+within one module follow declaration order. A module reached through several
+imports initializes once. Initializer failure prevents entry execution.
+
+Copy-typed reads produce ordinary copied values. A non-Copy read provides
+shared access to the one value stored by its defining module. It cannot move
+the value into owned storage, pass it to an `own` parameter, or request mutable
+access. Use an explicit supported `.clone()` or constructor when independent
+owned data is required.
+
+Module storage is immutable. Module-level `mut`, reassignment, compound
+assignment, and mutable access are `AU3003` errors. Stateful application data
+belongs in a local value owned by `main` or another explicit owner.
 
 ## Imports
 
@@ -100,8 +134,9 @@ Aura 0.2 does not support local function, class, enum, or trait declarations. It
 An assignment to a previously unseen simple name introduces a binding:
 
 ```python
-name = "Aura"
-mut count: int32 = 0
+def main():
+    name = "Aura"
+    mut count: int32 = 0
 ```
 
 The initializer is checked before the new name becomes available. A binding without `mut` is immutable. A later assignment to an existing name is reassignment, not a new shadowing declaration, and is valid only for a mutable place with the same type.
@@ -222,9 +257,13 @@ Builtin enum types such as `Option`, `Result`, `QueueReceive`, and `process.Erro
 
 ## Top-Level Statement Scope
 
-An entry module may contain executable top-level statements instead of a local `main`. Those statements share one top-level local environment and execute in source order after checking.
+An entry module may contain executable top-level statements instead of a local
+`main`. Those statements share one top-level local environment and execute in
+source order after reachable module constants finish initialization.
 
-Imported modules contribute declarations, not executable initialization: their top-level statements are checked as source but are not run as import side effects in Aura 0.2. Reusable modules should therefore keep executable work inside public functions. This boundary may be tightened in a later release, but programs MUST NOT depend on imported top-level side effects today.
+Imported modules contribute items and eagerly initialized constants. Their
+top-level executable statements are checked as source and do not run as import
+side effects. Reusable executable work belongs inside public functions.
 
 ## Grammar
 
@@ -248,9 +287,10 @@ rejected rather than selected by source order.
 
 Local and parameter references read their statically selected storage place;
 module, type, function, and associated-member names select compiler metadata
-and do not perform a runtime dictionary lookup. Entry-module top-level bindings
-are created in source order. Imports load declarations during compilation and
-do not execute imported top-level statements as initialization side effects.
+and do not perform a runtime dictionary lookup. Module constants initialize
+once in the dependency and source order defined above. Entry-module executable
+statements then run in source order. Imports do not execute imported top-level
+statements as initialization side effects.
 
 ## Ownership And Evaluation Order
 
@@ -268,13 +308,16 @@ scope is discarded with the expression.
 ## Diagnostics
 
 `AU2001` reports unknown, unavailable, or unresolved names, including a
-comprehension target used outside its expression. `AU2002` covers
+module constant read before initialization and a comprehension target used
+outside its expression. `AU2002` covers
 type-name arity and related expected-type failures. `AU2999` covers duplicate,
 reserved, private, ambiguous, or otherwise invalid name/scope declarations not
 assigned a narrower code. Reads of places invalidated after resolution use
-`AU3001` for a moved place, `AU3002` for a borrow conflict, `AU3003` for an
-immutable place, and `AU3004` for an invalid ownership mode, with related
-source spans and repair guidance where applicable.
+`AU3001` for a moved place or attempted move from non-Copy module storage,
+`AU3002` for a borrow conflict, `AU3003` for an immutable place or mutable
+module-storage request, and `AU3004` for an invalid ownership mode, with
+related source spans and repair guidance where applicable. Runtime module
+initialization re-entry is `AU4001`.
 
 ## Backend Support
 
@@ -295,9 +338,9 @@ left to implementation-defined name lookup.
 
 ## Status
 
-Static lexical scope, module imports and aliases, visibility, generic/type
-namespaces, member lookup, comprehension scopes, and the documented
-entry-module top-level scope are implemented.
+Static lexical scope, module imports and aliases, module constants, visibility,
+generic/type namespaces, member lookup, comprehension scopes, and the
+documented entry-module top-level scope are implemented.
 Dynamic names, reflection-based lookup, nested items, import side effects,
 wildcard imports, and user-selectable shadowing are unavailable. No future
 name-resolution form is implied by an identifier that happens to lex today.

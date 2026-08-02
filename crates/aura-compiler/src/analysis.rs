@@ -258,6 +258,20 @@ impl<'a> AnalysisBuilder<'a> {
     fn build(mut self) -> AnalysisOutput {
         self.visit_import_aliases();
         let mut top_level_scope = BTreeMap::new();
+        for constant in &self.program.module.constants {
+            self.visit_expr(&constant.value, &top_level_scope);
+            if let Some(info) = self.program.constants.get(&constant.name) {
+                top_level_scope.insert(
+                    constant.name.clone(),
+                    BindingInfo {
+                        ty: info.ty.clone(),
+                        trait_bounds: Vec::new(),
+                        definition: self.constant_definition(info),
+                        hover: format_value_hover("module constant", &constant.name, &info.ty),
+                    },
+                );
+            }
+        }
         self.visit_stmts(&self.program.top_level_stmts, &mut top_level_scope);
 
         for item in &self.program.module.items {
@@ -439,7 +453,7 @@ impl<'a> AnalysisBuilder<'a> {
         function_decl: &FunctionDecl,
         function_info: &FunctionInfo,
     ) -> BTreeMap<String, BindingInfo> {
-        let mut scope = BTreeMap::new();
+        let mut scope = self.constant_scope();
         for (param, ty) in function_decl
             .params
             .iter()
@@ -464,6 +478,24 @@ impl<'a> AnalysisBuilder<'a> {
             );
         }
         scope
+    }
+
+    fn constant_scope(&self) -> BTreeMap<String, BindingInfo> {
+        self.program
+            .constants
+            .iter()
+            .map(|(name, info)| {
+                (
+                    name.clone(),
+                    BindingInfo {
+                        ty: info.ty.clone(),
+                        trait_bounds: Vec::new(),
+                        definition: self.constant_definition(info),
+                        hover: format_value_hover("module constant", name, &info.ty),
+                    },
+                )
+            })
+            .collect()
     }
 
     fn method_scope(
@@ -1286,6 +1318,13 @@ impl<'a> AnalysisBuilder<'a> {
                 detail: format_function_detail(&function_info.decl),
             });
         }
+        for (visible_name, constant) in &self.program.constants {
+            completions.push(AnalysisCompletion {
+                name: visible_name.clone(),
+                kind: "constant".to_string(),
+                detail: constant.ty.to_string(),
+            });
+        }
         for (visible_name, function_info) in &self.program.extern_functions {
             completions.push(AnalysisCompletion {
                 name: visible_name.clone(),
@@ -1333,6 +1372,13 @@ impl<'a> AnalysisBuilder<'a> {
                         name: function.decl.name.clone(),
                         kind: "function".to_string(),
                         detail: format_function_detail(&function.decl),
+                    });
+                }
+                for constant in namespace.constants.values() {
+                    completions.push(AnalysisCompletion {
+                        name: constant.decl.name.clone(),
+                        kind: "constant".to_string(),
+                        detail: constant.ty.to_string(),
                     });
                 }
                 for function in namespace.extern_functions.values() {
@@ -1619,6 +1665,14 @@ impl<'a> AnalysisBuilder<'a> {
             &function.module_name,
             function.decl.span,
             function.decl.name.len(),
+        )
+    }
+
+    fn constant_definition(&self, constant: &crate::sema::ConstantInfo) -> AnalysisRange {
+        self.definition_range(
+            &constant.module_name,
+            constant.decl.span,
+            constant.decl.name.len(),
         )
     }
 
@@ -2415,6 +2469,18 @@ impl<'a> AnalysisBuilder<'a> {
             });
         }
 
+        if let Some(constant) = self.program.constants.get(name) {
+            return Some(ResolvedSymbol {
+                hover: append_alias_target(
+                    format_value_hover("module constant", name, &constant.ty),
+                    name,
+                    &constant.module_name,
+                    &constant.decl.name,
+                ),
+                definition: Some(self.constant_definition(constant)),
+            });
+        }
+
         if let Some(function) = self.program.functions.get(name) {
             return Some(ResolvedSymbol {
                 hover: append_alias_target(
@@ -2601,6 +2667,13 @@ impl<'a> AnalysisBuilder<'a> {
                     hover: format!("```aura\nmodule {}\n```", child.path),
                     definition: self.find_imported_module_range(&child.path),
                     ty: Some(Type::Module(child.path.clone())),
+                });
+            }
+            if let Some(constant) = namespace.constants.get(field) {
+                return Some(ResolvedMember {
+                    hover: format_value_hover("module constant", field, &constant.ty),
+                    definition: Some(self.constant_definition(constant)),
+                    ty: Some(constant.ty.clone()),
                 });
             }
             if let Some(function) = namespace.functions.get(field) {
@@ -4439,7 +4512,23 @@ where
 }
 
 fn symbols_from_module(module: &Module) -> Vec<AnalysisSymbol> {
-    let mut symbols = Vec::new();
+    let mut symbols = module
+        .constants
+        .iter()
+        .map(|constant| AnalysisSymbol {
+            name: constant.name.clone(),
+            kind: "constant".to_string(),
+            detail: constant
+                .annotation
+                .as_ref()
+                .map(|ty| lower_type_ref(ty).to_string())
+                .unwrap_or_else(|| "inferred".to_string()),
+            line: constant.span.line.saturating_sub(1),
+            start_character: constant.span.column.saturating_sub(1),
+            end_character: constant.span.column.saturating_sub(1) + constant.name.len(),
+            children: Vec::new(),
+        })
+        .collect::<Vec<_>>();
     for item in &module.items {
         match item {
             Item::Class(class_decl) => {

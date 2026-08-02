@@ -1,0 +1,7 @@
+values: list[int32] = [1, 2, 3]
+
+def consume(items: own list[int32]) -> None:
+    pass
+
+def main():
+    consume(values)

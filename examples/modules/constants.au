@@ -1,0 +1,7 @@
+service_name = "planner"
+public max_attempts: int64 = 3
+retry_budget = max_attempts + 2
+
+def main():
+    print(service_name)
+    print(retry_budget)

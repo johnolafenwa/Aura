@@ -401,6 +401,8 @@ function symbolKind(kind) {
       return 11;
     case "variant":
       return 22;
+    case "constant":
+      return 14;
     default:
       return 13;
   }

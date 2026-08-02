@@ -1,0 +1,7 @@
+def read_value() -> int64:
+    return value
+
+value = read_value()
+
+def main():
+    print("unreachable")

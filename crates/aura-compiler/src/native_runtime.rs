@@ -4,7 +4,7 @@ use std::borrow::Borrow;
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Write};
 use std::mem;
 #[cfg(unix)]
@@ -13,9 +13,9 @@ use std::process;
 use std::slice;
 use std::str;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
 #[cfg(test)]
-use std::sync::{Mutex, MutexGuard};
+use std::sync::MutexGuard;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
@@ -3470,6 +3470,7 @@ pub extern "C-unwind" fn aura_direct_runtime_init(
     initialize_internal_diagnostic_channels();
     task_runtime_boundary(|| {
         clear_direct_task_runtime_states();
+        clear_direct_module_constants();
         let _ = DIRECT_PROGRAM_SOURCE.set(ProgramSourceContext {
             path: decode_bytes(path_ptr, path_len),
             source: decode_bytes(source_ptr, source_len),
@@ -3484,6 +3485,13 @@ pub unsafe extern "C-unwind" fn aura_direct_run_root(thunk_ptr: i64) -> i32 {
             runtime_error("invalid direct root thunk pointer");
         }
         let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
+        struct ModuleConstantCleanup;
+        impl Drop for ModuleConstantCleanup {
+            fn drop(&mut self) {
+                clear_direct_module_constants();
+            }
+        }
+        let _module_constant_cleanup = ModuleConstantCleanup;
         let result = run_direct_root_task(thunk);
         match result {
             Ok(Value::Int(value)) => value.as_i128().unwrap_or_default() as i32,
@@ -3952,6 +3960,117 @@ pub extern "C-unwind" fn aura_direct_function_thunk(function: *mut OpaqueValue) 
             "indirect call expected a function value, found `{}`",
             value_type_name(other)
         )),
+    })
+}
+
+#[derive(Copy, Clone)]
+enum DirectModuleConstantState {
+    Initializing,
+    Ready(usize),
+    Failed,
+}
+
+static DIRECT_MODULE_CONSTANTS: OnceLock<Mutex<HashMap<String, DirectModuleConstantState>>> =
+    OnceLock::new();
+static DIRECT_MODULE_CONSTANT_ORDER: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+
+fn direct_module_constants() -> &'static Mutex<HashMap<String, DirectModuleConstantState>> {
+    DIRECT_MODULE_CONSTANTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn direct_module_constant_order() -> &'static Mutex<Vec<String>> {
+    DIRECT_MODULE_CONSTANT_ORDER.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn lock_direct_module_constants(
+) -> std::sync::MutexGuard<'static, HashMap<String, DirectModuleConstantState>> {
+    direct_module_constants()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn clear_direct_module_constants() {
+    let mut states = lock_direct_module_constants();
+    let mut order = direct_module_constant_order()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for key in order.drain(..).rev() {
+        if let Some(DirectModuleConstantState::Ready(address)) = states.remove(&key) {
+            unsafe { release_untracked_value(address as *mut OpaqueValue) };
+        }
+    }
+    states.clear();
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_module_constant(
+    key_ptr: *const u8,
+    key_len: usize,
+    initializer_thunk: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let key = decode_bytes(key_ptr, key_len);
+        {
+            let states = lock_direct_module_constants();
+            match states.get(&key).copied() {
+                Some(DirectModuleConstantState::Ready(address)) => {
+                    let value = address as *mut OpaqueValue;
+                    unsafe { retain_untracked_value(value) };
+                    register_direct_owned_value(value);
+                    return value;
+                }
+                Some(DirectModuleConstantState::Initializing) => runtime_diagnostic_error(
+                    Diagnostic::coded(
+                        "AU4001",
+                        format!("module constant `{key}` was read while its module was still initializing"),
+                    ),
+                ),
+                Some(DirectModuleConstantState::Failed) => runtime_diagnostic_error(
+                    Diagnostic::coded(
+                        "AU4001",
+                        format!("module constant `{key}` previously failed to initialize"),
+                    ),
+                ),
+                None => {}
+            }
+        }
+        if initializer_thunk == 0 {
+            runtime_error(format!(
+                "module constant `{key}` has a null initializer thunk"
+            ));
+        }
+        lock_direct_module_constants().insert(key.clone(), DirectModuleConstantState::Initializing);
+        struct FailedInitialization(String);
+        impl Drop for FailedInitialization {
+            fn drop(&mut self) {
+                let mut states = lock_direct_module_constants();
+                if matches!(
+                    states.get(&self.0),
+                    Some(DirectModuleConstantState::Initializing)
+                ) {
+                    states.insert(self.0.clone(), DirectModuleConstantState::Failed);
+                }
+            }
+        }
+        let guard = FailedInitialization(key.clone());
+        let thunk: NativeThunk = unsafe { std::mem::transmute(initializer_thunk as usize) };
+        let value = unsafe { thunk(std::ptr::null(), 0) };
+        if value.is_null() {
+            runtime_error(format!(
+                "module constant `{key}` initializer returned a null value"
+            ));
+        }
+        // The registry owns one untracked reference until runtime shutdown;
+        // the thunk's tracked reference remains the caller's read result.
+        unsafe { retain_untracked_value(value) };
+        lock_direct_module_constants()
+            .insert(key, DirectModuleConstantState::Ready(value as usize));
+        direct_module_constant_order()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(guard.0.clone());
+        std::mem::forget(guard);
+        value
     })
 }
 

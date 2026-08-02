@@ -1,0 +1,3 @@
+error[AU4001]: module constant `<main>::value` was read while its module was still initializing
+ --> crates/aura-compiler/tests/fixtures/run-fail/module_constant_indirect_reentry.au
+  = note: Aura call chain (innermost first): read_value at 1:1 -> __aura_const_init::<main>::value at 4:1

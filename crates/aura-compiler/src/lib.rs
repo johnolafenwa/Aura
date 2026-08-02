@@ -555,8 +555,63 @@ impl ModuleLoader {
                 program: program.clone(),
             },
         );
+        if is_entry_module {
+            program.constant_init_plan = self.build_constant_init_plan(&path)?;
+            self.cache.insert(
+                path.clone(),
+                LoadedModule {
+                    program: program.clone(),
+                },
+            );
+        }
         self.stack.pop();
         Ok(program)
+    }
+
+    fn build_constant_init_plan(&self, entry_path: &Path) -> Result<Vec<sema::ConstantInfo>> {
+        fn visit(
+            loader: &ModuleLoader,
+            path: &Path,
+            visited: &mut BTreeSet<PathBuf>,
+            plan: &mut Vec<sema::ConstantInfo>,
+        ) -> Result<()> {
+            let path = absolutize(path);
+            if !visited.insert(path.clone()) {
+                return Ok(());
+            }
+            let loaded = loader.cache.get(&path).ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "module constant initialization plan is missing loaded module `{}`",
+                    path.display()
+                ))
+            })?;
+            for import in &loaded.program.module.imports {
+                let module_path = match &import.kind {
+                    ImportKind::From { module_path, .. } => module_path,
+                    ImportKind::Module { path, .. } => path,
+                };
+                if builtin_modules::builtin_module_namespace(module_path).is_some() {
+                    continue;
+                }
+                let dependency = loader.resolve_import_path(&path, module_path)?;
+                visit(loader, &dependency, visited, plan)?;
+            }
+            let mut local = loaded
+                .program
+                .constants
+                .values()
+                .filter(|constant| constant.module_name == loaded.program.module_name)
+                .cloned()
+                .collect::<Vec<_>>();
+            local.sort_by_key(|constant| (constant.decl.span.line, constant.decl.span.column));
+            plan.extend(local);
+            Ok(())
+        }
+
+        let mut visited = BTreeSet::new();
+        let mut plan = Vec::new();
+        visit(self, entry_path, &mut visited, &mut plan)?;
+        Ok(plan)
     }
 
     fn resolve_imports(
@@ -897,6 +952,11 @@ fn qualify_namespace_path(namespace: &mut ModuleNamespace, prefix: &str) {
 
 fn local_item_exists(program: &Program, name: &str) -> bool {
     program.module.items.iter().any(|item| item.name() == name)
+        || program
+            .module
+            .constants
+            .iter()
+            .any(|item| item.name == name)
 }
 
 fn is_builtin_export_type(name: &str) -> bool {
@@ -1307,7 +1367,25 @@ fn qualify_trait_impl_info_for_export(
     qualified
 }
 
+fn qualify_constant_info_for_export(
+    program: &Program,
+    info: &sema::ConstantInfo,
+) -> sema::ConstantInfo {
+    let mut qualified = info.clone();
+    qualified.ty = qualify_export_type(program, &qualified.ty);
+    qualified
+}
+
 fn exported_binding(program: &Program, name: &str) -> Option<ImportedBinding> {
+    if let Some(constant) = program
+        .constants
+        .get(name)
+        .filter(|constant| constant.module_name == program.module_name && constant.decl.public)
+    {
+        return Some(ImportedBinding::Constant(qualify_constant_info_for_export(
+            program, constant,
+        )));
+    }
     for item in &program.module.items {
         match item {
             Item::ExternFunction(decl) if decl.name == name && decl.public => {
@@ -1364,6 +1442,28 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
         .cloned()
         .unwrap_or_else(|| program.module_name.clone());
     let mut namespace = ModuleNamespace {
+        constants: program
+            .constants
+            .iter()
+            .filter(|(_, info)| info.module_name == program.module_name && info.decl.public)
+            .map(|(name, info)| {
+                (
+                    name.clone(),
+                    qualify_constant_info_for_export(program, info),
+                )
+            })
+            .collect(),
+        all_constants: program
+            .constants
+            .iter()
+            .filter(|(_, info)| info.module_name == program.module_name)
+            .map(|(name, info)| {
+                (
+                    name.clone(),
+                    qualify_constant_info_for_export(program, info),
+                )
+            })
+            .collect(),
         name,
         path: path.join("."),
         source_path: program.source_path.clone(),
@@ -1533,6 +1633,8 @@ fn insert_namespace_import(
     let root_name = path[0].clone();
     let root = bindings.entry(root_name.clone()).or_insert_with(|| {
         ImportedBinding::Module(ModuleNamespace {
+            constants: BTreeMap::new(),
+            all_constants: BTreeMap::new(),
             name: root_name.clone(),
             path: root_name.clone(),
             source_path: None,
@@ -1575,6 +1677,8 @@ fn insert_namespace_import(
             .modules
             .entry(segment.clone())
             .or_insert_with(|| ModuleNamespace {
+                constants: BTreeMap::new(),
+                all_constants: BTreeMap::new(),
                 name: segment.clone(),
                 path: prefix.clone(),
                 source_path: None,

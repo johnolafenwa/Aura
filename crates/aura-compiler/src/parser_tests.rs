@@ -1544,7 +1544,9 @@ fn parse_module_imports_and_generic_bounds_cover_success_paths() {
 
     assert_eq!(module.imports.len(), 2);
     assert_eq!(module.items.len(), 2);
-    assert_eq!(module.top_level_stmts.len(), 1);
+    assert_eq!(module.constants.len(), 1);
+    assert_eq!(module.constants[0].name, "count");
+    assert_eq!(module.top_level_stmts.len(), 0);
 
     let Item::Function(function_decl) = &module.items[0] else {
         panic!("expected first item to be a function");
@@ -1558,6 +1560,28 @@ fn parse_module_imports_and_generic_bounds_cover_success_paths() {
             .len(),
         2
     );
+}
+
+#[test]
+fn parse_module_constants_preserves_visibility_annotation_and_source_order() {
+    let module =
+        parse("first = 1\npublic second: int64 = first + 1\ndef main():\n    print(second)\n")
+            .expect("module constants");
+    assert_eq!(module.constants.len(), 2);
+    assert_eq!(module.constants[0].name, "first");
+    assert!(!module.constants[0].public);
+    assert_eq!(module.constants[1].name, "second");
+    assert!(module.constants[1].public);
+    assert!(module.constants[1].annotation.is_some());
+    assert!(module.top_level_stmts.is_empty());
+}
+
+#[test]
+fn parse_module_constants_reject_mutable_module_state() {
+    let error = parse("mut counter = 0\ndef main():\n    pass\n")
+        .expect_err("mutable module state must be rejected");
+    assert_eq!(error.code, "AU3003");
+    assert!(error.message.contains("module bindings are immutable"));
 }
 
 #[test]

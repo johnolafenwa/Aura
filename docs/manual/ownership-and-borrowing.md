@@ -49,10 +49,11 @@ Move values transfer ownership on by-value use. Current move categories include:
 - file, process, supervisor, pipe, and network resources
 
 ```python
-name = "aura"
-other = name
-print(other)
-# print(name) would be rejected: name was moved
+def main():
+    name = "aura"
+    other = name
+    print(other)
+    # print(name) would be rejected: name was moved
 ```
 
 A generic payload whose declared type is an unconstrained type parameter is not assumed copyable. The canonical category list and builtin generic types are in [Types](/manual/types#copy-and-move-categories).
@@ -134,8 +135,9 @@ or take `own T` and return the result.
 def add_name(names: mut list[str], name: own str):
     names.append(name)
 
-mut names = list[str]()
-add_name(names, "Ada")
+def main():
+    mut names = list[str]()
+    add_name(names, "Ada")
 ```
 
 Only a mutable place can satisfy `mut T`. A local becomes mutable with `mut`; a
@@ -154,8 +156,9 @@ class Acc:
     def add_from(mut self, source: Acc):
         self.value += source.value
 
-mut acc = Acc(value=1)
-# acc.add_from(acc) is rejected: mutable self overlaps shared source
+def main():
+    mut acc = Acc(value=1)
+    # acc.add_from(acc) is rejected: mutable self overlaps shared source
 ```
 
 Place overlap is prefix-based for tracked name/field paths. `value` overlaps `value.field`, and `value.field` overlaps `value.field.inner`. Distinct roots do not overlap. Sibling fields such as `pair.left` and `pair.right` are distinct when the checker can prove those paths.
@@ -171,12 +174,13 @@ class User:
     name: str
     id: int32
 
-mut user = User(name="Ada", id=1)
-name = user.name
-print(user.id)
+def main():
+    mut user = User(name="Ada", id=1)
+    name = user.name
+    print(user.id)
 
-user.name = "Grace"
-print(user.name)
+    user.name = "Grace"
+    print(user.name)
 ```
 
 The complete class value cannot be used while any field remains moved. Assigning the exact moved field reinitializes that path. Assigning a fully moved mutable binding reinitializes the binding and clears its moved-field state.

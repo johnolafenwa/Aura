@@ -343,7 +343,7 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
         Rvalue::Construct { fields, .. } => fields
             .iter()
             .any(|field| operand_is_process_run_function(&field.value)),
-        Rvalue::TupleTakeElement { .. } => false,
+        Rvalue::TupleTakeElement { .. } | Rvalue::ModuleConstant { .. } => false,
     }
 }
 
@@ -621,6 +621,14 @@ struct MirRuntime {
     call_stack: Vec<RuntimeCallFrame>,
     task_ancestry: Vec<RuntimeTaskFrame>,
     return_type_stack: Vec<Type>,
+    constant_states: Arc<Mutex<HashMap<String, MirConstantState>>>,
+}
+
+#[derive(Clone)]
+enum MirConstantState {
+    Initializing,
+    Ready(Arc<Value>),
+    Failed(Diagnostic),
 }
 
 struct CallOutcome {
@@ -661,6 +669,7 @@ fn mir_function_value(name: &str, signature: &Type) -> Value {
 
 enum RvalueOutcome {
     Value(Value),
+    SharedModuleConstant(Arc<Value>),
     Return(Value),
 }
 
@@ -671,6 +680,7 @@ fn try_clone_mir_value(value: &Value) -> Result<Value> {
 #[derive(Default)]
 struct Env {
     values: HashMap<String, Value>,
+    shared_values: HashMap<String, Arc<Value>>,
     types: HashMap<String, Type>,
 }
 
@@ -694,6 +704,7 @@ impl Env {
     fn define_typed(&mut self, name: impl Into<String>, ty: Type, value: Value) {
         let name = name.into();
         self.types.insert(name.clone(), ty);
+        self.shared_values.remove(&name);
         self.values.insert(name, value);
     }
 
@@ -702,9 +713,12 @@ impl Env {
         let (root, rest) = segments
             .split_first()
             .expect("split_place_segments rejects empty MIR places");
-        let mut current = match self.values.get(root) {
-            Some(value) => value,
-            None => return Err(Diagnostic::new(format!("unknown MIR place `{}`", place))),
+        let mut current = if let Some(value) = self.shared_values.get(root) {
+            value.as_ref()
+        } else {
+            self.values
+                .get(root)
+                .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?
         };
         let mut index = 0usize;
         while index < rest.len() {
@@ -746,9 +760,12 @@ impl Env {
         let (root, rest) = segments
             .split_first()
             .expect("split_place_segments rejects empty MIR places");
-        let mut value = match self.values.get(root) {
-            Some(value) => value,
-            None => return Err(Diagnostic::new(format!("unknown MIR place `{}`", place))),
+        let mut value = if let Some(value) = self.shared_values.get(root) {
+            value.as_ref()
+        } else {
+            self.values
+                .get(root)
+                .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?
         };
         let mut index = 0usize;
         while index < rest.len() {
@@ -790,15 +807,23 @@ impl Env {
             .split_first()
             .expect("split_place_segments rejects empty MIR places");
         if rest.is_empty() {
+            if self.shared_values.contains_key(root) {
+                return Err(Diagnostic::new(format!(
+                    "shared MIR place `{place}` reached a consuming context"
+                )));
+            }
             return self
                 .values
                 .remove(root)
                 .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)));
         }
-        let value = self
-            .values
-            .get_mut(root)
-            .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?;
+        let value = self.values.get_mut(root).ok_or_else(|| {
+            if self.shared_values.contains_key(root) {
+                Diagnostic::new(format!("shared MIR place `{place}` cannot be mutated"))
+            } else {
+                Diagnostic::new(format!("unknown MIR place `{}`", place))
+            }
+        })?;
         take_nested_place(value, rest, place)
     }
 
@@ -807,10 +832,13 @@ impl Env {
         let (root, rest) = segments
             .split_first()
             .expect("split_place_segments rejects empty MIR places");
-        let value = self
-            .values
-            .get_mut(root)
-            .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{place}`")))?;
+        let value = self.values.get_mut(root).ok_or_else(|| {
+            if self.shared_values.contains_key(root) {
+                Diagnostic::new(format!("shared MIR place `{place}` cannot be mutated"))
+            } else {
+                Diagnostic::new(format!("unknown MIR place `{place}`"))
+            }
+        })?;
         nested_place_mut(value, rest, place)
     }
 
@@ -891,6 +919,7 @@ impl Env {
             .expect("split_place_segments rejects empty MIR places");
 
         if rest.is_empty() {
+            self.shared_values.remove(root);
             self.values.insert((*root).to_string(), value);
             return Ok(());
         }
@@ -904,6 +933,17 @@ impl Env {
             .map(|segment| segment.as_str())
             .collect::<Vec<_>>();
         write_nested_place(root_value, &rest_refs, value, place)
+    }
+
+    fn write_shared_place(&mut self, place: &str, value: Arc<Value>) -> Result<()> {
+        if place.contains('.') {
+            return Err(Diagnostic::new(format!(
+                "module constant reference cannot be assigned to nested MIR place `{place}`"
+            )));
+        }
+        self.values.remove(place);
+        self.shared_values.insert(place.to_string(), value);
+        Ok(())
     }
 
     fn place_type(&self, place: &str) -> Option<&Type> {
@@ -1595,6 +1635,72 @@ impl MirRuntime {
             call_stack: Vec::new(),
             task_ancestry: Vec::new(),
             return_type_stack: Vec::new(),
+            constant_states: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn read_module_constant(&mut self, key: &str, initializer: &str) -> Result<Arc<Value>> {
+        {
+            let states = self
+                .constant_states
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match states.get(key) {
+                Some(MirConstantState::Ready(value)) => return Ok(value.clone()),
+                Some(MirConstantState::Failed(error)) => return Err(error.clone()),
+                Some(MirConstantState::Initializing) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        format!(
+                        "module constant `{key}` was read while its module was still initializing"
+                    ),
+                    ))
+                }
+                None => {}
+            }
+        }
+        self.constant_states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(key.to_string(), MirConstantState::Initializing);
+        let function = self.functions.get(initializer).cloned().ok_or_else(|| {
+            Diagnostic::new(format!(
+                "missing MIR initializer `{initializer}` for module constant `{key}`"
+            ))
+        })?;
+        match self.call_function(&function, None, Vec::new()) {
+            Ok(outcome) => {
+                let stored = Arc::new(outcome.value);
+                self.constant_states
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(key.to_string(), MirConstantState::Ready(stored.clone()));
+                Ok(stored)
+            }
+            Err(error) => {
+                self.constant_states
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(key.to_string(), MirConstantState::Failed(error.clone()));
+                Err(error)
+            }
+        }
+    }
+
+    fn initialize_module_constants(&mut self) -> Result<()> {
+        for constant in self.module.constants.clone() {
+            let _ = self.read_module_constant(&constant.key, &constant.initializer)?;
+        }
+        Ok(())
+    }
+
+    fn cleanup_module_constants(&mut self) {
+        let mut states = self
+            .constant_states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for constant in self.module.constants.iter().rev() {
+            states.remove(&constant.key);
         }
     }
 
@@ -1819,15 +1925,23 @@ impl MirRuntime {
     /// Enters the module at `entry`, or at its ordinary entry point when
     /// `entry` is absent.
     fn run_entry(&mut self, entry: Option<&str>) -> Result<Value> {
-        let Some(entry) = entry else {
-            return self.run_main();
+        if let Err(error) = self.initialize_module_constants() {
+            self.cleanup_module_constants();
+            return Err(error);
+        }
+        let result = if let Some(entry) = entry {
+            let function = self.functions.get(entry).cloned().ok_or_else(|| {
+                Diagnostic::new(format!("no entry function named `{entry}` was found"))
+            });
+            function.and_then(|function| {
+                self.call_function(&function, None, Vec::new())
+                    .map(|outcome| outcome.value)
+            })
+        } else {
+            self.run_main()
         };
-        let Some(function) = self.functions.get(entry).cloned() else {
-            return Err(Diagnostic::new(format!(
-                "no entry function named `{entry}` was found"
-            )));
-        };
-        Ok(self.call_function(&function, None, Vec::new())?.value)
+        self.cleanup_module_constants();
+        result
     }
 
     fn run_main(&mut self) -> Result<Value> {
@@ -2472,6 +2586,15 @@ impl MirRuntime {
                         env.write_place(target, evaluated)?;
                         Ok(None)
                     }
+                    RvalueOutcome::SharedModuleConstant(evaluated) => {
+                        if let Some(target_ty) = target_ty {
+                            if !target.contains('.') {
+                                env.set_place_type(target, target_ty);
+                            }
+                        }
+                        env.write_shared_place(target, evaluated)?;
+                        Ok(None)
+                    }
                     RvalueOutcome::Return(value) => Ok(Some(value)),
                 }
             }
@@ -2807,6 +2930,9 @@ impl MirRuntime {
         match value {
             Rvalue::Use(operand) => Ok(RvalueOutcome::Value(
                 self.evaluate_owned_operand(operand, env)?,
+            )),
+            Rvalue::ModuleConstant { key, initializer } => Ok(RvalueOutcome::SharedModuleConstant(
+                self.read_module_constant(key, initializer)?,
             )),
             Rvalue::Closure {
                 function,
@@ -4576,6 +4702,7 @@ impl MirRuntime {
         let stdout = self.stdout.clone();
         let stdout_sink = self.stdout_sink.clone();
         let program_args = self.program_args.clone();
+        let constant_states = self.constant_states.clone();
         let function_for_task = function.clone();
         let function_signature = function_value.signature.clone();
         let mut task_ancestry = self.task_ancestry.clone();
@@ -4597,6 +4724,7 @@ impl MirRuntime {
                 cancellation,
                 program_args,
             );
+            runtime.constant_states = constant_states;
             runtime.task_ancestry = task_ancestry;
             if is_closure {
                 runtime

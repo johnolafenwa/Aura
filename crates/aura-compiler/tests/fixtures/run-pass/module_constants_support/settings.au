@@ -1,0 +1,5 @@
+def initialize() -> str:
+    print("dependency")
+    return "configured"
+
+public status = initialize()

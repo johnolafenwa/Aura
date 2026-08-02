@@ -29,6 +29,13 @@ pub struct Program {
     pub classes: BTreeMap<String, ClassInfo>,
     pub enums: BTreeMap<String, EnumInfo>,
     pub functions: BTreeMap<String, FunctionInfo>,
+    /// Module constants visible by their source-level local names. Imported
+    /// aliases retain the defining module and storage identity in ConstantInfo.
+    pub constants: BTreeMap<String, ConstantInfo>,
+    /// Dependency-first, import-source-order plan for eager module constant
+    /// initialization. The file loader replaces the local-only seed with the
+    /// complete transitive plan for an entry program.
+    pub constant_init_plan: Vec<ConstantInfo>,
     pub extern_functions: BTreeMap<String, ExternFunctionInfo>,
     pub opaque_handles: BTreeMap<String, OpaqueHandleInfo>,
     pub traits: BTreeMap<String, TraitInfo>,
@@ -49,6 +56,13 @@ pub struct Program {
     /// progressively scoped iterable inference.
     pub comprehensions: BTreeMap<ComprehensionId, ComprehensionInfo>,
     pub top_level_stmts: Vec<Stmt>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConstantInfo {
+    pub module_name: String,
+    pub decl: crate::ast::ConstantDecl,
+    pub ty: Type,
 }
 
 impl Program {
@@ -335,6 +349,7 @@ pub enum ImportedBinding {
     Class(ClassInfo),
     Enum(EnumInfo),
     Trait(TraitInfo),
+    Constant(ConstantInfo),
     Module(ModuleNamespace),
 }
 
@@ -345,6 +360,7 @@ pub struct ModuleNamespace {
     pub source_path: Option<String>,
     pub modules: BTreeMap<String, ModuleNamespace>,
     pub functions: BTreeMap<String, FunctionInfo>,
+    pub constants: BTreeMap<String, ConstantInfo>,
     pub extern_functions: BTreeMap<String, ExternFunctionInfo>,
     pub opaque_handles: BTreeMap<String, OpaqueHandleInfo>,
     pub classes: BTreeMap<String, ClassInfo>,
@@ -352,6 +368,7 @@ pub struct ModuleNamespace {
     pub traits: BTreeMap<String, TraitInfo>,
     pub trait_impls: Vec<TraitImplInfo>,
     pub all_functions: BTreeMap<String, FunctionInfo>,
+    pub all_constants: BTreeMap<String, ConstantInfo>,
     pub all_extern_functions: BTreeMap<String, ExternFunctionInfo>,
     pub all_opaque_handles: BTreeMap<String, OpaqueHandleInfo>,
     pub all_classes: BTreeMap<String, ClassInfo>,
@@ -1430,6 +1447,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
     let mut imported_modules = BTreeMap::new();
 
     let mut imported_functions = BTreeMap::new();
+    let mut constants = BTreeMap::new();
     let mut imported_extern_functions = BTreeMap::new();
     let mut imported_opaque_handles = BTreeMap::new();
     let mut imported_classes = BTreeMap::new();
@@ -1503,6 +1521,10 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                     register_module_namespace_types(namespace, &mut type_names, &mut type_arities);
                 }
                 imported_traits.insert(name.clone(), trait_info.clone());
+            }
+            ImportedBinding::Constant(constant) => {
+                item_names.insert(name.clone(), ("module constant", constant.decl.span));
+                constants.insert(name.clone(), constant.clone());
             }
             ImportedBinding::Module(namespace) => {
                 item_names.insert(name.clone(), ("module", crate::diag::Span::new(1, 1)));
@@ -2056,6 +2078,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         &classes,
         &enums,
         &empty_functions,
+        &constants,
         &traits,
         &empty_trait_impls,
         &imported_modules,
@@ -2479,6 +2502,102 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         });
     }
 
+    // Constants become visible strictly in declaration order. Items were
+    // collected above, so initializers may call functions and constructors
+    // regardless of textual position without exposing a later constant.
+    let declared_constant_spans = module
+        .constants
+        .iter()
+        .map(|constant| (constant.name.clone(), constant.span))
+        .collect::<BTreeMap<_, _>>();
+    for constant in &module.constants {
+        if let Some((kind, existing)) =
+            item_names.insert(constant.name.clone(), ("module constant", constant.span))
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2999",
+                constant.span,
+                format!(
+                    "module constant `{}` collides with an existing {}",
+                    constant.name, kind
+                ),
+            )
+            .with_secondary(existing, format!("the existing {kind} is declared here")));
+        }
+        let expected = constant
+            .annotation
+            .as_ref()
+            .map(|annotation| {
+                lower_type(
+                    annotation,
+                    &type_names,
+                    &type_arities,
+                    &canonical_type_names,
+                    &BTreeMap::new(),
+                )
+            })
+            .transpose()?;
+        let checker = FunctionChecker::new(
+            &module_name,
+            &type_names,
+            &type_arities,
+            &canonical_type_names,
+            &classes,
+            &enums,
+            &functions,
+            &constants,
+            &traits,
+            &trait_impls,
+            &imported_modules,
+            &context.module_registry,
+        )
+        .with_ffi(&extern_functions, &opaque_handles);
+        let mut scope = HashMap::new();
+        checker.seed_module_scope(&mut scope);
+        let inferred =
+            match checker.type_of_expr_hint(&constant.value, &mut scope, expected.as_ref()) {
+                Ok(ty) => ty,
+                Err(error) => {
+                    let blocked = declared_constant_spans.iter().find(|(name, span)| {
+                        (**span == constant.span || span.line > constant.span.line)
+                            && error.message.contains(&format!("unknown name `{name}`"))
+                    });
+                    if let Some((name, declaration)) = blocked {
+                        return Err(Diagnostic::coded_at(
+                            "AU2001",
+                            constant.value.span,
+                            format!("module constant `{name}` is used before initialization"),
+                        )
+                        .with_secondary(*declaration, format!("`{name}` is declared here")));
+                    }
+                    return Err(error);
+                }
+            };
+        if let Some(expected) = &expected {
+            if &inferred != expected {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    constant.value.span,
+                    format!(
+                        "initializer for module constant `{}` has type `{}`, expected `{}`",
+                        constant.name, inferred, expected
+                    ),
+                ));
+            }
+        }
+        checker.consume_value_expr(&constant.value, &mut scope)?;
+        constants.insert(
+            constant.name.clone(),
+            ConstantInfo {
+                module_name: module_name.clone(),
+                decl: constant.clone(),
+                ty: expected.unwrap_or(inferred),
+            },
+        );
+    }
+
+    let mut constant_init_plan = constants.values().cloned().collect::<Vec<_>>();
+    constant_init_plan.sort_by_key(|constant| (constant.decl.span.line, constant.decl.span.column));
     let mut program = Program {
         module: module.clone(),
         module_name,
@@ -2486,6 +2605,8 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         classes,
         enums,
         functions,
+        constants,
+        constant_init_plan,
         extern_functions,
         opaque_handles,
         traits,
@@ -2557,6 +2678,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 &program.classes,
                 &program.enums,
                 &program.functions,
+                &program.constants,
                 &program.traits,
                 &program.trait_impls,
                 &program.imported_modules,
@@ -2887,6 +3009,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 &program.classes,
                 &program.enums,
                 &program.functions,
+                &program.constants,
                 &program.traits,
                 &program.trait_impls,
                 &program.imported_modules,
@@ -3013,6 +3136,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         &program.classes,
         &program.enums,
         &program.functions,
+        &program.constants,
         &program.traits,
         &program.trait_impls,
         &program.imported_modules,
@@ -5350,6 +5474,7 @@ struct FunctionChecker<'a> {
     classes: &'a BTreeMap<String, ClassInfo>,
     enums: &'a BTreeMap<String, EnumInfo>,
     functions: &'a BTreeMap<String, FunctionInfo>,
+    constants: &'a BTreeMap<String, ConstantInfo>,
     extern_functions: &'a BTreeMap<String, ExternFunctionInfo>,
     opaque_handles: &'a BTreeMap<String, OpaqueHandleInfo>,
     traits: &'a BTreeMap<String, TraitInfo>,
@@ -7481,6 +7606,38 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn seed_module_constants(&self, locals: &mut HashMap<String, LocalBinding>) {
+        let constants = self
+            .current_module_namespace()
+            .map(|namespace| &namespace.all_constants)
+            .unwrap_or(self.constants);
+        for (name, constant) in constants {
+            locals.entry(name.clone()).or_insert_with(|| LocalBinding {
+                ty: constant.ty.clone(),
+                assignable: false,
+                mutable_place: false,
+                managed_resource: false,
+                passing: ReceiverKind::Borrow,
+                borrow_origin: Some(format!("module constant `{name}`")),
+                borrowed_at: Some(constant.decl.span),
+                match_borrow_place: None,
+                stale_match_borrow_place: None,
+                shared_match_scrutinee: None,
+                moved: false,
+                moved_at: None,
+                moved_fields: BTreeMap::new(),
+                frozen_places: BTreeMap::new(),
+                shared_match_places: BTreeMap::new(),
+                captured: false,
+            });
+        }
+    }
+
+    fn seed_module_scope(&self, locals: &mut HashMap<String, LocalBinding>) {
+        self.seed_imported_modules(locals);
+        self.seed_module_constants(locals);
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new(
         module_name: &'a str,
@@ -7490,6 +7647,7 @@ impl<'a> FunctionChecker<'a> {
         classes: &'a BTreeMap<String, ClassInfo>,
         enums: &'a BTreeMap<String, EnumInfo>,
         functions: &'a BTreeMap<String, FunctionInfo>,
+        constants: &'a BTreeMap<String, ConstantInfo>,
         traits: &'a BTreeMap<String, TraitInfo>,
         trait_impls: &'a [TraitImplInfo],
         imported_modules: &'a BTreeMap<String, ModuleNamespace>,
@@ -7508,6 +7666,7 @@ impl<'a> FunctionChecker<'a> {
             classes,
             enums,
             functions,
+            constants,
             extern_functions: EMPTY_EXTERN_FUNCTIONS.get_or_init(BTreeMap::new),
             opaque_handles: EMPTY_OPAQUE_HANDLES.get_or_init(BTreeMap::new),
             traits,
@@ -7548,6 +7707,7 @@ impl<'a> FunctionChecker<'a> {
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
+            constants: self.constants,
             extern_functions: self.extern_functions,
             opaque_handles: self.opaque_handles,
             traits: self.traits,
@@ -7582,6 +7742,7 @@ impl<'a> FunctionChecker<'a> {
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
+            constants: self.constants,
             extern_functions: self.extern_functions,
             opaque_handles: self.opaque_handles,
             traits: self.traits,
@@ -7612,6 +7773,7 @@ impl<'a> FunctionChecker<'a> {
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
+            constants: self.constants,
             extern_functions: self.extern_functions,
             opaque_handles: self.opaque_handles,
             traits: self.traits,
@@ -7642,6 +7804,7 @@ impl<'a> FunctionChecker<'a> {
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
+            constants: self.constants,
             extern_functions: self.extern_functions,
             opaque_handles: self.opaque_handles,
             traits: self.traits,
@@ -7842,6 +8005,22 @@ impl<'a> FunctionChecker<'a> {
         let duplication_member = self.builtin_duplication_member(&binding.ty);
         let clone_supported = duplication_member.is_some();
         if binding.passing != ReceiverKind::Value {
+            if binding
+                .borrow_origin
+                .as_deref()
+                .is_some_and(|origin| origin.starts_with("module constant `"))
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU3001",
+                    span,
+                    format!("cannot move `{name}` out of immutable module storage"),
+                )
+                .with_help(if let Some(member) = duplication_member {
+                    format!("call `.{member}()` when an independent owned value is required")
+                } else {
+                    "keep shared access or construct an independent owned value".to_string()
+                }));
+            }
             if let Some(ty) = self.implicit_borrowed_params.get(name) {
                 let mut diagnostic = Diagnostic::at(
                     span,
@@ -8086,17 +8265,26 @@ impl<'a> FunctionChecker<'a> {
                     return Ok(());
                 }
                 if let Some((module_path, function_name)) = self.qualified_module_item(expr) {
-                    if self
-                        .module_namespace(&module_path)
-                        .is_some_and(|namespace| {
-                            namespace.functions.contains_key(&function_name)
-                                || namespace.all_functions.contains_key(&function_name)
-                        })
-                    {
-                        // A module-qualified function value is an immediate
-                        // Copy code pointer, not a member borrowed from a
-                        // runtime module object.
-                        return Ok(());
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if namespace.constants.contains_key(&function_name) {
+                            let rendered = format!("{module_path}.{function_name}");
+                            return Err(Diagnostic::coded_at(
+                                "AU3001",
+                                expr.span,
+                                format!("cannot move `{rendered}` out of immutable module storage"),
+                            )
+                            .with_help(
+                                "keep shared access or construct an independent owned value",
+                            ));
+                        }
+                        if namespace.functions.contains_key(&function_name)
+                            || namespace.all_functions.contains_key(&function_name)
+                        {
+                            // A module-qualified function value is an immediate
+                            // Copy code pointer, not a member borrowed from a
+                            // runtime module object.
+                            return Ok(());
+                        }
                     }
                 }
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
@@ -8523,6 +8711,7 @@ impl<'a> FunctionChecker<'a> {
                 &method_info.signature.param_passings,
             );
         let mut locals = HashMap::new();
+        checker.seed_module_scope(&mut locals);
         checker.seed_imported_modules(&mut locals);
         if let Some(receiver_kind) = method.receiver {
             locals.insert(
@@ -8622,6 +8811,7 @@ impl<'a> FunctionChecker<'a> {
             "function",
         )?;
         let mut locals = HashMap::new();
+        checker.seed_module_scope(&mut locals);
         checker.seed_imported_modules(&mut locals);
         for ((param, ty), passing) in function
             .params
@@ -8722,6 +8912,7 @@ impl<'a> FunctionChecker<'a> {
             "method",
         )?;
         let mut locals = HashMap::new();
+        checker.seed_module_scope(&mut locals);
         checker.seed_imported_modules(&mut locals);
         if let Some(receiver_kind) = method.receiver {
             locals.insert(
@@ -8893,6 +9084,7 @@ impl<'a> FunctionChecker<'a> {
             "impl method",
         )?;
         let mut locals = HashMap::new();
+        checker.seed_module_scope(&mut locals);
         checker.seed_imported_modules(&mut locals);
         if let Some(receiver_kind) = method.receiver {
             locals.insert(
@@ -8958,7 +9150,7 @@ impl<'a> FunctionChecker<'a> {
 
     fn check_top_level(&self, body: &[Stmt]) -> Result<()> {
         let mut locals = HashMap::new();
-        self.seed_imported_modules(&mut locals);
+        self.seed_module_scope(&mut locals);
         self.check_block(body, &mut locals, &Type::Unit, 0, false)?;
         Ok(())
     }
@@ -10336,6 +10528,20 @@ impl<'a> FunctionChecker<'a> {
                 locals,
             )?;
             if !existing.assignable && !existing.mutable_place {
+                if existing
+                    .borrow_origin
+                    .as_deref()
+                    .is_some_and(|origin| origin.starts_with("module constant `"))
+                {
+                    return Err(Diagnostic::coded_at(
+                        "AU3003",
+                        assign.span,
+                        format!("module constant `{binding_name}` is immutable"),
+                    )
+                    .with_help(
+                        "put mutable state in a local value owned by `main` or another explicit owner",
+                    ));
+                }
                 if existing.borrow_origin.is_some() {
                     return Err(Diagnostic::coded_at(
                         "AU3003",
@@ -21066,6 +21272,9 @@ impl<'a> FunctionChecker<'a> {
                 if let Some(child) = namespace.modules.get(field) {
                     return Ok(Type::Module(child.path.clone()));
                 }
+                if let Some(constant) = namespace.constants.get(field) {
+                    return Ok(constant.ty.clone());
+                }
                 if namespace.functions.contains_key(field) {
                     return Err(Diagnostic::at(
                         span,
@@ -22433,6 +22642,25 @@ impl<'a> FunctionChecker<'a> {
         }
         if self.is_shared_self_place(object, locals) {
             return Err(self.shared_self_mutation_diagnostic(span, locals));
+        }
+        if let Some(place) = self.borrow_call_place(object) {
+            if locals
+                .get(&place.root)
+                .and_then(|binding| binding.borrow_origin.as_deref())
+                .is_some_and(|origin| origin.starts_with("module constant `"))
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU3003",
+                    span,
+                    format!(
+                        "module constant `{}` cannot provide a mutable receiver for method `{method_name}`",
+                        place.root
+                    ),
+                )
+                .with_help(
+                    "put mutable state in a local value owned by `main` or another explicit owner",
+                ));
+            }
         }
         Err(Diagnostic::coded_at(
             "AU3003",

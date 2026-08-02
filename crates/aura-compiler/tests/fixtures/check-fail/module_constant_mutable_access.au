@@ -1,0 +1,4 @@
+values: list[int32] = [1, 2, 3]
+
+def main():
+    values.append(4)

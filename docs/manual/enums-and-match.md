@@ -228,13 +228,14 @@ Use the qualified form in public examples and reference material when ambiguity 
 bindings:
 
 ```python
-result: Result[str, str] = Result.Ok("hello")
+def main():
+    result: Result[str, str] = Result.Ok("hello")
 
-match own result:
-    case Result.Ok(message):
-        print(message)
-    case Result.Err(error):
-        print(error)
+    match own result:
+        case Result.Ok(message):
+            print(message)
+        case Result.Err(error):
+            print(error)
 ```
 
 Use bare `match` to retain the scrutinee and expose shared non-copy payload

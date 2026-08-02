@@ -187,7 +187,10 @@ There is no semicolon, assignment expression, unary plus, or lambda arrow.
 ```ebnf
 module = { module-element }, EOF ;
 
-module-element = import-declaration | item | statement ;
+module-element = import-declaration | module-constant | item | statement ;
+
+module-constant
+    = [ "public" ], IDENT, [ ":", type ], "=", expression, NEWLINE ;
 
 import-declaration
     = "import", identifier-path, [ "as", import-alias ], NEWLINE
@@ -201,7 +204,13 @@ identifier-path = identifier, { ".", identifier } ;
 identifier      = IDENT | "from" ;
 ```
 
-Imports, items, and executable top-level statements may be interleaved syntactically. The compiled module represents imports, items, and top-level statements as separate categories; programs MUST NOT depend on their original cross-category interleaving as an execution order.
+Imports, module constants, items, and executable top-level statements may be
+interleaved syntactically. Imports resolve before initializer checking. Module
+constants initialize after their dependencies and in declaration source order.
+Executable entry statements run only after constant initialization completes.
+The compiled module represents these as separate categories; programs MUST use
+the defined category ordering and MUST NOT infer another execution order from
+cross-category interleaving.
 
 An `as` clause binds the complete imported module or declaration under the
 written local alias. A from-import may mix direct and aliased names in one

@@ -558,6 +558,11 @@ printed-output order unless they explicitly coordinate that order.
 
 ### `modules/`
 
+- `constants.au`
+  - inferred, annotated, public, and source-ordered module constants beside a local `main`
+  - prints:
+    - `planner`
+    - `5`
 - `simple_import.au`
   - local file modules with `import ...`, `from ... import ...`, and `public` module boundaries
   - prints:

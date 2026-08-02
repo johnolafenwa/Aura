@@ -12,6 +12,11 @@ fn empty_canonical_type_names() -> &'static BTreeMap<String, String> {
     NAMES.get_or_init(BTreeMap::new)
 }
 
+fn empty_constants() -> &'static BTreeMap<String, ConstantInfo> {
+    static EMPTY: std::sync::OnceLock<BTreeMap<String, ConstantInfo>> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(BTreeMap::new)
+}
+
 #[test]
 fn assertion_introspection_dispatch_requires_two_shared_custom_operands() {
     assert!(assertion_dispatch_is_non_consuming(None));
@@ -142,6 +147,8 @@ fn public_ffi_handle_namespace(module_name: &str) -> ModuleNamespace {
     let mut handle = remote.opaque_handles["Handle"].clone();
     handle.module_name = module_name.to_string();
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: module_name.to_string(),
         path: module_name.to_string(),
         source_path: None,
@@ -172,6 +179,8 @@ fn public_ffi_function_namespace(module_name: &str) -> ModuleNamespace {
     let mut scalar = remote.extern_functions["scalar"].clone();
     scalar.module_name = module_name.to_string();
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: module_name.to_string(),
         path: module_name.to_string(),
         source_path: None,
@@ -1998,6 +2007,8 @@ fn ffi_extern_metadata_supports_from_and_qualified_import_calls() {
     let mut scalar = remote.extern_functions["scalar"].clone();
     scalar.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "ffi_api".to_string(),
         path: "ffi_api".to_string(),
         source_path: None,
@@ -2064,6 +2075,8 @@ fn ffi_qualified_imports_do_not_expose_private_extern_declarations() {
     let mut hidden = remote.extern_functions["hidden"].clone();
     hidden.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "ffi_api".to_string(),
         path: "ffi_api".to_string(),
         source_path: None,
@@ -2116,6 +2129,8 @@ fn ffi_qualified_imports_do_not_expose_private_opaque_handles() {
     let mut hidden = remote.opaque_handles["Hidden"].clone();
     hidden.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "ffi_api".to_string(),
         path: "ffi_api".to_string(),
         source_path: None,
@@ -6784,6 +6799,8 @@ fn enum_info(name: &str, payload: Option<Type>) -> EnumInfo {
 
 fn namespace(path: &str) -> ModuleNamespace {
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: path.rsplit('.').next().unwrap_or(path).to_string(),
         path: path.to_string(),
         source_path: None,
@@ -6827,6 +6844,7 @@ fn checker<'a>(
         classes,
         enums,
         functions,
+        empty_constants(),
         traits,
         trait_impls,
         imported_modules,
@@ -7065,6 +7083,7 @@ fn checker_helper_paths_cover_explicit_type_args_and_pattern_unification_edges()
         &program.classes,
         &program.enums,
         &program.functions,
+        &program.constants,
         &program.traits,
         &program.trait_impls,
         &program.imported_modules,
@@ -7313,6 +7332,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         &program.classes,
         &program.enums,
         &program.functions,
+        &program.constants,
         &traits,
         &trait_impls,
         &program.imported_modules,
@@ -14827,6 +14847,7 @@ fn checker_loop_move_helper_reports_full_and_partial_repeated_moves() {
         &program.classes,
         &program.enums,
         &program.functions,
+        &program.constants,
         &program.traits,
         &program.trait_impls,
         &program.imported_modules,
@@ -18853,6 +18874,8 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
     let remote_enum = enum_info("RemoteStatus", Some(Type::named("int32")));
     let remote_trait = trait_info("RemoteShow", Vec::new());
     let namespace = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "tools".to_string(),
         path: "pkg.tools".to_string(),
         source_path: None,
@@ -18903,6 +18926,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
     };
     let program = check_with_context(
         Module {
+            constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Function(function_decl("main"))],
             top_level_stmts: Vec::new(),
@@ -18916,6 +18940,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_class = check_with_context(
         Module {
+            constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Class(class_decl("RemoteBox", false, Vec::new()))],
             top_level_stmts: Vec::new(),
@@ -18937,6 +18962,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_enum = check_with_context(
         Module {
+            constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Enum(EnumDecl {
                 public: true,
@@ -18965,6 +18991,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_function = check_with_context(
         Module {
+            constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Function(function_decl("remote_fn"))],
             top_level_stmts: Vec::new(),
@@ -22979,6 +23006,8 @@ fn imported_module_functions_are_first_class_values() {
         type_param_bounds: BTreeMap::new(),
     };
     let namespace = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "tools".to_string(),
         path: "pkg.tools".to_string(),
         source_path: None,
@@ -23028,6 +23057,8 @@ fn nested_imported_module_functions_are_first_class_values() {
         type_param_bounds: BTreeMap::new(),
     };
     let helpers = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "helpers".to_string(),
         path: "function_value_imported_support.helpers".to_string(),
         source_path: None,
@@ -23050,6 +23081,8 @@ fn nested_imported_module_functions_are_first_class_values() {
         comprehensions: BTreeMap::new(),
     };
     let support = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "function_value_imported_support".to_string(),
         path: "function_value_imported_support".to_string(),
         source_path: None,
@@ -23501,6 +23534,8 @@ fn imported_generic_function_values_specialize_as_values_and_task_targets() {
         type_param_bounds: BTreeMap::new(),
     };
     let namespace = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "tools".to_string(),
         path: "pkg.tools".to_string(),
         source_path: None,

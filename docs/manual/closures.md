@@ -130,11 +130,12 @@ outer source afterward reports `AU3001`. Clone before creation when both
 owners are required:
 
 ```aura
-name = "Aura"
-kept = name.clone()
-length: def() -> int64 = lambda: kept.len()
-print(name)
-print(length())
+def main():
+    name = "Aura"
+    kept = name.clone()
+    length: def() -> int64 = lambda: kept.len()
+    print(name)
+    print(length())
 ```
 
 A bare parameter of an enclosing function is shared capability, not owned

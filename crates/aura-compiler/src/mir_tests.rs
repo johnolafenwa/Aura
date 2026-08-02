@@ -3633,6 +3633,8 @@ fn variant_pattern(
 
 fn namespace_from_program(name: &str, path: &str, program: &Program) -> ModuleNamespace {
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: name.to_string(),
         path: path.to_string(),
         source_path: None,
@@ -3713,6 +3715,8 @@ def generic_helper[T](value: own T) -> T:
     reexport.classes.clear();
     reexport.enums.clear();
     let mut pkg = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "pkg".to_string(),
         path: "pkg".to_string(),
         source_path: None,
@@ -3743,6 +3747,8 @@ def generic_helper[T](value: own T) -> T:
         .insert("reexport".to_string(), reexport.clone());
 
     let mut current = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "main".to_string(),
         path: "pkg.main".to_string(),
         source_path: None,
@@ -4053,6 +4059,8 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         Some("RemoteTrait")
     );
     let mut imported_only_root = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "pkg".to_string(),
         path: "pkg".to_string(),
         source_path: None,

@@ -46,9 +46,10 @@ The binding's type is its annotation when present, otherwise the initializer typ
 `mut` makes a newly introduced binding assignable and usable as a mutable place:
 
 ```python
-mut count: int32 = 0
-count = 1
-count += 2
+def main():
+    mut count: int32 = 0
+    count = 1
+    count += 2
 ```
 
 Reassignment requires an existing mutable binding and preserves its type. `mut` does not mean dynamically typed, and it does not make values globally mutable through aliases.
@@ -56,8 +57,9 @@ Reassignment requires an existing mutable binding and preserves its type. `mut` 
 `from` is a contextual identifier and is legal as a binding and assignment target when the token sequence is not a from-import:
 
 ```python
-mut from = "cache"
-from = "network"
+def main():
+    mut from = "cache"
+    from = "network"
 ```
 
 ### Assignment Targets
@@ -202,9 +204,10 @@ Conditions are evaluated in source order until one is `true`. Only the selected 
 A `while` statement evaluates its condition before each iteration:
 
 ```python
-mut attempts = 0
-while attempts < 3:
-    attempts += 1
+def main():
+    mut attempts = 0
+    while attempts < 3:
+        attempts += 1
 ```
 
 The condition must have type `bool`. A false first condition executes the body zero times. Aura 0.2 has no loop `else` clause.
@@ -409,7 +412,7 @@ def placeholder():
 
 It must appear on its own logical line. It is used for intentionally empty function, method, class, trait, implementation, or control-flow suites. An enum body still requires at least one variant and does not use `pass` as a variant.
 
-## Module-Level Imports And Execution
+## Module Constants, Imports, And Execution
 
 Imports are module elements rather than executable statements. Aura accepts:
 
@@ -432,14 +435,30 @@ relative-dot imports, parenthesized import lists, and trailing import commas
 are not accepted. Import resolution and visibility are defined in
 [Packages](/manual/packages#imports).
 
-An entry module may contain executable top-level statements:
+An immutable binding at module level is a module constant:
 
-```python
+```aura
 message = "hello"
-print(message)
+public retry_limit: int64 = 3
+
+def main():
+    print(message)
 ```
 
-Those statements execute in their stored source order. Alternatively, the entry module may define a local `main`. It cannot combine executable top-level statements with a local `main`. Imported module top-level statements do not execute as import side effects in Aura 0.2.
+The constant initializer is required. `mut` module storage and later
+assignment are rejected. Constants may coexist with a local `main`, and
+reachable dependency constants initialize before entry execution. The full
+scope, order, visibility, and ownership rules are defined in
+[Names And Scopes](/manual/names-and-scopes#module-constants).
+
+An entry module may also contain executable top-level statements:
+
+    print(message)
+
+Those statements execute in their stored source order after reachable module
+constants are ready. An entry module with executable top-level statements
+cannot define a local `main`. Imported module top-level statements do not
+execute as import side effects.
 
 The accepted `main` signatures and process exit behavior are defined in [Functions](/manual/functions#main) and [Execution Model](/manual/execution-model#entry-module-execution).
 
@@ -457,6 +476,7 @@ Parsing a statement shape does not make it legal in every context:
 - match arms must satisfy compatibility, reachability, and exhaustiveness rules.
 - `with` requires a supported resource and preserves its cleanup capability.
 - items cannot appear inside suites.
+- module constants are immutable and cannot use `mut` or reassignment.
 - an entry module cannot mix executable top-level statements with local `main`.
 
 The complete checker rules are normative in [Static Semantics](/manual/static-semantics), and ownership effects are normative in [Ownership And Borrowing](/manual/ownership-and-borrowing).

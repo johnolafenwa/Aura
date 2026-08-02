@@ -1066,6 +1066,53 @@ fn module_loader_package_qualification_ignores_paths_outside_graph_sources() {
 }
 
 #[test]
+fn module_constant_plan_is_dependency_first_import_ordered_and_diamond_safe() {
+    let temp = TempDir::new("aura-module-constant-plan");
+    let main_path = temp.path().join("main.au");
+    fs::write(temp.path().join("shared.au"), "public marker = 1\n").expect("write shared module");
+    fs::write(
+        temp.path().join("beta.au"),
+        "import shared\npublic marker = shared.marker + 1\n",
+    )
+    .expect("write beta module");
+    fs::write(
+        temp.path().join("alpha.au"),
+        "import shared\npublic marker = shared.marker + 2\n",
+    )
+    .expect("write alpha module");
+    fs::write(
+        &main_path,
+        "import beta\nimport alpha\nroot = beta.marker + alpha.marker\n\ndef main():\n    print(root)\n",
+    )
+    .expect("write entry module");
+
+    let program = check_path(&main_path).expect("constant modules should check");
+    let plan = program
+        .constant_init_plan
+        .iter()
+        .map(|constant| format!("{}::{}", constant.module_name, constant.decl.name))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        plan,
+        [
+            "shared::marker",
+            "beta::marker",
+            "alpha::marker",
+            "main::root",
+        ]
+    );
+
+    let mir = lower_path_to_mir(&main_path).expect("constant modules should lower");
+    assert_eq!(
+        mir.constants
+            .iter()
+            .map(|constant| constant.key.as_str())
+            .collect::<Vec<_>>(),
+        plan
+    );
+}
+
+#[test]
 fn imported_rng_clone_obligations_and_qualified_wrapper_identity_survive_namespaces() {
     let temp = TempDir::new("aura-rng-clone-obligation-imports");
     let utils_path = temp.path().join("utils.au");

@@ -363,6 +363,7 @@ fn heterogeneous_match_arm_mutable_locals_keep_distinct_direct_slots() {
 fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
     let tuple_type = Type::Tuple(vec![Type::named("int64"), Type::named("str")]);
     let module = |instructions, local_types| crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -1215,6 +1216,7 @@ fn handbuilt_mir_safepoint_validates_and_emits_for_a_sequential_module() {
         .expect("a hand-built MIR safepoint is a valid backend instruction");
 
     let module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![function],
         classes: Vec::new(),
         trait_impls: Vec::new(),
@@ -1986,6 +1988,7 @@ fn module_with_main_call(call: Rvalue) -> crate::mir::MirModule {
 
 fn module_with_main_call_result_type(call: Rvalue, result_ty: Type) -> crate::mir::MirModule {
     crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -2050,6 +2053,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
     let handle_ty = Type::named("ProcessHandle");
     let bytes_ty = Type::Named("list".to_string(), vec![Type::named("uint8")]);
     let module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -2267,6 +2271,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
 
     let bytes_ty = Type::Named("list".to_string(), vec![Type::named("uint8")]);
     let missing_mut_writeback = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -2455,6 +2460,7 @@ fn module_with_main_member_call_result_type(
     args: Vec<MirArg>,
 ) -> crate::mir::MirModule {
     crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -2741,6 +2747,7 @@ fn direct_backend_internal_collection_member_surface_compiles() {
 #[test]
 fn direct_backend_scalar_bool_range_and_coercion_paths_compile() {
     let module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -5831,6 +5838,7 @@ def main() -> int32:
 fn direct_backend_wait_helpers_cover_unknown_task_payload_fallback() {
     let string_vec = Type::Named("list".to_string(), vec![Type::named("str")]);
     let wait_all_unknown = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -5888,6 +5896,7 @@ fn direct_backend_wait_helpers_cover_unknown_task_payload_fallback() {
 #[test]
 fn direct_backend_entry_thunk_handles_unit_parameters() {
     let unit_param_main = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -6566,6 +6575,7 @@ fn native_codegen_function_value_signature_errors_are_precise() {
 
     fn module(signature: Type, args: Vec<MirArg>) -> crate::mir::MirModule {
         crate::mir::MirModule {
+            constants: Vec::new(),
             functions: vec![
                 MirFunction {
                     name: "worker".to_string(),
@@ -7262,6 +7272,7 @@ def main() -> int32:
 #[test]
 fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths() {
     let wildcard_match = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -7318,6 +7329,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
         .is_empty());
 
     let opaque_branch = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -7359,6 +7371,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
         .is_empty());
 
     let scalar_match = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -7395,6 +7408,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
     assert!(scalar_error.contains("expected enum matches to use opaque scrutinees"));
 
     let module_match = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -7440,6 +7454,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
 #[test]
 fn direct_backend_for_range_and_spawn_error_surface_reports_expected_diagnostics() {
     let invalid_for_range = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -8495,6 +8510,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     assert!(empty_place_error.contains("does not know local"));
 
     let stray_pop_cleanup_module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -8538,6 +8554,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         methods: Vec::new(),
     };
     let missing_field_module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -8580,6 +8597,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     assert!(non_class_construct_error.contains("could not construct non-class type `int32`"));
 
     let plain_cast_target_module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -8616,6 +8634,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         .contains("direct backend only supports numeric casts, found target `Pair`"));
 
     let plain_cast_source_module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -8747,6 +8766,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     }
 
     let missing_field_access_module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -8805,6 +8825,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
 #[test]
 fn native_codegen_reports_invalid_non_boolean_branch_conditions() {
     let invalid_module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -8856,6 +8877,7 @@ fn native_codegen_reports_invalid_non_boolean_branch_conditions() {
 #[test]
 fn native_codegen_rejects_try_between_non_result_types() {
     let invalid_module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -11426,6 +11448,7 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
     assert!(!object.is_empty());
 
     let invalid_module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -12661,6 +12684,7 @@ fn validate_function_rejects_unreachable_terminators_for_direct_backend() {
 #[test]
 fn native_codegen_constructor_initializes_runtime_function_surface() {
     let module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -12782,6 +12806,7 @@ fn cleanup_test_function(local_name: &str, ty: Type, place: &str) -> MirFunction
 
 fn cleanup_test_module(functions: Vec<MirFunction>) -> crate::mir::MirModule {
     crate::mir::MirModule {
+        constants: Vec::new(),
         functions,
         classes: Vec::new(),
         trait_impls: Vec::new(),
@@ -12865,6 +12890,7 @@ fn native_codegen_cleanup_thunks_cover_scalar_plain_opaque_and_metadata_errors()
 
     let plain_function = cleanup_test_function("resource", Type::named("Plain"), "resource");
     let plain_module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![plain_function.clone()],
         classes: vec![crate::mir::MirClass {
             name: "Plain".to_string(),
@@ -12898,6 +12924,7 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
         cleanup_test_function("resource", Type::named("Resource"), "resource");
     let resource_close = close_function("Resource");
     let plain_close_module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![plain_close_function.clone(), resource_close],
         classes: vec![crate::mir::MirClass {
             name: "Resource".to_string(),
@@ -12933,6 +12960,7 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
     let opaque_close_function = cleanup_test_function("managed", Type::named("Managed"), "managed");
     let managed_close = close_function("Managed");
     let opaque_close_module = crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![opaque_close_function.clone(), managed_close],
         classes: vec![crate::mir::MirClass {
             name: "Managed".to_string(),
@@ -13055,6 +13083,7 @@ fn direct_introspected_assertions_reference_the_detailed_failure_helper() {
 #[test]
 fn direct_validation_accepts_assert_fail_operands_and_rejects_unknown_places() {
     let make_module = |message, captures| crate::mir::MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),

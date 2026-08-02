@@ -1,10 +1,11 @@
-mut total: int64 = 0
+def main():
+    mut total: int64 = 0
 
-for value in range(6):
-    if value == 3:
-        continue
-    if value == 5:
-        break
-    total += value
+    for value in range(6):
+        if value == 3:
+            continue
+        if value == 5:
+            break
+        total += value
 
-print(total)
+    print(total)

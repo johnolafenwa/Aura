@@ -266,7 +266,7 @@
       "stderr": ""
     },
     "docs/manual/closures.md#aura-3": {
-      "sha256": "e4541b34b53f6529f48c1151f30b08001f05a575e376993edb7e4f62bd7aaab2",
+      "sha256": "a114f89b8c82ea558ed71a568e035ba0158511b9d3b82596cfdb3b11cd32c396",
       "mode": "run",
       "stdout": "Aura\n4\n",
       "stderr": ""
@@ -484,7 +484,7 @@
       "reason": "Short-pattern fragment: result is an input supplied by the surrounding example."
     },
     "docs/manual/enums-and-match.md#aura-11": {
-      "sha256": "977bbb278b1c4896e82af332070d944009634ba5f512a90664f7eb5f34cf2eca",
+      "sha256": "ddbda25d8204ae6bd5b82611d899ceeb065562892c1235be179d2eb81ec58135",
       "mode": "run",
       "stdout": "hello\n",
       "stderr": ""
@@ -1008,7 +1008,7 @@
       "reason": "Normative match-expression EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-2": {
-      "sha256": "ad1aada604cced01c5bd4de6730e3a907560a26abb7fbbe89df235d6e0e22134",
+      "sha256": "af11a160ea7c4a9ee1b7b69036aa71090a129dc063b675aabd8032793dd546d5",
       "mode": "illustrative",
       "reason": "Normative module-and-import EBNF fragment interpreted by the grammar prose, not Aura source."
     },
@@ -1086,7 +1086,7 @@
       "stderr": ""
     },
     "docs/manual/lexical-structure.md#aura-1": {
-      "sha256": "c2263521242d287a62978de74d0f6e11a6488fc54954675c42705436974f6ae4",
+      "sha256": "d8fbfa3fc77b1adeb1b8e29eadc4ac35ab211cd284e317cc64f7e2e7e3fc0b02",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1205,7 +1205,7 @@
       "reason": "From-import alias example: it requires the multi-file tools.text module tree described by the surrounding page."
     },
     "docs/manual/names-and-scopes.md#aura-5": {
-      "sha256": "1713ed781b5bd377b0e4d1df2df52e4b46973f9f9fa043b42717a09bbbe38d83",
+      "sha256": "2a627748c0382d4c030dc38e5786fd4e5b578806264bd10d7705a2b481201adf",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1275,7 +1275,7 @@
       "stderr": ""
     },
     "docs/manual/ownership-and-borrowing.md#aura-2": {
-      "sha256": "b5ce2b004dada707e2577c394d653b7ae0f551d1aa049ff2739340e54abcff83",
+      "sha256": "d44a1df5a412671f304e6a20a6306342b210fe4749f567574bb7110e39110205",
       "mode": "run",
       "stdout": "aura\n",
       "stderr": ""
@@ -1287,19 +1287,19 @@
       "stderr": ""
     },
     "docs/manual/ownership-and-borrowing.md#aura-4": {
-      "sha256": "dcfa6f74edc9c5c11731ef22e9cabd4eed73978b4521de74c23cf0947026b8e9",
+      "sha256": "f899cbf11d9cfbfa383f1d94a61617890416f7b71633461f13479c929b8252ff",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/ownership-and-borrowing.md#aura-5": {
-      "sha256": "1bcacfdcbf3dc282a71d99921fb97a0a13e48b42d7e072262c1284eaabd30f6d",
+      "sha256": "7332e94cc5ddb6fb6224c813b5879b54752b92415b52cb7778dd9f05366fbce2",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/ownership-and-borrowing.md#aura-6": {
-      "sha256": "6809a106989459d5825943c95bdf5b7ad827df9fe870571266984486c62ca99c",
+      "sha256": "d73b600a78dc0a1e37e3678bbe51bf197ad89edb3fb47ca20b4582134d4aeb64",
       "mode": "run",
       "stdout": "1\nGrace\n",
       "stderr": ""
@@ -1435,7 +1435,7 @@
       "reason": "Conditional-chain fragment: value is an input supplied by the surrounding example."
     },
     "docs/manual/statements.md#aura-12": {
-      "sha256": "52093c57956a970ce1b93c43d493d90f01b8a04da634eca7be96b275340c29f2",
+      "sha256": "40318713f9ede6c89185afd0c13bba2111769e7ae81709a68b354a30edd6cab9",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1490,19 +1490,19 @@
       "reason": "Module-import example: it requires the multi-file util.math module tree described by the surrounding page."
     },
     "docs/manual/statements.md#aura-21": {
-      "sha256": "37edb6ce3a2558aca196dd0cdca5a6e3e02721488a7529ae5b29c7d622a0b57d",
+      "sha256": "c04397028c36cdadf9a6c5b679382799fa2568dc9208907bea8c51fa028d3da7",
       "mode": "run",
       "stdout": "hello\n",
       "stderr": ""
     },
     "docs/manual/statements.md#aura-3": {
-      "sha256": "2ac9a639477819d57495784ad4d72fedec8c93011b3e19e83748d46e31b5ae1d",
+      "sha256": "70a3948498098c6d64b0a709fc52be94de774c8506386101e7d310dfbbc92ebd",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/statements.md#aura-4": {
-      "sha256": "a7086a57f0ffe2edf1e18214528f548498f83bee282d90ab06ebc52b22406112",
+      "sha256": "f30b00710c43417c453e5421320a35d40d624e1d6303c38b24700f916e522155",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1539,7 +1539,7 @@
       "reason": "Exact integer-division diagnostic-message excerpt, not Aura source."
     },
     "docs/manual/tuples.md#aura-1": {
-      "sha256": "9c96231d22ff3b4ae72894e75ab3449e148f4034be8a9454d88696bf6f21d250",
+      "sha256": "d6bd7f2804db039c85a3b48849e06c3832294158d341279d32ac89ccef9d15a2",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""

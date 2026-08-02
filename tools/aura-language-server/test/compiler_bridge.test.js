@@ -177,6 +177,15 @@ test("compiler bridge helper conversions cover diagnostics, symbols, and definit
         children: []
       },
       {
+        name: "answer",
+        kind: "constant",
+        detail: "answer: int64",
+        line: 9,
+        start_character: 0,
+        end_character: 6,
+        children: []
+      },
+      {
         name: "mystery",
         kind: "unknown",
         detail: undefined,
@@ -194,7 +203,8 @@ test("compiler bridge helper conversions cover diagnostics, symbols, and definit
   assert.equal(symbols[3].kind, 10);
   assert.equal(symbols[3].children[0].kind, 22);
   assert.equal(symbols[4].kind, 11);
-  assert.equal(symbols[5].kind, 13);
+  assert.equal(symbols[5].kind, 14);
+  assert.equal(symbols[6].kind, 13);
 
   assert.equal(
     findOccurrence(
@@ -2831,6 +2841,64 @@ test("compiler bridge resolves local module imports for analysis and completions
 
   assert.ok(completions);
   assert.ok(completions.some((item) => item.name === "double"));
+});
+
+test("compiler bridge exposes module constants through symbols hover definitions and completions", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-module-constants-"));
+  try {
+    const settingsPath = path.join(tempRoot, "settings.au");
+    fs.writeFileSync(settingsPath, "public service_name: str = \"planner\"\n");
+    const canonicalSettingsPath = fs.realpathSync(settingsPath);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const source = [
+      "import settings",
+      "from settings import service_name as configured_name",
+      "local_name = configured_name",
+      "",
+      "def main():",
+      "    print(settings.service_name)",
+      "    print(local_name)"
+    ].join("\n");
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 0);
+    assert.ok(
+      analysis.symbols.some(
+        (symbol) => symbol.name === "local_name" && symbol.kind === "constant"
+      )
+    );
+    const importedUse = analysis.occurrences.find(
+      (occurrence) =>
+        occurrence.line === 5 && occurrence.hover.includes("module constant service_name")
+    );
+    assert.ok(importedUse, JSON.stringify(analysis.occurrences, null, 2));
+    assert.equal(importedUse.definition?.file_path, canonicalSettingsPath);
+
+    const globalCompletions = await completeWithCompiler(mainUri, source, 4, 0, null);
+    assert.ok(
+      globalCompletions.some(
+        (completion) => completion.name === "local_name" && completion.kind === "constant"
+      )
+    );
+    const memberSource = source.replace("    print(settings.service_name)", "    settings.");
+    const memberCompletions = await completeWithCompiler(
+      mainUri,
+      memberSource,
+      5,
+      memberSource.split("\n")[5].length,
+      "."
+    );
+    assert.ok(
+      memberCompletions.some(
+        (completion) => completion.name === "service_name" && completion.kind === "constant"
+      )
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("compiler bridge preserves import aliases in hover, definitions, and completions", async () => {

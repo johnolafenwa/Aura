@@ -1,0 +1,13 @@
+import module_constants_support.settings as settings
+from module_constants_support.settings import status as imported_status
+
+def announce_entry() -> str:
+    print("entry")
+    return "ready"
+
+entry_status = announce_entry()
+
+def main():
+    print(settings.status)
+    print(imported_status)
+    print(entry_status)

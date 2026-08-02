@@ -1,0 +1,5 @@
+first = "planner"
+second = first
+
+def main():
+    pass

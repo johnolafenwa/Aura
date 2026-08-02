@@ -399,7 +399,16 @@ pub struct MirModule {
     pub functions: Vec<MirFunction>,
     pub classes: Vec<MirClass>,
     pub trait_impls: Vec<MirTraitImpl>,
+    #[serde(default)]
+    pub constants: Vec<MirConstant>,
     pub top_level: Option<MirFunction>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MirConstant {
+    pub key: String,
+    pub initializer: String,
+    pub ty: Type,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -509,6 +518,12 @@ pub enum Instruction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Rvalue {
     Use(Operand),
+    /// Read a once-initialized immutable module value. The initializer thunk
+    /// is shared by MIR and direct execution and guarded against re-entry.
+    ModuleConstant {
+        key: String,
+        initializer: String,
+    },
     /// Constructs a first-class closure around an ordinary synthesized MIR
     /// function. Captures are evaluated exactly once, in source order, and
     /// become hidden leading arguments whenever the function is invoked.
@@ -854,6 +869,22 @@ pub fn lower(program: &Program) -> MirModule {
         &mut seen_trait_impls,
     );
 
+    let mut constants = Vec::new();
+    let mut seen_constants = BTreeSet::new();
+    for constant in &program.constant_init_plan {
+        let key = format!("{}::{}", constant.module_name, constant.decl.name);
+        if !seen_constants.insert(key.clone()) {
+            continue;
+        }
+        let initializer = format!("__aura_const_init::{key}");
+        functions.extend(lower_constant_initializer(program, &initializer, constant));
+        constants.push(MirConstant {
+            key,
+            initializer,
+            ty: constant.ty.clone(),
+        });
+    }
+
     let top_level = if program.top_level_stmts.is_empty() {
         None
     } else {
@@ -864,11 +895,37 @@ pub fn lower(program: &Program) -> MirModule {
     };
 
     MirModule {
+        constants,
         functions,
         classes,
         trait_impls,
         top_level,
     }
+}
+
+fn lower_constant_initializer(
+    program: &Program,
+    name: &str,
+    constant: &crate::sema::ConstantInfo,
+) -> Vec<MirFunction> {
+    let mut lowerer = Lowerer::new(
+        program,
+        name,
+        &constant.module_name,
+        constant.ty.clone(),
+        BTreeMap::new(),
+    )
+    .with_metadata_owner(ClosureOwner::TopLevel);
+    let value = lowerer.lower_expr_for_owned_value(&constant.decl.value, Some(&constant.ty));
+    lowerer.terminate(Terminator::Return(value));
+    lowerer.finish_with_generated(MirFunctionSpec {
+        name: name.to_string(),
+        span: constant.decl.span,
+        receiver: None,
+        params: Vec::new(),
+        return_type: constant.ty.clone(),
+        default_return: default_return_operand(&constant.ty),
+    })
 }
 
 fn push_imported_module_functions(
@@ -1118,8 +1175,8 @@ fn push_imported_module_functions_from_namespace(
     functions: &mut Vec<MirFunction>,
     seen: &mut BTreeSet<String>,
 ) {
-    for (name, function) in &namespace.functions {
-        let qualified_name = imported_module_function_name(&namespace.path, name);
+    for (name, function) in &namespace.all_functions {
+        let qualified_name = imported_module_function_name(&function.module_name, name);
         if qualified_name == "control::retry" && !program_imports_control_retry(program) {
             // The builtin registry is checker-wide, but `control.retry` owns a
             // generated Aura state machine rather than a zero-cost host
@@ -2079,6 +2136,30 @@ impl<'a> Lowerer<'a> {
             }
             _ => None,
         }
+    }
+
+    fn resolve_constant_info(&self, name: &str) -> Option<&crate::sema::ConstantInfo> {
+        if self.local_types.contains_key(&self.render_local_name(name)) {
+            return None;
+        }
+        if self.module_name == self.program.module_name {
+            self.program.constants.get(name)
+        } else {
+            self.current_module_namespace()?.all_constants.get(name)
+        }
+    }
+
+    fn lower_constant_read(&mut self, constant: &crate::sema::ConstantInfo) -> Operand {
+        let temp = self.new_typed_temp(constant.ty.clone());
+        let key = format!("{}::{}", constant.module_name, constant.decl.name);
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::ModuleConstant {
+                initializer: format!("__aura_const_init::{key}"),
+                key,
+            },
+        });
+        Operand::Place(temp)
     }
 
     fn qualified_module_item(&self, expr: &Expr) -> Option<(String, String)> {
@@ -4673,7 +4754,13 @@ impl<'a> Lowerer<'a> {
             ExprKind::Name(name) if name == "None" => Operand::Unit,
             ExprKind::BuiltinOmitted => Operand::Unit,
             ExprKind::Lambda { params, body } => self.lower_lambda(expr, params, body),
-            ExprKind::Name(name) => Operand::Place(self.render_local_name(name)),
+            ExprKind::Name(name) => {
+                if let Some(constant) = self.resolve_constant_info(name).cloned() {
+                    self.lower_constant_read(&constant)
+                } else {
+                    Operand::Place(self.render_local_name(name))
+                }
+            }
             ExprKind::Int(value) => Operand::Int(*value),
             ExprKind::DurationNanos(value) => Operand::Duration(*value),
             ExprKind::Float(value) => Operand::Float(*value),
@@ -4936,6 +5023,15 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Member { object, field } => {
+                if let Some(module_path) = self.infer_module_path(object) {
+                    if let Some(constant) = self
+                        .module_namespace(&module_path)
+                        .and_then(|namespace| namespace.constants.get(field))
+                        .cloned()
+                    {
+                        return self.lower_constant_read(&constant);
+                    }
+                }
                 if let Some((module_path, enum_name)) = self.qualified_module_item(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(enum_info) = namespace.enums.get(&enum_name).cloned() {
@@ -8943,6 +9039,10 @@ impl<'a> Lowerer<'a> {
                     .get(name)
                     .cloned()
                     .or_else(|| {
+                        self.resolve_constant_info(name)
+                            .map(|constant| constant.ty.clone())
+                    })
+                    .or_else(|| {
                         self.program
                             .imported_modules
                             .get(name)
@@ -9620,6 +9720,12 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Member { object, field } => {
                 if let Some(module_path) = self.infer_module_path(object) {
+                    if let Some(constant) = self
+                        .module_namespace(&module_path)
+                        .and_then(|namespace| namespace.constants.get(field))
+                    {
+                        return Some(constant.ty.clone());
+                    }
                     if let Some(function) =
                         self.module_namespace(&module_path).and_then(|namespace| {
                             namespace

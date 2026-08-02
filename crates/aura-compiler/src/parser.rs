@@ -1,12 +1,13 @@
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BindingTarget,
     BreakStmt, ClassDecl, CompareLink, CompareOp, ComprehensionClause, ComprehensionOutput,
-    ContinueStmt, DestructureStmt, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind,
-    ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl, FieldDecl, ForStmt, FormatPart,
-    FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind,
-    ImportName, Item, LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm,
-    MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, ReturnStmt, Stmt,
-    TraitDecl, TuplePattern, TypeRef, TypeRefKind, UnaryOp, VariantPattern, WhileStmt, WithStmt,
+    ConstantDecl, ContinueStmt, DestructureStmt, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl,
+    Expr, ExprKind, ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl, FieldDecl, ForStmt,
+    FormatPart, FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl,
+    ImportKind, ImportName, Item, LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr,
+    MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, ReturnStmt,
+    Stmt, TraitDecl, TuplePattern, TypeRef, TypeRefKind, UnaryOp, VariantPattern, WhileStmt,
+    WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -99,6 +100,7 @@ impl Parser {
 
     fn parse_module(&mut self) -> Result<Module> {
         let mut imports = Vec::new();
+        let mut constants = Vec::new();
         let mut items = Vec::new();
         let mut top_level_stmts = Vec::new();
         self.skip_newlines();
@@ -106,6 +108,17 @@ impl Parser {
         while !self.at_eof() {
             if self.at_keyword_import() || self.at_from_import_start() {
                 imports.push(self.parse_import()?);
+            } else if self.at_simple(&TokenKind::KwMut) {
+                return Err(Diagnostic::coded_at(
+                    "AU3003",
+                    self.current_span(),
+                    "module bindings are immutable; `mut` module state is not supported",
+                )
+                .with_help(
+                    "put mutable state in a local value owned by `main` or another explicit owner",
+                ));
+            } else if self.at_module_constant_start() {
+                constants.push(self.parse_module_constant()?);
             } else if self.at_simple(&TokenKind::KwPublic)
                 || self.at_copy_class_start()
                 || self.at_keyword_class()
@@ -124,8 +137,39 @@ impl Parser {
 
         Ok(Module {
             imports,
+            constants,
             items,
             top_level_stmts,
+        })
+    }
+
+    fn at_module_constant_start(&self) -> bool {
+        match self.current_kind() {
+            TokenKind::Identifier(_) => {
+                matches!(self.peek_kind(1), Some(TokenKind::Equal | TokenKind::Colon))
+            }
+            TokenKind::KwPublic => matches!(self.peek_kind(1), Some(TokenKind::Identifier(_))),
+            _ => false,
+        }
+    }
+
+    fn parse_module_constant(&mut self) -> Result<ConstantDecl> {
+        let public = self.eat_simple(&TokenKind::KwPublic).is_some();
+        let (name, span) = self.expect_identifier_with_span()?;
+        let annotation = if self.eat_simple(&TokenKind::Colon).is_some() {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        self.expect_simple(TokenKind::Equal)?;
+        let value = self.parse_expr()?;
+        self.expect_statement_terminator()?;
+        Ok(ConstantDecl {
+            public,
+            name,
+            annotation,
+            value,
+            span,
         })
     }
 

@@ -917,6 +917,8 @@ fn io_namespace() -> ModuleNamespace {
     enums.insert(error.decl.name.clone(), error.clone());
 
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "io".to_string(),
         path: "io".to_string(),
         source_path: None,
@@ -1063,6 +1065,8 @@ fn fs_namespace() -> ModuleNamespace {
     }
 
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "fs".to_string(),
         path: "fs".to_string(),
         source_path: None,
@@ -1286,6 +1290,8 @@ fn net_namespace() -> ModuleNamespace {
     }
 
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "net".to_string(),
         path: "net".to_string(),
         source_path: None,
@@ -1438,6 +1444,8 @@ fn process_namespace() -> ModuleNamespace {
     }
 
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "process".to_string(),
         path: "process".to_string(),
         source_path: None,
@@ -1486,6 +1494,8 @@ fn random_namespace() -> ModuleNamespace {
     .collect::<BTreeMap<_, _>>();
 
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "random".to_string(),
         path: "random".to_string(),
         source_path: None,
@@ -1547,6 +1557,8 @@ fn function_only_namespace(name: &str, functions: Vec<FunctionInfo>) -> ModuleNa
         .map(|function| (function.decl.name.clone(), function))
         .collect::<BTreeMap<_, _>>();
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: name.to_string(),
         path: name.to_string(),
         source_path: None,
@@ -1933,6 +1945,8 @@ fn json_namespace() -> ModuleNamespace {
         (error.decl.name.clone(), error),
     ]);
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "json".to_string(),
         path: "json".to_string(),
         source_path: None,
@@ -2048,6 +2062,8 @@ fn bytes_namespace() -> ModuleNamespace {
     let error = bytes_error_enum_info();
     let enums = BTreeMap::from([(error.decl.name.clone(), error)]);
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "bytes".to_string(),
         path: "bytes".to_string(),
         source_path: None,

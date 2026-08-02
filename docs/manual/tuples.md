@@ -37,9 +37,10 @@ while `(value,)` is a singleton tuple. `()` is not a tuple value. A
 multi-element tuple has no trailing comma:
 
 ```aura
-pair = ("north", 7)
-singleton = (true,)
-nested = (pair, (2, 3))
+def main():
+    pair = ("north", 7)
+    singleton = (true,)
+    nested = (pair, (2, 3))
 ```
 
 Top-level assignment and `for` binding lists use `left, right`; parentheses

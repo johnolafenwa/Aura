@@ -1,0 +1,6 @@
+error[AU3001]: cannot move `values` out of immutable module storage
+ --> crates/aura-compiler/tests/fixtures/check-fail/module_constant_move.au:7:13
+  |
+7 |     consume(values)
+  |             ^
+  = help: call `.copy()` when an independent owned value is required

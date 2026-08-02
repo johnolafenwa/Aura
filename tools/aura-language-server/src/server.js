@@ -247,6 +247,8 @@ function completionKind(kind) {
       return CompletionItemKind.Enum;
     case "variant":
       return CompletionItemKind.EnumMember;
+    case "constant":
+      return CompletionItemKind.Constant;
     case "keyword":
       return CompletionItemKind.Keyword;
     default:
