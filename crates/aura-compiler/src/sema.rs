@@ -2644,6 +2644,22 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         .functions
         .get("main")
         .filter(|function| function.module_name == program.module_name);
+    if context.is_entry_module && local_main.is_some() {
+        if let Some(Stmt::Assign(assign)) = program
+            .top_level_stmts
+            .iter()
+            .find(|stmt| matches!(stmt, Stmt::Assign(assign) if assign.mutable))
+        {
+            return Err(Diagnostic::coded_at(
+                "AU3003",
+                assign.span,
+                "module bindings are immutable; `mut` module state is not supported",
+            )
+            .with_help(
+                "put mutable state in a local value owned by `main` or another explicit owner",
+            ));
+        }
+    }
     if let (true, false, Some(main)) = (
         context.is_entry_module,
         program.top_level_stmts.is_empty(),

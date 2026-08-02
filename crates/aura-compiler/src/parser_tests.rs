@@ -1577,11 +1577,36 @@ fn parse_module_constants_preserves_visibility_annotation_and_source_order() {
 }
 
 #[test]
-fn parse_module_constants_reject_mutable_module_state() {
-    let error = parse("mut counter = 0\ndef main():\n    pass\n")
-        .expect_err("mutable module state must be rejected");
-    assert_eq!(error.code, "AU3003");
-    assert!(error.message.contains("module bindings are immutable"));
+fn parse_preserves_top_level_mutable_bindings_for_contextual_entry_checking() {
+    let module = parse("mut counter = 0\ndef main():\n    pass\n")
+        .expect("parsing must preserve the script statement until the entry style is known");
+    assert!(module.constants.is_empty());
+    assert!(matches!(
+        module.top_level_stmts.as_slice(),
+        [Stmt::Assign(AssignStmt {
+            mutable: true,
+            target: AssignTarget::Name(name),
+            ..
+        })] if name == "counter"
+    ));
+}
+
+#[test]
+fn parse_script_mode_keeps_mutable_locals_beside_module_constants() {
+    let module = parse(
+        "limit: int32 = 2\nmut counter: int32 = 0\nwhile counter < limit:\n    counter += 1\nprint(counter)\n",
+    )
+    .expect("script-mode mutable locals must parse");
+    assert_eq!(module.constants.len(), 1);
+    assert_eq!(module.constants[0].name, "limit");
+    assert!(matches!(
+        module.top_level_stmts.as_slice(),
+        [
+            Stmt::Assign(AssignStmt { mutable: true, .. }),
+            Stmt::While(_),
+            Stmt::Expr(_)
+        ]
+    ));
 }
 
 #[test]

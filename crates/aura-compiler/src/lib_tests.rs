@@ -2017,11 +2017,34 @@ fn omitted_none_return_type_is_allowed() {
 fn top_level_scripts_run_without_main() {
     let module = parse_source(TOP_LEVEL_ADDITION_SOURCE).expect("top-level addition should parse");
     assert_eq!(module.items.len(), 0);
-    assert_eq!(module.top_level_stmts.len(), 4);
+    assert_eq!(module.constants.len(), 3);
+    assert_eq!(module.top_level_stmts.len(), 1);
 
     let output = run_source(TOP_LEVEL_ADDITION_SOURCE).expect("top-level addition should run");
     assert_eq!(output.stdout, "16\n");
     assert_eq!(output.value, zero_exit_value());
+}
+
+#[test]
+fn script_mode_mutable_locals_coexist_with_module_constants() {
+    let source = "limit: int32 = 3\nmut counter: int32 = 0\nwhile counter < limit:\n    counter += 1\nprint(counter)\n";
+    let module = parse_source(source).expect("script source should parse");
+    assert_eq!(module.constants.len(), 1);
+    assert_eq!(module.top_level_stmts.len(), 3);
+
+    check_source(source).expect("script source should type-check");
+    let output = run_source(source).expect("script source should run");
+    assert_eq!(output.stdout, "3\n");
+    assert_eq!(output.value, zero_exit_value());
+}
+
+#[test]
+fn mutable_top_level_binding_cannot_be_module_storage_beside_main() {
+    let error = check_source("mut counter: int32 = 0\ndef main():\n    print(counter)\n")
+        .expect_err("mutable module storage must remain rejected");
+    assert_eq!(error.code, "AU3003");
+    assert_eq!(error.span, Some(crate::diag::Span::new(1, 5)));
+    assert!(error.message.contains("module bindings are immutable"));
 }
 
 #[test]

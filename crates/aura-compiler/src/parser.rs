@@ -108,15 +108,6 @@ impl Parser {
         while !self.at_eof() {
             if self.at_keyword_import() || self.at_from_import_start() {
                 imports.push(self.parse_import()?);
-            } else if self.at_simple(&TokenKind::KwMut) {
-                return Err(Diagnostic::coded_at(
-                    "AU3003",
-                    self.current_span(),
-                    "module bindings are immutable; `mut` module state is not supported",
-                )
-                .with_help(
-                    "put mutable state in a local value owned by `main` or another explicit owner",
-                ));
             } else if self.at_module_constant_start() {
                 constants.push(self.parse_module_constant()?);
             } else if self.at_simple(&TokenKind::KwPublic)
