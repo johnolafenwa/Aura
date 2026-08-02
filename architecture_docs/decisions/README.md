@@ -51,3 +51,18 @@ test locations that must prove completion.
 40. [ADR-0040: Owned Vec and String slices](0040-owned-vec-and-string-slices.md) — Accepted for Aura 0.2 in Batch 6, Phase 7.2
 41. [ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](0041-contiguous-numeric-arrays.md) — Accepted for Aura 0.2 in Batch 6, Phase 7.3
 42. [ADR-0042: Aura product identity](0042-aura-product-identity.md) — Accepted before the first v0.2.0 preview publication
+43. [ADR-0043: Unified `int64` index domain](0043-int64-index-domain.md) — Accepted for Aura 0.3 in Batch S1
+44. [ADR-0044: Canonical collection surface](0044-canonical-collection-surface.md) — Accepted for Aura 0.3 in Batch S1
+45. [ADR-0045: Testing framework and assertion introspection](0045-testing-framework-and-assertion-introspection.md) — Provisional for Aura 0.3 checkpoint ratification
+46. [ADR-0046: String literal forms and f-string format specifications](0046-string-literals-and-format-specifications.md) — Accepted for Aura 0.3 in Batch S1
+47. [ADR-0047: Integer literal bases, bitwise operators, and shifts](0047-integer-literals-bitwise-and-shifts.md) — Accepted for Aura 0.3 in Batch S1
+48. [ADR-0048: Power, rounding, divmod, and the math module](0048-power-round-divmod-and-math.md) — Accepted for Aura 0.3 in Batch S1
+49. [ADR-0049: Match guards and or-patterns](0049-match-guards-and-or-patterns.md) — Accepted for Aura 0.3 in Batch S1
+50. [ADR-0050: Module-level constants and deterministic initialization](0050-module-level-constants.md) — Accepted for Aura 0.3 in Batch S1
+51. [ADR-0051: Import aliases and keyword-only parameter disposition](0051-import-aliases-and-keyword-only-parameters.md) — Accepted for Aura 0.3 in Batch S1
+52. [ADR-0052: Anonymous closed union types](0052-anonymous-closed-union-types.md) — Proposed design
+53. [ADR-0053: Function decorators](0053-function-decorators.md) — Proposed design
+54. [ADR-0054: Generators and the iterator protocol](0054-generators-and-iterator-protocol.md) — Proposed design
+55. [ADR-0055: Display trait and read-only properties](0055-display-trait-and-properties.md) — Proposed design
+56. [ADR-0056: Docstrings and documentation metadata](0056-docstrings-and-documentation-metadata.md) — Proposed design
+43. [ADR-0043: Unified `int64` index domain](0043-int64-index-domain.md) — Accepted for the Aura 0.3 Python surface

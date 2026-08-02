@@ -1,6 +1,6 @@
 # Edge: class with empty string default
 class Message:
-    text: String = ""
+    text: str = ""
     priority: int32 = 0
 
 def main() -> int32:

@@ -1,19 +1,19 @@
 # Test: multiple type params each with trait bounds
 
 trait Show:
-    def show(self) -> String
+    def show(self) -> str
 
 trait Count:
     def count(self) -> int32
 
 class Name:
-    text: String
+    text: str
 
 class Qty:
     n: int32
 
 impl Show for Name:
-    def show(self) -> String:
+    def show(self) -> str:
         return self.text
 
 impl Count for Qty:

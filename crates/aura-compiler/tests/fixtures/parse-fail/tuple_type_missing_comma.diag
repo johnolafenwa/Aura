@@ -1,5 +1,5 @@
 error[AU1101]: tuple types need a comma; write `(T,)` for a singleton tuple type or `T` for the type itself
- --> crates/aura-compiler/tests/fixtures/parse-fail/tuple_type_missing_comma.au:1:24
+ --> crates/aura-compiler/tests/fixtures/parse-fail/tuple_type_missing_comma.au:1:21
   |
-1 | def read(value: (String)):
-  |                        ^
+1 | def read(value: (str)):
+  |                     ^

@@ -1,8 +1,8 @@
-def consume(text: own String):
+def consume(text: own str):
     print(text)
 
 def main() -> int32:
-    text: String = "aura"
+    text: str = "aura"
     consume(text=text)
     print(text)
     return 0

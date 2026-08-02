@@ -21,9 +21,9 @@ A valid log entry has three pieces: a level, a service, and a message. A class w
 
 ```python
 class LogLine:
-    level: String
-    service: String
-    message: String
+    level: str
+    service: str
+    message: str
 ```
 
 The original text is kept in `message` so later code can print or inspect the unmodified line if it wants to.
@@ -33,7 +33,7 @@ The original text is kept in `message` so later code can print or inspect the un
 A line that cannot be parsed is not a crash. It is an expected, measurable absence of data. That makes `Option[LogLine]` the right return type:
 
 ```python
-def parse_line(line: String) -> Option[LogLine]:
+def parse_line(line: str) -> Option[LogLine]:
     clean = line.trim()
     parts = clean.split(" ")
 
@@ -57,23 +57,23 @@ def parse_line(line: String) -> Option[LogLine]:
 
 The `parts.len() < 3` guard makes the two fallback arms unreachable, but keeping the `match` exhaustive is a cheap insurance policy. When the parser grows — a later revision might accept quoted strings or nested fields — the exhaustive shape makes the change hard to get wrong.
 
-## Step 3: Count With A Map
+## Step 3: Count With A dict
 
-Counting is a map from string to integer. The helper is deliberately small:
+Counting uses a dictionary from string to integer. The helper is deliberately small:
 
 ```python
-def increment(counts: mut Map[String, int32], key: own String):
+def increment(counts: mut dict[str, int32], key: own str):
     current = match counts.get(key):
         case Option.Some(value):
             value
         case Option.None:
             0
 
-    counts.set(key, current + 1)
+    counts[key] = current + 1
 ```
 
-The small ownership detail is now visible in the signature. `Map.get` borrows
-`key`; `counts.set` then consumes it because the map retains the key. No clone
+The small ownership detail is now visible in the signature. `dict.get` shares
+`key`; indexed assignment then consumes it because the dictionary retains the key. No clone
 is needed.
 
 ## Step 4: The Report
@@ -83,21 +83,21 @@ Now pull the pieces together:
 ```python
 lines = ["INFO api started", "WARN api slow", "ERROR worker failed", "INFO worker recovered", "badline"]
 
-mut levels = Map[String, int32]()
-mut services = Set[String]()
+mut levels = dict[str, int32]()
+mut services = set[str]()
 mut skipped = 0
 
 for line in lines:
     match parse_line(line):
         case Option.Some(entry):
             increment(levels, entry.level.clone())
-            services.insert(entry.service)
+            services.add(entry.service)
         case Option.None:
             skipped += 1
 
 print("levels")
-for entry in levels.items():
-    print("  " + entry.key + ": " + entry.value.to_string())
+for level, count in levels.items():
+    print("  " + level + ": " + count.to_string())
 
 print("services: " + services.len().to_string())
 print("skipped: " + skipped.to_string())
@@ -123,7 +123,7 @@ text = try fs.read_to_string("app.log")
 lines = text.split("\n")
 ```
 
-The parser keeps returning `Option[LogLine]`. The counter keeps mutating a map owned by its caller. The set keeps owning service names. The program's structure does not move.
+The parser keeps returning `Option[LogLine]`. The counter keeps mutating a dictionary owned by its caller. The set keeps owning service names. The program's structure does not move.
 
 That is the argument for typing data at the boundary: when the input source changes, the program's core stays exactly where it was.
 
@@ -131,7 +131,7 @@ That is the argument for typing data at the boundary: when the input source chan
 
 The analyzer is small on purpose. A few directions you might push it:
 
-- Add a `Map[String, int32]` that counts services as well as levels.
+- Add a `dict[str, int32]` that counts services as well as levels.
 - Turn `level` into an enum — `LogLevel.Info`, `LogLevel.Warn`, `LogLevel.Error` — and treat unknown levels as skipped.
 - Print the most frequent service by iterating over `services` and looking up counts.
 - Read from standard input with `io.read_line()` in a loop.

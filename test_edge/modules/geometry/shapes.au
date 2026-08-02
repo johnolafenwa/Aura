@@ -4,7 +4,7 @@ public copy class Circle:
     public def area(self) -> int32:
         return self.radius * self.radius * 3
 
-    public def describe(self) -> String:
+    public def describe(self) -> str:
         return f"Circle(r={self.radius})"
 
 public copy class Rect:
@@ -14,5 +14,5 @@ public copy class Rect:
     public def area(self) -> int32:
         return self.width * self.height
 
-    public def describe(self) -> String:
+    public def describe(self) -> str:
         return f"Rect({self.width}x{self.height})"

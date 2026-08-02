@@ -9,7 +9,7 @@ The only dtypes are `int32`, `int64`, `float32`, and `float64`.
 
 ```aura
 def main() -> int32:
-    left = Array[float64].from_vec([1.0, 2.0, 3.0, 4.0], [2, 2])
+    left = Array[float64].from_list([1.0, 2.0, 3.0, 4.0], [2, 2])
     right = Array[float64].full([2, 2], 0.5)
     combined = left + right
     first_row = combined[0:1]
@@ -34,7 +34,7 @@ array [ [ expression ] : [ expression ] ]
 ```
 
 The supported `dtype` names are exactly `int32`, `int64`, `float32`, and
-`float64`. Comma-separated Array indexing is distinct from a Vec index.
+`float64`. Comma-separated Array indexing is distinct from a list index.
 One-colon slicing selects a first-axis range. The complete syntax remains
 defined by [Grammar](/manual/grammar).
 
@@ -49,25 +49,25 @@ The complete constructor surface is:
 
 | Constructor | Result |
 | --- | --- |
-| `Array[T].zeros(shape: Vec[int64])` | `Array[T]` |
-| `Array[T].full(shape: Vec[int64], value: T)` | `Array[T]` |
-| `Array[T].from_vec(values: Vec[T], shape: Vec[int64])` | `Array[T]` |
+| `Array[T].zeros(shape: list[int64])` | `Array[T]` |
+| `Array[T].full(shape: list[int64], value: T)` | `Array[T]` |
+| `Array[T].from_list(values: list[T], shape: list[int64])` | `Array[T]` |
 
 `T` must be one of the four maintained dtypes. Shape is a runtime
-`Vec[int64]`, so rank and dimensions are not part of the static type.
-`from_vec` requires exact `Vec[T]`, copies its scalar elements, and leaves the
-shared source Vec usable. Constructors never infer a different dtype from a
+`list[int64]`, so rank and dimensions are not part of the static type.
+`from_list` requires exact `list[T]`, copies its scalar elements, and leaves the
+shared source list usable. Constructors never infer a different dtype from a
 mixed numeric source.
 
 ### Members
 
 | Member | Result and contract |
 | --- | --- |
-| `shape()` | `Vec[int64]`; owned shape snapshot |
+| `shape()` | `list[int64]`; owned shape snapshot |
 | `len()` | `int64`; total element count |
 | `clone()` | fresh `Array[T]` |
-| `get(index: Vec[int32])` | `Option[T]` |
-| `set(index: Vec[int32], value: T)` | mutable receiver; `Some(T)` replaced value or a coordinate/rank trap |
+| `get(index: list[int64])` | `Option[T]` |
+| `set(index: list[int64], value: T)` | mutable receiver; `Some(T)` replaced value or a coordinate/rank trap |
 | `fill(value: T)` | mutable receiver; returns `None` |
 | `map[U](f: def(T) -> U)` | `Array[U]`; `U` is one of the four dtypes |
 | `sum()` | `T` |
@@ -79,7 +79,7 @@ mixed numeric source.
 match exactly. A consuming closure, `mut`/`own` parameter, or unsupported
 result dtype is rejected. `set` and `fill` require a mutable Array place.
 
-Direct indexing uses exactly one `int32` coordinate per runtime axis.
+Direct indexing uses exactly one `int64` coordinate per runtime axis.
 `array[i, j]` has type `T`; indexed assignment requires a mutable Array place
 and a value of exactly `T`. `array[start:end]` returns `Array[T]`.
 
@@ -106,7 +106,7 @@ Dimensions are `int64`, may be zero, and may not be negative. `len()` is the
 checked product of all dimensions. A zero dimension therefore makes the Array
 empty while preserving its complete shape.
 
-`zeros`, `full`, and `from_vec` lay out elements in row-major order. Direct
+`zeros`, `full`, and `from_list` lay out elements in row-major order. Direct
 coordinates are translated in that same order. A negative coordinate
 normalizes once against its own axis. `get` returns `None` for an invalid
 coordinate; method `set`, direct indexed read, and direct indexed assignment
@@ -160,7 +160,7 @@ unsupported dtype, exact argument/callback/result mismatch, or mixed dtype.
 `AU2003` reports unsupported operators, including integer Array `/`, and
 preserves the ordinary checked-integer guidance. `AU2004` reports invalid
 argument binding. `AU2005` reserves slice steps and slice assignment with the
-same owned-copy guidance as Vec/String slices. `AU3002` reports mutation while
+same owned-copy guidance as list/str slices. `AU3002` reports mutation while
 shared access is active; `AU3003` reports `set`, `fill`, or indexed assignment
 through an immutable place.
 
@@ -177,7 +177,7 @@ method `set` traps.
 `AU4007` (`numeric array shape or reduction violation`) reports:
 
 - rank-zero or negative-dimension construction
-- `from_vec` element-count mismatch
+- `from_list` element-count mismatch
 - exact-shape Array/Array operation mismatch
 - direct coordinate-count/runtime-rank mismatch
 - empty `min`, `max`, or `mean`

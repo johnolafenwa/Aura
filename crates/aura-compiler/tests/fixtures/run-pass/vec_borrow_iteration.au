@@ -1,12 +1,12 @@
 def main() -> int32:
-    mut names: Vec[String] = ["Ada", "Grace"]
+    mut names: list[str] = ["Ada", "Grace"]
     for name in names:
         print(name)
     print(names.len())
 
-    empty: Vec[int32] = []
+    empty: list[int32] = []
     print(empty.is_empty())
 
-    values = Vec[int32]()
+    values = list[int32]()
     print(values.len())
     return 0

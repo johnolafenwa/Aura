@@ -1,7 +1,7 @@
-def make_text() -> String:
+def make_text() -> str:
     return "nested"
 
-def make_task() -> Task[String]:
+def make_task() -> Task[str]:
     with TaskGroup() as group:
         return group.start(make_text)
 

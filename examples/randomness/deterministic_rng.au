@@ -5,7 +5,7 @@ def main() -> int32:
     print(rng.next_int(0, 10))
     print(rng.next_int(-5, 6))
 
-    mut values: Vec[int64] = [0, 1, 2, 3, 4, 5]
+    mut values: list[int64] = [0, 1, 2, 3, 4, 5]
     mut shuffle_rng = random.Rng(42)
     shuffle_rng.shuffle(values)
     print(values)

@@ -5,10 +5,10 @@ enum Slot:
 class Holder:
     slot: Slot
 
-def failing() -> Result[int32, String]:
+def failing() -> Result[int32, str]:
     return Result.Err("boom")
 
-def try_exit(slot: mut Slot) -> Result[int32, String]:
+def try_exit(slot: mut Slot) -> Result[int32, str]:
     match mut slot:
         case Slot.Filled(value):
             value = value + 7

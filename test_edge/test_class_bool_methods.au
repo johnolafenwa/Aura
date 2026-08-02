@@ -1,12 +1,12 @@
 class User:
-    name: String
+    name: str
     active: bool
     login_count: int32
 
     def is_new(self) -> bool:
         return self.login_count == 0
 
-    def status(self) -> String:
+    def status(self) -> str:
         if self.active:
             if self.is_new():
                 return "new"

@@ -1,5 +1,5 @@
 class User:
-    name: String
+    name: str
 
 def main():
     mut users = [User(name="Ada")]

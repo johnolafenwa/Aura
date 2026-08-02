@@ -2,15 +2,15 @@ def in_range(value: int32, low: int32, high: int32) -> bool:
     return low <= value < high
 
 def main():
-    mut ports = Vec[int32]()
-    ports.push(80)
-    ports.push(443)
+    mut ports = list[int32]()
+    ports.append(80)
+    ports.append(443)
 
-    mut allowed = Set[String]()
-    allowed.insert("aura.dev")
+    mut allowed = set[str]()
+    allowed.add("aura.dev")
 
-    mut ages = Map[String, int32]()
-    ages.set("ada", 36)
+    mut ages = dict[str, int32]()
+    ages["ada"] = 36
 
     request = "GET /health HTTP/1.1"
 

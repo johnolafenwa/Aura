@@ -37,8 +37,8 @@ not duplicate the underlying queue, task, queued values, or stored result.
 Move values transfer ownership on by-value use. Current move categories include:
 
 - tuples with at least one move element
-- `String`
-- `Vec[T]`, `Map[K, V]`, and `Set[T]`
+- `str`
+- `list[T]`, `dict[K, V]`, and `set[T]`
 - `random.Rng`
 - ordinary user classes
 - user or builtin enums with any move payload
@@ -65,23 +65,23 @@ A non-copy value is consumed when used in an owned position, including:
 - an `own` function parameter or an `own self` method receiver
 - a by-value return
 - a class or enum payload, collection literal, mutating collection method, or
-  simple Map indexed assignment that stores the value
+  simple dict indexed assignment that stores the value
 - by-value enum matching
-- `own` iteration over `Vec[T]` or `Set[T]`
+- `own` iteration over `list[T]` or `set[T]`
 - the resource expression of `with`
 - a task-start argument copied or moved into task-owned capture storage
 
 An expression is evaluated before its move is recorded at that boundary. Aura also rejects an expression that tries to borrow and move overlapping places in incompatible subexpressions.
 
-Vec slicing is a clone-producing shared read rather than an element move.
+List slicing is a clone-producing shared read. It does not move elements.
 `values[start:end]` retains `values` while the endpoint expressions run, then
 copies Copy elements or clones clone-safe non-Copy elements into a fresh owned
-Vec. A type containing `random.Rng` cannot be sliced because it cannot be
+list. A type containing `random.Rng` cannot be sliced because it cannot be
 safely duplicated; a non-repeatable Task observation right likewise cannot be
 duplicated. String slicing copies a Unicode-scalar range into a fresh owned
-String. Neither result aliases its source or acts as an assignable place.
+`str`. Neither result aliases its source or acts as an assignable place.
 After creation, that fresh result follows the ordinary move rules for any
-other owned non-copy Vec or String value.
+other owned non-copy list or str value.
 
 Unpacking a non-copy tuple is one whole-source move. The target leaves receive
 owned elements, but the source does not become a set of independently reusable
@@ -99,8 +99,8 @@ the source usable.
 | `self` | Shared method receiver and the default receiver spelling. |
 | `own self` | Consuming method receiver. |
 | `mut self` | Exclusive mutable method receiver. |
-| `for value in collection:` | Default shared iteration for `Vec` and `Set`. |
-| `for value in own collection:` | Consuming iteration for `Vec` and `Set`. |
+| `for value in collection:` | Default shared iteration for `list` and `set`. |
+| `for value in own collection:` | Consuming iteration for `list` and `set`. |
 | `for value in mut collection:` | Mutable-borrow iteration where supported. |
 | `match value:` | Shared borrowed pattern matching. |
 | `match own value:` | Consuming pattern matching. |
@@ -113,7 +113,7 @@ Call sites never prefix arguments with a capability. The parameter or receiver
 declaration selects the mode:
 
 ```python
-def render(name: String) -> String:
+def render(name: str) -> str:
     return name.to_upper()
 
 name = "aura"
@@ -131,10 +131,10 @@ every mutation a silent lost write. Require the caller to pass a mutable value,
 or take `own T` and return the result.
 
 ```python
-def add_name(names: mut Vec[String], name: own String):
-    names.push(name)
+def add_name(names: mut list[str], name: own str):
+    names.append(name)
 
-mut names = Vec[String]()
+mut names = list[str]()
 add_name(names, "Ada")
 ```
 
@@ -168,7 +168,7 @@ Moving a non-copy field from an owned class marks that field path moved while pr
 
 ```python
 class User:
-    name: String
+    name: str
     id: int32
 
 mut user = User(name="Ada", id=1)
@@ -184,14 +184,14 @@ The complete class value cannot be used while any field remains moved. Assigning
 Moving a non-copy field through a shared or mutable borrow is rejected because the borrower does not own the containing value:
 
 ```python
-def bad(user: User) -> String:
+def bad(user: User) -> str:
     return user.name # rejected
 ```
 
 Use `.clone()` for a new owned value when the type supports it, or expose an owner method that performs the read or mutation:
 
 ```python
-def good(user: User) -> String:
+def good(user: User) -> str:
     return user.name.clone()
 ```
 
@@ -213,12 +213,12 @@ def identity(value: int32) -> int32:
     return value
 
 class User:
-    name: String
+    name: str
 
-def copy_name(user: User) -> String:
+def copy_name(user: User) -> str:
     return user.name.clone()
 
-def into_name(user: own User) -> String:
+def into_name(user: own User) -> str:
     return user.name
 ```
 
@@ -239,7 +239,7 @@ label or access capability. The detailed rules are in
 and gives non-copy payload bindings shared-borrow provenance:
 
 ```python
-result: Result[String, String] = Result.Ok("ready")
+result: Result[str, str] = Result.Ok("ready")
 
 match result:
     case Result.Ok(value):
@@ -266,18 +266,17 @@ Payload bindings are arm-local and cannot shadow a visible binding. Match typing
 
 ## Borrowed Iteration
 
-Bare `Vec` and `Set` iteration retains the collection and yields shared-borrowed
+Bare `list` and `set` iteration retains the collection and yields shared-borrowed
 non-copy elements. `for value in own collection` moves the collection once into
 a loop-private source and yields owned elements. Reinitializing the consumed
 source binding in the body cannot switch or truncate that active iteration.
-That one-time source selection is accepted under ADR-0017; ADR-0006's
-accepted loop ownership modes are unchanged.
-`for value in mut vec` requires a mutable vector place and yields
+That one-time source selection is accepted under ADR-0017.
+`for value in mut values` requires a mutable list place and yields
 mutable-borrowed elements.
 
 The place selected by bare iteration is frozen against overlapping mutation
 for the loop body.
-Mutable-borrow set iteration is not supported; mutate a set through `insert`
+Mutable-borrow set iteration is not supported; mutate a set through `add`
 and `remove` outside borrowed iteration. Queue iteration receives values; it is
 a scheduler operation, not a place traversal. The bare form copies the Queue
 handle once at loop entry and yields owned items without freezing the source
@@ -303,7 +302,9 @@ print(name)
 print(copy)
 ```
 
-String and collection clones copy their owned contents. Cloning runtime-backed resource handles does not necessarily create an independent host resource; rely on the resource's documented API rather than assuming deep host duplication.
+Text clones and collection copies create owned contents. Cloning a
+runtime-backed resource handle does not necessarily create an independent host
+resource; rely on the resource's documented API.
 
 Not every move type supports cloning. `random.Rng` is deliberately
 non-cloneable, and wrapping it in a class, enum, or collection does not make
@@ -336,9 +337,9 @@ than owned values and cannot be captured. Captured state is read-only. See
 ## FFI Views And Opaque Handles
 
 FFI v0 views are temporary call-boundary capabilities, not first-class Aura
-references. Bare `String` and `Vec[uint8]` retain their owner while exposing a
-const pointer and byte length for one synchronous foreign call. `mut
-Vec[uint8]` requires an exclusive mutable vector place and copies the initial
+references. Bare `str` and `list[uint8]` retain their owner while exposing a
+const pointer and byte length for one synchronous foreign call. `mut list[uint8]`
+requires an exclusive mutable list place and copies the initial
 bytes into a same-length scratch buffer; exactly that length is written back
 after the foreign function returns. Empty views use a null pointer with length
 zero. Foreign code must not retain any view pointer.
@@ -360,7 +361,7 @@ two `_with_stack` forms add an `int64` capacity argument before the callable;
 they do not change capture ownership.
 
 ```python
-def worker(label: String):
+def worker(label: str):
     print(label)
 
 with group = TaskGroup():
@@ -380,7 +381,7 @@ results, Queue construction, and Queue `put`/`try_put`. Handle-only Queue
 operations do not recheck the payload. A bare target parameter can still borrow its
 child-owned capture for the call, but the captured value itself must be
 transferable. A shared or mutable capability view cannot cross the boundary:
-pass owned structural data instead. Copy values, `String`, and aggregates made
+pass owned structural data instead. Copy values, `str`, and aggregates made
 entirely from transferable components qualify; `random.Rng`, `TaskGroup`, and
 live host resources do not.
 
@@ -397,7 +398,7 @@ The same decision statically divides task results into repeatable values and
 single-consumer values. `Task[T]` is copyable only when `T` is copyable, a
 `Queue[...]`, or a recursively repeatable `Task[...]`. Otherwise each result
 method consumes the unique observation right even when it reports timeout,
-cancellation, or failure. Multi-task waits consume their entire task vector,
+cancellation, or failure. Multi-task waits consume their entire task list,
 and `wait_any` abandons unchosen rights. These rules are required before the
 pinned-worker runtime can safely run sibling task bodies on different host
 threads. That runtime is now implemented: Queue and Task handle identity may
@@ -449,11 +450,11 @@ that are propagated through calls and discharged after specialization.
 
 A copy use duplicates a value and a move transfers it. Shared and mutable
 borrows are statically enforced access contracts rather than first-class
-runtime reference values in Aura 0.2. Mutable borrowed calls and Vec
+runtime reference values in Aura 0.2. Mutable borrowed calls and list
 iteration write through the original place; `match mut` reconstructs
-and writes back on every arm exit. Simple Map indexed assignment accepts and
-owns any value type; direct compound indexed assignment requires a copy `Vec`
-element or `Map` value.
+and writes back on every arm exit. Simple dict indexed assignment accepts and
+owns any value type; direct compound indexed assignment requires a copy `list`
+element or `dict` value.
 Task start first transfers captures into child-owned storage. `with` owns one cleanup registration and runs it exactly
 once on every maintained scope exit under the documented failure-precedence
 rules.
@@ -477,13 +478,13 @@ rejected with `AU3002`, with the retained selection identified as the borrow
 origin. Name roots and projected member places follow the same rule, and no
 backend inserts a hidden deep clone. Operations that require a point-in-time
 representation produce it immediately; each f-string interpolation renders to
-`String` before the next interpolation begins.
+`str` before the next interpolation begins.
 
 Compound assignment uses the corresponding binary operator dispatch, including
 applicable user-defined operator traits for root and projected targets. A copy
 target is captured before the right operand. A non-copy root or projected
 target remains borrowed across that operand, so overlapping mutable borrow or
-consumption is `AU3002`. A non-copy `Vec` element or `Map` value cannot be a
+consumption is `AU3002`. A non-copy `list` element or `dict` value cannot be a
 direct compound target because Aura 0.2 has no indexed-place identity and
 writeback model; Aura rejects the operation instead of cloning or
 destructively moving the stored value.
@@ -505,7 +506,7 @@ diagnostic points to both the later access and the retained-borrow origin.
 `AU3003` reports assignment or mutation through an immutable place, including
 shared `self`. `AU3004`
 reports invalid parameter, receiver, loop, or Queue-iteration ownership modes.
-`AU3005` rejects a direct indexed read of a non-copy Vec element or Map value;
+`AU3005` rejects a direct indexed read of a non-copy list element or dict value;
 `AU3006` rejects the corresponding indexed compound read-modify-write.
 `AU3007` rejects direct or transitive duplication of non-cloneable state,
 including `random.Rng`, opaque FFI handles, capturing closure environments,
@@ -531,7 +532,7 @@ and primary-diagnostic behavior.
 ## Limits And Implementation-Defined Behavior
 
 Place analysis tracks local roots and field-prefix paths; it proves disjoint
-sibling fields but is not a general alias theorem. Mutable Set iteration,
+sibling fields but is not a general alias theorem. Mutable set iteration,
 explicit Queue ownership modifiers,
 mutable-borrow task targets, moving out of a managed resource, and arbitrary
 reference values are unavailable. Loop move analysis intentionally uses only
@@ -543,8 +544,8 @@ order are language-defined, not backend- or host-defined.
 Copy/move classification, declaration-stable parameter defaults, explicit
 owned/shared/mutable passing, all receiver modes, call-boundary exclusivity,
 partial moves and reinitialization, flow-sensitive checks, owned returns,
-borrowed matching and Vec/Set iteration, task capture, cloning,
+borrowed matching and list/set iteration, task capture, cloning,
 and lexical resource ownership are implemented for the post-Phase 1.5
-surface; the one-time Vec/Set/Queue iteration-source rule is accepted under
-ADR-0017. Mutable Set iteration, Queue ownership modifiers, and mutable task
+surface; the one-time list/set/Queue iteration-source rule is accepted under
+ADR-0017. Mutable set iteration, Queue ownership modifiers, and mutable task
 capture are unavailable.

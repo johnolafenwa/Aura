@@ -1,5 +1,5 @@
 class Builder:
-    name: String
+    name: str
     port: int32
     debug: bool
 
@@ -9,7 +9,7 @@ class Builder:
     def with_debug(own self, d: bool) -> Builder:
         return Builder(name=self.name, port=self.port, debug=d)
 
-    def build(own self) -> String:
+    def build(own self) -> str:
         return self.name
 
 def main() -> int32:

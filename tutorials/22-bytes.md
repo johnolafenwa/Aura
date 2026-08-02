@@ -1,16 +1,16 @@
 # Bytes, Encodings, And Hashes
 
-Aura uses `Vec[uint8]` whenever an API needs raw bytes. That is the same type
+Aura uses `list[uint8]` whenever an API needs raw bytes. That is the same type
 returned by file, socket, process, and secure-random byte APIs, so data can move
 between those boundaries without a wrapper conversion.
 
-There is deliberately no implicit conversion between `String` and bytes.
+There is deliberately no implicit conversion between `str` and bytes.
 Text has a character encoding; bytes do not. Aura makes the UTF-8 boundary
 visible.
 
 ## Convert UTF-8 Explicitly
 
-Call `to_bytes()` on a String:
+Call `to_bytes()` on a str:
 
 ```python
 import bytes
@@ -20,19 +20,19 @@ payload = text.to_bytes()
 print(bytes.hex_encode(payload))
 ```
 
-This prints `4175726120f09f8c8c`. The returned vector contains the exact
+This prints `4175726120f09f8c8c`. The returned list contains the exact
 UTF-8 bytes. Embedded NULs, non-ASCII text, and a leading U+FEFF are preserved;
 Aura does not normalize the text or rewrite line endings.
 
-Going the other way can fail because an arbitrary byte vector need not be
+Going the other way can fail because an arbitrary byte list need not be
 valid UTF-8:
 
 ```python
 import bytes
 
-payload: Vec[uint8] = [65, 117, 114, 97]
+payload: list[uint8] = [65, 117, 114, 97]
 
-match String.from_bytes(payload):
+match str.from_bytes(payload):
     case Result.Ok(text):
         print(text)
     case Result.Err(bytes.Error.InvalidUtf8(index)):
@@ -41,12 +41,12 @@ match String.from_bytes(payload):
         print(error)
 ```
 
-`String.from_bytes` validates strictly. It never replaces bad bytes with a
+`str.from_bytes` validates strictly. It never replaces bad bytes with a
 replacement character. `InvalidUtf8(index)` points to the zero-based byte
 offset where the first invalid sequence begins.
 
 The conversion functions share their inputs. `payload` remains available
-after `from_bytes`, and the original String remains available after
+after `from_bytes`, and the original str remains available after
 `to_bytes`.
 
 ## Hexadecimal Is A Text Representation
@@ -56,7 +56,7 @@ Hex encoding uses two lowercase digits per byte:
 ```python
 import bytes
 
-payload: Vec[uint8] = [0, 1, 254, 255]
+payload: list[uint8] = [0, 1, 254, 255]
 text = bytes.hex_encode(payload)
 print(text)
 ```
@@ -85,7 +85,7 @@ Base64 is useful when a text protocol needs to carry arbitrary bytes:
 ```python
 import bytes
 
-payload: Vec[uint8] = [0, 1, 254, 255]
+payload: list[uint8] = [0, 1, 254, 255]
 encoded = bytes.base64_encode(payload)
 print(encoded)
 
@@ -101,7 +101,7 @@ This prints `AAH+/w==` and then `[0, 1, 254, 255]`.
 Aura uses the RFC 4648 standard alphabet with canonical `=` padding. The
 decoder rejects URL-safe `-`/`_`, whitespace, missing or extra padding,
 trailing data, and nonzero discarded bits. It does not quietly repair input.
-Decoded bytes are not assumed to be UTF-8; call `String.from_bytes` separately
+Decoded bytes are not assumed to be UTF-8; call `str.from_bytes` separately
 when text is required.
 
 ## Hash Exact Bytes
@@ -120,7 +120,7 @@ print(bytes.hex_encode(digest))
 The output length is `32`, and the hex line is:
 `ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad`.
 
-For a String, `bytes.sha256_string(text)` hashes exactly the bytes produced by
+For a str, `bytes.sha256_string(text)` hashes exactly the bytes produced by
 `text.to_bytes()`. It does not add a terminator or normalize text. These two
 expressions therefore produce equal digest vectors:
 
@@ -142,7 +142,7 @@ application requires. If required malformed-data metadata exceeds
 `2147483647`, Aura traps with `AU4005`. It never truncates or wraps the value.
 
 Each fresh codec destination has a fixed 2,147,483,647-byte safety ceiling
-independent of the public String and `Vec` length domains. Crossing that
+independent of the public str and `list` length domains. Crossing that
 ceiling, arithmetic overflow while calculating the destination size, or
 allocation failure traps with `AU4005`. A codec never returns a partial
 successful value.
@@ -151,7 +151,7 @@ The optional `encoding` parameter is reserved but not implemented. These are
 the complete 0.2 conversion calls:
 
 - `text.to_bytes()`
-- `String.from_bytes(payload)`
+- `str.from_bytes(payload)`
 
 Do not pass `"utf-8"` positionally or as `encoding=...`; ordinary argument
 checking rejects it.

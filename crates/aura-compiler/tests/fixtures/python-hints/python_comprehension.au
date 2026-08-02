@@ -1,3 +1,0 @@
-def main():
-    values = Vec[int32]()
-    doubled = [value for value in values]

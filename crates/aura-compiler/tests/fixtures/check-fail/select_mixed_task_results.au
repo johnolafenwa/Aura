@@ -1,7 +1,7 @@
 def number() -> int32:
     return 1
 
-def label() -> String:
+def label() -> str:
     return "one"
 
 def main():

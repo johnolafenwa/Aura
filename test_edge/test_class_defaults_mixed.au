@@ -1,8 +1,8 @@
 class User:
-    name: String
+    name: str
     age: int32
     active: bool = true
-    role: String = "user"
+    role: str = "user"
 
 def main() -> int32:
     u1 = User(name="Bob", age=25)

@@ -2,16 +2,16 @@
 ## Expects: "item-42"
 
 trait Labelable:
-    def label(self) -> String
+    def label(self) -> str
 
 class Item:
     id: int32
 
-    def prefix(self) -> String:
+    def prefix(self) -> str:
         return "item-"
 
 impl Labelable for Item:
-    def label(self) -> String:
+    def label(self) -> str:
         return self.prefix() + f"{self.id}"
 
 def main() -> int32:

@@ -1,4 +1,4 @@
-def consume(value: own String):
+def consume(value: own str):
     print(value)
 
 def main() -> int32:
@@ -6,7 +6,7 @@ def main() -> int32:
     for name in own names:
         consume(name)
 
-    tags: Set[String] = {"red", "blue"}
+    tags: set[str] = {"red", "blue"}
     for tag in own tags:
         consume(tag)
     return 0

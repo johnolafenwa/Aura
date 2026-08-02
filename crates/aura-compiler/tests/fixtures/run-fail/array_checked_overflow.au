@@ -1,3 +1,3 @@
 def main():
-    values: Vec[int32] = [2147483647, 1]
-    print(Array[int32].from_vec(values, [2]) + 1)
+    values: list[int32] = [2147483647, 1]
+    print(Array[int32].from_list(values, [2]) + 1)

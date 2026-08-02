@@ -2,10 +2,10 @@ enum Envelope[T]:
     Empty
     Value(T)
 
-def duplicate[T](values: Vec[Envelope[T]]) -> Vec[Envelope[T]]:
-    return values.clone()
+def duplicate[T](values: list[Envelope[T]]) -> list[Envelope[T]]:
+    return values.copy()
 
-def accept(values: Vec[Envelope[int64]]) -> Vec[Envelope[int64]]:
+def accept(values: list[Envelope[int64]]) -> list[Envelope[int64]]:
     return duplicate(values)
 
 def main() -> int32:

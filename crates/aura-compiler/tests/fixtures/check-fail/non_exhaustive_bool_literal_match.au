@@ -1,4 +1,4 @@
-def render(flag: bool) -> String:
+def render(flag: bool) -> str:
     match own flag:
         case true:
             return "yes"

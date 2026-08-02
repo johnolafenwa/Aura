@@ -2,7 +2,7 @@
 
 trait FullTrait:
     def method_a(self) -> int32
-    def method_b(self) -> String
+    def method_b(self) -> str
 
 class Incomplete:
     value: int32

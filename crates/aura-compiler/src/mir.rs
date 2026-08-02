@@ -172,7 +172,7 @@ fn is_builtin_binary_operator(op: BinaryOp, left_ty: &Type, right_ty: &Type) -> 
         BinaryOp::And | BinaryOp::Or => *left_ty == Type::named("bool"),
         BinaryOp::Add => {
             crate::sema::integer_type_bounds(left_ty).is_some()
-                || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64" || name == "String")
+                || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64" || name == "str")
         }
         BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Mod => {
             crate::sema::integer_type_bounds(left_ty).is_some()
@@ -337,7 +337,7 @@ fn default_return_operand(ty: &Type) -> Operand {
         Type::Named(name, args) if args.is_empty() => match name.as_str() {
             "bool" => Operand::Bool(false),
             "float32" | "float64" => Operand::Float(0.0),
-            "String" => Operand::String(String::new()),
+            "str" => Operand::String(String::new()),
             "Duration" => Operand::Duration(0),
             _ if matches!(
                 name.as_str(),
@@ -1919,7 +1919,7 @@ impl<'a> Lowerer<'a> {
                     return Type::Unit;
                 }
                 let source_name = match source_name.as_str() {
-                    "str" => "String",
+                    "str" => "str",
                     "int" => "int64",
                     name => name,
                 };
@@ -2359,17 +2359,17 @@ impl<'a> Lowerer<'a> {
         if let AssignTarget::Index { object, index } = &assign.target {
             let lowered_object = self.lower_expr(object);
             let object_ty = self.infer_expr_type(object);
-            let (index_field, set_index_field, index_ty, target_ty) = match object_ty {
-                Some(Type::Named(name, args)) if name == "Map" && args.len() == 2 => (
+            let (index_field, set_index_field, index_ty, target_ty) = match object_ty.as_ref() {
+                Some(Type::Named(name, args)) if name == "dict" && args.len() == 2 => (
                     INTERNAL_MAP_INDEX_FIELD.to_string(),
                     INTERNAL_MAP_SET_INDEX_FIELD.to_string(),
                     Some(args[0].clone()),
                     Some(args[1].clone()),
                 ),
-                Some(Type::Named(name, args)) if name == "Vec" && args.len() == 1 => (
+                Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => (
                     INTERNAL_VEC_INDEX_FIELD.to_string(),
                     INTERNAL_VEC_SET_INDEX_FIELD.to_string(),
-                    Some(Type::named("int32")),
+                    Some(Type::named("int64")),
                     Some(args[0].clone()),
                 ),
                 Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => (
@@ -2385,7 +2385,15 @@ impl<'a> Lowerer<'a> {
                     None,
                 ),
             };
-            let lowered_index = self.lower_expr_for_owned_value(index, index_ty.as_ref());
+            let lowered_index = match object_ty.as_ref() {
+                Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
+                    self.lower_index_domain_expr(index)
+                }
+                Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => {
+                    self.lower_array_coordinate_expr(index)
+                }
+                _ => self.lower_expr_for_owned_value(index, index_ty.as_ref()),
+            };
             let (read_index, set_index) = if assign.op.is_some() {
                 let captured = match index_ty.clone() {
                     Some(ty) => self.new_typed_temp(ty),
@@ -2701,7 +2709,7 @@ impl<'a> Lowerer<'a> {
     fn lower_collection_literal_with_type(&mut self, expr: &Expr, ty: &Type) -> Option<Rvalue> {
         match (&expr.kind, ty) {
             (ExprKind::List(elements), Type::Named(name, args))
-                if name == "Vec" && args.len() == 1 =>
+                if name == "list" && args.len() == 1 =>
             {
                 Some(Rvalue::VecLiteral {
                     elements: elements
@@ -2712,7 +2720,7 @@ impl<'a> Lowerer<'a> {
                 })
             }
             (ExprKind::Set(elements), Type::Named(name, args))
-                if name == "Set" && args.len() == 1 =>
+                if name == "set" && args.len() == 1 =>
             {
                 Some(Rvalue::SetLiteral {
                     elements: elements
@@ -2723,7 +2731,7 @@ impl<'a> Lowerer<'a> {
                 })
             }
             (ExprKind::Map(entries), Type::Named(name, args))
-                if entries.is_empty() && name == "Set" && args.len() == 1 =>
+                if entries.is_empty() && name == "set" && args.len() == 1 =>
             {
                 Some(Rvalue::SetLiteral {
                     elements: Vec::new(),
@@ -2731,7 +2739,7 @@ impl<'a> Lowerer<'a> {
                 })
             }
             (ExprKind::Map(entries), Type::Named(name, args))
-                if name == "Map" && args.len() == 2 =>
+                if name == "dict" && args.len() == 2 =>
             {
                 Some(Rvalue::MapLiteral {
                     entries: entries
@@ -3354,7 +3362,7 @@ impl<'a> Lowerer<'a> {
             })
             .collect::<Vec<_>>();
 
-        let index = self.new_typed_temp(Type::named("int32"));
+        let index = self.new_typed_temp(Type::named("int64"));
         self.emit(Instruction::Assign {
             target: index.clone(),
             value: Rvalue::Use(Operand::Int(0)),
@@ -3368,11 +3376,7 @@ impl<'a> Lowerer<'a> {
             let position = self.new_typed_temp(Type::named("int64"));
             self.emit(Instruction::Assign {
                 target: position.clone(),
-                value: Rvalue::Cast {
-                    value: Operand::Place(index.clone()),
-                    ty: Type::named("int64"),
-                    span: for_stmt.span,
-                },
+                value: Rvalue::Use(Operand::Place(index.clone())),
             });
             element_operands.push(Operand::Place(position));
             element_types.push(Type::named("int64"));
@@ -3525,13 +3529,13 @@ impl<'a> Lowerer<'a> {
         let target_ty = checked_binding
             .map(|binding| binding.binding_type.clone())
             .unwrap_or_else(|| match iterable_ty.as_ref() {
-                Some(Type::Named(name, _)) if name == "Range" => Type::named("int32"),
+                Some(Type::Named(name, _)) if name == "Range" => Type::named("int64"),
                 Some(Type::Named(name, args))
-                    if matches!(name.as_str(), "Queue" | "Vec" | "Set") && args.len() == 1 =>
+                    if matches!(name.as_str(), "Queue" | "list" | "set") && args.len() == 1 =>
                 {
                     args[0].clone()
                 }
-                _ => Type::named("int32"),
+                _ => Type::named("int64"),
             });
         let target_scope = self.fresh_scoped_binding_target_slots(&for_stmt.target, &target_ty);
         let simple_binding = match &for_stmt.target {
@@ -3643,7 +3647,7 @@ impl<'a> Lowerer<'a> {
                     },
                 });
             }
-            Some(Type::Named(name, args)) if name == "Vec" && args.len() == 1 => {
+            Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
                 let element_ty = args[0].clone();
                 let takes_owned = owned_iterable_place.is_some();
                 let binding = match simple_binding.clone() {
@@ -3662,7 +3666,7 @@ impl<'a> Lowerer<'a> {
                 };
                 let next_value = self
                     .new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
-                let index = self.new_typed_temp(Type::named("int32"));
+                let index = self.new_typed_temp(Type::named("int64"));
                 self.emit(Instruction::Assign {
                     target: index.clone(),
                     value: Rvalue::Use(Operand::Int(0)),
@@ -3824,7 +3828,7 @@ impl<'a> Lowerer<'a> {
                     });
                 }
             }
-            Some(Type::Named(name, args)) if name == "Set" && args.len() == 1 => {
+            Some(Type::Named(name, args)) if name == "set" && args.len() == 1 => {
                 let element_ty = args[0].clone();
                 let takes_owned = owned_iterable_place.is_some();
                 let binding = match simple_binding.clone() {
@@ -3843,7 +3847,7 @@ impl<'a> Lowerer<'a> {
                 };
                 let next_value = self
                     .new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
-                let index = self.new_typed_temp(Type::named("int32"));
+                let index = self.new_typed_temp(Type::named("int64"));
                 self.emit(Instruction::Assign {
                     target: index.clone(),
                     value: Rvalue::Use(Operand::Int(0)),
@@ -4058,7 +4062,7 @@ impl<'a> Lowerer<'a> {
         let result_place = self.new_typed_temp(info.result_type.clone());
         let result_literal = match (&info.result_type, output) {
             (Type::Named(name, args), ComprehensionOutput::List(_))
-                if name == "Vec" && args.len() == 1 =>
+                if name == "list" && args.len() == 1 =>
             {
                 Rvalue::VecLiteral {
                     elements: Vec::new(),
@@ -4066,7 +4070,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             (Type::Named(name, args), ComprehensionOutput::Set(_))
-                if name == "Set" && args.len() == 1 =>
+                if name == "set" && args.len() == 1 =>
             {
                 Rvalue::SetLiteral {
                     elements: Vec::new(),
@@ -4074,7 +4078,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             (Type::Named(name, args), ComprehensionOutput::Map { .. })
-                if name == "Map" && args.len() == 2 =>
+                if name == "dict" && args.len() == 2 =>
             {
                 Rvalue::MapLiteral {
                     entries: Vec::new(),
@@ -4180,7 +4184,7 @@ impl<'a> Lowerer<'a> {
     ) {
         match (output, result_type) {
             (ComprehensionOutput::List(value), Type::Named(name, args))
-                if name == "Vec" && args.len() == 1 =>
+                if name == "list" && args.len() == 1 =>
             {
                 let value = self.lower_expr_for_owned_value(value, Some(&args[0]));
                 self.emit_vec_push(
@@ -4190,16 +4194,16 @@ impl<'a> Lowerer<'a> {
                 );
             }
             (ComprehensionOutput::Set(value), Type::Named(name, args))
-                if name == "Set" && args.len() == 1 =>
+                if name == "set" && args.len() == 1 =>
             {
                 let value = self.lower_expr_for_owned_value(value, Some(&args[0]));
-                let ignored = self.new_typed_temp(Type::named("bool"));
+                let ignored = self.new_typed_temp(Type::Unit);
                 self.emit(Instruction::Assign {
                     target: ignored,
                     value: Rvalue::Call {
                         callee: CallTarget::Member {
                             object: Operand::Place(result_place.to_string()),
-                            field: "insert".to_string(),
+                            field: "add".to_string(),
                             receiver_place: Some(result_place.to_string()),
                         },
                         args: vec![MirArg {
@@ -4216,7 +4220,7 @@ impl<'a> Lowerer<'a> {
                     value,
                 },
                 Type::Named(name, args),
-            ) if name == "Map" && args.len() == 2 => {
+            ) if name == "dict" && args.len() == 2 => {
                 // Map output preserves source order: evaluate the key fully
                 // before beginning the value, then replace any prior entry.
                 let key = self.lower_expr_for_owned_value(key_expr, Some(&args[0]));
@@ -4344,7 +4348,7 @@ impl<'a> Lowerer<'a> {
                 self.lower_comprehension(expr, output, clauses)
             }
             ExprKind::FString(parts) => {
-                let temp = self.new_typed_temp(Type::named("String"));
+                let temp = self.new_typed_temp(Type::named("str"));
                 let parts = parts
                     .iter()
                     .map(|part| match part {
@@ -4353,7 +4357,7 @@ impl<'a> Lowerer<'a> {
                         }
                         crate::ast::FormatPart::Expr(expr) => {
                             let value = self.lower_expr_at_sequence_point(expr, None);
-                            let rendered = self.new_typed_temp(Type::named("String"));
+                            let rendered = self.new_typed_temp(Type::named("str"));
                             self.emit(Instruction::Assign {
                                 target: rendered.clone(),
                                 value: Rvalue::FormatString {
@@ -4595,16 +4599,18 @@ impl<'a> Lowerer<'a> {
                 let temp = self.new_temp_for_expr(expr);
                 let object_type = self.infer_expr_type(object);
                 let lowered_object = self.lower_expr_at_sequence_point(object, None);
-                let index_type = matches!(
-                    object_type,
-                    Some(Type::Named(ref name, ref args))
-                        if name == "Array" && args.len() == 1
-                )
-                .then(|| array_coordinate_type(index));
-                let lowered_index = self.lower_expr_at_sequence_point(index, index_type.as_ref());
+                let lowered_index = match object_type.as_ref() {
+                    Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
+                        self.lower_index_domain_expr(index)
+                    }
+                    Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => {
+                        self.lower_array_coordinate_expr(index)
+                    }
+                    _ => self.lower_expr_at_sequence_point(index, None),
+                };
                 let receiver_place = self.render_place_expr_option(object);
                 let field = match object_type {
-                    Some(Type::Named(name, args)) if name == "Map" && args.len() == 2 => {
+                    Some(Type::Named(name, args)) if name == "dict" && args.len() == 2 => {
                         INTERNAL_MAP_INDEX_FIELD.to_string()
                     }
                     _ => INTERNAL_VEC_INDEX_FIELD.to_string(),
@@ -4646,14 +4652,13 @@ impl<'a> Lowerer<'a> {
             } => {
                 let temp = self.new_temp_for_expr(expr);
                 let lowered_object = self.lower_expr_at_sequence_point(object, None);
-                let endpoint_ty = Type::named("int32");
                 let lowered_start = start
                     .as_deref()
-                    .map(|start| self.lower_expr_at_sequence_point(start, Some(&endpoint_ty)))
+                    .map(|start| self.lower_index_domain_expr(start))
                     .unwrap_or(Operand::Int(0));
                 let lowered_end = end
                     .as_deref()
-                    .map(|end| self.lower_expr_at_sequence_point(end, Some(&endpoint_ty)))
+                    .map(|end| self.lower_index_domain_expr(end))
                     .unwrap_or(Operand::Int(0));
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
@@ -4745,11 +4750,11 @@ impl<'a> Lowerer<'a> {
         let Some(Type::Named(receiver_name, receiver_args)) = self.infer_expr_type(object) else {
             return false;
         };
-        if receiver_name != "Vec" || receiver_args.len() != 1 {
+        if receiver_name != "list" || receiver_args.len() != 1 {
             return false;
         }
         let element_ty = receiver_args[0].clone();
-        let Some(member) = BuiltinMember::resolve("Vec", field) else {
+        let Some(member) = BuiltinMember::resolve("list", field) else {
             return false;
         };
         if !matches!(
@@ -4766,15 +4771,76 @@ impl<'a> Lowerer<'a> {
             BuiltinMember::VecSort => {
                 let receiver_place = self
                     .render_place_expr_option(object)
-                    .expect("checked Vec.sort receiver should be a mutable place");
-                self.lower_stable_vec_sort(
-                    Operand::Place(receiver_place.clone()),
-                    &receiver_place,
-                    &element_ty,
-                    None,
-                    expr.span,
-                    result,
-                );
+                    .expect("checked list.sort receiver should be a mutable place");
+                let ordered = member
+                    .bind_args(args, expr.span)
+                    .expect("checked list.sort arguments should bind during MIR lowering");
+                let callback = ordered[0].map(|argument| {
+                    let callback_ty = self
+                        .infer_expr_type(&argument.value)
+                        .expect("checked list.sort key should have a function type");
+                    let callback =
+                        self.lower_expr_at_sequence_point(&argument.value, Some(&callback_ty));
+                    let (Type::Function {
+                        return_type: key_ty,
+                        ..
+                    }
+                    | Type::Closure {
+                        return_type: key_ty,
+                        ..
+                    }) = callback_ty
+                    else {
+                        unreachable!("checked list.sort key should have a function type");
+                    };
+                    (callback, *key_ty)
+                });
+                let reverse = ordered[1]
+                    .map(|argument| {
+                        self.lower_expr_at_sequence_point(
+                            &argument.value,
+                            Some(&Type::named("bool")),
+                        )
+                    })
+                    .unwrap_or(Operand::Bool(false));
+                let source = Operand::Place(receiver_place.clone());
+                if let Some((callback, key_ty)) = callback {
+                    let keys =
+                        self.new_typed_temp(Type::Named("list".to_string(), vec![key_ty.clone()]));
+                    self.emit(Instruction::Assign {
+                        target: keys.clone(),
+                        value: Rvalue::VecLiteral {
+                            elements: Vec::new(),
+                            element_type: key_ty.clone(),
+                        },
+                    });
+                    self.lower_vec_key_collection_loop(
+                        source.clone(),
+                        &element_ty,
+                        callback,
+                        &keys,
+                        &key_ty,
+                        expr.span,
+                    );
+                    self.lower_stable_vec_sort(
+                        source,
+                        &receiver_place,
+                        &key_ty,
+                        Some((&keys, &key_ty)),
+                        reverse,
+                        expr.span,
+                        result,
+                    );
+                } else {
+                    self.lower_stable_vec_sort(
+                        source,
+                        &receiver_place,
+                        &element_ty,
+                        None,
+                        reverse,
+                        expr.span,
+                        result,
+                    );
+                }
             }
             BuiltinMember::VecSortBy => {
                 let receiver_place = self
@@ -4803,7 +4869,7 @@ impl<'a> Lowerer<'a> {
                 };
                 let key_ty = *key_ty;
                 let keys =
-                    self.new_typed_temp(Type::Named("Vec".to_string(), vec![key_ty.clone()]));
+                    self.new_typed_temp(Type::Named("list".to_string(), vec![key_ty.clone()]));
                 self.emit(Instruction::Assign {
                     target: keys.clone(),
                     value: Rvalue::VecLiteral {
@@ -4825,6 +4891,7 @@ impl<'a> Lowerer<'a> {
                     &receiver_place,
                     &key_ty,
                     Some((&keys, &key_ty)),
+                    Operand::Bool(false),
                     expr.span,
                     result,
                 );
@@ -4848,7 +4915,7 @@ impl<'a> Lowerer<'a> {
                     else {
                         unreachable!("checked Vec.map result should be Vec[U]");
                     };
-                    assert_eq!(name, "Vec");
+                    assert_eq!(name, "list");
                     output_args
                         .into_iter()
                         .next()
@@ -5194,7 +5261,7 @@ impl<'a> Lowerer<'a> {
         key_ty: &Type,
         span: Span,
     ) {
-        let index = self.new_typed_temp(Type::named("int32"));
+        let index = self.new_typed_temp(Type::named("int64"));
         let next = self.new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
         let element = self.new_typed_temp(element_ty.clone());
         self.emit(Instruction::Assign {
@@ -5268,7 +5335,7 @@ impl<'a> Lowerer<'a> {
         filter: bool,
         span: Span,
     ) {
-        let index = self.new_typed_temp(Type::named("int32"));
+        let index = self.new_typed_temp(Type::named("int64"));
         let next = self.new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
         let element = self.new_typed_temp(element_ty.clone());
         self.emit(Instruction::Assign {
@@ -5373,21 +5440,23 @@ impl<'a> Lowerer<'a> {
         self.switch_to(done);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lower_stable_vec_sort(
         &mut self,
         source: Operand,
         source_place: &str,
         ordering_ty: &Type,
         keys: Option<(&str, &Type)>,
+        reverse: Operand,
         span: Span,
         result: &str,
     ) {
         let ordering_source = keys
             .map(|(keys, _)| Operand::Place(keys.to_string()))
             .unwrap_or_else(|| source.clone());
-        let length64 = self.new_typed_temp(Type::named("int64"));
+        let length = self.new_typed_temp(Type::named("int64"));
         self.emit(Instruction::Assign {
-            target: length64.clone(),
+            target: length.clone(),
             value: Rvalue::Call {
                 callee: CallTarget::Member {
                     object: ordering_source.clone(),
@@ -5397,16 +5466,7 @@ impl<'a> Lowerer<'a> {
                 args: Vec::new(),
             },
         });
-        let length = self.new_typed_temp(Type::named("int32"));
-        self.emit(Instruction::Assign {
-            target: length.clone(),
-            value: Rvalue::Cast {
-                value: Operand::Place(length64),
-                ty: Type::named("int32"),
-                span,
-            },
-        });
-        let outer_index = self.new_typed_temp(Type::named("int32"));
+        let outer_index = self.new_typed_temp(Type::named("int64"));
         self.emit(Instruction::Assign {
             target: outer_index.clone(),
             value: Rvalue::Use(Operand::Int(1)),
@@ -5438,7 +5498,7 @@ impl<'a> Lowerer<'a> {
             else_label: self.label(done),
         });
 
-        let inner_index = self.new_typed_temp(Type::named("int32"));
+        let inner_index = self.new_typed_temp(Type::named("int64"));
         self.switch_to(outer_body);
         self.emit(Instruction::Assign {
             target: inner_index.clone(),
@@ -5464,7 +5524,7 @@ impl<'a> Lowerer<'a> {
         });
 
         self.switch_to(inner_compare);
-        let previous_index = self.new_typed_temp(Type::named("int32"));
+        let previous_index = self.new_typed_temp(Type::named("int64"));
         self.emit(Instruction::Assign {
             target: previous_index.clone(),
             value: Rvalue::Binary {
@@ -5477,7 +5537,47 @@ impl<'a> Lowerer<'a> {
         let current = self.emit_vec_read(ordering_source.clone(), &inner_index, ordering_ty, span);
         let previous =
             self.emit_vec_read(ordering_source.clone(), &previous_index, ordering_ty, span);
-        let comes_before = self.emit_vec_ordering_less(&current, &previous, ordering_ty, span);
+        let ascending = self.emit_vec_ordering_less(&current, &previous, ordering_ty, span);
+        let descending = self.emit_vec_ordering_less(&previous, &current, ordering_ty, span);
+        let not_reverse = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: not_reverse.clone(),
+            value: Rvalue::Unary {
+                op: UnaryOp::Not,
+                value: reverse.clone(),
+                span,
+            },
+        });
+        let ascending_selected = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: ascending_selected.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::And,
+                left: Operand::Place(not_reverse),
+                right: Operand::Place(ascending),
+                span,
+            },
+        });
+        let descending_selected = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: descending_selected.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::And,
+                left: reverse,
+                right: Operand::Place(descending),
+                span,
+            },
+        });
+        let comes_before = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: comes_before.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Or,
+                left: Operand::Place(ascending_selected),
+                right: Operand::Place(descending_selected),
+                span,
+            },
+        });
         self.terminate(Terminator::Branch {
             condition: Operand::Place(comes_before),
             then_label: self.label(swap),
@@ -5605,7 +5705,7 @@ impl<'a> Lowerer<'a> {
             value: Rvalue::Call {
                 callee: CallTarget::Member {
                     object: vector,
-                    field: "push".to_string(),
+                    field: "append".to_string(),
                     receiver_place: Some(vector_place.to_string()),
                 },
                 args: vec![MirArg {
@@ -5618,7 +5718,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn emit_vec_swap(&mut self, vector: Operand, vector_place: &str, first: &str, second: &str) {
-        let ignored = self.new_typed_temp(Type::named("bool"));
+        let ignored = self.new_typed_temp(Type::Unit);
         self.emit(Instruction::Assign {
             target: ignored,
             value: Rvalue::Call {
@@ -5983,6 +6083,53 @@ impl<'a> Lowerer<'a> {
             value: Rvalue::Use(value),
         });
         Operand::Place(temp)
+    }
+
+    /// Lowers one of the public index-domain positions. The checker admits
+    /// only integer types whose complete domain fits in int64; MIR makes that
+    /// narrowly scoped conversion explicit so both execution backends observe
+    /// an int64 value without enabling general implicit numeric conversion.
+    fn lower_index_domain_expr(&mut self, expr: &Expr) -> Operand {
+        let target = Type::named("int64");
+        let actual = self.infer_expr_type(expr).unwrap_or_else(|| target.clone());
+        let source_expected = if actual == target { &target } else { &actual };
+        let value = self.lower_expr_at_sequence_point(expr, Some(source_expected));
+        if actual == target {
+            return value;
+        }
+        let temp = self.new_typed_temp(target.clone());
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::Cast {
+                value,
+                ty: target,
+                span: expr.span,
+            },
+        });
+        Operand::Place(temp)
+    }
+
+    fn lower_array_coordinate_expr(&mut self, expr: &Expr) -> Operand {
+        match &expr.kind {
+            ExprKind::Group(inner) => self.lower_array_coordinate_expr(inner),
+            ExprKind::Tuple(elements) => {
+                let element_types = vec![Type::named("int64"); elements.len()];
+                let elements = elements
+                    .iter()
+                    .map(|element| self.lower_index_domain_expr(element))
+                    .collect();
+                let temp = self.new_typed_temp(Type::Tuple(element_types.clone()));
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::TupleLiteral {
+                        elements,
+                        element_types,
+                    },
+                });
+                Operand::Place(temp)
+            }
+            _ => self.lower_index_domain_expr(expr),
+        }
     }
 
     fn lower_expr_for_passing(
@@ -6970,7 +7117,7 @@ impl<'a> Lowerer<'a> {
                 });
             }
             ExprKind::Name(name)
-                if name == "Vec"
+                if name == "list"
                     && matches!(&callee.kind, ExprKind::Specialize { .. })
                     && args.is_empty() =>
             {
@@ -6990,7 +7137,7 @@ impl<'a> Lowerer<'a> {
                 });
             }
             ExprKind::Name(name)
-                if name == "Map"
+                if name == "dict"
                     && matches!(&callee.kind, ExprKind::Specialize { .. })
                     && args.is_empty() =>
             {
@@ -7046,19 +7193,30 @@ impl<'a> Lowerer<'a> {
                                     vec![Type::named("int64")]
                                 }
                                 BuiltinAssociatedFunction::StringFromBytes => {
-                                    vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])]
+                                    vec![Type::Named(
+                                        "list".to_string(),
+                                        vec![Type::named("uint8")],
+                                    )]
                                 }
                                 BuiltinAssociatedFunction::ArrayZeros => {
-                                    vec![Type::Named("Vec".to_string(), vec![Type::named("int64")])]
+                                    vec![Type::Named(
+                                        "list".to_string(),
+                                        vec![Type::named("int64")],
+                                    )]
                                 }
                                 BuiltinAssociatedFunction::ArrayFull => vec![
-                                    Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+                                    Type::Named("list".to_string(), vec![Type::named("int64")]),
                                     array_element_type,
                                 ],
                                 BuiltinAssociatedFunction::ArrayFromVec => vec![
-                                    Type::Named("Vec".to_string(), vec![array_element_type]),
-                                    Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+                                    Type::Named("list".to_string(), vec![array_element_type]),
+                                    Type::Named("list".to_string(), vec![Type::named("int64")]),
                                 ],
+                                BuiltinAssociatedFunction::ListWithCapacity
+                                | BuiltinAssociatedFunction::DictWithCapacity
+                                | BuiltinAssociatedFunction::SetWithCapacity => {
+                                    vec![Type::named("int64")]
+                                }
                             };
                             let mut lowered_by_param = vec![None::<MirArg>; ordered_args.len()];
                             for argument in args {
@@ -7110,17 +7268,17 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 if field == "to_bytes"
-                    && self.infer_expr_type(object).as_ref() == Some(&Type::named("String"))
+                    && self.infer_expr_type(object).as_ref() == Some(&Type::named("str"))
                 {
                     let value = self.lower_expr_for_passing(
                         object,
-                        Some(&Type::named("String")),
+                        Some(&Type::named("str")),
                         ReceiverKind::Borrow,
                     );
                     self.emit(Instruction::Assign {
                         target: temp.clone(),
                         value: Rvalue::Call {
-                            callee: CallTarget::Name("String.to_bytes".to_string()),
+                            callee: CallTarget::Name("str.to_bytes".to_string()),
                             args: vec![MirArg {
                                 name: None,
                                 value,
@@ -7578,6 +7736,23 @@ impl<'a> Lowerer<'a> {
                     },
                 });
             }
+            ExprKind::Name(name) if name == "range" => {
+                let lowered_args = args
+                    .iter()
+                    .map(|argument| MirArg {
+                        name: argument.name.clone(),
+                        value: self.lower_index_domain_expr(&argument.value),
+                        writeback_place: None,
+                    })
+                    .collect();
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name(name.clone()),
+                        args: lowered_args,
+                    },
+                });
+            }
             ExprKind::Name(name) if name == "select" => {
                 let lowered_args = args
                     .iter()
@@ -7627,7 +7802,7 @@ impl<'a> Lowerer<'a> {
                 let consumes_tasks = matches!(
                     tasks_type.as_ref(),
                     Some(Type::Named(container, elements))
-                        if container == "Vec"
+                        if container == "list"
                             && matches!(
                                 elements.as_slice(),
                                 [Type::Named(task, result)]
@@ -7936,7 +8111,7 @@ impl<'a> Lowerer<'a> {
                     let expected = if class_name == "Array" && class_args.len() == 1 {
                         match (builtin_member, index) {
                             (BuiltinMember::ArrayGet | BuiltinMember::ArraySet, 0) => {
-                                Some(Type::Named("Vec".to_string(), vec![Type::named("int32")]))
+                                Some(Type::Named("list".to_string(), vec![Type::named("int64")]))
                             }
                             (BuiltinMember::ArraySet, 1) | (BuiltinMember::ArrayFill, 0) => {
                                 Some(class_args[0].clone())
@@ -7964,8 +8139,20 @@ impl<'a> Lowerer<'a> {
                     } else {
                         self.infer_expr_type(&argument.value)
                     };
-                    let value =
-                        self.lower_expr_for_passing(&argument.value, expected.as_ref(), passing);
+                    let index_domain_argument = class_name == "list"
+                        && matches!(
+                            (builtin_member, index),
+                            (BuiltinMember::VecGet, 0)
+                                | (BuiltinMember::VecSet, 0)
+                                | (BuiltinMember::VecRemove, 0)
+                                | (BuiltinMember::VecSwap, 0 | 1)
+                                | (BuiltinMember::VecInsert, 0)
+                        );
+                    let value = if index_domain_argument {
+                        self.lower_index_domain_expr(&argument.value)
+                    } else {
+                        self.lower_expr_for_passing(&argument.value, expected.as_ref(), passing)
+                    };
                     let writeback_place = (passing == ReceiverKind::BorrowMut)
                         .then(|| self.render_place_expr_option(&argument.value))
                         .flatten();
@@ -8298,7 +8485,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Int(_) => Some(Type::named("int64")),
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
-            ExprKind::String(_) => Some(Type::named("String")),
+            ExprKind::String(_) => Some(Type::named("str")),
             ExprKind::Tuple(elements) => Some(Type::Tuple(
                 elements
                     .iter()
@@ -8309,21 +8496,21 @@ impl<'a> Lowerer<'a> {
                     .collect(),
             )),
             ExprKind::List(elements) => Some(Type::Named(
-                "Vec".to_string(),
+                "list".to_string(),
                 vec![elements
                     .first()
                     .and_then(|element| self.infer_expr_type(element))
                     .unwrap_or_else(|| Type::named("Unknown"))],
             )),
             ExprKind::Set(elements) => Some(Type::Named(
-                "Set".to_string(),
+                "set".to_string(),
                 vec![elements
                     .first()
                     .and_then(|element| self.infer_expr_type(element))
                     .unwrap_or_else(|| Type::named("Unknown"))],
             )),
             ExprKind::Map(entries) => Some(Type::Named(
-                "Map".to_string(),
+                "dict".to_string(),
                 vec![
                     entries
                         .first()
@@ -8338,7 +8525,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Comprehension { .. } => self
                 .comprehension_info_at(expr.span)
                 .map(|info| info.result_type.clone()),
-            ExprKind::FString(_) => Some(Type::named("String")),
+            ExprKind::FString(_) => Some(Type::named("str")),
             ExprKind::Specialize { expr, type_args } => {
                 if let Some((_runtime_name, function)) = self.resolve_function_value_target(expr) {
                     let substitutions = substitutions_from_decl_type_args(
@@ -8354,7 +8541,7 @@ impl<'a> Lowerer<'a> {
                     ExprKind::Name(name)
                         if matches!(
                             name.as_str(),
-                            "Option" | "Result" | "SendError" | "Queue" | "Vec" | "Set" | "Map"
+                            "Option" | "Result" | "SendError" | "Queue" | "list" | "set" | "dict"
                         ) =>
                     {
                         Some(Type::Named(
@@ -8463,7 +8650,7 @@ impl<'a> Lowerer<'a> {
                             return args.first().and_then(|argument| {
                                 match self.infer_expr_type(&argument.value) {
                                     Some(Type::Named(container, container_args))
-                                        if container == "Vec" && container_args.len() == 1 =>
+                                        if container == "list" && container_args.len() == 1 =>
                                     {
                                         match &container_args[0] {
                                             Type::Named(task, task_args)
@@ -8485,7 +8672,7 @@ impl<'a> Lowerer<'a> {
                             return args.first().and_then(|argument| {
                                 match self.infer_expr_type(&argument.value) {
                                     Some(Type::Named(container, container_args))
-                                        if container == "Vec" && container_args.len() == 1 =>
+                                        if container == "list" && container_args.len() == 1 =>
                                     {
                                         match &container_args[0] {
                                             Type::Named(task, task_args)
@@ -8507,7 +8694,7 @@ impl<'a> Lowerer<'a> {
                             return Some(Type::named("int64"));
                         }
                         if name == "str" {
-                            return Some(Type::named("String"));
+                            return Some(Type::named("str"));
                         }
                         if name == "abs" || name == "min" || name == "max" || name == "sqrt" {
                             return args
@@ -8517,19 +8704,19 @@ impl<'a> Lowerer<'a> {
                         if name == "parse_int32" {
                             return Some(Type::Named(
                                 "Result".to_string(),
-                                vec![Type::named("int32"), Type::named("String")],
+                                vec![Type::named("int32"), Type::named("str")],
                             ));
                         }
                         if name == "parse_int64" {
                             return Some(Type::Named(
                                 "Result".to_string(),
-                                vec![Type::named("int64"), Type::named("String")],
+                                vec![Type::named("int64"), Type::named("str")],
                             ));
                         }
                         if name == "parse_float64" {
                             return Some(Type::Named(
                                 "Result".to_string(),
-                                vec![Type::named("float64"), Type::named("String")],
+                                vec![Type::named("float64"), Type::named("str")],
                             ));
                         }
                         if name == "Queue" {
@@ -8546,10 +8733,10 @@ impl<'a> Lowerer<'a> {
                         if name == "TaskGroup" {
                             return Some(Type::named("TaskGroup"));
                         }
-                        if name == "Vec" {
+                        if name == "list" {
                             return explicit_type_args.map(|type_args| {
                                 Type::Named(
-                                    "Vec".to_string(),
+                                    "list".to_string(),
                                     type_args
                                         .iter()
                                         .map(|ty| self.lower_type_ref_with_provenance(ty))
@@ -8557,10 +8744,10 @@ impl<'a> Lowerer<'a> {
                                 )
                             });
                         }
-                        if name == "Set" {
+                        if name == "set" {
                             return explicit_type_args.map(|type_args| {
                                 Type::Named(
-                                    "Set".to_string(),
+                                    "set".to_string(),
                                     type_args
                                         .iter()
                                         .map(|ty| self.lower_type_ref_with_provenance(ty))
@@ -8568,10 +8755,10 @@ impl<'a> Lowerer<'a> {
                                 )
                             });
                         }
-                        if name == "Map" {
+                        if name == "dict" {
                             return explicit_type_args.map(|type_args| {
                                 Type::Named(
-                                    "Map".to_string(),
+                                    "dict".to_string(),
                                     type_args
                                         .iter()
                                         .map(|ty| self.lower_type_ref_with_provenance(ty))
@@ -8786,10 +8973,15 @@ impl<'a> Lowerer<'a> {
                                             Some(Type::Named(
                                                 "Result".to_string(),
                                                 vec![
-                                                    Type::named("String"),
+                                                    Type::named("str"),
                                                     Type::named("bytes.Error"),
                                                 ],
                                             ))
+                                        }
+                                        BuiltinAssociatedFunction::ListWithCapacity
+                                        | BuiltinAssociatedFunction::DictWithCapacity
+                                        | BuiltinAssociatedFunction::SetWithCapacity => {
+                                            receiver_type
                                         }
                                     };
                                 }
@@ -8859,9 +9051,9 @@ impl<'a> Lowerer<'a> {
                             };
                         }
                         if let Type::Named(name, receiver_args) = &receiver_type {
-                            if name == "Vec" && receiver_args.len() == 1 {
+                            if name == "list" && receiver_args.len() == 1 {
                                 match field.as_str() {
-                                    "sort" | "sort_by" => return Some(Type::Unit),
+                                    "sort" => return Some(Type::Unit),
                                     "filter" => return Some(receiver_type.clone()),
                                     "map" => {
                                         let callback = BuiltinMember::VecMap
@@ -8875,7 +9067,7 @@ impl<'a> Lowerer<'a> {
                                             self.infer_expr_type(&argument.value)
                                         }) {
                                             return Some(Type::Named(
-                                                "Vec".to_string(),
+                                                "list".to_string(),
                                                 vec![*return_type],
                                             ));
                                         }
@@ -8999,10 +9191,10 @@ impl<'a> Lowerer<'a> {
                 }
                 match self.infer_expr_type(object)? {
                     Type::Tuple(elements) => elements.get(tuple_constant_index(index)?).cloned(),
-                    Type::Named(name, args) if name == "Vec" && args.len() == 1 => {
+                    Type::Named(name, args) if name == "list" && args.len() == 1 => {
                         Some(args[0].clone())
                     }
-                    Type::Named(name, args) if name == "Map" && args.len() == 2 => {
+                    Type::Named(name, args) if name == "dict" && args.len() == 2 => {
                         Some(args[1].clone())
                     }
                     Type::Named(name, args) if name == "Array" && args.len() == 1 => {
@@ -9482,23 +9674,23 @@ impl<'a> Lowerer<'a> {
                 Type::Named(name, args) if name == "TaskResult" && args.len() == 1 => {
                     return Some(match variant_name {
                         "Ready" => vec![args[0].clone()],
-                        "Error" => vec![Type::named("String")],
+                        "Error" => vec![Type::named("str")],
                         "TimedOut" | "Cancelled" => Vec::new(),
                         _ => return None,
                     });
                 }
                 Type::Named(name, args) if name == "WaitAny" && args.len() == 1 => {
                     return Some(match variant_name {
-                        "Ready" => vec![Type::named("int32"), args[0].clone()],
-                        "Error" => vec![Type::named("int32"), Type::named("String")],
+                        "Ready" => vec![Type::named("int64"), args[0].clone()],
+                        "Error" => vec![Type::named("int64"), Type::named("str")],
                         "TimedOut" | "Cancelled" => Vec::new(),
                         _ => return None,
                     });
                 }
                 Type::Named(name, args) if name == "WaitAll" && args.len() == 1 => {
                     return Some(match variant_name {
-                        "Ready" => vec![Type::Named("Vec".to_string(), vec![args[0].clone()])],
-                        "Error" => vec![Type::named("int32"), Type::named("String")],
+                        "Ready" => vec![Type::Named("list".to_string(), vec![args[0].clone()])],
+                        "Error" => vec![Type::named("int64"), Type::named("str")],
                         "TimedOut" | "Cancelled" => Vec::new(),
                         _ => return None,
                     });
@@ -9506,14 +9698,14 @@ impl<'a> Lowerer<'a> {
                 Type::Named(name, args) if name == "SelectOutcome" && args.len() == 2 => {
                     return Some(match variant_name {
                         "Queue" => vec![
-                            Type::named("int32"),
+                            Type::named("int64"),
                             Type::Named("QueueReceive".to_string(), vec![args[0].clone()]),
                         ],
                         "Task" => vec![
-                            Type::named("int32"),
+                            Type::named("int64"),
                             Type::Named("TaskResult".to_string(), vec![args[1].clone()]),
                         ],
-                        "Deadline" => vec![Type::named("int32")],
+                        "Deadline" => vec![Type::named("int64")],
                         "Cancelled" => Vec::new(),
                         _ => return None,
                     });
@@ -9558,7 +9750,7 @@ impl<'a> Lowerer<'a> {
         let Type::Named(name, args) = receiver_type else {
             return None;
         };
-        let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+        let bytes_ty = Type::Named("list".to_string(), vec![Type::named("uint8")]);
         let io_error_ty = Type::Named("io.Error".to_string(), Vec::new());
         if args.is_empty()
             && field == "to_float"
@@ -9601,10 +9793,10 @@ impl<'a> Lowerer<'a> {
                     | "float64"
             )
         {
-            return Some(Type::named("String"));
+            return Some(Type::named("str"));
         }
         match (name.as_str(), field) {
-            ("Array", "shape") => Some(Type::Named("Vec".to_string(), vec![Type::named("int64")])),
+            ("Array", "shape") => Some(Type::Named("list".to_string(), vec![Type::named("int64")])),
             ("Array", "len") => Some(Type::named("int64")),
             ("Array", "clone")
             | ("Array", "wrapping_add")
@@ -9623,69 +9815,68 @@ impl<'a> Lowerer<'a> {
             ("Array", "fill") => Some(Type::Unit),
             ("Array", "sum") | ("Array", "min") | ("Array", "max") => args.first().cloned(),
             ("Array", "mean") => Some(Type::named("float64")),
-            ("String", "len" | "byte_len") => Some(Type::named("int64")),
-            ("String", "contains") | ("String", "starts_with") | ("String", "ends_with") => {
+            ("str", "len" | "byte_len") => Some(Type::named("int64")),
+            ("str", "contains") | ("str", "starts_with") | ("str", "ends_with") => {
                 Some(Type::named("bool"))
             }
-            ("String", "split") => {
-                Some(Type::Named("Vec".to_string(), vec![Type::named("String")]))
+            ("str", "split") => Some(Type::Named("list".to_string(), vec![Type::named("str")])),
+            ("str", "replace")
+            | ("str", "to_lower")
+            | ("str", "to_upper")
+            | ("str", "trim")
+            | ("str", "join")
+            | ("str", "clone") => Some(Type::named("str")),
+            ("str", "strip_prefix") | ("str", "strip_suffix") => {
+                Some(Type::Named("Option".to_string(), vec![Type::named("str")]))
             }
-            ("String", "replace")
-            | ("String", "to_lower")
-            | ("String", "to_upper")
-            | ("String", "trim")
-            | ("String", "join")
-            | ("String", "clone") => Some(Type::named("String")),
-            ("String", "strip_prefix") | ("String", "strip_suffix") => Some(Type::Named(
+            ("list", "len") => Some(Type::named("int64")),
+            ("list", "is_empty") => Some(Type::named("bool")),
+            ("list", "copy") => Some(Type::Named("list".to_string(), args.clone())),
+            ("list", "append")
+            | ("list", "extend")
+            | ("list", "clear")
+            | ("list", "reverse")
+            | ("list", "sort")
+            | ("list", "reserve")
+            | ("list", "remove")
+            | ("list", "swap")
+            | ("list", "insert") => Some(Type::Unit),
+            ("list", "filter") => Some(Type::Named("list".to_string(), args.clone())),
+            ("list", "contains") => Some(Type::named("bool")),
+            ("list", "index") | ("list", "count") => Some(Type::named("int64")),
+            ("list", "pop") | ("list", "set") => args.first().cloned(),
+            ("list", "get") => Some(Type::Named(
                 "Option".to_string(),
-                vec![Type::named("String")],
-            )),
-            ("Vec", "len") => Some(Type::named("int64")),
-            ("Vec", "is_empty") => Some(Type::named("bool")),
-            ("Vec", "clone") => Some(Type::Named("Vec".to_string(), args.clone())),
-            ("Vec", "push")
-            | ("Vec", "extend")
-            | ("Vec", "clear")
-            | ("Vec", "reverse")
-            | ("Vec", "sort")
-            | ("Vec", "sort_by") => Some(Type::Unit),
-            ("Vec", "filter") => Some(Type::Named("Vec".to_string(), args.clone())),
-            ("Vec", "swap") | ("Vec", "contains") | ("Vec", "insert") => Some(Type::named("bool")),
-            ("Vec", "pop") | ("Vec", "get") | ("Vec", "set") | ("Vec", "remove") => {
-                Some(Type::Named(
-                    "Option".to_string(),
-                    vec![args
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| Type::named("Unknown"))],
-                ))
-            }
-            ("Set", "len") => Some(Type::named("int64")),
-            ("Set", "is_empty") => Some(Type::named("bool")),
-            ("Set", "clone") => Some(Type::Named("Set".to_string(), args.clone())),
-            ("Set", "contains") | ("Set", "insert") | ("Set", "remove") => {
-                Some(Type::named("bool"))
-            }
-            ("Map", "len") => Some(Type::named("int64")),
-            ("Map", "is_empty") => Some(Type::named("bool")),
-            ("Map", "clone") => Some(Type::Named("Map".to_string(), args.clone())),
-            ("Map", "contains_key") => Some(Type::named("bool")),
-            ("Map", "keys") => Some(Type::Named(
-                "Vec".to_string(),
                 vec![args
                     .first()
                     .cloned()
                     .unwrap_or_else(|| Type::named("Unknown"))],
             )),
-            ("Map", "values") => Some(Type::Named(
-                "Vec".to_string(),
+            ("set", "len") => Some(Type::named("int64")),
+            ("set", "is_empty") => Some(Type::named("bool")),
+            ("set", "copy") => Some(Type::Named("set".to_string(), args.clone())),
+            ("set", "contains") => Some(Type::named("bool")),
+            ("set", "add" | "remove" | "discard" | "clear" | "reserve") => Some(Type::Unit),
+            ("dict", "len") => Some(Type::named("int64")),
+            ("dict", "is_empty") => Some(Type::named("bool")),
+            ("dict", "copy") => Some(Type::Named("dict".to_string(), args.clone())),
+            ("dict", "contains_key") => Some(Type::named("bool")),
+            ("dict", "keys") => Some(Type::Named(
+                "list".to_string(),
+                vec![args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"))],
+            )),
+            ("dict", "values") => Some(Type::Named(
+                "list".to_string(),
                 vec![args
                     .get(1)
                     .cloned()
                     .unwrap_or_else(|| Type::named("Unknown"))],
             )),
-            ("Map", "items") | ("Map", "entries") => Some(Type::Named(
-                "Vec".to_string(),
+            ("dict", "items") => Some(Type::Named(
+                "list".to_string(),
                 vec![Type::Named(
                     "MapEntry".to_string(),
                     vec![
@@ -9698,8 +9889,8 @@ impl<'a> Lowerer<'a> {
                     ],
                 )],
             )),
-            ("Map", "clear") | ("Map", "extend") => Some(Type::Unit),
-            ("Map", "get") | ("Map", "set") | ("Map", "remove") => Some(Type::Named(
+            ("dict", "clear") | ("dict", "update") | ("dict", "reserve") => Some(Type::Unit),
+            ("dict", "get") | ("dict", "set") | ("dict", "remove") => Some(Type::Named(
                 "Option".to_string(),
                 vec![args
                     .get(1)
@@ -9768,7 +9959,7 @@ impl<'a> Lowerer<'a> {
             }
             ("fs.File", "read_all") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("fs.File", "read_bytes") => Some(Type::Named(
                 "Result".to_string(),
@@ -9781,7 +9972,7 @@ impl<'a> Lowerer<'a> {
             ("process.Completed", "status") => Some(Type::named("process.ExitStatus")),
             ("process.Completed", "success") => Some(Type::named("bool")),
             ("process.Completed", "stdout") | ("process.Completed", "stderr") => {
-                Some(Type::named("String"))
+                Some(Type::named("str"))
             }
             ("process.Completed", "stdout_bytes") | ("process.Completed", "stderr_bytes") => {
                 Some(bytes_ty.clone())
@@ -9796,19 +9987,19 @@ impl<'a> Lowerer<'a> {
             )),
             ("net.TcpListener", "local_addr") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.TcpListener", "close") => Some(Type::Unit),
             ("net.TcpStream", "read_all")
             | ("net.TcpStream", "local_addr")
             | ("net.TcpStream", "peer_addr") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.TcpStream", "read_line") => Some(Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                     io_error_ty.clone(),
                 ],
             )),
@@ -9853,14 +10044,14 @@ impl<'a> Lowerer<'a> {
             )),
             ("net.UdpSocket", "local_addr") | ("net.UdpSocket", "peer_addr") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.UdpSocket", "close") => Some(Type::Unit),
-            ("net.UdpDatagram", "address") => Some(Type::named("String")),
+            ("net.UdpDatagram", "address") => Some(Type::named("str")),
             ("net.UdpDatagram", "bytes") => Some(bytes_ty.clone()),
             ("net.UdpDatagram", "text") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.HttpListener", "accept") => Some(Type::Named(
                 "Result".to_string(),
@@ -9868,19 +10059,19 @@ impl<'a> Lowerer<'a> {
             )),
             ("net.HttpListener", "local_addr") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.HttpListener", "close") => Some(Type::Unit),
             ("net.HttpExchange", "method") | ("net.HttpExchange", "path") => {
-                Some(Type::named("String"))
+                Some(Type::named("str"))
             }
             ("net.HttpExchange", "headers") | ("net.HttpResponse", "headers") => Some(Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("String")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("str")],
             )),
             ("net.HttpExchange", "body_text") | ("net.HttpResponse", "text") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.HttpExchange", "body_bytes") | ("net.HttpResponse", "bytes") => {
                 Some(bytes_ty.clone())
@@ -9890,7 +10081,7 @@ impl<'a> Lowerer<'a> {
             ),
             ("net.HttpExchange", "close") => Some(Type::Unit),
             ("net.HttpResponse", "status") => Some(Type::named("int32")),
-            ("net.HttpResponse", "reason") => Some(Type::named("String")),
+            ("net.HttpResponse", "reason") => Some(Type::named("str")),
             ("net.HttpResponse", "close") => Some(Type::Unit),
             ("net.WebSocketListener", "accept") => Some(Type::Named(
                 "Result".to_string(),
@@ -9898,7 +10089,7 @@ impl<'a> Lowerer<'a> {
             )),
             ("net.WebSocketListener", "local_addr") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.WebSocketListener", "close") => Some(Type::Unit),
             ("net.WebSocket", "send_text") | ("net.WebSocket", "send_bytes") => Some(Type::Named(
@@ -9908,7 +10099,7 @@ impl<'a> Lowerer<'a> {
             ("net.WebSocket", "recv_text") => Some(Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                     io_error_ty.clone(),
                 ],
             )),
@@ -9928,7 +10119,7 @@ impl<'a> Lowerer<'a> {
             ("net.UnixStream", "read_line") => Some(Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                     io_error_ty.clone(),
                 ],
             )),
@@ -9947,13 +10138,13 @@ impl<'a> Lowerer<'a> {
             )),
             ("net.TlsListener", "local_addr") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.TlsListener", "close") => Some(Type::Unit),
             ("net.TlsStream", "read_line") => Some(Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                     io_error_ty.clone(),
                 ],
             )),
@@ -10089,7 +10280,7 @@ impl<'a> Lowerer<'a> {
             Operand::Duration(_) => Some(Type::named("Duration")),
             Operand::Float(_) => Some(Type::named("float64")),
             Operand::Bool(_) => Some(Type::named("bool")),
-            Operand::String(_) => Some(Type::named("String")),
+            Operand::String(_) => Some(Type::named("str")),
             Operand::Unit => Some(Type::Unit),
         }
     }
@@ -10230,9 +10421,9 @@ fn tuple_constant_index(expr: &Expr) -> Option<usize> {
 
 fn array_coordinate_type(expr: &Expr) -> Type {
     match &expr.kind {
-        ExprKind::Tuple(elements) => Type::Tuple(vec![Type::named("int32"); elements.len()]),
+        ExprKind::Tuple(elements) => Type::Tuple(vec![Type::named("int64"); elements.len()]),
         ExprKind::Group(inner) => array_coordinate_type(inner),
-        _ => Type::named("int32"),
+        _ => Type::named("int64"),
     }
 }
 
@@ -10261,7 +10452,7 @@ fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
                 return Type::Unit;
             }
             let name = match name.as_str() {
-                "str" => "String",
+                "str" => "str",
                 "int" => "int64",
                 name => name,
             };

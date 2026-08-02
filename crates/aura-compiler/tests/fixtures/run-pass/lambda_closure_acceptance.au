@@ -2,11 +2,11 @@ import control
 
 def make_and_drop_consuming_closure() -> None:
     payload = "never-called"
-    unused: def() -> String = lambda: payload
+    unused: def() -> str = lambda: payload
     return None
 
-def invoke_with_environment(environment: own String) -> String:
-    worker: def() -> String = lambda: environment
+def invoke_with_environment(environment: own str) -> str:
+    worker: def() -> str = lambda: environment
     return worker()
 
 def main() -> int32:
@@ -24,17 +24,17 @@ def main() -> int32:
     print(identity(5))
 
     payload = "single-use"
-    take_payload: def() -> String = lambda: payload
+    take_payload: def() -> str = lambda: payload
     print(take_payload())
 
-    mut values: Vec[int64] = [1, 3, 2]
-    values.sort_by(lambda value: 0 - value)
+    mut values: list[int64] = [1, 3, 2]
+    values.sort(key = lambda value: 0 - value)
     print(values)
     print(values.map(lambda value: value * 2))
     print(values.filter(lambda value: value > 1))
 
-    match own control.retry[int64, String](
-        lambda: Result[int64, String].Ok(7),
+    match own control.retry[int64, str](
+        lambda: Result[int64, str].Ok(7),
         max_attempts=3,
         initial_backoff=0ms
     ):
@@ -44,8 +44,8 @@ def main() -> int32:
             print(error)
             return 1
 
-    task_payload: (String, int64) = ("task", 9)
-    task_worker: def() -> String = lambda: f"{task_payload}"
+    task_payload: (str, int64) = ("task", 9)
+    task_worker: def() -> str = lambda: f"{task_payload}"
     with TaskGroup() as group:
         task = group.start(task_worker)
         print(task.result_or("missing", timeout=1s))

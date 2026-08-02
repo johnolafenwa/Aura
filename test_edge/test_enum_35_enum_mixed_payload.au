@@ -1,9 +1,9 @@
 enum Event:
     Click(int32)
-    Key(String)
+    Key(str)
     Close
 
-def handle(e: own Event) -> String:
+def handle(e: own Event) -> str:
     match own e:
         case Event.Click(pos):
             print(pos)

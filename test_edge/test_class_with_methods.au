@@ -1,6 +1,6 @@
 ## Test: Class with multiple methods, mutating and read-only
 class Stack:
-    values: String
+    values: str
     count: int32
 
     def push(mut self, item: int32):

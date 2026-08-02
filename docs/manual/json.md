@@ -5,16 +5,16 @@ Parsing reports malformed or unsupported input as typed data; dumping produces
 one deterministic JSON string or traps when the supplied value cannot satisfy
 the serializer contract.
 
-The dynamic tree complements the older string-map helpers. It does not derive
-schemas from user classes or enums.
+The dynamic tree and typed `dict[str, str]` helpers serve separate data shapes. The
+module does not derive schemas from user classes or enums.
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `json.parse` | `parse(text: String) -> Result[json.Value, json.Error]` | Parses one strict JSON value from a shared string. |
-| `json.dumps` | `dumps(value: json.Value, indent: Option[int64] = None) -> String` | Deterministically serializes a shared JSON tree. |
-| `json.is_valid` | `is_valid(text: String) -> bool` | Existing validation helper; its compatibility contract is unchanged. |
-| `json.stringify_map` | `stringify_map(value: Map[String, String]) -> Result[String, String]` | Existing sorted string-map serializer. |
-| `json.parse_string_map` | `parse_string_map(text: String) -> Result[Map[String, String], String]` | Existing string-map-only parser. |
+| `json.parse` | `parse(text: str) -> Result[json.Value, json.Error]` | Parses one strict JSON value from a shared string. |
+| `json.dumps` | `dumps(value: json.Value, indent: Option[int64] = None) -> str` | Deterministically serializes a shared JSON tree. |
+| `json.is_valid` | `is_valid(text: str) -> bool` | Reports whether the text is valid JSON. |
+| `json.stringify_map` | `stringify_map(value: dict[str, str]) -> Result[str, str]` | Serializes a flat string dictionary in sorted-key order. |
+| `json.parse_string_map` | `parse_string_map(text: str) -> Result[dict[str, str], str]` | Parses a JSON object whose values are strings. |
 
 ## Value And Error Model
 
@@ -26,9 +26,9 @@ schemas from user classes or enums.
 | `Bool` | `bool` | JSON true or false. |
 | `Int` | `int64` | A mathematically integral JSON number in the `int64` range. |
 | `Float` | `float64` | Any other finite JSON number representable by binary64. |
-| `String` | `String` | An owned decoded JSON string. |
-| `Array` | `Vec[json.Value]` | An owned ordered sequence of values. |
-| `Object` | `Map[String, json.Value]` | An owned string-keyed object with insertion slots. |
+| `String` | `str` | An owned decoded JSON string. |
+| `Array` | `list[json.Value]` | An owned ordered sequence of values. |
+| `Object` | `dict[str, json.Value]` | An owned string-keyed object with insertion slots. |
 
 `json.Error` is returned only by `json.parse` and represents input-data
 failures. Resource failures while parsing or materializing the runtime tree
@@ -36,7 +36,7 @@ trap with `AU4005` instead of adding a resource variant to this enum:
 
 | Variant | Payload | Meaning |
 | --- | --- | --- |
-| `Syntax` | `message: String, line: int32, column: int32` | The input is not one strict JSON value. |
+| `Syntax` | `message: str, line: int32, column: int32` | The input is not one strict JSON value. |
 | `NumberOutOfRange` | `line: int32, column: int32` | A number fits neither the `Int` rule nor a finite `float64`. |
 | `NestingTooDeep` | `limit: int32, line: int32, column: int32` | A container would exceed the depth limit. |
 | `InputTooLarge` | `actual_bytes: int64, limit_bytes: int64` | The encoded input exceeds the parse cap. |
@@ -58,9 +58,9 @@ Accessors never coerce between variants:
 | `json.as_bool` | `as_bool(value: json.Value) -> Option[bool]` | The Bool payload or `None`. |
 | `json.as_int` | `as_int(value: json.Value) -> Option[int64]` | The Int payload or `None`; Float is not converted. |
 | `json.as_float` | `as_float(value: json.Value) -> Option[float64]` | The Float payload or `None`; Int is not converted. |
-| `json.into_string` | `into_string(value: own json.Value) -> Option[String]` | Consumes the value and returns its String payload or `None`. |
-| `json.into_array` | `into_array(value: own json.Value) -> Option[Vec[json.Value]]` | Consumes the value and returns its Array payload or `None`. |
-| `json.into_object` | `into_object(value: own json.Value) -> Option[Map[String, json.Value]]` | Consumes the value and returns its Object payload or `None`. |
+| `json.into_string` | `into_string(value: own json.Value) -> Option[str]` | Consumes the value and returns its str payload or `None`. |
+| `json.into_array` | `into_array(value: own json.Value) -> Option[list[json.Value]]` | Consumes the value and returns its Array payload or `None`. |
+| `json.into_object` | `into_object(value: own json.Value) -> Option[dict[str, json.Value]]` | Consumes the value and returns its Object payload or `None`. |
 
 The inspecting functions borrow `value`. The `into_*` functions take an
 explicit owned value. A failed consuming accessor still consumes its argument
@@ -87,9 +87,9 @@ the last is integer zero. `1.5` parses as a Float. `1e400` returns
 
 Array elements retain source order. Object keys establish insertion slots on
 their first occurrence. A later occurrence of the same key replaces its value
-without moving that first slot. Duplicate comparison uses the decoded String,
+without moving that first slot. Duplicate comparison uses the decoded str,
 so `"a"` and `"\u0061"` are the same key. This ordering remains observable
-through the ordinary `Map` iteration APIs even though dumping applies its own
+through the ordinary `dict` iteration APIs even though dumping applies its own
 sorted-key order.
 
 Depth counts arrays and objects, not scalar leaves. A root scalar has depth
@@ -123,7 +123,7 @@ a decimal or exponent marker, and negative zero remains `-0.0`. Parsing that
 text still applies the exact mathematical-integer rule, so
 `parse(dumps(value))` is not promised to preserve an explicitly constructed
 integral Float variant or negative floating zero. Sorted object keys likewise
-need not preserve the original map's insertion slots.
+need not preserve the original dictionary's insertion slots.
 
 Strings retain non-ASCII Unicode scalar values. Quotation mark and reverse
 solidus are escaped. Backspace, tab, line feed, form feed, and carriage return
@@ -180,15 +180,15 @@ The same program is maintained as
 The module adds no source-language grammar. Imports, qualified enum variants,
 variant construction, method calls, `Result` and `Option` matching, maps,
 vectors, and named/default arguments use the ordinary grammar defined
-elsewhere in this Manual. JSON text is runtime `String` data; JSON object,
+elsewhere in this Manual. JSON text is runtime `str` data; JSON object,
 array, string, number, Boolean, and null syntax is not Aura source syntax.
 
 ## Typing Rules
 
 The signatures and variant tables above are normative. `json.Value` and
 `json.Error` are module-qualified builtin enums. `json.Value` is a move type
-because its declaration contains owned String, Vec, Map, and recursive Value
-payloads. `json.Error` is also a move type because `Syntax` contains a String.
+because its declaration contains owned str, list, dict, and recursive Value
+payloads. `json.Error` is also a move type because `Syntax` contains a str.
 
 Every variant payload uses the normal owned enum-construction rule.
 `json.parse` and `json.dumps` use ordinary bare parameters, which are
@@ -200,7 +200,7 @@ do not change ownership. Each `into_*` call consumes its argument even when
 the runtime variant does not match. No accessor converts Int to Float, Float
 to Int, or a scalar to text.
 
-The string-map helpers have their own exact types. They are not aliases
+The flat-dictionary helpers have their own exact types. They are not aliases
 for `parse` and `dumps`, and the dynamic API does not broaden
 `parse_string_map` to accept nested or non-string values. The
 `json.is_valid` and `json.parse_string_map` parsers remain bounded caller-side
@@ -233,7 +233,7 @@ in this chapter without making host call depth proportional to JSON nesting.
 
 Dump validates indent, depth, and finite floating values while emitting into a
 capped destination. It applies the exact sorted-key, number, escape, and
-whitespace rules above. A successful call returns one fresh owned String.
+whitespace rules above. A successful call returns one fresh owned str.
 Validation or resource failure produces the diagnostic described below rather
 than a `json.Error`, because the public return type is not a `Result`.
 Before emission, runtime-to-codec conversion applies the same root-inclusive,
@@ -248,14 +248,14 @@ dumped as JSON.
 
 ## Ownership And Evaluation Order
 
-`parse` shares its input only for the call and does not retain it. Every String
-key, String value, array, object, and enum payload in the returned tree is
+`parse` shares its input only for the call and does not retain it. Every str
+key, str value, array, object, and enum payload in the returned tree is
 fresh owned data. `dumps` shares its tree only for the call, does not reorder
 or mutate object maps, and leaves the caller's value available afterward.
 
 Enum constructors evaluate payload expressions in source order and consume
 non-copy payloads. Array and object construction therefore uses the existing
-Vec, Map, and enum ownership rules. Inspecting accessors borrow their
+List, dictionary, and enum ownership rules apply. Inspecting accessors share their
 argument; consuming accessors transfer one payload out of the supplied value
 or consume the unmatched value.
 
@@ -296,7 +296,7 @@ the same Aura result and exact dump bytes.
 
 Both backends use the same bounded codec service for `json.parse`. The direct
 backend holds value-table read access only long enough to validate and copy
-the shared source String; it does not hold that access while waiting for
+the shared source str; it does not hold that access while waiting for
 service admission or completion.
 
 Runtime, direct-codegen, analysis, language-server, fixture, and
@@ -341,4 +341,4 @@ formatting, and resource boundary are implemented Aura 0.2 behavior. Their
 exact gap-fill semantics are accepted under ADR-0021.
 
 `is_valid`, `stringify_map`, and `parse_string_map` are maintained bounded
-string-map operations. Aura 0.2 has no streaming JSON codec.
+flat-dictionary operations. Aura 0.2 has no streaming JSON codec.

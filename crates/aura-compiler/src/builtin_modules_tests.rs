@@ -17,7 +17,7 @@ fn builtin_type_lowering_preserves_nested_function_signatures() {
             ),
             FunctionTypeParam::new(
                 ParamMode::BorrowMut,
-                TypeRef::named("String", Vec::new(), false, span),
+                TypeRef::named("str", Vec::new(), false, span),
                 span,
             ),
             FunctionTypeParam::new(
@@ -51,7 +51,7 @@ fn builtin_type_lowering_preserves_nested_function_signatures() {
                 },
                 FunctionParamContract {
                     name: String::new(),
-                    ty: Type::named("String"),
+                    ty: Type::named("str"),
                     passing: ReceiverKind::BorrowMut,
                     has_default: false,
                     default_erased: true,
@@ -203,8 +203,8 @@ fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() 
         "bytes::base64_decode",
         "bytes::sha256",
         "bytes::sha256_string",
-        "String.to_bytes",
-        "String.from_bytes",
+        "str.to_bytes",
+        "str.from_bytes",
         "json::is_valid",
         "json::stringify_map",
         "json::parse_string_map",
@@ -241,19 +241,19 @@ fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() 
         vec![
             (
                 "base",
-                &crate::sema::Type::named("String"),
+                &crate::sema::Type::named("str"),
                 ReceiverKind::Borrow,
                 true
             ),
             (
                 "child",
-                &crate::sema::Type::named("String"),
+                &crate::sema::Type::named("str"),
                 ReceiverKind::Borrow,
                 true
             ),
         ]
     );
-    assert_eq!(join.return_type, crate::sema::Type::named("String"));
+    assert_eq!(join.return_type, crate::sema::Type::named("str"));
 
     let increment =
         host_builtin_metadata("metrics::increment").expect("metrics.increment metadata");
@@ -278,7 +278,7 @@ fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() 
     assert_eq!(secure_bytes.params[0].ty, crate::sema::Type::named("int64"));
     assert_eq!(
         secure_bytes.return_type,
-        crate::sema::Type::Named("Vec".to_string(), vec![crate::sema::Type::named("uint8")])
+        crate::sema::Type::Named("list".to_string(), vec![crate::sema::Type::named("uint8")])
     );
 
     assert!(host_builtin_metadata("fs::exists").is_none());
@@ -346,13 +346,13 @@ fn bytes_namespace_exposes_shared_byte_vector_codecs_and_typed_errors() {
         ]
     );
 
-    let from_bytes = host_builtin_metadata("String.from_bytes").expect("associated metadata");
+    let from_bytes = host_builtin_metadata("str.from_bytes").expect("associated metadata");
     assert_eq!(from_bytes.params[0].passing, ReceiverKind::Borrow);
     assert_eq!(
         from_bytes.return_type,
         Type::Named(
             "Result".to_string(),
-            vec![Type::named("String"), Type::named("bytes.Error")],
+            vec![Type::named("str"), Type::named("bytes.Error")],
         )
     );
 }
@@ -395,7 +395,7 @@ fn random_namespace_exposes_one_opaque_rng_type_and_secure_functions() {
     );
     assert_eq!(
         secure_bytes.signature.return_type,
-        crate::sema::Type::Named("Vec".to_string(), vec![crate::sema::Type::named("uint8")])
+        crate::sema::Type::Named("list".to_string(), vec![crate::sema::Type::named("uint8")])
     );
     assert!(!namespace.functions.contains_key("secure_float"));
 
@@ -428,19 +428,19 @@ fn json_namespace_exposes_dynamic_tree_contract() {
         ("Bool", vec![Type::named("bool")]),
         ("Int", vec![Type::named("int64")]),
         ("Float", vec![Type::named("float64")]),
-        ("String", vec![Type::named("String")]),
+        ("String", vec![Type::named("str")]),
         (
             "Array",
             vec![Type::Named(
-                "Vec".to_string(),
+                "list".to_string(),
                 vec![Type::named("json.Value")],
             )],
         ),
         (
             "Object",
             vec![Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("json.Value")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("json.Value")],
             )],
         ),
     ];
@@ -479,7 +479,7 @@ fn json_namespace_exposes_dynamic_tree_contract() {
         (
             "Syntax",
             vec![
-                ("message", Type::named("String")),
+                ("message", Type::named("str")),
                 ("line", Type::named("int32")),
                 ("column", Type::named("int32")),
             ],
@@ -523,7 +523,7 @@ fn json_namespace_exposes_dynamic_tree_contract() {
     }
 
     let parse = &namespace.functions["parse"];
-    assert_eq!(parse.signature.params, vec![Type::named("String")]);
+    assert_eq!(parse.signature.params, vec![Type::named("str")]);
     assert_eq!(parse.decl.params[0].mode, ParamMode::Default);
     assert_eq!(parse.signature.param_passings, vec![ReceiverKind::Borrow]);
     assert_eq!(
@@ -556,7 +556,7 @@ fn json_namespace_exposes_dynamic_tree_contract() {
             .map(|default| &default.kind),
         Some(ExprKind::Name(name)) if name == "None"
     ));
-    assert_eq!(dumps.signature.return_type, Type::named("String"));
+    assert_eq!(dumps.signature.return_type, Type::named("str"));
     assert!(
         !host_builtin_metadata("json::dumps")
             .expect("json.dumps host metadata")
@@ -590,16 +590,16 @@ fn json_namespace_exposes_dynamic_tree_contract() {
     }
 
     for (name, inner_type) in [
-        ("into_string", Type::named("String")),
+        ("into_string", Type::named("str")),
         (
             "into_array",
-            Type::Named("Vec".to_string(), vec![Type::named("json.Value")]),
+            Type::Named("list".to_string(), vec![Type::named("json.Value")]),
         ),
         (
             "into_object",
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("json.Value")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("json.Value")],
             ),
         ),
     ] {

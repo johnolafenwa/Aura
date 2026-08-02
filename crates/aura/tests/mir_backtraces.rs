@@ -112,14 +112,14 @@ fn run_json_stdin(virtual_path: &str, source: &str, backend: &str) -> serde_json
 
 #[test]
 fn aura_run_renders_nested_call_and_child_task_backtraces() {
-    let nested = "def explode() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef relay() -> int32:\n    return explode()\n\ndef main() -> int32:\n    return relay()\n";
+    let nested = "def explode() -> int32:\n    values: list[int32] = [1, 2]\n    return values[9]\n\ndef relay() -> int32:\n    return explode()\n\ndef main() -> int32:\n    return relay()\n";
     assert_mir_run_stderr_contains(
         "nested-call-backtrace",
         nested,
         &["note: Aura call chain (innermost first): explode at 1:1 -> relay at 5:1 -> main at 8:1"],
     );
 
-    let task = "def child() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    with group = TaskGroup():\n        group.start(child)\n    return 0\n";
+    let task = "def child() -> int32:\n    values: list[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    with group = TaskGroup():\n        group.start(child)\n    return 0\n";
     assert_mir_run_stderr_contains(
         "child-task-backtrace",
         task,
@@ -133,7 +133,7 @@ fn aura_run_renders_nested_call_and_child_task_backtraces() {
 
 #[test]
 fn standalone_direct_human_trap_keeps_frames_and_runs_cleanup_once() {
-    let source = "class Resource:\n    def close(mut self):\n        print(\"CLEANUP\")\n\ndef child() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    with resource = Resource():\n        with group = TaskGroup():\n            group.start(child)\n    return 0\n";
+    let source = "class Resource:\n    def close(mut self):\n        print(\"CLEANUP\")\n\ndef child() -> int32:\n    values: list[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    with resource = Resource():\n        with group = TaskGroup():\n            group.start(child)\n    return 0\n";
     let path = write_source("standalone-human-task-cleanup", source);
     let binary = path.with_extension("bin");
     let build = Command::new(aura_bin())
@@ -177,7 +177,7 @@ fn standalone_direct_human_trap_keeps_frames_and_runs_cleanup_once() {
 
 #[test]
 fn mir_and_direct_json_use_the_same_typed_call_and_task_frames() {
-    let nested = "def explode() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef relay() -> int32:\n    return explode()\n\ndef main() -> int32:\n    return relay()\n";
+    let nested = "def explode() -> int32:\n    values: list[int32] = [1, 2]\n    return values[9]\n\ndef relay() -> int32:\n    return explode()\n\ndef main() -> int32:\n    return relay()\n";
     let nested_path = write_source("nested-json-parity", nested);
     let nested_mir = run_json_path(&nested_path, "mir");
     let nested_direct = run_json_path(&nested_path, "direct");
@@ -214,7 +214,7 @@ fn mir_and_direct_json_use_the_same_typed_call_and_task_frames() {
     );
     let _ = fs::remove_file(&nested_path);
 
-    let task = "def child() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    with group = TaskGroup():\n        group.start(child)\n    return 0\n";
+    let task = "def child() -> int32:\n    values: list[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    with group = TaskGroup():\n        group.start(child)\n    return 0\n";
     let task_path = write_source("task-json-parity", task);
     let task_mir = run_json_path(&task_path, "mir");
     let task_direct = run_json_path(&task_path, "direct");
@@ -250,7 +250,7 @@ fn mir_and_direct_json_use_the_same_typed_call_and_task_frames() {
 
 #[test]
 fn mir_and_direct_json_preserve_exact_nested_task_ancestry() {
-    let source = "def grandchild() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef child() -> int32:\n    with group = TaskGroup():\n        group.start(grandchild)\n    return 0\n\ndef main() -> int32:\n    with group = TaskGroup():\n        group.start(child)\n    return 0\n";
+    let source = "def grandchild() -> int32:\n    values: list[int32] = [1, 2]\n    return values[9]\n\ndef child() -> int32:\n    with group = TaskGroup():\n        group.start(grandchild)\n    return 0\n\ndef main() -> int32:\n    with group = TaskGroup():\n        group.start(child)\n    return 0\n";
     let path = write_source("nested-task-json-parity", source);
     let mir = run_json_path(&path, "mir");
     let direct = run_json_path(&path, "direct");
@@ -288,7 +288,7 @@ fn mir_and_direct_json_preserve_exact_nested_task_ancestry() {
 #[test]
 fn direct_json_stdin_preserves_the_virtual_path_in_typed_frames() {
     let virtual_path = "virtual/transport/nested.au";
-    let source = "def explode() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    return explode()\n";
+    let source = "def explode() -> int32:\n    values: list[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    return explode()\n";
     let mir = run_json_stdin(virtual_path, source, "mir");
     let direct = run_json_stdin(virtual_path, source, "direct");
     let resolved_path = std::env::current_dir()
@@ -326,7 +326,7 @@ fn structured_frames_keep_imported_function_paths_on_both_backends() {
     let main_path = root.join("main.au");
     fs::write(
         &helper_path,
-        "public def explode() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n",
+        "public def explode() -> int32:\n    values: list[int32] = [1, 2]\n    return values[9]\n",
     )
     .expect("helper source should write");
     fs::write(

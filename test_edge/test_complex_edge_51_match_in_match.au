@@ -8,7 +8,7 @@ enum Color:
     Red
     Blue
 
-def classify(shape: Shape, color: Color) -> String:
+def classify(shape: Shape, color: Color) -> str:
     match own shape:
         case Shape.Circle(r):
             match own color:

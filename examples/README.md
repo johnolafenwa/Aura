@@ -62,10 +62,10 @@ printed-output order unless they explicitly coordinate that order.
     - `12`
 - `function_values.au`
   - capture-free named function values in bindings, parameters, fields, and
-    `Vec`, including copy semantics, explicit generic specialization, and a
+    `list`, including copy semantics, explicit generic specialization, and a
     statically known indirect call that uses a default and a named argument
   - explicit `def(mut T) -> R` and `def(own T) -> R` contracts through fields
-    and `Vec`
+    and `list`
   - prints:
     - `2`
     - `3`
@@ -111,14 +111,14 @@ printed-output order unless they explicitly coordinate that order.
     - `all assertions passed`
 - `multiline_expressions.au`
   - splits a function signature, grouped arithmetic, calls, list literals, and
-    a map literal across physical lines through `()`, `[]`, and `{}`
+    a dictionary literal across physical lines through `()`, `[]`, and `{}`
   - keeps the existing no-trailing-comma and single-line-string rules
   - prints:
     - `80`
     - `20`
 - `len_and_str.au`
-  - the `int64` results of `String.len()`, `String.byte_len()`, `Vec.len()`,
-    `Map.len()`, and `Set.len()`; `len(value) == value.len()`; Unicode scalar
+  - the `int64` results of `str.len()`, `str.byte_len()`, `list.len()`,
+    `dict.len()`, and `set.len()`; `len(value) == value.len()`; Unicode scalar
     length versus UTF-8 byte length; and `str(value)` producing the print
     rendering
   - prints:
@@ -143,7 +143,7 @@ printed-output order unless they explicitly coordinate that order.
 ### `collections/`
 
 - `comprehensions.au`
-  - eager owned list, set, and map comprehensions with filters, nested
+  - eager owned list, set, and dictionary comprehensions with filters, nested
     outer-major clauses, target-local scope, and ordinary bare-loop ownership
   - prints:
     - `[1, 4, 9, 16]`
@@ -151,7 +151,7 @@ printed-output order unless they explicitly coordinate that order.
     - `{3: 30, 4: 40}`
     - `[11, 12, 21, 22]`
 - `slices.au`
-  - owned Vec and Unicode-scalar String slices with every omitted-endpoint
+  - owned list and Unicode-scalar str slices with every omitted-endpoint
     form, negative endpoints, and source/result independence
   - prints:
     - `[20, 30]`
@@ -166,7 +166,7 @@ printed-output order unless they explicitly coordinate that order.
     - `A🎉Z`
     - `A🎉Z`
 - `vec_basics.au`
-  - list literals, indexed reads, `Vec[T]` methods, and indexed mutation through `set(...)`
+  - list literals, indexed reads, `list[T]` methods, and indexed mutation through `set(...)`
   - prints:
     - `3`
     - `1`
@@ -177,7 +177,7 @@ printed-output order unless they explicitly coordinate that order.
     - `99`
     - `false`
 - `vec_iteration.au`
-  - empty-vector construction with `Vec[T]()`, `extend(...)`, explicit `Vec[T]`
+  - empty-list construction with `list[T]()`, `extend(...)`, explicit `list[T]`
     annotations, bare shared iteration, and consuming `own` iteration
   - prints:
     - `Ada`
@@ -186,9 +186,9 @@ printed-output order unless they explicitly coordinate that order.
     - `9`
 - `vec_polish.au`
   - negative direct/method indexes, non-copy cloned reads, `mut`
-    iteration, an explicit checked `as int32` conversion from `Vec.len()` for
-    `range(...)`, `insert(...)`, `swap(...)`, `reverse()`, `extend(...)`,
-    `clear()`, and Vec equality
+    iteration, cast-free `list.len()` use with `range(...)`, `insert(...)`,
+    `swap(...)`, `reverse()`, `extend(...)`,
+    `clear()`, and list equality
   - prints:
     - `Ada`
     - `Grace`
@@ -217,7 +217,7 @@ printed-output order unless they explicitly coordinate that order.
     - `third`
     - `[3, 1, 2, 4]`
 - `map_basics.au`
-  - `Map[K, V]` literals, `extend(...)`, `items()` / `entries()`, indexed writes, copy-value indexed reads, and the maintained map method surface (`get`/`remove` make non-copy reads explicit)
+  - `dict[K, V]` literals, `update(...)`, tuple-valued `items()`, indexed writes, indexed reads, and typed optional lookup and removal
   - prints:
     - `3`
     - `true`
@@ -231,7 +231,7 @@ printed-output order unless they explicitly coordinate that order.
     - `3`
     - `true`
 - `set_basics.au`
-  - `Set[T]` literals, shared-borrow iteration, deduplication, and the maintained set method surface
+  - `set[T]` literals, shared-borrow iteration, deduplication, and the maintained set method surface
   - prints:
     - `3`
     - `true`
@@ -300,7 +300,7 @@ printed-output order unless they explicitly coordinate that order.
   - uses `random.Rng(42)`, exponential `Duration` backoff with deterministic
     jitter, explicit five-second network/task deadlines, and scoped
     `TaskGroup`, worker-owned listener, exchange, and response resources; the
-    live listener stays on its owning task while a `Queue[String]` carries its
+    live listener stays on its owning task while a `Queue[str]` carries its
     transferable bound address to the client task
   - the maintained CLI regression runs the example through both the MIR and
     forced-direct backends and pins seven real loopback requests
@@ -331,7 +331,7 @@ printed-output order unless they explicitly coordinate that order.
 ### `bytes/`
 
 - `codecs_and_hashing.au`
-  - converts String to strict UTF-8 bytes and back, encodes and decodes binary
+  - converts str to strict UTF-8 bytes and back, encodes and decodes binary
     data with canonical base64, renders lowercase hex, computes raw SHA-256,
     and demonstrates that shared inputs remain reusable
   - prints:
@@ -362,7 +362,7 @@ printed-output order unless they explicitly coordinate that order.
     - `mid`
     - `low`
 - `membership_and_chains.au`
-  - `in` and `not in` over `Vec`, `Set`, `Map` keys, and `String` substrings, plus a chained comparison bound check
+  - `in` and `not in` over `list`, `set`, `dict` keys, and `str` substrings, plus a chained comparison bound check
   - prints:
     - `true`
     - `true`
@@ -384,7 +384,7 @@ printed-output order unless they explicitly coordinate that order.
   - prints `7`
   - current bootstrap note: `range(...)` bounds must fit the signed index space used by the compiler/runtime
 - `match_literals.au`
-  - statement-form `match` over literal `bool`, integer, and `String` cases
+  - statement-form `match` over literal `bool`, integer, and `str` cases
   - prints:
     - `negative`
     - `zero`
@@ -413,7 +413,7 @@ printed-output order unless they explicitly coordinate that order.
     - `division by zero`
     - `7`
 - `explicit_type_args.au`
-  - explicit type arguments on built-in enum constructors like `Result[int32, String].Ok(...)`
+  - explicit type arguments on built-in enum constructors like `Result[int32, str].Ok(...)`
   - prints:
     - `7`
     - `bad`
@@ -501,9 +501,9 @@ printed-output order unless they explicitly coordinate that order.
   - empty marker traits declared with `pass`
   - prints `1`
 - `builtin_target_traits.au`
-  - trait implementations for builtin targets such as `Vec[int32]` and `String`, using method names that do not collide with a builtin member
+  - trait implementations for builtin targets such as `list[int32]` and `str`, using method names that do not collide with a builtin member
   - prints:
-    - `vec of 2`
+    - `list of 2`
     - `text of 5`
 - `specialized_generic_impl.au`
   - specialized trait impls for concrete generic instances
@@ -862,11 +862,11 @@ single task-result right on the first attempt.
   - string concatenation and equality
   - prints `hello, aura`
 - `string_clone.au`
-  - `String.clone()` on owned strings
+  - `str.clone()` on owned strings
   - prints `aura`
 - `string_methods.au`
-  - single-quoted strings, an owned `Option[String]` match helper, and the
-    maintained `String` method surface: `int64` Unicode-scalar `len()`,
+  - single-quoted strings, an owned `Option[str]` match helper, and the
+    maintained `str` method surface: `int64` Unicode-scalar `len()`,
     `int64` UTF-8 `byte_len()`, `contains(...)`, `starts_with(...)`,
     `ends_with(...)`, `split(...)`, `replace(...)`, `to_lower()`,
     `to_upper()`, `strip_prefix(...)`, `strip_suffix(...)`, `trim()`, and
@@ -889,7 +889,7 @@ single task-result right on the first attempt.
     - `none`
     - `11`
 - `string_parsing_and_formatting.au`
-  - parsing builtins, scalar and boolean `.to_string()`, and `String.join(...)`
+  - parsing builtins, scalar and boolean `.to_string()`, and `str.join(...)`
   - prints:
     - `42`
     - `-9000000000`
@@ -905,7 +905,7 @@ single task-result right on the first attempt.
   - borrowed string parameters with `str`
   - prints `Hello, Aura`
 - `f_strings.au`
-  - interpolated `f"..."` strings producing owned `String` values
+  - interpolated `f"..."` strings producing owned `str` values
   - prints `Hello, Aura 42`
 
 ## Stable Bootstrap Examples

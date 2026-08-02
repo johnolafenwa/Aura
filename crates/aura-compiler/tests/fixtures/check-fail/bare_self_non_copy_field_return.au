@@ -1,7 +1,7 @@
 class Holder:
-    value: String
+    value: str
 
-    def take(self) -> String:
+    def take(self) -> str:
         return self.value
 
 def main() -> int32:

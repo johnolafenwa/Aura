@@ -125,8 +125,8 @@ def inspect(child: process.Child, pipe: process.Pipe, completed: process.Complet
     return 0
 
 def boot() -> Result[None, process.Error]:
-    env: Map[String, String] = {"AURA_PROCESS_VAR": "present"}
-    with running = try process.start(["/bin/cat"], cwd=Option.None, env=env.clone(), stdin=process.pipe(), stdout=process.pipe(), stderr=process.null(), group=true):
+    env: dict[str, str] = {"AURA_PROCESS_VAR": "present"}
+    with running = try process.start(["/bin/cat"], cwd=Option.None, env=env.copy(), stdin=process.pipe(), stdout=process.pipe(), stderr=process.null(), group=true):
         print(running.stdin())
         print(running.stdout())
         print(running.stderr())
@@ -169,14 +169,14 @@ fn builtin_process_module_runs_through_public_api() {
         r#"import process
 
 def run_env() -> Result[None, process.Error]:
-    env: Map[String, String] = {{"AURA_PROCESS_VAR": "present"}}
+    env: dict[str, str] = {{"AURA_PROCESS_VAR": "present"}}
     completed = try process.run(["/usr/bin/printenv", "AURA_PROCESS_VAR"], cwd=Option.None, env=env, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)
     print(completed.stdout().trim())
     print(completed.stderr().len())
     print(completed.status())
     return Result.Ok(None)
 
-def run_pwd(cwd: own String) -> Result[None, process.Error]:
+def run_pwd(cwd: own str) -> Result[None, process.Error]:
     completed = try process.run(["/bin/pwd"], cwd=Option.Some(cwd), env={{}}, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)
     print(completed.stdout().trim())
     print(completed.stderr().len())
@@ -422,7 +422,7 @@ fn supervisor_duplicate_name_does_not_leave_unmanaged_child_running() {
     let source = format!(
         r#"import process
 
-def run_duplicate(first_pid: String, second_pid: String) -> Result[None, process.Error]:
+def run_duplicate(first_pid: str, second_pid: str) -> Result[None, process.Error]:
     with supervisor = process.supervisor():
         try supervisor.start(name="dup", command=["/bin/sh", "-c", "echo $$ > " + first_pid + "; sleep 30"], stdout=process.null(), stderr=process.null(), group=true)
         match own supervisor.start(name="dup", command=["/bin/sh", "-c", "echo $$ > " + second_pid + "; sleep 30"], stdout=process.null(), stderr=process.null(), group=true):

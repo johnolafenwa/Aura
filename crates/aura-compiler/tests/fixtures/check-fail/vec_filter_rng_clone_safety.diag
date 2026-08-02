@@ -1,4 +1,4 @@
-error[AU3007]: cannot use `Vec.filter` because `random.Rng` contains non-cloneable `random.Rng` state
+error[AU3007]: cannot use `list.filter` because `random.Rng` contains non-cloneable `random.Rng` state
  --> crates/aura-compiler/tests/fixtures/check-fail/vec_filter_rng_clone_safety.au:8:18
   |
 8 |     print(values.filter(keep))

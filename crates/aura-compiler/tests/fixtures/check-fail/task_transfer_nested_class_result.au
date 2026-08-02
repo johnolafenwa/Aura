@@ -1,7 +1,7 @@
 import random
 
 class Holder:
-    label: String
+    label: str
     generator: random.Rng
 
 def make_holder() -> Holder:

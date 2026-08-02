@@ -357,7 +357,7 @@ fn error_enum_info() -> EnumInfo {
             "Other",
             vec![EnumPayloadFieldDecl {
                 name: Some("message".to_string()),
-                ty: type_ref("String", Vec::new()),
+                ty: type_ref("str", Vec::new()),
                 span: builtin_span(),
             }],
         ),
@@ -414,16 +414,13 @@ fn process_error_type_ref() -> TypeRef {
 }
 
 fn bytes_type_ref() -> TypeRef {
-    type_ref("Vec", vec![type_ref("uint8", Vec::new())])
+    type_ref("list", vec![type_ref("uint8", Vec::new())])
 }
 
 fn string_map_type_ref() -> TypeRef {
     type_ref(
-        "Map",
-        vec![
-            type_ref("String", Vec::new()),
-            type_ref("String", Vec::new()),
-        ],
+        "dict",
+        vec![type_ref("str", Vec::new()), type_ref("str", Vec::new())],
     )
 }
 
@@ -456,7 +453,7 @@ fn process_error_enum_info() -> EnumInfo {
             "Spawn",
             vec![EnumPayloadFieldDecl {
                 name: Some("message".to_string()),
-                ty: type_ref("String", Vec::new()),
+                ty: type_ref("str", Vec::new()),
                 span: builtin_span(),
             }],
         ),
@@ -464,7 +461,7 @@ fn process_error_enum_info() -> EnumInfo {
             "Other",
             vec![EnumPayloadFieldDecl {
                 name: Some("message".to_string()),
-                ty: type_ref("String", Vec::new()),
+                ty: type_ref("str", Vec::new()),
                 span: builtin_span(),
             }],
         ),
@@ -725,7 +722,7 @@ fn process_supervisor_event_enum_info() -> EnumInfo {
             vec![
                 EnumPayloadFieldDecl {
                     name: Some("name".to_string()),
-                    ty: type_ref("String", Vec::new()),
+                    ty: type_ref("str", Vec::new()),
                     span: builtin_span(),
                 },
                 EnumPayloadFieldDecl {
@@ -745,7 +742,7 @@ fn process_supervisor_event_enum_info() -> EnumInfo {
             vec![
                 EnumPayloadFieldDecl {
                     name: Some("name".to_string()),
-                    ty: type_ref("String", Vec::new()),
+                    ty: type_ref("str", Vec::new()),
                     span: builtin_span(),
                 },
                 EnumPayloadFieldDecl {
@@ -765,7 +762,7 @@ fn process_supervisor_event_enum_info() -> EnumInfo {
             vec![
                 EnumPayloadFieldDecl {
                     name: Some("name".to_string()),
-                    ty: type_ref("String", Vec::new()),
+                    ty: type_ref("str", Vec::new()),
                     span: builtin_span(),
                 },
                 EnumPayloadFieldDecl {
@@ -884,7 +881,7 @@ fn io_namespace() -> ModuleNamespace {
         function_info(
             "io",
             "write",
-            vec![value_param("text", type_ref("String", Vec::new()))],
+            vec![value_param("text", type_ref("str", Vec::new()))],
             type_ref(
                 "Result",
                 vec![type_ref("None", Vec::new()), io_error_type_ref()],
@@ -906,7 +903,7 @@ fn io_namespace() -> ModuleNamespace {
             type_ref(
                 "Result",
                 vec![
-                    type_ref("Option", vec![type_ref("String", Vec::new())]),
+                    type_ref("Option", vec![type_ref("str", Vec::new())]),
                     io_error_type_ref(),
                 ],
             ),
@@ -954,7 +951,7 @@ fn fs_namespace() -> ModuleNamespace {
     );
     let result_string = type_ref(
         "Result",
-        vec![type_ref("String", Vec::new()), io_error_type_ref()],
+        vec![type_ref("str", Vec::new()), io_error_type_ref()],
     );
     let result_file = type_ref(
         "Result",
@@ -964,7 +961,7 @@ fn fs_namespace() -> ModuleNamespace {
     let result_vec_string = type_ref(
         "Result",
         vec![
-            type_ref("Vec", vec![type_ref("String", Vec::new())]),
+            type_ref("list", vec![type_ref("str", Vec::new())]),
             io_error_type_ref(),
         ],
     );
@@ -974,27 +971,27 @@ fn fs_namespace() -> ModuleNamespace {
         function_info(
             "fs",
             "exists",
-            vec![value_param("path", type_ref("String", Vec::new()))],
+            vec![value_param("path", type_ref("str", Vec::new()))],
             type_ref("bool", Vec::new()),
         ),
         function_info(
             "fs",
             "read_to_string",
-            vec![value_param("path", type_ref("String", Vec::new()))],
+            vec![value_param("path", type_ref("str", Vec::new()))],
             result_string.clone(),
         ),
         function_info(
             "fs",
             "read_bytes",
-            vec![value_param("path", type_ref("String", Vec::new()))],
+            vec![value_param("path", type_ref("str", Vec::new()))],
             result_bytes.clone(),
         ),
         function_info(
             "fs",
             "write_string",
             vec![
-                value_param("path", type_ref("String", Vec::new())),
-                value_param("text", type_ref("String", Vec::new())),
+                value_param("path", type_ref("str", Vec::new())),
+                value_param("text", type_ref("str", Vec::new())),
             ],
             result_none.clone(),
         ),
@@ -1002,7 +999,7 @@ fn fs_namespace() -> ModuleNamespace {
             "fs",
             "write_bytes",
             vec![
-                value_param("path", type_ref("String", Vec::new())),
+                value_param("path", type_ref("str", Vec::new())),
                 value_param("bytes", bytes_type_ref()),
             ],
             result_none.clone(),
@@ -1011,8 +1008,8 @@ fn fs_namespace() -> ModuleNamespace {
             "fs",
             "append_string",
             vec![
-                value_param("path", type_ref("String", Vec::new())),
-                value_param("text", type_ref("String", Vec::new())),
+                value_param("path", type_ref("str", Vec::new())),
+                value_param("text", type_ref("str", Vec::new())),
             ],
             result_none.clone(),
         ),
@@ -1020,7 +1017,7 @@ fn fs_namespace() -> ModuleNamespace {
             "fs",
             "append_bytes",
             vec![
-                value_param("path", type_ref("String", Vec::new())),
+                value_param("path", type_ref("str", Vec::new())),
                 value_param("bytes", bytes_type_ref()),
             ],
             result_none.clone(),
@@ -1028,37 +1025,37 @@ fn fs_namespace() -> ModuleNamespace {
         function_info(
             "fs",
             "create_dir",
-            vec![value_param("path", type_ref("String", Vec::new()))],
+            vec![value_param("path", type_ref("str", Vec::new()))],
             result_none.clone(),
         ),
         function_info(
             "fs",
             "read_dir",
-            vec![value_param("path", type_ref("String", Vec::new()))],
+            vec![value_param("path", type_ref("str", Vec::new()))],
             result_vec_string,
         ),
         function_info(
             "fs",
             "remove_file",
-            vec![value_param("path", type_ref("String", Vec::new()))],
+            vec![value_param("path", type_ref("str", Vec::new()))],
             result_none.clone(),
         ),
         function_info(
             "fs",
             "open",
-            vec![value_param("path", type_ref("String", Vec::new()))],
+            vec![value_param("path", type_ref("str", Vec::new()))],
             result_file.clone(),
         ),
         function_info(
             "fs",
             "create",
-            vec![value_param("path", type_ref("String", Vec::new()))],
+            vec![value_param("path", type_ref("str", Vec::new()))],
             result_file.clone(),
         ),
         function_info(
             "fs",
             "append",
-            vec![value_param("path", type_ref("String", Vec::new()))],
+            vec![value_param("path", type_ref("str", Vec::new()))],
             result_file,
         ),
     ] {
@@ -1126,7 +1123,7 @@ fn net_namespace() -> ModuleNamespace {
         function_info(
             "net",
             "connect",
-            vec![value_param("address", type_ref("String", Vec::new()))],
+            vec![value_param("address", type_ref("str", Vec::new()))],
             type_ref(
                 "Result",
                 vec![type_ref("net.TcpStream", Vec::new()), io_error_type_ref()],
@@ -1136,7 +1133,7 @@ fn net_namespace() -> ModuleNamespace {
             "net",
             "connect_timeout",
             vec![
-                value_param("address", type_ref("String", Vec::new())),
+                value_param("address", type_ref("str", Vec::new())),
                 value_param("timeout", type_ref("Duration", Vec::new())),
             ],
             type_ref(
@@ -1147,7 +1144,7 @@ fn net_namespace() -> ModuleNamespace {
         function_info(
             "net",
             "listen",
-            vec![value_param("address", type_ref("String", Vec::new()))],
+            vec![value_param("address", type_ref("str", Vec::new()))],
             type_ref(
                 "Result",
                 vec![type_ref("net.TcpListener", Vec::new()), io_error_type_ref()],
@@ -1156,26 +1153,26 @@ fn net_namespace() -> ModuleNamespace {
         function_info(
             "net",
             "udp_bind",
-            vec![value_param("address", type_ref("String", Vec::new()))],
+            vec![value_param("address", type_ref("str", Vec::new()))],
             result_type_ref(type_ref("net.UdpSocket", Vec::new())),
         ),
         function_info(
             "net",
             "unix_listen",
-            vec![value_param("path", type_ref("String", Vec::new()))],
+            vec![value_param("path", type_ref("str", Vec::new()))],
             result_type_ref(type_ref("net.UnixListener", Vec::new())),
         ),
         function_info(
             "net",
             "unix_connect",
-            vec![value_param("path", type_ref("String", Vec::new()))],
+            vec![value_param("path", type_ref("str", Vec::new()))],
             result_type_ref(type_ref("net.UnixStream", Vec::new())),
         ),
         function_info(
             "net",
             "unix_connect_timeout",
             vec![
-                value_param("path", type_ref("String", Vec::new())),
+                value_param("path", type_ref("str", Vec::new())),
                 value_param("timeout", type_ref("Duration", Vec::new())),
             ],
             result_type_ref(type_ref("net.UnixStream", Vec::new())),
@@ -1184,9 +1181,9 @@ fn net_namespace() -> ModuleNamespace {
             "net",
             "tls_listen",
             vec![
-                value_param("address", type_ref("String", Vec::new())),
-                value_param("cert_pem_path", type_ref("String", Vec::new())),
-                value_param("key_pem_path", type_ref("String", Vec::new())),
+                value_param("address", type_ref("str", Vec::new())),
+                value_param("cert_pem_path", type_ref("str", Vec::new())),
+                value_param("key_pem_path", type_ref("str", Vec::new())),
             ],
             result_type_ref(type_ref("net.TlsListener", Vec::new())),
         ),
@@ -1194,9 +1191,9 @@ fn net_namespace() -> ModuleNamespace {
             "net",
             "tls_connect",
             vec![
-                value_param("address", type_ref("String", Vec::new())),
-                value_param("server_name", type_ref("String", Vec::new())),
-                value_param("ca_pem_path", type_ref("String", Vec::new())),
+                value_param("address", type_ref("str", Vec::new())),
+                value_param("server_name", type_ref("str", Vec::new())),
+                value_param("ca_pem_path", type_ref("str", Vec::new())),
             ],
             result_type_ref(type_ref("net.TlsStream", Vec::new())),
         ),
@@ -1204,9 +1201,9 @@ fn net_namespace() -> ModuleNamespace {
             "net",
             "tls_connect_timeout",
             vec![
-                value_param("address", type_ref("String", Vec::new())),
-                value_param("server_name", type_ref("String", Vec::new())),
-                value_param("ca_pem_path", type_ref("String", Vec::new())),
+                value_param("address", type_ref("str", Vec::new())),
+                value_param("server_name", type_ref("str", Vec::new())),
+                value_param("ca_pem_path", type_ref("str", Vec::new())),
                 value_param("timeout", type_ref("Duration", Vec::new())),
             ],
             result_type_ref(type_ref("net.TlsStream", Vec::new())),
@@ -1214,16 +1211,16 @@ fn net_namespace() -> ModuleNamespace {
         function_info(
             "net",
             "http_listen",
-            vec![value_param("address", type_ref("String", Vec::new()))],
+            vec![value_param("address", type_ref("str", Vec::new()))],
             result_type_ref(type_ref("net.HttpListener", Vec::new())),
         ),
         function_info(
             "net",
             "http_request_text",
             vec![
-                value_param("method", type_ref("String", Vec::new())),
-                value_param("url", type_ref("String", Vec::new())),
-                value_param("body", type_ref("String", Vec::new())),
+                value_param("method", type_ref("str", Vec::new())),
+                value_param("url", type_ref("str", Vec::new())),
+                value_param("body", type_ref("str", Vec::new())),
                 value_param("headers", string_map_type_ref()),
             ],
             result_type_ref(type_ref("net.HttpResponse", Vec::new())),
@@ -1232,9 +1229,9 @@ fn net_namespace() -> ModuleNamespace {
             "net",
             "http_request_text_timeout",
             vec![
-                value_param("method", type_ref("String", Vec::new())),
-                value_param("url", type_ref("String", Vec::new())),
-                value_param("body", type_ref("String", Vec::new())),
+                value_param("method", type_ref("str", Vec::new())),
+                value_param("url", type_ref("str", Vec::new())),
+                value_param("body", type_ref("str", Vec::new())),
                 value_param("headers", string_map_type_ref()),
                 value_param("timeout", type_ref("Duration", Vec::new())),
             ],
@@ -1244,8 +1241,8 @@ fn net_namespace() -> ModuleNamespace {
             "net",
             "http_request_bytes",
             vec![
-                value_param("method", type_ref("String", Vec::new())),
-                value_param("url", type_ref("String", Vec::new())),
+                value_param("method", type_ref("str", Vec::new())),
+                value_param("url", type_ref("str", Vec::new())),
                 value_param("bytes", bytes_type_ref()),
                 value_param("headers", string_map_type_ref()),
             ],
@@ -1255,8 +1252,8 @@ fn net_namespace() -> ModuleNamespace {
             "net",
             "http_request_bytes_timeout",
             vec![
-                value_param("method", type_ref("String", Vec::new())),
-                value_param("url", type_ref("String", Vec::new())),
+                value_param("method", type_ref("str", Vec::new())),
+                value_param("url", type_ref("str", Vec::new())),
                 value_param("bytes", bytes_type_ref()),
                 value_param("headers", string_map_type_ref()),
                 value_param("timeout", type_ref("Duration", Vec::new())),
@@ -1266,20 +1263,20 @@ fn net_namespace() -> ModuleNamespace {
         function_info(
             "net",
             "websocket_listen",
-            vec![value_param("address", type_ref("String", Vec::new()))],
+            vec![value_param("address", type_ref("str", Vec::new()))],
             result_type_ref(type_ref("net.WebSocketListener", Vec::new())),
         ),
         function_info(
             "net",
             "websocket_connect",
-            vec![value_param("url", type_ref("String", Vec::new()))],
+            vec![value_param("url", type_ref("str", Vec::new()))],
             result_type_ref(type_ref("net.WebSocket", Vec::new())),
         ),
         function_info(
             "net",
             "websocket_connect_timeout",
             vec![
-                value_param("url", type_ref("String", Vec::new())),
+                value_param("url", type_ref("str", Vec::new())),
                 value_param("timeout", type_ref("Duration", Vec::new())),
             ],
             result_type_ref(type_ref("net.WebSocket", Vec::new())),
@@ -1371,11 +1368,11 @@ fn process_namespace() -> ModuleNamespace {
             vec![
                 value_param(
                     "command",
-                    type_ref("Vec", vec![type_ref("String", Vec::new())]),
+                    type_ref("list", vec![type_ref("str", Vec::new())]),
                 ),
                 value_param_with_default(
                     "cwd",
-                    type_ref("Option", vec![type_ref("String", Vec::new())]),
+                    type_ref("Option", vec![type_ref("str", Vec::new())]),
                     name_expr("None"),
                 ),
                 value_param_with_default("env", string_map_type_ref(), empty_map_expr()),
@@ -1404,11 +1401,11 @@ fn process_namespace() -> ModuleNamespace {
             vec![
                 value_param(
                     "command",
-                    type_ref("Vec", vec![type_ref("String", Vec::new())]),
+                    type_ref("list", vec![type_ref("str", Vec::new())]),
                 ),
                 value_param_with_default(
                     "cwd",
-                    type_ref("Option", vec![type_ref("String", Vec::new())]),
+                    type_ref("Option", vec![type_ref("str", Vec::new())]),
                     name_expr("None"),
                 ),
                 value_param_with_default("env", string_map_type_ref(), empty_map_expr()),
@@ -1481,7 +1478,7 @@ fn random_namespace() -> ModuleNamespace {
             "random",
             "secure_bytes",
             vec![value_param("n", type_ref("int64", Vec::new()))],
-            type_ref("Vec", vec![type_ref("uint8", Vec::new())]),
+            type_ref("list", vec![type_ref("uint8", Vec::new())]),
         ),
     ]
     .into_iter()
@@ -1581,19 +1578,19 @@ fn sys_namespace() -> ModuleNamespace {
                 "sys",
                 "args",
                 Vec::new(),
-                type_ref("Vec", vec![type_ref("String", Vec::new())]),
+                type_ref("list", vec![type_ref("str", Vec::new())]),
             ),
             function_info(
                 "sys",
                 "env",
-                vec![value_param("name", type_ref("String", Vec::new()))],
-                type_ref("Option", vec![type_ref("String", Vec::new())]),
+                vec![value_param("name", type_ref("str", Vec::new()))],
+                type_ref("Option", vec![type_ref("str", Vec::new())]),
             ),
             function_info(
                 "sys",
                 "current_dir",
                 Vec::new(),
-                result_type_ref(type_ref("String", Vec::new())),
+                result_type_ref(type_ref("str", Vec::new())),
             ),
             function_info(
                 "sys",
@@ -1612,7 +1609,7 @@ fn sys_namespace() -> ModuleNamespace {
 }
 
 fn path_namespace() -> ModuleNamespace {
-    let string = || type_ref("String", Vec::new());
+    let string = || type_ref("str", Vec::new());
     let optional_string = || type_ref("Option", vec![string()]);
     function_only_namespace(
         "path",
@@ -1658,16 +1655,13 @@ fn serialization_namespace(name: &str) -> ModuleNamespace {
     let result_string = || {
         type_ref(
             "Result",
-            vec![
-                type_ref("String", Vec::new()),
-                type_ref("String", Vec::new()),
-            ],
+            vec![type_ref("str", Vec::new()), type_ref("str", Vec::new())],
         )
     };
     let result_map = || {
         type_ref(
             "Result",
-            vec![string_map_type_ref(), type_ref("String", Vec::new())],
+            vec![string_map_type_ref(), type_ref("str", Vec::new())],
         )
     };
     function_only_namespace(
@@ -1676,7 +1670,7 @@ fn serialization_namespace(name: &str) -> ModuleNamespace {
             function_info(
                 name,
                 "is_valid",
-                vec![value_param("text", type_ref("String", Vec::new()))],
+                vec![value_param("text", type_ref("str", Vec::new()))],
                 type_ref("bool", Vec::new()),
             ),
             function_info(
@@ -1688,7 +1682,7 @@ fn serialization_namespace(name: &str) -> ModuleNamespace {
             function_info(
                 name,
                 "parse_string_map",
-                vec![value_param("text", type_ref("String", Vec::new()))],
+                vec![value_param("text", type_ref("str", Vec::new()))],
                 result_map(),
             ),
         ],
@@ -1762,17 +1756,17 @@ fn json_value_enum_info() -> EnumInfo {
             ("Bool", positional(type_ref("bool", Vec::new())), false),
             ("Int", positional(type_ref("int64", Vec::new())), false),
             ("Float", positional(type_ref("float64", Vec::new())), false),
-            ("String", positional(type_ref("String", Vec::new())), false),
+            ("String", positional(type_ref("str", Vec::new())), false),
             (
                 "Array",
-                positional(type_ref("Vec", vec![json_value_type_ref()])),
+                positional(type_ref("list", vec![json_value_type_ref()])),
                 false,
             ),
             (
                 "Object",
                 positional(type_ref(
-                    "Map",
-                    vec![type_ref("String", Vec::new()), json_value_type_ref()],
+                    "dict",
+                    vec![type_ref("str", Vec::new()), json_value_type_ref()],
                 )),
                 false,
             ),
@@ -1792,7 +1786,7 @@ fn json_error_enum_info() -> EnumInfo {
             named("column", type_ref("int32", Vec::new())),
         ]
     };
-    let mut syntax = vec![named("message", type_ref("String", Vec::new()))];
+    let mut syntax = vec![named("message", type_ref("str", Vec::new()))];
     syntax.extend(location());
     let mut nesting = vec![named("limit", type_ref("int32", Vec::new()))];
     nesting.extend(location());
@@ -1822,7 +1816,7 @@ fn json_namespace() -> ModuleNamespace {
         function_info(
             "json",
             "parse",
-            vec![value_param("text", type_ref("String", Vec::new()))],
+            vec![value_param("text", type_ref("str", Vec::new()))],
             type_ref(
                 "Result",
                 vec![json_value(), type_ref("json.Error", Vec::new())],
@@ -1839,7 +1833,7 @@ fn json_namespace() -> ModuleNamespace {
                     name_expr("None"),
                 ),
             ],
-            type_ref("String", Vec::new()),
+            type_ref("str", Vec::new()),
         ),
         function_info(
             "json",
@@ -1869,21 +1863,21 @@ fn json_namespace() -> ModuleNamespace {
             "json",
             "into_string",
             vec![own_param("value", json_value())],
-            option(type_ref("String", Vec::new())),
+            option(type_ref("str", Vec::new())),
         ),
         function_info(
             "json",
             "into_array",
             vec![own_param("value", json_value())],
-            option(type_ref("Vec", vec![json_value()])),
+            option(type_ref("list", vec![json_value()])),
         ),
         function_info(
             "json",
             "into_object",
             vec![own_param("value", json_value())],
             option(type_ref(
-                "Map",
-                vec![type_ref("String", Vec::new()), json_value()],
+                "dict",
+                vec![type_ref("str", Vec::new()), json_value()],
             )),
         ),
     ];
@@ -1925,7 +1919,7 @@ fn json_namespace() -> ModuleNamespace {
 }
 
 fn bytes_vec_type_ref() -> TypeRef {
-    type_ref("Vec", vec![type_ref("uint8", Vec::new())])
+    type_ref("list", vec![type_ref("uint8", Vec::new())])
 }
 
 fn bytes_error_enum_info() -> EnumInfo {
@@ -1977,24 +1971,24 @@ fn bytes_namespace() -> ModuleNamespace {
             "bytes",
             "hex_encode",
             vec![value_param("value", bytes_vec_type_ref())],
-            type_ref("String", Vec::new()),
+            type_ref("str", Vec::new()),
         ),
         function_info(
             "bytes",
             "hex_decode",
-            vec![value_param("text", type_ref("String", Vec::new()))],
+            vec![value_param("text", type_ref("str", Vec::new()))],
             bytes_result(),
         ),
         function_info(
             "bytes",
             "base64_encode",
             vec![value_param("value", bytes_vec_type_ref())],
-            type_ref("String", Vec::new()),
+            type_ref("str", Vec::new()),
         ),
         function_info(
             "bytes",
             "base64_decode",
-            vec![value_param("text", type_ref("String", Vec::new()))],
+            vec![value_param("text", type_ref("str", Vec::new()))],
             bytes_result(),
         ),
         function_info(
@@ -2006,7 +2000,7 @@ fn bytes_namespace() -> ModuleNamespace {
         function_info(
             "bytes",
             "sha256_string",
-            vec![value_param("text", type_ref("String", Vec::new()))],
+            vec![value_param("text", type_ref("str", Vec::new()))],
             bytes_vec_type_ref(),
         ),
     ]
@@ -2046,7 +2040,7 @@ fn telemetry_namespace(name: &str) -> ModuleNamespace {
                 name,
                 "increment",
                 vec![
-                    value_param("name", type_ref("String", Vec::new())),
+                    value_param("name", type_ref("str", Vec::new())),
                     value_param("value", type_ref("int64", Vec::new())),
                 ],
                 type_ref("None", Vec::new()),
@@ -2054,7 +2048,7 @@ fn telemetry_namespace(name: &str) -> ModuleNamespace {
             function_info(
                 name,
                 "get",
-                vec![value_param("name", type_ref("String", Vec::new()))],
+                vec![value_param("name", type_ref("str", Vec::new()))],
                 type_ref("int64", Vec::new()),
             ),
             function_info(name, "reset", Vec::new(), type_ref("None", Vec::new())),
@@ -2066,7 +2060,7 @@ fn telemetry_namespace(name: &str) -> ModuleNamespace {
                     name,
                     level,
                     vec![
-                        value_param("message", type_ref("String", Vec::new())),
+                        value_param("message", type_ref("str", Vec::new())),
                         value_param("fields", string_map_type_ref()),
                     ],
                     type_ref("None", Vec::new()),
@@ -2077,7 +2071,7 @@ fn telemetry_namespace(name: &str) -> ModuleNamespace {
             name,
             "event",
             vec![
-                value_param("name", type_ref("String", Vec::new())),
+                value_param("name", type_ref("str", Vec::new())),
                 value_param("fields", string_map_type_ref()),
             ],
             type_ref("None", Vec::new()),
@@ -2125,26 +2119,26 @@ fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
         .collect::<BTreeMap<_, _>>();
     for associated in [
         HostBuiltinMetadata {
-            qualified_name: "String.to_bytes".to_string(),
+            qualified_name: "str.to_bytes".to_string(),
             params: vec![HostBuiltinParamMetadata {
                 name: "value".to_string(),
-                ty: Type::named("String"),
+                ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
                 required: true,
             }],
-            return_type: Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            return_type: Type::Named("list".to_string(), vec![Type::named("uint8")]),
         },
         HostBuiltinMetadata {
-            qualified_name: "String.from_bytes".to_string(),
+            qualified_name: "str.from_bytes".to_string(),
             params: vec![HostBuiltinParamMetadata {
                 name: "bytes".to_string(),
-                ty: Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 passing: ReceiverKind::Borrow,
                 required: true,
             }],
             return_type: Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), Type::named("bytes.Error")],
+                vec![Type::named("str"), Type::named("bytes.Error")],
             ),
         },
     ] {

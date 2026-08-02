@@ -1,18 +1,18 @@
 trait Describe:
-    def describe(self) -> String
+    def describe(self) -> str
 
 class Dog:
-    name: String
+    name: str
 
 class Cat:
-    label: String
+    label: str
 
 impl Describe for Dog:
-    def describe(self) -> String:
+    def describe(self) -> str:
         return "dog"
 
 impl Describe for Cat:
-    def describe(self) -> String:
+    def describe(self) -> str:
         return "cat"
 
 def show[T: Describe](animal: T) -> None:

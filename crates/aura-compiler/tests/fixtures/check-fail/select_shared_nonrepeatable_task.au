@@ -1,2 +1,2 @@
-def observe(task: Task[String]):
+def observe(task: Task[str]):
     print(select(task))

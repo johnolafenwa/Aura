@@ -122,7 +122,7 @@ Rules:
 Parameters can have defaults, which must come after required parameters:
 
 ```python
-def greet(name: String = "world"):
+def greet(name: str = "world"):
     print("hello " + name)
 
 greet()               # "hello world"
@@ -226,7 +226,7 @@ def apply(transform: def(int32) -> int32, value: int32) -> int32:
 
 selected = double
 pipeline = Pipeline(transform=selected)
-transforms: Vec[def(int32) -> int32] = [selected]
+transforms: list[def(int32) -> int32] = [selected]
 
 print(apply(pipeline.transform, 3))
 print(transforms[0](4))
@@ -239,8 +239,8 @@ you can also write it explicitly:
 
 ```python
 mutate: def(mut Counter) -> None = increment
-consume: def(own String) -> String = take
-callbacks: Vec[def(mut Counter) -> None] = [mutate]
+consume: def(own str) -> str = take
+callbacks: list[def(mut Counter) -> None] = [mutate]
 ```
 
 Calling `mutate` requires a mutable place; calling `consume` moves a non-copy

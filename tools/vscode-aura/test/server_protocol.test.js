@@ -219,7 +219,7 @@ test("bundled language server completes safely while a function header is incomp
   );
   assert.ok(Array.isArray(completion.result), "completion should return a list");
   const labels = new Set(completion.result.map((item) => item.label));
-  for (const expected of ["String", "Path", "write_to_path", "yield_now"]) {
+  for (const expected of ["str", "Path", "write_to_path", "yield_now"]) {
     assert.ok(labels.has(expected), `recovery completion should include ${expected}`);
   }
 });
@@ -245,7 +245,7 @@ test("bundled language server preserves comprehension hover definition and scope
   client.notify("initialized", {});
 
   const lines = [
-    "def collect_lengths(groups: Vec[Vec[String]]) -> Vec[int64]:",
+    "def collect_lengths(groups: list[list[str]]) -> list[int64]:",
     "    lengths = [entry.len() for group in groups if group.len() > 0 for entry in group if entry.contains(\"a\")]",
     "    print(lengths)",
     "    return lengths",
@@ -269,7 +269,7 @@ test("bundled language server preserves comprehension hover definition and scope
     position: { line: 1, character: outputEntryStart + 1 }
   });
   assert.equal(hover.error, undefined, JSON.stringify(hover.error));
-  assert.equal(hover.result?.contents?.value, "```aura\nlocal entry: String\n```");
+  assert.equal(hover.result?.contents?.value, "```aura\nlocal entry: str\n```");
 
   const definition = await client.request("textDocument/definition", {
     textDocument: { uri },
@@ -298,7 +298,7 @@ test("bundled language server preserves comprehension hover definition and scope
   assert.equal(resultHover.error, undefined, JSON.stringify(resultHover.error));
   assert.equal(
     resultHover.result?.contents?.value,
-    "```aura\nbinding lengths: Vec[int64]\n```"
+    "```aura\nbinding lengths: list[int64]\n```"
   );
 
   const afterCompletion = await client.request("textDocument/completion", {
@@ -332,7 +332,7 @@ test("bundled language server preserves owned slice intelligence and reserved di
   client.notify("initialized", {});
 
   const lines = [
-    "def take_slice(values: Vec[String], start: int32, end: int32) -> Vec[String]:",
+    "def take_slice(values: list[str], start: int64, end: int64) -> list[str]:",
     "    selected = values[start:end]",
     "    print(values[start:end].len())",
     "    return selected",
@@ -360,7 +360,7 @@ test("bundled language server preserves owned slice intelligence and reserved di
     position: { line: 1, character: endpointStart + 1 }
   });
   assert.equal(hover.error, undefined, JSON.stringify(hover.error));
-  assert.equal(hover.result?.contents?.value, "```aura\nparam start: int32\n```");
+  assert.equal(hover.result?.contents?.value, "```aura\nparam start: int64\n```");
 
   const definition = await client.request("textDocument/definition", {
     textDocument: { uri },
@@ -381,17 +381,17 @@ test("bundled language server preserves owned slice intelligence and reserved di
   });
   assert.equal(completion.error, undefined, JSON.stringify(completion.error));
   const labels = new Set(completion.result.map((item) => item.label));
-  assert.ok(labels.has("push"));
+  assert.ok(labels.has("append"));
   assert.ok(labels.has("len"));
 
   const receiverLines = [
-    "def make_values() -> Vec[String]:",
+    "def make_values() -> list[str]:",
     "    return [\"Ada\", \"Grace\"]",
     "",
-    "def endpoint(text: String) -> int32:",
+    "def endpoint(text: str) -> int64:",
     "    return 0",
     "",
-    "def inspect(values: Vec[String]):",
+    "def inspect(values: list[str]):",
     "    print(make_values()[1:].len())",
     "    print(values[endpoint(\"]\"):].len())",
     ""
@@ -426,7 +426,7 @@ test("bundled language server preserves owned slice intelligence and reserved di
     const receiverLabels = new Set(
       receiverCompletion.result.map((item) => item.label)
     );
-    assert.ok(receiverLabels.has("push"), receiverLines[line]);
+    assert.ok(receiverLabels.has("append"), receiverLines[line]);
     assert.ok(receiverLabels.has("len"), receiverLines[line]);
   }
 
@@ -475,7 +475,7 @@ test("bundled language server preserves owned slice intelligence and reserved di
   assert.ok(Array.isArray(recovery.result));
 
   const endpointLines = [
-    "def reject(values: Vec[int32], endpoint: int64):",
+    "def reject(values: list[int32], endpoint: uint64):",
     "    print(values[endpoint:])",
     ""
   ];
@@ -501,7 +501,7 @@ test("bundled language server preserves owned slice intelligence and reserved di
     },
     {
       code: "AU2002",
-      message: "slice endpoints must have type `int32`, found `int64`",
+      message: "slice endpoints must have type `int64` or a losslessly narrower integer type, found `uint64`",
       range: {
         start: { line: 1, character: 17 },
         end: { line: 1, character: 18 }
@@ -511,7 +511,7 @@ test("bundled language server preserves owned slice intelligence and reserved di
   );
 
   const assignmentLines = [
-    "def replace(values: Vec[int32]):",
+    "def replace(values: list[int32]):",
     "    values[1:3] = values",
     ""
   ];
@@ -628,7 +628,7 @@ test("bundled language server recovers safely while comprehension clauses are in
 
   for (const edit of cases) {
     const lines = [
-      "def collect(values: Vec[int64]) -> Vec[int64]:",
+      "def collect(values: list[int64]) -> list[int64]:",
       edit.line,
       "    return result",
       ""
@@ -660,7 +660,7 @@ test("bundled language server recovers safely while comprehension clauses are in
     );
     assert.ok(Array.isArray(completion.result), `${edit.name} completion should return a list`);
     const labels = new Set(completion.result.map((item) => item.label));
-    for (const expected of ["collect", "Vec", "if", "yield_now"]) {
+    for (const expected of ["collect", "list", "if", "yield_now"]) {
       assert.ok(labels.has(expected), `${edit.name} recovery should complete ${expected}`);
     }
 

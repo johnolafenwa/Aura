@@ -79,9 +79,9 @@ def double(value: int32) -> float64:
     return value.to_float() * 2.0
 
 def main():
-    source: Vec[int32] = [1, 2, 3, 4]
+    source: list[int32] = [1, 2, 3, 4]
     scalar: int32 = 10
-    mut values = Array[int32].from_vec(values=source, shape=[2, 2])
+    mut values = Array[int32].from_list(values=source, shape=[2, 2])
     copied = values.clone()
     print(values.shape())
     print(values.len())
@@ -139,7 +139,7 @@ Array[float64](shape=[2, 2], values=[2.0, 12.0, 6.0, 8.0])\n\
 #[test]
 fn mir_arrays_preserve_named_argument_order_and_capturing_map_results() {
     let source = r#"
-def shape() -> Vec[int64]:
+def shape() -> list[int64]:
     print("shape")
     return [2]
 
@@ -147,7 +147,7 @@ def seed() -> int32:
     print("seed")
     return 4
 
-def coordinate() -> Vec[int32]:
+def coordinate() -> list[int64]:
     print("index")
     return [1]
 
@@ -386,14 +386,14 @@ def main():
 fn mir_array_containing_vec_and_map_copies_are_independent() {
     let output = crate::run_source(
         r#"
-def first(values: Vec[Array[int32]]) -> Array[int32]:
+def first(values: list[Array[int32]]) -> Array[int32]:
     match own values.get(0):
         case Option.Some(value):
             return value
         case Option.None:
             return Array[int32].zeros([1])
 
-def named(values: Map[String, Array[int32]]) -> Array[int32]:
+def named(values: dict[str, Array[int32]]) -> Array[int32]:
     match own values.get("values"):
         case Option.Some(value):
             return value
@@ -401,11 +401,11 @@ def named(values: Map[String, Array[int32]]) -> Array[int32]:
             return Array[int32].zeros([1])
 
 def main():
-    source_values: Vec[int32] = [1, 2]
-    source = Array[int32].from_vec(source_values, [2])
+    source_values: list[int32] = [1, 2]
+    source = Array[int32].from_list(source_values, [2])
 
-    nested: Vec[Array[int32]] = [source.clone()]
-    copied = nested.clone()
+    nested: list[Array[int32]] = [source.clone()]
+    copied = nested.copy()
     mut copied_array = first(copied)
     copied_array[0] = 9
     print(first(nested))
@@ -417,7 +417,7 @@ def main():
     print(first(nested))
     print(sliced_array)
 
-    lookup: Map[String, Array[int32]] = {"values": source.clone()}
+    lookup: dict[str, Array[int32]] = {"values": source.clone()}
     mut mapped_array = named(lookup)
     mapped_array[0] = 7
     print(named(lookup))
@@ -444,7 +444,7 @@ fn mir_nested_array_clone_allocation_failure_is_au4005_and_preserves_source() {
     env.define_typed(
         "nested",
         Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
             vec![Type::Named("Array".to_string(), vec![Type::named("int32")])],
         ),
         Value::Vec(VecValue {
@@ -466,14 +466,14 @@ fn mir_nested_array_clone_allocation_failure_is_au4005_and_preserves_source() {
             }) => values.as_ptr(),
             other => panic!("expected nested Array, found {other:?}"),
         },
-        other => panic!("expected Vec[Array[int32]], found {other:?}"),
+        other => panic!("expected list[Array[int32]], found {other:?}"),
     };
 
     let error = crate::runtime_value::with_array_allocation_budget(1, || {
         runtime.evaluate_call(
             &CallTarget::Member {
                 object: Operand::Place("nested".to_string()),
-                field: "clone".to_string(),
+                field: "copy".to_string(),
                 receiver_place: Some("nested".to_string()),
             },
             &[],
@@ -490,7 +490,7 @@ fn mir_nested_array_clone_allocation_failure_is_au4005_and_preserves_source() {
             }) => assert_eq!(values.as_ptr(), source_storage),
             other => panic!("expected nested Array, found {other:?}"),
         },
-        other => panic!("expected Vec[Array[int32]], found {other:?}"),
+        other => panic!("expected list[Array[int32]], found {other:?}"),
     }
 }
 
@@ -643,7 +643,7 @@ fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque
     );
     env.define_typed(
         "bytes",
-        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+        Type::Named("list".to_string(), vec![Type::named("uint8")]),
         super::bytes_runtime_value(&[0, 254]),
     );
     let source_pointer = 0x1234usize as *mut c_void;
@@ -673,7 +673,7 @@ fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque
             MirExternParam {
                 name: "bytes".to_string(),
                 passing: MirReceiverKind::BorrowMut,
-                ty: Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
             },
             MirExternParam {
                 name: "handle".to_string(),
@@ -847,10 +847,10 @@ fn mir_runtime_ffi_marshals_every_scalar_and_shared_view_source_shape() {
         ),
         ("f32_value", Type::named("float32"), Value::Float(3.5)),
         ("f64_value", Type::named("float64"), Value::Float(7.25)),
-        ("text", Type::named("String"), Value::String(String::new())),
+        ("text", Type::named("str"), Value::String(String::new())),
         (
             "bytes",
-            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            Type::Named("list".to_string(), vec![Type::named("uint8")]),
             super::bytes_runtime_value(&[]),
         ),
     ];
@@ -871,10 +871,10 @@ fn mir_runtime_ffi_marshals_every_scalar_and_shared_view_source_shape() {
         ("u64_value", Type::named("uint64")),
         ("f32_value", Type::named("float32")),
         ("f64_value", Type::named("float64")),
-        ("text", Type::named("String")),
+        ("text", Type::named("str")),
         (
             "bytes",
-            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            Type::Named("list".to_string(), vec![Type::named("uint8")]),
         ),
     ];
     let call = MirExternCall {
@@ -1123,7 +1123,7 @@ fn mir_runtime_ffi_writes_mutable_views_back_before_foreign_and_result_errors() 
             params: vec![MirExternParam {
                 name: "bytes".to_string(),
                 passing: MirReceiverKind::BorrowMut,
-                ty: Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
             }],
             return_type: Type::named("int32"),
         }
@@ -1141,7 +1141,7 @@ fn mir_runtime_ffi_writes_mutable_views_back_before_foreign_and_result_errors() 
         let mut env = Env::default();
         env.define_typed(
             "bytes",
-            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            Type::Named("list".to_string(), vec![Type::named("uint8")]),
             super::bytes_runtime_value(&[1, 2]),
         );
         env
@@ -1157,7 +1157,7 @@ fn mir_runtime_ffi_writes_mutable_views_back_before_foreign_and_result_errors() 
             |_, signature, arguments| {
                 assert_eq!(signature.parameters(), &[FfiType::BytesViewMut]);
                 let FfiValue::Bytes(bytes) = &mut arguments[0] else {
-                    panic!("mutable Vec[uint8] should marshal as bytes");
+                    panic!("mutable list[uint8] should marshal as bytes");
                 };
                 bytes.copy_from_slice(&[3, 4]);
                 Err(FfiError::NullOpaqueHandleReturn)
@@ -1185,7 +1185,7 @@ fn mir_runtime_ffi_writes_mutable_views_back_before_foreign_and_result_errors() 
             &mut result_error_env,
             |_, _, arguments| {
                 let FfiValue::Bytes(bytes) = &mut arguments[0] else {
-                    panic!("mutable Vec[uint8] should marshal as bytes");
+                    panic!("mutable list[uint8] should marshal as bytes");
                 };
                 bytes.copy_from_slice(&[5, 6]);
                 Ok(FfiValue::Bool(true))
@@ -1213,7 +1213,7 @@ fn mir_runtime_ffi_writes_mutable_views_back_before_foreign_and_result_errors() 
             &mut missing_place_env,
             |_, _, arguments| {
                 let FfiValue::Bytes(bytes) = &mut arguments[0] else {
-                    panic!("mutable Vec[uint8] should marshal as bytes");
+                    panic!("mutable list[uint8] should marshal as bytes");
                 };
                 bytes.copy_from_slice(&[7, 8]);
                 Ok(FfiValue::I32(0))
@@ -1354,14 +1354,14 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
         ),
         (Type::named("float32"), Value::Bool(true)),
         (Type::named("float64"), Value::Bool(true)),
-        (Type::named("String"), Value::Bool(true)),
+        (Type::named("str"), Value::Bool(true)),
         (Type::named("Token"), Value::Bool(true)),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            Type::Named("list".to_string(), vec![Type::named("uint8")]),
             Value::Bool(true),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            Type::Named("list".to_string(), vec![Type::named("uint8")]),
             Value::Vec(VecValue {
                 element_type: Type::named("uint8"),
                 elements: vec![Value::Bool(true)],
@@ -1380,7 +1380,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     }
 
     let unsupported = shape_error(
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Type::Named("list".to_string(), vec![Type::named("int32")]),
         Value::Vec(VecValue {
             element_type: Type::named("int32"),
             elements: vec![Value::Int(IntegerValue::from_i32(1))],
@@ -1389,10 +1389,10 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     assert_eq!(unsupported.code, "AU4005");
     assert_eq!(
         unsupported.message,
-        "unsupported FFI source type `Vec[int32]` reached MIR execution"
+        "unsupported FFI source type `list[int32]` reached MIR execution"
     );
 
-    let bytes_type = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+    let bytes_type = Type::Named("list".to_string(), vec![Type::named("uint8")]);
     let mut env = Env::default();
     env.define_typed(
         "bytes",
@@ -1474,7 +1474,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                 params: vec![MirExternParam {
                     name: "bytes".to_string(),
                     passing: MirReceiverKind::BorrowMut,
-                    ty: Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                    ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 }],
                 return_type: Type::Unit,
             },
@@ -1487,7 +1487,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                 let mut env = Env::default();
                 env.define_typed(
                     "bytes",
-                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                    Type::Named("list".to_string(), vec![Type::named("uint8")]),
                     super::bytes_runtime_value(&[1]),
                 );
                 env
@@ -1813,31 +1813,31 @@ fn assert_mir_member_length_borrows_receiver(
 #[test]
 fn mir_length_string_len_borrows_receiver_without_snapshot_clone() {
     assert_mir_member_length_borrows_receiver(
-        Type::named("String"),
+        Type::named("str"),
         Value::String("é🎉e\u{301}".to_string()),
         "len",
         4,
-        "String.len",
+        "str.len",
     );
 }
 
 #[test]
 fn mir_length_string_byte_len_borrows_receiver_without_snapshot_clone() {
     assert_mir_member_length_borrows_receiver(
-        Type::named("String"),
+        Type::named("str"),
         Value::String("é🎉e\u{301}".to_string()),
         "byte_len",
         9,
-        "String.byte_len",
+        "str.byte_len",
     );
 }
 
 #[test]
 fn mir_length_vec_len_borrows_receiver_without_snapshot_clone() {
     assert_mir_member_length_borrows_receiver(
-        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+        Type::Named("list".to_string(), vec![Type::named("str")]),
         Value::Vec(VecValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: vec![
                 Value::String("first-vector-payload".repeat(64)),
                 Value::String("second-vector-payload".repeat(64)),
@@ -1853,12 +1853,12 @@ fn mir_length_vec_len_borrows_receiver_without_snapshot_clone() {
 fn mir_length_map_len_borrows_receiver_without_snapshot_clone() {
     assert_mir_member_length_borrows_receiver(
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("String")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("str")],
         ),
         Value::Map(MapValue {
-            key_type: Type::named("String"),
-            value_type: Type::named("String"),
+            key_type: Type::named("str"),
+            value_type: Type::named("str"),
             entries: vec![
                 (
                     Value::String("first-map-key".repeat(64)),
@@ -1879,9 +1879,9 @@ fn mir_length_map_len_borrows_receiver_without_snapshot_clone() {
 #[test]
 fn mir_length_set_len_borrows_receiver_without_snapshot_clone() {
     assert_mir_member_length_borrows_receiver(
-        Type::Named("Set".to_string(), vec![Type::named("String")]),
+        Type::Named("set".to_string(), vec![Type::named("str")]),
         Value::Set(SetValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: vec![
                 Value::String("first-set-value".repeat(64)),
                 Value::String("second-set-value".repeat(64)),
@@ -1897,7 +1897,7 @@ fn mir_length_set_len_borrows_receiver_without_snapshot_clone() {
 fn mir_length_free_len_delegation_borrows_receiver_without_snapshot_clone() {
     let module = crate::lower_source_to_mir(
         r#"
-def measure(values: Vec[String]) -> int64:
+def measure(values: list[str]) -> int64:
     return len(values)
 "#,
     )
@@ -1936,9 +1936,9 @@ def measure(values: Vec[String]) -> int64:
     let mut env = Env::default();
     env.define_typed(
         "values",
-        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+        Type::Named("list".to_string(), vec![Type::named("str")]),
         Value::Vec(VecValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: vec![
                 Value::String("first-free-len-payload".repeat(64)),
                 Value::String("second-free-len-payload".repeat(64)),
@@ -1953,7 +1953,7 @@ def measure(values: Vec[String]) -> int64:
         &args,
         "values",
         2,
-        "free len(Vec[String])",
+        "free len(list[str])",
     );
 }
 
@@ -1963,7 +1963,7 @@ fn mir_tuple_construct_project_and_take_preserve_ownership_boundaries() {
     let mut env = Env::default();
     let text = "owned tuple element".repeat(32);
     let text_ptr = text.as_ptr();
-    env.define_typed("text", Type::named("String"), Value::String(text));
+    env.define_typed("text", Type::named("str"), Value::String(text));
     env.define_typed(
         "number",
         Type::named("int64"),
@@ -1977,7 +1977,7 @@ fn mir_tuple_construct_project_and_take_preserve_ownership_boundaries() {
                     Operand::MovePlace("text".to_string()),
                     Operand::Place("number".to_string()),
                 ],
-                element_types: vec![Type::named("String"), Type::named("int64")],
+                element_types: vec![Type::named("str"), Type::named("int64")],
             },
             &mut env,
         )
@@ -1992,7 +1992,7 @@ fn mir_tuple_construct_project_and_take_preserve_ownership_boundaries() {
     );
     env.define_typed(
         "tuple",
-        Type::Tuple(vec![Type::named("String"), Type::named("int64")]),
+        Type::Tuple(vec![Type::named("str"), Type::named("int64")]),
         tuple,
     );
 
@@ -2016,13 +2016,13 @@ fn mir_tuple_construct_project_and_take_preserve_ownership_boundaries() {
             &Rvalue::TupleTakeElement {
                 place: "tuple".to_string(),
                 index: 0,
-                element_type: Type::named("String"),
+                element_type: Type::named("str"),
             },
             &mut env,
         )
         .expect("non-Copy tuple element should move");
     let super::RvalueOutcome::Value(Value::String(taken)) = taken else {
-        panic!("expected moved String");
+        panic!("expected moved str");
     };
     assert_eq!(taken.as_ptr(), text_ptr);
     let Value::Tuple(remaining) = env.read_place("tuple").expect("tuple owner remains") else {
@@ -2143,13 +2143,13 @@ fn mir_tuple_coercion_preserves_owned_element_allocations_and_metadata() {
     let coerced = runtime
         .coerce_value_to_type(
             Value::Tuple(TupleValue {
-                element_types: vec![Type::named("String"), Type::named("int64")],
+                element_types: vec![Type::named("str"), Type::named("int64")],
                 elements: vec![
                     Value::String(text),
                     Value::Int(IntegerValue::from_signed(7)),
                 ],
             }),
-            &Type::Tuple(vec![Type::named("String"), Type::named("int8")]),
+            &Type::Tuple(vec![Type::named("str"), Type::named("int8")]),
             None,
         )
         .expect("tuple elements should coerce structurally");
@@ -2158,10 +2158,10 @@ fn mir_tuple_coercion_preserves_owned_element_allocations_and_metadata() {
     };
     assert_eq!(
         coerced.element_types,
-        vec![Type::named("String"), Type::named("int8")]
+        vec![Type::named("str"), Type::named("int8")]
     );
     let Value::String(text) = &coerced.elements[0] else {
-        panic!("expected String element");
+        panic!("expected str element");
     };
     assert_eq!(text.as_ptr(), text_ptr);
     let Value::Int(number) = &coerced.elements[1] else {
@@ -2170,10 +2170,7 @@ fn mir_tuple_coercion_preserves_owned_element_allocations_and_metadata() {
     assert_eq!(number.runtime_kind(), Some(IntegerKind::Int8));
     assert_eq!(
         MirRuntime::infer_value_type(&Value::Tuple(coerced)),
-        Some(Type::Tuple(vec![
-            Type::named("String"),
-            Type::named("int8")
-        ])),
+        Some(Type::Tuple(vec![Type::named("str"), Type::named("int8")])),
         "runtime inference must preserve the tuple's coerced element metadata"
     );
 }
@@ -2203,26 +2200,26 @@ fn mir_own_user_and_trait_receivers_transfer_the_original_allocation() {
     let module = crate::lower_source_to_mir(
         r#"
 class DirectBox:
-    value: String
+    value: str
 
-    def take(own self) -> String:
+    def take(own self) -> str:
         return self.value
 
 trait Take:
-    def take(own self) -> String
+    def take(own self) -> str
 
 class TraitBox:
-    value: String
+    value: str
 
 impl Take for TraitBox:
-    def take(own self) -> String:
+    def take(own self) -> str:
         return self.value
 
 trait TakeString:
-    def take_string(own self) -> String
+    def take_string(own self) -> str
 
-impl TakeString for String:
-    def take_string(own self) -> String:
+impl TakeString for str:
+    def take_string(own self) -> str:
         return self
 
 def main():
@@ -2269,7 +2266,7 @@ def main():
                 text_ptr,
                 "an own {class_name} receiver must enter its method without a snapshot clone"
             ),
-            other => panic!("expected String from {class_name}.{field}, found {other:?}"),
+            other => panic!("expected str from {class_name}.{field}, found {other:?}"),
         }
         assert!(
             env.place_ref(place).is_err(),
@@ -2280,7 +2277,7 @@ def main():
     let text = "builtin-trait-receiver-".repeat(64);
     let text_ptr = text.as_ptr();
     let mut env = Env::default();
-    env.define_typed("text", Type::named("String"), Value::String(text));
+    env.define_typed("text", Type::named("str"), Value::String(text));
     let returned = runtime
         .evaluate_call(
             &CallTarget::Member {
@@ -2293,7 +2290,7 @@ def main():
         )
         .expect("an own trait receiver on a builtin value should run");
     let Value::String(returned) = returned else {
-        panic!("expected String from String.take_string");
+        panic!("expected str from str.take_string");
     };
     assert_eq!(
         returned.as_ptr(),
@@ -2359,7 +2356,7 @@ fn mir_json_borrowed_host_args_reference_the_existing_runtime_value() {
     let mut env = Env::default();
     env.define_typed(
         "text",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("{\"answer\":42}".repeat(32)),
     );
     env.define_typed(
@@ -2370,20 +2367,20 @@ fn mir_json_borrowed_host_args_reference_the_existing_runtime_value() {
 
     let text_ptr = match env.place_ref("text").expect("text should exist") {
         Value::String(text) => text.as_ptr(),
-        other => panic!("expected String, found {other:?}"),
+        other => panic!("expected str, found {other:?}"),
     };
     let value_ptr = env.place_ref("value").expect("value should exist") as *const Value;
 
     let text_operand = Operand::Place("text".to_string());
     let value_operand = Operand::Place("value".to_string());
     let text_arg =
-        super::borrow_mir_operand(&text_operand, &env).expect("String place should be borrowed");
+        super::borrow_mir_operand(&text_operand, &env).expect("str place should be borrowed");
     let value_arg = super::borrow_mir_operand(&value_operand, &env)
         .expect("json.Value place should be borrowed");
 
     match text_arg.as_value() {
         Value::String(text) => assert_eq!(text.as_ptr(), text_ptr),
-        other => panic!("expected String, found {other:?}"),
+        other => panic!("expected str, found {other:?}"),
     }
     assert_eq!(value_arg.as_value() as *const Value, value_ptr);
     assert!(text_arg.is_borrowed_place());
@@ -2417,9 +2414,9 @@ fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
         Value::String(value) => assert_eq!(
             value.as_ptr(),
             text_ptr,
-            "owned String payload must be transferred, not cloned"
+            "owned str payload must be transferred, not cloned"
         ),
-        other => panic!("expected String payload, found {other:?}"),
+        other => panic!("expected str payload, found {other:?}"),
     }
     assert!(
         env.place_ref("string_value").is_err(),
@@ -2468,7 +2465,7 @@ fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
         json_value(
             "Object",
             vec![Value::Map(MapValue {
-                key_type: Type::named("String"),
+                key_type: Type::named("str"),
                 value_type: Type::named("json.Value"),
                 entries,
             })],
@@ -2511,11 +2508,11 @@ fn mir_json_variant_construction_moves_owned_payload_allocations() {
     let entries_ptr = entries.as_ptr();
 
     let cases = [
-        ("text", "String", Type::named("String"), Value::String(text)),
+        ("text", "String", Type::named("str"), Value::String(text)),
         (
             "values",
             "Array",
-            Type::Named("Vec".to_string(), vec![Type::named("json.Value")]),
+            Type::Named("list".to_string(), vec![Type::named("json.Value")]),
             Value::Vec(VecValue {
                 element_type: Type::named("json.Value"),
                 elements: values,
@@ -2525,11 +2522,11 @@ fn mir_json_variant_construction_moves_owned_payload_allocations() {
             "entries",
             "Object",
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("json.Value")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("json.Value")],
             ),
             Value::Map(MapValue {
-                key_type: Type::named("String"),
+                key_type: Type::named("str"),
                 value_type: Type::named("json.Value"),
                 entries,
             }),
@@ -2622,7 +2619,7 @@ fn mir_json_owned_accessor_moves_a_nested_place_without_cloning_its_payload() {
     let mut payloads = enum_payloads(result, "Option", "Some");
     match payloads.remove(0) {
         Value::String(value) => assert_eq!(value.as_ptr(), text_ptr),
-        other => panic!("expected String payload, found {other:?}"),
+        other => panic!("expected str payload, found {other:?}"),
     }
     assert!(
         env.place_ref("holder.value").is_err(),
@@ -2692,7 +2689,7 @@ fn mir_move_variant_payload_preserves_allocation_and_marks_slot_consumed() {
         )
         .expect("owned variant payload extraction should succeed");
     let super::RvalueOutcome::Value(Value::String(text)) = outcome else {
-        panic!("expected moved String payload");
+        panic!("expected moved str payload");
     };
     assert_eq!(text.as_ptr(), text_ptr);
     match env
@@ -2710,21 +2707,21 @@ fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_erro
     let mut env = Env::default();
     env.define_typed(
         "valid_text",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("{\"answer\":42}".repeat(32)),
     );
     env.define_typed(
         "invalid_text",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("{".repeat(32)),
     );
     let valid_text_ptr = match env.place_ref("valid_text").unwrap() {
         Value::String(value) => value.as_ptr(),
-        other => panic!("expected String, found {other:?}"),
+        other => panic!("expected str, found {other:?}"),
     };
     let invalid_text_ptr = match env.place_ref("invalid_text").unwrap() {
         Value::String(value) => value.as_ptr(),
-        other => panic!("expected String, found {other:?}"),
+        other => panic!("expected str, found {other:?}"),
     };
 
     for place in ["valid_text", "invalid_text"] {
@@ -2739,11 +2736,11 @@ fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_erro
     }
     match env.place_ref("valid_text").unwrap() {
         Value::String(value) => assert_eq!(value.as_ptr(), valid_text_ptr),
-        other => panic!("expected String, found {other:?}"),
+        other => panic!("expected str, found {other:?}"),
     }
     match env.place_ref("invalid_text").unwrap() {
         Value::String(value) => assert_eq!(value.as_ptr(), invalid_text_ptr),
-        other => panic!("expected String, found {other:?}"),
+        other => panic!("expected str, found {other:?}"),
     }
 
     let payload = "borrowed-payload".repeat(32);
@@ -2790,7 +2787,7 @@ fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_erro
     match retained {
         Value::EnumVariant(variant) => match variant.payloads.as_slice() {
             [Value::String(value)] => assert_eq!(value.as_ptr(), payload_ptr),
-            other => panic!("expected one String payload, found {other:?}"),
+            other => panic!("expected one str payload, found {other:?}"),
         },
         other => panic!("expected json.Value.String, found {other:?}"),
     }
@@ -2830,12 +2827,12 @@ fn mir_json_parse_materialization_allocation_failure_is_au4005_and_preserves_sou
     let mut env = Env::default();
     env.define_typed(
         "source",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("[null]".to_string()),
     );
     let source_ptr = match env.place_ref("source").expect("source should exist") {
         Value::String(value) => value.as_ptr(),
-        other => panic!("expected String, found {other:?}"),
+        other => panic!("expected str, found {other:?}"),
     };
 
     let error = crate::runtime_value::with_json_runtime_allocation_budget(0, || {
@@ -2858,7 +2855,7 @@ fn mir_json_parse_materialization_allocation_failure_is_au4005_and_preserves_sou
         .expect("borrowed parse source should survive the trap")
     {
         Value::String(value) => assert_eq!(value.as_ptr(), source_ptr),
-        other => panic!("expected String, found {other:?}"),
+        other => panic!("expected str, found {other:?}"),
     }
 }
 
@@ -2867,12 +2864,12 @@ fn mir_bytes_adapter_propagates_materialization_allocation_failure_as_au4005() {
     let mut env = Env::default();
     env.define_typed(
         "source",
-        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+        Type::Named("list".to_string(), vec![Type::named("uint8")]),
         bytes_vec_value(vec![0xab]),
     );
     let source_elements = match env.place_ref("source").expect("source should exist") {
         Value::Vec(value) => value.elements.as_ptr(),
-        other => panic!("expected Vec[uint8], found {other:?}"),
+        other => panic!("expected list[uint8], found {other:?}"),
     };
     let args = [mir_arg(None, Operand::Place("source".to_string()))];
 
@@ -2892,7 +2889,7 @@ fn mir_bytes_adapter_propagates_materialization_allocation_failure_as_au4005() {
         .expect("borrowed byte source should survive the trap")
     {
         Value::Vec(value) => assert_eq!(value.elements.as_ptr(), source_elements),
-        other => panic!("expected Vec[uint8], found {other:?}"),
+        other => panic!("expected list[uint8], found {other:?}"),
     }
 }
 
@@ -2932,14 +2929,14 @@ fn mir_string_to_bytes_member_diagnostics_preserve_the_receiver() {
             &args,
             &mut env,
         )
-        .expect_err("String.to_bytes must reject arguments before moving its receiver");
+        .expect_err("str.to_bytes must reject arguments before moving its receiver");
     assert_eq!(error.message, "`to_bytes` does not take arguments");
     match env
         .place_ref("source")
         .expect("the rejected call must preserve its receiver")
     {
         Value::String(value) => assert_eq!(value.as_ptr(), source_ptr),
-        other => panic!("expected String, found {other:?}"),
+        other => panic!("expected str, found {other:?}"),
     }
 }
 
@@ -2963,7 +2960,7 @@ fn mir_dynamic_string_to_bytes_borrows_receiver_before_allocation_failure() {
             &mut env,
         )
     })
-    .expect_err("dynamic String.to_bytes allocation failure should trap");
+    .expect_err("dynamic str.to_bytes allocation failure should trap");
 
     assert_eq!(error.code, "AU4005");
     assert_eq!(
@@ -2973,14 +2970,14 @@ fn mir_dynamic_string_to_bytes_borrows_receiver_before_allocation_failure() {
     assert_eq!(
         super::mir_value_clone_count(),
         clone_count,
-        "dynamic String.to_bytes must borrow its receiver before entering the byte adapter"
+        "dynamic str.to_bytes must borrow its receiver before entering the byte adapter"
     );
     match env
         .place_ref("source")
-        .expect("borrowed String receiver should survive the trap")
+        .expect("borrowed str receiver should survive the trap")
     {
         Value::String(value) => assert_eq!(value.as_ptr(), source_ptr),
-        other => panic!("expected String, found {other:?}"),
+        other => panic!("expected str, found {other:?}"),
     }
 }
 
@@ -2988,23 +2985,23 @@ fn mir_dynamic_string_to_bytes_borrows_receiver_before_allocation_failure() {
 fn mir_literal_string_to_bytes_avoids_snapshot_before_allocation_failure() {
     let module = crate::lower_source_to_mir(
         r#"
-def make_text() -> String:
+def make_text() -> str:
     return "temporary"
 
-def literal_bytes() -> Vec[uint8]:
+def literal_bytes() -> list[uint8]:
     return "literal-string-receiver".to_bytes()
 
-def formatted_bytes() -> Vec[uint8]:
+def formatted_bytes() -> list[uint8]:
     return f"formatted-temporary".to_bytes()
 
-def returned_bytes() -> Vec[uint8]:
+def returned_bytes() -> list[uint8]:
     return make_text().to_bytes()
 
 def main():
     literal_bytes()
 "#,
     )
-    .expect("literal and temporary String receivers should lower");
+    .expect("literal and temporary str receivers should lower");
 
     fn to_bytes_operand<'a>(module: &'a crate::mir::MirModule, function_name: &str) -> &'a Operand {
         let function = module
@@ -3024,14 +3021,14 @@ def main():
                             args,
                         },
                     ..
-                } if name == "String.to_bytes" => args.first().map(|argument| &argument.value),
+                } if name == "str.to_bytes" => args.first().map(|argument| &argument.value),
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("{function_name} should call String.to_bytes"))
+            .unwrap_or_else(|| panic!("{function_name} should call str.to_bytes"))
     }
 
     let Operand::String(literal) = to_bytes_operand(&module, "literal_bytes") else {
-        panic!("a literal String receiver should remain a borrowed MIR literal");
+        panic!("a literal str receiver should remain a borrowed MIR literal");
     };
     assert_eq!(literal, "literal-string-receiver");
     assert!(
@@ -3039,14 +3036,14 @@ def main():
             to_bytes_operand(&module, "formatted_bytes"),
             Operand::Place(_)
         ),
-        "a formatted String receiver should lower to a borrowed temporary place"
+        "a formatted str receiver should lower to a borrowed temporary place"
     );
     assert!(
         matches!(
             to_bytes_operand(&module, "returned_bytes"),
             Operand::Place(_)
         ),
-        "a returned String receiver should lower to a borrowed temporary place"
+        "a returned str receiver should lower to a borrowed temporary place"
     );
     let mut runtime = MirRuntime::new(
         module,
@@ -3057,7 +3054,7 @@ def main():
 
     let error =
         crate::runtime_value::with_bytes_runtime_allocation_budget(0, || runtime.run_main())
-            .expect_err("literal String.to_bytes allocation failure should trap");
+            .expect_err("literal str.to_bytes allocation failure should trap");
 
     assert_eq!(error.code, "AU4005");
     assert_eq!(
@@ -3067,7 +3064,7 @@ def main():
     assert_eq!(
         super::mir_value_clone_count(),
         clone_count,
-        "literal String.to_bytes must borrow the MIR literal before entering the byte adapter"
+        "literal str.to_bytes must borrow the MIR literal before entering the byte adapter"
     );
 }
 
@@ -3121,7 +3118,7 @@ fn mir_json_adapters_reject_inexact_runtime_metadata() {
             "array_value",
             "Array",
             Value::Vec(VecValue {
-                element_type: Type::named("String"),
+                element_type: Type::named("str"),
                 elements: Vec::new(),
             }),
         ),
@@ -3129,7 +3126,7 @@ fn mir_json_adapters_reject_inexact_runtime_metadata() {
             "object_value",
             "Object",
             Value::Map(MapValue {
-                key_type: Type::named("String"),
+                key_type: Type::named("str"),
                 value_type: Type::named("bool"),
                 entries: Vec::new(),
             }),
@@ -3396,7 +3393,7 @@ fn mir_json_host_argument_errors_preserve_borrowed_sources() {
 
     let text = "{\"answer\":42}".repeat(32);
     let text_ptr = text.as_ptr();
-    env.define_typed("text", Type::named("String"), Value::String(text));
+    env.define_typed("text", Type::named("str"), Value::String(text));
     let consuming_borrow = call_name(
         &mut runtime,
         "json::parse",
@@ -3413,7 +3410,7 @@ fn mir_json_host_argument_errors_preserve_borrowed_sources() {
         .expect("the rejected consuming borrow must preserve its source")
     {
         Value::String(text) => assert_eq!(text.as_ptr(), text_ptr),
-        other => panic!("expected preserved String, found {other:?}"),
+        other => panic!("expected preserved str, found {other:?}"),
     }
 
     let wrong_place_type = call_name(
@@ -3422,11 +3419,11 @@ fn mir_json_host_argument_errors_preserve_borrowed_sources() {
         &[mir_arg(None, Operand::Bool(true))],
         &mut env,
     )
-    .expect_err("json.parse should diagnose non-String immediate operands");
+    .expect_err("json.parse should diagnose non-str immediate operands");
     assert_eq!(wrong_place_type.code, "AU4001");
     assert_eq!(
         wrong_place_type.message,
-        "`json::parse` expects `String`, found `true`"
+        "`json::parse` expects `str`, found `true`"
     );
 
     env.define_typed(
@@ -3586,12 +3583,12 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
     fn string_ptr(value: &Value) -> *const u8 {
         match value {
             Value::String(value) => value.as_ptr(),
-            other => panic!("expected String, found {other:?}"),
+            other => panic!("expected str, found {other:?}"),
         }
     }
 
-    let string_type = Type::named("String");
-    let vector_type = Type::Named("Vec".to_string(), vec![string_type.clone()]);
+    let string_type = Type::named("str");
+    let vector_type = Type::Named("list".to_string(), vec![string_type.clone()]);
     for (method, index) in [("set", 0_u128), ("insert", 0), ("__set_index", 0)] {
         let mut runtime = test_runtime();
         let mut env = Env::default();
@@ -3670,7 +3667,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
     assert!(env.place_ref("other").is_err());
 
     let map_type = Type::Named(
-        "Map".to_string(),
+        "dict".to_string(),
         vec![string_type.clone(), string_type.clone()],
     );
     for method in ["set", "__set_index"] {
@@ -3734,12 +3731,12 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
     runtime
         .evaluate_map_method(
             map,
-            "extend",
+            "update",
             Some("map"),
             &[mir_arg(None, Operand::MovePlace("other".to_string()))],
             &mut env,
         )
-        .expect("Map.extend should succeed");
+        .expect("dict.update should succeed");
     let Value::Map(updated) = env.place_ref("map").expect("map should be written back") else {
         panic!("expected map writeback");
     };
@@ -3749,29 +3746,29 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
 
     let mut runtime = test_runtime();
     let mut env = Env::default();
-    let inserted = "set-inserted-value".repeat(64);
-    let inserted_ptr = inserted.as_ptr();
-    let set_type = Type::Named("Set".to_string(), vec![string_type.clone()]);
+    let added = "set-added-value".repeat(64);
+    let added_ptr = added.as_ptr();
+    let set_type = Type::Named("set".to_string(), vec![string_type.clone()]);
     let set = SetValue {
         element_type: string_type.clone(),
         elements: Vec::new(),
     };
     env.define_typed("set", set_type, Value::Set(set.clone()));
-    env.define_typed("inserted", string_type, Value::String(inserted));
+    env.define_typed("added", string_type, Value::String(added));
     runtime
         .evaluate_set_method(
             set,
-            "insert",
+            "add",
             Some("set"),
-            &[mir_arg(None, Operand::MovePlace("inserted".to_string()))],
+            &[mir_arg(None, Operand::MovePlace("added".to_string()))],
             &mut env,
         )
-        .expect("Set.insert should succeed");
+        .expect("set.add should succeed");
     let Value::Set(updated) = env.place_ref("set").expect("set should be written back") else {
         panic!("expected set writeback");
     };
-    assert_eq!(string_ptr(&updated.elements[0]), inserted_ptr);
-    assert!(env.place_ref("inserted").is_err());
+    assert_eq!(string_ptr(&updated.elements[0]), added_ptr);
+    assert!(env.place_ref("added").is_err());
 }
 
 #[test]
@@ -3795,7 +3792,7 @@ fn mir_owned_process_and_http_decoders_transfer_string_allocations() {
         .collect::<Vec<_>>();
     let decoded_command = super::expect_owned_command_vec(
         Value::Vec(VecValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: command,
         }),
         "start(command=...)",
@@ -3825,8 +3822,8 @@ fn mir_owned_process_and_http_decoders_transfer_string_allocations() {
     let header_value_ptr = header_value.as_ptr();
     let headers = super::expect_owned_headers_map(
         Value::Map(MapValue {
-            key_type: Type::named("String"),
-            value_type: Type::named("String"),
+            key_type: Type::named("str"),
+            value_type: Type::named("str"),
             entries: vec![(Value::String(header_name), Value::String(header_value))],
         }),
         "respond_text(headers=...)",
@@ -3866,7 +3863,7 @@ fn mir_owned_queue_and_task_fallback_adapters_preserve_allocations() {
                 expected,
                 "{label} must return the original owned allocation"
             ),
-            other => panic!("{label} returned {other:?} instead of String"),
+            other => panic!("{label} returned {other:?} instead of str"),
         }
     }
 
@@ -3876,7 +3873,7 @@ fn mir_owned_queue_and_task_fallback_adapters_preserve_allocations() {
         let channel = ChannelValue::new();
         let payload = format!("{method}-queue-payload-").repeat(64);
         let payload_ptr = payload.as_ptr();
-        env.define_typed("payload", Type::named("String"), Value::String(payload));
+        env.define_typed("payload", Type::named("str"), Value::String(payload));
         runtime
             .evaluate_channel_method(
                 channel.clone(),
@@ -3898,7 +3895,7 @@ fn mir_owned_queue_and_task_fallback_adapters_preserve_allocations() {
     let queue_fallback_ptr = queue_fallback.as_ptr();
     env.define_typed(
         "queue_fallback",
-        Type::named("String"),
+        Type::named("str"),
         Value::String(queue_fallback),
     );
     let fallback = runtime
@@ -3921,7 +3918,7 @@ fn mir_owned_queue_and_task_fallback_adapters_preserve_allocations() {
     let task_fallback_ptr = task_fallback.as_ptr();
     env.define_typed(
         "task_fallback",
-        Type::named("String"),
+        Type::named("str"),
         Value::String(task_fallback),
     );
     let pending = TaskValue::from_handle(thread::spawn(|| {
@@ -3949,7 +3946,7 @@ fn mir_owned_vec_and_set_iteration_take_elements_from_the_private_source() {
         let mut payloads = enum_payloads(value, "Option", "Some");
         match payloads.remove(0) {
             Value::String(value) => assert_eq!(value.as_ptr(), expected),
-            other => panic!("expected Option.Some(String), found {other:?}"),
+            other => panic!("expected Option.Some(str), found {other:?}"),
         }
     }
 
@@ -3957,12 +3954,12 @@ fn mir_owned_vec_and_set_iteration_take_elements_from_the_private_source() {
     let mut env = Env::default();
     let vector_text = "owned-vector-iteration".repeat(64);
     let vector_text_ptr = vector_text.as_ptr();
-    let vector_type = Type::Named("Vec".to_string(), vec![Type::named("String")]);
+    let vector_type = Type::Named("list".to_string(), vec![Type::named("str")]);
     env.define_typed(
         "vector",
         vector_type,
         Value::Vec(VecValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: vec![Value::String(vector_text)],
         }),
     );
@@ -3985,12 +3982,12 @@ fn mir_owned_vec_and_set_iteration_take_elements_from_the_private_source() {
 
     let set_text = "owned-set-iteration".repeat(64);
     let set_text_ptr = set_text.as_ptr();
-    let set_type = Type::Named("Set".to_string(), vec![Type::named("String")]);
+    let set_type = Type::Named("set".to_string(), vec![Type::named("str")]);
     env.define_typed(
         "set",
         set_type,
         Value::Set(SetValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: vec![Value::String(set_text)],
         }),
     );
@@ -4105,7 +4102,7 @@ fn mir_secure_random_diagnostics_preserve_validation_and_host_failures() {
 
 fn string_vec_value(items: &[&str]) -> Value {
     Value::Vec(VecValue {
-        element_type: Type::named("String"),
+        element_type: Type::named("str"),
         elements: items
             .iter()
             .map(|item| Value::String((*item).to_string()))
@@ -4115,8 +4112,8 @@ fn string_vec_value(items: &[&str]) -> Value {
 
 fn string_map_value(items: &[(&str, &str)]) -> Value {
     Value::Map(crate::runtime_value::MapValue {
-        key_type: Type::named("String"),
-        value_type: Type::named("String"),
+        key_type: Type::named("str"),
+        value_type: Type::named("str"),
         entries: items
             .iter()
             .map(|(key, value)| {
@@ -4395,7 +4392,7 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
         .expect_err("string helper should reject booleans");
     assert!(string_type_error
         .message
-        .contains("`path` expects `String`, found `true`"));
+        .contains("`path` expects `str`, found `true`"));
 
     let command_type_error = super::expect_command_vec(
         &Value::Vec(VecValue {
@@ -4407,11 +4404,11 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
     .expect_err("command helper should reject non-string vectors");
     assert!(command_type_error
         .message
-        .contains("`command` expects `Vec[String]`"));
+        .contains("`command` expects `list[str]`"));
     assert_eq!(
         super::expect_command_vec(
             &Value::Vec(VecValue {
-                element_type: Type::named("String"),
+                element_type: Type::named("str"),
                 elements: vec![Value::String("echo".to_string())],
             }),
             "command",
@@ -4421,7 +4418,7 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
     );
     let malformed_command_error = super::expect_command_vec(
         &Value::Vec(VecValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: vec![Value::Bool(true)],
         }),
         "command",
@@ -4429,7 +4426,7 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
     .expect_err("command helper should validate string vector elements");
     assert!(malformed_command_error
         .message
-        .contains("`command` expects `String`"));
+        .contains("`command` expects `str`"));
 
     assert_eq!(
         super::expect_bytes_value(
@@ -4449,7 +4446,7 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
         .expect_err("byte helper should reject non-vector payloads");
     assert!(bytes_type_error
         .message
-        .contains("`payload` expects `Vec[uint8]`"));
+        .contains("`payload` expects `list[uint8]`"));
     let bytes_range_error = super::expect_bytes_value(
         &Value::Vec(VecValue {
             element_type: Type::named("uint8"),
@@ -4460,7 +4457,7 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
     .expect_err("byte helper should reject out-of-range integers");
     assert!(bytes_range_error
         .message
-        .contains("`payload` expects `Vec[uint8]`"));
+        .contains("`payload` expects `list[uint8]`"));
 
     let bool_type_error = super::expect_bool_value(&Value::String("yes".to_string()), "flag")
         .expect_err("bool helper should reject strings");
@@ -4483,7 +4480,7 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
             &option_some(Value::String("ready".to_string())),
             "event"
         )
-        .expect("Option.Some(String) should decode"),
+        .expect("Option.Some(str) should decode"),
         Some("ready".to_string())
     );
     let malformed_option_error = super::expect_optional_string_value(
@@ -4503,7 +4500,7 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
             .expect_err("optional string helper should reject booleans");
     assert!(optional_string_type_error
         .message
-        .contains("`event` expects `Option[String]`"));
+        .contains("`event` expects `Option[str]`"));
 
     assert_eq!(
         super::expect_i32_value(&Value::Int(IntegerValue::from_signed(7)), "count")
@@ -4619,8 +4616,8 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
     assert_eq!(
         super::expect_headers_map(
             &Value::Map(MapValue {
-                key_type: Type::named("String"),
-                value_type: Type::named("String"),
+                key_type: Type::named("str"),
+                value_type: Type::named("str"),
                 entries: vec![(
                     Value::String("Accept".to_string()),
                     Value::String("*/*".to_string())
@@ -4637,8 +4634,8 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
     );
     let malformed_headers_error = super::expect_headers_map(
         &Value::Map(MapValue {
-            key_type: Type::named("String"),
-            value_type: Type::named("String"),
+            key_type: Type::named("str"),
+            value_type: Type::named("str"),
             entries: vec![(Value::Bool(true), Value::String("bad".to_string()))],
         }),
         "headers",
@@ -4646,12 +4643,12 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
     .expect_err("headers helper should validate map entries");
     assert!(malformed_headers_error
         .message
-        .contains("`headers` expects `String`"));
+        .contains("`headers` expects `str`"));
     let headers_type_error = super::expect_headers_map(&Value::Bool(true), "headers")
         .expect_err("headers helper should reject non-maps");
     assert!(headers_type_error
         .message
-        .contains("`headers` expects `Map[String, String]`"));
+        .contains("`headers` expects `dict[str, str]`"));
 }
 
 #[test]
@@ -4724,11 +4721,11 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
         .expect_err("non-integer byte payloads should fail capture decoding");
     assert!(error
         .message
-        .contains("process stderr capture returned `bad` inside `Vec[uint8]"));
+        .contains("process stderr capture returned `bad` inside `list[uint8]"));
 
     let wrong_result_type = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: vec![Value::String("bad".to_string())],
         }))
     }));
@@ -4737,7 +4734,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
         .expect_err("wrong capture result types should fail");
     assert!(error
         .message
-        .contains("process stderr capture returned `[bad]` instead of `Vec[uint8]"));
+        .contains("process stderr capture returned `[bad]` instead of `list[uint8]"));
 
     let capture_error =
         TaskValue::from_handle(thread::spawn(|| Err(Diagnostic::new("pipe failed"))));
@@ -5136,7 +5133,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     let mut env = Env::default();
     env.define_typed(
         "bytes",
-        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+        Type::Named("list".to_string(), vec![Type::named("uint8")]),
         bytes_vec_value(b"-bytes".to_vec()),
     );
 
@@ -5223,7 +5220,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
             &mut env,
         )
         .expect_err("file write_all should reject non-string text");
-    assert!(bad_file_write.message.contains("expects `String`"));
+    assert!(bad_file_write.message.contains("expects `str`"));
     assert_eq!(
         runtime
             .evaluate_file_method(write_file.clone(), "close", &[], &mut env)
@@ -5717,7 +5714,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
     let mut env = Env::default();
     env.define_typed(
         "bytes",
-        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+        Type::Named("list".to_string(), vec![Type::named("uint8")]),
         bytes_vec_value(b"payload".to_vec()),
     );
     env.define_typed(
@@ -5820,7 +5817,7 @@ fn mir_runtime_network_member_helpers_cover_closed_and_validation_edges() {
             &mut env,
         )
         .expect_err("tcp write_all should reject non-string input");
-    assert!(bad_tcp_write.message.contains("expects `String`"));
+    assert!(bad_tcp_write.message.contains("expects `str`"));
 
     tcp_listener.close();
     assert_result_err(
@@ -6025,7 +6022,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
     let mut env = Env::default();
     env.define_typed(
         "bytes",
-        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+        Type::Named("list".to_string(), vec![Type::named("uint8")]),
         bytes_vec_value(b"client-bytes".to_vec()),
     );
 
@@ -6258,7 +6255,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             let mut server_env = Env::default();
             server_env.define_typed(
                 "bytes",
-                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 bytes_vec_value(b"server-bytes".to_vec()),
             );
             let client_text = result_ok_payload(
@@ -6420,12 +6417,12 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             server_env.define_typed(
                 "headers",
                 Type::Named(
-                    "Map".to_string(),
-                    vec![Type::named("String"), Type::named("String")],
+                    "dict".to_string(),
+                    vec![Type::named("str"), Type::named("str")],
                 ),
                 Value::Map(crate::runtime_value::MapValue {
-                    key_type: Type::named("String"),
-                    value_type: Type::named("String"),
+                    key_type: Type::named("str"),
+                    value_type: Type::named("str"),
                     entries: vec![(
                         Value::String("Content-Type".to_string()),
                         Value::String("text/plain".to_string()),
@@ -6434,7 +6431,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             );
             server_env.define_typed(
                 "bytes",
-                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 bytes_vec_value(b"bytes-reply".to_vec()),
             );
             let exchange = listener
@@ -7437,7 +7434,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
     let text_ptr = text.as_ptr();
     env.define_typed(
         "text_target",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("old".to_string()),
     );
     runtime
@@ -7445,7 +7442,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
             &[MirParam {
                 name: "text".to_string(),
                 passing: crate::mir::MirReceiverKind::BorrowMut,
-                ty: Type::named("String"),
+                ty: Type::named("str"),
                 default_function: None,
             }],
             &[Some("text_target".to_string())],
@@ -7457,7 +7454,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
         .place_ref("text_target")
         .expect("borrow-mut target should be updated")
     else {
-        panic!("expected String borrow-mut target");
+        panic!("expected str borrow-mut target");
     };
     assert_eq!(
         text_target.as_ptr(),
@@ -7490,7 +7487,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
             params: vec![MirParam {
                 name: "value".to_string(),
                 passing: crate::mir::MirReceiverKind::Borrow,
-                ty: Type::named("String"),
+                ty: Type::named("str"),
                 default_function: None,
             }],
             ..by_value.clone()
@@ -7535,24 +7532,20 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
         Value::Int(IntegerValue::from_literal(7)),
     );
     env.define_typed("ratio", Type::named("float64"), Value::Float(-2.5));
-    env.define_typed(
-        "text",
-        Type::named("String"),
-        Value::String("12".to_string()),
-    );
+    env.define_typed("text", Type::named("str"), Value::String("12".to_string()));
     env.define_typed(
         "word",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("Aura".to_string()),
     );
     env.define_typed(
         "float_text",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("1.5e2".to_string()),
     );
     env.define_typed(
         "infinite_text",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("inf".to_string()),
     );
 
@@ -7573,7 +7566,7 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
     assert!(matches!(
         runtime
             .evaluate_call(
-                &crate::mir::CallTarget::Name("Vec".to_string()),
+                &crate::mir::CallTarget::Name("list".to_string()),
                 &[],
                 &mut env
             )
@@ -7583,7 +7576,7 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
     assert!(matches!(
         runtime
             .evaluate_call(
-                &crate::mir::CallTarget::Name("Set".to_string()),
+                &crate::mir::CallTarget::Name("set".to_string()),
                 &[],
                 &mut env
             )
@@ -7593,7 +7586,7 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
     assert!(matches!(
         runtime
             .evaluate_call(
-                &crate::mir::CallTarget::Name("Map".to_string()),
+                &crate::mir::CallTarget::Name("dict".to_string()),
                 &[],
                 &mut env
             )
@@ -8085,7 +8078,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
     let mut env = Env::default();
     env.define_typed(
         "bytes",
-        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+        Type::Named("list".to_string(), vec![Type::named("uint8")]),
         bytes_vec_value(b"payload".to_vec()),
     );
     env.define_typed(
@@ -8346,12 +8339,12 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
     let mut env = Env::default();
     env.define_typed(
         "exit_command",
-        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+        Type::Named("list".to_string(), vec![Type::named("str")]),
         string_vec_value(&["/bin/sh", "-c", "exit 0"]),
     );
     env.define_typed(
         "sleep_command",
-        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+        Type::Named("list".to_string(), vec![Type::named("str")]),
         string_vec_value(&["/bin/sh", "-c", "sleep 5"]),
     );
     let stdio_variant = |variant_name: &str| {
@@ -8363,7 +8356,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
     };
     env.define_typed(
         "supervisor_cwd",
-        Type::named("Option[String]"),
+        Type::named("Option[str]"),
         option_some(Value::String(
             std::env::temp_dir().to_string_lossy().into_owned(),
         )),
@@ -8371,8 +8364,8 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
     env.define_typed(
         "supervisor_env",
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("String")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("str")],
         ),
         string_map_value(&[("AURA_SUPERVISOR_TEST", "1")]),
     );
@@ -8696,20 +8689,20 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
 
     env.define_typed(
         "empty_cmd",
-        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+        Type::Named("list".to_string(), vec![Type::named("str")]),
         string_vec_value(&[]),
     );
     env.define_typed(
         "child_cmd",
-        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+        Type::Named("list".to_string(), vec![Type::named("str")]),
         string_vec_value(&["/bin/sh", "-c", "printf child"]),
     );
-    env.define_typed("cwd", Type::named("Option[String]"), option_none());
+    env.define_typed("cwd", Type::named("Option[str]"), option_none());
     env.define_typed(
         "env_map",
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("String")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("str")],
         ),
         string_map_value(&[]),
     );
@@ -8782,37 +8775,37 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
 
     env.define_typed(
         "read_path",
-        Type::named("String"),
+        Type::named("str"),
         Value::String(read_path.to_string_lossy().into_owned()),
     );
     env.define_typed(
         "write_path",
-        Type::named("String"),
+        Type::named("str"),
         Value::String(write_path.to_string_lossy().into_owned()),
     );
     env.define_typed(
         "bytes_path",
-        Type::named("String"),
+        Type::named("str"),
         Value::String(bytes_path.to_string_lossy().into_owned()),
     );
     env.define_typed(
         "dir_path",
-        Type::named("String"),
+        Type::named("str"),
         Value::String(dir_path.to_string_lossy().into_owned()),
     );
     env.define_typed(
         "text",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("hello".to_string()),
     );
     env.define_typed(
         "suffix",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("-again".to_string()),
     );
     env.define_typed(
         "bytes",
-        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+        Type::Named("list".to_string(), vec![Type::named("uint8")]),
         bytes_vec_value(b"ab".to_vec()),
     );
 
@@ -8886,7 +8879,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
     .expect_err("fs.write_string should reject non-string text");
     assert!(write_text_error
         .message
-        .contains("expects `String` for `text`"));
+        .contains("expects `str` for `text`"));
     assert_eq!(
         result_ok_payload(
             call_name(
@@ -9020,7 +9013,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
         &mut env,
     )
     .expect_err("fs.open should reject non-string paths");
-    assert!(open_type_error.message.contains("expects `String`"));
+    assert!(open_type_error.message.contains("expects `str`"));
 
     let listener = result_ok_payload(
         call_name(
@@ -9043,7 +9036,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
         .expect("tcp listener address should be available");
     env.define_typed(
         "tcp_address",
-        Type::named("String"),
+        Type::named("str"),
         Value::String(tcp_address),
     );
     let tcp_server = {
@@ -9089,7 +9082,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
         &mut env,
     )
     .expect_err("net.connect should reject non-string addresses");
-    assert!(connect_type_error.message.contains("expects `String`"));
+    assert!(connect_type_error.message.contains("expects `str`"));
 
     match result_ok_payload(
         call_name(
@@ -9202,14 +9195,14 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
     };
     env.define_typed(
         "http_url",
-        Type::named("String"),
+        Type::named("str"),
         Value::String(format!("http://{http_address}/builtin")),
     );
     env.define_typed(
         "headers",
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("String")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("str")],
         ),
         string_map_value(&[("Content-Type", "text/plain")]),
     );
@@ -9414,7 +9407,7 @@ fn mir_runtime_builtin_io_error_results_cover_filesystem_and_network_edges() {
     let missing_path = missing_file.to_string_lossy().into_owned();
     env.define_typed(
         "bytes",
-        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+        Type::Named("list".to_string(), vec![Type::named("uint8")]),
         bytes_vec_value(b"bytes".to_vec()),
     );
 
@@ -9430,7 +9423,7 @@ fn mir_runtime_builtin_io_error_results_cover_filesystem_and_network_edges() {
     .expect_err("fs.write_string should reject non-string paths");
     assert!(write_path_error
         .message
-        .contains("expects `String` for `path`"));
+        .contains("expects `str` for `path`"));
 
     expect_result_err(
         &mut runtime,
@@ -9498,7 +9491,7 @@ fn mir_runtime_builtin_io_error_results_cover_filesystem_and_network_edges() {
         &mut env,
     )
     .expect_err("net.listen should reject non-string addresses");
-    assert!(listen_type_error.message.contains("expects `String`"));
+    assert!(listen_type_error.message.contains("expects `str`"));
 
     #[cfg(unix)]
     {
@@ -9538,15 +9531,15 @@ fn mir_runtime_process_run_builtin_captures_stdio_under_scheduler() {
         let mut env = Env::default();
         env.define_typed(
             "run_cmd",
-            Type::Named("Vec".to_string(), vec![Type::named("String")]),
+            Type::Named("list".to_string(), vec![Type::named("str")]),
             string_vec_value(&["/bin/sh", "-c", "printf out; printf err >&2"]),
         );
-        env.define_typed("cwd", Type::named("Option[String]"), option_none());
+        env.define_typed("cwd", Type::named("Option[str]"), option_none());
         env.define_typed(
             "env_map",
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("String")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("str")],
             ),
             string_map_value(&[]),
         );
@@ -9592,15 +9585,15 @@ fn mir_runtime_process_builtins_cover_spawn_timeout_and_cancelled_edges() {
     fn install_process_env(runtime: &mut MirRuntime, env: &mut Env, command: &[&str]) {
         env.define_typed(
             "command",
-            Type::Named("Vec".to_string(), vec![Type::named("String")]),
+            Type::Named("list".to_string(), vec![Type::named("str")]),
             string_vec_value(command),
         );
-        env.define_typed("cwd", Type::named("Option[String]"), option_none());
+        env.define_typed("cwd", Type::named("Option[str]"), option_none());
         env.define_typed(
             "env_map",
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("String")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("str")],
             ),
             string_map_value(&[]),
         );
@@ -9716,7 +9709,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
             receiver: Some(crate::mir::MirReceiverKind::Borrow),
             params: Vec::new(),
             local_types: Vec::new(),
-            return_type: Type::named("String"),
+            return_type: Type::named("str"),
             entry: "entry".to_string(),
             blocks: vec![BasicBlock {
                 label: "entry".to_string(),
@@ -9735,7 +9728,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
             receiver: Some(crate::mir::MirReceiverKind::Borrow),
             params: Vec::new(),
             local_types: Vec::new(),
-            return_type: Type::named("String"),
+            return_type: Type::named("str"),
             entry: "entry".to_string(),
             blocks: vec![BasicBlock {
                 label: "entry".to_string(),
@@ -9778,12 +9771,12 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
     env.define_typed("flag", Type::named("bool"), Value::Bool(true));
     env.define_typed(
         "text",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("Aura".to_string()),
     );
     env.define_typed(
         "values",
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Type::Named("list".to_string(), vec![Type::named("int32")]),
         Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: vec![
@@ -9795,11 +9788,11 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
     env.define_typed(
         "counts",
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         ),
         Value::Map(crate::runtime_value::MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![(
                 Value::String("count".to_string()),
@@ -9809,9 +9802,9 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
     );
     env.define_typed(
         "seen",
-        Type::Named("Set".to_string(), vec![Type::named("String")]),
+        Type::Named("set".to_string(), vec![Type::named("str")]),
         Value::Set(crate::runtime_value::SetValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: vec![Value::String("ready".to_string())],
         }),
     );
@@ -9922,7 +9915,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
                 &mut env,
             )
             .expect("vec member calls should dispatch"),
-        Value::Bool(true)
+        Value::Unit
     );
     assert_eq!(
         runtime
@@ -9943,14 +9936,14 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
             .evaluate_call(
                 &crate::mir::CallTarget::Member {
                     object: Operand::Place("seen".to_string()),
-                    field: "insert".to_string(),
+                    field: "add".to_string(),
                     receiver_place: Some("seen".to_string()),
                 },
                 &[mir_arg(None, Operand::String("go".to_string()))],
                 &mut env,
             )
             .expect("set member calls should dispatch"),
-        Value::Bool(true)
+        Value::Unit
     );
     assert_eq!(
         runtime
@@ -10055,7 +10048,7 @@ fn mir_runtime_builtin_error_surface_covers_additional_builtin_branches() {
     );
     env.define_typed(
         "word",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("aura".to_string()),
     );
     env.define_typed("flag", Type::named("bool"), Value::Bool(true));
@@ -10143,7 +10136,7 @@ fn mir_runtime_builtin_error_surface_covers_additional_builtin_branches() {
         .expect_err("parse_int64() should reject non-strings");
     assert!(parse_int64_type
         .message
-        .contains("expects `String`, found `true`"));
+        .contains("expects `str`, found `true`"));
 
     let parse_int32_type = runtime
         .evaluate_call(
@@ -10154,7 +10147,7 @@ fn mir_runtime_builtin_error_surface_covers_additional_builtin_branches() {
         .expect_err("parse_int32() should reject non-strings");
     assert!(parse_int32_type
         .message
-        .contains("expects `String`, found `true`"));
+        .contains("expects `str`, found `true`"));
 
     let parse_float64_type = runtime
         .evaluate_call(
@@ -10165,7 +10158,7 @@ fn mir_runtime_builtin_error_surface_covers_additional_builtin_branches() {
         .expect_err("parse_float64() should reject non-strings");
     assert!(parse_float64_type
         .message
-        .contains("expects `String`, found `true`"));
+        .contains("expects `str`, found `true`"));
 
     let io_write_type = runtime
         .evaluate_call(
@@ -10176,7 +10169,7 @@ fn mir_runtime_builtin_error_surface_covers_additional_builtin_branches() {
         .expect_err("io.write() should reject non-string text");
     assert!(io_write_type
         .message
-        .contains("`io.write(...)` expects `String`, found `true`"));
+        .contains("`io.write(...)` expects `str`, found `true`"));
 
     let fs_exists_type = runtime
         .evaluate_call(
@@ -10187,7 +10180,7 @@ fn mir_runtime_builtin_error_surface_covers_additional_builtin_branches() {
         .expect_err("fs.exists() should reject non-string paths");
     assert!(fs_exists_type
         .message
-        .contains("`fs.exists(...)` expects `String`, found `true`"));
+        .contains("`fs.exists(...)` expects `str`, found `true`"));
 
     let unknown = runtime
         .evaluate_call(
@@ -10286,7 +10279,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
     env.define_typed("flag", Type::named("bool"), Value::Bool(true));
     env.define_typed(
         "values",
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Type::Named("list".to_string(), vec![Type::named("int32")]),
         Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: vec![Value::Int(IntegerValue::from_signed(1))],
@@ -10386,16 +10379,16 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
         .evaluate_call(
             &crate::mir::CallTarget::Member {
                 object: Operand::Place("values".to_string()),
-                field: "push".to_string(),
+                field: "append".to_string(),
                 receiver_place: None,
             },
             &[mir_arg(None, Operand::Int(9))],
             &mut env,
         )
-        .expect_err("push() should require a mutable receiver place");
+        .expect_err("append() should require a mutable receiver place");
     assert!(push_no_place
         .message
-        .contains("requires a mutable vector place"));
+        .contains("requires a mutable list place"));
 
     let internal_index_args = runtime
         .evaluate_call(
@@ -10852,34 +10845,34 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
     let mut substitutions = HashMap::new();
     collect_runtime_type_substitutions(
         &Type::Named(
-            "Map".to_string(),
+            "dict".to_string(),
             vec![
                 Type::TypeParam("K".to_string()),
                 Type::TypeParam("V".to_string()),
             ],
         ),
         &Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         ),
         &mut substitutions,
     );
-    assert_eq!(substitutions.get("K"), Some(&Type::named("String")));
+    assert_eq!(substitutions.get("K"), Some(&Type::named("str")));
     assert_eq!(substitutions.get("V"), Some(&Type::named("int32")));
     collect_runtime_type_substitutions(
         &Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
             vec![Type::TypeParam("Ignored".to_string())],
         ),
-        &Type::named("String"),
+        &Type::named("str"),
         &mut substitutions,
     );
     collect_runtime_type_substitutions(
         &Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
             vec![Type::TypeParam("Ignored".to_string())],
         ),
-        &Type::Named("Set".to_string(), vec![Type::named("String")]),
+        &Type::Named("set".to_string(), vec![Type::named("str")]),
         &mut substitutions,
     );
     collect_runtime_type_substitutions(&Type::Unit, &Type::Unit, &mut substitutions);
@@ -10888,17 +10881,17 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
         &Type::Tuple(vec![
             Type::TypeParam("TupleLeft".to_string()),
             Type::Named(
-                "Vec".to_string(),
+                "list".to_string(),
                 vec![Type::TypeParam("TupleRight".to_string())],
             ),
         ]),
         &Type::Tuple(vec![
-            Type::named("String"),
-            Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+            Type::named("str"),
+            Type::Named("list".to_string(), vec![Type::named("int64")]),
         ]),
         &mut substitutions,
     );
-    assert_eq!(substitutions.get("TupleLeft"), Some(&Type::named("String")));
+    assert_eq!(substitutions.get("TupleLeft"), Some(&Type::named("str")));
     assert_eq!(substitutions.get("TupleRight"), Some(&Type::named("int64")));
     collect_runtime_type_substitutions(
         &Type::Tuple(vec![Type::TypeParam("WrongArity".to_string())]),
@@ -10908,7 +10901,7 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
     assert!(!substitutions.contains_key("WrongArity"));
     collect_runtime_type_substitutions(
         &Type::Tuple(vec![Type::TypeParam("TupleOnly".to_string())]),
-        &Type::named("String"),
+        &Type::named("str"),
         &mut substitutions,
     );
     assert!(
@@ -10934,7 +10927,7 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
     collect_type_params_from_type(
         &Type::Tuple(vec![
             Type::TypeParam("TupleT".to_string()),
-            Type::named("String"),
+            Type::named("str"),
         ]),
         &mut collected,
     );
@@ -11005,7 +10998,7 @@ fn serialized_mir_helper_reports_invalid_payloads() {
 fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
     let mut runtime = test_runtime();
     let no_context = runtime
-        .convert_try_error_via_from(Value::String("boom".to_string()), &Type::named("String"))
+        .convert_try_error_via_from(Value::String("boom".to_string()), &Type::named("str"))
         .expect_err("try error conversion should require a Result return context");
     assert!(no_context
         .message
@@ -11013,7 +11006,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
 
     runtime.return_type_stack.push(Type::named("int32"));
     let non_result_context = runtime
-        .convert_try_error_via_from(Value::String("boom".to_string()), &Type::named("String"))
+        .convert_try_error_via_from(Value::String("boom".to_string()), &Type::named("str"))
         .expect_err("try error conversion should reject non-Result return types");
     assert!(non_result_context
         .message
@@ -11025,7 +11018,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
         vec![Type::named("int32"), Type::named("bool")],
     ));
     let mismatch = runtime
-        .convert_try_error_via_from(Value::String("boom".to_string()), &Type::named("String"))
+        .convert_try_error_via_from(Value::String("boom".to_string()), &Type::named("str"))
         .expect_err("try error conversion should reject unrelated error types");
     assert!(mismatch
         .message
@@ -11040,13 +11033,13 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
                 MirTraitImpl {
                     trait_name: "Display".to_string(),
                     trait_args: vec![Type::named("int32")],
-                    for_type: Type::named("String"),
+                    for_type: Type::named("str"),
                     methods: Vec::new(),
                 },
                 MirTraitImpl {
                     trait_name: "From".to_string(),
                     trait_args: Vec::new(),
-                    for_type: Type::named("String"),
+                    for_type: Type::named("str"),
                     methods: Vec::new(),
                 },
                 MirTraitImpl {
@@ -11058,13 +11051,13 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
                 MirTraitImpl {
                     trait_name: "From".to_string(),
                     trait_args: vec![Type::named("bool")],
-                    for_type: Type::named("String"),
+                    for_type: Type::named("str"),
                     methods: Vec::new(),
                 },
                 MirTraitImpl {
                     trait_name: "From".to_string(),
                     trait_args: vec![Type::named("int32")],
-                    for_type: Type::named("String"),
+                    for_type: Type::named("str"),
                     methods: vec![MirMethod {
                         name: "from".to_string(),
                         function_name: "missing_from_body".to_string(),
@@ -11078,7 +11071,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
         CancellationContext::default(),
     );
     assert!(lookup_runtime
-        .find_from_trait_impl_method(&Type::named("int32"), &Type::named("String"))
+        .find_from_trait_impl_method(&Type::named("int32"), &Type::named("str"))
         .is_none());
 
     let from_function = MirFunction {
@@ -11094,7 +11087,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
             default_function: None,
         }],
         local_types: Vec::new(),
-        return_type: Type::named("String"),
+        return_type: Type::named("str"),
         entry: "entry".to_string(),
         blocks: vec![BasicBlock {
             label: "entry".to_string(),
@@ -11109,7 +11102,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
             trait_impls: vec![MirTraitImpl {
                 trait_name: "From".to_string(),
                 trait_args: vec![Type::named("int32")],
-                for_type: Type::named("String"),
+                for_type: Type::named("str"),
                 methods: vec![MirMethod {
                     name: "from".to_string(),
                     function_name: "from_int_error".to_string(),
@@ -11123,7 +11116,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
     );
     converting_runtime.return_type_stack.push(Type::Named(
         "Result".to_string(),
-        vec![Type::named("int32"), Type::named("String")],
+        vec![Type::named("int32"), Type::named("str")],
     ));
     assert_eq!(
         converting_runtime
@@ -11218,18 +11211,18 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
             element_type: Type::named("int32"),
             elements: vec![Value::Int(IntegerValue::from_signed(1))],
         })),
-        Some(Type::Named("Vec".to_string(), vec![Type::named("int32")]))
+        Some(Type::Named("list".to_string(), vec![Type::named("int32")]))
     );
     assert_eq!(
         MirRuntime::infer_value_type(&Value::Set(crate::runtime_value::SetValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: vec![Value::String("ready".to_string())],
         })),
-        Some(Type::Named("Set".to_string(), vec![Type::named("String")]))
+        Some(Type::Named("set".to_string(), vec![Type::named("str")]))
     );
     assert_eq!(
         MirRuntime::infer_value_type(&Value::Map(crate::runtime_value::MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![(
                 Value::String("count".to_string()),
@@ -11237,8 +11230,8 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
             )],
         })),
         Some(Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")]
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")]
         ))
     );
     assert_eq!(
@@ -11249,7 +11242,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
         MirRuntime::infer_value_type(&result_err(Value::String("oops".to_string()))),
         Some(Type::Named(
             "Result".to_string(),
-            vec![Type::Unit, Type::named("String")]
+            vec![Type::Unit, Type::named("str")]
         ))
     );
     assert_eq!(
@@ -11267,7 +11260,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
         })),
         Some(Type::Named(
             "SendError".to_string(),
-            vec![Type::named("String")]
+            vec![Type::named("str")]
         ))
     );
     assert_eq!(
@@ -11386,7 +11379,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
         };
 
     let vector = VecValue {
-        element_type: Type::named("String"),
+        element_type: Type::named("str"),
         elements: ["zero", "one", "two", "three"]
             .into_iter()
             .map(|value| Value::String(value.to_string()))
@@ -11395,7 +11388,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
     let source_elements = vector.elements.as_ptr();
     env.define_typed(
         "source_vector",
-        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+        Type::Named("list".to_string(), vec![Type::named("str")]),
         Value::Vec(vector),
     );
     let sliced = runtime
@@ -11419,7 +11412,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
     let Value::Vec(sliced) = sliced else {
         panic!("expected owned Vec slice");
     };
-    assert_eq!(sliced.element_type, Type::named("String"));
+    assert_eq!(sliced.element_type, Type::named("str"));
     assert_eq!(
         sliced.elements,
         ["one", "two", "three"]
@@ -11449,7 +11442,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
     let source_text_bytes = source_text.as_ptr();
     env.define_typed(
         "source_text",
-        Type::named("String"),
+        Type::named("str"),
         Value::String(source_text),
     );
     let sliced = runtime
@@ -11462,21 +11455,21 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
             &slice_args(Operand::Int(1), true, Operand::Int(4), true, 9, 7),
             &mut env,
         )
-        .expect("MIR String slicing should count Unicode scalar values");
+        .expect("MIR str slicing should count Unicode scalar values");
     let Value::String(sliced) = sliced else {
-        panic!("expected owned String slice");
+        panic!("expected owned str slice");
     };
     assert_eq!(sliced, "é🎉e");
     assert_ne!(
         sliced.as_ptr(),
         source_text_bytes,
-        "MIR String slicing must allocate a fresh owned result"
+        "MIR str slicing must allocate a fresh owned result"
     );
     let Value::String(source_after_slice) = env
         .place_ref("source_text")
-        .expect("the borrowed String source must remain in its place")
+        .expect("the borrowed str source must remain in its place")
     else {
-        panic!("expected source String");
+        panic!("expected source str");
     };
     assert_eq!(source_after_slice.as_ptr(), source_text_bytes);
 
@@ -11490,7 +11483,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
             &slice_args(Operand::Int(0), false, Operand::Int(6), true, 11, 5),
             &mut env,
         )
-        .expect_err("MIR String slicing must reject rather than clamp");
+        .expect_err("MIR str slicing must reject rather than clamp");
     assert_eq!(out_of_range.code, "AU4003");
     assert_eq!(out_of_range.message, "slice end `6` is outside `0..=5`");
     assert_eq!(out_of_range.span, Some(Span::new(11, 5)));
@@ -11528,7 +11521,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
             &slice_args(Operand::Int(8), true, Operand::Int(2), true, 13, 3),
             &mut env,
         )
-        .expect_err("temporary String slicing should use the owned fallback");
+        .expect_err("temporary str slicing should use the owned fallback");
     assert_eq!(temporary_reversed.code, "AU4003");
     assert_eq!(
         temporary_reversed.message,
@@ -11651,7 +11644,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     let mut env = Env::default();
     env.define_typed(
         "values",
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Type::Named("list".to_string(), vec![Type::named("int32")]),
         Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: vec![
@@ -11662,7 +11655,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     );
     env.define_typed(
         "other",
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Type::Named("list".to_string(), vec![Type::named("int32")]),
         Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: vec![Value::Int(IntegerValue::from_signed(3))],
@@ -11670,9 +11663,9 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     );
     env.define_typed(
         "texts",
-        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+        Type::Named("list".to_string(), vec![Type::named("str")]),
         Value::Vec(crate::runtime_value::VecValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: vec![
                 Value::String("one".to_string()),
                 Value::String("two".to_string()),
@@ -11682,11 +11675,11 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     env.define_typed(
         "mapping",
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         ),
         Value::Map(crate::runtime_value::MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![(
                 Value::String("count".to_string()),
@@ -11697,11 +11690,11 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     env.define_typed(
         "mapping_other",
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         ),
         Value::Map(crate::runtime_value::MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![(
                 Value::String("next".to_string()),
@@ -11711,9 +11704,9 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     );
     env.define_typed(
         "flags",
-        Type::Named("Set".to_string(), vec![Type::named("String")]),
+        Type::Named("set".to_string(), vec![Type::named("str")]),
         Value::Set(crate::runtime_value::SetValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: vec![Value::String("ready".to_string())],
         }),
     );
@@ -11760,15 +11753,15 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     let vec_clone = runtime
         .evaluate_vec_method(
             vec_from_env(&mut env, "values"),
-            "clone",
+            "copy",
             Some("values"),
             &[],
             &mut env,
         )
-        .expect("vec clone should succeed");
+        .expect("list copy should succeed");
     match vec_clone {
         Value::Vec(vector) => assert_eq!(vector.elements.len(), 2),
-        other => panic!("expected vec clone, found {other:?}"),
+        other => panic!("expected list copy, found {other:?}"),
     }
 
     let vec_get = runtime
@@ -11811,16 +11804,16 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     let vec_clone_args = runtime
         .evaluate_vec_method(
             vec_from_env(&mut env, "values"),
-            "clone",
+            "copy",
             Some("values"),
             &[mir_arg(None, Operand::Int(1))],
             &mut env,
         )
-        .expect_err("vec clone should reject arguments");
+        .expect_err("list copy should reject arguments");
     assert!(vec_clone_args
         .message
-        .contains("`clone` does not take arguments"));
-    let vec_pop_args = runtime
+        .contains("`copy` does not take arguments"));
+    let vec_pop_at_index = runtime
         .evaluate_vec_method(
             vec_from_env(&mut env, "values"),
             "pop",
@@ -11828,16 +11821,14 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &[mir_arg(None, Operand::Int(1))],
             &mut env,
         )
-        .expect_err("vec pop should reject arguments");
-    assert!(vec_pop_args
-        .message
-        .contains("`pop` does not take arguments"));
+        .expect("list pop should accept an optional index");
+    assert_eq!(vec_pop_at_index, Value::Int(IntegerValue::from_signed(2)));
     let vec_pop_no_place = runtime
         .evaluate_vec_method(vec_from_env(&mut env, "values"), "pop", None, &[], &mut env)
         .expect_err("vec pop should require a receiver place");
     assert!(vec_pop_no_place
         .message
-        .contains("requires a mutable vector place"));
+        .contains("requires a mutable list place"));
     let vec_set_index_no_place = runtime
         .evaluate_vec_method(
             vec_from_env(&mut env, "values"),
@@ -11854,7 +11845,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .expect_err("internal indexed vector assignment should require a receiver place");
     assert!(vec_set_index_no_place
         .message
-        .contains("requires a mutable vector place"));
+        .contains("requires a mutable list place"));
     let vec_swap_no_place = runtime
         .evaluate_vec_method(
             vec_from_env(&mut env, "values"),
@@ -11862,14 +11853,14 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             None,
             &[
                 mir_arg(Some("first"), Operand::Int(0)),
-                mir_arg(Some("second"), Operand::Int(1)),
+                mir_arg(Some("second"), Operand::Int(0)),
             ],
             &mut env,
         )
         .expect_err("vec swap should require a receiver place");
     assert!(vec_swap_no_place
         .message
-        .contains("requires a mutable vector place"));
+        .contains("requires a mutable list place"));
     let vec_clear_args = runtime
         .evaluate_vec_method(
             vec_from_env(&mut env, "values"),
@@ -11905,7 +11896,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .expect_err("vec extend should require a receiver place");
     assert!(vec_extend_no_place
         .message
-        .contains("requires a mutable vector place"));
+        .contains("requires a mutable list place"));
 
     let map_len = runtime
         .evaluate_map_method(
@@ -11932,15 +11923,15 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     let map_clone = runtime
         .evaluate_map_method(
             map_from_env(&mut env, "mapping"),
-            "clone",
+            "copy",
             Some("mapping"),
             &[],
             &mut env,
         )
-        .expect("map clone should succeed");
+        .expect("dict copy should succeed");
     match map_clone {
         Value::Map(map) => assert_eq!(map.entries.len(), 1),
-        other => panic!("expected map clone, found {other:?}"),
+        other => panic!("expected dict copy, found {other:?}"),
     }
 
     let map_get = runtime
@@ -12057,15 +12048,15 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     let map_clone_args = runtime
         .evaluate_map_method(
             map_from_env(&mut env, "mapping"),
-            "clone",
+            "copy",
             Some("mapping"),
             &[mir_arg(None, Operand::Int(1))],
             &mut env,
         )
-        .expect_err("map clone should reject arguments");
+        .expect_err("dict copy should reject arguments");
     assert!(map_clone_args
         .message
-        .contains("`clone` does not take arguments"));
+        .contains("`copy` does not take arguments"));
     let set_len = runtime
         .evaluate_set_method(
             match env.read_place("flags").unwrap() {
@@ -12100,15 +12091,15 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 Value::Set(set) => set,
                 other => panic!("expected set, found {other:?}"),
             },
-            "clone",
+            "copy",
             Some("flags"),
             &[],
             &mut env,
         )
-        .expect("set clone should succeed");
+        .expect("set copy should succeed");
     match set_clone {
         Value::Set(set) => assert_eq!(set.elements.len(), 1),
-        other => panic!("expected set clone, found {other:?}"),
+        other => panic!("expected set copy, found {other:?}"),
     }
 
     let set_contains = runtime
@@ -12516,7 +12507,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &mut env,
         )
         .expect("vec insert should succeed");
-    assert_eq!(insert, Value::Bool(true));
+    assert_eq!(insert, Value::Unit);
 
     let reverse = runtime
         .evaluate_vec_method(
@@ -12587,33 +12578,26 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         )
         .expect("map items should succeed");
     match map_items {
-        Value::Vec(entries) => assert_eq!(entries.elements.len(), 1),
-        other => panic!("expected vec, found {other:?}"),
-    }
-    let map_entries = runtime
-        .evaluate_map_method(
-            match env.read_place("mapping").unwrap() {
-                Value::Map(map) => map,
-                other => panic!("expected map, found {other:?}"),
-            },
-            "entries",
-            Some("mapping"),
-            &[],
-            &mut env,
-        )
-        .expect("map entries alias should succeed");
-    match map_entries {
-        Value::Vec(entries) => assert_eq!(entries.elements.len(), 1),
+        Value::Vec(items) => assert_eq!(
+            items.elements,
+            vec![Value::Tuple(TupleValue {
+                element_types: vec![Type::named("str"), Type::named("int32")],
+                elements: vec![
+                    Value::String("count".to_string()),
+                    Value::Int(IntegerValue::from_signed(1)),
+                ],
+            })]
+        ),
         other => panic!("expected vec, found {other:?}"),
     }
 
-    let map_extend = runtime
+    let map_update = runtime
         .evaluate_map_method(
             match env.read_place("mapping").unwrap() {
                 Value::Map(map) => map,
                 other => panic!("expected map, found {other:?}"),
             },
-            "extend",
+            "update",
             Some("mapping"),
             &[mir_arg(
                 Some("other"),
@@ -12621,8 +12605,8 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             )],
             &mut env,
         )
-        .expect("map extend should succeed");
-    assert_eq!(map_extend, Value::Unit);
+        .expect("dict update should succeed");
+    assert_eq!(map_update, Value::Unit);
 
     let map_set_existing = runtime
         .evaluate_map_method(
@@ -12674,15 +12658,15 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .expect_err("internal map indexed assignment should require a receiver place");
     assert!(map_set_index_no_place
         .message
-        .contains("requires a mutable map place"));
+        .contains("requires a mutable dict place"));
     env.define_typed(
         "mapping_update",
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         ),
         Value::Map(crate::runtime_value::MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![(
                 Value::String("count".to_string()),
@@ -12693,7 +12677,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     runtime
         .evaluate_map_method(
             map_from_env(&mut env, "mapping"),
-            "extend",
+            "update",
             Some("mapping"),
             &[mir_arg(
                 Some("other"),
@@ -12701,11 +12685,11 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             )],
             &mut env,
         )
-        .expect("map extend should update existing keys");
-    let map_extend_no_place = runtime
+        .expect("dict update should update existing keys");
+    let map_update_no_place = runtime
         .evaluate_map_method(
             map_from_env(&mut env, "mapping"),
-            "extend",
+            "update",
             None,
             &[mir_arg(
                 Some("other"),
@@ -12713,10 +12697,10 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             )],
             &mut env,
         )
-        .expect_err("map extend should require a receiver place");
-    assert!(map_extend_no_place
+        .expect_err("dict update should require a receiver place");
+    assert!(map_update_no_place
         .message
-        .contains("requires a mutable map place"));
+        .contains("requires a mutable dict place"));
     let unsupported_map_method = runtime
         .evaluate_map_method(
             map_from_env(&mut env, "mapping"),
@@ -12728,7 +12712,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .expect_err("unknown map methods should fail");
     assert!(unsupported_map_method
         .message
-        .contains("unsupported map method `mystery`"));
+        .contains("unsupported dict method `mystery`"));
 
     let map_set_new = runtime
         .evaluate_map_method(
@@ -12817,29 +12801,29 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 Value::Map(map) => map,
                 other => panic!("expected map, found {other:?}"),
             },
-            "extend",
+            "update",
             Some("mapping_other"),
             &[mir_arg(Some("other"), Operand::Int(7))],
             &mut env,
         )
-        .expect_err("map extend should reject non-map values");
+        .expect_err("dict update should reject non-dict values");
     assert!(map_error
         .message
-        .contains("requires another `Map[K, V]` value"));
+        .contains("requires another `dict[K, V]` value"));
 
-    let set_insert = runtime
+    let set_add = runtime
         .evaluate_set_method(
             match env.read_place("flags").unwrap() {
                 Value::Set(set) => set,
                 other => panic!("expected set, found {other:?}"),
             },
-            "insert",
+            "add",
             Some("flags"),
             &[mir_arg(Some("value"), Operand::String("go".to_string()))],
             &mut env,
         )
-        .expect("set insert should succeed");
-    assert_eq!(set_insert, Value::Bool(true));
+        .expect("set add should succeed");
+    assert_eq!(set_add, Value::Unit);
 
     let set_remove = runtime
         .evaluate_set_method(
@@ -12853,21 +12837,21 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &mut env,
         )
         .expect("set remove should succeed");
-    assert_eq!(set_remove, Value::Bool(true));
+    assert_eq!(set_remove, Value::Unit);
 
-    let set_insert_existing = runtime
+    let set_add_existing = runtime
         .evaluate_set_method(
             match env.read_place("flags").unwrap() {
                 Value::Set(set) => set,
                 other => panic!("expected set, found {other:?}"),
             },
-            "insert",
+            "add",
             Some("flags"),
             &[mir_arg(Some("value"), Operand::String("go".to_string()))],
             &mut env,
         )
-        .expect("set insert should return false for duplicate values");
-    assert_eq!(set_insert_existing, Value::Bool(false));
+        .expect("set add should accept duplicate values");
+    assert_eq!(set_add_existing, Value::Unit);
 
     let set_remove_missing = runtime
         .evaluate_set_method(
@@ -12883,8 +12867,8 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             )],
             &mut env,
         )
-        .expect("set remove should return false for missing values");
-    assert_eq!(set_remove_missing, Value::Bool(false));
+        .expect_err("set remove should reject missing values");
+    assert_eq!(set_remove_missing.code, "AU4008");
 
     let set_error = runtime
         .evaluate_set_method(
@@ -12944,7 +12928,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &mut env,
         )
         .expect_err("string contains should reject non-string args");
-    assert!(string_error.message.contains("requires a `String`"));
+    assert!(string_error.message.contains("requires a `str`"));
 
     let join_error = runtime
         .evaluate_string_method(
@@ -12954,11 +12938,11 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &mut env,
         )
         .expect_err("string join should reject non-vectors");
-    assert!(join_error.message.contains("requires `Vec[String]`"));
+    assert!(join_error.message.contains("requires `list[str]`"));
 
     env.define_typed(
         "non_string_parts",
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Type::Named("list".to_string(), vec![Type::named("int32")]),
         Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: vec![Value::Int(IntegerValue::from_signed(1))],
@@ -12974,17 +12958,17 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         (
             "starts_with",
             vec![mir_arg(Some("text"), Operand::Bool(true))],
-            "`starts_with` requires a `String` argument",
+            "`starts_with` requires a `str` argument",
         ),
         (
             "ends_with",
             vec![mir_arg(Some("text"), Operand::Bool(true))],
-            "`ends_with` requires a `String` argument",
+            "`ends_with` requires a `str` argument",
         ),
         (
             "split",
             vec![mir_arg(Some("text"), Operand::Bool(true))],
-            "`split` requires a `String` argument",
+            "`split` requires a `str` argument",
         ),
         (
             "replace",
@@ -12992,7 +12976,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 mir_arg(Some("from"), Operand::Bool(true)),
                 mir_arg(Some("to"), Operand::String("x".to_string())),
             ],
-            "`replace` requires `String` for `from`",
+            "`replace` requires `str` for `from`",
         ),
         (
             "replace",
@@ -13000,7 +12984,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 mir_arg(Some("from"), Operand::String("a".to_string())),
                 mir_arg(Some("to"), Operand::Bool(true)),
             ],
-            "`replace` requires `String` for `to`",
+            "`replace` requires `str` for `to`",
         ),
         (
             "to_lower",
@@ -13018,22 +13002,22 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 Some("parts"),
                 Operand::Place("non_string_parts".to_string()),
             )],
-            "`join` requires `Vec[String]`",
+            "`join` requires `list[str]`",
         ),
         (
             "add",
             vec![mir_arg(Some("other"), Operand::Bool(true))],
-            "`add` requires a `String` argument",
+            "`add` requires a `str` argument",
         ),
         (
             "strip_prefix",
             vec![mir_arg(Some("text"), Operand::Bool(true))],
-            "`strip_prefix` requires a `String` argument",
+            "`strip_prefix` requires a `str` argument",
         ),
         (
             "strip_suffix",
             vec![mir_arg(Some("text"), Operand::Bool(true))],
-            "`strip_suffix` requires a `String` argument",
+            "`strip_suffix` requires a `str` argument",
         ),
         (
             "trim",
@@ -13117,7 +13101,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
 fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
     let mut runtime = test_runtime();
     let mut env = Env::default();
-    let vec_type = Type::Named("Vec".to_string(), vec![Type::named("int32")]);
+    let vec_type = Type::Named("list".to_string(), vec![Type::named("int32")]);
     env.define_typed(
         "values",
         vec_type,
@@ -13208,24 +13192,18 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
             &mut env,
         )
         .expect("negative set should normalize");
-    assert_eq!(
-        replaced,
-        option_some(Value::Int(IntegerValue::from_signed(10)))
-    );
+    assert_eq!(replaced, Value::Int(IntegerValue::from_signed(10)));
 
-    let removed = runtime
+    let popped = runtime
         .evaluate_vec_method(
             read_vec(&mut env),
-            "remove",
+            "pop",
             Some("values"),
             &[mir_arg(Some("index"), negative(2))],
             &mut env,
         )
-        .expect("negative remove should normalize");
-    assert_eq!(
-        removed,
-        option_some(Value::Int(IntegerValue::from_signed(35)))
-    );
+        .expect("negative pop should normalize");
+    assert_eq!(popped, Value::Int(IntegerValue::from_signed(35)));
 
     let swapped = runtime
         .evaluate_vec_method(
@@ -13239,7 +13217,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
             &mut env,
         )
         .expect("negative swap indices should normalize");
-    assert_eq!(swapped, Value::Bool(true));
+    assert_eq!(swapped, Value::Unit);
 
     let inserted = runtime
         .evaluate_vec_method(
@@ -13253,7 +13231,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
             &mut env,
         )
         .expect("insert(-1, value) should insert before the final element");
-    assert_eq!(inserted, Value::Bool(true));
+    assert_eq!(inserted, Value::Unit);
 
     let final_values = read_vec(&mut env)
         .elements
@@ -13272,12 +13250,12 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
                 mir_arg(Some("index"), negative(5)),
                 mir_arg(Some("value"), Operand::Int(1)),
             ],
-            "vector set index `-5` is out of bounds for length `4`",
+            "list set index `-5` is out of bounds for length `4`",
         ),
         (
-            "remove",
+            "pop",
             vec![mir_arg(Some("index"), negative(5))],
-            "vector remove index `-5` is out of bounds for length `4`",
+            "list pop index `-5` is out of bounds for length `4`",
         ),
         (
             "swap",
@@ -13285,15 +13263,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
                 mir_arg(Some("first"), negative(5)),
                 mir_arg(Some("second"), negative(1)),
             ],
-            "vector swap indices `-5` and `-1` are out of bounds for length `4`",
-        ),
-        (
-            "insert",
-            vec![
-                mir_arg(Some("index"), negative(5)),
-                mir_arg(Some("value"), Operand::Int(1)),
-            ],
-            "vector insert index `-5` is out of bounds for length `4`",
+            "list swap indices `-5` and `-1` are out of bounds for length `4`",
         ),
     ] {
         let error = runtime
@@ -13317,7 +13287,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
         .expect_err("too-negative indexed read should trap");
     assert_eq!(
         read_error.message,
-        "vector index `-5` is out of bounds for length `4`"
+        "list index `-5` is out of bounds for length `4`"
     );
     assert_eq!(read_error.span, Some(crate::diag::Span::new(8, 6)));
 
@@ -13337,19 +13307,19 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
         .expect_err("too-negative indexed write should trap");
     assert_eq!(
         write_error.message,
-        "vector index `-5` is out of bounds for length `4`"
+        "list index `-5` is out of bounds for length `4`"
     );
     assert_eq!(write_error.span, Some(crate::diag::Span::new(9, 7)));
 
     env.define_typed(
         "empty",
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Type::Named("list".to_string(), vec![Type::named("int32")]),
         Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: Vec::new(),
         }),
     );
-    let empty_insert_error = runtime
+    let empty_insert = runtime
         .evaluate_vec_method(
             match env.read_place("empty").expect("empty should exist") {
                 Value::Vec(vector) => vector,
@@ -13363,10 +13333,23 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
             ],
             &mut env,
         )
-        .expect_err("insert(-1, value) on an empty Vec must not clamp to zero");
+        .expect("insert clamps a too-negative index to the start of an empty list");
+    assert_eq!(empty_insert, Value::Unit);
     assert_eq!(
-        empty_insert_error.message,
-        "vector insert index `-1` is out of bounds for length `0`"
+        read_vec(&mut env).elements,
+        vec![
+            Value::Int(IntegerValue::from_signed(40)),
+            Value::Int(IntegerValue::from_signed(20)),
+            Value::Int(IntegerValue::from_signed(99)),
+            Value::Int(IntegerValue::from_signed(11)),
+        ]
+    );
+    let Value::Vec(empty) = env.read_place("empty").expect("empty list should remain") else {
+        panic!("expected list");
+    };
+    assert_eq!(
+        empty.elements,
+        vec![Value::Int(IntegerValue::from_signed(7))]
     );
 }
 
@@ -13377,7 +13360,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
     env.define_typed("flag", Type::named("bool"), Value::Bool(true));
     env.define_typed(
         "text",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("aura".to_string()),
     );
 
@@ -13391,7 +13374,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
         .expect_err("non-integer indices should fail");
     assert!(non_integer
         .message
-        .contains("vector indices must be integers"));
+        .contains("list indices must be integers"));
 
     let vec_missing_place = runtime
         .evaluate_vec_method(
@@ -13407,7 +13390,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
         .expect_err("mutable vec methods should require a receiver place");
     assert!(vec_missing_place
         .message
-        .contains("requires a mutable vector place"));
+        .contains("requires a mutable list place"));
 
     for (field, args, expected) in [
         (
@@ -13416,12 +13399,12 @@ fn mir_runtime_index_helpers_cover_error_paths() {
                 mir_arg(Some("index"), Operand::Int(0)),
                 mir_arg(Some("value"), Operand::Int(1)),
             ],
-            "`set` requires a mutable vector place",
+            "`set` requires a mutable list place",
         ),
         (
             "remove",
-            vec![mir_arg(Some("index"), Operand::Int(0))],
-            "`remove` requires a mutable vector place",
+            vec![mir_arg(Some("value"), Operand::Int(1))],
+            "`remove` requires a mutable list place",
         ),
         (
             "swap",
@@ -13429,7 +13412,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
                 mir_arg(Some("first"), Operand::Int(0)),
                 mir_arg(Some("second"), Operand::Int(1)),
             ],
-            "vector swap indices `0` and `1` are out of bounds for length `1`",
+            "list swap indices `0` and `1` are out of bounds for length `1`",
         ),
         (
             "insert",
@@ -13437,17 +13420,17 @@ fn mir_runtime_index_helpers_cover_error_paths() {
                 mir_arg(Some("index"), Operand::Int(0)),
                 mir_arg(Some("value"), Operand::Int(1)),
             ],
-            "`insert` requires a mutable vector place",
+            "`insert` requires a mutable list place",
         ),
         (
             "reverse",
             Vec::new(),
-            "`reverse` requires a mutable vector place",
+            "`reverse` requires a mutable list place",
         ),
         (
             "extend",
             vec![mir_arg(Some("other"), Operand::Bool(true))],
-            "`extend` requires another `Vec[T]` value",
+            "`extend` requires another `list[T]` value",
         ),
     ] {
         let error = runtime
@@ -13484,7 +13467,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
             ],
             &mut env,
         )
-        .expect_err("internal vector indexing should report out-of-bounds spans");
+        .expect_err("internal list indexing should report out-of-bounds spans");
     assert!(internal_index_oob.message.contains("out of bounds"));
     assert_eq!(internal_index_oob.span, Some(crate::diag::Span::new(9, 2)));
 
@@ -13509,7 +13492,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
     assert_eq!(internal_set_oob.span, Some(crate::diag::Span::new(4, 6)));
 
     let map_value = || crate::runtime_value::MapValue {
-        key_type: Type::named("String"),
+        key_type: Type::named("str"),
         value_type: Type::named("int32"),
         entries: vec![(
             Value::String("count".to_string()),
@@ -13530,19 +13513,10 @@ fn mir_runtime_index_helpers_cover_error_paths() {
             "internal map indexed assignment requires key, value, line, and column operands",
         ),
         (
-            "set",
-            vec![
-                mir_arg(Some("key"), Operand::String("count".to_string())),
-                mir_arg(Some("value"), Operand::Int(2)),
-            ],
-            None,
-            "`set` requires a mutable map place",
-        ),
-        (
             "remove",
             vec![mir_arg(Some("key"), Operand::String("count".to_string()))],
             None,
-            "`remove` requires a mutable map place",
+            "`remove` requires a mutable dict place",
         ),
         (
             "keys",
@@ -13561,12 +13535,6 @@ fn mir_runtime_index_helpers_cover_error_paths() {
             vec![mir_arg(None, Operand::Int(1))],
             Some("mapping"),
             "`items` does not take arguments",
-        ),
-        (
-            "entries",
-            vec![mir_arg(None, Operand::Int(1))],
-            Some("mapping"),
-            "`entries` does not take arguments",
         ),
         (
             "clear",
@@ -13588,7 +13556,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
     let map_missing_place = runtime
         .evaluate_map_method(
             crate::runtime_value::MapValue {
-                key_type: Type::named("String"),
+                key_type: Type::named("str"),
                 value_type: Type::named("int32"),
                 entries: vec![],
             },
@@ -13605,10 +13573,10 @@ fn mir_runtime_index_helpers_cover_error_paths() {
     let set_missing_place = runtime
         .evaluate_set_method(
             crate::runtime_value::SetValue {
-                element_type: Type::named("String"),
+                element_type: Type::named("str"),
                 elements: vec![],
             },
-            "insert",
+            "add",
             None,
             &[mir_arg(Some("value"), Operand::String("go".to_string()))],
             &mut env,
@@ -13619,7 +13587,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
         .contains("requires a mutable set place"));
 
     let set_value = || crate::runtime_value::SetValue {
-        element_type: Type::named("String"),
+        element_type: Type::named("str"),
         elements: vec![Value::String("ready".to_string())],
     };
     for (field, args, receiver_place, expected) in [
@@ -13636,10 +13604,10 @@ fn mir_runtime_index_helpers_cover_error_paths() {
             "`is_empty` does not take arguments",
         ),
         (
-            "clone",
+            "copy",
             vec![mir_arg(None, Operand::Int(1))],
             Some("flags"),
-            "`clone` does not take arguments",
+            "`copy` does not take arguments",
         ),
         (
             "remove",
@@ -14553,12 +14521,12 @@ fn mir_runtime_select_adapter_preserves_source_order_and_queue_losers() {
     let mut env = Env::default();
     env.define_typed(
         "first",
-        Type::Named("Queue".to_string(), vec![Type::named("String")]),
+        Type::Named("Queue".to_string(), vec![Type::named("str")]),
         Value::Channel(first),
     );
     env.define_typed(
         "second",
-        Type::Named("Queue".to_string(), vec![Type::named("String")]),
+        Type::Named("Queue".to_string(), vec![Type::named("str")]),
         Value::Channel(second.clone()),
     );
     let selected = runtime
@@ -14591,7 +14559,7 @@ fn mir_runtime_select_adapter_preserves_source_order_and_queue_losers() {
     closed.close();
     env.define_typed(
         "closed",
-        Type::Named("Queue".to_string(), vec![Type::named("String")]),
+        Type::Named("Queue".to_string(), vec![Type::named("str")]),
         Value::Channel(closed),
     );
     let selected = runtime
@@ -14622,12 +14590,12 @@ fn mir_runtime_select_adapter_reports_task_outcomes_and_claims_losers() {
     let mut env = Env::default();
     env.define_typed(
         "ready",
-        Type::Named("Task".to_string(), vec![Type::named("String")]),
+        Type::Named("Task".to_string(), vec![Type::named("str")]),
         Value::Task(ready),
     );
     env.define_typed(
         "failed",
-        Type::Named("Task".to_string(), vec![Type::named("String")]),
+        Type::Named("Task".to_string(), vec![Type::named("str")]),
         Value::Task(failed),
     );
     let selected = runtime
@@ -14651,7 +14619,7 @@ fn mir_runtime_select_adapter_reports_task_outcomes_and_claims_losers() {
         TaskValue::from_handle(std::thread::spawn(|| Err(Diagnostic::new("task error"))));
     env.define_typed(
         "failed_only",
-        Type::Named("Task".to_string(), vec![Type::named("String")]),
+        Type::Named("Task".to_string(), vec![Type::named("str")]),
         Value::Task(failed_only),
     );
     let failed_outcome = runtime
@@ -14678,7 +14646,7 @@ fn mir_runtime_select_adapter_reports_task_outcomes_and_claims_losers() {
     );
     env.define_typed(
         "losing",
-        Type::Named("Task".to_string(), vec![Type::named("String")]),
+        Type::Named("Task".to_string(), vec![Type::named("str")]),
         Value::Task(losing.clone()),
     );
     let deadline = runtime
@@ -14750,7 +14718,7 @@ fn mir_runtime_select_adapter_distinguishes_child_and_current_task_cancellation(
     let mut env = Env::default();
     env.define_typed(
         "ready",
-        Type::Named("Queue".to_string(), vec![Type::named("String")]),
+        Type::Named("Queue".to_string(), vec![Type::named("str")]),
         Value::Channel(ready.clone()),
     );
     let cancelled = runtime
@@ -14823,7 +14791,7 @@ fn mir_runtime_select_adapter_validates_typed_source_descriptors_before_arbitrat
 
     env.define_typed(
         "wrong_type",
-        Type::named("String"),
+        Type::named("str"),
         Value::Channel(ChannelValue::new()),
     );
     let wrong = select_error(&mut runtime, &mut env, &["wrong_type"]);
@@ -14854,7 +14822,7 @@ fn mir_runtime_select_adapter_validates_typed_source_descriptors_before_arbitrat
 
     env.define_typed(
         "wrong_duration_arity",
-        Type::Named("Duration".to_string(), vec![Type::named("String")]),
+        Type::Named("Duration".to_string(), vec![Type::named("str")]),
         Value::Duration(0),
     );
     let wrong_duration_arity = select_error(&mut runtime, &mut env, &["wrong_duration_arity"]);
@@ -14865,22 +14833,22 @@ fn mir_runtime_select_adapter_validates_typed_source_descriptors_before_arbitrat
 
     env.define_typed(
         "queue_value_mismatch",
-        Type::Named("Queue".to_string(), vec![Type::named("String")]),
+        Type::Named("Queue".to_string(), vec![Type::named("str")]),
         Value::Duration(0),
     );
     let queue_mismatch = select_error(&mut runtime, &mut env, &["queue_value_mismatch"]);
     assert_eq!(queue_mismatch.code, "AU4001");
-    assert!(queue_mismatch.message.contains("Queue[String]"));
+    assert!(queue_mismatch.message.contains("Queue[str]"));
     assert!(queue_mismatch.message.contains("queue runtime value"));
 
     env.define_typed(
         "task_value_mismatch",
-        Type::Named("Task".to_string(), vec![Type::named("String")]),
+        Type::Named("Task".to_string(), vec![Type::named("str")]),
         Value::Duration(0),
     );
     let task_mismatch = select_error(&mut runtime, &mut env, &["task_value_mismatch"]);
     assert_eq!(task_mismatch.code, "AU4001");
-    assert!(task_mismatch.message.contains("Task[String]"));
+    assert!(task_mismatch.message.contains("Task[str]"));
     assert!(task_mismatch.message.contains("task runtime value"));
 
     env.define_typed(
@@ -14895,7 +14863,7 @@ fn mir_runtime_select_adapter_validates_typed_source_descriptors_before_arbitrat
 
     env.define_typed(
         "queue_string",
-        Type::Named("Queue".to_string(), vec![Type::named("String")]),
+        Type::Named("Queue".to_string(), vec![Type::named("str")]),
         Value::Channel(ChannelValue::new()),
     );
     env.define_typed(
@@ -14906,12 +14874,12 @@ fn mir_runtime_select_adapter_validates_typed_source_descriptors_before_arbitrat
     let mixed_queues = select_error(&mut runtime, &mut env, &["queue_string", "queue_int"]);
     assert_eq!(mixed_queues.code, "AU4001");
     assert!(mixed_queues.message.contains("common Queue payload type"));
-    assert!(mixed_queues.message.contains("String"));
+    assert!(mixed_queues.message.contains("str"));
     assert!(mixed_queues.message.contains("int32"));
 
     env.define_typed(
         "task_string",
-        Type::Named("Task".to_string(), vec![Type::named("String")]),
+        Type::Named("Task".to_string(), vec![Type::named("str")]),
         Value::Task(TaskValue::from_handle(std::thread::spawn(|| {
             Ok(Value::String("ready".to_string()))
         }))),
@@ -14926,7 +14894,7 @@ fn mir_runtime_select_adapter_validates_typed_source_descriptors_before_arbitrat
     let mixed_tasks = select_error(&mut runtime, &mut env, &["task_string", "task_bool"]);
     assert_eq!(mixed_tasks.code, "AU4001");
     assert!(mixed_tasks.message.contains("common Task result type"));
-    assert!(mixed_tasks.message.contains("String"));
+    assert!(mixed_tasks.message.contains("str"));
     assert!(mixed_tasks.message.contains("bool"));
 }
 
@@ -14948,7 +14916,7 @@ fn mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_path
     let non_vec = runtime
         .expect_task_list(&Value::Bool(true), "wait_any(...)")
         .expect_err("non-vector task lists should fail");
-    assert!(non_vec.message.contains("expects `Vec[Task[T]]`"));
+    assert!(non_vec.message.contains("expects `list[Task[T]]`"));
     let non_task_list = Value::Vec(VecValue {
         element_type: Type::named("int32"),
         elements: vec![Value::Int(IntegerValue::from_signed(1))],
@@ -14956,7 +14924,7 @@ fn mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_path
     let non_task = runtime
         .expect_task_list(&non_task_list, "wait_any(...)")
         .expect_err("task vectors with non-task elements should fail");
-    assert!(non_task.message.contains("expects `Vec[Task[T]]`"));
+    assert!(non_task.message.contains("expects `list[Task[T]]`"));
 
     assert_eq!(
         enum_payloads(
@@ -15190,7 +15158,7 @@ fn mir_runtime_io_write_streams_to_stdout_sink() {
     let mut env = Env::default();
     env.define_typed(
         "text",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("hello".to_string()),
     );
 
@@ -16186,7 +16154,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         "ok_result",
         Type::Named(
             "Result".to_string(),
-            vec![Type::named("int32"), Type::named("String")],
+            vec![Type::named("int32"), Type::named("str")],
         ),
         result_ok(Value::Int(IntegerValue::from_signed(8))),
     );
@@ -16209,13 +16177,13 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         "err_result",
         Type::Named(
             "Result".to_string(),
-            vec![Type::named("int32"), Type::named("String")],
+            vec![Type::named("int32"), Type::named("str")],
         ),
         result_err(Value::String("boom".to_string())),
     );
     runtime.return_type_stack.push(Type::Named(
         "Result".to_string(),
-        vec![Type::named("int32"), Type::named("String")],
+        vec![Type::named("int32"), Type::named("str")],
     ));
     match runtime
         .evaluate_rvalue(
@@ -16239,7 +16207,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         "broken_result",
         Type::Named(
             "Result".to_string(),
-            vec![Type::named("int32"), Type::named("String")],
+            vec![Type::named("int32"), Type::named("str")],
         ),
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Result".to_string(),
@@ -16591,7 +16559,7 @@ fn mir_assert_fail_preserves_default_custom_empty_and_whitespace_messages() {
     assert_eq!(error.code, "AU4001");
     assert_eq!(
         error.message,
-        "MIR assertion message must evaluate to `String`, found `17`"
+        "MIR assertion message must evaluate to `str`, found `17`"
     );
     assert_eq!(error.span, Some(Span::new(11, 13)));
 }
@@ -16602,7 +16570,7 @@ fn mir_assert_fail_moves_an_owned_message_only_on_the_failure_path() {
     let mut env = Env::default();
     env.define_typed(
         "message",
-        Type::named("String"),
+        Type::named("str"),
         Value::String("owned message".to_string()),
     );
     let mut loop_state = HashMap::new();
@@ -16633,7 +16601,7 @@ fn source_assertion_custom_message_is_lazy_and_borrows_a_bare_string() {
     let message = "borrowed assertion message that is long enough to own an allocation";
     let source = format!(
         r#"
-def unselected_message() -> String:
+def unselected_message() -> str:
     print("message must stay lazy")
     return "unselected"
 
@@ -16676,11 +16644,7 @@ def main():
     let mut env = Env::default();
     let owned_message = message.to_string();
     let allocation = owned_message.as_ptr();
-    env.define_typed(
-        "message",
-        Type::named("String"),
-        Value::String(owned_message),
-    );
+    env.define_typed("message", Type::named("str"), Value::String(owned_message));
     let mut loop_state = HashMap::new();
     let mut cleanups = Vec::new();
     let clone_count = super::mir_value_clone_count();
@@ -16712,9 +16676,9 @@ def main():
         Value::String(value) => assert_eq!(
             value.as_ptr(),
             allocation,
-            "assertion diagnostics must not move or replace a borrowed String allocation"
+            "assertion diagnostics must not move or replace a borrowed str allocation"
         ),
-        other => panic!("expected String, found {other:?}"),
+        other => panic!("expected str, found {other:?}"),
     }
 
     let stdout = Arc::new(Mutex::new(String::new()));
@@ -16747,10 +16711,10 @@ class Counter:
 def increment(counter: mut Counter) -> None:
     counter.value += 1
 
-def consume(value: own String) -> int64:
+def consume(value: own str) -> int64:
     return value.len()
 
-def mark(label: String, value: int32) -> int32:
+def mark(label: str, value: int32) -> int32:
     print(label)
     return value
 
@@ -16806,7 +16770,7 @@ def double(value: int32) -> int32:
 
 def main():
     holder = Holder(callback=double)
-    callbacks: Vec[def(int32) -> int32] = [double]
+    callbacks: list[def(int32) -> int32] = [double]
     with group = TaskGroup():
         field_task = group.start(holder.callback, 5)
         index_task = group.start(callbacks[0], 6)
@@ -16848,7 +16812,7 @@ def main():
 
 #[test]
 fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_bad_calls() {
-    let string_type = Type::named("String");
+    let string_type = Type::named("str");
     let consume_signature = Type::Function {
         params: vec![crate::sema::FunctionParamContract {
             name: "value".to_string(),
@@ -16967,7 +16931,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
             allocation,
             "the owned allocation should transfer through the dynamic call"
         ),
-        other => panic!("expected the consumed String, found {other:?}"),
+        other => panic!("expected the consumed str, found {other:?}"),
     }
     assert!(
         env.place_ref("text").is_err(),
@@ -17224,7 +17188,7 @@ fn mir_function_value_runtime_type_parameter_discovery_descends_into_signatures(
     let signature = Type::Function {
         params: vec![contract(Type::TypeParam("CallbackInput".to_string()))],
         return_type: Box::new(Type::Function {
-            params: vec![contract(Type::named("String"))],
+            params: vec![contract(Type::named("str"))],
             return_type: Box::new(Type::TypeParam("CallbackOutput".to_string())),
         }),
     };
@@ -17311,7 +17275,7 @@ def main():
 #[test]
 fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_consuming() {
     let int_type = Type::named("int64");
-    let string_type = Type::named("String");
+    let string_type = Type::named("str");
     let shared_int_param = |name: &str| MirParam {
         name: name.to_string(),
         passing: crate::mir::MirReceiverKind::Borrow,
@@ -17454,7 +17418,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
         return_type: Box::new(string_type),
         captures: Box::new(vec![crate::sema::ClosureCapture {
             name: "__capture_text".to_string(),
-            ty: Type::named("String"),
+            ty: Type::named("str"),
             mode: crate::sema::ClosureCaptureMode::Move,
             span: Span::new(4, 16),
         }]),
@@ -17468,7 +17432,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
                 captures: vec![MirClosureCapture {
                     name: "__capture_text".to_string(),
                     value: Operand::MovePlace("text".to_string()),
-                    ty: Type::named("String"),
+                    ty: Type::named("str"),
                 }],
                 consuming: true,
             },
@@ -17522,7 +17486,7 @@ def main():
 
     offset: int64 = 7
     add_offset: def(int64) -> int64 = lambda value: value + offset
-    values: Vec[int64] = [1, 3]
+    values: list[int64] = [1, 3]
     print(values.map(add_offset))
 
     nested: def() -> int64 = lambda: add_offset(3)
@@ -17543,7 +17507,7 @@ def main():
 fn mir_closure_task_failure_surfaces_after_handoff_cleanup_with_task_ancestry() {
     let module = crate::lower_source_to_mir(
         r#"
-def crash(label: String) -> int64:
+def crash(label: str) -> int64:
     print(label)
     return 1 // 0
 
@@ -17599,13 +17563,13 @@ def mark_default() -> int64:
 def add_default(value: int64, delta: int64 = mark_default()) -> int64:
     return value + delta
 
-def decorate(prefix: String, value: own String) -> String:
+def decorate(prefix: str, value: own str) -> str:
     return f"{prefix}:{value}"
 
 def main():
     offset: int64 = 4
-    push_offset: def(mut Vec[int64]) -> None = lambda mut values: values.push(offset)
-    mut values: Vec[int64] = [1, 2]
+    push_offset: def(mut list[int64]) -> None = lambda mut values: values.append(offset)
+    mut values: list[int64] = [1, 2]
     push_offset(values)
     push_offset(values)
     print(values)
@@ -17615,13 +17579,13 @@ def main():
     print(add_fresh())
 
     prefix = "tag"
-    decorate_value: def(own String) -> String = lambda own value: decorate(prefix, value)
+    decorate_value: def(own str) -> str = lambda own value: decorate(prefix, value)
     first = "one"
     second = "two"
     print(decorate_value(first))
     print(decorate_value(second))
 
-    nested: def() -> String = lambda: decorate_value("nested")
+    nested: def() -> str = lambda: decorate_value("nested")
     print(nested())
 "#,
     )
@@ -17642,14 +17606,14 @@ fn mir_closure_behavior_retry_repeats_capture_and_returns_last_owned_error() {
         r#"
 import control
 
-def fail(label: String) -> Result[int64, String]:
+def fail(label: str) -> Result[int64, str]:
     print(label)
     return Result.Err(label.clone())
 
 def main():
     label = "captured-attempt"
-    worker: def() -> Result[int64, String] = lambda: fail(label)
-    match own control.retry[int64, String](worker):
+    worker: def() -> Result[int64, str] = lambda: fail(label)
+    match own control.retry[int64, str](worker):
         case Result.Ok(value):
             print(value)
         case Result.Err(error):
@@ -17671,13 +17635,13 @@ def main():
 fn mir_closure_behavior_callback_traps_preserve_partial_output_and_public_frames() {
     let module = crate::lower_source_to_mir(
         r#"
-def divide(label: String, value: int64) -> int64:
+def divide(label: str, value: int64) -> int64:
     print(label)
     return 10 // value
 
 def main():
     label = "callback-trap"
-    values: Vec[int64] = [2, 0, 5]
+    values: list[int64] = [2, 0, 5]
     print("before-map")
     mapped = values.map(lambda value: divide(label, value))
     print(mapped)
@@ -17711,7 +17675,7 @@ def main():
 fn mir_closure_behavior_consuming_trap_follows_owned_transfer_with_complete_frames() {
     let module = crate::lower_source_to_mir(
         r#"
-def consume_and_crash(value: own String) -> int64:
+def consume_and_crash(value: own str) -> int64:
     print(value)
     return 1 // 0
 
@@ -17749,10 +17713,10 @@ fn mir_closure_behavior_explicit_stack_tasks_handoff_captures_and_cleanup() {
     let module = crate::lower_source_to_mir(
         r#"
 def main():
-    events = Queue[String]()
+    events = Queue[str]()
     producer = events
     label = "stack-worker"
-    worker: def() -> Result[None, SendError[String]] = lambda: producer.put(label)
+    worker: def() -> Result[None, SendError[str]] = lambda: producer.put(label)
 
     offset: int64 = 4
     add_offset: def(int64) -> int64 = lambda value: value + offset
@@ -17777,7 +17741,7 @@ def main():
 fn mir_closure_final_task_results_cover_ready_error_optional_poll_and_cleanup() {
     let module = crate::lower_source_to_mir(
         r#"
-def fail(label: String) -> int64:
+def fail(label: str) -> int64:
     print(label)
     return 1 // 0
 
@@ -17958,12 +17922,12 @@ def main():
         .expect_err("Rng.shuffle must reject non-vector runtime values");
     assert_eq!(
         shuffle_type.message,
-        "`Rng.shuffle(...)` expects `Vec[T]`, found `true`"
+        "`Rng.shuffle(...)` expects `list[T]`, found `true`"
     );
 
     env.define_typed(
         "values",
-        Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+        Type::Named("list".to_string(), vec![Type::named("int64")]),
         Value::Vec(VecValue {
             element_type: Type::named("int64"),
             elements: vec![Value::Int(IntegerValue::from_signed(1))],
@@ -17979,7 +17943,7 @@ def main():
         .expect_err("Rng.shuffle requires an explicit mutable writeback place in MIR");
     assert_eq!(
         shuffle_place.message,
-        "`Rng.shuffle(...)` requires a mutable vector place"
+        "`Rng.shuffle(...)` requires a mutable list place"
     );
     assert_eq!(
         env.place_ref("values")

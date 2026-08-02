@@ -476,14 +476,14 @@ fn direct_callable_ffi_symbols_preserve_the_public_runtime_contract() {
         params: vec![
             FunctionParamContract {
                 name: "path".to_string(),
-                ty: Type::named("String"),
+                ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
                 default_erased: false,
             },
             FunctionParamContract {
                 name: "buffer".to_string(),
-                ty: Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 passing: ReceiverKind::BorrowMut,
                 has_default: true,
                 default_erased: false,

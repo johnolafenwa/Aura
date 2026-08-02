@@ -1,7 +1,7 @@
 class Item:
-    name: String
+    name: str
 
-    def name(self) -> String:
+    def name(self) -> str:
         return self.name
 
 def main() -> int32:

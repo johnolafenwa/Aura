@@ -1,7 +1,7 @@
 # Test: can we match on string values directly?
 # (This may or may not be supported)
 
-def classify(s: str) -> String:
+def classify(s: str) -> str:
     if s == "red":
         return "color"
     if s == "cat":

@@ -1,2 +1,2 @@
-def take_left(left: String, right: String) -> String:
+def take_left(left: str, right: str) -> str:
     return right

@@ -12,7 +12,7 @@ class Wrapper[T]:
         return self.inner
 
 def main() -> int32:
-    p: Pair[int32, String] = Pair(first=42, second="hello")
+    p: Pair[int32, str] = Pair(first=42, second="hello")
     w: Wrapper[int32] = Wrapper(inner=p.first)
     print(w.unwrap())
     return 0

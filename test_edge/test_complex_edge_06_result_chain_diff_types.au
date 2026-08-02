@@ -1,15 +1,15 @@
 # Edge test: try with different Result Ok types at each level
 
-def step1(n: int32) -> Result[int32, String]:
+def step1(n: int32) -> Result[int32, str]:
     if n < 0:
         return Result.Err("negative")
     return Result.Ok(n)
 
-def step2(n: int32) -> Result[String, String]:
+def step2(n: int32) -> Result[str, str]:
     val = try step1(n)
     return Result.Ok(f"value is {val}")
 
-def step3(n: int32) -> Result[bool, String]:
+def step3(n: int32) -> Result[bool, str]:
     msg = try step2(n)
     if msg == "value is 5":
         return Result.Ok(true)

@@ -1,4 +1,4 @@
-def consume(text: String) -> None:
+def consume(text: str) -> None:
     pass
 
 def allow_if_fallthrough(flag: bool) -> None:

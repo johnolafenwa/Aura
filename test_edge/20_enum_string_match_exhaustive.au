@@ -1,9 +1,9 @@
 enum Shape:
     Circle(float64)
     Rectangle(float64)
-    Named(String)
+    Named(str)
 
-def describe(s: own Shape) -> String:
+def describe(s: own Shape) -> str:
     match own s:
         case Shape.Circle(r):
             return "circle"

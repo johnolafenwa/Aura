@@ -91,9 +91,9 @@ A type annotation is allowed only on a simple-name target. `mut` also belongs on
 # mut point.x = 4.0
 ```
 
-Field assignment requires a mutable base place and a declared field. Vector
-index assignment requires exactly `int32`. Simple Map index assignment requires
-exactly the map's key type and either replaces an equal key or inserts a new
+Field assignment requires a mutable base place and a declared field. List
+index assignment uses the `int64` index domain. Simple dict index assignment requires
+exactly the dictionary's key type and either replaces an equal key or inserts a new
 entry; an absent key is not a simple-assignment error. It accepts any value
 type. The key and value are owned storage positions, so each is consumed when
 non-copy, matching `set(key: own K, value: own V)`.
@@ -118,11 +118,11 @@ change the captured left operand or retarget the store. A non-copy root or
 projected target remains borrowed across right-operand evaluation; an
 overlapping mutable borrow or consumption is rejected with `AU3002`.
 
-Direct indexed compound assignment requires a copy `Vec` element or `Map`
+Direct indexed compound assignment requires a copy `list` element or `dict`
 value. A non-copy indexed element is rejected because reading it for
 read-modify-write would require either a hidden clone or a destructive move
 before an operation that may fail. Use an explicit safe read or ownership
-transfer followed by a simple write; for a Map, use `get(key)` or `remove(key)`
+transfer followed by a simple write; for a dict, use `get(key)` or `remove(key)`
 and explicit simple assignment. Runtime overflow/division behavior is the same
 as for the corresponding expression operator. Integer `/=` is rejected with
 the integer `/` teaching diagnostic; use integer `//=` for a floor quotient.
@@ -138,7 +138,7 @@ updating the target. Indexed assignment evaluates the collection place and then
 the index or key before its right side. Its non-copy collection base remains
 borrowed through those later inputs; an overlapping mutable borrow or
 consumption is rejected with `AU3002`, and no hidden deep clone is inserted. A
-simple Map assignment captures and, when non-copy, consumes that key before
+simple dict assignment captures and, when non-copy, consumes that key before
 evaluating and consuming its value, so later value-side effects cannot change
 the selected key. Reassigning an exact
 moved binding or field reinitializes that place when the new value has the
@@ -225,8 +225,8 @@ for name, count in records:
     print(count)
 ```
 
-Use `for value in own values:` when the loop deliberately consumes a `Vec` or
-`Set` and needs owned element bindings. The collection moves once into a
+Use `for value in own values:` when the loop deliberately consumes a `list` or
+`set` and needs owned element bindings. The collection moves once into a
 loop-private source at entry. Reinitializing the consumed `values` binding in
 the body does not switch or truncate that active iteration.
 
@@ -238,11 +238,11 @@ Maintained iterable forms include:
 
 | Form | Behavior |
 | --- | --- |
-| `for i in range(n):` | Yields `int32` values from zero up to `n`, excluding `n`. |
-| `for i in range(start, end):` | Yields `int32` values from `start` up to `end`, excluding `end`. |
-| `for value in vec:` | Retains the vector and yields shared-borrowed access for non-copy elements. |
-| `for value in own vec:` | Consumes the vector and yields owned elements. |
-| `for value in mut vec:` | Retains a mutable vector and yields mutable-borrowed access; the iterable place must be mutable. |
+| `for i in range(n):` | Yields `int64` values from zero up to `n`, excluding `n`. |
+| `for i in range(start, end):` | Yields `int64` values from `start` up to `end`, excluding `end`. |
+| `for value in values:` | Retains the list and yields shared access for non-copy elements. |
+| `for value in own values:` | Consumes the list and yields owned elements. |
+| `for value in mut values:` | Retains a mutable list and yields mutable access; the iterable place must be mutable. |
 | `for value in set:` | Retains the set and yields shared-borrowed access. |
 | `for value in own set:` | Consumes the set and yields owned elements. |
 | `for value in queue:` | Receives queue items under the scheduler-aware queue iteration contract. |
@@ -270,8 +270,8 @@ one anywhere else reports `AU2005` and names the loop spelling. A user
 declaration of either name shadows the loop form, so an existing `def zip(...)`
 keeps its ordinary call meaning.
 
-Both forms read their operands by position, so each operand must be a `Vec[T]`
-or a `Set[T]`; a `Range` or `Queue[T]` operand reports `AU2002`. Both iterate
+Both forms read their operands by position, so each operand must be a `list[T]`
+or a `set[T]`; a `Range` or `Queue[T]` operand reports `AU2002`. Both iterate
 over the bare-loop borrow default: an ownership modifier on the loop reports
 `AU3002`, every operand stays shared-borrowed and frozen for the whole loop,
 and a non-copy element binding is a shared borrow that cannot be moved out.
@@ -293,7 +293,7 @@ for host, port in zip(hosts, ports):
     print(port)
 ```
 
-Range iteration accepts only the bare form. Every yielded `int32` is an
+Range iteration accepts only the bare form. Every yielded `int64` is an
 independent copy, so `mut` has no place through which to write back and `own`
 has nothing to transfer. Either modifier reports `AU3004`, explains that
 ownership modifiers do not apply to these copy values, and suggests
@@ -378,10 +378,10 @@ unrecoverable runtime diagnostic:
     assert response_code == 200, "expected a successful response"
 
 The condition must have exactly type `bool`. The optional message must have
-exactly type `String`. The condition evaluates exactly once. A true condition
+exactly type `str`. The condition evaluates exactly once. A true condition
 falls through without evaluating the message. A false condition evaluates the
 message exactly once and traps with `AU4001`. Without a message, the exact
-failure text is `assertion failed`; otherwise the supplied String is preserved
+failure text is `assertion failed`; otherwise the supplied str is preserved
 exactly, including an empty or whitespace-only value.
 
 The diagnostic points to the `assert` keyword. A trap produced while evaluating
@@ -441,7 +441,7 @@ Parsing a statement shape does not make it legal in every context:
 - member and index assignment require a mutable base and cannot declare a type or use `mut`.
 - conditions require `bool` rather than truthiness.
 - assertion conditions require `bool`, and assertion messages require
-  `String`.
+  `str`.
 - match arms must satisfy compatibility, reachability, and exhaustiveness rules.
 - `with` requires a supported resource and preserves its cleanup capability.
 - items cannot appear inside suites.
@@ -463,7 +463,7 @@ exactly `bool`; return values match the enclosing signature; iterables determine
 their loop binding contract; match patterns are compatible, reachable, and
 exhaustive where required; and `with` accepts only the maintained cleanup
 contract. Assertion conditions are exactly `bool` and messages are exactly
-`String`; an assertion does not refine later control flow. Contextual legality
+`str`; an assertion does not refine later control flow. Contextual legality
 is checked after parsing.
 
 ## Runtime Semantics
@@ -471,12 +471,12 @@ is checked after parsing.
 Statements execute in source order within the selected suite. Simple-name and
 field assignment evaluate the right side before writing the target; indexed
 assignment evaluates its collection and index/key before the right side, with a
-simple Map assignment capturing its owned key before any value-side effects;
+simple dict assignment capturing its owned key before any value-side effects;
 compound assignment uses the corresponding binary dispatch and stores into its
 once-selected target; a copy target is captured before the right side, while a
 non-copy root or projected target remains borrowed across it; direct indexed
 compound assignment reads only a copy element and traps with `AU4003` when a
-Map key is absent; conditionals select at most one branch; loops test or
+Dictionary key is absent; conditionals select at most one branch; loops test or
 receive before each body;
 a match evaluates its
 scrutinee once; and `with` registers cleanup only after resource construction
@@ -487,13 +487,13 @@ every exited cleanup in reverse registration order.
 ## Ownership And Evaluation Order
 
 Bindings own, copy, or borrow their initializer according to type and context.
-`own` Vec/Set iteration consumes once into a loop-private source, bare
+`own` list/set iteration consumes once into a loop-private source, bare
 collection iteration retains and freezes its selected place, and Queue
 iteration captures a copy handle once while receiving already-owned items.
 The one-time iterable selection is the accepted ADR-0017 rule; the ownership
 modes themselves remain those accepted in ADR-0006.
-Simple Map indexed assignment consumes non-copy keys and values into owned
-storage; direct Vec/Map indexed compound assignment is restricted to copy
+Simple dict indexed assignment consumes non-copy keys and values into owned
+storage; direct list/dict indexed compound assignment is restricted to copy
 elements. Assignment to a place
 invalidates conflicting borrows and reinitializes the written place. Branch and
 loop analysis conservatively preserves any move that may reach a continuing
@@ -505,7 +505,7 @@ path; no control-flow join restores ownership implicitly.
 unresolved name or target. `AU2002` means an expected-type, condition,
 iteration, match, return, or assignment mismatch. `AU2003` means an unsupported
 compound-assignment operator. `AU2004` means call or target argument binding
-failed. `AU2005` means focused migration guidance for a Python-shaped
+failed. `AU2005` means unsupported syntax or feature for a Python-shaped
 statement. `AU2999` means an exhaustiveness, contextual-legality, unsupported
 statement rejection without a narrower code. `AU3001` means use of a moved
 place; `AU3002` means a borrow conflict, including later access that mutably

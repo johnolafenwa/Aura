@@ -39,7 +39,7 @@ def main() -> int32:
     else:
         print("ne suffix: FAIL")
 
-    # String literal comparison
+    # str literal comparison
     if "test" == "test":
         print("literal eq: pass")
     else:

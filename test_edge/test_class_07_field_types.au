@@ -1,10 +1,10 @@
 class Record:
     id: int32
     score: float64
-    label: String
+    label: str
     active: bool
 
-    def summary(self) -> String:
+    def summary(self) -> str:
         return self.label
 
 def main() -> int32:

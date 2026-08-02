@@ -1,6 +1,6 @@
 class Pair:
-    first: String
-    second: String
+    first: str
+    second: str
 
 def main() -> int32:
     pair = Pair(first="a", second="b")

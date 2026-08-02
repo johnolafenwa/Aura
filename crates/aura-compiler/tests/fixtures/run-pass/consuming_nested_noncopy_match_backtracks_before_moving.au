@@ -1,6 +1,6 @@
 enum Inner:
-    Pair(String, int32)
-    Solo(String)
+    Pair(str, int32)
+    Solo(str)
 
 enum Outer:
     Wrapped(Inner)

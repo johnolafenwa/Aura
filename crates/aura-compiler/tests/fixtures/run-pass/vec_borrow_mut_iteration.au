@@ -1,4 +1,4 @@
-def update_first(values: mut Vec[int64]) -> int64:
+def update_first(values: mut list[int64]) -> int64:
     for value in mut values:
         value += 13
         return value

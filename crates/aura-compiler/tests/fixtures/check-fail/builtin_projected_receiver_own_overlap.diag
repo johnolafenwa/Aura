@@ -1,7 +1,7 @@
 error[AU3002]: cannot consume `node` while `node.children` remains mutably borrowed by the method receiver
- --> crates/aura-compiler/tests/fixtures/check-fail/builtin_projected_receiver_own_overlap.au:6:24
+ --> crates/aura-compiler/tests/fixtures/check-fail/builtin_projected_receiver_own_overlap.au:6:26
   |
-6 |     node.children.push(node)
-  |                        ^
+6 |     node.children.append(node)
+  |                          ^
   = related crates/aura-compiler/tests/fixtures/check-fail/builtin_projected_receiver_own_overlap.au:6:10: mutable borrow for the method receiver begins here
   = help: call `.clone()` before the expression when an independent value is intended, or perform the consumption in a separate statement first

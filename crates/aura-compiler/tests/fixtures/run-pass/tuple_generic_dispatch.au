@@ -1,4 +1,4 @@
-def identity_pair[T](value: own (T, String)) -> (T, String):
+def identity_pair[T](value: own (T, str)) -> (T, str):
     return value
 
 

@@ -1,6 +1,6 @@
 enum Data:
     Num(int32)
-    Txt(String)
+    Txt(str)
 
 def main() -> int32:
     d = Data.Num(7)

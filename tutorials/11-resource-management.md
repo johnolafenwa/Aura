@@ -10,7 +10,7 @@ If you are coming from Python, this works like Python's `with` statement and con
 import fs
 import io
 
-def load_text(path: String) -> Result[String, io.Error]:
+def load_text(path: str) -> Result[str, io.Error]:
     with file = try fs.open(path):
         return file.read_all()
     # file.close() is called automatically here, even on early return

@@ -1,0 +1,3 @@
+def main():
+    mut values: set[int64] = {1, 2}
+    values.remove(3)

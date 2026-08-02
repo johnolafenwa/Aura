@@ -15,7 +15,7 @@ def main() -> int32:
     single = "x"
     print(single)
 
-    # String with spaces
+    # str with spaces
     spaced = "  hello  world  "
     print(spaced)
 

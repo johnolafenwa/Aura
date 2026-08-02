@@ -15,7 +15,7 @@ def main() -> int32:
     print(s.value)
 
     f2 = First(value="hello")
-    s2: Second[String] = transfer(f2)
+    s2: Second[str] = transfer(f2)
     print(s2.value)
 
     return 0

@@ -1,5 +1,5 @@
 def main() -> int32:
-    text: String = "aura"
+    text: str = "aura"
     copy = text.clone()
     print(copy)
     return 0

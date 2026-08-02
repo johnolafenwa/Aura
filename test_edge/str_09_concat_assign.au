@@ -1,24 +1,24 @@
 def main() -> int32:
     # Basic += on string
-    mut s: String = "Hello"
+    mut s: str = "Hello"
     s += " World"
     print(s)
 
     # Multiple +=
-    mut acc: String = ""
+    mut acc: str = ""
     acc += "a"
     acc += "b"
     acc += "c"
     print(acc)
 
     # += with variable
-    mut base: String = "base"
+    mut base: str = "base"
     suffix = "-end"
     base += suffix
     print(base)
 
     # += empty string (no-op)
-    mut unchanged: String = "stay"
+    mut unchanged: str = "stay"
     unchanged += ""
     if unchanged == "stay":
         print("noop: pass")

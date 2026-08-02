@@ -1,4 +1,4 @@
-error[AU3007]: cannot use `Vec slice` because `Holder` contains non-cloneable `random.Rng` state
+error[AU3007]: cannot use `list slice` because `Holder` contains non-cloneable `random.Rng` state
  --> crates/aura-compiler/tests/fixtures/check-fail/vec_slice_requires_clone_safe_elements.au:7:19
   |
 7 |     return values[:]

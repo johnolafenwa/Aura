@@ -224,6 +224,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         band: "runtime",
         title: "array shape or reduction violation",
     },
+    DiagnosticCodeInfo {
+        code: "AU4008",
+        band: "runtime",
+        title: "collection value not found",
+    },
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

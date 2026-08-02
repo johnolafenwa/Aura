@@ -1,5 +1,5 @@
 copy class Bad:
-    name: String
+    name: str
 
 def main() -> int32:
     return 0

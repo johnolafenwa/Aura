@@ -1,21 +1,21 @@
 trait Describe:
-    def describe(self) -> String
+    def describe(self) -> str
 
-impl Describe for Vec[int32]:
-    def describe(self) -> String:
-        return f"vec of {self.len()}"
+impl Describe for list[int32]:
+    def describe(self) -> str:
+        return f"list of {self.len()}"
 
-impl Describe for String:
-    def describe(self) -> String:
+impl Describe for str:
+    def describe(self) -> str:
         return f"text of {self.len()}"
 
-def describe_through_bound[T: Describe](value: T) -> String:
+def describe_through_bound[T: Describe](value: T) -> str:
     return value.describe()
 
 def main():
-    mut values = Vec[int32]()
-    values.push(1)
-    values.push(2)
+    mut values = list[int32]()
+    values.append(1)
+    values.append(2)
     print(values.describe())
 
     text = "hello"

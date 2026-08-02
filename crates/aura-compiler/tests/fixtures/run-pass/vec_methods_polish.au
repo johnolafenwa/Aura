@@ -12,8 +12,8 @@ def main() -> int32:
     left.swap(0, 2)
     print(left[0])
     print(left[2])
-    print_bool(left.contains(2))
-    print_bool(left.contains(9))
+    print_bool((2 in left))
+    print_bool((9 in left))
 
     left.extend(right)
     print(left.len())

@@ -13,19 +13,19 @@ Filesystem APIs return `Result[..., io.Error]` except `fs.exists(...)`, which re
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `fs.exists` | `exists(path: String) -> bool` | Returns `true` when `path` exists. Errors are collapsed to `false`. |
-| `fs.read_to_string` | `read_to_string(path: String) -> Result[String, io.Error]` | Reads a UTF-8 file into a `String`. Reads are capped at 256 MiB. |
-| `fs.read_bytes` | `read_bytes(path: String) -> Result[Vec[uint8], io.Error]` | Reads a file into raw bytes. Reads are capped at 256 MiB. |
-| `fs.write_string` | `write_string(path: String, text: String) -> Result[None, io.Error]` | Creates or replaces `path` with `text`. |
-| `fs.write_bytes` | `write_bytes(path: String, bytes: Vec[uint8]) -> Result[None, io.Error]` | Creates or replaces `path` with raw bytes. Empty byte vectors are allowed. |
-| `fs.append_string` | `append_string(path: String, text: String) -> Result[None, io.Error]` | Creates or opens `path` and appends `text`. |
-| `fs.append_bytes` | `append_bytes(path: String, bytes: Vec[uint8]) -> Result[None, io.Error]` | Creates or opens `path` and appends bytes. |
-| `fs.create_dir` | `create_dir(path: String) -> Result[None, io.Error]` | Creates one directory. Parent directories must already exist. |
-| `fs.read_dir` | `read_dir(path: String) -> Result[Vec[String], io.Error]` | Returns the directory's immediate entry names in sorted order. Names that are not valid UTF-8 are converted lossily. |
-| `fs.remove_file` | `remove_file(path: String) -> Result[None, io.Error]` | Removes a file. |
-| `fs.open` | `open(path: String) -> Result[fs.File, io.Error]` | Opens a file for reading. |
-| `fs.create` | `create(path: String) -> Result[fs.File, io.Error]` | Creates or truncates a file for writing. |
-| `fs.append` | `append(path: String) -> Result[fs.File, io.Error]` | Opens a file for appending, creating it if needed. |
+| `fs.exists` | `exists(path: str) -> bool` | Returns `true` when `path` exists. Errors are collapsed to `false`. |
+| `fs.read_to_string` | `read_to_string(path: str) -> Result[str, io.Error]` | Reads a UTF-8 file into a `str`. Reads are capped at 256 MiB. |
+| `fs.read_bytes` | `read_bytes(path: str) -> Result[list[uint8], io.Error]` | Reads a file into raw bytes. Reads are capped at 256 MiB. |
+| `fs.write_string` | `write_string(path: str, text: str) -> Result[None, io.Error]` | Creates or replaces `path` with `text`. |
+| `fs.write_bytes` | `write_bytes(path: str, bytes: list[uint8]) -> Result[None, io.Error]` | Creates or replaces `path` with raw bytes. Empty byte vectors are allowed. |
+| `fs.append_string` | `append_string(path: str, text: str) -> Result[None, io.Error]` | Creates or opens `path` and appends `text`. |
+| `fs.append_bytes` | `append_bytes(path: str, bytes: list[uint8]) -> Result[None, io.Error]` | Creates or opens `path` and appends bytes. |
+| `fs.create_dir` | `create_dir(path: str) -> Result[None, io.Error]` | Creates one directory. Parent directories must already exist. |
+| `fs.read_dir` | `read_dir(path: str) -> Result[list[str], io.Error]` | Returns the directory's immediate entry names in sorted order. Names that are not valid UTF-8 are converted lossily. |
+| `fs.remove_file` | `remove_file(path: str) -> Result[None, io.Error]` | Removes a file. |
+| `fs.open` | `open(path: str) -> Result[fs.File, io.Error]` | Opens a file for reading. |
+| `fs.create` | `create(path: str) -> Result[fs.File, io.Error]` | Creates or truncates a file for writing. |
+| `fs.append` | `append(path: str) -> Result[fs.File, io.Error]` | Opens a file for appending, creating it if needed. |
 
 The read cap is part of the API contract and also applies to `fs.File.read_all()` and `fs.File.read_bytes()`. Aura 0.2 has no chunked file-read API, so a program that must process a larger file needs a host-side helper or must split the data before reading it through Aura.
 
@@ -45,10 +45,10 @@ def show_file() -> Result[None, io.Error]:
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `read_all` | `read_all() -> Result[String, io.Error]` | Reads remaining file contents as strict UTF-8 text, capped at 256 MiB. |
-| `read_bytes` | `read_bytes() -> Result[Vec[uint8], io.Error]` | Reads remaining file contents as raw bytes, capped at 256 MiB. |
-| `write_all` | `write_all(text: String) -> Result[None, io.Error]` | Writes all of `text` to the file. |
-| `write_bytes` | `write_bytes(bytes: Vec[uint8]) -> Result[None, io.Error]` | Writes all raw bytes to the file. |
+| `read_all` | `read_all() -> Result[str, io.Error]` | Reads remaining file contents as strict UTF-8 text, capped at 256 MiB. |
+| `read_bytes` | `read_bytes() -> Result[list[uint8], io.Error]` | Reads remaining file contents as raw bytes, capped at 256 MiB. |
+| `write_all` | `write_all(text: str) -> Result[None, io.Error]` | Writes all of `text` to the file. |
+| `write_bytes` | `write_bytes(bytes: list[uint8]) -> Result[None, io.Error]` | Writes all raw bytes to the file. |
 | `flush` | `flush() -> Result[None, io.Error]` | Flushes pending writes to the operating system. |
 | `close` | `close() -> None` | Closes the handle. Further use is invalid. |
 
@@ -57,7 +57,7 @@ def show_file() -> Result[None, io.Error]:
 Use text helpers when the file is known to be UTF-8:
 
 ```python
-def read_config() -> Result[String, io.Error]:
+def read_config() -> Result[str, io.Error]:
     text = try fs.read_to_string("config.txt")
     return Result.Ok(text)
 ```
@@ -85,7 +85,7 @@ All text reads decode UTF-8 strictly and return `io.Error.InvalidData` for inval
 import fs
 import io
 
-def append_line(path: String, line: String) -> Result[None, io.Error]:
+def append_line(path: str, line: str) -> Result[None, io.Error]:
     with file = try fs.append(path):
         try file.write_all(line)
         try file.write_all("\n")
@@ -111,11 +111,11 @@ match fs.read_to_string("config.txt"):
 
 The filesystem module adds no source-language grammar. Programs use ordinary imports, calls, member calls, `Result`, `try`, `match`, and `with`. A `with name = expression:` binding follows the general resource-scope grammar and invokes the resource's `close()` operation on every scope exit.
 
-Paths are `String` values, not path literals or a distinct path type. Text and byte operations are selected by different function names; no encoding annotation changes a byte operation into a text operation.
+Paths are `str` values, not path literals or a distinct path type. Text and byte operations are selected by different function names; no encoding annotation changes a byte operation into a text operation.
 
 ## Typing Rules
 
-The signatures in the one-shot and `fs.File` tables are normative. All operations except `fs.exists` return `Result`; failure values are `io.Error`. Text reads produce `String`, binary reads produce `Vec[uint8]`, and open/create/append produce the non-copy resource type `fs.File`.
+The signatures in the one-shot and `fs.File` tables are normative. All operations except `fs.exists` return `Result`; failure values are `io.Error`. Text reads produce `str`, binary reads produce `list[uint8]`, and open/create/append produce the non-copy resource type `fs.File`.
 
 `fs.File.write_all`, `write_bytes`, `flush`, and `close` require a mutable receiver place. `read_all` and `read_bytes` are callable through a shared receiver even though the host file cursor advances. Calling a method on the wrong type, supplying a wrong argument type, or ignoring the `Result` where a `try` expression requires it is checked by the ordinary static rules.
 
@@ -127,7 +127,7 @@ Text is strict UTF-8. Invalid text and reads over 256 MiB return `io.Error.Inval
 
 ## Ownership And Evaluation Order
 
-Call arguments are evaluated left to right. Path, text, and byte-vector arguments are shared for the duration of the operation and are not retained by the filesystem API. Successful reads return fresh owned values. `fs.File` is non-copy: assigning or passing it by ownership moves the handle, and later use of the moved binding is rejected.
+Call arguments are evaluated left to right. Path, text, and byte-list arguments are shared for the duration of the operation and are not retained by the filesystem API. Successful reads return fresh owned values. `fs.File` is non-copy: assigning or passing it by ownership moves the handle, and later use of the moved binding is rejected.
 
 `with` owns the bound resource for the lexical scope and closes it exactly once on normal exit, early return, loop transfer, or error propagation. Cleanup runs after the body and does not undo completed host I/O. Shared read methods use interior host state for the file cursor; mutating write, flush, and close methods require a mutable receiver binding.
 

@@ -1,10 +1,10 @@
 class Holder:
-    text: String
+    text: str
 
 def show(holder: Holder):
     print(holder.text)
 
-def clone_text(holder: Holder) -> String:
+def clone_text(holder: Holder) -> str:
     return holder.text.clone()
 
 def main() -> int32:

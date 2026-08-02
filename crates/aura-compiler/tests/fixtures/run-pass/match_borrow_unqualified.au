@@ -1,5 +1,5 @@
 def main() -> int32:
-    result: Result[String, String] = Result.Ok("ok")
+    result: Result[str, str] = Result.Ok("ok")
 
     match result:
         case Ok(value):

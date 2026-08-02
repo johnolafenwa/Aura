@@ -108,7 +108,7 @@ exactly `int32`, `int64`, `float32`, and `float64`:
 def square(value: float64) -> float64:
     return value * value
 
-matrix = Array[float64].from_vec([1.0, 2.0, 3.0, 4.0], [2, 2])
+matrix = Array[float64].from_list([1.0, 2.0, 3.0, 4.0], [2, 2])
 squares = matrix.map[float64](square)
 first_row = squares[0:1]
 
@@ -208,7 +208,7 @@ The combined arithmetic example is
 | `int128` | `uint128` | |
 | `intsize` | `uintsize` | |
 
-Use `int` (the `int64` alias) and `float64` by default. Other explicit widths are useful when you need control over memory layout, value ranges, or a fixed API contract. APIs declared with `int32` remain `int32`; the new literal default does not widen them. Full-range `uint128` arithmetic is supported:
+Use `int` (the `int64` alias) and `float64` by default. Other explicit widths are useful when you need control over memory layout, value ranges, or a fixed API contract. APIs declared with `int32` remain `int32`; literal defaulting does not widen them. Full-range `uint128` arithmetic is supported:
 
 ```python
 value: uint128 = 340282366920938463463374607431768211455
@@ -232,10 +232,10 @@ def double(x: float32) -> float32:
 
 See [examples/numbers/float32_values.au](../examples/numbers/float32_values.au).
 
-## String Basics
+## str Basics
 
 Ordinary strings use matching single or double quotes. Both forms produce the
-same `String`, support the same escapes, and concatenate with `+`:
+same `str`, support the same escapes, and concatenate with `+`:
 
 ```python
 greeting = 'hello' + ", aura"
@@ -245,15 +245,15 @@ quotation = 'the compiler said "ready"'
 
 The supported escapes are `\n`, `\t`, `\"`, `\'`, `\\`, `\0`, `\xHH`, and
 `\u{H...}`. Triple-quoted, raw, and byte-string literals are not implemented,
-and a one-character literal remains a `String`. Aura has no character type.
+and a one-character literal remains a `str`. Aura has no character type.
 
 ## F-Strings
 
 Interpolated strings use the double-quoted `f"..."` form and produce an owned
-`String`; `f'...'` is not supported:
+`str`; `f'...'` is not supported:
 
 ```python
-name: String = "Aura"
+name: str = "Aura"
 answer: int32 = 42
 print(f"Hello, {name} {answer}")
 ```
@@ -266,18 +266,18 @@ print(f"value: {counts['key']}")
 
 See [examples/strings/f_strings.au](../examples/strings/f_strings.au).
 
-## Borrowed String Parameters
+## Borrowed str Parameters
 
 When a function takes a string it only reads, use `str`:
 
 ```python
-def greet(name: str) -> String:
+def greet(name: str) -> str:
     return "Hello, " + name
 ```
 
 See [examples/strings/borrow_str.au](../examples/strings/borrow_str.au).
 
-## String Methods
+## str Methods
 
 Aura provides a rich set of string methods:
 
@@ -303,8 +303,8 @@ print(text.len())       # 2; O(n)
 print(text.byte_len())  # 5; O(1)
 ```
 
-Integer indexing on `String` remains unavailable, but one-colon slicing
-returns a fresh owned String:
+Integer indexing on `str` remains unavailable, but one-colon slicing
+returns a fresh owned str:
 
 ```python
 text = "A🎉Z"
@@ -316,7 +316,7 @@ print(text[:])     # A🎉Z
 
 Endpoints count Unicode scalar values, matching `len()`. They do not count
 UTF-8 bytes or grapheme clusters. Locating scalar boundaries scans the text, so
-String slicing is O(n). Written endpoints are exactly `int32`; negatives
+String slicing is O(n). Written endpoints use `int64`; negatives
 normalize once. Both effective endpoints must lie in `0..=len`, and start must
 not exceed end. Aura does not clamp invalid bounds like Python: invalid or
 reversed ranges trap with `AU4003`.
@@ -324,11 +324,11 @@ reversed ranges trap with `AU4003`.
 The result is an owned copy, not a view. Slice steps and slice assignment are
 unavailable. Character iteration, `ord()`, and `chr()` are also not
 implemented. Strict UTF-8 conversion is available through `text.to_bytes()`
-and `String.from_bytes(payload)`; hexadecimal, base64, typed conversion errors,
+and `str.from_bytes(payload)`; hexadecimal, base64, typed conversion errors,
 and SHA-256 are taught in [22-bytes.md](22-bytes.md). An explicit `encoding`
 argument remains reserved but unimplemented.
 
-`strip_prefix(...)` and `strip_suffix(...)` return `Option[String]`, so they compose with `match`:
+`strip_prefix(...)` and `strip_suffix(...)` return `Option[str]`, so they compose with `match`:
 
 ```python
 match trimmed.strip_prefix("aura "):
@@ -348,7 +348,7 @@ print("-".join(parts))    # "aura-lang-tests"
 `clone()` creates an independent copy of a string (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for why this matters):
 
 ```python
-text: String = "aura"
+text: str = "aura"
 copy = text.clone()
 print(text)    # still valid
 print(copy)
@@ -360,9 +360,9 @@ See [examples/strings/string_methods.au](../examples/strings/string_methods.au) 
 
 Aura provides parsing builtins that return `Result`:
 
-- `parse_int32(text: str) -> Result[int32, String]`
-- `parse_int64(text: str) -> Result[int64, String]`
-- `parse_float64(text: str) -> Result[float64, String]`
+- `parse_int32(text: str) -> Result[int32, str]`
+- `parse_int64(text: str) -> Result[int64, str]`
+- `parse_float64(text: str) -> Result[float64, str]`
 
 Use `match` to handle success and failure:
 
@@ -374,11 +374,11 @@ match parse_int32("42"):
         print(message)
 ```
 
-Combined with `.to_string()` and `String.join(...)`, these cover the maintained formatting surface.
+Combined with `.to_string()` and `str.join(...)`, these cover the maintained formatting surface.
 
 See [examples/strings/string_parsing_and_formatting.au](../examples/strings/string_parsing_and_formatting.au).
 
-## String Equality
+## str Equality
 
 Strings support `==` and `!=`:
 

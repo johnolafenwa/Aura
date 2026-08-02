@@ -1,5 +1,5 @@
 class User:
-    name: String
+    name: str
 
 def rename(user: mut User):
     alias = user

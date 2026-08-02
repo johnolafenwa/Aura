@@ -1,9 +1,9 @@
-def inner_op(x: int32) -> Result[int32, String]:
+def inner_op(x: int32) -> Result[int32, str]:
     if x == 0:
         return Result.Err("inner zero")
     return Result.Ok(x * 10)
 
-def outer_op(x: int32) -> Result[Result[int32, String], String]:
+def outer_op(x: int32) -> Result[Result[int32, str], str]:
     if x < 0:
         return Result.Err("outer negative")
     r = inner_op(x)

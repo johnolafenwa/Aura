@@ -93,7 +93,7 @@ fn capture_stdout_sink() -> (Arc<Mutex<String>>, StdoutSink) {
 fn broad_surface_source_covers_public_compiler_entrypoints() {
     let source = r#"
 trait Labelled:
-    def label(self) -> String
+    def label(self) -> str
 
 class Counter:
     value: int32
@@ -103,14 +103,14 @@ class Counter:
         return self.value
 
 impl Labelled for Counter:
-    def label(self) -> String:
+    def label(self) -> str:
         return f"Counter({self.value})"
 
 class Badge:
-    text: String
+    text: str
 
 impl Labelled for Badge:
-    def label(self) -> String:
+    def label(self) -> str:
         return self.text.clone()
 
 class Resource:
@@ -126,13 +126,13 @@ def produce(queue: Queue[int32]) -> None:
     queue.put(11)
     queue.close()
 
-def summarize[T: Labelled](value: T) -> String:
+def summarize[T: Labelled](value: T) -> str:
     return value.label()
 
-def parse_value(text: String) -> Result[int32, String]:
+def parse_value(text: str) -> Result[int32, str]:
     return parse_int32(text)
 
-def parse_and_offset(text: String) -> Result[int32, String]:
+def parse_and_offset(text: str) -> Result[int32, str]:
     parsed = try parse_value(text)
     return Result.Ok(parsed + 5)
 
@@ -180,13 +180,13 @@ def main() -> int32:
     parsed_result = parse_and_offset("7")
     print(parsed_result)
 
-    mut values: Vec[int32] = [1, 2]
-    values.push(3)
+    mut values: list[int32] = [1, 2]
+    values.append(3)
     print(values.get(1))
     print(values[0])
     print(values.set(0, 9))
     values[1] = 8
-    print(values.remove(0))
+    print(values.pop(0))
     print(values.swap(0, 0))
     print(values.contains(8))
     print(values.insert(1, 7))
@@ -194,8 +194,8 @@ def main() -> int32:
     values.extend([5, 6])
     print(values == [3, 7, 8, 5, 6])
     print_int_option(values.get(0))
-    mut range_total: int32 = 0
-    for number in range(values.len() as int32):
+    mut range_total: int64 = 0
+    for number in range(values.len()):
         range_total += number
     print(range_total)
     for value in values:
@@ -209,22 +209,23 @@ def main() -> int32:
     mut counts = {"a": 1}
     print(counts.get("a"))
     print(counts["a"])
-    print(counts.set("a", 2))
+    counts["a"] = 2
+    print(counts["a"])
     counts["b"] = 3
     print(counts.remove("a"))
-    print(counts.contains_key("b"))
+    print("b" in counts)
     print(counts.keys().len())
     print(counts.values().len())
     print(counts.items().len())
-    print(counts.entries().len())
-    counts.extend({"c": 4})
+    print(counts.items().len())
+    counts.update({"c": 4})
     counts.clear()
     print(counts.is_empty())
 
-    mut seen = Set{"x"}
-    print(seen.insert("y"))
+    mut seen = {"x"}
+    print(seen.add("y"))
     print(seen.remove("x"))
-    print(seen.contains("y"))
+    print("y" in seen)
     print(seen.len())
 
     mut counter = Counter(value=1)
@@ -247,7 +248,7 @@ def main() -> int32:
         for item in stream:
             print(item)
 
-    empty_any = Vec[Task[int32]]()
+    empty_any = list[Task[int32]]()
     match wait_any(empty_any, timeout=1ms):
         case WaitAny.Ready(index, value):
             print(index)
@@ -260,7 +261,7 @@ def main() -> int32:
         case WaitAny.Cancelled:
             print("cancelled")
 
-    empty_all = Vec[Task[int32]]()
+    empty_all = list[Task[int32]]()
     match wait_all(empty_all, timeout=1ms):
         case WaitAll.Ready(results):
             print(results.len())
@@ -321,7 +322,7 @@ def main() -> int32:
         .iter()
         .map(|item| item.name.as_str())
         .collect::<BTreeSet<_>>();
-    assert!(completion_names.contains("push"));
+    assert!(completion_names.contains("append"));
     assert!(completion_names.contains("reverse"));
 
     let output = run_source(source).expect("broad source should run");
@@ -357,7 +358,7 @@ def show[T](value: T) -> None:
 def take_first[A, B](first: own A, second: B) -> A:
     return first
 
-def mark(label: String, value: int32) -> int32:
+def mark(label: str, value: int32) -> int32:
     print(label)
     return value
 
@@ -376,7 +377,7 @@ def main() -> int32:
     known_default = first_default
     selected_default = first_default if false else second_default
     pipeline = Pipeline(transform=selected)
-    callbacks: Vec[def(int32) -> int32] = [double]
+    callbacks: list[def(int32) -> int32] = [double]
     stdio_factory: def() -> process.Stdio = process.pipe
 
     print(selected(4))
@@ -434,7 +435,7 @@ impl Neg[Score] for Score:
         return Score(value=0 - self.value)
 
 enum Bucket:
-    Items(Vec[int32])
+    Items(list[int32])
     Empty
 
 def main() -> int32:
@@ -456,7 +457,7 @@ def main() -> int32:
     mut bucket = Bucket.Items([1])
     match mut bucket:
         case Items(items):
-            items.push(2)
+            items.append(2)
         case Empty:
             pass
     match own bucket:
@@ -507,9 +508,9 @@ def main() -> int32:
                             ..
                         },
                     ..
-                } if field == "push"
+                } if field == "append"
             )),
-        "mutable match payload updates must retain the mutating receiver place"
+        "mutable match append must retain the mutating receiver place"
     );
     assert!(!emit_host_native_object(&mir)
         .expect("combined behavior source should lower through the direct backend")
@@ -1007,7 +1008,7 @@ fn path_surface_covers_modules_analysis_completion_and_direct_codegen() {
     temp.write(
         "pkg/named.au",
         r#"public trait Named:
-    def name(self) -> String
+    def name(self) -> str
 "#,
     );
     temp.write(
@@ -1015,14 +1016,14 @@ fn path_surface_covers_modules_analysis_completion_and_direct_codegen() {
         r#"from pkg.named import Named
 
 public class User:
-    public label: String
+    public label: str
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.label.clone()
 
 public enum Outcome:
-    Ready(code: int32, reason: String)
+    Ready(code: int32, reason: str)
     Empty
 "#,
     );
@@ -1030,7 +1031,7 @@ public enum Outcome:
         "helpers/factory.au",
         r#"from pkg.user import User
 
-public def describe_user(name: own String) -> String:
+public def describe_user(name: own str) -> str:
     user = User(label=name)
     return user.name()
 "#,
@@ -1064,7 +1065,7 @@ def main() -> int32:
     assert!(
         analysis.occurrences.iter().any(|occurrence| {
             occurrence.hover
-                == "```aura\nvariant Ready(code: own int32, reason: own String) -> pkg.user.Outcome\n```"
+                == "```aura\nvariant Ready(code: own int32, reason: own str) -> pkg.user.Outcome\n```"
         }),
         "qualified enum constructors should expose every named payload as owned"
     );
@@ -1108,7 +1109,7 @@ def main() -> int32:
             .iter()
             .find(|completion| completion.name == "Ready")
             .map(|completion| completion.detail.as_str()),
-        Some("Ready(code: own int32, reason: own String) -> pkg.user.Outcome")
+        Some("Ready(code: own int32, reason: own str) -> pkg.user.Outcome")
     );
 
     let output = run_path(&main_path).expect("package program should run");
@@ -1157,8 +1158,12 @@ fn maintained_example_subset_runs_via_public_entrypoints_and_direct_codegen() {
         let mir_output = run_mir(&mir).expect("maintained example MIR should run");
         assert_eq!(mir_output.stdout, output.stdout, "{}", path.display());
 
-        let object =
-            emit_host_native_object(&mir).expect("maintained example should emit a native object");
+        let object = emit_host_native_object(&mir).unwrap_or_else(|error| {
+            panic!(
+                "maintained example should emit a native object for {}: {error}",
+                path.display()
+            )
+        });
         assert!(!object.is_empty(), "{}", path.display());
     }
 }
@@ -1168,7 +1173,7 @@ fn json_semantics_public_analysis_exposes_canonical_enum_identity_and_variant_pa
     let source = r#"
 import json
 
-def describe(value: own json.Value) -> String:
+def describe(value: own json.Value) -> str:
     match own value:
         case json.Value.String(text):
             return text
@@ -1199,14 +1204,14 @@ def main() -> int32:
     );
     assert!(
         analysis.occurrences.iter().any(|occurrence| {
-            occurrence.hover == "```aura\nvariant String(own String) -> json.Value\n```"
+            occurrence.hover == "```aura\nvariant String(own str) -> json.Value\n```"
         }),
         "json.Value.String occurrences should expose their owned payload and canonical result type"
     );
     assert!(
         analysis.occurrences.iter().any(|occurrence| {
             occurrence.hover
-                == "```aura\nvariant Object(own Map[String, json.Value]) -> json.Value\n```"
+                == "```aura\nvariant Object(own dict[str, json.Value]) -> json.Value\n```"
         }),
         "json.Value.Object occurrences should retain the recursive canonical payload type"
     );
@@ -1226,21 +1231,21 @@ def main() -> int32:
             .iter()
             .find(|completion| completion.name == "String")
             .map(|completion| completion.detail.as_str()),
-        Some("String(own String) -> json.Value")
+        Some("String(own str) -> json.Value")
     );
     assert_eq!(
         completions
             .iter()
             .find(|completion| completion.name == "Object")
             .map(|completion| completion.detail.as_str()),
-        Some("Object(own Map[String, json.Value]) -> json.Value")
+        Some("Object(own dict[str, json.Value]) -> json.Value")
     );
 
     let method_completion_source = r#"
 class Document:
-    content: String
+    content: str
 
-    def render(self) -> String:
+    def render(self) -> str:
         self.
 
 def main() -> int32:
@@ -1279,7 +1284,7 @@ import json
 
 class Holder:
     value: json.Value
-    sibling: String
+    sibling: str
 
 enum Inner:
     Text(json.Value)
@@ -1288,14 +1293,14 @@ enum Outer:
     Wrapped(Inner)
     Empty
 
-def take_string_value(value: own json.Value) -> String:
+def take_string_value(value: own json.Value) -> str:
     match own value:
         case json.Value.String(text):
             return text
         case _:
             return "not-string"
 
-def extract(value: own Outer) -> String:
+def extract(value: own Outer) -> str:
     return match own value:
         case Outer.Wrapped(Inner.Text(json.Value.String(text))): text
         case Outer.Wrapped(Inner.Text(_)): "not-string"
@@ -1303,7 +1308,7 @@ def extract(value: own Outer) -> String:
 
 def main() -> int32:
     labels = {"json", "ownership", "parity"}
-    empty: Set[String] = {}
+    empty: set[str] = {}
     print(labels.len())
     print(empty.is_empty())
 

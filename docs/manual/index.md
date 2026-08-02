@@ -26,7 +26,7 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 - [Types](/manual/types): primitive types, tuples, `None`, `Duration`, generic types, copy and move categories, and type annotations.
 - [Static Semantics](/manual/static-semantics): inference, type equality, assignment, calls, operators, constructors, matching, traits, resources, and entrypoints.
 - [Expressions](/manual/expressions): operators, calls, indexing, owned
-  Vec/String slicing, member access, literals, conditional expressions,
+  list/str slicing, member access, literals, conditional expressions,
   membership and comparison chains, `match` expressions, `try`, and f-strings.
 - [Statements](/manual/statements): bindings, assignment, control flow, loops, imports, `with`, `pass`, assertions, and top-level execution.
 - [Tuples](/manual/tuples): fixed structural values and types, recursive
@@ -51,13 +51,13 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 
 ## Runtime And Library Reference
 
-- [Collections](/manual/collections): `Vec[T]`, `Map[K, V]`, `Set[T]`,
+- [Collections](/manual/collections): `list[T]`, `dict[K, V]`, `set[T]`,
   literals, eager owned comprehensions and slices, iteration, mutation, and
-  eager callable-powered Vec algorithms.
+  eager callable-powered list algorithms.
 - [Numeric Arrays](/manual/numeric-arrays): contiguous row-major `Array[T]`,
   four numeric dtypes, first-axis owned slices, reductions, native kernels,
   and explicit checked/wrapping/saturating integer arithmetic.
-- [Bytes, Text Codecs, And SHA-256](/manual/bytes): `Vec[uint8]`, strict UTF-8 conversion, canonical hex/base64, typed data errors, and raw SHA-256.
+- [Bytes, Text Codecs, And SHA-256](/manual/bytes): `list[uint8]`, strict UTF-8 conversion, canonical hex/base64, typed data errors, and raw SHA-256.
 - [JSON Module](/manual/json): recursive JSON values, typed parse errors, exact number classification, deterministic dumping, and resource limits.
 - [Randomness Module](/manual/randomness): deterministic seeded streams, exact sequence compatibility, unbiased ranges, in-place shuffle, and OS-secure integers and bytes.
 - [Concurrency](/manual/concurrency): `TaskGroup`, `Task[T]`, `Queue[T]`,

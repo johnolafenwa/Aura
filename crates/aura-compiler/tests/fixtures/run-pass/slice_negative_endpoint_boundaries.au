@@ -1,10 +1,10 @@
 def main() -> int32:
-    values: Vec[int32] = [10, 20, 30, 40]
+    values: list[int32] = [10, 20, 30, 40]
     print(values[-4:])
     print(values[:-4].len())
     print(values[-3:-1])
 
-    text: String = "Aé🙂Z"
+    text: str = "Aé🙂Z"
     print(text[-4:])
     print(text[:-4].len())
     print(text[-3:-1])

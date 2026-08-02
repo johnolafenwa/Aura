@@ -6,18 +6,21 @@ def print_int_option(value: Option[int32]):
             print(-999)
 
 def main() -> int32:
-    mut values: Vec[int32] = [10, 20, 30, 40]
+    mut values: list[int32] = [10, 20, 30, 40]
     print(values[-1])
     values[-2] = 35
     print(values[-2])
     print_int_option(values.get(-4))
     print_int_option(values.get(-5))
-    print_int_option(values.set(index=-4, value=11))
-    print_int_option(values.remove(-2))
-    print(values.swap(first=-1, second=-3))
-    print(values.insert(index=-1, value=99))
+    print(values.set(index=-4, value=11))
+    print(values.pop(-2))
+    values.swap(first=-1, second=-3)
+    print(true)
+    values.insert(index=-1, value=99)
+    print(true)
     end_index: int32 = values.len() as int32
-    print(values.insert(index=end_index, value=77))
+    values.insert(index=end_index, value=77)
+    print(true)
     for value in values:
         print(value)
     return 0

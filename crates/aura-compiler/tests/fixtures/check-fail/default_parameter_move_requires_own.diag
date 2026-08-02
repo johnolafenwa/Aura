@@ -1,8 +1,8 @@
-error[AU3002]: parameter `value` is borrowed; declare it as `own String` to take ownership, or clone the value before consuming it
+error[AU3002]: parameter `value` is borrowed; declare it as `own str` to take ownership, or clone the value before consuming it
  --> crates/aura-compiler/tests/fixtures/check-fail/default_parameter_move_requires_own.au:2:12
   |
 2 |     return value
   |            ^
   = related crates/aura-compiler/tests/fixtures/check-fail/default_parameter_move_requires_own.au:1:10: parameter `value` is borrowed here
-  = help: declare the parameter as `own String` when the function should consume it, or call `.clone()` to consume an independent copy
+  = help: declare the parameter as `own str` when the function should consume it, or call `.clone()` to consume an independent copy
   = fix: replace crates/aura-compiler/tests/fixtures/check-fail/default_parameter_move_requires_own.au:2:17-2:17 with `.clone()`

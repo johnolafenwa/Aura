@@ -1,7 +1,7 @@
 class Person:
     
     age: int32 
-    name: String
+    name: str
 
 def multiply(a: float32, b: float32) -> float32:
     

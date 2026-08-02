@@ -1,7 +1,7 @@
 # Edge: calling multiple mutating methods in sequence
 class Counter:
     value: int32
-    name: String
+    name: str
 
     def bump(mut self):
         self.value += 1
@@ -9,7 +9,7 @@ class Counter:
     def bump_by(mut self, n: int32):
         self.value = self.value + n
 
-    def set_name(mut self, new_name: own String):
+    def set_name(mut self, new_name: own str):
         self.name = new_name
 
 def main() -> int32:

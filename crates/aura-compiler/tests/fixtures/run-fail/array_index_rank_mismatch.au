@@ -1,5 +1,5 @@
 def main() -> int32:
-    source: Vec[int32] = [1, 2, 3, 4]
-    values = Array[int32].from_vec(source, [2, 2])
+    source: list[int32] = [1, 2, 3, 4]
+    values = Array[int32].from_list(source, [2, 2])
     print(values[0])
     return 0

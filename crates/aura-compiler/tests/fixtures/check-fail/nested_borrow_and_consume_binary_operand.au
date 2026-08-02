@@ -1,10 +1,10 @@
 class Container:
-    name: String
+    name: str
 
 def consume_c(c: own Container) -> int32:
     return 1
 
-def len_of(text: String) -> int32:
+def len_of(text: str) -> int32:
     return text.len() as int32
 
 def main() -> int32:

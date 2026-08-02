@@ -1,5 +1,5 @@
 # Edge: return inside elif branch
-def classify(n: int32) -> String:
+def classify(n: int32) -> str:
     if n % 15 == 0:
         return "fizzbuzz"
     elif n % 3 == 0:

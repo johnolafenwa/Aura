@@ -1,7 +1,7 @@
-def replace_and_return(value: mut String) -> String:
+def replace_and_return(value: mut str) -> str:
     value = "B"
     return "A"
 
 def main():
-    mut value: String = "A"
+    mut value: str = "A"
     print(value.starts_with(replace_and_return(value)))

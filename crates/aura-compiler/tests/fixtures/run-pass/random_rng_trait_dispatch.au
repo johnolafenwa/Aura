@@ -1,10 +1,10 @@
 import random
 
 trait Describe:
-    def describe(self) -> String
+    def describe(self) -> str
 
 impl Describe for random.Rng:
-    def describe(self) -> String:
+    def describe(self) -> str:
         return "trait rng"
 
 def main() -> int32:

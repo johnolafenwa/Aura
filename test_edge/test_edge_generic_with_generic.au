@@ -7,16 +7,16 @@ class Pair[A, B]:
     second: B
 
 def main() -> int32:
-    # Wrapper[Pair[int32, String]]
+    # Wrapper[Pair[int32, str]]
     p = Pair(first=1, second="hello")
-    w: Wrapper[Pair[int32, String]] = Wrapper(inner=p)
+    w: Wrapper[Pair[int32, str]] = Wrapper(inner=p)
     print(w.inner.first)
     print(w.inner.second)
 
-    # Pair[Wrapper[int32], Wrapper[String]]
+    # Pair[Wrapper[int32], Wrapper[str]]
     w1 = Wrapper(inner=42)
     w2 = Wrapper(inner="world")
-    p2: Pair[Wrapper[int32], Wrapper[String]] = Pair(first=w1, second=w2)
+    p2: Pair[Wrapper[int32], Wrapper[str]] = Pair(first=w1, second=w2)
     print(p2.first.inner)
     print(p2.second.inner)
 

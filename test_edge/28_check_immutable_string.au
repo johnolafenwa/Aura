@@ -1,5 +1,5 @@
 def main() -> int32:
-    s: String = "hello"
+    s: str = "hello"
     s = "world"
     print(s)
     return 0

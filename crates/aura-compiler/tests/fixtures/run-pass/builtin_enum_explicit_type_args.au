@@ -1,6 +1,6 @@
 def main() -> int32:
-    wrapped = Result[int32, String].Ok(7)
-    fallback = Result[int32, String].Err("bad")
+    wrapped = Result[int32, str].Ok(7)
+    fallback = Result[int32, str].Err("bad")
 
     match own wrapped:
         case Ok(value):

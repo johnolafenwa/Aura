@@ -1,4 +1,4 @@
-def choose(left: String, right: String, pick_left: bool) -> String:
+def choose(left: str, right: str, pick_left: bool) -> str:
     if pick_left:
         return left
     return right

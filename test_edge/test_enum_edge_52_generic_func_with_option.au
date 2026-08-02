@@ -8,7 +8,7 @@ def unwrap_or_int(opt: Option[int32], default_val: int32) -> int32:
         case Option.None:
             return default_val
 
-def unwrap_or_str(opt: own Option[String], default_val: own String) -> String:
+def unwrap_or_str(opt: own Option[str], default_val: own str) -> str:
     match own opt:
         case Option.Some(v):
             return v
@@ -21,8 +21,8 @@ def main() -> int32:
     print(unwrap_or_int(a, 0))
     print(unwrap_or_int(b, -1))
 
-    c: Option[String] = Option.Some("world")
-    d: Option[String] = Option.None
+    c: Option[str] = Option.Some("world")
+    d: Option[str] = Option.None
     print(unwrap_or_str(c, "default"))
     print(unwrap_or_str(d, "default"))
 

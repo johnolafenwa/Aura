@@ -30,7 +30,7 @@ def double_reverse(d: Direction) -> Direction:
     # Pass result of one enum function as arg to another
     return opposite(opposite(d))
 
-def show_dir(d: Direction) -> String:
+def show_dir(d: Direction) -> str:
     match own d:
         case Direction.Up:
             return "up"

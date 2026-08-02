@@ -2,7 +2,7 @@ import io
 import net
 
 
-def read_control(expected: String) -> bool:
+def read_control(expected: str) -> bool:
     match io.read_line():
         case Result.Ok(Option.Some(line)):
             return line == expected
@@ -20,7 +20,7 @@ def flush_stdout() -> bool:
             return false
 
 
-def serve_one(index: int32, addresses: Queue[String]) -> Result[int32, io.Error]:
+def serve_one(index: int32, addresses: Queue[str]) -> Result[int32, io.Error]:
     with listener = try net.listen("127.0.0.1:0"):
         addresses.put(try listener.local_addr())
         stream = try listener.accept(timeout=5s)
@@ -38,7 +38,7 @@ def serve_one(index: int32, addresses: Queue[String]) -> Result[int32, io.Error]
             return Result.Ok(index)
 
 
-def run_client(address: own String) -> Result[int32, io.Error]:
+def run_client(address: own str) -> Result[int32, io.Error]:
     stream = try net.connect_timeout(address, 5s)
     with socket = stream:
         try socket.write_all("ping\n", timeout=5s)
@@ -53,19 +53,19 @@ def run_client(address: own String) -> Result[int32, io.Error]:
 
 
 def run() -> Result[int32, io.Error]:
-    addresses = Queue[String]()
-    mut address_list = Vec[String]()
+    addresses = Queue[str]()
+    mut address_list = list[str]()
 
     with TaskGroup() as group:
-        mut server_tasks = Vec[Task[Result[int32, io.Error]]]()
+        mut server_tasks = list[Task[Result[int32, io.Error]]]()
         for index in range(20):
-            server_tasks.push(group.start(serve_one, index, addresses))
+            server_tasks.append(group.start(serve_one, index, addresses))
 
         mut address_count: int32 = 0
         while address_count < 20:
             match own addresses.get(timeout=10s):
                 case QueueReceive.Item(address):
-                    address_list.push(address)
+                    address_list.append(address)
                     address_count += 1
                 case QueueReceive.Closed:
                     return Result.Err(io.Error.Other(message="TCP fan-out address queue closed"))
@@ -80,9 +80,9 @@ def run() -> Result[int32, io.Error]:
         if not read_control("GO release-performance tcp-fanout"):
             return Result.Err(io.Error.Other(message="unexpected TCP fan-out control line"))
 
-        mut client_tasks = Vec[Task[Result[int32, io.Error]]]()
+        mut client_tasks = list[Task[Result[int32, io.Error]]]()
         for address in own address_list:
-            client_tasks.push(group.start(run_client, address))
+            client_tasks.append(group.start(run_client, address))
 
         mut client_count: int32 = 0
         mut checksum: int32 = 0

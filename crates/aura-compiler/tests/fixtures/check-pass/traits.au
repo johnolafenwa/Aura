@@ -1,11 +1,11 @@
 trait Greeter:
-    def greet(self) -> String
+    def greet(self) -> str
 
 class User:
-    name: String
+    name: str
 
 impl Greeter for User:
-    def greet(self) -> String:
+    def greet(self) -> str:
         return "hello " + self.name
 
 def speak[T: Greeter](value: T):

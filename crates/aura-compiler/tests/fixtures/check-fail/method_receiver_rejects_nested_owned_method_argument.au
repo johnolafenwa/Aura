@@ -1,9 +1,9 @@
 class Consumer:
-    def consume(self, values: own Vec[int32], label: String = "default") -> int32:
+    def consume(self, values: own list[int32], label: str = "default") -> int32:
         return 0
 
 class Holder:
-    values: Vec[int32]
+    values: list[int32]
 
 def main():
     consumer = Consumer()

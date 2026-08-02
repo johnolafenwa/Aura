@@ -1,4 +1,4 @@
-def verify(value: bool, message: String):
+def verify(value: bool, message: str):
     assert value
     assert value, message
 

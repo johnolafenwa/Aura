@@ -30,7 +30,7 @@ combine executable top-level statements with a local `main`.
 
 The condition must have exactly type `bool`; numbers, strings, collections,
 resources, and class values are not converted by truthiness. The optional
-message must have exactly type `String`.
+message must have exactly type `str`.
 
 An assertion is a fallthrough statement for static control-flow analysis. It
 does not establish a permanent narrowing or value refinement, and a statically
@@ -43,7 +43,7 @@ the optional message is not evaluated. If it is `false`, the message evaluates
 exactly once and the assertion traps.
 
 Without a message, the exact diagnostic text is `assertion failed`. A custom
-message is preserved exactly, including an empty or whitespace-only String. A
+message is preserved exactly, including an empty or whitespace-only str. A
 trap while evaluating the condition or message occurs first and prevents the
 assertion trap.
 
@@ -51,7 +51,7 @@ The following verified program demonstrates successful fallthrough and a lazy
 message:
 
 ```aura
-def build_message() -> String:
+def build_message() -> str:
     print("message evaluated")
     return "unexpected arithmetic result"
 
@@ -84,7 +84,7 @@ cleanup begins and remains primary if cleanup also fails.
 ## Diagnostics
 
 `AU2002` reports a condition whose type is not `bool` or a message whose type
-is not `String`. The primary location points at the `assert` keyword.
+is not `str`. The primary location points at the `assert` keyword.
 
 `AU4001` reports a failed assertion at runtime. It uses the same keyword location
 and the exact default or custom message described above. A condition or message

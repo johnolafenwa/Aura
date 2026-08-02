@@ -3,7 +3,7 @@ public enum Color:
     Green
     Blue
 
-public def color_name(c: Color) -> String:
+public def color_name(c: Color) -> str:
     match own c:
         case Color.Red:
             return "red"

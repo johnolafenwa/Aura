@@ -1,2 +1,0 @@
-def read(borrow counter: Counter) -> int32:
-    return counter.value

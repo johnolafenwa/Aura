@@ -1,12 +1,12 @@
 # Investigate: does borrow self allow field access that free functions don't?
 
 class Holder:
-    text: String
+    text: str
 
-    def get_text(self) -> String:
+    def get_text(self) -> str:
         return self.text
 
-    def clone_text(self) -> String:
+    def clone_text(self) -> str:
         return self.text.clone()
 
     def print_text(self):

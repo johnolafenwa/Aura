@@ -19,8 +19,8 @@ def main() -> int32:
             return 1
     print(path.is_absolute("alpha/beta.au"))
 
-    labels: Map[String, String] = {"name": "aura", "role": "control-plane"}
-    match json.stringify_map(labels.clone()):
+    labels: dict[str, str] = {"name": "aura", "role": "control-plane"}
+    match json.stringify_map(labels.copy()):
         case Result.Ok(text):
             print(text)
         case Result.Err(error):
@@ -38,7 +38,7 @@ def main() -> int32:
             return 1
     print(json.is_valid("[1, true, null]"))
 
-    match toml.stringify_map(labels.clone()):
+    match toml.stringify_map(labels.copy()):
         case Result.Ok(text):
             print(toml.is_valid(text))
         case Result.Err(error):
@@ -59,6 +59,6 @@ def main() -> int32:
     metrics.increment(value=2, name="jobs")
     metrics.increment("jobs", 3)
     print(metrics.get(name="jobs"))
-    log.info("ready", labels.clone())
+    log.info("ready", labels.copy())
     trace.event("boot", labels)
     return 0

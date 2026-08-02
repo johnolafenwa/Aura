@@ -1,7 +1,7 @@
-def consume(value: own String) -> int64:
+def consume(value: own str) -> int64:
     return value.len()
 
 def main() -> int32:
-    shared_only: def(String) -> int64 = consume
+    shared_only: def(str) -> int64 = consume
     print(shared_only("Aura"))
     return 0

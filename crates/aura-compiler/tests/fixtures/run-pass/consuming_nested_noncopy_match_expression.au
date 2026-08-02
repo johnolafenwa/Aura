@@ -1,12 +1,12 @@
 enum Inner:
-    Pair(String, int32)
-    Solo(String)
+    Pair(str, int32)
+    Solo(str)
 
 enum Outer:
     Wrapped(Inner)
     Empty
 
-def extract(value: own Outer) -> String:
+def extract(value: own Outer) -> str:
     return match own value:
         case Outer.Wrapped(Inner.Pair(text, 0)): text
         case Outer.Wrapped(Inner.Pair(text, _)): text

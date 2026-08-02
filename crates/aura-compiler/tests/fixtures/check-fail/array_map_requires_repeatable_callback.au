@@ -1,4 +1,4 @@
-def take(value: own String) -> int32:
+def take(value: own str) -> int32:
     return 1
 
 def main():

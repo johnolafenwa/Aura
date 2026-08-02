@@ -36,24 +36,24 @@ def even(value: int32) -> bool:
     return value % 2 == 0
 
 def main():
-    mut empty = Vec[int32]()
+    mut empty = list[int32]()
     empty.sort()
-    empty.sort_by(descending_key)
+    empty.sort(key = descending_key)
     print(empty)
     print(empty.map(descending_key))
     print(empty.filter(even))
 
-    mut singleton: Vec[int32] = [7]
+    mut singleton: list[int32] = [7]
     singleton.sort()
-    singleton.sort_by(descending_key)
+    singleton.sort(key = descending_key)
     print(singleton)
 
-    mut plain: Vec[int32] = [3, 1, 2, 2]
+    mut plain: list[int32] = [3, 1, 2, 2]
     plain.sort()
     print(plain)
 
-    mut keyed: Vec[int32] = [3, 1, 2, 2]
-    keyed.sort_by(descending_key)
+    mut keyed: list[int32] = [3, 1, 2, 2]
+    keyed.sort(key = descending_key)
     print(keyed)
 
     boxes = plain.map(box_double)
@@ -64,7 +64,7 @@ def main():
     print(plain)
     print(filtered)
 
-    mut rows: Vec[Row] = [
+    mut rows: list[Row] = [
         Row(key=2, order=0),
         Row(key=1, order=1),
         Row(key=2, order=2)

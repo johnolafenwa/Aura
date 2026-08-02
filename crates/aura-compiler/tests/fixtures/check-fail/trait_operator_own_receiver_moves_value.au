@@ -2,7 +2,7 @@ trait Add[Rhs, Out]:
     def add(own self, rhs: Rhs) -> Out
 
 class Token:
-    value: String
+    value: str
 
 impl Add[Token, Token] for Token:
     def add(own self, rhs: Token) -> Token:

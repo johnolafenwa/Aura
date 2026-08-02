@@ -1,7 +1,7 @@
 trait Shape:
     def area(self) -> float64
     def perimeter(self) -> float64
-    def name(self) -> String
+    def name(self) -> str
 
 class Circle:
     radius: float64
@@ -13,7 +13,7 @@ impl Shape for Circle:
     def perimeter(self) -> float64:
         return 2.0 * 3.14159 * self.radius
 
-    def name(self) -> String:
+    def name(self) -> str:
         return "Circle"
 
 class Rectangle:
@@ -27,7 +27,7 @@ impl Shape for Rectangle:
     def perimeter(self) -> float64:
         return 2.0 * (self.width + self.height)
 
-    def name(self) -> String:
+    def name(self) -> str:
         return "Rectangle"
 
 def print_shape_info[T: Shape](shape: T):

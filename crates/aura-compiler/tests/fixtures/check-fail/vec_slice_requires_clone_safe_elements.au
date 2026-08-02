@@ -3,5 +3,5 @@ import random
 class Holder:
     generator: random.Rng
 
-def duplicate(values: Vec[Holder]) -> Vec[Holder]:
+def duplicate(values: list[Holder]) -> list[Holder]:
     return values[:]

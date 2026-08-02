@@ -87,7 +87,7 @@ fn array_and_builtin_associated_results_retain_checked_types_in_mir() {
     let module = crate::lower_source_to_mir(
         r#"
 def main():
-    values = Array[int32].from_vec([1, 2], [2])
+    values = Array[int32].from_list([1, 2], [2])
     scalar: int32 = 2
     right = values + scalar
     left = scalar - values
@@ -97,8 +97,8 @@ def main():
     coordinate: int32 = 0
     item = values[(coordinate)]
     duration = Duration.ms(1)
-    bytes: Vec[uint8] = [65]
-    decoded = String.from_bytes(bytes)
+    bytes: list[uint8] = [65]
+    decoded = str.from_bytes(bytes)
     print(right)
     print(left)
     print(mapped)
@@ -136,7 +136,7 @@ def main():
         locals["decoded"],
         Type::Named(
             "Result".to_string(),
-            vec![Type::named("String"), Type::named("bytes.Error")]
+            vec![Type::named("str"), Type::named("bytes.Error")]
         )
     );
 }
@@ -148,7 +148,7 @@ fn extern_calls_lower_to_explicit_abi_metadata_without_synthetic_function_bodies
 public extern "C" opaque class Handle
 public extern "C" def consume(
     value: int32,
-    bytes: mut Vec[uint8],
+    bytes: mut list[uint8],
     handle: own Handle
 ) -> int32
 public extern "C" def acquire() -> Handle
@@ -192,10 +192,10 @@ def main():
 
     let call_module = lower_ffi_source(
         r#"
-public extern "C" def mutate(value: int32, bytes: mut Vec[uint8]) -> int32
+public extern "C" def mutate(value: int32, bytes: mut list[uint8]) -> int32
 
 def main():
-    mut bytes: Vec[uint8] = [1, 2]
+    mut bytes: list[uint8] = [1, 2]
     answer = mutate(bytes=bytes, value=7)
 "#,
     );
@@ -234,7 +234,7 @@ def main():
             (
                 "bytes",
                 MirReceiverKind::BorrowMut,
-                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                Type::Named("list".to_string(), vec![Type::named("uint8")]),
             ),
         ]
     );
@@ -250,14 +250,14 @@ fn extern_view_and_shared_handle_calls_preserve_exact_mir_contracts() {
 public extern "C" opaque class Handle
 public extern "C" def acquire() -> Handle
 public extern "C" def inspect(
-    text: String,
-    input: Vec[uint8],
-    output: mut Vec[uint8],
+    text: str,
+    input: list[uint8],
+    output: mut list[uint8],
     handle: Handle
 ) -> uint64
 
 def main():
-    mut output: Vec[uint8] = [0, 0]
+    mut output: list[uint8] = [0, 0]
     handle = acquire()
     answer = inspect("hi", [1, 2], output, handle)
 "#,
@@ -292,16 +292,16 @@ def main():
             .map(|param| (param.name.as_str(), param.passing, param.ty.clone()))
             .collect::<Vec<_>>(),
         vec![
-            ("text", MirReceiverKind::Borrow, Type::named("String")),
+            ("text", MirReceiverKind::Borrow, Type::named("str")),
             (
                 "input",
                 MirReceiverKind::Borrow,
-                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                Type::Named("list".to_string(), vec![Type::named("uint8")]),
             ),
             (
                 "output",
                 MirReceiverKind::BorrowMut,
-                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                Type::Named("list".to_string(), vec![Type::named("uint8")]),
             ),
             ("handle", MirReceiverKind::Borrow, Type::named("Handle")),
         ]
@@ -387,10 +387,10 @@ fn imported_extern_calls_lower_from_and_qualified_names_without_wrapper_bodies()
 fn tuple_literals_capture_each_element_left_to_right_before_construction() {
     let module = crate::lower_source_to_mir(
         r#"
-def first() -> String:
+def first() -> str:
     return "first"
 
-def second() -> String:
+def second() -> str:
     return "second"
 
 def main():
@@ -718,7 +718,7 @@ def main():
                 index: 0,
                 element_type,
                 ..
-            } if element_type == &Type::named("String")
+            } if element_type == &Type::named("str")
         )
     }));
     assert!(rvalues.iter().any(|value| {
@@ -773,8 +773,8 @@ fn heterogeneous_ordinary_for_bindings_use_distinct_scoped_typed_slots() {
     let module = crate::lower_source_to_mir(
         r#"
 def main():
-    numbers: Vec[int64] = [1]
-    words: Vec[String] = ["one"]
+    numbers: list[int64] = [1]
+    words: list[str] = ["one"]
     for item in numbers:
         print(item + 10)
     for item in words:
@@ -817,7 +817,7 @@ def main():
 
     assert_eq!(bindings.len(), 2);
     assert_eq!(bindings[0].1, Some(&Type::named("int64")));
-    assert_eq!(bindings[1].1, Some(&Type::named("String")));
+    assert_eq!(bindings[1].1, Some(&Type::named("str")));
     assert!(bindings.iter().all(|(name, _)| name.starts_with("%t")));
     assert_ne!(bindings[0].0, bindings[1].0);
     assert!(!local_types.contains_key("item"));
@@ -828,12 +828,12 @@ fn every_ordinary_for_form_uses_a_fresh_scoped_target_slot() {
     let module = crate::lower_source_to_mir(
         r#"
 def main():
-    jobs = Queue[String]()
+    jobs = Queue[str]()
     jobs.put("queue")
     jobs.close()
-    mut labels = Set[String]()
-    labels.insert("set")
-    numbers: Vec[int64] = [1]
+    mut labels = set[str]()
+    labels.add("set")
+    numbers: list[int64] = [1]
     for item in jobs:
         print(item)
     for item in labels:
@@ -901,10 +901,7 @@ def main():
         .map(|ty| ty.to_string())
         .collect::<Vec<_>>();
     rendered_target_types.sort();
-    assert_eq!(
-        rendered_target_types,
-        vec!["String", "String", "int32", "int64"]
-    );
+    assert_eq!(rendered_target_types, vec!["int64", "int64", "str", "str"]);
 }
 
 fn safepoint_blocks(function: &MirFunction) -> Vec<&BasicBlock> {
@@ -1098,11 +1095,11 @@ def range_loop():
     for value in range(0, 2):
         print(value)
 
-def vec_loop(values: Vec[int64]):
+def vec_loop(values: list[int64]):
     for value in values:
         print(value)
 
-def set_loop(values: Set[int64]):
+def set_loop(values: set[int64]):
     for value in values:
         print(value)
 
@@ -1110,11 +1107,11 @@ def queue_loop(values: Queue[int64]):
     for value in values:
         print(value)
 
-def enumerate_loop(values: Vec[int64]):
+def enumerate_loop(values: list[int64]):
     for index, value in enumerate(values):
         print(index + value)
 
-def zip_loop(left: Vec[int64], right: Vec[int64]):
+def zip_loop(left: list[int64], right: list[int64]):
     for first, second in zip(left, right):
         print(first + second)
 "#,
@@ -1163,16 +1160,16 @@ fn comprehensions_lower_to_owned_collection_literals_nested_loops_and_insertion_
     let module = crate::lower_source_to_mir(
         r#"
 def build(
-    numbers: Vec[int64],
-    other: Vec[int64]
-) -> Map[int64, int64]:
-    list_values: Vec[int64] = [
+    numbers: list[int64],
+    other: list[int64]
+) -> dict[int64, int64]:
+    list_values: list[int64] = [
         left + right
         for left in numbers
         for right in other
         if left != right
     ]
-    unique: Set[int64] = {value for value in list_values}
+    unique: set[int64] = {value for value in list_values}
     return {value: value * 2 for value in unique}
 "#,
     )
@@ -1186,8 +1183,8 @@ def build(
     let mut vec_literals = 0;
     let mut set_literals = 0;
     let mut map_literals = 0;
-    let mut push_calls = 0;
-    let mut insert_calls = 0;
+    let mut append_calls = 0;
+    let mut add_calls = 0;
     let mut map_set_calls = 0;
     let mut safepoints = 0;
     for block in &build.blocks {
@@ -1201,11 +1198,11 @@ def build(
                     Rvalue::Call {
                         callee: CallTarget::Member { field, .. },
                         ..
-                    } if field == "push" => push_calls += 1,
+                    } if field == "append" => append_calls += 1,
                     Rvalue::Call {
                         callee: CallTarget::Member { field, .. },
                         ..
-                    } if field == "insert" => insert_calls += 1,
+                    } if field == "add" => add_calls += 1,
                     Rvalue::Call {
                         callee: CallTarget::Member { field, .. },
                         ..
@@ -1220,8 +1217,8 @@ def build(
     assert_eq!(vec_literals, 1, "list comprehension allocates one result");
     assert_eq!(set_literals, 1, "set comprehension allocates one result");
     assert_eq!(map_literals, 1, "map comprehension allocates one result");
-    assert_eq!(push_calls, 1, "list output appends once at its leaf");
-    assert_eq!(insert_calls, 1, "set output inserts once at its leaf");
+    assert_eq!(append_calls, 1, "list output appends once at its leaf");
+    assert_eq!(add_calls, 1, "set output adds once at its leaf");
     assert_eq!(map_set_calls, 1, "map output assigns once at its leaf");
     assert_eq!(
         safepoints, 4,
@@ -1234,27 +1231,27 @@ fn comprehensions_preserve_checked_iterator_ownership_and_generated_lambda_conte
     let module = crate::lower_source_to_mir(
         r#"
 def main():
-    ranged: Vec[int32] = [value * 3 for value in range(1, 4)]
+    ranged: list[int64] = [value * 3 for value in range(1, 4)]
 
-    tags: Set[String] = Set{"set-owned"}
-    copied_tags: Vec[String] = [tag.clone() for tag in tags]
+    tags: set[str] = {"set-owned"}
+    copied_tags: list[str] = [tag.clone() for tag in tags]
 
-    pairs = Queue[(String, String)]()
+    pairs = Queue[(str, str)]()
     pairs.put(("queue", "-tuple"))
     pairs.close()
-    joined: Vec[String] = [left + right for left, right in pairs]
+    joined: list[str] = [left + right for left, right in pairs]
 
-    indexed: Vec[int64] = [
+    indexed: list[int64] = [
         index * 10 + value
         for index, value in enumerate([4, 5])
     ]
-    zipped: Vec[int64] = [
+    zipped: list[int64] = [
         left + right
         for left, right in zip([1, 2, 3], [10, 20])
     ]
 
     offset: int64 = 10
-    build: def() -> Vec[int64] = lambda: [
+    build: def() -> list[int64] = lambda: [
         value + offset
         for value in [1, 2]
     ]
@@ -1297,7 +1294,7 @@ def main():
         .count();
     assert_eq!(
         tuple_takes, 2,
-        "Queue tuple bindings must transfer both received String elements"
+        "Queue tuple bindings must transfer both received str elements"
     );
 
     let tuple_reads = main
@@ -1345,7 +1342,7 @@ fn mutable_vec_writeback_precedes_its_single_safepoint_latch() {
     let module = crate::lower_source_to_mir(
         r#"
 def main():
-    mut values: Vec[int64] = [1, 2]
+    mut values: list[int64] = [1, 2]
     for value in mut values:
         value += 1
 "#,
@@ -1407,7 +1404,7 @@ fn ordinary_for_target_scope_starts_after_iterable_evaluation() {
     );
     lowerer.local_types.insert(
         "values".to_string(),
-        Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+        Type::Named("list".to_string(), vec![Type::named("int64")]),
     );
     lowerer.lower_for(&ForStmt {
         target: BindingTarget::Name {
@@ -1483,7 +1480,7 @@ fn owned_slice_lowering_preserves_endpoint_presence_and_source_order() {
     );
     lowerer.local_types.insert(
         "values".to_string(),
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Type::Named("list".to_string(), vec![Type::named("int32")]),
     );
     lowerer
         .local_types
@@ -1547,6 +1544,21 @@ fn owned_slice_lowering_preserves_endpoint_presence_and_source_order() {
             _ => None,
         })
         .collect::<Vec<_>>();
+    let widened_places = instructions[..call_index]
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::Cast {
+                        value: Operand::Place(source),
+                        ty,
+                        ..
+                    },
+            } if *ty == Type::named("int64") => Some((target, source)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     assert_eq!(object, &Operand::Place("values".to_string()));
     assert_eq!(receiver_place.as_deref(), Some("values"));
     assert_eq!(
@@ -1558,14 +1570,17 @@ fn owned_slice_lowering_preserves_endpoint_presence_and_source_order() {
         "written endpoints must be captured once in source order"
     );
     assert_eq!(args.len(), 6);
+    assert_eq!(widened_places.len(), 2);
+    assert_eq!(widened_places[0].1, captured_places[0].0);
+    assert_eq!(widened_places[1].1, captured_places[1].0);
     assert_eq!(
         args[0].value,
-        Operand::Place(captured_places[0].0.to_string())
+        Operand::Place(widened_places[0].0.to_string())
     );
     assert_eq!(args[1].value, Operand::Bool(true));
     assert_eq!(
         args[2].value,
-        Operand::Place(captured_places[1].0.to_string())
+        Operand::Place(widened_places[1].0.to_string())
     );
     assert_eq!(args[3].value, Operand::Bool(true));
     assert_eq!(args[4].value, Operand::Int(4));
@@ -1655,7 +1670,7 @@ def main():
     pair = (10, 20)
     print(pair[(0)])
 
-    rows: Set[(int64, int64)] = Set{(1, 2)}
+    rows: set[(int64, int64)] = {(1, 2)}
     for left, right in rows:
         print(left + right)
 "#,
@@ -1670,7 +1685,7 @@ fn generic_tuple_type_helpers_preserve_nested_parameters_and_structure() {
     let tuple = Type::Tuple(vec![
         Type::TypeParam("Left".to_string()),
         Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
             vec![Type::TypeParam("Right".to_string())],
         ),
     ]);
@@ -1685,7 +1700,7 @@ fn generic_tuple_type_helpers_preserve_nested_parameters_and_structure() {
     let tuple_ref = TypeRef::tuple(
         vec![
             type_ref("int"),
-            TypeRef::named("Vec", vec![type_ref("str")], false, Span::new(1, 1)),
+            TypeRef::named("list", vec![type_ref("str")], false, Span::new(1, 1)),
         ],
         false,
         Span::new(1, 1),
@@ -1694,7 +1709,7 @@ fn generic_tuple_type_helpers_preserve_nested_parameters_and_structure() {
         lower_type_ref(&tuple_ref),
         Type::Tuple(vec![
             Type::named("int64"),
-            Type::Named("Vec".to_string(), vec![Type::named("String")]),
+            Type::Named("list".to_string(), vec![Type::named("str")]),
         ])
     );
 }
@@ -1811,7 +1826,7 @@ fn json_dumps_omitted_indent_materializes_option_none_in_checked_mir() {
         r#"
 import json
 
-def render(value: json.Value) -> String:
+def render(value: json.Value) -> str:
     return json.dumps(value)
 "#,
     )
@@ -1935,7 +1950,7 @@ fn json_owned_accessors_lower_noncopy_places_without_snapshot_clones() {
         r#"
 import json
 
-def extract(value: own json.Value) -> Option[String]:
+def extract(value: own json.Value) -> Option[str]:
     return json.into_string(value)
 "#,
     )
@@ -2115,9 +2130,9 @@ fn consuming_match_uses_a_private_owner_and_destructive_payload_operands() {
     let module = crate::lower_source_to_mir(
         r#"
 enum Packet:
-    Text(String)
+    Text(str)
 
-def unwrap(packet: own Packet) -> String:
+def unwrap(packet: own Packet) -> str:
     match own packet:
         case Packet.Text(text):
             return text
@@ -2163,19 +2178,19 @@ fn own_user_and_trait_receivers_lower_as_explicit_moves() {
     let module = crate::lower_source_to_mir(
         r#"
 class DirectBox:
-    value: String
+    value: str
 
-    def take(own self) -> String:
+    def take(own self) -> str:
         return self.value
 
 trait Take:
-    def take(own self) -> String
+    def take(own self) -> str
 
 class TraitBox:
-    value: String
+    value: str
 
 impl Take for TraitBox:
-    def take(own self) -> String:
+    def take(own self) -> str:
         return self.value
 
 def main():
@@ -2219,15 +2234,15 @@ def main():
 fn queue_and_owned_collection_iteration_lower_destructive_yields() {
     let module = crate::lower_source_to_mir(
         r#"
-def consume_vector(values: own Vec[String]):
+def consume_vector(values: own list[str]):
     for value in own values:
         print(value)
 
-def consume_set(values: own Set[String]):
+def consume_set(values: own set[str]):
     for value in own values:
         print(value)
 
-def consume_queue(values: Queue[String]):
+def consume_queue(values: Queue[str]):
     for value in values:
         print(value)
 "#,
@@ -2306,10 +2321,10 @@ def consume_queue(values: Queue[String]):
 fn task_group_captures_use_owned_operands_for_bare_and_own_target_params() {
     let module = crate::lower_source_to_mir(
         r#"
-def shared_worker(value: String):
+def shared_worker(value: str):
     print(value)
 
-def own_worker(value: own String):
+def own_worker(value: own str):
     print(value)
 
 def main():
@@ -2362,10 +2377,10 @@ def duration_worker() -> Duration:
 def queue_worker() -> Queue[int32]:
     return Queue[int32]()
 
-def string_worker() -> String:
+def string_worker() -> str:
     return "value"
 
-def vector_worker() -> Vec[int32]:
+def vector_worker() -> list[int32]:
     return [1]
 
 def main():
@@ -2427,20 +2442,20 @@ class Factory[T]:
 def int_worker() -> int64:
     return 1
 
-def string_worker() -> String:
+def string_worker() -> str:
     return "value"
 
 def main():
     with TaskGroup() as group:
         explicit_int = group.start(relay[int64], 1)
-        group.start_soon(relay[String], "value")
+        group.start_soon(relay[str], "value")
         default_int = group.start_with_stack(262144, defaulted[int64])
         group.start_soon_with_stack(262144, relay[Queue[int64]], Queue[int64]())
         static_int = group.start(Factory[int64].relay, 2)
         int_task = group.start(int_worker)
         nested_int = group.start(relay[Task[int64]], int_task)
         string_task = group.start(string_worker)
-        nested_string = group.start(relay[Task[String]], string_task)
+        nested_string = group.start(relay[Task[str]], string_task)
 "#,
     )
     .expect("generic task starts should lower after semantic specialization");
@@ -2544,7 +2559,7 @@ def main():
         named_types["nested_string"],
         Type::Named(
             "Task".to_string(),
-            vec![Type::Named("Task".to_string(), vec![Type::named("String")])]
+            vec![Type::Named("Task".to_string(), vec![Type::named("str")])]
         )
     );
 }
@@ -2562,12 +2577,12 @@ def pair[A, B](first: own A, second: own B) -> (A, B):
     return (first, second)
 
 def main():
-    explicit_label: String = "explicit"
-    inferred_label: String = "inferred"
+    explicit_label: str = "explicit"
+    inferred_label: str = "inferred"
     with TaskGroup() as group:
-        tuple_task = group.start(empty[((String, int32),)])
+        tuple_task = group.start(empty[((str, int32),)])
         qualified_task = group.start(empty[io.Error])
-        explicit_pair = group.start(pair[String, int64], explicit_label, 2)
+        explicit_pair = group.start(pair[str, int64], explicit_label, 2)
         inferred_pair = group.start(pair, inferred_label, 3)
 "#,
     )
@@ -2595,10 +2610,7 @@ def main():
             "Task".to_string(),
             vec![Type::Named(
                 "Option".to_string(),
-                vec![Type::Tuple(vec![
-                    Type::named("String"),
-                    Type::named("int32")
-                ])]
+                vec![Type::Tuple(vec![Type::named("str"), Type::named("int32")])]
             )]
         )
     );
@@ -2614,10 +2626,7 @@ def main():
     );
     let expected_pair = Type::Named(
         "Task".to_string(),
-        vec![Type::Tuple(vec![
-            Type::named("String"),
-            Type::named("int64"),
-        ])],
+        vec![Type::Tuple(vec![Type::named("str"), Type::named("int64")])],
     );
     assert_eq!(named_types["explicit_pair"], expected_pair);
     assert_eq!(named_types["inferred_pair"], expected_pair);
@@ -2651,7 +2660,7 @@ def main():
     assert_eq!(
         starts[3].2[0].value,
         Operand::MovePlace("inferred_label".to_string()),
-        "inferred String capture must use the specialized non-copy parameter type"
+        "inferred str capture must use the specialized non-copy parameter type"
     );
     assert!(
         matches!(starts[3].2[1].value, Operand::Place(_)),
@@ -2699,7 +2708,7 @@ def same[T](left: own T, right: own T) -> T:
     return left
 
 def main():
-    label: String = "value"
+    label: str = "value"
     with TaskGroup() as group:
         group.start(same, label, 1)
 "#,
@@ -2708,7 +2717,7 @@ def main():
     assert!(
         invalid
             .message
-            .contains("conflicting inferred types for `T`: `String` and `int64`"),
+            .contains("conflicting inferred types for `T`: `str` and `int64`"),
         "{invalid:?}"
     );
 }
@@ -2720,7 +2729,7 @@ fn task_observations_and_waits_move_only_nonrepeatable_rights() {
 def int_worker() -> int64:
     return 1
 
-def string_worker() -> String:
+def string_worker() -> str:
     return "value"
 
 def queue_worker() -> Queue[int64]:
@@ -2811,7 +2820,7 @@ def main():
 fn typed_select_lowers_sources_in_order_and_moves_only_nonrepeatable_task_rights() {
     let module = crate::lower_source_to_mir(
         r#"
-def string_worker() -> String:
+def string_worker() -> str:
     return "value"
 
 def main():
@@ -2859,14 +2868,14 @@ fn typed_select_queue_and_deadline_outcomes_execute_through_mir() {
     let module = crate::lower_source_to_mir(
         r#"
 def main():
-    first = Queue[String]()
-    second = Queue[String]()
+    first = Queue[str]()
+    second = Queue[str]()
     first.put("first")
     second.put("second")
     print(select(first, second))
     print(second.get())
 
-    closed = Queue[String]()
+    closed = Queue[str]()
     closed.close()
     print(select(closed))
     print(select(0ms, 0ms))
@@ -2953,13 +2962,13 @@ fn retained_process_and_http_builtin_arguments_lower_with_owned_operands() {
 import process
 import net
 
-def supervise(supervisor: process.Supervisor, name: own String, command: own Vec[String], cwd: own Option[String], environment: own Map[String, String], stdin: own process.Stdio, stdout: own process.Stdio, stderr: own process.Stdio, restart: own process.RestartPolicy, backoff: own Duration, max_restarts: own int32, group: own bool):
+def supervise(supervisor: process.Supervisor, name: own str, command: own list[str], cwd: own Option[str], environment: own dict[str, str], stdin: own process.Stdio, stdout: own process.Stdio, stderr: own process.Stdio, restart: own process.RestartPolicy, backoff: own Duration, max_restarts: own int32, group: own bool):
     supervisor.start(name=name, command=command, cwd=cwd, env=environment, stdin=stdin, stdout=stdout, stderr=stderr, restart=restart, backoff=backoff, max_restarts=max_restarts, group=group)
 
-def respond_text(exchange: net.HttpExchange, status: int32, text: own String, headers: own Map[String, String]):
+def respond_text(exchange: net.HttpExchange, status: int32, text: own str, headers: own dict[str, str]):
     exchange.respond_text(status=status, text=text, headers=headers)
 
-def respond_bytes(exchange: net.HttpExchange, status: int32, bytes: own Vec[uint8], headers: own Map[String, String]):
+def respond_bytes(exchange: net.HttpExchange, status: int32, bytes: own list[uint8], headers: own dict[str, str]):
     exchange.respond_bytes(status=status, bytes=bytes, headers=headers)
 "#,
     )
@@ -3069,10 +3078,10 @@ fn random_rng_constructor_and_projected_shuffle_lower_with_mutable_writeback() {
 import random
 
 class Item:
-    label: String
+    label: str
 
 class Holder:
-    values: Vec[Item]
+    values: list[Item]
 
 def main() -> int32:
     mut rng = random.Rng(seed=42)
@@ -3298,7 +3307,7 @@ def main() -> int32:
 fn d6_mir_uses_declaration_resolved_parameter_conventions() {
     let module = crate::lower_source_to_mir(
         r#"
-def modes(copy_value: int32, inferred: String, owned: own String, shared: String, mutable: mut String):
+def modes(copy_value: int32, inferred: str, owned: own str, shared: str, mutable: mut str):
     pass
 
 def generic[T](value: T):
@@ -3345,10 +3354,10 @@ def main() -> int32:
 fn d6_shared_default_temporary_lives_through_the_call() {
     let module = crate::lower_source_to_mir(
         r#"
-def shared(value: String = "shared") -> String:
+def shared(value: str = "shared") -> str:
     return value.clone()
 
-def owned(value: own String = "owned") -> String:
+def owned(value: own str = "owned") -> str:
     return value
 
 def main() -> int32:
@@ -3446,7 +3455,7 @@ enum Status:
     Value(int32)
 
 trait RemoteTrait:
-    def label(self) -> String
+    def label(self) -> str
 
 def helper() -> int32:
     return 7
@@ -3567,13 +3576,13 @@ trait Neg[Out]:
     def neg(self) -> Out
 
 trait Named:
-    def name(self) -> String
+    def name(self) -> str
 
 trait Reset:
     def reset(mut self)
 
 class User:
-    label: String
+    label: str
 
 class Counter:
     value: int32
@@ -3591,7 +3600,7 @@ def make_flag() -> bool:
     return true
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.label.clone()
 
 impl Reset for User:
@@ -3602,8 +3611,8 @@ impl Add[int32, bool] for User:
     def add(self, rhs: own int32) -> bool:
         return rhs > 0
 
-impl Neg[String] for User:
-    def neg(self) -> String:
+impl Neg[str] for User:
+    def neg(self) -> str:
         return self.label.clone()
 
 impl[T: Named] Add[Box[T], Box[T]] for Box[T]:
@@ -3634,7 +3643,7 @@ impl[T: Named] Add[Box[T], Box[T]] for Box[T]:
                         .expect("neg trait should exist")
                         .0
                         .to_string(),
-                    trait_args: vec![Type::named("String")],
+                    trait_args: vec![Type::named("str")],
                 }],
             ),
         ]),
@@ -3683,8 +3692,8 @@ fn mir_helper_functions_cover_builtin_ops_and_type_lowering() {
     ));
     assert!(is_builtin_binary_operator(
         BinaryOp::Add,
-        &Type::named("String"),
-        &Type::named("String")
+        &Type::named("str"),
+        &Type::named("str")
     ));
     assert!(is_builtin_binary_operator(
         BinaryOp::And,
@@ -3700,10 +3709,10 @@ fn mir_helper_functions_cover_builtin_ops_and_type_lowering() {
     let mut collected = BTreeSet::new();
     collect_type_params_from_type(
         &Type::Named(
-            "Map".to_string(),
+            "dict".to_string(),
             vec![
                 Type::TypeParam("K".to_string()),
-                Type::Named("Vec".to_string(), vec![Type::TypeParam("V".to_string())]),
+                Type::Named("list".to_string(), vec![Type::TypeParam("V".to_string())]),
             ],
         ),
         &mut collected,
@@ -3738,7 +3747,7 @@ fn mir_helper_functions_cover_builtin_ops_and_type_lowering() {
         Operand::Float(0.0)
     );
     assert_eq!(
-        default_return_operand(&Type::named("String")),
+        default_return_operand(&Type::named("str")),
         Operand::String(String::new())
     );
     assert_eq!(
@@ -3768,21 +3777,21 @@ fn mir_helper_functions_cover_builtin_ops_and_type_lowering() {
         "pkg.tools::work"
     );
     assert_eq!(
-        format_trait_args(&[Type::named("int32"), Type::named("String")]),
-        "[int32, String]"
+        format_trait_args(&[Type::named("int32"), Type::named("str")]),
+        "[int32, str]"
     );
     assert_eq!(format_trait_args(&[]), "");
 
     assert_eq!(lower_type_ref(&type_ref("None")), Type::Unit);
-    assert_eq!(lower_type_ref(&type_ref("str")), Type::named("String"));
+    assert_eq!(lower_type_ref(&type_ref("str")), Type::named("str"));
     assert_eq!(
         lower_type_ref(&TypeRef::named(
-            "Vec",
+            "list",
             vec![type_ref("int32")],
             false,
             Span::new(1, 1),
         )),
-        Type::Named("Vec".to_string(), vec![Type::named("int32")])
+        Type::Named("list".to_string(), vec![Type::named("int32")])
     );
 }
 
@@ -3961,12 +3970,12 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
     );
     for (builtin_name, args) in [
         ("Option", vec![type_ref("int32")]),
-        ("Result", vec![type_ref("int32"), type_ref("String")]),
+        ("Result", vec![type_ref("int32"), type_ref("str")]),
         ("SendError", vec![type_ref("int32")]),
-        ("Queue", vec![type_ref("String")]),
-        ("Vec", vec![type_ref("int32")]),
-        ("Set", vec![type_ref("String")]),
-        ("Map", vec![type_ref("String"), type_ref("int32")]),
+        ("Queue", vec![type_ref("str")]),
+        ("list", vec![type_ref("int32")]),
+        ("set", vec![type_ref("str")]),
+        ("dict", vec![type_ref("str"), type_ref("int32")]),
     ] {
         assert_eq!(
             lowerer.infer_expr_type(&expr(ExprKind::Specialize {
@@ -4218,18 +4227,18 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
     )));
 
     let first_temp = lowerer.new_temp();
-    let typed_temp = lowerer.new_typed_temp(Type::named("String"));
+    let typed_temp = lowerer.new_typed_temp(Type::named("str"));
     let temp_for_expr = lowerer.new_temp_for_expr(&expr(ExprKind::String("aura".to_string())));
     assert!(first_temp.starts_with("%t"));
     assert!(typed_temp.starts_with("%t"));
     assert!(temp_for_expr.starts_with("%t"));
     assert_eq!(
         lowerer.local_types.get(&typed_temp),
-        Some(&Type::named("String"))
+        Some(&Type::named("str"))
     );
     assert_eq!(
         lowerer.local_types.get(&temp_for_expr),
-        Some(&Type::named("String"))
+        Some(&Type::named("str"))
     );
 
     let block = lowerer.new_block("branch");
@@ -4292,7 +4301,7 @@ fn imported_task_targets_preserve_contextual_and_static_specialization() {
     let imported_class = member_expr(member_expr(name_expr("pkg"), "helpers"), "GenericThing");
     let specialized_class = expr(ExprKind::Specialize {
         expr: Box::new(imported_class),
-        type_args: vec![type_ref("String")],
+        type_args: vec![type_ref("str")],
     });
     let static_target = member_expr(specialized_class, "relay");
     let target = lowerer
@@ -4307,8 +4316,8 @@ fn imported_task_targets_preserve_contextual_and_static_specialization() {
         target.function_name.as_deref(),
         Some("pkg.helpers::GenericThing.relay")
     );
-    assert_eq!(target.param_types, vec![Type::named("String")]);
-    assert_eq!(target.return_type, Type::named("String"));
+    assert_eq!(target.param_types, vec![Type::named("str")]);
+    assert_eq!(target.return_type, Type::named("str"));
 
     let generic_static_target = expr(ExprKind::Index {
         object: Box::new(member_expr(
@@ -4317,7 +4326,7 @@ fn imported_task_targets_preserve_contextual_and_static_specialization() {
                     member_expr(name_expr("pkg"), "helpers"),
                     "GenericThing",
                 )),
-                type_args: vec![type_ref("String")],
+                type_args: vec![type_ref("str")],
             }),
             "choose",
         )),
@@ -4402,13 +4411,13 @@ fn imported_trait_impl_collection_deduplicates_equivalent_impls() {
     let trait_program = checked_program(
         r#"
 trait Named:
-    def name(self) -> String
+    def name(self) -> str
 
 class User:
-    label: String
+    label: str
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.label.clone()
 "#,
     );
@@ -4486,21 +4495,21 @@ enum Status:
 fn mir_types_public_length_members_as_int64() {
     let lowerer = trait_lowerer();
     let cases = [
-        (Type::named("String"), "len"),
-        (Type::named("String"), "byte_len"),
+        (Type::named("str"), "len"),
+        (Type::named("str"), "byte_len"),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("String")]),
+            Type::Named("list".to_string(), vec![Type::named("str")]),
             "len",
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             "len",
         ),
         (
-            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            Type::Named("set".to_string(), vec![Type::named("str")]),
             "len",
         ),
     ];
@@ -4545,7 +4554,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     );
     assert_eq!(
         lowerer.operator_return_type_for_unary(&Type::TypeParam("U".to_string()), UnaryOp::Neg),
-        Some(Type::named("String"))
+        Some(Type::named("str"))
     );
     assert_eq!(
         lowerer.operator_return_type_for_binary(
@@ -4557,7 +4566,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     );
     assert_eq!(
         lowerer.operator_return_type_for_unary(&Type::named("User"), UnaryOp::Neg),
-        Some(Type::named("String"))
+        Some(Type::named("str"))
     );
     assert_eq!(
         lowerer.operator_return_type_for_unary(&Type::named("User"), UnaryOp::Not),
@@ -4569,7 +4578,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         trait_args: Vec::new(),
     };
     assert!(lowerer.type_implements_trait_bound(&Type::named("User"), &named_bound));
-    assert!(!lowerer.type_implements_trait_bound(&Type::named("String"), &named_bound));
+    assert!(!lowerer.type_implements_trait_bound(&Type::named("str"), &named_bound));
     let bounded_box_add_impl = lowerer
         .program
         .trait_impls
@@ -4587,7 +4596,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     assert!(lowerer
         .trait_impl_substitutions_for_bound(bounded_box_add_impl, &box_user, &box_user_add_bound)
         .is_some());
-    let box_string = Type::Named("Box".to_string(), vec![Type::named("String")]);
+    let box_string = Type::Named("Box".to_string(), vec![Type::named("str")]);
     let box_string_add_bound = TraitBound {
         trait_name: "Add".to_string(),
         trait_args: vec![box_string.clone(), box_string.clone()],
@@ -4606,7 +4615,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         .trait_impl_method_for_class_name("User", "name")
         .is_some());
 
-    let option_string = Type::Named("Option".to_string(), vec![Type::named("String")]);
+    let option_string = Type::Named("Option".to_string(), vec![Type::named("str")]);
     assert_eq!(
         lowerer.builtin_enum_variant_type(&option_string, "Some"),
         Some(option_string.clone())
@@ -4615,7 +4624,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         lowerer.builtin_enum_variant_type(&option_string, "Missing"),
         None
     );
-    let send_error_string = Type::Named("SendError".to_string(), vec![Type::named("String")]);
+    let send_error_string = Type::Named("SendError".to_string(), vec![Type::named("str")]);
     assert_eq!(
         lowerer.builtin_enum_variant_type(&send_error_string, "Closed"),
         Some(send_error_string.clone())
@@ -4623,25 +4632,22 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
 
     assert_eq!(
         lowerer.variant_payload_types(
-            Some(&Type::Named(
-                "Option".to_string(),
-                vec![Type::named("String")]
-            )),
+            Some(&Type::Named("Option".to_string(), vec![Type::named("str")])),
             "Option",
             "Some"
         ),
-        Some(vec![Type::named("String")])
+        Some(vec![Type::named("str")])
     );
     assert_eq!(
         lowerer.variant_payload_types(
             Some(&Type::Named(
                 "Result".to_string(),
-                vec![Type::named("int32"), Type::named("String")]
+                vec![Type::named("int32"), Type::named("str")]
             )),
             "Result",
             "Err"
         ),
-        Some(vec![Type::named("String")])
+        Some(vec![Type::named("str")])
     );
     assert_eq!(
         lowerer.variant_payload_types(
@@ -4669,18 +4675,18 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         lowerer.variant_payload_types(
             Some(&Type::Named(
                 "WaitAny".to_string(),
-                vec![Type::named("String")]
+                vec![Type::named("str")]
             )),
             "WaitAny",
             "Ready"
         ),
-        Some(vec![Type::named("int32"), Type::named("String")])
+        Some(vec![Type::named("int64"), Type::named("str")])
     );
     assert_eq!(
         lowerer.variant_payload_types(
             Some(&Type::Named(
                 "QueueReceive".to_string(),
-                vec![Type::named("String")]
+                vec![Type::named("str")]
             )),
             "QueueReceive",
             "TimedOut"
@@ -4691,22 +4697,22 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         lowerer.variant_payload_types(
             Some(&Type::Named(
                 "WaitAll".to_string(),
-                vec![Type::named("String")]
+                vec![Type::named("str")]
             )),
             "WaitAll",
             "Error"
         ),
-        Some(vec![Type::named("int32"), Type::named("String")])
+        Some(vec![Type::named("int64"), Type::named("str")])
     );
     for (ty, enum_name) in [
         (
-            Type::Named("Option".to_string(), vec![Type::named("String")]),
+            Type::Named("Option".to_string(), vec![Type::named("str")]),
             "Option",
         ),
         (
             Type::Named(
                 "Result".to_string(),
-                vec![Type::named("int32"), Type::named("String")],
+                vec![Type::named("int32"), Type::named("str")],
             ),
             "Result",
         ),
@@ -4715,19 +4721,19 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
             "SendError",
         ),
         (
-            Type::Named("QueueReceive".to_string(), vec![Type::named("String")]),
+            Type::Named("QueueReceive".to_string(), vec![Type::named("str")]),
             "QueueReceive",
         ),
         (
-            Type::Named("TaskResult".to_string(), vec![Type::named("String")]),
+            Type::Named("TaskResult".to_string(), vec![Type::named("str")]),
             "TaskResult",
         ),
         (
-            Type::Named("WaitAny".to_string(), vec![Type::named("String")]),
+            Type::Named("WaitAny".to_string(), vec![Type::named("str")]),
             "WaitAny",
         ),
         (
-            Type::Named("WaitAll".to_string(), vec![Type::named("String")]),
+            Type::Named("WaitAll".to_string(), vec![Type::named("str")]),
             "WaitAll",
         ),
     ] {
@@ -4742,16 +4748,16 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         Some(vec![Type::named("int32")])
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("String"), "len"),
+        lowerer.builtin_runtime_member_return_type(&Type::named("str"), "len"),
         Some(Type::named("int64"))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("String"), "byte_len"),
+        lowerer.builtin_runtime_member_return_type(&Type::named("str"), "byte_len"),
         Some(Type::named("int64"))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("String"), "split"),
-        Some(Type::Named("Vec".to_string(), vec![Type::named("String")]))
+        lowerer.builtin_runtime_member_return_type(&Type::named("str"), "split"),
+        Some(Type::Named("list".to_string(), vec![Type::named("str")]))
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(&Type::Unit, "to_string"),
@@ -4759,56 +4765,53 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(&Type::named("int32"), "to_string"),
-        Some(Type::named("String"))
+        Some(Type::named("str"))
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(
-            &Type::Named("Vec".to_string(), vec![Type::named("String")]),
+            &Type::Named("list".to_string(), vec![Type::named("str")]),
             "pop"
         ),
-        Some(Type::Named(
-            "Option".to_string(),
-            vec![Type::named("String")]
-        ))
+        Some(Type::named("str"))
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(
-            &Type::Named("Set".to_string(), vec![Type::named("String")]),
-            "insert"
+            &Type::Named("set".to_string(), vec![Type::named("str")]),
+            "add"
         ),
-        Some(Type::named("bool"))
+        Some(Type::Unit)
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(
             &Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")]
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")]
             ),
             "items"
         ),
         Some(Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
             vec![Type::Named(
                 "MapEntry".to_string(),
-                vec![Type::named("String"), Type::named("int32")]
+                vec![Type::named("str"), Type::named("int32")]
             )]
         ))
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(
             &Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")]
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")]
             ),
             "keys"
         ),
-        Some(Type::Named("Vec".to_string(), vec![Type::named("String")]))
+        Some(Type::Named("list".to_string(), vec![Type::named("str")]))
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(
             &Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")]
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")]
             ),
             "get"
         ),
@@ -4858,24 +4861,30 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("Vec"), "get"),
+        lowerer.builtin_runtime_member_return_type(&Type::named("list"), "get"),
         Some(Type::Named(
             "Option".to_string(),
             vec![Type::named("Unknown")]
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("Map"), "keys"),
-        Some(Type::Named("Vec".to_string(), vec![Type::named("Unknown")]))
-    );
-    assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("Map"), "values"),
-        Some(Type::Named("Vec".to_string(), vec![Type::named("Unknown")]))
-    );
-    assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("Map"), "items"),
+        lowerer.builtin_runtime_member_return_type(&Type::named("dict"), "keys"),
         Some(Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
+            vec![Type::named("Unknown")]
+        ))
+    );
+    assert_eq!(
+        lowerer.builtin_runtime_member_return_type(&Type::named("dict"), "values"),
+        Some(Type::Named(
+            "list".to_string(),
+            vec![Type::named("Unknown")]
+        ))
+    );
+    assert_eq!(
+        lowerer.builtin_runtime_member_return_type(&Type::named("dict"), "items"),
+        Some(Type::Named(
+            "list".to_string(),
             vec![Type::Named(
                 "MapEntry".to_string(),
                 vec![Type::named("Unknown"), Type::named("Unknown")]
@@ -4883,7 +4892,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("Map"), "get"),
+        lowerer.builtin_runtime_member_return_type(&Type::named("dict"), "get"),
         Some(Type::Named(
             "Option".to_string(),
             vec![Type::named("Unknown")]
@@ -4938,7 +4947,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         lowerer.builtin_runtime_member_return_type(&Type::named("fs.File"), "read_all"),
         Some(Type::Named(
             "Result".to_string(),
-            vec![Type::named("String"), Type::named("io.Error")]
+            vec![Type::named("str"), Type::named("io.Error")]
         ))
     );
     assert_eq!(
@@ -4946,7 +4955,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         Some(Type::Named(
             "Result".to_string(),
             vec![
-                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 Type::named("io.Error")
             ]
         ))
@@ -4964,7 +4973,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(&Type::named("process.Completed"), "stdout"),
-        Some(Type::named("String"))
+        Some(Type::named("str"))
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(&Type::named("net.TcpListener"), "close"),
@@ -4988,7 +4997,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
             vec![
                 Type::Named(
                     "Option".to_string(),
-                    vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])]
+                    vec![Type::Named("list".to_string(), vec![Type::named("uint8")])]
                 ),
                 Type::named("io.Error")
             ]
@@ -5008,7 +5017,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(&Type::named("net.HttpResponse"), "reason"),
-        Some(Type::named("String"))
+        Some(Type::named("str"))
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(&Type::named("net.HttpResponse"), "close"),
@@ -5025,7 +5034,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
             vec![
                 Type::Named(
                     "Option".to_string(),
-                    vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])]
+                    vec![Type::Named("list".to_string(), vec![Type::named("uint8")])]
                 ),
                 Type::named("io.Error")
             ]
@@ -5044,7 +5053,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         Some(Type::Named(
             "Result".to_string(),
             vec![
-                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 Type::named("io.Error")
             ]
         ))
@@ -5062,7 +5071,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         Some(Type::Named(
             "Result".to_string(),
             vec![
-                Type::Named("Option".to_string(), vec![Type::named("String")]),
+                Type::Named("Option".to_string(), vec![Type::named("str")]),
                 Type::named("io.Error")
             ]
         ))
@@ -5072,13 +5081,13 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         Some(Type::Unit)
     );
 
-    let int_vec = Type::Named("Vec".to_string(), vec![Type::named("int32")]);
+    let int_vec = Type::Named("list".to_string(), vec![Type::named("int32")]);
     lowerer
         .local_types
         .insert("items".to_string(), int_vec.clone());
     lowerer
         .local_types
-        .insert("label".to_string(), Type::named("String"));
+        .insert("label".to_string(), Type::named("str"));
     lowerer
         .local_types
         .insert("user".to_string(), Type::named("User"));
@@ -5110,7 +5119,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     );
     assert_eq!(
         lowerer.infer_operand_type(&Operand::String("label".to_string())),
-        Some(Type::named("String"))
+        Some(Type::named("str"))
     );
     assert_eq!(lowerer.infer_operand_type(&Operand::Unit), Some(Type::Unit));
     assert_eq!(
@@ -5120,18 +5129,18 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
             return_type: Box::new(Type::named("bool")),
         })
     );
-    assert!(lowerer.member_call_mutates_receiver(&Operand::Place("items".to_string()), "push"));
+    assert!(lowerer.member_call_mutates_receiver(&Operand::Place("items".to_string()), "append"));
     assert!(!lowerer.member_call_mutates_receiver(&Operand::Place("label".to_string()), "len"));
     assert!(!lowerer.member_call_mutates_receiver(&Operand::Place("items".to_string()), "contains"));
     assert!(lowerer.member_call_mutates_receiver(&Operand::Place("user".to_string()), "reset"));
     assert!(lowerer.member_call_mutates_receiver(&Operand::Place("counter".to_string()), "bump"));
-    assert!(!lowerer.member_call_mutates_receiver(&Operand::Place("missing".to_string()), "push"));
+    assert!(!lowerer.member_call_mutates_receiver(&Operand::Place("missing".to_string()), "append"));
     assert!(!lowerer.member_call_mutates_receiver(&Operand::Place("count".to_string()), "missing"));
     assert!(lowerer.rvalue_writes_place(
         &Rvalue::Call {
             callee: CallTarget::Member {
                 object: Operand::Place("items".to_string()),
-                field: "push".to_string(),
+                field: "append".to_string(),
                 receiver_place: Some("items".to_string()),
             },
             args: Vec::new(),
@@ -5156,13 +5165,13 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
 fn lower_source_to_mir_covers_broad_control_flow_and_collection_surface() {
     let source = r#"
 trait Named:
-    def name(self) -> String
+    def name(self) -> str
 
 class User:
-    label: String
+    label: str
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.label.clone()
 
 class Resource:
@@ -5180,10 +5189,10 @@ enum Boxed:
 def worker(value: int32) -> int32:
     return value + 1
 
-def consume[T: Named](value: T) -> String:
+def consume[T: Named](value: T) -> str:
     return value.name()
 
-def first_mut(values: own Vec[int32]) -> int32:
+def first_mut(values: own list[int32]) -> int32:
     mut local = values
     for item in mut local:
         return item
@@ -5193,13 +5202,13 @@ def main() -> int32:
     mut counter = Counter(value=0)
     positional = Counter(2)
     counter.value += positional.value
-    mut values: Vec[int32] = [1, 2]
+    mut values: list[int32] = [1, 2]
     values[0] = 3
     values[0] += 4
-    mut counts: Map[String, int32] = {"a": 1}
+    mut counts: dict[str, int32] = {"a": 1}
     counts["b"] = 2
     counts["a"] += 5
-    seen = Set{"a", "b"}
+    seen = {"a", "b"}
     jobs = Queue[int32]()
     jobs.put(1)
     if true and not false:
@@ -5210,7 +5219,7 @@ def main() -> int32:
         case _:
             pass
     for i in range(2):
-        counter.value += i
+        counter.value += i as int32
     for item in values:
         counter.value += item
     while counter.value < 10:
@@ -5231,7 +5240,7 @@ def main() -> int32:
     with TaskGroup() as group:
         task = group.start(worker, counter.value)
         print(task.result())
-    print(seen.contains("a"))
+    print("a" in seen)
     print(counts.get("a"))
     mut boxed = Boxed.Filled(3)
     counter.value += match mut boxed:
@@ -5276,10 +5285,10 @@ def main() -> int32:
 fn indexed_compound_assignment_results_keep_the_collection_element_type() {
     let source = r#"
 def main() -> int32:
-    mut values: Vec[int32] = [-7]
+    mut values: list[int32] = [-7]
     values[0] //= 3
     values[0] %= -3
-    mut counts: Map[String, int32] = {"left": -7}
+    mut counts: dict[str, int32] = {"left": -7}
     counts["left"] //= 3
     counts["left"] %= -3
     return 0
@@ -5379,7 +5388,7 @@ def main() -> int32:
         ),
         Some(Type::Named(
             "Pair".to_string(),
-            vec![Type::named("String"), Type::named("int64")]
+            vec![Type::named("str"), Type::named("int64")]
         ))
     );
     assert_eq!(
@@ -5397,11 +5406,11 @@ def main() -> int32:
         lowerer.infer_class_constructor_type(
             "Pair",
             &[],
-            Some(&[type_ref("String"), type_ref("int32")])
+            Some(&[type_ref("str"), type_ref("int32")])
         ),
         Some(Type::Named(
             "Pair".to_string(),
-            vec![Type::named("String"), Type::named("int32")]
+            vec![Type::named("str"), Type::named("int32")]
         ))
     );
     assert_eq!(
@@ -5432,7 +5441,7 @@ def main() -> int32:
     assert!(fallback_binding.starts_with("%t"));
     assert_eq!(
         lowerer.local_types.get(fallback_binding),
-        Some(&Type::named("int32"))
+        Some(&Type::named("int64"))
     );
 
     let mut return_lowerer = Lowerer::new(
@@ -5444,7 +5453,7 @@ def main() -> int32:
     );
     return_lowerer.local_types.insert(
         "items".to_string(),
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Type::Named("list".to_string(), vec![Type::named("int32")]),
     );
     let parent_return_block = return_lowerer.new_block("parent_return");
     let parent_return_label = return_lowerer.label(parent_return_block);
@@ -5526,14 +5535,14 @@ fn lowerer_direct_collection_literals_cover_uninferred_set_and_map_exprs() {
     let empty_map_operand = lowerer.lower_expr(&expr(ExprKind::Map(Vec::new())));
     let malformed_vec_constructor = lowerer.lower_expr(&expr(ExprKind::Call {
         callee: Box::new(expr(ExprKind::Specialize {
-            expr: Box::new(name_expr("Vec")),
+            expr: Box::new(name_expr("list")),
             type_args: Vec::new(),
         })),
         args: Vec::new(),
     }));
     let malformed_map_constructor = lowerer.lower_expr(&expr(ExprKind::Call {
         callee: Box::new(expr(ExprKind::Specialize {
-            expr: Box::new(name_expr("Map")),
+            expr: Box::new(name_expr("dict")),
             type_args: Vec::new(),
         })),
         args: Vec::new(),
@@ -5558,7 +5567,7 @@ fn lowerer_direct_collection_literals_cover_uninferred_set_and_map_exprs() {
                 elements,
             },
             ..
-        } if element_type == &Type::named("String") && elements.len() == 2
+        } if element_type == &Type::named("str") && elements.len() == 2
     )));
     assert!(instructions.iter().any(|instruction| matches!(
         instruction,
@@ -5569,7 +5578,7 @@ fn lowerer_direct_collection_literals_cover_uninferred_set_and_map_exprs() {
                 entries,
             },
             ..
-        } if key_type == &Type::named("String")
+        } if key_type == &Type::named("str")
             && value_type == &Type::named("int64")
             && entries.len() == 1
     )));
@@ -6127,7 +6136,7 @@ def main() -> int32:
 #[test]
 fn owned_conditional_values_move_only_the_selected_arm_into_the_join() {
     let source = r#"
-def choose(flag: bool, left: own String, right: own String) -> String:
+def choose(flag: bool, left: own str, right: own str) -> str:
     selected = left if flag else right
     return selected
 "#;
@@ -6167,14 +6176,14 @@ def choose(flag: bool, left: own String, right: own String) -> String:
                 Terminator::Return(Operand::MovePlace(place)) if place == "selected"
             )
         }),
-        "returning the selected String must transfer the joined value"
+        "returning the selected str must transfer the joined value"
     );
 }
 
 #[test]
 fn conditional_result_inference_uses_the_concrete_arm_in_either_position() {
     let source = r#"
-def make_values() -> Vec[int32]:
+def make_values() -> list[int32]:
     return [7]
 
 def choose(flag: bool, exact: float32):
@@ -6203,11 +6212,11 @@ def choose(flag: bool, exact: float32):
         ("float_right", Type::named("float32")),
         (
             "empty_left",
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
         ),
         (
             "empty_right",
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
         ),
         (
             "none_left",
@@ -6220,7 +6229,7 @@ def choose(flag: bool, exact: float32):
         (
             "nested_empty",
             Type::Tuple(vec![
-                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                Type::Named("list".to_string(), vec![Type::named("int32")]),
                 Type::named("int64"),
             ]),
         ),
@@ -6248,10 +6257,10 @@ class Counter:
 def increment(counter: mut Counter) -> None:
     counter.value += 1
 
-def consume(value: own String) -> String:
+def consume(value: own str) -> str:
     return value
 
-def mark(label: String, value: int32) -> int32:
+def mark(label: str, value: int32) -> int32:
     print(label)
     return value
 
@@ -6435,7 +6444,7 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
             ReceiverKind::BorrowMut,
         )],
         return_type: Box::new(Type::Function {
-            params: vec![contract(Type::named("String"), ReceiverKind::Borrow)],
+            params: vec![contract(Type::named("str"), ReceiverKind::Borrow)],
             return_type: Box::new(Type::TypeParam("U".to_string())),
         }),
     };
@@ -6491,7 +6500,7 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
             ),
             crate::ast::FunctionTypeParam::new(
                 crate::ast::ParamMode::Own,
-                type_ref("String"),
+                type_ref("str"),
                 Span::new(1, 1),
             ),
         ],
@@ -6503,7 +6512,7 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
         Type::Function {
             params: vec![
                 contract(Type::named("int32"), ReceiverKind::BorrowMut),
-                contract(Type::named("String"), ReceiverKind::Value),
+                contract(Type::named("str"), ReceiverKind::Value),
             ],
             return_type: Box::new(Type::named("bool")),
         },
@@ -6513,7 +6522,7 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
     let lowerer = lowerer_with_imported_modules();
     let specialized = expr(ExprKind::Specialize {
         expr: Box::new(expr(ExprKind::Group(Box::new(name_expr("generic_helper"))))),
-        type_args: vec![type_ref("String")],
+        type_args: vec![type_ref("str")],
     });
     let operand = lowerer
         .lower_function_value(&specialized)
@@ -6521,12 +6530,12 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
     let expected = Type::Function {
         params: vec![crate::sema::FunctionParamContract {
             name: "value".to_string(),
-            ty: Type::named("String"),
+            ty: Type::named("str"),
             passing: ReceiverKind::Value,
             has_default: false,
             default_erased: false,
         }],
-        return_type: Box::new(Type::named("String")),
+        return_type: Box::new(Type::named("str")),
     };
     assert_eq!(
         operand,
@@ -6557,8 +6566,8 @@ def even(value: int32) -> bool:
     return value % 2 == 0
 
 def main():
-    mut values: Vec[int32] = [3, 1, 2]
-    values.sort_by(key)
+    mut values: list[int32] = [3, 1, 2]
+    values.sort(key = key)
     mapped = values.map(double)
     filtered = values.filter(even)
     print(mapped)
@@ -6690,12 +6699,12 @@ def even(value: int32) -> bool:
     return value % 2 == 0
 
 def main():
-    mut plain: Vec[int32] = [3, 1, 2, 2]
+    mut plain: list[int32] = [3, 1, 2, 2]
     plain.sort()
     print(plain)
 
-    mut keyed: Vec[int32] = [3, 1, 2, 2]
-    keyed.sort_by(descending_key)
+    mut keyed: list[int32] = [3, 1, 2, 2]
+    keyed.sort(key = descending_key)
     print(keyed)
 
     boxes = plain.map(box_double)
@@ -6729,11 +6738,11 @@ fn control_retry_lowers_to_shared_indirect_calls_and_runtime_policy_adapters() {
         r#"
 import control
 
-def worker() -> Result[Vec[String], String]:
+def worker() -> Result[list[str], str]:
     return Result.Ok(["ready"])
 
 def main():
-    print(control.retry[Vec[String], String](
+    print(control.retry[list[str], str](
         initial_backoff=0ms,
         worker=worker,
         max_attempts=2
@@ -6772,10 +6781,10 @@ def main():
                                     "Result".to_string(),
                                     vec![
                                         Type::Named(
-                                            "Vec".to_string(),
-                                            vec![Type::named("String")],
+                                            "list".to_string(),
+                                            vec![Type::named("str")],
                                         ),
-                                        Type::named("String"),
+                                        Type::named("str"),
                                     ],
                                 )
                 )
@@ -6875,7 +6884,7 @@ def main():
     identity: def(int64) -> int64 = lambda value: value
     print(identity(2))
     payload = "single-use"
-    take_payload: def() -> String = lambda: payload
+    take_payload: def() -> str = lambda: payload
     print(take_payload())
 "#,
     )
@@ -6988,7 +6997,7 @@ def main():
     let &(_, consuming_signature, consuming_captures, consuming) = closures
         .iter()
         .find(|entry| *entry.3)
-        .expect("the moved String capture should produce a consuming closure");
+        .expect("the moved str capture should produce a consuming closure");
     assert!(*consuming);
     assert!(matches!(
         consuming_signature,
@@ -7314,7 +7323,7 @@ fn imported_comprehensions_resolve_owner_qualified_result_metadata() {
         .expect("the imported helper namespace should be exported");
     let boxed_type = Type::named("comprehension_imported_metadata_support.helpers.Boxed");
     assert!(namespace.comprehensions.values().any(|info| {
-        info.result_type == Type::Named("Vec".to_string(), vec![boxed_type.clone()])
+        info.result_type == Type::Named("list".to_string(), vec![boxed_type.clone()])
     }));
     assert!(namespace.comprehensions.values().any(|info| {
         info.clauses
@@ -7351,9 +7360,9 @@ fn closure_callbacks_and_task_targets_lower_through_shared_callable_contracts() 
         r#"
 def main() -> int32:
     offset: int64 = 5
-    mut values: Vec[int64] = [3, 1, 2]
-    values.sort_by(lambda value: value + offset)
-    mapped: Vec[int64] = values.map(lambda value: value + offset)
+    mut values: list[int64] = [3, 1, 2]
+    values.sort(key = lambda value: value + offset)
+    mapped: list[int64] = values.map(lambda value: value + offset)
     worker: def(int64) -> int64 = lambda value: value + offset
     with TaskGroup() as group:
         task: Task[int64] = group.start((worker), 7)

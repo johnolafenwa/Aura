@@ -6,7 +6,7 @@ def main():
     length: def() -> int64 = lambda: label.len()
 
     token = "owned"
-    take: def() -> String = lambda: token
+    take: def() -> str = lambda: token
 
     print(scale(21))
     print(scale(6))

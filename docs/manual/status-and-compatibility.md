@@ -1,6 +1,9 @@
 # Status And Compatibility
 
-Aura 0.2 is an advanced technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments; it is not yet a production systems-language release or a security boundary for untrusted programs.
+Aura 0.3 is an active development channel and advanced technical preview. It
+is suitable for compiler and runtime evaluation, examples, and controlled
+experiments. It is not a production systems-language release or a security
+boundary for untrusted programs.
 
 ## Canonical Contract
 
@@ -22,12 +25,12 @@ Adding `len` and `str` to the maintained builtin functions also reserves both
 names: a program that previously declared its own `def len(...)` or
 `def str(...)` is now rejected, the same way redefining `print` or `abs` is.
 ADR-0030 is Accepted with the B3.0-d length-unification amendment:
-`String.len()`, `String.byte_len()`, `Vec.len()`, `Map.len()`, and `Set.len()`
-now return `int64`. For `String`, `Vec`, `Map`, and `Set`, `len(value)` and
-`value.len()` have the same static type and value; `String.byte_len()` is the
-separate UTF-8 byte count. Code that previously annotated a member length as
-`int32`, or passed one directly to a still-`int32` range or Vec index boundary,
-must update the annotation or use an explicit checked `as int32` cast.
+`str.len()`, `str.byte_len()`, `list.len()`, `dict.len()`, and `set.len()`
+now return `int64`. For `str`, `list`, `dict`, and `set`, `len(value)` and
+`value.len()` have the same static type and value; `str.byte_len()` is the
+separate UTF-8 byte count. Range bounds and yields, list indexes, slice
+endpoints, enumeration positions, and Array coordinates use the same `int64`
+position domain.
 
 Conditional expressions, membership operators, comparison chains, and the
 `enumerate`/`zip` loop forms are accepted language surface under ADR-0027,
@@ -42,10 +45,10 @@ consume it; tuple ordering remains rejected. See
 
 Phase 6.1 capture-free function values make named functions Copy and Transfer
 values with structural `def(...) -> ...` types. Phase 6.2 uses that surface for
-the maintained eager `Vec.sort`, `sort_by`, `map`, and `filter` algorithms and
+the maintained eager natural/keyed `list.sort`, `map`, and `filter` algorithms and
 for `control.retry`. These are compatible API additions to the technical
 preview, but `control` now resolves as a builtin module namespace and the four
-Vec member names are part of the builtin no-shadowing surface. Callback
+List member names are part of the builtin no-shadowing surface. Callback
 capabilities are exact: code must pass bare/shared element callbacks rather
 than relying on adaptation from `mut` or `own`.
 
@@ -61,29 +64,29 @@ collection, or annotated return boundaries.
 
 Phase 6.4 adds explicitly authorized FFI v0 packages. Bodyless
 `extern "C"` functions call process-global symbols synchronously through
-fixed-width scalars, pointer-length String/byte views, or non-null opaque
+fixed-width scalars, pointer-length str/byte views, or non-null opaque
 handles. FFI-enabled dependencies must be visible in the root manifest's exact
 `[ffi] dependencies` report. Externs are direct-call-only; callbacks, raw
 pointers, variadics, returned views, nullable handles, and explicit library
 loading remain unavailable. This is an unsafe native boundary, not a memory
 safety promise for a false declaration or misbehaving C implementation.
 
-Phase 7.1 adds eager owned list, set, and map comprehensions under Accepted
+Phase 7.1 adds eager owned list, set, and dictionary comprehensions under Accepted
 ADR-0039. Clauses inherit statement bare-loop iteration, including shared
-Vec/Set traversal, Range copy values, compiler-known `enumerate`/`zip`, and
+List/set traversal, Range copy values, compiler-known `enumerate`/`zip`, and
 Queue's receive-owned item carve-out. Nested clauses are outer-major, filters
-run left to right, map keys run before values, and target names never leak.
+run left to right, dictionary keys run before values, and target names never leak.
 Result insertion follows ordinary Copy, move, explicit-clone, and ADR-0037
-capture rules. Generator expressions remain unavailable and
-receive an `AU2005` migration to an eager comprehension or explicit loop.
+capture rules. Generator expressions are unavailable; use an eager
+comprehension or explicit loop.
 
-Phase 7.2 adds owned Vec and String slicing under Accepted ADR-0040. The four
+Phase 7.2 adds owned list and str slicing under Accepted ADR-0040. The four
 one-colon forms accept omitted endpoints and select a half-open range. Written
-endpoints are exact `int32`; negatives normalize once, and an invalid or
-reversed range traps with `AU4003` instead of adopting Python's clamping
-behavior. String positions count Unicode scalar values and require an O(n)
-scan. Every result owns independent storage: Vec elements copy or clone under
-clone-safety and task-repeatability rules, while String produces a fresh valid
+endpoints use the `int64` position domain; negatives normalize once, and an invalid or
+reversed range traps with `AU4003`; endpoints are not clamped. String positions
+count Unicode scalar values and require an O(n)
+scan. Every result owns independent storage: list elements copy or clone under
+clone-safety and task-repeatability rules, while str produces a fresh valid
 UTF-8 value. String integer indexing, steps, slice assignment, and views remain
 unavailable; this feature does not implement ADR-0038.
 
@@ -101,7 +104,11 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 
 ## Stability Policy
 
-The ratified correctness-recovery and Phase 1.5 semantic re-defaults established the reference baseline that the 0.2 capability migration and later Accepted ADRs extend. Outside explicitly recorded ADR decisions, syntax expansion is frozen for the technical-preview release. Work in this cycle prioritizes correctness, native-runtime safety, editor responsiveness, and an honest control-plane surface. APIs may still change while 0.2 remains a technical preview.
+Accepted ADRs define the current reference baseline. Outside explicitly
+recorded decisions, syntax expansion is frozen for each technical-preview
+checkpoint. Work prioritizes correctness, native-runtime safety, editor
+responsiveness, and a coherent control-plane surface. APIs may change while
+Aura remains a technical preview.
 
 The post-Phase-1.5 Manual is reference-frozen. Every later semantic change,
 including a compatible extension, requires an ADR and must update the normative

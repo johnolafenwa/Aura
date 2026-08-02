@@ -1,23 +1,23 @@
 trait Named:
-    def name(self) -> String
-    def label(self) -> String:
+    def name(self) -> str
+    def label(self) -> str:
         return "name=" + self.name()
 
 class User:
-    name: String
+    name: str
 
 class Team:
-    name: String
+    name: str
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.name.clone()
 
 impl Named for Team:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.name.clone()
 
-    def label(self) -> String:
+    def label(self) -> str:
         return "team=" + self.name()
 
 def show[T: Named](value: T):

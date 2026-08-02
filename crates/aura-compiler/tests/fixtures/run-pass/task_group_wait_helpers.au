@@ -13,10 +13,10 @@ def worker_blocked(value: int32, release: Queue[int32]) -> int32:
         case QueueReceive.Cancelled:
             return value * 2
 
-def announce(queue: Queue[String]) -> None:
+def announce(queue: Queue[str]) -> None:
     queue.put("ready")
 
-def print_string_receive(value: own QueueReceive[String]):
+def print_string_receive(value: own QueueReceive[str]):
     match own value:
         case QueueReceive.Item(text):
             print(text)
@@ -65,7 +65,7 @@ def print_task_result(value: own TaskResult[int32]):
             print("cancelled")
 
 def main() -> int32:
-    started = Queue[String]()
+    started = Queue[str]()
     bounded = Queue[int32](capacity=1)
     print(bounded.put(1))
     print(bounded.try_put(2))
@@ -94,9 +94,9 @@ def main() -> int32:
     with TaskGroup() as group:
         group.start_soon(announce, started)
         release = Queue[int32]()
-        mut task_list = Vec[Task[int32]]()
-        task_list.push(group.start(worker_blocked, 4, release))
-        task_list.push(group.start(worker_fast, 3))
+        mut task_list = list[Task[int32]]()
+        task_list.append(group.start(worker_blocked, 4, release))
+        task_list.append(group.start(worker_fast, 3))
         print_string_receive(started.get(timeout=20ms))
         print_any(wait_any(task_list, timeout=20ms))
         release.put(1)

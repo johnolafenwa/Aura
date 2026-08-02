@@ -1,5 +1,5 @@
 # Test: function with many return points
-def multi_return(x: int32) -> String:
+def multi_return(x: int32) -> str:
     if x < 0:
         return "negative"
 

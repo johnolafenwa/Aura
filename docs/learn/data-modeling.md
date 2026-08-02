@@ -22,7 +22,7 @@ Imagine a small job runner. A job has an identifier, a queue name, and an attemp
 ```python
 class Job:
     id: int32
-    queue: String
+    queue: str
     attempts: int32 = 0
 ```
 
@@ -49,7 +49,7 @@ consume(job)
 When a helper only needs to look at a job, borrow it:
 
 ```python
-def describe(job: Job) -> String:
+def describe(job: Job) -> str:
     return job.queue + "#" + job.id.to_string()
 ```
 
@@ -62,13 +62,13 @@ Methods are functions declared inside a class. The **receiver** — how `self` i
 ```python
 class Job:
     id: int32
-    queue: String
+    queue: str
     attempts: int32 = 0
 
     def bump(mut self):
         self.attempts += 1
 
-    def label(self) -> String:
+    def label(self) -> str:
         return self.queue + "#" + self.id.to_string()
 ```
 
@@ -95,13 +95,13 @@ supports cloning, clone when you need to return an owned copy:
 
 ```python
 class User:
-    name: String
+    name: str
 
-    def name_copy(self) -> String:
+    def name_copy(self) -> str:
         return self.name.clone()
 ```
 
-Returning `self.name` directly would move the `String` through a shared borrow, which the compiler rejects. The clone makes the intention explicit and the reader does not have to guess.
+Returning `self.name` directly would move the `str` through a shared borrow, which the compiler rejects. The clone makes the intention explicit and the reader does not have to guess.
 
 An associated method is called on the type itself — useful for constructors and factories:
 
@@ -145,9 +145,9 @@ An enum describes a value that is exactly one of several shapes. A job in flight
 ```python
 enum JobState:
     Queued
-    Running(worker: String)
+    Running(worker: str)
     Done(duration: Duration)
-    Failed(message: String)
+    Failed(message: str)
 ```
 
 Construct a variant by naming it:
@@ -159,7 +159,7 @@ state = JobState.Running(worker="worker-a")
 `match` then inspects the variant exhaustively:
 
 ```python
-def render_state(state: JobState) -> String:
+def render_state(state: JobState) -> str:
     return match state:
         case JobState.Queued:
             "queued"
@@ -184,10 +184,10 @@ class TrackedJob:
     job: Job
     state: JobState = JobState.Queued
 
-    def mark_running(mut self, worker: own String):
+    def mark_running(mut self, worker: own str):
         self.state = JobState.Running(worker=worker)
 
-    def mark_failed(mut self, message: own String):
+    def mark_failed(mut self, message: own str):
         self.state = JobState.Failed(message=message)
 ```
 
@@ -204,7 +204,7 @@ class Box[T]:
 enum Load[T]:
     Ready(value: T)
     Empty
-    Failed(message: String)
+    Failed(message: str)
 ```
 
 Generic types let you write utility data structures without giving up the type of the stored value. [Generics And Traits](/manual/generics-and-traits) in the Manual covers the details.

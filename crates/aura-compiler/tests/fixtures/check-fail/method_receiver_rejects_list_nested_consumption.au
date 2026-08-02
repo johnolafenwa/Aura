@@ -1,6 +1,6 @@
-def eat(values: own Vec[Vec[int32]]) -> int32:
+def eat(values: own list[list[int32]]) -> int32:
     return 0
 
 def main():
-    values: Vec[Vec[int32]] = []
-    print(values.contains([eat(values)]))
+    values: list[list[int32]] = []
+    print(([eat(values)] in values))

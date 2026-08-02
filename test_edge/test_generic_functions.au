@@ -33,7 +33,7 @@ def main() -> int32:
     b: Box[int32] = make_box(99)
     print(b.get())
 
-    b2: Box[String] = make_box("boxed")
+    b2: Box[str] = make_box("boxed")
     print(b2.get())
 
     return 0

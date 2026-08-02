@@ -6,7 +6,7 @@ class Payload[T]:
 
 enum Response[T]:
     Success(Payload[T])
-    Failure(String)
+    Failure(str)
 
 def make_response[T](data: own T, tag: int32) -> Response[T]:
     payload = Payload(data=data, tag=tag)
@@ -23,7 +23,7 @@ def main() -> int32:
         case Response.Failure(msg):
             print(msg)
 
-    r2: Response[String] = make_response(data="hello", tag=2)
+    r2: Response[str] = make_response(data="hello", tag=2)
     match own r2:
         case Response.Success(p):
             print(f"data={p.data} tag={p.tag}")

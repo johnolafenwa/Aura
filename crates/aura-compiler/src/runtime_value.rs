@@ -660,7 +660,7 @@ impl ArrayValue {
                 ),
             ));
         }
-        let shape = try_copy_array_storage(shape, "Array.from_vec shape")?;
+        let shape = try_copy_array_storage(shape, "Array.from_list shape")?;
         Self::from_vec_with_shape(vector, dtype, shape)
     }
 
@@ -672,22 +672,22 @@ impl ArrayValue {
         let storage = match dtype {
             ArrayDType::Int32 => ArrayStorage::Int32(try_collect_array_storage(
                 vector.elements.len(),
-                "Array.from_vec",
+                "Array.from_list",
                 |index| array_int32_scalar(&vector.elements[index], index),
             )?),
             ArrayDType::Int64 => ArrayStorage::Int64(try_collect_array_storage(
                 vector.elements.len(),
-                "Array.from_vec",
+                "Array.from_list",
                 |index| array_int64_scalar(&vector.elements[index], index),
             )?),
             ArrayDType::Float32 => ArrayStorage::Float32(try_collect_array_storage(
                 vector.elements.len(),
-                "Array.from_vec",
+                "Array.from_list",
                 |index| array_float32_scalar(&vector.elements[index], index),
             )?),
             ArrayDType::Float64 => ArrayStorage::Float64(try_collect_array_storage(
                 vector.elements.len(),
-                "Array.from_vec",
+                "Array.from_list",
                 |index| array_float64_scalar(&vector.elements[index], index),
             )?),
         };
@@ -804,18 +804,18 @@ impl ArrayValue {
         }
     }
 
-    pub fn get(&self, coordinates: &[i32]) -> Result<Value> {
+    pub fn get(&self, coordinates: &[i64]) -> Result<Value> {
         Ok(self.value_at_flat(self.flat_index(coordinates)?))
     }
 
-    pub fn get_optional(&self, coordinates: &[i32]) -> Result<Option<Value>> {
+    pub fn get_optional(&self, coordinates: &[i64]) -> Result<Option<Value>> {
         Ok(self
             .flat_index(coordinates)
             .ok()
             .map(|index| self.value_at_flat(index)))
     }
 
-    pub fn set(&mut self, coordinates: &[i32], value: Value) -> Result<Value> {
+    pub fn set(&mut self, coordinates: &[i64], value: Value) -> Result<Value> {
         let index = self.flat_index(coordinates)?;
         self.set_flat(index, value)
     }
@@ -1017,7 +1017,7 @@ impl ArrayValue {
         )
     }
 
-    fn flat_index(&self, coordinates: &[i32]) -> Result<usize> {
+    fn flat_index(&self, coordinates: &[i64]) -> Result<usize> {
         if coordinates.len() != self.rank() {
             return Err(Diagnostic::coded(
                 "AU4007",
@@ -2975,12 +2975,12 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
                 unreachable!("numeric source types are handled before render_source_type")
             }
             Value::Bool(_) => "bool".to_string(),
-            Value::String(_) => "String".to_string(),
+            Value::String(_) => "str".to_string(),
             Value::Tuple(_) => "tuple".to_string(),
-            Value::Vec(_) => "Vec".to_string(),
+            Value::Vec(_) => "list".to_string(),
             Value::Array(_) => "Array".to_string(),
-            Value::Set(_) => "Set".to_string(),
-            Value::Map(_) => "Map".to_string(),
+            Value::Set(_) => "set".to_string(),
+            Value::Map(_) => "dict".to_string(),
             Value::Duration(_) => "Duration".to_string(),
             Value::Rng(_) => "random.Rng".to_string(),
             Value::Range(_) => "Range".to_string(),
@@ -4276,9 +4276,9 @@ fn select_runtime_sources(values: Vec<Value>) -> Result<Vec<SelectRuntimeSource>
             "select runtime requires at least one Queue, Task, or Duration source",
         ));
     }
-    if values.len() > i32::MAX as usize {
+    if i64::try_from(values.len()).is_err() {
         return Err(select_runtime_error(
-            "select runtime source count exceeds the int32 outcome-index range",
+            "select runtime source count exceeds the int64 outcome-index range",
         ));
     }
 
@@ -4330,7 +4330,7 @@ fn select_runtime_probe(
 
     let now = Instant::now();
     for (index, source) in sources.iter().enumerate() {
-        let index = i32::try_from(index).expect("select source count was validated");
+        let index = i64::try_from(index).expect("select source count was validated");
         match source {
             SelectRuntimeSource::Queue(channel) => match channel.try_recv() {
                 TryRecvResult::Value(value) => {
@@ -6688,7 +6688,11 @@ impl Value {
                     }
                     Value::Array(array) => rendered.push_str(&array.render()),
                     Value::Set(values) => {
-                        rendered.push_str("Set{");
+                        if values.elements.is_empty() {
+                            rendered.push_str("set()");
+                            continue;
+                        }
+                        rendered.push('{');
                         actions.push(RenderAction::Static("}"));
                         for (index, value) in values.elements.iter().enumerate().rev() {
                             actions.push(RenderAction::Value(value));
@@ -13263,7 +13267,7 @@ fn runtime_uint8_elements<'a>(value: &'a Value, call: &str) -> Result<&'a [Value
     let Value::Vec(value) = value else {
         return Err(Diagnostic::coded(
             "AU4001",
-            format!("`{call}` expects a runtime `Vec[uint8]` value"),
+            format!("`{call}` expects a runtime `list[uint8]` value"),
         ));
     };
     if !matches!(
@@ -13276,7 +13280,7 @@ fn runtime_uint8_elements<'a>(value: &'a Value, call: &str) -> Result<&'a [Value
     {
         return Err(Diagnostic::coded(
             "AU4001",
-            format!("`{call}` expects an exact runtime `Vec[uint8]` value"),
+            format!("`{call}` expects an exact runtime `list[uint8]` value"),
         ));
     }
     Ok(&value.elements)
@@ -13470,7 +13474,7 @@ fn host_string_value_ref<'a>(value: &'a Value, index: usize, call: &str) -> Resu
     match value {
         Value::String(value) => Ok(value),
         other => Err(Diagnostic::new(format!(
-            "`{call}` expects argument {} to be `String`, found `{}`",
+            "`{call}` expects argument {} to be `str`, found `{}`",
             index + 1,
             other.render()
         ))),
@@ -13486,13 +13490,13 @@ fn bytes_host_builtin_name(name: &str) -> bool {
             | "bytes::base64_decode"
             | "bytes::sha256"
             | "bytes::sha256_string"
-            | "String.to_bytes"
-            | "String.from_bytes"
+            | "str.to_bytes"
+            | "str.from_bytes"
     )
 }
 
 pub(crate) fn evaluate_string_to_bytes_host_ref(text: &str) -> Result<Value> {
-    bytes_resource_only(bytes_codec::string_to_bytes(text), "String.to_bytes")
+    bytes_resource_only(bytes_codec::string_to_bytes(text), "str.to_bytes")
         .and_then(|bytes| runtime_bytes_from_host(&bytes))
 }
 
@@ -13550,14 +13554,14 @@ pub(crate) fn evaluate_bytes_host_builtin_ref(name: &str, value: &Value) -> Opti
             bytes_resource_only(bytes_codec::sha256_string(text), name)
                 .and_then(|digest| runtime_bytes_from_host(&digest))
         }
-        "String.to_bytes" => {
+        "str.to_bytes" => {
             let text = match host_string_value_ref(value, 0, name) {
                 Ok(text) => text,
                 Err(error) => return Some(Err(error)),
             };
             evaluate_string_to_bytes_host_ref(text)
         }
-        "String.from_bytes" => {
+        "str.from_bytes" => {
             let elements = match runtime_uint8_elements(value, name) {
                 Ok(elements) => elements,
                 Err(error) => return Some(Err(error)),
@@ -13592,7 +13596,7 @@ fn host_string_ref_arg<'a>(args: &'a [Value], index: usize, call: &str) -> Resul
     match args.get(index) {
         Some(Value::String(value)) => Ok(value),
         Some(other) => Err(Diagnostic::new(format!(
-            "`{call}` expects argument {} to be `String`, found `{}`",
+            "`{call}` expects argument {} to be `str`, found `{}`",
             index + 1,
             other.render()
         ))),
@@ -13614,7 +13618,7 @@ fn host_string_map_arg(
 ) -> Result<BTreeMap<String, String>> {
     let Some(Value::Map(map)) = args.get(index) else {
         return Err(Diagnostic::new(format!(
-            "`{call}` expects argument {} to be `Map[String, String]`",
+            "`{call}` expects argument {} to be `dict[str, str]`",
             index + 1
         )));
     };
@@ -13623,7 +13627,7 @@ fn host_string_map_arg(
         .map(|(key, value)| match (key, value) {
             (Value::String(key), Value::String(value)) => Ok((key.clone(), value.clone())),
             _ => Err(Diagnostic::new(format!(
-                "`{call}` expects `Map[String, String]`"
+                "`{call}` expects `dict[str, str]`"
             ))),
         })
         .collect()
@@ -13631,8 +13635,8 @@ fn host_string_map_arg(
 
 fn host_string_map_value(entries: BTreeMap<String, String>) -> Value {
     Value::Map(MapValue {
-        key_type: Type::named("String"),
-        value_type: Type::named("String"),
+        key_type: Type::named("str"),
+        value_type: Type::named("str"),
         entries: entries
             .into_iter()
             .map(|(key, value)| (Value::String(key), Value::String(value)))
@@ -14148,7 +14152,7 @@ pub(crate) fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
                             "json.Value",
                             "Object",
                             json_runtime_single_payload(Value::Map(MapValue {
-                                key_type: json_runtime_type("String")?,
+                                key_type: json_runtime_type("str")?,
                                 value_type: json_runtime_type("json.Value")?,
                                 entries,
                             }))?,
@@ -14300,7 +14304,7 @@ pub(crate) fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                 }
                 ("Array", [Value::Vec(_)]) => {
                     return Err(malformed(
-                        "Value.Array payload must be exactly `Vec[json.Value]` at runtime",
+                        "Value.Array payload must be exactly `list[json.Value]` at runtime",
                     ))
                 }
                 ("Object", [Value::Map(entries)]) if json_object_metadata_is_exact(entries) => {
@@ -14315,7 +14319,7 @@ pub(crate) fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                         let (key, value) = &entries.entries[0];
                         let Value::String(key) = key else {
                             return Err(malformed(format!(
-                                "Value.Object key must be `String`, found `{}`",
+                                "Value.Object key must be `str`, found `{}`",
                                 key.render()
                             )));
                         };
@@ -14335,7 +14339,7 @@ pub(crate) fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                 }
                 ("Object", [Value::Map(_)]) => {
                     return Err(malformed(
-                        "Value.Object payload must be exactly `Map[String, json.Value]` at runtime",
+                        "Value.Object payload must be exactly `dict[str, json.Value]` at runtime",
                     ))
                 }
                 (variant_name, _) => {
@@ -14390,7 +14394,7 @@ pub(crate) fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                     if let Some((key, value)) = entries.get(next_index) {
                         let Value::String(key) = key else {
                             return Err(malformed(format!(
-                                "Value.Object key must be `String`, found `{}`",
+                                "Value.Object key must be `str`, found `{}`",
                                 key.render()
                             )));
                         };
@@ -14435,7 +14439,7 @@ pub(crate) fn json_array_metadata_is_exact(value: &VecValue) -> bool {
 }
 
 pub(crate) fn json_object_metadata_is_exact(value: &MapValue) -> bool {
-    json_exact_nominal_type(&value.key_type, "String")
+    json_exact_nominal_type(&value.key_type, "str")
         && json_exact_nominal_type(&value.value_type, "json.Value")
 }
 
@@ -14739,7 +14743,7 @@ fn evaluate_host_builtin_with_args(
         "sys::args" => {
             host_expect_arity(name, &args, 0)?;
             Ok(Value::Vec(VecValue {
-                element_type: Type::named("String"),
+                element_type: Type::named("str"),
                 elements: program_args
                     .map(<[String]>::to_vec)
                     .unwrap_or_else(host_process_args)
@@ -15145,33 +15149,27 @@ pub(crate) fn task_result_cancelled() -> Value {
     })
 }
 
-pub(crate) fn select_outcome_queue(index: i32, outcome: Value) -> Value {
+pub(crate) fn select_outcome_queue(index: i64, outcome: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SelectOutcome".to_string(),
         variant_name: "Queue".to_string(),
-        payloads: vec![
-            Value::Int(IntegerValue::from_signed(index as i128)),
-            outcome,
-        ],
+        payloads: vec![Value::Int(IntegerValue::from_i64(index)), outcome],
     })
 }
 
-pub(crate) fn select_outcome_task(index: i32, outcome: Value) -> Value {
+pub(crate) fn select_outcome_task(index: i64, outcome: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SelectOutcome".to_string(),
         variant_name: "Task".to_string(),
-        payloads: vec![
-            Value::Int(IntegerValue::from_signed(index as i128)),
-            outcome,
-        ],
+        payloads: vec![Value::Int(IntegerValue::from_i64(index)), outcome],
     })
 }
 
-pub(crate) fn select_outcome_deadline(index: i32) -> Value {
+pub(crate) fn select_outcome_deadline(index: i64) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SelectOutcome".to_string(),
         variant_name: "Deadline".to_string(),
-        payloads: vec![Value::Int(IntegerValue::from_signed(index as i128))],
+        payloads: vec![Value::Int(IntegerValue::from_i64(index))],
     })
 }
 
@@ -15183,20 +15181,20 @@ pub(crate) fn select_outcome_cancelled() -> Value {
     })
 }
 
-pub(crate) fn wait_any_ready(index: i32, value: Value) -> Value {
+pub(crate) fn wait_any_ready(index: i64, value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "WaitAny".to_string(),
         variant_name: "Ready".to_string(),
-        payloads: vec![Value::Int(IntegerValue::from_signed(index as i128)), value],
+        payloads: vec![Value::Int(IntegerValue::from_i64(index)), value],
     })
 }
 
-pub(crate) fn wait_any_error(index: i32, message: String) -> Value {
+pub(crate) fn wait_any_error(index: i64, message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "WaitAny".to_string(),
         variant_name: "Error".to_string(),
         payloads: vec![
-            Value::Int(IntegerValue::from_signed(index as i128)),
+            Value::Int(IntegerValue::from_i64(index)),
             Value::String(message),
         ],
     })
@@ -15229,12 +15227,12 @@ pub(crate) fn wait_all_ready(values: Vec<Value>) -> Value {
     })
 }
 
-pub(crate) fn wait_all_error(index: i32, message: String) -> Value {
+pub(crate) fn wait_all_error(index: i64, message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "WaitAll".to_string(),
         variant_name: "Error".to_string(),
         payloads: vec![
-            Value::Int(IntegerValue::from_signed(index as i128)),
+            Value::Int(IntegerValue::from_i64(index)),
             Value::String(message),
         ],
     })

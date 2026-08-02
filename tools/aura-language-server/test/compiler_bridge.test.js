@@ -234,7 +234,7 @@ test("compiler bridge helper conversions cover diagnostics, symbols, and definit
             line: 4,
             start_character: 2,
             end_character: 6,
-            hover: "```aura\nfunction greet() -> String\n```"
+            hover: "```aura\nfunction greet() -> str\n```"
           }
         ]
       },
@@ -242,7 +242,7 @@ test("compiler bridge helper conversions cover diagnostics, symbols, and definit
       3
     ),
     {
-      value: "```aura\nfunction greet() -> String\n```",
+      value: "```aura\nfunction greet() -> str\n```",
       range: {
         start: { line: 4, character: 2 },
         end: { line: 4, character: 6 }
@@ -329,9 +329,9 @@ test("compiler bridge defaults metadata omitted by older compatible records", ()
     call_frames: [],
     task_ancestry: []
   });
-  assert.deepEqual(convert({ help: ["borrow or clone"] }).data, {
+  assert.deepEqual(convert({ help: ["use shared access"] }).data, {
     notes: [],
-    help: ["borrow or clone"],
+    help: ["use shared access"],
     edits: [],
     call_frames: [],
     task_ancestry: []
@@ -354,7 +354,7 @@ test("compiler bridge preserves populated runtime frame metadata without rewriti
         line: 8,
         start_character: 17,
         end_character: 18,
-        message: "vector index is out of bounds",
+        message: "list index is out of bounds",
         secondary_spans: [],
         notes: [],
         help: [],
@@ -1216,7 +1216,7 @@ test("compiler bridge preserves assert operand occurrences and keyword completio
     assert.ok(conditionUse, "assert condition should expose its identifier use");
     assert.ok(messageUse, "assert message should expose its identifier use");
     assert.equal(conditionUse.hover, "```aura\nbinding ready: bool\n```");
-    assert.equal(messageUse.hover, "```aura\nbinding message: String\n```");
+    assert.equal(messageUse.hover, "```aura\nbinding message: str\n```");
     assert.equal(conditionUse.definition?.line, 1);
     assert.equal(messageUse.definition?.line, 2);
 
@@ -1226,11 +1226,6 @@ test("compiler bridge preserves assert operand occurrences and keyword completio
         (completion) => completion.name === "assert" && completion.kind === "keyword"
       ),
       "compiler completion should include the assert keyword"
-    );
-    assert.equal(
-      completions.some((completion) => completion.name === "borrow"),
-      false,
-      "compiler completion must not suggest the retired borrow keyword"
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -1375,7 +1370,7 @@ test("compiler bridge exposes invalid assert diagnostics at the keyword", async 
 test("compiler bridge preserves len and str builtin calls", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-len-str-"));
   const source = [
-    "def report(hosts: Vec[String]):",
+    "def report(hosts: list[str]):",
     "    print(len(hosts))",
     "    print(str(hosts))",
     ""
@@ -1392,7 +1387,7 @@ test("compiler bridge preserves len and str builtin calls", async () => {
       (candidate) => candidate.line === 1 && candidate.start_character === 14
     );
     assert.ok(operand, "missing len operand occurrence");
-    assert.ok(operand.hover.includes("param hosts: Vec[String]"));
+    assert.ok(operand.hover.includes("param hosts: list[str]"));
 
     const invalid = await analyzeWithCompiler(
       mainUri,
@@ -1414,7 +1409,7 @@ test("compiler bridge preserves len and str builtin calls", async () => {
 test("compiler bridge exposes all public length members as int64", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-length-types-"));
   const source = [
-    "def lengths_match(text: String, values: Vec[int32], counts: Map[String, int32], seen: Set[int32]) -> bool:",
+    "def lengths_match(text: str, values: list[int32], counts: dict[str, int32], seen: set[int32]) -> bool:",
     "    text_length = text.len()",
     "    text_bytes = text.byte_len()",
     "    vector_length = values.len()",
@@ -1443,11 +1438,11 @@ test("compiler bridge exposes all public length members as int64", async () => {
 
     const lines = source.split("\n");
     for (const [line, member, receiver] of [
-      [1, "len", "String"],
-      [2, "byte_len", "String"],
-      [3, "len", "Vec"],
-      [4, "len", "Map"],
-      [5, "len", "Set"]
+      [1, "len", "str"],
+      [2, "byte_len", "str"],
+      [3, "len", "list"],
+      [4, "len", "dict"],
+      [5, "len", "set"]
     ]) {
       const character = lines[line].indexOf(`.${member}`) + 1;
       const hover = compilerHoverAtPosition(analysis, line, character);
@@ -1466,7 +1461,7 @@ test("compiler bridge exposes all public length members as int64", async () => {
     assert.ok(builtinHover, "missing len(...) builtin hover");
     assert.ok(
       builtinHover.value.startsWith(
-        "```aura\nlen(value: String|Vec[T]|Map[K, V]|Set[T]) -> int64\n```"
+        "```aura\nlen(value: str|list[T]|dict[K, V]|set[T]) -> int64\n```"
       ),
       `len(...) hover must expose an int64 result, found ${builtinHover.value}`
     );
@@ -1493,7 +1488,7 @@ test("compiler bridge exposes all public length members as int64", async () => {
 test("compiler bridge preserves enumerate and zip loop operands", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-lockstep-"));
   const source = [
-    "def report(hosts: Vec[String], ports: Vec[int32]):",
+    "def report(hosts: list[str], ports: list[int32]):",
     "    for index, host in enumerate(hosts):",
     "        print(index)",
     "    for host, port in zip(hosts, ports):",
@@ -1512,7 +1507,7 @@ test("compiler bridge preserves enumerate and zip loop operands", async () => {
       (candidate) => candidate.line === 1 && candidate.start_character === 33
     );
     assert.ok(hosts, "missing enumerate operand occurrence");
-    assert.ok(hosts.hover.includes("param hosts: Vec[String]"));
+    assert.ok(hosts.hover.includes("param hosts: list[str]"));
 
     const invalid = await analyzeWithCompiler(
       mainUri,
@@ -1529,7 +1524,7 @@ test("compiler bridge preserves enumerate and zip loop operands", async () => {
     assert.equal(diagnostic.code, "AU2002");
     assert.equal(
       diagnostic.message,
-      "`enumerate` requires a `Vec[T]` or `Set[T]` iterable, found `Range`"
+      "`enumerate` requires a `list[T]` or `set[T]` iterable, found `Range`"
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -1539,7 +1534,7 @@ test("compiler bridge preserves enumerate and zip loop operands", async () => {
 test("compiler bridge preserves membership and comparison chain operands", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-membership-"));
   const source = [
-    "def probe(ports: Vec[int32], port: int32, low: int32, high: int32) -> bool:",
+    "def probe(ports: list[int32], port: int32, low: int32, high: int32) -> bool:",
     "    return port in ports and low <= port < high",
     ""
   ].join("\n");
@@ -1553,7 +1548,7 @@ test("compiler bridge preserves membership and comparison chain operands", async
     assert.deepEqual(analysis.diagnostics, []);
     for (const [start, end, hover] of [
       [11, 15, "param port: int32"],
-      [19, 24, "param ports: Vec[int32]"],
+      [19, 24, "param ports: list[int32]"],
       [29, 32, "param low: int32"],
       [36, 40, "param port: int32"],
       [43, 47, "param high: int32"]
@@ -1578,7 +1573,7 @@ test("compiler bridge preserves membership and comparison chain operands", async
     assert.equal(diagnostic.code, "AU2003");
     assert.equal(
       diagnostic.message,
-      "`in` requires a `Vec[T]`, `Set[T]`, `Map[K, V]`, or `String` container, found `int64`"
+      "`in` requires a `list[T]`, `set[T]`, `dict[K, V]`, or `str` container, found `int64`"
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -1588,7 +1583,7 @@ test("compiler bridge preserves membership and comparison chain operands", async
 test("compiler bridge preserves conditional operands and bool diagnostics", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-conditional-"));
   const source = [
-    "def choose(ready: bool, left: String, right: String) -> String:",
+    "def choose(ready: bool, left: str, right: str) -> str:",
     "    return left.clone() if ready else right.clone()",
     ""
   ].join("\n");
@@ -1601,9 +1596,9 @@ test("compiler bridge preserves conditional operands and bool diagnostics", asyn
     assert.ok(analysis);
     assert.deepEqual(analysis.diagnostics, []);
     for (const [start, end, hover] of [
-      [11, 15, "param left: String"],
+      [11, 15, "param left: str"],
       [27, 32, "param ready: bool"],
-      [38, 43, "param right: String"]
+      [38, 43, "param right: str"]
     ]) {
       const occurrence = analysis.occurrences.find(
         (candidate) =>
@@ -1638,7 +1633,7 @@ test("compiler bridge preserves conditional operands and bool diagnostics", asyn
 
 test("compiler bridge preserves real ownership provenance, help, and safe edits", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-ownership-diag-"));
-  const source = "def take(value: String) -> String:\n    return value\n";
+  const source = "def take(value: str) -> str:\n    return value\n";
 
   try {
     setWorkspaceRoots([repoRoot, tempRoot]);
@@ -1667,7 +1662,7 @@ test("compiler bridge preserves real ownership provenance, help, and safe edits"
       }
     ]);
     assert.deepEqual(diagnostics[0].data.help, [
-      "declare the parameter as `own String` when the function should consume it, or call `.clone()` to consume an independent copy"
+      "declare the parameter as `own str` when the function should consume it, or call `.clone()` to consume an independent copy"
     ]);
     assert.deepEqual(diagnostics[0].data.edits, [
       {
@@ -1689,7 +1684,7 @@ test("compiler bridge preserves nested Transfer diagnostics and provenance", asy
     "import random",
     "",
     "class Holder:",
-    "    label: String",
+    "    label: str",
     "    generator: random.Rng",
     "",
     "def consume(holder: own Holder):",
@@ -1743,8 +1738,8 @@ test("compiler bridge preserves single-consumer duplication diagnostics", async 
     path.join(os.tmpdir(), "aura-lsp-task-result-diag-")
   );
   const source = [
-    "def duplicate(tasks: Vec[Task[String]]) -> Vec[Task[String]]:",
-    "    return tasks.clone()",
+    "def duplicate(tasks: list[Task[str]]) -> list[Task[str]]:",
+    "    return tasks.copy()",
     ""
   ].join("\n");
 
@@ -1760,7 +1755,7 @@ test("compiler bridge preserves single-consumer duplication diagnostics", async 
     assert.equal(diagnostic.code, "AU3009");
     assert.equal(
       diagnostic.message,
-      "cannot use `Vec.clone` because duplicating `Vec[Task[String]]` would create a second observation right for non-repeatable task result `String`"
+      "cannot use `list.copy` because duplicating `list[Task[str]]` would create a second observation right for non-repeatable task result `str`"
     );
     assert.deepEqual(diagnostic.range, {
       start: { line: 1, character: 17 },
@@ -1777,7 +1772,7 @@ test("compiler bridge preserves single-consumer duplication diagnostics", async 
 test("compiler bridge preserves single-consumer Task alias provenance", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-task-alias-"));
   const source = [
-    "def make_text() -> String:",
+    "def make_text() -> str:",
     '    return "once"',
     "",
     "def main() -> int32:",
@@ -1830,7 +1825,7 @@ test("compiler bridge teaches conditional task consumption and Queue Transfer", 
     path.join(os.tmpdir(), "aura-lsp-task-transfer-hover-")
   );
   const source = [
-    "def inspect(task: own Task[String], tasks: own Vec[Task[String]], queue: Queue[String]):",
+    "def inspect(task: own Task[str], tasks: own list[Task[str]], queue: Queue[str]):",
     "    print(task.result_or_none())",
     "    print(wait_all(tasks))",
     '    queue.put("hello")',
@@ -1857,9 +1852,9 @@ test("compiler bridge teaches conditional task consumption and Queue Transfer", 
     assert.ok(
       hovers.some(
         (hover) =>
-          hover.includes("wait_all(tasks: Vec[Task[T]]") &&
-          hover.includes("consumes the whole `Vec[Task[T]]` observation right") &&
-          hover.includes("repeatable `T` leaves the vector reusable")
+          hover.includes("wait_all(tasks: list[Task[T]]") &&
+          hover.includes("consumes the whole `list[Task[T]]` observation right") &&
+          hover.includes("repeatable `T` leaves the list reusable")
       )
     );
     assert.ok(
@@ -1884,13 +1879,13 @@ test("compiler bridge teaches conditional task consumption and Queue Transfer", 
       assert.ok(item, `missing ${name} completion`);
       assert.ok(
         item.detail.includes("consumes tasks when T is non-repeatable"),
-        `${name} completion must expose whole-vector conditional consumption`
+        `${name} completion must expose whole-list conditional consumption`
       );
     }
 
     const taskCompletions = await completeWithCompiler(
       mainUri,
-      "def inspect(task: own Task[String]):\n    task.\n",
+      "def inspect(task: own Task[str]):\n    task.\n",
       1,
       9,
       "."
@@ -1907,7 +1902,7 @@ test("compiler bridge teaches conditional task consumption and Queue Transfer", 
 
     const queueCompletions = await completeWithCompiler(
       mainUri,
-      "def inspect(queue: Queue[String]):\n    queue.\n",
+      "def inspect(queue: Queue[str]):\n    queue.\n",
       1,
       10,
       "."
@@ -1926,89 +1921,12 @@ test("compiler bridge teaches conditional task consumption and Queue Transfer", 
   }
 });
 
-test("compiler bridge preserves exact ADR-0022 retired-borrow migration diagnostics", async () => {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-retired-borrow-"));
-  const cases = [
-    {
-      name: "shared-parameter",
-      source: "def inspect(value: borrow String):\n    pass\n",
-      message: "`borrow T` was removed; write `T` for shared access"
-    },
-    {
-      name: "mutable-parameter",
-      source: "def replace(value: borrow mut String):\n    pass\n",
-      message: "`borrow mut T` was removed; write `mut T`"
-    },
-    {
-      name: "shared-receiver",
-      source: "class Box:\n    def read(borrow self):\n        pass\n",
-      message: "`borrow self` was removed; write `self` for a shared receiver"
-    },
-    {
-      name: "mutable-receiver",
-      source: "class Box:\n    def replace(borrow mut self):\n        pass\n",
-      message: "`borrow mut self` was removed; write `mut self`"
-    },
-    {
-      name: "shared-loop",
-      source: "def main():\n    for value in borrow values:\n        pass\n",
-      message: "`in borrow` was removed; write `in` for shared iteration"
-    },
-    {
-      name: "mutable-loop",
-      source: "def main():\n    for value in borrow mut values:\n        pass\n",
-      message: "`in borrow mut` was removed; write `in mut`"
-    },
-    {
-      name: "shared-match",
-      source: "def main():\n    match borrow value:\n        case _:\n            pass\n",
-      message: "`match borrow` was removed; write `match` for shared access"
-    },
-    {
-      name: "mutable-match",
-      source: "def main():\n    match borrow mut value:\n        case _:\n            pass\n",
-      message: "`match borrow mut` was removed; write `match mut`"
-    },
-    {
-      name: "borrowed-return",
-      source: "def choose(value: String) -> borrow String:\n    return value\n",
-      message: "borrowed returns were removed; return an owned value instead"
-    },
-    {
-      name: "reserved-identifier",
-      source: "def borrow():\n    pass\n",
-      message: "expected identifier"
-    }
-  ];
-
-  try {
-    setWorkspaceRoots([repoRoot, tempRoot]);
-    for (const entry of cases) {
-      const mainPath = path.join(tempRoot, `${entry.name}.au`);
-      const mainUri = `file://${mainPath}`;
-      const analysis = await analyzeWithCompiler(mainUri, entry.source);
-
-      assert.ok(analysis, `${entry.name} should return compiler analysis`);
-      assert.equal(analysis.diagnostics.length, 1, entry.name);
-      assert.equal(analysis.diagnostics[0].code, "AU1101", entry.name);
-      assert.equal(analysis.diagnostics[0].message, entry.message, entry.name);
-
-      const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);
-      assert.equal(diagnostic.code, "AU1101", entry.name);
-      assert.equal(diagnostic.source, "aura-compiler", entry.name);
-      assert.equal(diagnostic.message, entry.message, entry.name);
-    }
-  } finally {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
-  }
-});
-
 test("compiler bridge preserves Queue and Range iteration carve-out diagnostics", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-iteration-capability-"));
   const queueMessage =
     "Queue iteration receives values; each received item is already owned by the loop binding, and the Queue handle is a copy value, so ownership modifiers have nothing to modify; use the bare form `for item in queue:`";
   const rangeMessage =
-    "Range iteration yields copy `int32` values, so ownership modifiers have nothing to modify or transfer; use the bare form `for item in range(...):`";
+    "Range iteration yields copy `int64` values, so ownership modifiers have nothing to modify or transfer; use the bare form `for item in range(...):`";
   const cases = [
     {
       name: "queue-mut",
@@ -2129,7 +2047,7 @@ test("compiler bridge preserves the integer true-division teaching diagnostic", 
   }
 });
 
-test("compiler bridge accepts the retired chained-comparison spelling", async () => {
+test("compiler bridge accepts chained comparisons", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-chained-comparison-"));
   const source = [
     "def main():",
@@ -2169,8 +2087,8 @@ test("compiler bridge preserves indexed non-copy ownership diagnostic codes", as
       code: "AU3005",
       source: [
         "def main():",
-        "    values: Vec[String] = [\"one\"]",
-        "    value: String = values[0]",
+        "    values: list[str] = [\"one\"]",
+        "    value: str = values[0]",
         ""
       ].join("\n")
     },
@@ -2178,7 +2096,7 @@ test("compiler bridge preserves indexed non-copy ownership diagnostic codes", as
       code: "AU3006",
       source: [
         "def main():",
-        "    mut values: Vec[String] = [\"one\"]",
+        "    mut values: list[str] = [\"one\"]",
         "    values[0] += \"two\"",
         ""
       ].join("\n")
@@ -2209,12 +2127,12 @@ test("compiler bridge propagates clone-safety-aware indexed read guidance", asyn
       name: "clone_safe_vector",
       source: [
         "def main():",
-        "    values: Vec[String] = [\"one\"]",
-        "    value: String = values[0]",
+        "    values: list[str] = [\"one\"]",
+        "    value: str = values[0]",
         ""
       ].join("\n"),
       message:
-        "cannot implicitly copy `String` out of a vector index; use `get(index)` for an explicit cloned read instead"
+        "cannot implicitly copy `str` out of a list index; use `get(index)` for an explicit cloned read instead"
     },
     {
       name: "rng_vector",
@@ -2222,18 +2140,18 @@ test("compiler bridge propagates clone-safety-aware indexed read guidance", asyn
         "import random",
         "",
         "def main():",
-        "    mut generators = Vec[random.Rng]()",
-        "    generators.push(random.Rng(seed=1))",
+        "    mut generators = list[random.Rng]()",
+        "    generators.append(random.Rng(seed=1))",
         "    chosen = generators[0]",
         ""
       ].join("\n"),
       message:
-        "cannot implicitly copy `random.Rng` out of a vector index; `get(index)` cannot clone it because `random.Rng` is directly non-cloneable, so use `remove(index)` to transfer ownership instead"
+        "cannot implicitly copy `random.Rng` out of a list index; `get(index)` cannot clone it because `random.Rng` is directly non-cloneable, so use `pop(index)` to transfer ownership instead"
     },
     {
       name: "generic_map",
       source: [
-        "def lookup[V](values: Map[String, V], key: String) -> V:",
+        "def lookup[V](values: dict[str, V], key: str) -> V:",
         "    return values[key]",
         "",
         "def main():",
@@ -2241,7 +2159,7 @@ test("compiler bridge propagates clone-safety-aware indexed read guidance", asyn
         ""
       ].join("\n"),
       message:
-        "cannot implicitly copy `V` out of a map index; `get(key)` requires a clone-safe `V`, or use `remove(key)` to transfer ownership"
+        "cannot implicitly copy `V` out of a dict index; `get(key)` requires a clone-safe `V`, or use `remove(key)` to transfer ownership"
     }
   ];
 
@@ -2366,13 +2284,13 @@ test("compiler bridge preserves canonical receiver contracts in hover and comple
 test("compiler bridge preserves ordinary parameter ownership in hover and diagnostics", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-param-contracts-"));
   const source = [
-    "def inspect(value: String):",
+    "def inspect(value: str):",
     "    print(value)",
-    "def consume(value: own String = \"owned fallback\"):",
+    "def consume(value: own str = \"owned fallback\"):",
     "    print(value)",
-    "def explicit(value: String = \"fallback\"):",
+    "def explicit(value: str = \"fallback\"):",
     "    print(value)",
-    "def mutate(value: mut String):",
+    "def mutate(value: mut str):",
     "    pass",
     "def main():",
     "    mut text = \"aura\"",
@@ -2393,10 +2311,10 @@ test("compiler bridge preserves ordinary parameter ownership in hover and diagno
     assert.ok(analysis);
     assert.equal(analysis.diagnostics.length, 0);
     for (const signature of [
-      "function inspect(value: String) -> None",
-      "function consume(value: own String = ...) -> None",
-      "function explicit(value: String = ...) -> None",
-      "function mutate(value: mut String) -> None"
+      "function inspect(value: str) -> None",
+      "function consume(value: own str = ...) -> None",
+      "function explicit(value: str = ...) -> None",
+      "function mutate(value: mut str) -> None"
     ]) {
       assert.ok(
         analysis.occurrences.some((occurrence) => occurrence.hover.includes(signature)),
@@ -2405,7 +2323,7 @@ test("compiler bridge preserves ordinary parameter ownership in hover and diagno
     }
 
     const invalid = [
-      "def lost(value: mut String = \"fallback\"):",
+      "def lost(value: mut str = \"fallback\"):",
       "    pass",
       ""
     ].join("\n");
@@ -2429,14 +2347,14 @@ test("compiler bridge exposes capture-free function values and rejects method va
     "    return transform(value)",
     "def offset(value: int32 = 10) -> int32:",
     "    return value + 1",
-    "def take(value: own String) -> String:",
+    "def take(value: own str) -> str:",
     "    return value",
-    "def apply_owned(callback: def(own String) -> String, value: own String) -> String:",
+    "def apply_owned(callback: def(own str) -> str, value: own str) -> str:",
     "    return callback(value)",
     "def main() -> int32:",
     "    selected = double",
     "    known_offset = offset",
-    "    consume: def(own String) -> String = take",
+    "    consume: def(own str) -> str = take",
     "    print(apply(selected, 21))",
     "    print(apply_owned(consume, \"owned\"))",
     "    print(known_offset())",
@@ -2480,7 +2398,7 @@ test("compiler bridge exposes capture-free function values and rejects method va
     assert.ok(
       analysis.occurrences.some((occurrence) =>
         occurrence.hover.includes(
-          "function apply_owned(callback: def(own String) -> String, value: own String) -> String"
+          "function apply_owned(callback: def(own str) -> str, value: own str) -> str"
         )
       )
     );
@@ -2525,10 +2443,10 @@ test("compiler bridge exposes capture-free function values and rejects method va
     );
 
     const invalidCapability = [
-      "def consume(value: own String) -> int64:",
+      "def consume(value: own str) -> int64:",
       "    return value.len()",
       "def main() -> int32:",
-      "    shared_only: def(String) -> int64 = consume",
+      "    shared_only: def(str) -> int64 = consume",
       "    return 0",
       ""
     ].join("\n");
@@ -2768,7 +2686,7 @@ test("compiler bridge understands trait symbols and trait method completions", a
     "."
   );
   assert.ok(completions);
-  assert.ok(completions.some((item) => item.name === "greet" && item.detail === "greet(self) -> String"));
+  assert.ok(completions.some((item) => item.name === "greet" && item.detail === "greet(self) -> str"));
 });
 
 test("compiler bridge resolves local module imports for analysis and completions", async () => {
@@ -2884,7 +2802,7 @@ test("compiler bridge preserves complete owned enum payload signatures", async (
       eventsPath,
       [
         "public enum Event:",
-        "    Message(code: int32, body: String)",
+        "    Message(code: int32, body: str)",
         ""
       ].join("\n")
     );
@@ -2914,7 +2832,7 @@ test("compiler bridge preserves complete owned enum payload signatures", async (
     const matchingVariantOccurrences = analysis.occurrences.filter(
       (occurrence) =>
         occurrence.hover.includes(
-          "variant Message(code: own int32, body: own String) -> pkg.events.Event"
+          "variant Message(code: own int32, body: own str) -> pkg.events.Event"
         ) &&
         occurrence.definition !== null &&
         occurrence.definition.file_path === canonicalEventsPath
@@ -2947,12 +2865,12 @@ test("compiler bridge preserves complete owned enum payload signatures", async (
     assert.ok(message);
     assert.equal(
       message.detail,
-      "Message(code: own int32, body: own String) -> pkg.events.Event"
+      "Message(code: own int32, body: own str) -> pkg.events.Event"
     );
 
     for (const [enumName, variantName, detail] of [
-      ["WaitAny", "Ready", "Ready(own int32, own T) -> WaitAny"],
-      ["WaitAll", "Error", "Error(own int32, own String) -> WaitAll"]
+      ["WaitAny", "Ready", "Ready(own int64, own T) -> WaitAny"],
+      ["WaitAll", "Error", "Error(own int64, own str) -> WaitAll"]
     ]) {
       const builtinSource = `def main():\n    ${enumName}.\n`;
       const builtinCompletions = await completeWithCompiler(
@@ -2978,11 +2896,11 @@ test("compiler bridge includes imported trait methods in completions", async () 
     fs.mkdirSync(path.join(tempRoot, "pkg"));
     fs.writeFileSync(
       path.join(tempRoot, "pkg/named.au"),
-      "public trait Named:\n    def name(self) -> String\n"
+      "public trait Named:\n    def name(self) -> str\n"
     );
     fs.writeFileSync(
       path.join(tempRoot, "pkg/user.au"),
-      "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(self) -> String:\n        return self.label.clone()\n"
+      "from pkg.named import Named\n\npublic class User:\n    public label: str\n\nimpl Named for User:\n    def name(self) -> str:\n        return self.label.clone()\n"
     );
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;
@@ -3001,7 +2919,7 @@ test("compiler bridge includes imported trait methods in completions", async () 
 
     assert.ok(completions);
     assert.ok(completions.some((item) => item.name === "label"));
-    assert.ok(completions.some((item) => item.name === "name" && item.detail === "name(self) -> String"));
+    assert.ok(completions.some((item) => item.name === "name" && item.detail === "name(self) -> str"));
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -3025,11 +2943,11 @@ test("compiler bridge preserves cross-file definitions for imported function, fi
     );
     fs.writeFileSync(
       path.join(tempRoot, "pkg/named.au"),
-      "public trait Named:\n    def name(self) -> String\n"
+      "public trait Named:\n    def name(self) -> str\n"
     );
     fs.writeFileSync(
       userPath,
-      "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(self) -> String:\n        return self.label.clone()\n"
+      "from pkg.named import Named\n\npublic class User:\n    public label: str\n\nimpl Named for User:\n    def name(self) -> str:\n        return self.label.clone()\n"
     );
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;
@@ -3066,14 +2984,14 @@ test("compiler bridge preserves cross-file definitions for imported function, fi
     assert.ok(
       analysis.occurrences.some(
         (occurrence) =>
-          occurrence.hover.includes("field label: String") &&
+          occurrence.hover.includes("field label: str") &&
           occurrence.definition?.file_path === canonicalUserPath
       )
     );
     assert.ok(
       analysis.occurrences.some(
         (occurrence) =>
-          occurrence.hover.includes("method name(self) -> String") &&
+          occurrence.hover.includes("method name(self) -> str") &&
           occurrence.definition?.file_path === canonicalUserPath
       )
     );
@@ -3242,7 +3160,7 @@ test("compiler bridge maps cross-file definitions to file URIs", () => {
   });
 });
 
-test("compiler bridge includes Vec collection members in completions", async () => {
+test("compiler bridge includes list collection members in completions", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-vec-"));
   try {
     const mainPath = path.join(tempRoot, "main.au");
@@ -3262,39 +3180,53 @@ test("compiler bridge includes Vec collection members in completions", async () 
 
     assert.ok(completions);
     const names = new Set(completions.map((item) => item.name));
-    assert.ok(names.has("len"));
-    assert.ok(names.has("is_empty"));
-    assert.ok(names.has("push"));
-    assert.ok(names.has("pop"));
-    assert.ok(names.has("get"));
-    assert.ok(names.has("set"));
-    assert.ok(names.has("remove"));
-    assert.ok(names.has("swap"));
-    assert.ok(names.has("contains"));
-    assert.ok(names.has("extend"));
-    assert.ok(names.has("insert"));
-    assert.ok(names.has("clear"));
-    assert.ok(names.has("reverse"));
-    assert.ok(names.has("sort"));
-    assert.ok(names.has("sort_by"));
-    assert.ok(names.has("map"));
-    assert.ok(names.has("filter"));
+    assert.deepEqual(
+      [...names].sort(),
+      [
+        "append",
+        "clear",
+        "copy",
+        "count",
+        "extend",
+        "filter",
+        "get",
+        "index",
+        "insert",
+        "is_empty",
+        "len",
+        "map",
+        "pop",
+        "remove",
+        "reserve",
+        "reverse",
+        "set",
+        "sort",
+        "swap"
+      ]
+    );
     const details = new Map(completions.map((item) => [item.name, item.detail]));
     assert.equal(details.get("len"), "len() -> int64");
-    assert.equal(details.get("push"), "push(value: own T) -> None");
-    assert.equal(details.get("set"), "set(index: int32, value: own T) -> Option[T]");
-    assert.equal(details.get("extend"), "extend(other: own Vec[T]) -> None");
-    assert.equal(details.get("insert"), "insert(index: int32, value: own T) -> bool");
-    assert.equal(details.get("sort"), "sort() -> None");
-    assert.equal(details.get("sort_by"), "sort_by(key: def(T) -> K) -> None");
-    assert.equal(details.get("map"), "map(f: def(T) -> U) -> Vec[U]");
-    assert.equal(details.get("filter"), "filter(f: def(T) -> bool) -> Vec[T]");
+    assert.equal(details.get("append"), "append(value: own T) -> None");
+    assert.equal(details.get("pop"), "pop(index: int64 = -1) -> T");
+    assert.equal(details.get("remove"), "remove(value: T) -> None");
+    assert.equal(details.get("index"), "index(value: T) -> int64");
+    assert.equal(details.get("count"), "count(value: T) -> int64");
+    assert.equal(details.get("set"), "set(index: int64, value: own T) -> T");
+    assert.equal(details.get("swap"), "swap(first: int64, second: int64) -> None");
+    assert.equal(details.get("extend"), "extend(other: own list[T]) -> None");
+    assert.equal(details.get("insert"), "insert(index: int64, value: own T) -> None");
+    assert.match(details.get("sort"), /^sort\(/);
+    assert.match(details.get("sort"), /reverse: bool = false/);
+    assert.equal(details.get("copy"), "copy() -> list[T]");
+    assert.equal(details.get("reserve"), "reserve(additional: int64) -> None");
+    assert.equal(details.get("map"), "map(f: def(T) -> U) -> list[U]");
+    assert.equal(details.get("filter"), "filter(f: def(T) -> bool) -> list[T]");
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
-test("compiler bridge exposes Vec algorithm hover contracts", async () => {
+test("compiler bridge exposes list algorithm hover contracts", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-vec-algorithms-"));
   try {
     const mainPath = path.join(tempRoot, "main.au");
@@ -3302,14 +3234,14 @@ test("compiler bridge exposes Vec algorithm hover contracts", async () => {
     const source = [
       "def key(value: int64) -> int64:",
       "    return value",
-      "def render(value: int64) -> String:",
+      "def render(value: int64) -> str:",
       "    return str(value)",
       "def keep(value: int64) -> bool:",
       "    return value > 0",
       "def main():",
       "    mut values = [3, 1, 2]",
       "    values.sort()",
-      "    values.sort_by(key)",
+      "    values.sort(key=key)",
       "    mapped = values.map(render)",
       "    filtered = values.filter(keep)",
       "    print(mapped)",
@@ -3322,36 +3254,36 @@ test("compiler bridge exposes Vec algorithm hover contracts", async () => {
     assert.deepEqual(analysis.diagnostics, []);
 
     for (const [line, signature] of [
-      [8, "sort() -> None"],
-      [9, "sort_by(key: def(T) -> K) -> None"],
-      [10, "map(f: def(T) -> U) -> Vec[U]"],
-      [11, "filter(f: def(T) -> bool) -> Vec[T]"]
+      [8, "sort(key: def(T) -> K = ..., reverse: bool = false) -> None"],
+      [9, "sort(key: def(T) -> K = ..., reverse: bool = false) -> None"],
+      [10, "map(f: def(T) -> U) -> list[U]"],
+      [11, "filter(f: def(T) -> bool) -> list[T]"]
     ]) {
       const methodStart = source.split("\n")[line].indexOf(".") + 1;
       const hover = compilerHoverAtPosition(analysis, line, methodStart);
-      assert.ok(hover, `Vec algorithm on line ${line + 1} should expose hover`);
+      assert.ok(hover, `list algorithm on line ${line + 1} should expose hover`);
       assert.ok(
         hover.value.includes(signature),
-        `Vec algorithm hover should contain \`${signature}\`, found ${hover.value}`
+        `list algorithm hover should contain \`${signature}\`, found ${hover.value}`
       );
     }
     const mappedUse = source.split("\n")[12].indexOf("mapped");
     assert.equal(
       compilerHoverAtPosition(analysis, 12, mappedUse)?.value,
-      "```aura\nbinding mapped: Vec[String]\n```"
+      "```aura\nbinding mapped: list[str]\n```"
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
-test("compiler bridge includes String and Map builtin members in completions", async () => {
+test("compiler bridge includes str and dict builtin members in completions", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-string-map-"));
   try {
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;
     const source =
-      "def main() -> int32:\n    text = '  aura repo  '\n    mut counts = Map[String, int32]()\n    text.\n    counts.\n    return 0\n";
+      "def main() -> int32:\n    text = '  aura repo  '\n    mut counts = dict[str, int32]()\n    text.\n    counts.\n    return 0\n";
 
     setWorkspaceRoots([repoRoot, tempRoot]);
     const analysis = await analyzeWithCompiler(mainUri, source);
@@ -3406,30 +3338,33 @@ test("compiler bridge includes String and Map builtin members in completions", a
 
     assert.ok(mapCompletions);
     const mapNames = new Set(mapCompletions.map((item) => item.name));
-    assert.ok(mapNames.has("len"));
-    assert.ok(mapNames.has("is_empty"));
-    assert.ok(mapNames.has("clone"));
-    assert.ok(mapNames.has("get"));
-    assert.ok(mapNames.has("set"));
-    assert.ok(mapNames.has("remove"));
-    assert.ok(mapNames.has("contains_key"));
-    assert.ok(mapNames.has("keys"));
-    assert.ok(mapNames.has("values"));
-    assert.ok(mapNames.has("items"));
-    assert.ok(mapNames.has("entries"));
-    assert.ok(mapNames.has("clear"));
-    assert.ok(mapNames.has("extend"));
-    assert.equal(
-      mapCompletions.find((item) => item.name === "set")?.detail,
-      "set(key: own K, value: own V) -> Option[V]"
+    assert.deepEqual(
+      [...mapNames].sort(),
+      [
+        "clear",
+        "copy",
+        "get",
+        "is_empty",
+        "items",
+        "keys",
+        "len",
+        "remove",
+        "reserve",
+        "update",
+        "values"
+      ]
     );
     assert.equal(
       mapCompletions.find((item) => item.name === "len")?.detail,
       "len() -> int64"
     );
     assert.equal(
-      mapCompletions.find((item) => item.name === "extend")?.detail,
-      "extend(other: own Map[K, V]) -> None"
+      mapCompletions.find((item) => item.name === "items")?.detail,
+      "items() -> list[(K, V)]"
+    );
+    assert.equal(
+      mapCompletions.find((item) => item.name === "update")?.detail,
+      "update(other: own dict[K, V]) -> None"
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -3439,7 +3374,7 @@ test("compiler bridge includes String and Map builtin members in completions", a
 test("compiler bridge exposes typed select inference, hover, and outcome completions", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-typed-select-"));
   const source = [
-    "def inspect(queue: Queue[String], task: Task[int32]):",
+    "def inspect(queue: Queue[str], task: Task[int32]):",
     "    result = select(queue, task, 1ms)",
     "    match result:",
     "        case SelectOutcome.Queue(index, outcome):",
@@ -3485,7 +3420,7 @@ test("compiler bridge exposes typed select inference, hover, and outcome complet
       analysis.occurrences.some(
         (occurrence) =>
           occurrence.hover ===
-          "```aura\nbinding result: SelectOutcome[String, int32]\n```"
+          "```aura\nbinding result: SelectOutcome[str, int32]\n```"
       ),
       "select result hover should preserve independently inferred Queue and Task types"
     );
@@ -3531,17 +3466,17 @@ test("compiler bridge exposes typed select inference, hover, and outcome complet
         {
           name: "Queue",
           kind: "variant",
-          detail: "Queue(own int32, own QueueReceive[Q]) -> SelectOutcome"
+          detail: "Queue(own int64, own QueueReceive[Q]) -> SelectOutcome"
         },
         {
           name: "Task",
           kind: "variant",
-          detail: "Task(own int32, own TaskResult[T]) -> SelectOutcome"
+          detail: "Task(own int64, own TaskResult[T]) -> SelectOutcome"
         },
         {
           name: "Deadline",
           kind: "variant",
-          detail: "Deadline(own int32) -> SelectOutcome"
+          detail: "Deadline(own int64) -> SelectOutcome"
         },
         {
           name: "Cancelled",
@@ -3583,7 +3518,7 @@ test("compiler bridge preserves typed select diagnostic codes and guidance", asy
         "pass one or more queue handles, task handles, or relative Duration values as positional sources"
       ],
       [
-        "def main():\n    left = Queue[int32]()\n    right = Queue[String]()\n    print(select(left, right))\n",
+        "def main():\n    left = Queue[int32]()\n    right = Queue[str]()\n    print(select(left, right))\n",
         "AU2002",
         "all Queue sources in one `select` call must have the same payload type",
         "wrap heterogeneous queue payloads in one explicit enum before selecting"
@@ -3615,7 +3550,7 @@ test("compiler bridge withholds typed select inference for rejected keyword argu
     path.join(os.tmpdir(), "aura-lsp-typed-select-keyword-")
   );
   const source = [
-    "def inspect(queue: Queue[String]):",
+    "def inspect(queue: Queue[str]):",
     "    result = select(source=queue)",
     "    print(result)",
     ""
@@ -3685,21 +3620,21 @@ test("compiler bridge preserves typed select builtin redefinition diagnostics", 
   }
 });
 
-test("compiler bridge includes Set collection members and MapEntry fields", async () => {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-set-mapentry-"));
+test("compiler bridge exposes canonical set members and tuple-shaped dict items", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-set-dict-items-"));
   try {
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;
     const source = [
       "def main() -> int32:",
       "    mut seen = {1, 2, 3}",
-      "    counts: Map[String, int32] = {\"a\": 1, \"b\": 2}",
-      "    entries: Vec[MapEntry[String, int32]] = counts.items()",
+      "    counts: dict[str, int32] = {\"a\": 1, \"b\": 2}",
+      "    entries: list[(str, int32)] = counts.items()",
       "    match entries.get(index=0):",
       "        case Some(found):",
       "            entry = found",
       "            seen.",
-      "            entry.",
+      "            print(entry[0])",
       "        case None:",
       "            pass",
       "    return 0"
@@ -3726,39 +3661,67 @@ test("compiler bridge includes Set collection members and MapEntry fields", asyn
     assert.equal(
       setCompletions.length,
       setNames.size,
-      "Set member completions must not contain duplicate rows"
+      "set member completions must not contain duplicate rows"
     );
-    assert.ok(setNames.has("len"));
-    assert.ok(setNames.has("is_empty"));
-    assert.ok(setNames.has("clone"));
-    assert.ok(setNames.has("contains"));
-    assert.ok(setNames.has("insert"));
-    assert.ok(setNames.has("remove"));
+    assert.deepEqual(
+      [...setNames].sort(),
+      ["add", "clear", "copy", "discard", "is_empty", "len", "remove", "reserve"]
+    );
     const setLengthCompletions = setCompletions.filter((item) => item.name === "len");
     assert.equal(
       setLengthCompletions.length,
       1,
-      "Set.len must be emitted exactly once"
+      "set.len must be emitted exactly once"
     );
     assert.equal(
       setLengthCompletions[0]?.detail,
       "len() -> int64"
     );
-
-    const entryLineIndex = lines.findIndex((line) => line.includes("entry."));
-    const entryCharacter = lines[entryLineIndex].indexOf(".") + 1;
-    const entryCompletions = await completeWithCompiler(
-      mainUri,
-      source,
-      entryLineIndex,
-      entryCharacter,
-      "."
+    const setDetails = new Map(
+      setCompletions.map((item) => [item.name, item.detail])
     );
+    assert.equal(setDetails.get("add"), "add(value: own T) -> None");
+    assert.equal(setDetails.get("remove"), "remove(value: T) -> None");
+    assert.equal(setDetails.get("discard"), "discard(value: T) -> None");
+    assert.equal(setDetails.get("copy"), "copy() -> set[T]");
+    assert.equal(setDetails.get("reserve"), "reserve(additional: int64) -> None");
 
-    assert.ok(entryCompletions);
-    const entryNames = new Set(entryCompletions.map((item) => item.name));
-    assert.ok(entryNames.has("key"));
-    assert.ok(entryNames.has("value"));
+    const entriesOccurrence = analysis.occurrences.find(
+      (occurrence) =>
+        occurrence.hover === "```aura\nbinding entries: list[(str, int32)]\n```"
+    );
+    assert.ok(entriesOccurrence, "dict.items() must preserve its tuple-shaped list type");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge exposes collection with_capacity constructors", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-capacity-"));
+  try {
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    setWorkspaceRoots([repoRoot, tempRoot]);
+
+    for (const [typeExpression, detail] of [
+      ["list[int64]", "with_capacity(minimum: int64) -> list[int64]"],
+      ["dict[str, int64]", "with_capacity(minimum: int64) -> dict[str, int64]"],
+      ["set[int64]", "with_capacity(minimum: int64) -> set[int64]"]
+    ]) {
+      const source = `def main():\n    ${typeExpression}.\n`;
+      const completions = await completeWithCompiler(
+        mainUri,
+        source,
+        1,
+        source.split("\n")[1].length,
+        "."
+      );
+      assert.ok(completions, typeExpression);
+      assert.equal(
+        completions.find((item) => item.name === "with_capacity")?.detail,
+        detail,
+        typeExpression
+      );
+    }
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -4014,11 +3977,11 @@ test("compiler bridge exposes control-plane module completions", async () => {
     const analysisSource = [
       "import control",
       "",
-      "def worker() -> Result[int32, String]:",
+      "def worker() -> Result[int32, str]:",
       "    return Result.Ok(7)",
       "",
       "def main():",
-      "    result = control.retry[int32, String](worker)",
+      "    result = control.retry[int32, str](worker)",
       "    print(result)"
     ].join("\n");
     const analysis = await analyzeWithCompiler(mainUri, analysisSource);
@@ -4036,7 +3999,7 @@ test("compiler bridge exposes control-plane module completions", async () => {
     const resultUse = analysisSource.split("\n")[7].indexOf("result");
     assert.equal(
       compilerHoverAtPosition(analysis, 7, resultUse)?.value,
-      "```aura\nbinding result: Result[int32, String]\n```"
+      "```aura\nbinding result: Result[int32, str]\n```"
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -4061,7 +4024,7 @@ test("compiler bridge exposes the recursive json.Value contract", async () => {
     const validSource = [
       "import json",
       "",
-      "def decode(text: String) -> Result[json.Value, json.Error]:",
+      "def decode(text: str) -> Result[json.Value, json.Error]:",
       "    return json.parse(text)",
       "",
       "def main() -> int32:",
@@ -4099,21 +4062,21 @@ test("compiler bridge exposes the recursive json.Value contract", async () => {
     }
     assert.equal(
       moduleItems.find((item) => item.name === "parse")?.detail,
-      "parse(text: String) -> Result[json.Value, json.Error]"
+      "parse(text: str) -> Result[json.Value, json.Error]"
     );
     assert.equal(
       moduleItems.find((item) => item.name === "dumps")?.detail,
-      "dumps(value: json.Value, indent: Option[int64] = ...) -> String"
+      "dumps(value: json.Value, indent: Option[int64] = ...) -> str"
     );
     const accessorDetails = {
       as_bool: "as_bool(value: json.Value) -> Option[bool]",
       as_float: "as_float(value: json.Value) -> Option[float64]",
       as_int: "as_int(value: json.Value) -> Option[int64]",
       into_array:
-        "into_array(value: own json.Value) -> Option[Vec[json.Value]]",
+        "into_array(value: own json.Value) -> Option[list[json.Value]]",
       into_object:
-        "into_object(value: own json.Value) -> Option[Map[String, json.Value]]",
-      into_string: "into_string(value: own json.Value) -> Option[String]",
+        "into_object(value: own json.Value) -> Option[dict[str, json.Value]]",
+      into_string: "into_string(value: own json.Value) -> Option[str]",
       is_null: "is_null(value: json.Value) -> bool"
     };
     for (const [name, detail] of Object.entries(accessorDetails)) {
@@ -4128,13 +4091,13 @@ test("compiler bridge exposes the recursive json.Value contract", async () => {
     assert.deepEqual(
       Object.fromEntries(valueItems.map((item) => [item.name, item.detail])),
       {
-        Array: "Array(own Vec[json.Value]) -> json.Value",
+        Array: "Array(own list[json.Value]) -> json.Value",
         Bool: "Bool(own bool) -> json.Value",
         Float: "Float(own float64) -> json.Value",
         Int: "Int(own int64) -> json.Value",
         Null: "Null -> json.Value",
-        Object: "Object(own Map[String, json.Value]) -> json.Value",
-        String: "String(own String) -> json.Value"
+        Object: "Object(own dict[str, json.Value]) -> json.Value",
+        String: "String(own str) -> json.Value"
       }
     );
     const errorItems = await completionsForLine("    json.Error.");
@@ -4148,7 +4111,7 @@ test("compiler bridge exposes the recursive json.Value contract", async () => {
         NumberOutOfRange:
           "NumberOutOfRange(line: own int32, column: own int32) -> json.Error",
         Syntax:
-          "Syntax(message: own String, line: own int32, column: own int32) -> json.Error"
+          "Syntax(message: own str, line: own int32, column: own int32) -> json.Error"
       }
     );
     assert.ok(
@@ -4161,7 +4124,7 @@ test("compiler bridge exposes the recursive json.Value contract", async () => {
     const fromImportSource = [
       "from json import Value, Error, parse, dumps",
       "",
-      "def decode(text: String) -> Result[Value, Error]:",
+      "def decode(text: str) -> Result[Value, Error]:",
       "    return parse(text)",
       "",
       "def main() -> int32:",
@@ -4328,7 +4291,7 @@ test("compiler bridge exposes one random.Rng constructor and its stateful member
     );
     assert.equal(
       moduleItems.find((item) => item.name === "secure_bytes")?.detail,
-      "secure_bytes(n: int64) -> Vec[uint8]"
+      "secure_bytes(n: int64) -> list[uint8]"
     );
     assert.equal(moduleItems.some((item) => item.name === "secure_float"), false);
 
@@ -4336,7 +4299,7 @@ test("compiler bridge exposes one random.Rng constructor and its stateful member
     for (const [name, detail] of [
       ["next_int", "next_int(lo: int64, hi: int64) -> int64"],
       ["next_float", "next_float() -> float64"],
-      ["shuffle", "shuffle(values: mut Vec[T]) -> None"]
+      ["shuffle", "shuffle(values: mut list[T]) -> None"]
     ]) {
       const matching = memberItems.filter((item) => item.name === name);
       assert.equal(matching.length, 1);
@@ -4348,7 +4311,7 @@ test("compiler bridge exposes one random.Rng constructor and its stateful member
   }
 });
 
-test("compiler bridge exposes the canonical bytes module, errors, and String conversions", async () => {
+test("compiler bridge exposes the canonical bytes module, errors, and str conversions", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-bytes-"));
   try {
     const mainPath = path.join(tempRoot, "main.au");
@@ -4372,8 +4335,8 @@ test("compiler bridge exposes the canonical bytes module, errors, and String con
     const validSource = [
       "import bytes",
       "",
-      "def decode(value: Vec[uint8]) -> Result[String, bytes.Error]:",
-      "    return String.from_bytes(bytes=value)",
+      "def decode(value: list[uint8]) -> Result[str, bytes.Error]:",
+      "    return str.from_bytes(bytes=value)",
       "",
       "def main() -> int32:",
       "    text = \"abc\"",
@@ -4388,12 +4351,12 @@ test("compiler bridge exposes the canonical bytes module, errors, and String con
     assert.ok(analysis);
     assert.deepEqual(analysis.diagnostics, []);
     for (const signature of [
-      "from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]",
-      "to_bytes() -> Vec[uint8]",
-      "hex_encode(value: Vec[uint8]) -> String",
-      "base64_encode(value: Vec[uint8]) -> String",
-      "sha256(value: Vec[uint8]) -> Vec[uint8]",
-      "sha256_string(text: String) -> Vec[uint8]"
+      "from_bytes(bytes: list[uint8]) -> Result[str, bytes.Error]",
+      "to_bytes() -> list[uint8]",
+      "hex_encode(value: list[uint8]) -> str",
+      "base64_encode(value: list[uint8]) -> str",
+      "sha256(value: list[uint8]) -> list[uint8]",
+      "sha256_string(text: str) -> list[uint8]"
     ]) {
       assert.ok(
         analysis.occurrences.some((occurrence) =>
@@ -4417,13 +4380,13 @@ test("compiler bridge exposes the canonical bytes module, errors, and String con
       assert.ok(moduleNames.has(expected), `bytes completion should include ${expected}`);
     }
     const moduleDetails = {
-      hex_encode: "hex_encode(value: Vec[uint8]) -> String",
-      hex_decode: "hex_decode(text: String) -> Result[Vec[uint8], bytes.Error]",
-      base64_encode: "base64_encode(value: Vec[uint8]) -> String",
+      hex_encode: "hex_encode(value: list[uint8]) -> str",
+      hex_decode: "hex_decode(text: str) -> Result[list[uint8], bytes.Error]",
+      base64_encode: "base64_encode(value: list[uint8]) -> str",
       base64_decode:
-        "base64_decode(text: String) -> Result[Vec[uint8], bytes.Error]",
-      sha256: "sha256(value: Vec[uint8]) -> Vec[uint8]",
-      sha256_string: "sha256_string(text: String) -> Vec[uint8]"
+        "base64_decode(text: str) -> Result[list[uint8], bytes.Error]",
+      sha256: "sha256(value: list[uint8]) -> list[uint8]",
+      sha256_string: "sha256_string(text: str) -> list[uint8]"
     };
     for (const [name, detail] of Object.entries(moduleDetails)) {
       assert.equal(moduleItems.find((item) => item.name === name)?.detail, detail);
@@ -4444,10 +4407,10 @@ test("compiler bridge exposes the canonical bytes module, errors, and String con
       }
     );
 
-    const staticItems = await completionsForLine("    String.");
+    const staticItems = await completionsForLine("    str.");
     assert.equal(
       staticItems.find((item) => item.name === "from_bytes")?.detail,
-      "from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]"
+      "from_bytes(bytes: list[uint8]) -> Result[str, bytes.Error]"
     );
     assert.equal(staticItems.some((item) => item.name === "to_bytes"), false);
 
@@ -4468,14 +4431,14 @@ test("compiler bridge exposes the canonical bytes module, errors, and String con
     assert.ok(instanceItems);
     assert.equal(
       instanceItems.find((item) => item.name === "to_bytes")?.detail,
-      "to_bytes() -> Vec[uint8]"
+      "to_bytes() -> list[uint8]"
     );
     assert.equal(instanceItems.some((item) => item.name === "from_bytes"), false);
 
     const fromImportSource = [
       "from bytes import Error, hex_decode",
       "",
-      "def decode(text: String) -> Result[Vec[uint8], Error]:",
+      "def decode(text: str) -> Result[list[uint8], Error]:",
       "    return hex_decode(text)",
       "",
       "def main() -> int32:",
@@ -4544,7 +4507,7 @@ test("compiler bridge recovers imported completions and symbols when a buffer co
 test("compiler bridge exposes tuple return, index, destructuring, loop, and pattern analysis", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-tuples-"));
   const source = [
-    "def make() -> (int64, String):",
+    "def make() -> (int64, str):",
     "    return (1, \"one\")",
     "",
     "def main():",
@@ -4576,11 +4539,11 @@ test("compiler bridge exposes tuple return, index, destructuring, loop, and patt
         (symbol) =>
           symbol.name === "make" &&
           symbol.kind === "function" &&
-          symbol.detail === "(int64, String)"
+          symbol.detail === "(int64, str)"
       )
     );
     assert.deepEqual(compilerHoverAtPosition(analysis, 5, 13), {
-      value: "```aura\nbinding pair: (int64, String)\n```",
+      value: "```aura\nbinding pair: (int64, str)\n```",
       range: {
         start: { line: 5, character: 12 },
         end: { line: 5, character: 16 }
@@ -4595,7 +4558,7 @@ test("compiler bridge exposes tuple return, index, destructuring, loop, and patt
     assert.ok(
       analysis.occurrences.some(
         (occurrence) =>
-          occurrence.hover === "```aura\nbinding label: String\n```"
+          occurrence.hover === "```aura\nbinding label: str\n```"
       )
     );
     assert.ok(
@@ -4665,7 +4628,7 @@ test("compiler bridge maps non-copy tuple index diagnostics", async () => {
       help: [],
       line: 2,
       message:
-        "cannot consume non-copy tuple element `String` by indexing; unpack the tuple to move its elements",
+        "cannot consume non-copy tuple element `str` by indexing; unpack the tuple to move its elements",
       notes: [],
       secondary_spans: [],
       severity: 1,
@@ -4679,7 +4642,7 @@ test("compiler bridge maps non-copy tuple index diagnostics", async () => {
     assert.equal(diagnostic.source, "aura-compiler");
     assert.equal(
       diagnostic.message,
-      "cannot consume non-copy tuple element `String` by indexing; unpack the tuple to move its elements"
+      "cannot consume non-copy tuple element `str` by indexing; unpack the tuple to move its elements"
     );
     assert.deepEqual(diagnostic.range, {
       start: { line: 2, character: 10 },
@@ -4694,8 +4657,8 @@ test("compiler bridge exposes structural tuple equality and ordering diagnostics
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-tuple-equality-"));
   const sourceLines = [
     "def inspect():",
-    "    left: (int32, String) = (1, \"left\")",
-    "    right: (int32, String) = (2, \"right\")",
+    "    left: (int32, str) = (1, \"left\")",
+    "    right: (int32, str) = (2, \"right\")",
     "    equal = left == right",
     "    not_equal = left != right",
     "    literal_on_right = left == (1, \"left\")",
@@ -4766,7 +4729,7 @@ test("compiler bridge exposes structural tuple equality and ordering diagnostics
       assert.ok(occurrence, `missing tuple operand occurrence for ${name} on line ${line}`);
       assert.equal(
         occurrence.hover,
-        `\`\`\`aura\nbinding ${name}: (int32, String)\n\`\`\``
+        `\`\`\`aura\nbinding ${name}: (int32, str)\n\`\`\``
       );
       assert.deepEqual(
         compilerDefinitionAtPosition(mainUri, analysis, line, start + 1)?.range,
@@ -4775,7 +4738,7 @@ test("compiler bridge exposes structural tuple equality and ordering diagnostics
     }
 
     const orderingSource = [
-      "def compare(left: (int32, String), right: (int32, String)):",
+      "def compare(left: (int32, str), right: (int32, str)):",
       "    ordered = left < right",
       ""
     ].join("\n");
@@ -4907,7 +4870,7 @@ test("compiler bridge exposes progressively scoped comprehension intelligence", 
     path.join(os.tmpdir(), "aura-lsp-comprehension-scope-")
   );
   const sourceLines = [
-    "def collect_lengths(groups: Vec[Vec[String]]) -> Vec[int64]:",
+    "def collect_lengths(groups: list[list[str]]) -> list[int64]:",
     "    lengths = [",
     "        entry.len()",
     "        for group in groups",
@@ -4934,7 +4897,7 @@ test("compiler bridge exposes progressively scoped comprehension intelligence", 
     const entryTargetStart = sourceLines[5].indexOf("entry");
     const entryHover = compilerHoverAtPosition(analysis, 2, outputEntryStart + 1);
     assert.deepEqual(entryHover, {
-      value: "```aura\nlocal entry: String\n```",
+      value: "```aura\nlocal entry: str\n```",
       range: {
         start: { line: 2, character: outputEntryStart },
         end: { line: 2, character: outputEntryStart + "entry".length }
@@ -4952,7 +4915,7 @@ test("compiler bridge exposes progressively scoped comprehension intelligence", 
     assert.ok(
       analysis.occurrences.some(
         (occurrence) =>
-          occurrence.hover === "```aura\nbinding lengths: Vec[int64]\n```"
+          occurrence.hover === "```aura\nbinding lengths: list[int64]\n```"
       ),
       "the eager owned comprehension result should retain its checked collection type"
     );
@@ -5009,7 +4972,7 @@ test("compiler bridge exposes progressively scoped comprehension intelligence", 
 test("compiler bridge preserves owned slice result types, endpoint intelligence, and diagnostics", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-owned-slices-"));
   const sourceLines = [
-    "def take_slice(values: Vec[String], start: int32, end: int32) -> Vec[String]:",
+    "def take_slice(values: list[str], start: int64, end: int64) -> list[str]:",
     "    selected = values[start:end]",
     "    return selected",
     ""
@@ -5024,9 +4987,9 @@ test("compiler bridge preserves owned slice result types, endpoint intelligence,
     assert.deepEqual(analysis.diagnostics, []);
 
     for (const [name, hover] of [
-      ["values", "param values: Vec[String]"],
-      ["start", "param start: int32"],
-      ["end", "param end: int32"]
+      ["values", "param values: list[str]"],
+      ["start", "param start: int64"],
+      ["end", "param end: int64"]
     ]) {
       const startCharacter = sourceLines[1].indexOf(name);
       assert.equal(
@@ -5037,9 +5000,9 @@ test("compiler bridge preserves owned slice result types, endpoint intelligence,
     assert.ok(
       analysis.occurrences.some(
         (occurrence) =>
-          occurrence.hover === "```aura\nbinding selected: Vec[String]\n```"
+          occurrence.hover === "```aura\nbinding selected: list[str]\n```"
       ),
-      "an owned Vec slice should preserve the ordinary Vec result type"
+      "an owned list slice should preserve the ordinary list result type"
     );
 
     const completionLine = "    values[start:end].";
@@ -5057,7 +5020,7 @@ test("compiler bridge preserves owned slice result types, endpoint intelligence,
       "."
     );
     const names = new Set(completions.map((item) => item.name));
-    assert.ok(names.has("push"));
+    assert.ok(names.has("append"));
     assert.ok(names.has("len"));
 
     for (const receiver of [
@@ -5066,13 +5029,13 @@ test("compiler bridge preserves owned slice result types, endpoint intelligence,
     ]) {
       const receiverLine = `    ${receiver}.`;
       const receiverSource = [
-        "def make_values() -> Vec[String]:",
+        "def make_values() -> list[str]:",
         "    return [\"Ada\", \"Grace\"]",
         "",
-        "def endpoint(text: String) -> int32:",
+        "def endpoint(text: str) -> int64:",
         "    return 0",
         "",
-        "def inspect(values: Vec[String]):",
+        "def inspect(values: list[str]):",
         receiverLine,
         ""
       ].join("\n");
@@ -5088,14 +5051,14 @@ test("compiler bridge preserves owned slice result types, endpoint intelligence,
         `completion should recover the slice receiver ${receiver}`
       );
       const receiverNames = new Set(receiverCompletions.map((item) => item.name));
-      assert.ok(receiverNames.has("push"), receiver);
+      assert.ok(receiverNames.has("append"), receiver);
       assert.ok(receiverNames.has("len"), receiver);
     }
 
     const stepped = await analyzeWithCompiler(
       `file://${path.join(tempRoot, "stepped.au")}`,
       [
-        "def reject(values: Vec[int32]):",
+        "def reject(values: list[int32]):",
         "    print(values[::2])",
         ""
       ].join("\n")
@@ -5111,13 +5074,13 @@ test("compiler bridge preserves owned slice result types, endpoint intelligence,
       {
         name: "endpoint-type",
         source: [
-          "def reject(values: Vec[int32], endpoint: int64):",
+          "def reject(values: list[int32], endpoint: uint64):",
           "    print(values[endpoint:])",
           ""
         ].join("\n"),
         expected: {
           code: "AU2002",
-          message: "slice endpoints must have type `int32`, found `int64`",
+          message: "slice endpoints must have type `int64` or a losslessly narrower integer type, found `uint64`",
           line: 1,
           startCharacter: 17,
           endCharacter: 18
@@ -5126,7 +5089,7 @@ test("compiler bridge preserves owned slice result types, endpoint intelligence,
       {
         name: "assignment",
         source: [
-          "def replace(values: Vec[int32]):",
+          "def replace(values: list[int32]):",
           "    values[1:3] = values",
           ""
         ].join("\n"),
@@ -5184,7 +5147,7 @@ test("compiler bridge preserves incomplete comprehension diagnostics without sta
     setWorkspaceRoots([repoRoot, tempRoot]);
     for (const edit of cases) {
       const sourceLines = [
-        "def collect(values: Vec[int64]) -> Vec[int64]:",
+        "def collect(values: list[int64]) -> list[int64]:",
         edit.line,
         "    return result",
         ""
@@ -5261,7 +5224,7 @@ test("compiler bridge preserves closure capture ownership diagnostics and guidan
     assert.match(movedAnalysis.diagnostics[0].message, /captur|mov/i);
 
     const sharedCapture = [
-      "def make_length(text: String) -> def() -> int64:",
+      "def make_length(text: str) -> def() -> int64:",
       "    return lambda: text.len()",
       ""
     ].join("\n");
@@ -5280,8 +5243,8 @@ test("compiler bridge preserves closure capture ownership diagnostics and guidan
 
     const mutableCapture = [
       "def main():",
-      "    mut values = Vec[int32]()",
-      "    push: def(int32) -> None = lambda value: values.push(value)",
+      "    mut values = list[int32]()",
+      "    push: def(int32) -> None = lambda value: values.append(value)",
       "    push(1)",
       ""
     ].join("\n");
@@ -5301,7 +5264,7 @@ test("compiler bridge exposes the global numeric Array surface and result types"
     "    return value.to_float()",
     "",
     "def transform() -> float64:",
-    "    left = Array[int32].from_vec([1, 2, 3, 4], [2, 2])",
+    "    left = Array[int32].from_list([1, 2, 3, 4], [2, 2])",
     "    right = Array[int32].full([2, 2], 5)",
     "    combined = left.wrapping_add(right)",
     "    scaled = combined * 2",
@@ -5341,7 +5304,7 @@ test("compiler bridge exposes the global numeric Array surface and result types"
       "binding scaled: Array[int32]",
       "binding item: int32",
       "binding maybe_item: Option[int32]",
-      "binding dimensions: Vec[int64]",
+      "binding dimensions: list[int64]",
       "binding length: int64",
       "binding first_row: Array[int32]",
       "binding mapped: Array[float64]",
@@ -5407,8 +5370,8 @@ test("compiler bridge exposes the global numeric Array surface and result types"
     );
     const staticNames = new Set(staticItems.map((item) => item.name));
     assert.deepEqual(
-      [...staticNames].filter((name) => ["zeros", "full", "from_vec"].includes(name)).sort(),
-      ["from_vec", "full", "zeros"]
+      [...staticNames].filter((name) => ["zeros", "full", "from_list"].includes(name)).sort(),
+      ["from_list", "full", "zeros"]
     );
 
     const rejected = await analyzeWithCompiler(

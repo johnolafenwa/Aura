@@ -180,24 +180,18 @@ test("extension highlights and snippets the maintained extern C surface", () => 
   ]);
 });
 
-test("syntax grammar treats mut and own as Aura storage modifiers without retired borrow", () => {
+test("syntax grammar highlights the current storage modifiers", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const grammarPath = path.join(extensionRoot, "syntaxes", "aura.tmLanguage.json");
   const grammar = JSON.parse(fs.readFileSync(grammarPath, "utf8"));
   const modifierRule = grammar.repository.keywords.patterns.find(
     (pattern) => pattern.name === "storage.modifier.aura"
   );
-  const retiredRule = grammar.repository.keywords.patterns.find(
-    (pattern) => pattern.name === "invalid.deprecated.aura"
-  );
 
   assert.ok(modifierRule);
   const modifierPattern = new RegExp(modifierRule.match);
   assert.equal(modifierPattern.test("mut"), true);
   assert.equal(modifierPattern.test("own"), true);
-  assert.equal(modifierPattern.test("borrow"), false);
-  assert.ok(retiredRule);
-  assert.equal(new RegExp(retiredRule.match).test("borrow"), true);
 });
 
 test("syntax grammar distinguishes ordinary quotes and nests strings in f-string interpolation", () => {
@@ -274,9 +268,10 @@ test("syntax grammar tracks maintained builtin types", () => {
     "SelectOutcome",
     "WaitAny",
     "WaitAll",
-    "Map",
-    "MapEntry",
-    "Set",
+    "list",
+    "dict",
+    "set",
+    "str",
     "Array",
     "process.Child",
     "fs.File",

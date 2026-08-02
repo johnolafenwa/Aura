@@ -1,4 +1,4 @@
 def main():
     left = "left"
     right = "right"
-    selected: def() -> String = (lambda: left) if true else (lambda: right)
+    selected: def() -> str = (lambda: left) if true else (lambda: right)

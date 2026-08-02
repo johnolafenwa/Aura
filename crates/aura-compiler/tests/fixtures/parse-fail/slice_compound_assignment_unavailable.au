@@ -1,2 +1,2 @@
-def replace(values: Vec[int32]):
+def replace(values: list[int32]):
     values[:] += values

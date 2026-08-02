@@ -1,5 +1,0 @@
-def main() -> int32:
-    values: Vec[int32] = [10]
-    index = 0
-    print(values.get(index))
-    return 0

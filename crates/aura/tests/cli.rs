@@ -301,14 +301,14 @@ fn write_temp_source(prefix: &str, source: &str) -> (TempDir, PathBuf) {
 }
 
 #[test]
-fn ast_json_preserves_legacy_named_and_loop_shapes_while_exposing_tuples() {
+fn ast_json_preserves_named_and_loop_shapes_while_exposing_tuples() {
     let source = [
-        "def named(items: Vec[int32]) -> int32:",
+        "def named(items: list[int32]) -> int32:",
         "    for item in items:",
         "        pass",
         "    return 0",
         "",
-        "def tupled(items: Vec[(int32, String)]) -> (int32, String):",
+        "def tupled(items: list[(int32, str)]) -> (int32, str):",
         "    for (number, text) in items:",
         "        return (number, text)",
         "    return (0, \"\")",
@@ -343,7 +343,7 @@ fn ast_json_preserves_legacy_named_and_loop_shapes_while_exposing_tuples() {
         serde_json::from_slice(&output.stdout).expect("ast-json should return valid JSON");
     let named = &json["items"][0]["Function"];
     let named_type = &named["params"][0]["ty"];
-    assert_eq!(named_type["name"], "Vec");
+    assert_eq!(named_type["name"], "list");
     assert_eq!(named_type["args"][0]["name"], "int32");
     assert!(
         named_type.get("kind").is_none(),
@@ -359,7 +359,7 @@ fn ast_json_preserves_legacy_named_and_loop_shapes_while_exposing_tuples() {
     let tupled = &json["items"][1]["Function"];
     let tuple_parameter = &tupled["params"][0]["ty"]["args"][0];
     assert_eq!(tuple_parameter["elements"][0]["name"], "int32");
-    assert_eq!(tuple_parameter["elements"][1]["name"], "String");
+    assert_eq!(tuple_parameter["elements"][1]["name"], "str");
     assert_eq!(
         tupled["return_type"]["elements"].as_array().map(Vec::len),
         Some(2)
@@ -770,7 +770,7 @@ fn lsp_service_handles_multiple_requests_in_one_process() {
             "semantic_interface_version": aura_compiler::SEMANTIC_INTERFACE_SCHEMA_VERSION,
             "method": "complete",
             "path": "/virtual/main.au",
-            "source": "def main() -> int32:\n    value: String = \"hi\"\n    value.\n    return 0\n",
+            "source": "def main() -> int32:\n    value: str = \"hi\"\n    value.\n    return 0\n",
             "line": 2,
             "character": 10,
             "trigger": "."
@@ -921,13 +921,13 @@ fn fmt_is_idempotent_for_adr_0022_capability_syntax() {
         &source_path,
         concat!(
             "class Box:\r\n",
-            "    value: String   \r\n",
-            "    def read(self) -> String:\r\n",
+            "    value: str   \r\n",
+            "    def read(self) -> str:\r\n",
             "        return self.value.clone()\r\n",
-            "    def replace(mut self, value: own String):\r\n",
+            "    def replace(mut self, value: own str):\r\n",
             "        self.value = value\r\n",
             "\r\n",
-            "def inspect(value: String):\r\n",
+            "def inspect(value: str):\r\n",
             "    print(value)\r\n",
             "\r\n",
             "def main():\r\n",
@@ -952,7 +952,7 @@ fn fmt_is_idempotent_for_adr_0022_capability_syntax() {
         String::from_utf8_lossy(&first.stderr)
     );
     let once = fs::read_to_string(&source_path).expect("formatted source should read");
-    assert!(once.contains("def replace(mut self, value: own String):"));
+    assert!(once.contains("def replace(mut self, value: own str):"));
     assert!(once.contains("for box in mut boxes:"));
     assert!(once.contains("match own boxes:"));
     assert!(!once.contains('\r'));
@@ -1031,7 +1031,7 @@ fn fmt_is_idempotent_for_extern_c_declarations() {
         concat!(
             "public extern \"C\" opaque class ProcessHandle   \r\n",
             "public extern \"C\" def getpid() -> int32\t\r\n",
-            "extern \"C\" def write(fd: int32, data: String) -> int64\r\n",
+            "extern \"C\" def write(fd: int32, data: str) -> int64\r\n",
         ),
     )
     .expect("FFI source should write");
@@ -1049,7 +1049,7 @@ fn fmt_is_idempotent_for_extern_c_declarations() {
     let once = fs::read_to_string(&source_path).expect("formatted source should read");
     assert!(once.contains("public extern \"C\" opaque class ProcessHandle"));
     assert!(once.contains("public extern \"C\" def getpid() -> int32"));
-    assert!(once.contains("extern \"C\" def write(fd: int32, data: String) -> int64"));
+    assert!(once.contains("extern \"C\" def write(fd: int32, data: str) -> int64"));
     assert!(!once.contains('\r'));
     assert!(!once.lines().any(|line| line.ends_with([' ', '\t'])));
 
@@ -1853,7 +1853,7 @@ fn explicit_four_worker_cancellation_and_task_failures_remain_isolated() {
 
 #[test]
 fn four_worker_prints_are_complete_atomic_lines_on_both_backends() {
-    let source = r#"def print_many(label: String) -> None:
+    let source = r#"def print_many(label: str) -> None:
     value32: float32 = 1.25
     for index in range(200):
         print(f"{label}:{index}:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -2458,7 +2458,7 @@ fn bounded_blocking_pool_admission_preserves_scheduler_progress_on_every_runtime
     let source = format!(
         r#"import fs
 
-def read_gate_one(path: String) -> String:
+def read_gate_one(path: str) -> str:
     print("gate-one-entered")
     match own fs.read_to_string(path):
         case Result.Ok(text):
@@ -2466,7 +2466,7 @@ def read_gate_one(path: String) -> String:
         case Result.Err(_):
             return "gate-one-error"
 
-def read_gate_two(path: String) -> String:
+def read_gate_two(path: str) -> str:
     print("gate-two-entered")
     match own fs.read_to_string(path):
         case Result.Ok(text):
@@ -2474,7 +2474,7 @@ def read_gate_two(path: String) -> String:
         case Result.Err(_):
             return "gate-two-error"
 
-def read_ordinary_one(path: String) -> String:
+def read_ordinary_one(path: str) -> str:
     print("ordinary-one-entered")
     match own fs.read_to_string(path):
         case Result.Ok(text):
@@ -2482,7 +2482,7 @@ def read_ordinary_one(path: String) -> String:
         case Result.Err(_):
             return "ordinary-one-error"
 
-def read_ordinary_two(path: String) -> String:
+def read_ordinary_two(path: str) -> str:
     print("ordinary-two-entered")
     match own fs.read_to_string(path):
         case Result.Ok(text):
@@ -2494,7 +2494,7 @@ def prove_scheduler_is_live() -> None:
     sleep(1ms)
     print("scheduler-live")
 
-def print_task(task: own Task[String]) -> None:
+def print_task(task: own Task[str]) -> None:
     match own task.result():
         case TaskResult.Ready(text):
             print(text)
@@ -2978,7 +2978,7 @@ fn bounded_blocking_pool_timeout_and_cancellation_preserve_acceptance_boundary_p
 import io
 import net
 
-def read_gate(path: String, entered: String) -> String:
+def read_gate(path: str, entered: str) -> str:
     print(entered)
     match own fs.read_to_string(path):
         case Result.Ok(text):
@@ -2986,7 +2986,7 @@ def read_gate(path: String, entered: String) -> String:
         case Result.Err(_):
             return "gate-error"
 
-def timed_tls(path: String, entered: String) -> String:
+def timed_tls(path: str, entered: str) -> str:
     print(entered)
     match own net.tls_connect_timeout("127.0.0.1:1", "localhost", path, 100ms):
         case Result.Ok(_):
@@ -2996,7 +2996,7 @@ def timed_tls(path: String, entered: String) -> String:
         case Result.Err(_):
             return "unexpected-error"
 
-def cancellable_tls(path: String, entered: String) -> String:
+def cancellable_tls(path: str, entered: str) -> str:
     print(entered)
     match own net.tls_connect_timeout("127.0.0.1:1", "localhost", path, 30s):
         case Result.Ok(_):
@@ -3006,7 +3006,7 @@ def cancellable_tls(path: String, entered: String) -> String:
         case Result.Err(_):
             return "unexpected-error"
 
-def print_task(task: own Task[String]) -> None:
+def print_task(task: own Task[str]) -> None:
     match own task.result():
         case TaskResult.Ready(text):
             print(text)
@@ -3017,7 +3017,7 @@ def print_task(task: own Task[String]) -> None:
         case TaskResult.Cancelled:
             print("cancelled")
 
-def print_file(path: String) -> None:
+def print_file(path: str) -> None:
     match own fs.read_to_string(path):
         case Result.Ok(text):
             print(text)
@@ -3160,7 +3160,7 @@ fn large_http_responses_complete_without_timing_out() {
 import io
 import net
 
-def serve(path: own String, addresses: Queue[String]) -> Result[None, io.Error]:
+def serve(path: own str, addresses: Queue[str]) -> Result[None, io.Error]:
     with server = try net.http_listen("127.0.0.1:0"):
         addresses.put(try server.local_addr())
         req = try server.accept(timeout=5s)
@@ -3170,7 +3170,7 @@ def serve(path: own String, addresses: Queue[String]) -> Result[None, io.Error]:
 
 def run() -> Result[None, io.Error]:
     with TaskGroup() as group:
-        addresses = Queue[String](capacity=1)
+        addresses = Queue[str](capacity=1)
         group.start_soon(serve, "{body_path}", addresses)
         match addresses.get(timeout=5s):
             case QueueReceive.Item(address):
@@ -3205,7 +3205,7 @@ fn http_declared_response_above_fixed_cap_is_typed_on_both_backends() {
     let source = r#"import io
 import net
 
-def serve(addresses: Queue[String]) -> Result[None, io.Error]:
+def serve(addresses: Queue[str]) -> Result[None, io.Error]:
     with listener = try net.http_listen("127.0.0.1:0"):
         addresses.put(try listener.local_addr())
         request = try listener.accept(timeout=5s)
@@ -3214,7 +3214,7 @@ def serve(addresses: Queue[String]) -> Result[None, io.Error]:
 
 def run() -> Result[None, io.Error]:
     with TaskGroup() as group:
-        addresses = Queue[String](capacity=1)
+        addresses = Queue[str](capacity=1)
         group.start_soon(serve, addresses)
         match addresses.get(timeout=5s):
             case QueueReceive.Item(address):
@@ -4260,7 +4260,7 @@ fn direct_run_json_transports_runtime_traps_on_cold_warm_and_auto_paths() {
     let cache = TempDir::new("aura-native-json-runtime-trap");
     let (_source, source_path) = write_temp_source(
         "aura-native-json-runtime-trap-source",
-        "def explode() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    return explode()\n",
+        "def explode() -> int32:\n    values: list[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    return explode()\n",
     );
 
     let run = |backend: &str| {
@@ -4402,7 +4402,7 @@ def run() -> Result[int32, process.Error]:
     if child_environment.contains("AURA_INTERNAL_DIAGNOSTIC_FD") or child_environment.contains("AURA_INTERNAL_DIAGNOSTIC_SIGNAL_FD"):
         return Result.Ok(12)
     try process.run(["/bin/sh", "-c", "sleep 10 &"], stdout=process.null(), stderr=process.null(), timeout=2s)
-    values: Vec[int32] = [1, 2]
+    values: list[int32] = [1, 2]
     return Result.Ok(values[9])
 
 def main() -> int32:
@@ -4481,7 +4481,7 @@ fn direct_run_json_buffers_wait_progress_into_one_document() {
 
     let fixture = NativeCacheFixture::new_with_program(
         "aura-native-json-wait",
-        "def explode() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    return explode()\n",
+        "def explode() -> int32:\n    values: list[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    return explode()\n",
         Some(1),
         "",
     );
@@ -5139,7 +5139,7 @@ fn owned_slice_matrix_matches_forced_mir_and_direct_backends() {
     );
     assert_eq!(
         mir.stdout, direct.stdout,
-        "owned Vec/String slices must produce byte-identical stdout on MIR and direct"
+        "owned list/str slices must produce byte-identical stdout on MIR and direct"
     );
     assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
 }
@@ -5149,14 +5149,14 @@ fn owned_slice_au4003_traps_match_forced_mir_and_direct_backends() {
     let root = repo_root();
     let cases = [
         (
-            "Vec reversed bounds",
+            "list reversed bounds",
             "crates/aura-compiler/tests/fixtures/run-fail/vec_slice_reversed_bounds.au",
             include_str!(
                 "../../aura-compiler/tests/fixtures/run-fail/vec_slice_reversed_bounds.diag"
             ),
         ),
         (
-            "String normalized start out of bounds",
+            "str normalized start out of bounds",
             "crates/aura-compiler/tests/fixtures/run-fail/string_slice_start_out_of_bounds.au",
             include_str!(
                 "../../aura-compiler/tests/fixtures/run-fail/string_slice_start_out_of_bounds.diag"
@@ -5230,7 +5230,7 @@ fn numeric_array_matrix_matches_forced_mir_and_direct_backends() {
 
     let rank_one_source = [
         "def main() -> int32:",
-        "    source: Vec[int32] = [4, 5, 6]",
+        "    source: list[int32] = [4, 5, 6]",
         "    mut values = Array[int32].from_vec(source, [3])",
         "    print(values[-1])",
         "    values[0] = 9",
@@ -5304,7 +5304,7 @@ fn numeric_array_all_dtypes_match_forced_mir_and_direct_backends() {
 def main() -> int32:
     i32_zeros = Array[int32].zeros([2])
     i32_full = Array[int32].full([2], 3)
-    i32_source: Vec[int32] = [1, 2]
+    i32_source: list[int32] = [1, 2]
     i32_values = Array[int32].from_vec(i32_source, [2])
     print(i32_zeros)
     print(i32_full)
@@ -5318,7 +5318,7 @@ def main() -> int32:
 
     i64_zeros = Array[int64].zeros([2])
     i64_full = Array[int64].full([2], 2)
-    i64_source: Vec[int64] = [5000000000, 6000000000]
+    i64_source: list[int64] = [5000000000, 6000000000]
     i64_values = Array[int64].from_vec(i64_source, [2])
     print(i64_zeros)
     print(i64_full)
@@ -5336,7 +5336,7 @@ def main() -> int32:
 
     f32_zeros = Array[float32].zeros([2])
     f32_full = Array[float32].full([2], 0.5)
-    f32_source: Vec[float32] = [1.5, 2.5]
+    f32_source: list[float32] = [1.5, 2.5]
     f32_values = Array[float32].from_vec(f32_source, [2])
     print(f32_zeros)
     print(f32_full)
@@ -5350,7 +5350,7 @@ def main() -> int32:
 
     f64_zeros = Array[float64].zeros([2])
     f64_full = Array[float64].full([2], 2.0)
-    f64_source: Vec[float64] = [4.0, 8.0]
+    f64_source: list[float64] = [4.0, 8.0]
     f64_values = Array[float64].from_vec(f64_source, [2])
     print(f64_zeros)
     print(f64_full)
@@ -5415,14 +5415,14 @@ def print_array(value: own Option[Array[int32]]):
             print("missing")
 
 def main() -> int32:
-    source: Vec[int32] = [3, 4]
-    arrays: Vec[Array[int32]] = [Array[int32].from_vec(source, [2])]
+    source: list[int32] = [3, 4]
+    arrays: list[Array[int32]] = [Array[int32].from_vec(source, [2])]
     print_array(arrays.get(0))
     arrays_copy = arrays.clone()
     print_array(arrays_copy.get(0))
 
-    map_source: Vec[int32] = [7, 8]
-    arrays_by_name: Map[String, Array[int32]] = {
+    map_source: list[int32] = [7, 8]
+    arrays_by_name: dict[str, Array[int32]] = {
         "item": Array[int32].from_vec(map_source, [2])
     }
     print_array(arrays_by_name.get("item"))
@@ -5437,7 +5437,7 @@ def main() -> int32:
     map_copy = arrays_by_name.clone()
     print_array(map_copy.get("item"))
 
-    holder_source: Vec[int32] = [11, 12]
+    holder_source: list[int32] = [11, 12]
     mut holder = ArrayHolder(
         array=Array[int32].from_vec(holder_source, [2]),
         count=0
@@ -5728,7 +5728,7 @@ fn run_backends_drop_partial_comprehension_before_propagating_trap() {
         );
         assert!(
             String::from_utf8_lossy(&output.stderr)
-                .contains("vector index `0` is out of bounds for length `0`"),
+                .contains("list index `0` is out of bounds for length `0`"),
             "{backend} should preserve the body trap, stderr was:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
@@ -5793,7 +5793,7 @@ fn compile_commands_accept_membership_and_comparison_chains() {
     assert_eq!(diagnostic["code"], "AU2003");
     assert_eq!(
         diagnostic["message"],
-        "`in` requires a `Vec[T]`, `Set[T]`, `Map[K, V]`, or `String` container, found `int64`"
+        "`in` requires a `list[T]`, `set[T]`, `dict[K, V]`, or `str` container, found `int64`"
     );
 }
 
@@ -6471,12 +6471,12 @@ fn complete_stdin_includes_imported_trait_methods() {
     fs::create_dir_all(temp.path().join("pkg")).expect("failed to create package dir");
     fs::write(
         temp.path().join("pkg/named.au"),
-        "public trait Named:\n    def name(self) -> String\n",
+        "public trait Named:\n    def name(self) -> str\n",
     )
     .expect("failed to write trait module");
     fs::write(
         temp.path().join("pkg/user.au"),
-        "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(self) -> String:\n        return self.label.clone()\n",
+        "from pkg.named import Named\n\npublic class User:\n    public label: str\n\nimpl Named for User:\n    def name(self) -> str:\n        return self.label.clone()\n",
     )
     .expect("failed to write user module");
     let main_path = temp.path().join("main.au");
@@ -7827,23 +7827,23 @@ def print_nested(value: Option[Option[int32]]):
             print(-3)
 
 def main() -> int32:
-    mut pushed = Vec[Option[int32]]()
-    pushed.push(None)
+    mut pushed = list[Option[int32]]()
+    pushed.append(None)
     print_opt(pushed[0])
 
-    literal: Vec[Option[int32]] = [None]
+    literal: list[Option[int32]] = [None]
     print_opt(literal[0])
 
-    mut values: Vec[Option[int32]] = [Option.Some(7)]
-    print_nested(values.set(index=0, value=None))
+    mut values: list[Option[int32]] = [Option.Some(7)]
+    print_opt(values.set(index=0, value=None))
     print_opt(values[0])
 
-    mut counts: Map[String, Option[int32]] = {"a": Option.Some(1)}
-    print_nested(counts.set(key="a", value=None))
+    mut counts: dict[str, Option[int32]] = {"a": Option.Some(1)}
+    counts["a"] = None
     print_opt(counts["a"])
 
-    mut seen: Set[Option[int32]] = Set{}
-    seen.insert(None)
+    mut seen: set[Option[int32]] = set[Option[int32]]()
+    seen.add(None)
     for value in seen:
         print_opt(value)
 
@@ -7862,7 +7862,7 @@ def main() -> int32:
         // The generated program is tiny, but the default-parallel CLI suite can
         // delay its process after spawn while other native builds are linking.
         std::time::Duration::from_secs(15),
-        "-1\n-1\n7\n-1\n1\n-1\n-1\n-1\n-2\n",
+        "-1\n-1\n7\n-1\n-1\n-1\n-1\n-2\n",
     );
 }
 
@@ -8085,7 +8085,7 @@ fn build_with_direct_backend_supports_generic_trait_impl_example() {
 fn build_with_direct_backend_prefers_more_specific_trait_impls() {
     let (_, run) = build_and_run_direct_source(
         "aura-build-direct-trait-specificity",
-        "trait Show:\n    def show(self) -> String\n\nclass Box[T]:\n    value: T\n\nimpl[T] Show for Box[T]:\n    def show(self) -> String:\n        return \"generic\"\n\nimpl Show for Box[int32]:\n    def show(self) -> String:\n        return \"int32\"\n\ndef main() -> int32:\n    value = Box[int32](value=7)\n    print(value.show())\n    return 0\n",
+        "trait Show:\n    def show(self) -> str\n\nclass Box[T]:\n    value: T\n\nimpl[T] Show for Box[T]:\n    def show(self) -> str:\n        return \"generic\"\n\nimpl Show for Box[int32]:\n    def show(self) -> str:\n        return \"int32\"\n\ndef main() -> int32:\n    value = Box[int32](value=7)\n    print(value.show())\n    return 0\n",
     );
 
     assert!(
@@ -8303,7 +8303,7 @@ fn build_with_direct_backend_supports_vec_literals_and_iteration() {
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "def main() -> int32:\n    mut values = [1, 2]\n    values.push(3)\n    mut total = 0\n    for value in values:\n        total += value\n    print(total)\n    return 0\n",
+        "def main() -> int32:\n    mut values = [1, 2]\n    values.append(3)\n    mut total = 0\n    for value in values:\n        total += value\n    print(total)\n    return 0\n",
     )
     .expect("failed to write vec source");
     let output_path = temp.path().join("vec-main");
@@ -8340,7 +8340,7 @@ fn build_with_direct_backend_supports_vec_literals_and_iteration() {
 fn build_with_direct_backend_supports_vec_methods_and_constructor() {
     let (_, run) = build_and_run_direct_source(
         "aura-build-direct-vec-methods",
-        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    values = Vec[int32]()\n    print(values.is_empty())\n    mut items: Vec[int32] = [1, 2, 3]\n    print(items.len())\n    print_int_option(items.get(1))\n    print_int_option(items.set(index=1, value=20))\n    print_int_option(items.remove(0))\n    items.push(99)\n    print_int_option(items.pop())\n    mut total: int32 = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
+        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    values = list[int32]()\n    print(values.is_empty())\n    mut items: list[int32] = [1, 2, 3]\n    print(items.len())\n    print_int_option(items.get(1))\n    print(items.set(index=1, value=20))\n    print(items.pop(0))\n    items.append(99)\n    print(items.pop())\n    mut total: int32 = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
     );
 
     assert!(
@@ -8358,7 +8358,7 @@ fn build_with_direct_backend_supports_vec_methods_and_constructor() {
 fn build_with_direct_backend_supports_string_map_and_numeric_builtins() {
     let (_, run) = build_and_run_direct_source(
         "aura-build-direct-string-map-numbers",
-        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aura repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts: Map[String, int32] = {\"aura\": 1, \"codex\": 2}\n    print(counts.len())\n    print(counts.contains_key(\"aura\"))\n    print_int_option(counts.get(\"aura\"))\n    print_int_option(counts.set(key=\"aura\", value=5))\n    print(counts[\"aura\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
+        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aura repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts: dict[str, int32] = {\"aura\": 1, \"codex\": 2}\n    print(counts.len())\n    print(\"aura\" in counts)\n    print_int_option(counts.get(\"aura\"))\n    counts[\"aura\"] = 5\n    print(counts[\"aura\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
     );
 
     assert!(
@@ -8368,7 +8368,7 @@ fn build_with_direct_backend_supports_string_map_and_numeric_builtins() {
     );
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
-        "13\ntrue\ntrue\ntrue\naura repo\n7\n2\n12\n9.0\n2\ntrue\n1\n1\n5\n2\n2\n2\nfalse\n"
+        "13\ntrue\ntrue\ntrue\naura repo\n7\n2\n12\n9.0\n2\ntrue\n1\n5\n2\n2\n2\nfalse\n"
     );
 }
 
@@ -8387,14 +8387,14 @@ def main() -> int32:
     print(text.len())
     print(text.byte_len())
 
-    mut values: Vec[int32] = [10, 20, 30, 40]
+    mut values: list[int32] = [10, 20, 30, 40]
     print(values[-1])
     values[-2] = 35
     print(values[-2])
     print_int_option(values.get(-4))
     print_int_option(values.get(-5))
-    print_int_option(values.set(index=-4, value=11))
-    print_int_option(values.remove(-2))
+    print(values.set(index=-4, value=11))
+    print(values.pop(-2))
     print(values.swap(first=-1, second=-3))
     print(values.insert(index=-1, value=99))
     end_index: int32 = values.len() as int32
@@ -8407,15 +8407,15 @@ def main() -> int32:
     assert_run_and_direct_source_stdout(
         "aura-string-lengths-negative-vec-indices",
         source,
-        "4\n9\n40\n35\n10\n-999\n10\n35\ntrue\ntrue\ntrue\n40\n20\n99\n11\n77\n",
+        "4\n9\n40\n35\n10\n-999\n10\n35\nNone\nNone\nNone\n40\n20\n99\n11\n77\n",
     );
 }
 
 #[test]
-fn too_negative_vec_index_traps_on_run_and_direct_backends() {
+fn too_negative_list_index_traps_on_run_and_direct_backends() {
     let source = r#"
 def main() -> int32:
-    values: Vec[int32] = [10, 20, 30]
+    values: list[int32] = [10, 20, 30]
     print(values[-4])
     return 0
 "#;
@@ -8425,7 +8425,7 @@ def main() -> int32:
         source,
         std::time::Duration::from_secs(20),
         "",
-        "vector index `-4` is out of bounds for length `3`",
+        "list index `-4` is out of bounds for length `3`",
     );
 }
 
@@ -8832,7 +8832,7 @@ fn build_with_direct_backend_supports_float_modulo() {
 fn build_with_direct_backend_runs_with_cleanup_on_normal_scope_exit() {
     let (_, run) = build_and_run_direct_source(
         "aura-build-direct-with-normal-exit",
-        "class Handle:\n    name: String\n\n    def close(mut self):\n        print(\"closing \" + self.name)\n\ndef main() -> int32:\n    with h = Handle(name=\"db\"):\n        print(\"inside with\")\n    print(\"after with\")\n    return 0\n",
+        "class Handle:\n    name: str\n\n    def close(mut self):\n        print(\"closing \" + self.name)\n\ndef main() -> int32:\n    with h = Handle(name=\"db\"):\n        print(\"inside with\")\n    print(\"after with\")\n    return 0\n",
     );
 
     assert!(
@@ -8850,7 +8850,7 @@ fn build_with_direct_backend_runs_with_cleanup_on_normal_scope_exit() {
 fn build_with_direct_backend_preserves_scalar_return_values_through_with_cleanup() {
     let (_, run) = build_and_run_direct_source(
         "aura-build-direct-with-return",
-        "class Handle:\n    name: String\n\n    def close(mut self):\n        print(\"closing \" + self.name)\n\ndef process() -> int32:\n    with h = Handle(name=\"file\"):\n        return 42\n    return 0\n\ndef main() -> int32:\n    print(process())\n    return 0\n",
+        "class Handle:\n    name: str\n\n    def close(mut self):\n        print(\"closing \" + self.name)\n\ndef process() -> int32:\n    with h = Handle(name=\"file\"):\n        return 42\n    return 0\n\ndef main() -> int32:\n    print(process())\n    return 0\n",
     );
 
     assert!(
@@ -8899,7 +8899,7 @@ fn build_with_direct_backend_rejects_narrow_integer_overflow_at_runtime() {
 fn build_with_direct_backend_supports_trait_impls_on_builtin_types() {
     let (_, run) = build_and_run_direct_source(
         "aura-build-direct-builtin-trait",
-        "trait Show:\n    def show(self) -> String\n\nimpl Show for int32:\n    def show(self) -> String:\n        return \"int\"\n\ndef main() -> int32:\n    value: int32 = 7\n    print(value.show())\n    return 0\n",
+        "trait Show:\n    def show(self) -> str\n\nimpl Show for int32:\n    def show(self) -> str:\n        return \"int\"\n\ndef main() -> int32:\n    value: int32 = 7\n    print(value.show())\n    return 0\n",
     );
 
     assert!(
@@ -9332,7 +9332,7 @@ fn run_executes_vec_literals_and_iteration() {
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "def main() -> int32:\n    mut values = [1, 2]\n    values.push(3)\n    mut total = 0\n    for value in values:\n        total += value\n    print(total)\n    return 0\n",
+        "def main() -> int32:\n    mut values = [1, 2]\n    values.append(3)\n    mut total = 0\n    for value in values:\n        total += value\n    print(total)\n    return 0\n",
     )
     .expect("failed to write vec source");
 
@@ -9356,7 +9356,7 @@ fn run_executes_vec_methods_and_constructor() {
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    values = Vec[int32]()\n    print(values.is_empty())\n    mut items: Vec[int32] = [1, 2, 3]\n    print(items.len())\n    print_int_option(items.get(1))\n    print_int_option(items.set(index=1, value=20))\n    print_int_option(items.remove(0))\n    items.push(99)\n    print_int_option(items.pop())\n    mut total: int32 = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
+        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    values = list[int32]()\n    print(values.is_empty())\n    mut items: list[int32] = [1, 2, 3]\n    print(items.len())\n    print_int_option(items.get(1))\n    print(items.set(index=1, value=20))\n    print(items.pop(0))\n    items.append(99)\n    print(items.pop())\n    mut total: int32 = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
     )
     .expect("failed to write vec methods source");
 
@@ -9680,7 +9680,7 @@ fn run_executes_string_map_and_numeric_builtins() {
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aura repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts: Map[String, int32] = {\"aura\": 1, \"codex\": 2}\n    print(counts.len())\n    print(counts.contains_key(\"aura\"))\n    print_int_option(counts.get(\"aura\"))\n    print_int_option(counts.set(key=\"aura\", value=5))\n    print(counts[\"aura\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
+        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aura repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts: dict[str, int32] = {\"aura\": 1, \"codex\": 2}\n    print(counts.len())\n    print(\"aura\" in counts)\n    print_int_option(counts.get(\"aura\"))\n    counts[\"aura\"] = 5\n    print(counts[\"aura\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
     )
     .expect("failed to write string/map/numbers source");
 
@@ -9697,7 +9697,7 @@ fn run_executes_string_map_and_numeric_builtins() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "13\ntrue\ntrue\ntrue\naura repo\n7\n2\n12\n9.0\n2\ntrue\n1\n1\n5\n2\n2\n2\nfalse\n"
+        "13\ntrue\ntrue\ntrue\naura repo\n7\n2\n12\n9.0\n2\ntrue\n1\n5\n2\n2\n2\nfalse\n"
     );
 }
 
@@ -9893,17 +9893,17 @@ fn build_produces_runnable_binary_for_program_with_local_modules() {
 #[test]
 fn build_executes_multiple_specialized_trait_impl_dispatch() {
     let source = r#"trait Show:
-    def show(self) -> String
+    def show(self) -> str
 
 class Box[T]:
     value: T
 
 impl Show for Box[int32]:
-    def show(self) -> String:
+    def show(self) -> str:
         return f"{self.value}"
 
-impl Show for Box[String]:
-    def show(self) -> String:
+impl Show for Box[str]:
+    def show(self) -> str:
         return self.value.clone()
 
 def render[T: Show](value: T) -> None:
@@ -10052,7 +10052,7 @@ fn direct_backend_build_supports_advanced_io_and_network_surface() {
 import fs
 import net
 
-def serve_udp(addresses: Queue[String]) -> Result[String, io.Error]:
+def serve_udp(addresses: Queue[str]) -> Result[str, io.Error]:
     with server_socket = try net.udp_bind("127.0.0.1:0"):
         addresses.put(try server_socket.local_addr())
         match own try server_socket.recv_from(1024, timeout=1s):
@@ -10063,7 +10063,7 @@ def serve_udp(addresses: Queue[String]) -> Result[String, io.Error]:
             case Option.None:
                 return Result.Ok("missing")
 
-def serve_http(addresses: Queue[String]) -> Result[None, io.Error]:
+def serve_http(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.http_listen("127.0.0.1:0"):
         addresses.put(try server_listener.local_addr())
         exchange = try server_listener.accept(timeout=1s)
@@ -10080,7 +10080,7 @@ def serve_http(addresses: Queue[String]) -> Result[None, io.Error]:
                     try request.respond_text(400, "missing X-Test", {{"Content-Type": "text/plain"}})
                     return Result.Ok(None)
 
-def serve_http_bytes(addresses: Queue[String]) -> Result[None, io.Error]:
+def serve_http_bytes(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.http_listen("127.0.0.1:0"):
         addresses.put(try server_listener.local_addr())
         exchange = try server_listener.accept(timeout=1s)
@@ -10089,7 +10089,7 @@ def serve_http_bytes(addresses: Queue[String]) -> Result[None, io.Error]:
             try request.respond_bytes(202, body, {{"Content-Type": "application/octet-stream"}})
             return Result.Ok(None)
 
-def serve_ws(addresses: Queue[String]) -> Result[None, io.Error]:
+def serve_ws(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.websocket_listen("127.0.0.1:0"):
         addresses.put(try server_listener.local_addr())
         socket = try server_listener.accept(timeout=1s)
@@ -10101,7 +10101,7 @@ def serve_ws(addresses: Queue[String]) -> Result[None, io.Error]:
                 case Option.None:
                     return Result.Ok(None)
 
-def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
+def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
     match own addresses.get(timeout=1s):
         case QueueReceive.Item(address):
             return Result.Ok(address)
@@ -10113,7 +10113,7 @@ def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
             return Result.Err(io.Error.Cancelled)
 
 def run() -> Result[None, io.Error]:
-    bytes: Vec[uint8] = [65 as uint8, 66 as uint8]
+    bytes: list[uint8] = [65 as uint8, 66 as uint8]
     try fs.write_bytes("{path}", bytes)
     try fs.append_bytes("{path}", [67 as uint8, 10 as uint8])
     read_back = try fs.read_bytes("{path}")
@@ -10122,7 +10122,7 @@ def run() -> Result[None, io.Error]:
     print(read_back[2])
 
     with TaskGroup() as group:
-        udp_addresses = Queue[String](capacity=1)
+        udp_addresses = Queue[str](capacity=1)
         udp_task = group.start(serve_udp, udp_addresses)
         udp_addr = try receive_address(udp_addresses)
         udp_client = try net.udp_bind("127.0.0.1:0")
@@ -10147,10 +10147,10 @@ def run() -> Result[None, io.Error]:
             case TaskResult.TimedOut:
                 return Result.Ok(None)
 
-        http_addresses = Queue[String](capacity=1)
+        http_addresses = Queue[str](capacity=1)
         http_task = group.start(serve_http, http_addresses)
         http_addr = try receive_address(http_addresses)
-        headers: Map[String, String] = {{"X-Test": "ok"}}
+        headers: dict[str, str] = {{"X-Test": "ok"}}
         response = try net.http_request_text("POST", "http://" + http_addr + "/hello", "body", headers.clone())
         with http_response = response:
             print(http_response.status())
@@ -10165,7 +10165,7 @@ def run() -> Result[None, io.Error]:
             case TaskResult.TimedOut:
                 return Result.Ok(None)
 
-        http_bytes_addresses = Queue[String](capacity=1)
+        http_bytes_addresses = Queue[str](capacity=1)
         http_bytes_task = group.start(serve_http_bytes, http_bytes_addresses)
         http_bytes_addr = try receive_address(http_bytes_addresses)
         bytes_response = try net.http_request_bytes("POST", "http://" + http_bytes_addr + "/bytes", [1 as uint8, 2 as uint8], headers)
@@ -10182,7 +10182,7 @@ def run() -> Result[None, io.Error]:
             case TaskResult.TimedOut:
                 return Result.Ok(None)
 
-        ws_addresses = Queue[String](capacity=1)
+        ws_addresses = Queue[str](capacity=1)
         ws_task = group.start(serve_ws, ws_addresses)
         ws_addr = try receive_address(ws_addresses)
         client = try net.websocket_connect_timeout("ws://" + ws_addr + "/", 1s)
@@ -10357,7 +10357,7 @@ def stack_bytes() -> int64:
     print("stack")
     return 262144
 
-def argument(label: String, value: int32) -> int32:
+def argument(label: str, value: int32) -> int32:
     print(label)
     return value
 
@@ -10481,7 +10481,7 @@ def main() -> int32:
 fn task_results_surface_errors_without_aborting_the_program() {
     let source = r#"
 def bad() -> int32:
-    values: Vec[int32] = [1, 2]
+    values: list[int32] = [1, 2]
     return values[7]
 
 def main() -> int32:
@@ -10520,7 +10520,7 @@ def main() -> int32:
 fn unread_task_failures_abort_task_group_scope() {
     let source = r#"
 def boom() -> int32:
-    values: Vec[int32] = [1, 2]
+    values: list[int32] = [1, 2]
     return values[7]
 
 def main() -> int32:
@@ -10675,7 +10675,7 @@ import net
 import sys
 
 def accept_then_report(
-    addresses: Queue[String],
+    addresses: Queue[str],
     progress: Queue[int64]
 ) -> Result[None, io.Error]:
     with server_listener = try net.listen("127.0.0.1:0"):
@@ -10689,7 +10689,7 @@ def accept_then_report(
                 progress.put(-1)
     return Result.Ok(None)
 
-def connect_after_delay(address: String) -> None:
+def connect_after_delay(address: str) -> None:
     sleep(10ms)
     match own net.connect_timeout(address, 1s):
         case Result.Ok(stream):
@@ -10705,7 +10705,7 @@ def run_hot_loop() -> None:
             return
 
 def socket_probe() -> Result[bool, io.Error]:
-    addresses = Queue[String](capacity=1)
+    addresses = Queue[str](capacity=1)
     socket_progress = Queue[int64]()
 
     with TaskGroup() as group:
@@ -10749,9 +10749,9 @@ def main() -> int32:
 fn self_receiver_method_result_can_bind_to_a_name() {
     let source = r#"
 class Box:
-    value: String
+    value: str
 
-    def take(own self) -> String:
+    def take(own self) -> str:
         return self.value
 
 def main() -> int32:
@@ -10893,7 +10893,7 @@ fn vec_remove_out_of_bounds_is_a_runtime_error() {
 def main() -> int32:
     mut values = [1, 2, 3]
     print("before")
-    print(values.remove(index=99))
+    print(values.pop(index=99))
     print("after")
     return 0
 "#;
@@ -10963,7 +10963,7 @@ def main() -> int32:
     assert_eq!(String::from_utf8_lossy(&run.stdout), "before\n");
     assert!(
         String::from_utf8_lossy(&run.stderr)
-            .contains("vector swap indices `0` and `99` are out of bounds for length `3`"),
+            .contains("list swap indices `0` and `99` are out of bounds for length `3`"),
         "run stderr should mention both out-of-bounds swap indices, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
@@ -10993,7 +10993,7 @@ def main() -> int32:
     assert_eq!(String::from_utf8_lossy(&direct.stdout), "before\n");
     assert!(
         String::from_utf8_lossy(&direct.stderr)
-            .contains("vector swap indices `0` and `99` are out of bounds for length `3`"),
+            .contains("list swap indices `0` and `99` are out of bounds for length `3`"),
         "direct stderr should mention both out-of-bounds swap indices, stderr was:\n{}",
         String::from_utf8_lossy(&direct.stderr)
     );
@@ -11086,7 +11086,7 @@ def main() -> int32:
 fn direct_backend_unwinds_with_resources_before_runtime_trap() {
     let source = r#"
 class Resource:
-    name: String
+    name: str
 
     def close(mut self):
         print("close " + self.name)
@@ -11094,7 +11094,7 @@ class Resource:
 def main() -> int32:
     with a = Resource(name="A"):
         with b = Resource(name="B"):
-            values: Vec[int32] = []
+            values: list[int32] = []
             print(values[5])
     return 0
 "#;
@@ -11102,12 +11102,12 @@ def main() -> int32:
     let (_, run) = build_and_run_direct_source("aura-direct-with-trap-cleanup", source);
     assert!(
         !run.status.success(),
-        "direct binary should fail on vector OOB"
+        "direct binary should fail on list OOB"
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "close B\nclose A\n");
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains("vector index `5` is out of bounds"),
-        "stderr should include vector OOB diagnostic, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr).contains("list index `5` is out of bounds"),
+        "stderr should include list OOB diagnostic, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
 }
@@ -11116,13 +11116,13 @@ def main() -> int32:
 fn direct_backend_unwinds_with_resources_when_callee_traps() {
     let source = r#"
 class Resource:
-    name: String
+    name: str
 
     def close(mut self):
         print("close " + self.name)
 
 def boom() -> int32:
-    values: Vec[int32] = []
+    values: list[int32] = []
     return values[5]
 
 def main() -> int32:
@@ -11136,15 +11136,15 @@ def main() -> int32:
     let (_, run) = build_and_run_direct_source("aura-direct-with-callee-trap-cleanup", source);
     assert!(
         !run.status.success(),
-        "direct binary should fail on vector OOB"
+        "direct binary should fail on list OOB"
     );
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
         "close C\nclose B\nclose A\n"
     );
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains("vector index `5` is out of bounds"),
-        "stderr should include vector OOB diagnostic, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr).contains("list index `5` is out of bounds"),
+        "stderr should include list OOB diagnostic, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
 }
@@ -11153,13 +11153,13 @@ def main() -> int32:
 fn direct_backend_callee_trap_cleanup_uses_current_resource_state() {
     let source = r#"
 class Resource:
-    name: String
+    name: str
 
     def close(mut self):
         print("close " + self.name)
 
 def boom() -> int32:
-    values: Vec[int32] = []
+    values: list[int32] = []
     return values[5]
 
 def main() -> int32:
@@ -11172,12 +11172,12 @@ def main() -> int32:
     let (_, run) = build_and_run_direct_source("aura-direct-with-current-cleanup", source);
     assert!(
         !run.status.success(),
-        "direct binary should fail on vector OOB"
+        "direct binary should fail on list OOB"
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "close new\n");
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains("vector index `5` is out of bounds"),
-        "stderr should include vector OOB diagnostic, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr).contains("list index `5` is out of bounds"),
+        "stderr should include list OOB diagnostic, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
 }
@@ -11186,7 +11186,7 @@ def main() -> int32:
 fn direct_backend_preserves_body_trap_when_cleanup_also_traps() {
     let source = r#"
 class Resource:
-    name: String
+    name: str
 
     def close(mut self):
         print("close " + self.name)
@@ -11320,7 +11320,7 @@ def main() -> int32:
 fn direct_backend_unwinds_with_resources_before_recursion_limit() {
     let source = r#"
 class Resource:
-    name: String
+    name: str
 
     def close(mut self):
         print("close " + self.name)
@@ -11554,7 +11554,7 @@ def main() -> int32:
 #[test]
 fn wait_any_without_tasks_times_out_immediately() {
     let source = r#"def main() -> int32:
-    tasks = Vec[Task[int32]]()
+    tasks = list[Task[int32]]()
     match wait_any(tasks):
         case WaitAny.Ready(index, value):
             print(index)
@@ -11647,8 +11647,8 @@ fn direct_backend_build_supports_process_module_surface() {
     let source = format!(
         r#"import process
 
-def run(cwd: own String) -> Result[None, process.Error]:
-    env: Map[String, String] = {{"AURA_PROCESS_VAR": "present"}}
+def run(cwd: own str) -> Result[None, process.Error]:
+    env: dict[str, str] = {{"AURA_PROCESS_VAR": "present"}}
     completed = try process.run(["/usr/bin/printenv", "AURA_PROCESS_VAR"], env=env, timeout=2s, group=true)
     print(completed.stdout().trim())
     print(completed.stderr().len())
@@ -11743,7 +11743,7 @@ fn direct_backend_build_supports_unix_and_tls_network_surface() {
         r#"import io
 import net
 
-def serve_unix(path: own String, ready: Queue[bool]) -> Result[None, io.Error]:
+def serve_unix(path: own str, ready: Queue[bool]) -> Result[None, io.Error]:
     with server_listener = try net.unix_listen(path):
         ready.put(true)
         stream = try server_listener.accept(timeout=1s)
@@ -11755,7 +11755,7 @@ def serve_unix(path: own String, ready: Queue[bool]) -> Result[None, io.Error]:
                 case Option.None:
                     return Result.Ok(None)
 
-def serve_tls(cert_path: own String, key_path: own String, addresses: Queue[String]) -> Result[None, io.Error]:
+def serve_tls(cert_path: own str, key_path: own str, addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.tls_listen("127.0.0.1:0", cert_path, key_path):
         addresses.put(try server_listener.local_addr())
         stream = try server_listener.accept(timeout=2s)
@@ -11797,7 +11797,7 @@ def run() -> Result[None, io.Error]:
             case TaskResult.TimedOut:
                 return Result.Ok(None)
 
-        tls_addresses = Queue[String](capacity=1)
+        tls_addresses = Queue[str](capacity=1)
         tls_task = group.start(serve_tls, "{cert_path}", "{key_path}", tls_addresses)
         match tls_addresses.get(timeout=2s):
             case QueueReceive.Item(tls_addr):
@@ -11908,15 +11908,15 @@ def main() -> int32:
 #[test]
 fn run_and_direct_backend_match_d6_parameter_loop_and_task_defaults() {
     let source = r#"class Message:
-    text: String
+    text: str
 
 def read(message: Message) -> int32:
     return message.text.len() as int32
 
-def consume(value: own String):
+def consume(value: own str):
     print(value)
 
-def task_read(value: String) -> int32:
+def task_read(value: str) -> int32:
     return value.len() as int32
 
 def main() -> int32:
@@ -11957,11 +11957,11 @@ def main() -> int32:
 
 #[test]
 fn check_and_direct_backend_preserve_d6_own_parameter_guidance() {
-    let source = r#"def take(value: String) -> String:
+    let source = r#"def take(value: str) -> str:
     return value
 "#;
     let (temp, source_path) = write_temp_source("aura-d6-own-guidance", source);
-    let expected = "parameter `value` is borrowed; declare it as `own String` to take ownership, or clone the value before consuming it";
+    let expected = "parameter `value` is borrowed; declare it as `own str` to take ownership, or clone the value before consuming it";
 
     let checked = Command::new(aura_bin())
         .arg("check")
@@ -12144,7 +12144,7 @@ fn assertions_preserve_exact_messages_in_run_and_direct_backends() {
 
 #[test]
 fn assertions_evaluate_condition_once_and_message_only_on_failure() {
-    let passing = r#"def lazy_message() -> String:
+    let passing = r#"def lazy_message() -> str:
     print("unexpected message")
     return "unused"
 
@@ -12168,7 +12168,7 @@ def main():
         print(f"condition {self.condition_calls}")
         return false
 
-    def message(mut self) -> String:
+    def message(mut self) -> str:
         self.message_calls += 1
         print(f"message {self.message_calls}")
         return "evaluated once"
@@ -12193,10 +12193,10 @@ def main():
 fn assertion_operand_traps_precede_assertion_failure() {
     let condition_trap = r#"def condition() -> bool:
     print("condition")
-    values: Vec[bool] = [true]
+    values: list[bool] = [true]
     return values[5]
 
-def message() -> String:
+def message() -> str:
     print("message")
     return "assertion should not run"
 
@@ -12206,13 +12206,13 @@ def main():
     for output in run_and_direct_failure_outputs("aura-assert-condition-trap", condition_trap) {
         assert_eq!(String::from_utf8_lossy(&output.stdout), "condition\n");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("vector index `5` is out of bounds"));
+        assert!(stderr.contains("list index `5` is out of bounds"));
         assert!(!stderr.contains("assertion should not run"));
     }
 
-    let message_trap = r#"def message() -> String:
+    let message_trap = r#"def message() -> str:
     print("message")
-    values: Vec[int32] = [1]
+    values: list[int32] = [1]
     print(values[5])
     return "assertion should not run"
 
@@ -12226,7 +12226,7 @@ def main():
             "condition\nmessage\n"
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("vector index `5` is out of bounds"));
+        assert!(stderr.contains("list index `5` is out of bounds"));
         assert!(!stderr.contains("assertion failed"));
     }
 }
@@ -12265,10 +12265,10 @@ fn aura_test_discovers_test_functions_and_keeps_main_files_working() {
     )
     .expect("function test source should write");
     fs::write(
-        tests.join("legacy.au"),
-        "def main() -> int32:\n    print(\"legacy\")\n    return 0\n",
+        tests.join("main_style.au"),
+        "def main() -> int32:\n    print(\"main style\")\n    return 0\n",
     )
-    .expect("legacy test source should write");
+    .expect("main-style test source should write");
 
     let run = Command::new(aura_bin())
         .current_dir(temp.path())
@@ -12286,7 +12286,7 @@ fn aura_test_discovers_test_functions_and_keeps_main_files_working() {
     );
     assert!(stdout.contains("::test_membership"), "{stdout}");
     // A file without any `def test_*()` still reports one result for the file.
-    assert!(stdout.contains("legacy.au"), "{stdout}");
+    assert!(stdout.contains("main_style.au"), "{stdout}");
     assert!(
         !stdout.contains("::helper") && !stderr.contains("::helper"),
         "a non-test function must not be discovered"
@@ -12345,6 +12345,691 @@ fn aura_test_treats_file_level_assertions_as_test_results() {
     assert!(stderr.contains("FAILED"));
     assert!(stderr.contains("error[AU4001]: file-level assertion"));
     assert!(stderr.contains("assert false"));
+}
+
+#[test]
+fn aura_test_filter_is_literal_case_sensitive_and_validates_usage() {
+    let temp = TempDir::new("aura-test-filter");
+    let source_path = temp.path().join("filter.au");
+    fs::write(
+        &source_path,
+        "def test_Alpha():\n    pass\n\ndef test_alphabet():\n    pass\n\ndef test_beta():\n    pass\n",
+    )
+    .expect("filter source should write");
+
+    let selected = Command::new(aura_bin())
+        .args(["test", "-k", "Alpha"])
+        .arg(&source_path)
+        .output()
+        .expect("filtered test run should start");
+    assert!(selected.status.success());
+    let stdout = String::from_utf8_lossy(&selected.stdout);
+    assert!(stdout.contains("::test_Alpha"), "{stdout}");
+    assert!(!stdout.contains("::test_alphabet"), "{stdout}");
+    assert!(stdout.contains("1 passed; 0 failed"), "{stdout}");
+
+    let no_match = Command::new(aura_bin())
+        .args(["test", "-k", "ALPHA"])
+        .arg(&source_path)
+        .output()
+        .expect("zero-match test run should start");
+    assert!(no_match.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&no_match.stdout),
+        "0 passed; 0 failed\n"
+    );
+
+    let missing = Command::new(aura_bin())
+        .args(["test", "-k"])
+        .output()
+        .expect("missing-filter-value run should start");
+    assert_eq!(missing.status.code(), Some(2));
+
+    for arguments in [
+        vec!["test", "-k", ""],
+        vec!["test", "-k", "alpha", "-k", "beta"],
+    ] {
+        let invalid = Command::new(aura_bin())
+            .args(arguments)
+            .arg(&source_path)
+            .output()
+            .expect("invalid filtered test run should start");
+        assert_eq!(invalid.status.code(), Some(2));
+    }
+}
+
+#[test]
+fn aura_test_preserves_source_declaration_order_and_normalizes_reported_paths() {
+    let temp = TempDir::new("aura-test-source-order");
+    let tests = temp.path().join("tests");
+    fs::create_dir_all(&tests).expect("test directory should create");
+    fs::write(
+        tests.join("order.au"),
+        "def test_zeta():\n    pass\n\ndef test_alpha():\n    pass\n\ndef test_middle():\n    pass\n",
+    )
+    .expect("ordered test source should write");
+
+    let run = Command::new(aura_bin())
+        .current_dir(temp.path())
+        .args(["test", "--format", "json", "./tests/../tests/order.au"])
+        .output()
+        .expect("ordered test run should start");
+    assert!(
+        run.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&run.stdout).expect("ordered JSON report should parse");
+    let tests = report["tests"]
+        .as_array()
+        .expect("tests should be an array");
+    assert_eq!(
+        tests
+            .iter()
+            .map(|record| record["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "tests/order.au::test_zeta",
+            "tests/order.au::test_alpha",
+            "tests/order.au::test_middle",
+        ]
+    );
+    assert!(tests
+        .iter()
+        .all(|record| record["file"] == "tests/order.au"));
+}
+
+#[test]
+fn aura_test_json_is_one_ordered_schema_versioned_document() {
+    let temp = TempDir::new("aura-test-json");
+    let source_path = temp.path().join("json.au");
+    fs::write(
+        &source_path,
+        "def test_first():\n    print(\"captured program output\")\n\ndef test_second():\n    assert false, \"second failed\"\n",
+    )
+    .expect("JSON test source should write");
+
+    let run = Command::new(aura_bin())
+        .args(["test", "--format", "json"])
+        .arg(&source_path)
+        .output()
+        .expect("JSON test run should start");
+    assert_eq!(run.status.code(), Some(1));
+    assert!(
+        run.stderr.is_empty(),
+        "stderr was not empty: {:?}",
+        run.stderr
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&run.stdout).expect("stdout should be one JSON document");
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["summary"]["selected"], 2);
+    assert_eq!(report["summary"]["passed"], 1);
+    assert_eq!(report["summary"]["failed"], 1);
+    let tests = report["tests"]
+        .as_array()
+        .expect("tests should be an array");
+    assert!(tests[0]["name"].as_str().unwrap().ends_with("::test_first"));
+    assert_eq!(tests[0]["outcome"], "passed");
+    assert!(tests[0]["duration_ms"].as_u64().is_some());
+    assert_eq!(tests[0]["stdout"], "captured program output\n");
+    assert!(tests[1]["name"]
+        .as_str()
+        .unwrap()
+        .ends_with("::test_second"));
+    assert_eq!(tests[1]["outcome"], "failed");
+    assert_eq!(tests[1]["diagnostic"]["code"], "AU4001");
+    assert!(tests[1].get("reason").is_none());
+}
+
+#[test]
+fn aura_test_runs_setup_and_teardown_for_each_selected_case() {
+    let temp = TempDir::new("aura-test-hooks");
+    let source_path = temp.path().join("hooks.au");
+    fs::write(
+        &source_path,
+        "def setup():\n    print(\"setup\")\n\ndef teardown():\n    print(\"teardown\")\n\ndef test_one():\n    print(\"one\")\n\ndef test_two():\n    print(\"two\")\n    assert false, \"two failed\"\n",
+    )
+    .expect("hook source should write");
+
+    let run = Command::new(aura_bin())
+        .args(["test"])
+        .arg(&source_path)
+        .output()
+        .expect("hook test run should start");
+    assert_eq!(run.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert_eq!(stdout.matches("setup\n").count(), 2, "{stdout}");
+    assert_eq!(stdout.matches("teardown\n").count(), 2, "{stdout}");
+    assert!(stdout.contains("setup\none\nteardown\n"), "{stdout}");
+    assert!(stdout.contains("setup\ntwo\nteardown\n"), "{stdout}");
+
+    let selected = Command::new(aura_bin())
+        .args(["test", "-k", "test_one"])
+        .arg(&source_path)
+        .output()
+        .expect("selected hook test run should start");
+    let selected_stdout = String::from_utf8_lossy(&selected.stdout);
+    assert_eq!(selected_stdout.matches("setup\n").count(), 1);
+    assert_eq!(selected_stdout.matches("teardown\n").count(), 1);
+    assert!(!selected_stdout.contains("two\n"));
+}
+
+#[test]
+fn aura_test_ignores_class_trait_and_impl_methods_named_like_hooks() {
+    let temp = TempDir::new("aura-test-non-module-hooks");
+    let source_path = temp.path().join("non_module_hooks.au");
+    fs::write(
+        &source_path,
+        r#"trait Lifecycle:
+    def setup(self) -> None
+    def teardown(self) -> None
+
+class Helper:
+    value: int32
+
+    def setup(self):
+        print("class setup must not run")
+
+    def teardown(self):
+        print("class teardown must not run")
+
+class Worker:
+    value: int32
+
+impl Lifecycle for Worker:
+    def setup(self) -> None:
+        print("impl setup must not run")
+
+    def teardown(self) -> None:
+        print("impl teardown must not run")
+
+def test_ok():
+    pass
+"#,
+    )
+    .expect("non-module-hook source should write");
+
+    let run = Command::new(aura_bin())
+        .args(["test"])
+        .arg(&source_path)
+        .output()
+        .expect("non-module-hook test run should start");
+    assert!(
+        run.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(stdout.contains("::test_ok"), "{stdout}");
+    assert!(!stdout.contains("must not run"), "{stdout}");
+}
+
+#[test]
+fn aura_test_non_function_hook_collisions_are_structured_diagnostics() {
+    let temp = TempDir::new("aura-test-hook-collision");
+    let source_path = temp.path().join("hook_collision.au");
+    fs::write(&source_path, "setup = 1\n\ndef test_ok():\n    pass\n")
+        .expect("hook-collision source should write");
+
+    let run = Command::new(aura_bin())
+        .args(["test", "--format", "json"])
+        .arg(&source_path)
+        .output()
+        .expect("hook-collision test run should start");
+    assert_eq!(run.status.code(), Some(1));
+    assert!(run.stderr.is_empty());
+    let report: serde_json::Value =
+        serde_json::from_slice(&run.stdout).expect("hook-collision JSON should parse");
+    assert_eq!(report["tests"][0]["diagnostic"]["code"], "AU2999");
+    assert_eq!(
+        report["tests"][0]["diagnostic"]["message"],
+        "test hook `setup` must be a module function"
+    );
+    assert_eq!(
+        report["tests"][0]["diagnostic"]["primary_span"]["start"]["line"],
+        1
+    );
+
+    fs::write(
+        &source_path,
+        "def setup(value: int32):\n    pass\n\ndef test_ok():\n    pass\n",
+    )
+    .expect("invalid-hook-signature source should write");
+    let invalid_signature = Command::new(aura_bin())
+        .args(["test", "--format", "json"])
+        .arg(&source_path)
+        .output()
+        .expect("invalid-hook-signature test run should start");
+    let report: serde_json::Value = serde_json::from_slice(&invalid_signature.stdout)
+        .expect("invalid-hook-signature JSON should parse");
+    assert_eq!(report["tests"][0]["diagnostic"]["code"], "AU2999");
+    assert_eq!(
+        report["tests"][0]["diagnostic"]["message"],
+        "test hook `setup` must be parameterless and return `None`"
+    );
+    assert_eq!(
+        report["tests"][0]["diagnostic"]["primary_span"]["start"]["line"],
+        1
+    );
+}
+
+#[test]
+fn aura_test_hook_failures_preserve_primary_and_report_teardown_secondarily() {
+    let temp = TempDir::new("aura-test-hook-failures");
+    let source_path = temp.path().join("hook_failures.au");
+    fs::write(
+        &source_path,
+        "def setup():\n    print(\"setup\")\n\ndef teardown():\n    print(\"teardown\")\n    assert false, \"teardown failed\"\n\ndef test_body():\n    print(\"body\")\n    assert false, \"body failed\"\n",
+    )
+    .expect("hook-failure source should write");
+
+    let run = Command::new(aura_bin())
+        .args(["test"])
+        .arg(&source_path)
+        .output()
+        .expect("hook-failure test run should start");
+    assert_eq!(run.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout)
+            .matches("teardown\n")
+            .count(),
+        1,
+        "teardown must run after the body traps"
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(stderr.contains("error[AU4001]: body failed"), "{stderr}");
+    assert!(stderr.contains("teardown also failed for"), "{stderr}");
+    assert!(
+        stderr.contains("error[AU4001]: teardown failed"),
+        "{stderr}"
+    );
+
+    let json_run = Command::new(aura_bin())
+        .args(["test", "--format", "json"])
+        .arg(&source_path)
+        .output()
+        .expect("JSON hook-failure test run should start");
+    let report: serde_json::Value =
+        serde_json::from_slice(&json_run.stdout).expect("hook-failure JSON should parse");
+    assert_eq!(report["tests"][0]["diagnostic"]["message"], "body failed");
+    assert_eq!(report["tests"][0]["secondary"]["stage"], "teardown");
+    assert_eq!(
+        report["tests"][0]["secondary"]["diagnostic"]["message"],
+        "teardown failed"
+    );
+    assert!(report["tests"][0]["secondary"]["diagnostic"]["primary_span"].is_object());
+
+    fs::write(
+        &source_path,
+        "def setup():\n    print(\"setup\")\n    assert false, \"setup failed\"\n\ndef teardown():\n    print(\"teardown\")\n\ndef test_body():\n    print(\"body must not run\")\n",
+    )
+    .expect("setup-failure source should write");
+    let setup_failure = Command::new(aura_bin())
+        .args(["test"])
+        .arg(&source_path)
+        .output()
+        .expect("setup-failure test run should start");
+    let stdout = String::from_utf8_lossy(&setup_failure.stdout);
+    assert!(stdout.contains("setup\nteardown\n"), "{stdout}");
+    assert!(!stdout.contains("body must not run"), "{stdout}");
+    assert!(String::from_utf8_lossy(&setup_failure.stderr).contains("setup failed"));
+}
+
+#[test]
+fn aura_test_lifecycle_order_is_observable_through_external_side_effects() {
+    let temp = TempDir::new("aura-test-lifecycle-side-effects");
+    let source_path = temp.path().join("lifecycle.au");
+    let trace_path = temp.path().join("trace.txt");
+    let trace = trace_path.display();
+    fs::write(
+        &source_path,
+        format!(
+            r#"import fs
+
+def setup():
+    match fs.append_string("{trace}", "setup\n"):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            assert false, "setup append failed"
+
+def teardown():
+    match fs.append_string("{trace}", "teardown\n"):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            assert false, "teardown append failed"
+
+def test_first():
+    match fs.append_string("{trace}", "first\n"):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            assert false, "first append failed"
+
+def test_second():
+    match fs.append_string("{trace}", "second\n"):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            assert false, "second append failed"
+"#
+        ),
+    )
+    .expect("lifecycle source should write");
+
+    let run = Command::new(aura_bin())
+        .args(["test"])
+        .arg(&source_path)
+        .output()
+        .expect("lifecycle test run should start");
+    assert!(
+        run.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&trace_path).expect("lifecycle trace should exist"),
+        "setup\nfirst\nteardown\nsetup\nsecond\nteardown\n"
+    );
+}
+
+#[test]
+fn aura_test_reuses_one_checked_module_when_setup_rewrites_the_source() {
+    let temp = TempDir::new("aura-test-checked-module-reuse");
+    let source_path = temp.path().join("checked_once.au");
+    let escaped_path = source_path
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let replacement = "def test_checked_body():\n    assert false, \"rewritten source ran\"\n";
+    let escaped_replacement = replacement
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n");
+    fs::write(
+        &source_path,
+        format!(
+            r#"import fs
+
+def setup():
+    print("original setup")
+    match fs.write_string("{escaped_path}", "{escaped_replacement}"):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            assert false, "source rewrite failed"
+
+def teardown():
+    print("original teardown")
+
+def test_checked_body():
+    print("original body")
+"#
+        ),
+    )
+    .expect("checked-once source should write");
+
+    let run = Command::new(aura_bin())
+        .args(["test"])
+        .arg(&source_path)
+        .output()
+        .expect("checked-once test run should start");
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        stdout.contains("original setup\noriginal body\noriginal teardown\n"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("rewritten source ran"), "{stdout}");
+    assert_eq!(
+        fs::read_to_string(&source_path).expect("rewritten source should remain readable"),
+        replacement,
+        "setup must really rewrite the source before the body executes"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn aura_test_preserves_manifest_authorized_ffi_across_lifecycle_phases() {
+    let temp = TempDir::new("aura-test-checked-ffi");
+    let source_dir = temp.path().join("src");
+    fs::create_dir_all(&source_dir).expect("FFI package source directory should create");
+    fs::write(
+        temp.path().join("Aura.toml"),
+        "[package]\nname = \"test_runner_ffi\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .expect("FFI package manifest should write");
+    let source_path = source_dir.join("main.au");
+    fs::write(
+        &source_path,
+        r#"public extern "C" def getpid() -> int32
+
+def setup():
+    assert getpid() > 0
+    print("ffi setup")
+
+def teardown():
+    assert getpid() > 0
+    print("ffi teardown")
+
+def test_ffi():
+    assert getpid() > 0
+    print("ffi body")
+"#,
+    )
+    .expect("FFI lifecycle source should write");
+
+    let run = Command::new(aura_bin())
+        .args(["test"])
+        .arg(&source_path)
+        .output()
+        .expect("FFI lifecycle test should start");
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        stdout.contains("ffi setup\nffi body\nffi teardown\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("1 passed; 0 failed"), "{stdout}");
+}
+
+#[test]
+fn aura_test_json_runner_failures_use_reason_and_do_not_leak_program_stdout() {
+    let temp = TempDir::new("aura-test-json-runner-failure");
+    let source_path = temp.path().join("timeout.au");
+    fs::write(
+        &source_path,
+        "def test_timeout():\n    print(\"must stay inside the result runner\")\n    while true:\n        pass\n",
+    )
+    .expect("timeout source should write");
+
+    let run = Command::new(aura_bin())
+        .args(["test", "--format", "json", "--timeout-ms", "100"])
+        .arg(&source_path)
+        .output()
+        .expect("JSON timeout test run should start");
+    assert_eq!(run.status.code(), Some(1));
+    assert!(run.stderr.is_empty());
+    let report: serde_json::Value =
+        serde_json::from_slice(&run.stdout).expect("stdout should contain only JSON");
+    assert_eq!(report["tests"][0]["outcome"], "failed");
+    assert!(report["tests"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("timed out after 100ms"));
+    assert!(report["tests"][0].get("diagnostic").is_none());
+    assert_eq!(
+        report["tests"][0]["stdout"],
+        "must stay inside the result runner\n"
+    );
+}
+
+#[test]
+fn aura_test_expands_parameter_registrations_before_filtering() {
+    let temp = TempDir::new("aura-test-parameters");
+    let source_path = temp.path().join("parameters.au");
+    fs::write(
+        &source_path,
+        "def zero():\n    print(\"zero\")\n\ndef unicode_case():\n    print(\"unicode\")\n\ndef test_cases() -> list[(str, def() -> None)]:\n    print(\"registration output\")\n    return [(\"zero\", zero), (\"unicode\", unicode_case)]\n",
+    )
+    .expect("parameter source should write");
+
+    let run = Command::new(aura_bin())
+        .args(["test", "-k", "[unicode]"])
+        .arg(&source_path)
+        .output()
+        .expect("parameterized test run should start");
+    assert!(
+        run.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        stdout.contains("::test_cases[unicode]"),
+        "{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(!stdout.contains("::test_cases[zero]"), "{stdout}");
+    assert_eq!(
+        stdout.matches("registration output\n").count(),
+        1,
+        "{stdout}"
+    );
+    assert!(stdout.contains("unicode\n"), "{stdout}");
+    assert!(!stdout.contains("zero\n"), "{stdout}");
+
+    let json_run = Command::new(aura_bin())
+        .args(["test", "--format", "json", "-k", "[unicode]"])
+        .arg(&source_path)
+        .output()
+        .expect("JSON parameterized test run should start");
+    assert!(json_run.status.success());
+    assert!(json_run.stderr.is_empty());
+    let report: serde_json::Value =
+        serde_json::from_slice(&json_run.stdout).expect("JSON report should parse");
+    assert_eq!(report["discovery"][0]["stdout"], "registration output\n");
+    assert_eq!(report["tests"][0]["stdout"], "unicode\n");
+}
+
+#[test]
+fn aura_test_registration_type_rejects_capturing_closures() {
+    let temp = TempDir::new("aura-test-captured-parameter");
+    let source_path = temp.path().join("captured_parameter.au");
+    fs::write(
+        &source_path,
+        "def test_cases() -> list[(str, def() -> None)]:\n    factor = 2\n    return [(\"captured\", lambda: print(factor))]\n",
+    )
+    .expect("captured parameter source should write");
+
+    let run = Command::new(aura_bin())
+        .args(["test"])
+        .arg(&source_path)
+        .output()
+        .expect("captured parameter test run should start");
+    assert_eq!(run.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("found `(str, closure def() -> None)`"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("registered case"), "{stderr}");
+}
+
+#[test]
+fn aura_test_validates_parameter_labels_and_allows_empty_registration() {
+    let temp = TempDir::new("aura-test-parameter-labels");
+    let source_path = temp.path().join("parameter_labels.au");
+
+    fs::write(
+        &source_path,
+        "def registered_case():\n    pass\n\ndef test_cases() -> list[(str, def() -> None)]:\n    return [(\"same\", registered_case), (\"same\", registered_case)]\n",
+    )
+    .expect("duplicate-label source should write");
+    let duplicate = Command::new(aura_bin())
+        .args(["test"])
+        .arg(&source_path)
+        .output()
+        .expect("duplicate-label test run should start");
+    assert_eq!(duplicate.status.code(), Some(1));
+    let duplicate_stderr = String::from_utf8_lossy(&duplicate.stderr);
+    assert!(
+        duplicate_stderr.contains("duplicate test registration label `same`"),
+        "{duplicate_stderr}"
+    );
+
+    fs::write(
+        &source_path,
+        "def registered_case():\n    pass\n\ndef test_cases() -> list[(str, def() -> None)]:\n    return [(\"\", registered_case)]\n",
+    )
+    .expect("empty-label source should write");
+    let empty_label = Command::new(aura_bin())
+        .args(["test"])
+        .arg(&source_path)
+        .output()
+        .expect("empty-label test run should start");
+    assert_eq!(empty_label.status.code(), Some(1));
+    let empty_label_stderr = String::from_utf8_lossy(&empty_label.stderr);
+    assert!(
+        empty_label_stderr.contains("test registration labels must be non-empty"),
+        "{empty_label_stderr}"
+    );
+
+    fs::write(
+        &source_path,
+        "def test_cases() -> list[(str, def() -> None)]:\n    return []\n",
+    )
+    .expect("empty-registration source should write");
+    let empty_registration = Command::new(aura_bin())
+        .args(["test"])
+        .arg(&source_path)
+        .output()
+        .expect("empty-registration test run should start");
+    assert!(empty_registration.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&empty_registration.stdout),
+        "0 passed; 0 failed\n"
+    );
+}
+
+#[test]
+fn aura_test_registration_timeout_retains_stdout_in_the_single_json_document() {
+    let temp = TempDir::new("aura-test-registration-timeout-output");
+    let source_path = temp.path().join("registration_timeout.au");
+    fs::write(
+        &source_path,
+        "def test_cases() -> list[(str, def() -> None)]:\n    print(\"registration began\")\n    while true:\n        pass\n    return []\n",
+    )
+    .expect("registration-timeout source should write");
+
+    let run = Command::new(aura_bin())
+        .args(["test", "--format", "json", "--timeout-ms", "100"])
+        .arg(&source_path)
+        .output()
+        .expect("registration-timeout test run should start");
+    assert_eq!(run.status.code(), Some(1));
+    assert!(run.stderr.is_empty());
+    let report: serde_json::Value =
+        serde_json::from_slice(&run.stdout).expect("registration-timeout JSON should parse");
+    assert!(report["tests"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("test registration timed out after 100ms"));
+    assert_eq!(report["tests"][0]["stdout"], "registration began\n");
 }
 
 #[test]
@@ -12422,7 +13107,7 @@ def finish(value: int32) -> int32:
 def fail() -> int32:
     return 1 // 0
 
-def observe(label: String, queue: Queue[int32]) -> Queue[int32]:
+def observe(label: str, queue: Queue[int32]) -> Queue[int32]:
     print(label)
     return queue
 
@@ -12589,7 +13274,7 @@ def double(value: int32) -> int32:
 def offset(value: int32 = 10) -> int32:
     return value + 1
 
-def mark(label: String, value: int32) -> int32:
+def mark(label: str, value: int32) -> int32:
     print(label)
     return value
 
@@ -12630,7 +13315,7 @@ def main() -> int32:
     selected_default = first_default if false else second_default
     known_combine = combine
     pipeline = Pipeline(transform=copied)
-    transforms: Vec[def(int32) -> int32] = [pipeline.transform, double]
+    transforms: list[def(int32) -> int32] = [pipeline.transform, double]
 
     print(selected(1))
     print(apply(pipeline.transform, 2))
@@ -12730,7 +13415,7 @@ def supplier[T](callback: def() -> Option[T] = empty) -> def() -> Option[T]:
     return callback
 
 def main() -> int32:
-    supplied = supplier[String]()
+    supplied = supplier[str]()
     match supplied():
         case Option.None:
             print("ordinary-none")
@@ -12763,24 +13448,24 @@ class Counter:
 def increment(counter: mut Counter) -> None:
     counter.value += 1
 
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
 class Holder:
     mutate: def(mut Counter) -> None
-    consume: def(own String) -> String
+    consume: def(own str) -> str
 
 def apply_mut(callback: def(mut Counter) -> None, counter: mut Counter) -> None:
     callback(counter)
 
-def apply_own(callback: def(own String) -> String, value: own String) -> String:
+def apply_own(callback: def(own str) -> str, value: own str) -> str:
     return callback(value)
 
 def main() -> int32:
     mutate: def(mut Counter) -> None = increment
-    consume: def(own String) -> String = take
-    mutators: Vec[def(mut Counter) -> None] = [mutate]
-    consumers: Vec[def(own String) -> String] = [consume]
+    consume: def(own str) -> str = take
+    mutators: list[def(mut Counter) -> None] = [mutate]
+    consumers: list[def(own str) -> str] = [consume]
     holder = Holder(mutate=mutate, consume=consume)
     mut counter = Counter(value=41)
     text = "owned"

@@ -1,6 +1,6 @@
-def consume_and_measure(values: own Vec[int32]) -> int32:
+def consume_and_measure(values: own list[int32]) -> int32:
     return 1 as int32
 
 def main():
-    values: Vec[int32] = [1, 2]
-    print(values.contains(consume_and_measure(values)))
+    values: list[int32] = [1, 2]
+    print((consume_and_measure(values) in values))

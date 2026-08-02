@@ -1,15 +1,15 @@
 trait Printable:
-    def to_string(self) -> String
+    def to_string(self) -> str
 
 trait Measurable:
     def measure(self) -> int32
 
 class Widget:
-    label: String
+    label: str
     size: int32
 
 impl Printable for Widget:
-    def to_string(self) -> String:
+    def to_string(self) -> str:
         return self.label
 
 impl Measurable for Widget:

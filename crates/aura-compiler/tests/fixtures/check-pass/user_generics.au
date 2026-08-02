@@ -12,7 +12,7 @@ def identity[T](value: own T) -> T:
 
 def main() -> int32:
     boxed: Box[int32] = Box(value=identity(7))
-    wrapped: Wrapper[String] = Wrapper.Item(identity("ok"))
+    wrapped: Wrapper[str] = Wrapper.Item(identity("ok"))
     print(boxed.get())
     match own wrapped:
         case Wrapper.Item(value):

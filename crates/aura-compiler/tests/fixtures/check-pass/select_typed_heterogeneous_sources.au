@@ -2,22 +2,22 @@ def ready() -> int32:
     return 7
 
 def main():
-    jobs = Queue[String]()
+    jobs = Queue[str]()
     with TaskGroup() as group:
         task = group.start(ready)
         deadline_only: SelectOutcome[None, None] = select(0ms)
-        queue_only: SelectOutcome[String, None] = select(jobs)
+        queue_only: SelectOutcome[str, None] = select(jobs)
         task_only: SelectOutcome[None, int32] = select(task)
-        mixed: SelectOutcome[String, int32] = select(jobs, 1ms, task)
+        mixed: SelectOutcome[str, int32] = select(jobs, 1ms, task)
 
         match mixed:
             case SelectOutcome.Queue(index, outcome):
-                selected_index: int32 = index
-                queue_outcome: QueueReceive[String] = outcome
+                selected_index: int64 = index
+                queue_outcome: QueueReceive[str] = outcome
             case SelectOutcome.Task(index, outcome):
-                selected_index: int32 = index
+                selected_index: int64 = index
                 task_outcome: TaskResult[int32] = outcome
             case SelectOutcome.Deadline(index):
-                selected_index: int32 = index
+                selected_index: int64 = index
             case SelectOutcome.Cancelled:
                 pass

@@ -12,9 +12,9 @@ The top-level `print(value)` builtin is separate. It renders a value, writes a n
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `io.write` | `write(text: String) -> Result[None, io.Error]` | Writes `text` to standard output without adding a newline. |
+| `io.write` | `write(text: str) -> Result[None, io.Error]` | Writes `text` to standard output without adding a newline. |
 | `io.flush` | `flush() -> Result[None, io.Error]` | Flushes standard output. |
-| `io.read_line` | `read_line() -> Result[Option[String], io.Error]` | Reads one strict UTF-8 line from standard input, removes trailing LF/CRLF, and returns `Ok(None)` on EOF. |
+| `io.read_line` | `read_line() -> Result[Option[str], io.Error]` | Reads one strict UTF-8 line from standard input, removes trailing LF/CRLF, and returns `Ok(None)` on EOF. |
 
 Example:
 
@@ -59,7 +59,7 @@ match io.read_line():
 | `InvalidData` | Data could not be decoded or was malformed for the operation. |
 | `Closed` | The resource was already closed or closed while waiting. |
 | `Cancelled` | Cancellation interrupted the operation. |
-| `Other(message: own String)` | A remaining platform or runtime error with a message. |
+| `Other(message: own str)` | A remaining platform or runtime error with a message. |
 
 ## Matching Errors
 
@@ -81,13 +81,13 @@ Avoid turning `io.Error` into a string too early. Error variants carry useful co
 
 ## Grammar
 
-The `io` module and top-level `print` builtin add no source-language grammar. They use ordinary imports, calls, `Result`, `Option`, `try`, and pattern matching. `io.Error.Other(message: own String)` uses the normal owned enum-payload rule; the other variants carry no payload.
+The `io` module and top-level `print` builtin add no source-language grammar. They use ordinary imports, calls, `Result`, `Option`, `try`, and pattern matching. `io.Error.Other(message: own str)` uses the normal owned enum-payload rule; the other variants carry no payload.
 
 Line endings are runtime input, not token syntax. `io.read_line()` removes one trailing LF or CRLF sequence from the returned line; it does not strip other whitespace.
 
 ## Typing Rules
 
-`print(value)` accepts one value and returns `None`. `io.write` accepts `String`; `io.flush` accepts no arguments; both return `Result[None, io.Error]`. `io.read_line` returns `Result[Option[String], io.Error]`, distinguishing a line, clean EOF, and an I/O failure.
+`print(value)` accepts one value and returns `None`. `io.write` accepts `str`; `io.flush` accepts no arguments; both return `Result[None, io.Error]`. `io.read_line` returns `Result[Option[str], io.Error]`, distinguishing a line, clean EOF, and an I/O failure.
 
 The `io.Error` variants in the table above are the common typed failure vocabulary for `io`, `fs`, and `net`; `process.Error.Io` owns an `io.Error` payload. Exhaustiveness and payload ownership follow the ordinary enum and match rules.
 
@@ -99,7 +99,7 @@ The `io.Error` variants in the table above are the common typed failure vocabula
 
 ## Ownership And Evaluation Order
 
-The argument to `print` or `io.write` is evaluated before output occurs. The write call shares its `String` for the duration of the operation and does not retain it. A successfully read line and every payload-bearing error are fresh owned values returned to the caller.
+The argument to `print` or `io.write` is evaluated before output occurs. The write call shares its `str` for the duration of the operation and does not retain it. A successfully read line and every payload-bearing error are fresh owned values returned to the caller.
 
 Standard input and output are process-global resources. Output calls are observable in source evaluation order within one task, but ordering between concurrent tasks follows scheduling. A successful write or read is not rolled back if later evaluation fails. Pattern matching can move the owned message from `io.Error.Other`; matching payload-free variants introduces no owned payload.
 

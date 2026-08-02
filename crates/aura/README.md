@@ -143,7 +143,7 @@ aura deps update util
 - `aura run <file.au>`
   - run a program through the MIR runtime
   - this now includes the maintained `pass` and `assert` statements plus the `sleep(duration)` and `yield_now()` builtins
-  - the maintained user-facing surface now also includes explicit numeric and Duration floor division, signed computed Duration values, integer `.to_float()`, the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]` with stable sorting and eager callable-powered map/filter, `Map[K, V]`, `Set[T]`, `control.retry`, deterministic and OS-secure randomness through `random`, bounded `Queue[T]`, structural `Transfer` checks on task/Queue boundaries, single-consumer non-repeatable task results, scheduler-aware text/binary file I/O plus the maintained socket/networking and shell-free process/supervisor surface through `io`, `fs`, `net`, and `process`, specialized generic trait bounds, and the current operator-trait subset
+  - the maintained user-facing surface now also includes explicit numeric and Duration floor division, signed computed Duration values, integer `.to_float()`, the expanded `str` utility and parsing surface, numeric helper builtins, `list[T]` with stable sorting and eager callable-powered map/filter, `dict[K, V]`, `set[T]`, `control.retry`, deterministic and OS-secure randomness through `random`, bounded `Queue[T]`, structural `Transfer` checks on task/Queue boundaries, single-consumer non-repeatable task results, scheduler-aware text/binary file I/O plus the maintained socket/networking and shell-free process/supervisor surface through `io`, `fs`, `net`, and `process`, specialized generic trait bounds, and the current operator-trait subset
   - local file imports and `public` module boundaries now work for file-backed programs
   - manifest-rooted packages now also resolve sibling path dependencies, git dependencies, and workspace members when the entry file lives under a package `src/`
   - append `-- <program-args>...` to expose arguments through `sys.args()`
@@ -158,7 +158,7 @@ aura deps update util
   - a file declaring none keeps the file-level model and reports one result for the path
 - `aura lsp`
   - run the persistent JSON-lines compiler service for editor tooling
-  - every request and response carries compiler-owned semantic-interface version `2`; an editor transport from another semantic schema is rejected instead of receiving incompatible analysis
+  - every request and response carries compiler-owned semantic-interface version `3`; a schema mismatch closes the connection before analysis
 - `aura run [--backend mir|direct|auto] <file.au> [-- <program-args>...]`
   - `mir` executes the lowered MIR and is the default
   - `direct` builds a native binary and runs it, reporting build or launch failures rather than degrading

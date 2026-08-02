@@ -9,10 +9,10 @@ use super::{
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
     queue_receive_item, queue_receive_timed_out, recv_for_task_group_iteration,
     remove_file_checked, render_float, render_float32, result_err, result_ok, run_blocking_io,
-    run_lightweight_root_task, run_protocol_step, select_runtime_values, send_error_cancelled,
-    send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
-    slice_string_owned, slice_vec_owned, spawn_lightweight_task,
-    spawn_lightweight_task_with_cancellation,
+    run_lightweight_root_task, run_protocol_step, select_outcome_deadline, select_outcome_queue,
+    select_outcome_task, select_runtime_values, send_error_cancelled, send_error_closed,
+    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned,
+    slice_vec_owned, spawn_lightweight_task, spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
     spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
     task_result_error, task_result_ready, task_result_timed_out, validate_read_line_capacity,
@@ -294,7 +294,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
         },
         None,
     )
-    .expect("Array[int64].from_vec should infer a one-dimensional shape");
+    .expect("Array[int64].from_list should infer a one-dimensional shape");
     assert_eq!(int64_array.shape.as_ref(), &[3]);
     assert_eq!(
         int64_array
@@ -328,7 +328,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
         },
         Some(&[3]),
     )
-    .expect("Array[float32].from_vec should retain float32 storage");
+    .expect("Array[float32].from_list should retain float32 storage");
     assert_eq!(
         float32_array.set(&[1], Value::Float(3.5)).unwrap(),
         Value::Float(-2.5)
@@ -357,7 +357,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
         },
         Some(&[3]),
     )
-    .expect("Array[float64].from_vec should retain float64 storage");
+    .expect("Array[float64].from_list should retain float64 storage");
     assert_eq!(
         float64_array.set(&[0], Value::Float(-4.5)).unwrap(),
         Value::Float(1.5)
@@ -411,7 +411,7 @@ fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
     assert_eq!(valid_allocation_error.code, "AU4005");
     assert_eq!(
         valid_allocation_error.message,
-        "Array.from_vec shape could not allocate storage for 1 array elements"
+        "Array.from_list shape could not allocate storage for 1 array elements"
     );
 
     let conversion_error = ArrayValue::from_vec(&malformed_source, Some(&[1]))
@@ -426,15 +426,15 @@ fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
 #[test]
 fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
     let unsupported = VecValue {
-        element_type: Type::named("String"),
+        element_type: Type::named("str"),
         elements: vec![Value::String("one".to_string())],
     };
     let from_vec_error = ArrayValue::from_vec(&unsupported, None)
-        .expect_err("Array.from_vec must reject non-numeric element types");
+        .expect_err("Array.from_list must reject non-numeric element types");
     assert_eq!(from_vec_error.code, "AU4007");
     assert_eq!(
         from_vec_error.message,
-        "Array values require int32, int64, float32, or float64 elements, found `String`"
+        "Array values require int32, int64, float32, or float64 elements, found `str`"
     );
 
     let from_values_error = ArrayValue::from_values(
@@ -450,10 +450,7 @@ fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
     );
 
     assert_eq!(
-        ArrayDType::from_type(&Type::Named(
-            "int32".to_string(),
-            vec![Type::named("String")]
-        )),
+        ArrayDType::from_type(&Type::Named("int32".to_string(), vec![Type::named("str")])),
         None,
         "numeric Array dtypes are exact non-generic scalar types"
     );
@@ -537,11 +534,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
             elements: vec![source_array(&[4, 9]), source_array(&[1, 7])],
         }),
         Value::Tuple(TupleValue {
-            element_types: vec![
-                Type::named("String"),
-                array_type.clone(),
-                Type::named("int32"),
-            ],
+            element_types: vec![Type::named("str"), array_type.clone(), Type::named("int32")],
             elements: vec![
                 Value::String("before".to_string()),
                 source_array(&[2, 5]),
@@ -549,7 +542,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
             ],
         }),
         Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: array_type.clone(),
             entries: vec![
                 (Value::String("second".to_string()), source_array(&[6, 3])),
@@ -644,11 +637,11 @@ fn array_containing_language_copies_preserve_empty_containers() {
             elements: Vec::new(),
         }),
         Value::Set(SetValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: Vec::new(),
         }),
         Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: array_type,
             entries: Vec::new(),
         }),
@@ -676,7 +669,7 @@ fn array_containing_language_copies_preserve_empty_containers() {
 #[test]
 fn array_aware_language_copy_preserves_reachable_scalar_set_order() {
     let source = Value::Set(SetValue {
-        element_type: Type::named("String"),
+        element_type: Type::named("str"),
         elements: vec![
             Value::String("third".to_string()),
             Value::String("first".to_string()),
@@ -689,7 +682,7 @@ fn array_aware_language_copy_preserves_reachable_scalar_set_order() {
     let Value::Set(copy) = copy else {
         panic!("copying a Set must retain its runtime variant");
     };
-    assert_eq!(copy.element_type, Type::named("String"));
+    assert_eq!(copy.element_type, Type::named("str"));
     assert_eq!(
         copy.elements,
         vec![
@@ -748,7 +741,7 @@ fn array_containing_language_copy_reports_outer_shape_and_storage_allocation_fai
     let (Value::Array(source_array), Value::Array(slice_array)) =
         (&source_vector.elements[0], &slice.elements[0])
     else {
-        panic!("Vec[Array[T]] slices should retain their element values");
+        panic!("list[Array[T]] slices should retain their element values");
     };
     let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(slice_storage)) =
         (&source_array.storage, &slice_array.storage)
@@ -1495,7 +1488,7 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
 #[test]
 fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() {
     let vector = VecValue {
-        element_type: Type::named("String"),
+        element_type: Type::named("str"),
         elements: ["zero", "one", "two", "three"]
             .into_iter()
             .map(|value| Value::String(value.to_string()))
@@ -1504,7 +1497,7 @@ fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() 
 
     let middle = slice_vec_owned(&vector, Some(-3), Some(-1))
         .expect("negative bounds should normalize once");
-    assert_eq!(middle.element_type, Type::named("String"));
+    assert_eq!(middle.element_type, Type::named("str"));
     assert_eq!(
         middle.elements,
         vec![
@@ -1529,11 +1522,11 @@ fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() 
     let unicode = "aé🎉e\u{301}";
     assert_eq!(
         slice_string_owned(unicode, Some(1), Some(-1))
-            .expect("String bounds should count Unicode scalar values"),
+            .expect("str bounds should count Unicode scalar values"),
         "é🎉e"
     );
     assert_eq!(
-        slice_string_owned(unicode, None, None).expect("full String slice should succeed"),
+        slice_string_owned(unicode, None, None).expect("full str slice should succeed"),
         unicode
     );
 
@@ -1742,14 +1735,14 @@ fn function_signature(parameter_name: &str, has_default: bool, default_erased: b
         params: vec![
             FunctionParamContract {
                 name: parameter_name.to_string(),
-                ty: Type::named("String"),
+                ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
                 has_default,
                 default_erased,
             },
             FunctionParamContract {
                 name: "items".to_string(),
-                ty: Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                ty: Type::Named("list".to_string(), vec![Type::named("int32")]),
                 passing: ReceiverKind::BorrowMut,
                 has_default: false,
                 default_erased: false,
@@ -1780,7 +1773,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
     let signature = function_signature("label", true, false);
     assert_eq!(
         signature.to_string(),
-        "def(String, mut Vec[int32], own def(own bool) -> None) -> (int64,)"
+        "def(str, mut list[int32], own def(own bool) -> None) -> (int64,)"
     );
 
     let function = Value::Function(Box::new(FunctionValue {
@@ -1859,7 +1852,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
         .expect_err("function values are not numeric cast sources");
     assert_eq!(
         cast_error.message,
-        "casts are only supported between numeric types, found `def(String, mut Vec[int32], own def(own bool) -> None) -> (int64,)` and `int32`"
+        "casts are only supported between numeric types, found `def(str, mut list[int32], own def(own bool) -> None) -> (int64,)` and `int32`"
     );
     assert_eq!(cast_error.span, Some(Span::new(19, 8)));
 }
@@ -2032,7 +2025,7 @@ fn p63_embedded_nominal_types_preserve_base_value_identity_and_rendering() {
     };
 
     let integer = instance("Packet\0pkg.Packet[int64]", "pkg.Packet[int64]");
-    let string = instance("Packet\0pkg.Packet[String]", "pkg.Packet[String]");
+    let string = instance("Packet\0pkg.Packet[str]", "pkg.Packet[str]");
     let other = instance("Envelope\0pkg.Envelope[int64]", "pkg.Envelope[int64]");
 
     assert_eq!(
@@ -2055,7 +2048,7 @@ fn p63_embedded_nominal_types_preserve_base_value_identity_and_rendering() {
 #[test]
 fn tuple_values_preserve_type_metadata_equality_and_rendering() {
     let pair = Value::Tuple(TupleValue {
-        element_types: vec![Type::named("int64"), Type::named("String")],
+        element_types: vec![Type::named("int64"), Type::named("str")],
         elements: vec![
             Value::Int(IntegerValue::from_signed(7)),
             Value::String("seven".to_string()),
@@ -2129,7 +2122,7 @@ fn runtime_bytes(bytes: &[u8]) -> Value {
 
 fn expect_runtime_bytes(value: &Value) -> Vec<u8> {
     super::host_bytes_from_runtime(value, "test byte value")
-        .expect("runtime byte value should carry exact Vec[uint8] metadata")
+        .expect("runtime byte value should carry exact list[uint8] metadata")
 }
 
 #[test]
@@ -2146,7 +2139,7 @@ fn bytes_runtime_materialization_is_fallible_exact_and_non_consuming() {
     let materialized = super::runtime_bytes_from_host(&[0, 1, 127, 128, 255])
         .expect("host bytes should materialize");
     let Value::Vec(materialized_vec) = &materialized else {
-        panic!("host bytes should materialize as Vec[uint8]");
+        panic!("host bytes should materialize as list[uint8]");
     };
     assert_eq!(materialized_vec.element_type, Type::named("uint8"));
     assert_eq!(
@@ -2199,15 +2192,15 @@ fn bytes_runtime_conversion_rejects_malformed_vec_uint8_values() {
     assert_eq!(error.code, "AU4001");
     assert_eq!(
         error.message,
-        "`bytes::hex_encode` expects a runtime `Vec[uint8]` value"
+        "`bytes::hex_encode` expects a runtime `list[uint8]` value"
     );
 
     for value in [&wrong_type, &wrong_metadata, &wrong_element] {
         let error = super::host_bytes_from_runtime(value, "bytes::hex_encode")
-            .expect_err("malformed Vec[uint8] runtime values must be rejected");
+            .expect_err("malformed list[uint8] runtime values must be rejected");
         assert_eq!(error.code, "AU4001");
         assert!(error.message.contains("`bytes::hex_encode`"));
-        assert!(error.message.contains("`Vec[uint8]`"));
+        assert!(error.message.contains("`list[uint8]`"));
     }
 }
 
@@ -2218,26 +2211,26 @@ fn bytes_adapter_rejects_wrong_runtime_types_without_consuming_inputs() {
         "bytes::hex_decode",
         "bytes::base64_decode",
         "bytes::sha256_string",
-        "String.to_bytes",
+        "str.to_bytes",
     ] {
         let error = super::evaluate_bytes_host_builtin_ref(name, &wrong)
             .expect("the byte builtin should be recognized")
-            .expect_err("String-taking byte builtins must reject non-String values");
+            .expect_err("str-taking byte builtins must reject non-str values");
         assert_eq!(error.code, "AU2004", "{name}");
         assert_eq!(
             error.message,
-            format!("`{name}` expects argument 1 to be `String`, found `true`"),
+            format!("`{name}` expects argument 1 to be `str`, found `true`"),
             "{name}"
         );
     }
 
-    let error = super::evaluate_bytes_host_builtin_ref("String.from_bytes", &wrong)
-        .expect("String.from_bytes should be recognized")
-        .expect_err("String.from_bytes must reject non-byte-vector runtime values");
+    let error = super::evaluate_bytes_host_builtin_ref("str.from_bytes", &wrong)
+        .expect("str.from_bytes should be recognized")
+        .expect_err("str.from_bytes must reject non-byte-vector runtime values");
     assert_eq!(error.code, "AU4001");
     assert_eq!(
         error.message,
-        "`String.from_bytes` expects a runtime `Vec[uint8]` value"
+        "`str.from_bytes` expects a runtime `list[uint8]` value"
     );
     assert_eq!(wrong, Value::Bool(true));
 }
@@ -2368,10 +2361,10 @@ fn bytes_host_builtin_adapter_covers_codecs_hashes_and_strict_utf8() {
     assert_eq!(expect_runtime_bytes(&digest).len(), 32);
     let text = Value::String("abc".to_string());
     assert_eq!(call("bytes::sha256_string", &[&text]), digest);
-    let encoded = call("String.to_bytes", &[&text]);
+    let encoded = call("str.to_bytes", &[&text]);
     assert_eq!(expect_runtime_bytes(&encoded), b"abc");
-    let Value::EnumVariant(decoded) = call("String.from_bytes", &[&encoded]) else {
-        panic!("String.from_bytes should return Result");
+    let Value::EnumVariant(decoded) = call("str.from_bytes", &[&encoded]) else {
+        panic!("str.from_bytes should return Result");
     };
     assert_eq!(decoded.variant_name, "Ok");
     assert_eq!(decoded.payloads, vec![Value::String("abc".to_string())]);
@@ -2409,7 +2402,7 @@ fn bytes_host_builtin_adapter_returns_typed_data_errors_and_au4005_resources() {
     }
 
     assert_eq!(
-        error_variant("String.from_bytes", &runtime_bytes(&[b'a', 0xff, b'b'])),
+        error_variant("str.from_bytes", &runtime_bytes(&[b'a', 0xff, b'b'])),
         "InvalidUtf8"
     );
     assert_eq!(
@@ -2455,13 +2448,13 @@ fn bytes_string_from_bytes_classifies_invalid_utf8_before_runtime_materializatio
     // Any eager copy of the Vec[uint8] would consume a seventh checkpoint and
     // incorrectly replace this typed data error with AU4005.
     let value = super::with_bytes_runtime_allocation_budget(6, || {
-        super::evaluate_bytes_host_builtin_ref("String.from_bytes", &malformed)
-            .expect("String.from_bytes should be recognized")
+        super::evaluate_bytes_host_builtin_ref("str.from_bytes", &malformed)
+            .expect("str.from_bytes should be recognized")
     })
     .expect("the allocation budget needed for bytes.Error must not be spent copying the input");
 
     let Value::EnumVariant(result) = value else {
-        panic!("String.from_bytes should return Result");
+        panic!("str.from_bytes should return Result");
     };
     assert_eq!(result.variant_name, "Err");
     let [Value::EnumVariant(error)] = result.payloads.as_slice() else {
@@ -2485,8 +2478,8 @@ fn bytes_string_from_bytes_reports_materialization_failure_without_consuming_inp
     let snapshot = source.clone();
 
     let error = super::with_bytes_runtime_allocation_budget(0, || {
-        super::evaluate_bytes_host_builtin_ref("String.from_bytes", &source)
-            .expect("String.from_bytes should be recognized")
+        super::evaluate_bytes_host_builtin_ref("str.from_bytes", &source)
+            .expect("str.from_bytes should be recognized")
     })
     .expect_err("runtime byte materialization failure must remain an AU4005 trap");
 
@@ -4533,14 +4526,14 @@ fn async_and_process_result_helpers_render_expected_variants() {
         wait_any_ready(2, ready.clone()),
         "WaitAny",
         "Ready",
-        vec![Value::Int(IntegerValue::from_signed(2)), ready.clone()],
+        vec![Value::Int(IntegerValue::from_i64(2)), ready.clone()],
     );
     assert_variant(
         wait_any_error(3, "failed".to_string()),
         "WaitAny",
         "Error",
         vec![
-            Value::Int(IntegerValue::from_signed(3)),
+            Value::Int(IntegerValue::from_i64(3)),
             Value::String("failed".to_string()),
         ],
     );
@@ -4562,12 +4555,29 @@ fn async_and_process_result_helpers_render_expected_variants() {
         "WaitAll",
         "Error",
         vec![
-            Value::Int(IntegerValue::from_signed(4)),
+            Value::Int(IntegerValue::from_i64(4)),
             Value::String("bad".to_string()),
         ],
     );
     assert_variant(wait_all_timed_out(), "WaitAll", "TimedOut", Vec::new());
     assert_variant(wait_all_cancelled(), "WaitAll", "Cancelled", Vec::new());
+
+    for outcome in [
+        wait_any_ready(0, Value::Unit),
+        wait_any_error(0, "failed".to_string()),
+        wait_all_error(0, "failed".to_string()),
+        select_outcome_queue(0, queue_receive_closed()),
+        select_outcome_task(0, task_result_cancelled()),
+        select_outcome_deadline(0),
+    ] {
+        let Value::EnumVariant(variant) = outcome else {
+            panic!("expected indexed concurrency outcome")
+        };
+        let Some(Value::Int(index)) = variant.payloads.first() else {
+            panic!("expected indexed concurrency outcome payload")
+        };
+        assert_eq!(index.runtime_type_name(), Some("int64"));
+    }
 
     assert_variant(process_wait_timed_out(), "Wait", "TimedOut", Vec::new());
     assert_variant(process_wait_cancelled(), "Wait", "Cancelled", Vec::new());
@@ -4759,23 +4769,23 @@ fn cast_numeric_value_covers_success_and_failure_paths() {
 
     let integer_to_non_numeric = cast_numeric_value(
         Value::Int(IntegerValue::from_signed(5)),
-        &Type::named("String"),
+        &Type::named("str"),
         None,
     )
     .expect_err("integer casts to nonnumeric targets should fail");
     assert!(
         integer_to_non_numeric
             .message
-            .contains("found `integer` and `String`"),
+            .contains("found `integer` and `str`"),
         "unexpected integer cast diagnostic: {}",
         integer_to_non_numeric.message
     );
 
-    let float_to_non_numeric = cast_numeric_value(Value::Float(1.5), &Type::named("String"), None)
+    let float_to_non_numeric = cast_numeric_value(Value::Float(1.5), &Type::named("str"), None)
         .expect_err("float casts to nonnumeric targets should fail");
     assert!(float_to_non_numeric
         .message
-        .contains("found `float64` and `String`"));
+        .contains("found `float64` and `str`"));
 
     let non_finite = cast_numeric_value(Value::Float(f64::INFINITY), &Type::named("int32"), None)
         .expect_err("non-finite float casts to integers should fail");
@@ -4849,28 +4859,28 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
     }
 
     assert_source_type(Value::Bool(true), "bool");
-    assert_source_type(Value::String("Aura".to_string()), "String");
+    assert_source_type(Value::String("Aura".to_string()), "str");
     assert_source_type(
         Value::Vec(VecValue {
             element_type: Type::named("int32"),
             elements: vec![],
         }),
-        "Vec",
+        "list",
     );
     assert_source_type(
         Value::Set(SetValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: vec![],
         }),
-        "Set",
+        "set",
     );
     assert_source_type(
         Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![],
         }),
-        "Map",
+        "dict",
     );
     assert_source_type(Value::Duration(5), "Duration");
     assert_source_type(Value::Range(RangeValue { start: 1, end: 3 }), "Range");
@@ -5476,9 +5486,9 @@ fn dynamic_json_runtime_conversion_round_trips_every_variant_and_preserves_objec
     assert_eq!(root.enum_name, "json.Value");
     assert_eq!(root.variant_name, "Object");
     let [Value::Map(object)] = root.payloads.as_slice() else {
-        panic!("json.Value.Object should carry Map[String, json.Value]");
+        panic!("json.Value.Object should carry dict[str, json.Value]");
     };
-    assert_eq!(object.key_type, Type::named("String"));
+    assert_eq!(object.key_type, Type::named("str"));
     assert_eq!(object.value_type, Type::named("json.Value"));
     assert_eq!(
         object
@@ -5539,7 +5549,7 @@ fn dynamic_json_shared_parse_adapter_borrows_the_source_allocation() {
     let args = vec![Value::String(source)];
 
     let borrowed = super::host_string_ref_arg(&args, 0, "json::parse")
-        .expect("json.parse should borrow a String argument");
+        .expect("json.parse should borrow a str argument");
 
     assert_eq!(borrowed.as_ptr(), source_ptr);
 }
@@ -5562,7 +5572,7 @@ fn dynamic_json_parse_materializes_a_structurally_dense_valid_input() {
         panic!("Result.Ok should contain json.Value.Array");
     };
     let [Value::Vec(values)] = array.payloads.as_slice() else {
-        panic!("json.Value.Array should contain Vec[json.Value]");
+        panic!("json.Value.Array should contain list[json.Value]");
     };
     assert_eq!(values.element_type, Type::named("json.Value"));
     assert_eq!(values.elements.len(), ELEMENTS);
@@ -5834,11 +5844,11 @@ fn dynamic_json_runtime_conversion_rejects_noncanonical_payload_metadata() {
             json_variant(
                 "Array",
                 Value::Vec(VecValue {
-                    element_type: Type::named("String"),
+                    element_type: Type::named("str"),
                     elements: Vec::new(),
                 }),
             ),
-            "exactly `Vec[json.Value]`",
+            "exactly `list[json.Value]`",
         ),
         (
             "wrong Object key metadata",
@@ -5850,19 +5860,19 @@ fn dynamic_json_runtime_conversion_rejects_noncanonical_payload_metadata() {
                     entries: Vec::new(),
                 }),
             ),
-            "exactly `Map[String, json.Value]`",
+            "exactly `dict[str, json.Value]`",
         ),
         (
             "wrong Object value metadata",
             json_variant(
                 "Object",
                 Value::Map(MapValue {
-                    key_type: Type::named("String"),
-                    value_type: Type::named("String"),
+                    key_type: Type::named("str"),
+                    value_type: Type::named("str"),
                     entries: Vec::new(),
                 }),
             ),
-            "exactly `Map[String, json.Value]`",
+            "exactly `dict[str, json.Value]`",
         ),
     ];
 
@@ -5906,7 +5916,7 @@ fn dynamic_json_accessors_reject_noncanonical_payload_metadata() {
             json_variant(
                 "Array",
                 Value::Vec(VecValue {
-                    element_type: Type::named("String"),
+                    element_type: Type::named("str"),
                     elements: Vec::new(),
                 }),
             ),
@@ -5927,8 +5937,8 @@ fn dynamic_json_accessors_reject_noncanonical_payload_metadata() {
             json_variant(
                 "Object",
                 Value::Map(MapValue {
-                    key_type: Type::named("String"),
-                    value_type: Type::named("String"),
+                    key_type: Type::named("str"),
+                    value_type: Type::named("str"),
                     entries: Vec::new(),
                 }),
             ),
@@ -6039,7 +6049,7 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
         "json.Value",
         "Object",
         vec![Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("json.Value"),
             entries: vec![(
                 Value::Int(IntegerValue::from_i64(1)),
@@ -6048,9 +6058,9 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
         })],
     );
     let diagnostic = super::runtime_value_to_json(&wrong_key)
-        .expect_err("runtime object keys must be String values, not merely String metadata");
+        .expect_err("runtime object keys must be str values, not merely str metadata");
     assert_eq!(diagnostic.code, "AU4001");
-    assert!(diagnostic.message.contains("Object key must be `String`"));
+    assert!(diagnostic.message.contains("Object key must be `str`"));
 
     for (label, value, expected) in [
         (
@@ -6081,7 +6091,7 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
         "json.Value",
         "Object",
         vec![Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("json.Value"),
             entries: vec![
                 (
@@ -6101,7 +6111,7 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
     assert!(
         diagnostic
             .message
-            .contains("Object key must be `String`, found `2`"),
+            .contains("Object key must be `str`, found `2`"),
         "unexpected later-key diagnostic: {diagnostic}"
     );
 
@@ -6595,7 +6605,7 @@ fn dynamic_json_host_builtins_parse_dump_and_expose_exact_typed_accessors() {
     let string_payload_ptr = match &string {
         Value::EnumVariant(variant) => match variant.payloads.as_slice() {
             [Value::String(value)] => value.as_ptr(),
-            _ => panic!("json.Value.String should contain one String"),
+            _ => panic!("json.Value.String should contain one str"),
         },
         _ => panic!("json.Value.String should be an enum variant"),
     };
@@ -6807,7 +6817,7 @@ fn legacy_json_validity_walks_nested_arrays_and_objects() {
     ] {
         assert_eq!(
             super::evaluate_host_builtin("json::is_valid", vec![Value::String(source.to_string())])
-                .expect("json.is_valid should accept a String"),
+                .expect("json.is_valid should accept a str"),
             Value::Bool(true),
             "valid nested JSON should remain valid: {source}"
         );
@@ -6831,8 +6841,8 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
     }
     fn string_map(entries: &[(&str, &str)]) -> Value {
         Value::Map(MapValue {
-            key_type: Type::named("String"),
-            value_type: Type::named("String"),
+            key_type: Type::named("str"),
+            value_type: Type::named("str"),
             entries: entries
                 .iter()
                 .map(|(key, value)| {
@@ -7172,14 +7182,11 @@ fn task_and_cancellation_helpers_cover_current_runtime_contract() {
 
     let channel = ChannelValue::new();
     assert_eq!(channel.runtime_type_name(), None);
-    channel.set_runtime_type_name("Queue[String]".to_string());
-    assert_eq!(
-        channel.runtime_type_name().as_deref(),
-        Some("Queue[String]")
-    );
+    channel.set_runtime_type_name("Queue[str]".to_string());
+    assert_eq!(channel.runtime_type_name().as_deref(), Some("Queue[str]"));
     assert_eq!(
         channel.clone().runtime_type_name().as_deref(),
-        Some("Queue[String]"),
+        Some("Queue[str]"),
         "Queue aliases must observe the same native-runtime type metadata"
     );
 }
@@ -9775,10 +9782,18 @@ fn value_equality_and_render_cover_collection_shapes() {
             ],
         })
     );
-    assert_eq!(set_a.render(), "Set{1, 2}");
+    assert_eq!(set_a.render(), "{1, 2}");
+    assert_eq!(
+        Value::Set(SetValue {
+            element_type: Type::named("int64"),
+            elements: Vec::new(),
+        })
+        .render(),
+        "set()"
+    );
 
     let map_a = Value::Map(MapValue {
-        key_type: Type::named("String"),
+        key_type: Type::named("str"),
         value_type: Type::named("int32"),
         entries: vec![
             (
@@ -9792,7 +9807,7 @@ fn value_equality_and_render_cover_collection_shapes() {
         ],
     });
     let map_b = Value::Map(MapValue {
-        key_type: Type::named("String"),
+        key_type: Type::named("str"),
         value_type: Type::named("int32"),
         entries: vec![
             (
@@ -9809,7 +9824,7 @@ fn value_equality_and_render_cover_collection_shapes() {
     assert_ne!(
         map_a,
         Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![(
                 Value::String("a".to_string()),
@@ -9820,7 +9835,7 @@ fn value_equality_and_render_cover_collection_shapes() {
     assert_ne!(
         map_a,
         Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![
                 (

@@ -1,4 +1,4 @@
-def first[T](values: Vec[T]) -> T:
+def first[T](values: list[T]) -> T:
     return values[0]
 
 def main():

@@ -1,4 +1,4 @@
-# Test deeply nested generics: Box[Box[int32]], Box[Box[Box[String]]], etc.
+# Test deeply nested generics: Box[Box[int32]], Box[Box[Box[str]]], etc.
 
 class Box[T]:
     value: T
@@ -12,10 +12,10 @@ def main() -> int32:
     outer: Box[Box[int32]] = Box(value=inner)
     print(outer.get().get())
 
-    # Box[Box[Box[String]]]
-    b1: Box[String] = Box(value="deep")
-    b2: Box[Box[String]] = Box(value=b1)
-    b3: Box[Box[Box[String]]] = Box(value=b2)
+    # Box[Box[Box[str]]]
+    b1: Box[str] = Box(value="deep")
+    b2: Box[Box[str]] = Box(value=b1)
+    b3: Box[Box[Box[str]]] = Box(value=b2)
     print(b3.get().get().get())
 
     # Box[Box[bool]]

@@ -1,4 +1,4 @@
-mut total: int32 = 0
+mut total: int64 = 0
 
 for value in range(6):
     if value == 3:

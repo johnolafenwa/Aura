@@ -1,11 +1,11 @@
 # Edge test: Default arguments with complex interactions
 
 class Config:
-    host: String = "localhost"
+    host: str = "localhost"
     port: int32 = 8080
     debug: bool = false
 
-def connect(host: String = "localhost", port: int32 = 3000, retries: int32 = 3) -> String:
+def connect(host: str = "localhost", port: int32 = 3000, retries: int32 = 3) -> str:
     return f"{host}:{port} (retries={retries})"
 
 def main() -> int32:

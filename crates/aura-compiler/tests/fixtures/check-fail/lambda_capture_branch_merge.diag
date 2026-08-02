@@ -1,6 +1,6 @@
 error[AU2002]: conditional expressions cannot merge capturing closure values in this language version
- --> crates/aura-compiler/tests/fixtures/check-fail/lambda_capture_branch_merge.au:4:33
+ --> crates/aura-compiler/tests/fixtures/check-fail/lambda_capture_branch_merge.au:4:30
   |
-4 |     selected: def() -> String = (lambda: left) if true else (lambda: right)
-  |                                 ^
+4 |     selected: def() -> str = (lambda: left) if true else (lambda: right)
+  |                              ^
   = help: call the closure inside each branch, or use capture-free lambdas or named functions that share one `def(...) -> ...` type

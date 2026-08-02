@@ -1,4 +1,4 @@
-def greet(name: String = "world"):
+def greet(name: str = "world"):
     print("hello " + name)
 
 def scale(value: int32, factor: int32 = 2) -> int32:

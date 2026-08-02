@@ -13,7 +13,7 @@ def transition(s: State) -> State:
         case State.Stopped:
             return State.Running
 
-def name(s: State) -> String:
+def name(s: State) -> str:
     match own s:
         case State.Running:
             return "running"

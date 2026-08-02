@@ -7,7 +7,7 @@ def fib(n: int) -> int:
     return fib(n - 1) + fib(n - 2)
 
 
-def read_control(expected: String) -> bool:
+def read_control(expected: str) -> bool:
     match io.read_line():
         case Result.Ok(Option.Some(line)):
             return line == expected

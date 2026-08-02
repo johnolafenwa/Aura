@@ -1,7 +1,7 @@
 class QueueBundle:
-    vector: Vec[Queue[int32]]
-    unique: Set[Queue[int32]]
-    mapping: Map[String, Queue[int32]]
+    vector: list[Queue[int32]]
+    unique: set[Queue[int32]]
+    mapping: dict[str, Queue[int32]]
 
 enum NestedQueues:
     Bundle(QueueBundle)
@@ -20,7 +20,7 @@ def main() -> int32:
     set_queue = Queue[int32]()
     map_queue = Queue[int32]()
     vector = [vector_queue]
-    unique: Set[Queue[int32]] = {set_queue}
+    unique: set[Queue[int32]] = {set_queue}
     mapping = {"queue": map_queue}
     nested = NestedQueues.Bundle(QueueBundle(vector=vector, unique=unique, mapping=mapping))
 

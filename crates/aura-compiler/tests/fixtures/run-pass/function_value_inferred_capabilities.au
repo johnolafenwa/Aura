@@ -4,24 +4,24 @@ class Counter:
 def increment(counter: mut Counter) -> None:
     counter.value += 1
 
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
 class Holder:
     mutate: def(mut Counter) -> None
-    consume: def(own String) -> String
+    consume: def(own str) -> str
 
 def apply_mut(callback: def(mut Counter) -> None, counter: mut Counter) -> None:
     callback(counter)
 
-def apply_own(callback: def(own String) -> String, value: own String) -> String:
+def apply_own(callback: def(own str) -> str, value: own str) -> str:
     return callback(value)
 
 def main() -> int32:
     mutate: def(mut Counter) -> None = increment
-    consume: def(own String) -> String = take
-    mutators: Vec[def(mut Counter) -> None] = [mutate]
-    consumers: Vec[def(own String) -> String] = [consume]
+    consume: def(own str) -> str = take
+    mutators: list[def(mut Counter) -> None] = [mutate]
+    consumers: list[def(own str) -> str] = [consume]
     holder = Holder(mutate=mutate, consume=consume)
     mut counter = Counter(value=41)
     text = "owned"

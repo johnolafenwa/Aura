@@ -1,14 +1,14 @@
-def divide(a: int32, b: int32) -> Result[int32, String]:
+def divide(a: int32, b: int32) -> Result[int32, str]:
     if b == 0:
         return Result.Err("division by zero")
     return Result.Ok(a // b)
 
-def compute(a: int32, b: int32, c: int32) -> Result[int32, String]:
+def compute(a: int32, b: int32, c: int32) -> Result[int32, str]:
     step1 = try divide(a, b)
     step2 = try divide(step1, c)
     return Result.Ok(step2)
 
-def chain_three(x: int32, y: int32, z: int32) -> Result[int32, String]:
+def chain_three(x: int32, y: int32, z: int32) -> Result[int32, str]:
     r1 = try divide(x, y)
     r2 = try divide(r1, z)
     r3 = try divide(r2, 1)

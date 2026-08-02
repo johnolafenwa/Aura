@@ -13,11 +13,11 @@ These tutorials teach the language as it exists in this repository today, not th
 - functions, owned return values, typed parameters, and shared or mutable access
 - classes, keyword construction, defaults, receivers, and methods
 - ownership, borrowing, move semantics, copy types, and cloning
-- owned `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals, indexing, and iteration
+- owned `list[T]`, `dict[K, V]`, and `set[T]` collections with literals, indexing, and iteration
 - enums, exhaustive `match`, built-in `Result[T, E]`, `Option[T]`, and `SendError[T]`
 - strings, string parsing/formatting, numbers, signed computed Duration values, and the current builtin methods
 - `if`, `elif`, `else`, `while`, `for range(...)`, `break`, and `continue`
-- statement-form `match` over enum variants plus literal `bool`, integer, and `String` cases
+- statement-form `match` over enum variants plus literal `bool`, integer, and `str` cases
 - `with`, `try expr`, queues, structured task groups, task waiting helpers, and task timeouts
 - expression-form `match`, nested enum patterns, and multi-payload variants
 - owned returns, including ordinary copies and explicit non-copy clones or transfers
@@ -40,7 +40,7 @@ Today's working subset includes:
 - ownership and borrowing with `T` and `mut T`
 - user-defined enums plus built-in `Result`, `Option`, and `SendError`
 - user-defined generic classes, enums, and functions
-- builtin `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals
+- builtin `list[T]`, `dict[K, V]`, and `set[T]` collections with literals
 - class methods with shared `self`, consuming `own self`, and mutable `mut self`
 - arithmetic, comparisons, strings, booleans, and Duration literals, constructors, conversions, and checked operators
 - `if`, `elif`, `else`, `while`, `for`, `match`, `with`, `break`, and `continue`

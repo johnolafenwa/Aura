@@ -8,7 +8,7 @@ class BigRecord:
     f: int32
     g: int32
     h: int32
-    i: String
+    i: str
     j: float64
     k: bool
 

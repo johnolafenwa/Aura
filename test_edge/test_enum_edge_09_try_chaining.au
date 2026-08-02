@@ -1,4 +1,4 @@
-def add_checked(a: int32, b: int32) -> Result[int32, String]:
+def add_checked(a: int32, b: int32) -> Result[int32, str]:
     result = a + b
     if result > 1000:
         return Result.Err("overflow")
@@ -6,13 +6,13 @@ def add_checked(a: int32, b: int32) -> Result[int32, String]:
         return Result.Err("underflow")
     return Result.Ok(result)
 
-def mul_checked(a: int32, b: int32) -> Result[int32, String]:
+def mul_checked(a: int32, b: int32) -> Result[int32, str]:
     result = a * b
     if result > 1000:
         return Result.Err("mul overflow")
     return Result.Ok(result)
 
-def complex_calc(a: int32, b: int32, c: int32, d: int32) -> Result[int32, String]:
+def complex_calc(a: int32, b: int32, c: int32, d: int32) -> Result[int32, str]:
     s1 = try add_checked(a, b)
     s2 = try add_checked(s1, c)
     s3 = try mul_checked(s2, d)

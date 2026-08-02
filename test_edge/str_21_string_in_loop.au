@@ -2,14 +2,14 @@
 
 def main() -> int32:
     # Build string in loop
-    mut result: String = ""
+    mut result: str = ""
     mut i: int32 = 0
     while i < 5:
         result += "x"
         i += 1
     print(result)
 
-    # String comparison in loop
+    # str comparison in loop
     mut count: int32 = 0
     mut j: int32 = 0
     while j < 3:

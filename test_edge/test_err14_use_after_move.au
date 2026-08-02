@@ -1,5 +1,5 @@
 class Data:
-    value: String
+    value: str
 
 def consume(d: Data):
     print(d.value)

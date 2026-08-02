@@ -47,11 +47,13 @@ test("recovery completion exposes keywords builtins and declarations but no memb
   assert.ok(names.includes("int32"));
   assert.ok(names.includes("int64"));
   assert.ok(names.includes("own"));
-  assert.equal(names.includes("borrow"), false);
   assert.ok(names.includes("print"));
   assert.ok(names.includes("select"));
   assert.ok(names.includes("SelectOutcome"));
   assert.ok(names.includes("Array"));
+  for (const expected of ["list", "dict", "set", "str"]) {
+    assert.ok(names.includes(expected), `recovery completion should include ${expected}`);
+  }
   assert.ok(names.includes("yield_now"));
   assert.ok(names.includes("Point"));
   assert.ok(names.includes("main"));
@@ -90,7 +92,7 @@ test("recovery hover and definition resolve only recovered declarations", () => 
 test("recovery document symbols tolerate empty and nested declarations", () => {
   assert.deepEqual(documentSymbols(""), []);
   const symbols = documentSymbols(
-    "enum State:\n    Ready\ntrait Show:\n    def show(self) -> String\n    def consume(own self) -> String\n"
+    "enum State:\n    Ready\ntrait Show:\n    def show(self) -> str\n    def consume(own self) -> str\n"
   );
   assert.deepEqual(symbols.map((symbol) => symbol.kind), ["enum", "trait"]);
   assert.deepEqual(

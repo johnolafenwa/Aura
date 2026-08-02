@@ -1,8 +1,8 @@
 # Edge: using a class instance after it was consumed (should be error)
 class Token:
-    value: String
+    value: str
 
-    def consume(own self) -> String:
+    def consume(own self) -> str:
         return self.value
 
 def main() -> int32:

@@ -4,7 +4,7 @@ def main() -> int32:
         print(name)
     print(names.len())
 
-    tags: Set[String] = {"red", "blue"}
+    tags: set[str] = {"red", "blue"}
     for tag in tags:
         print(tag)
     print(tags.len())

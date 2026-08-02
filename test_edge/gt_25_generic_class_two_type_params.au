@@ -6,7 +6,7 @@ class Pair[A, B]:
     second: B
 
 def main() -> int32:
-    p: Pair[int32, String] = Pair(first=1, second="two")
+    p: Pair[int32, str] = Pair(first=1, second="two")
     print(p.first)
     print(p.second)
     return 0

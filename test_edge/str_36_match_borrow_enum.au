@@ -1,7 +1,7 @@
-# Test: match borrow on enum with String payload (should not consume)
+# Test: match borrow on enum with str payload (should not consume)
 
 enum Container:
-    Full(String)
+    Full(str)
     Empty
 
 def main() -> int32:

@@ -54,7 +54,7 @@ The implemented subset already supports field defaults:
 
 ```python
 class ServerConfig:
-    host: String = "localhost"
+    host: str = "localhost"
     port: int32 = 8080
 ```
 
@@ -88,10 +88,10 @@ Aura now enforces class visibility across module boundaries. Fields and methods 
 
 ```python
 class User:
-    public name: String
+    public name: str
     age: int32
 
-    public def read_name(self) -> String:
+    public def read_name(self) -> str:
         return self.name.clone()
 ```
 
@@ -165,12 +165,12 @@ Method calls follow the same argument rules as ordinary functions, so methods an
 
 ```python
 class Greeter:
-    prefix: String
+    prefix: str
 
-    def say(self, name: String) -> String:
+    def say(self, name: str) -> str:
         return self.prefix + name
 
-    def named(prefix: own String) -> Greeter:
+    def named(prefix: own str) -> Greeter:
         return Greeter(prefix=prefix)
 
 greeter = Greeter.named(prefix="hello, ")

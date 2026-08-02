@@ -28,11 +28,11 @@ print(other)
 
 Task handles are conditional. `Task[T]` is copyable when `T` is copyable, a
 `Queue[...]` handle, or a recursively repeatable `Task[...]` handle. A task
-returning `String`, `Vec[...]`, or another non-copy owned value instead has a
+returning `str`, `list[...]`, or another non-copy owned value instead has a
 move-only handle so aliases cannot duplicate its single result-observation
 right.
 
-Everything else — `String`, `Vec[T]`, `Map[K, V]`, `Set[T]`,
+Everything else — `str`, `list[T]`, `dict[K, V]`, `set[T]`,
 `random.Rng`, ordinary class instances, `TaskGroup`, file handles, process
 resources, and network resources — is a **move type**. Assigning a move value
 transfers ownership:
@@ -60,22 +60,24 @@ print(name)
 print(copy)
 ```
 
-Collections clone their elements when you clone the collection:
+Collections clone their elements when `copy()` creates independent storage:
 
 ```python
 jobs = ["parse", "check", "build"]
-snapshot = jobs.clone()
+snapshot = jobs.copy()
 
 print(jobs.len())
 print(snapshot.len())
 ```
 
 That requires every produced element to be clone-safe. `random.Rng` deliberately
-has no clone route, and putting one inside a vector, map, class, or enum does
+has no clone route, and putting one inside a list, dictionary, class, or enum does
 not change that. A generic clone helper is still valid: Aura infers the
 requirement and rejects only a specialization that would duplicate an `Rng`.
 
-Clone close to the reason for cloning. A clone at the call site tells the reader that the program is deliberately keeping both values.
+Duplicate close to the reason for duplication. An explicit `clone()` or
+`copy()` at the call site tells the reader that the program is deliberately
+keeping both values.
 
 ## Closures Own Their Captures
 
@@ -114,7 +116,7 @@ owned values. Captured environments are read-only in the current phase.
 When a helper should read a value without owning it, the parameter uses `T`:
 
 ```python
-def render_title(title: String) -> String:
+def render_title(title: str) -> str:
     return title.to_upper()
 
 title = "manual"
@@ -131,9 +133,9 @@ Classes make the benefit obvious:
 ```python
 class Job:
     id: int32
-    label: String
+    label: str
 
-def render(job: Job) -> String:
+def render(job: Job) -> str:
     return f"{job.id}: {job.label}"
 
 job = Job(id=7, label="compile")
@@ -148,10 +150,10 @@ The same job is rendered twice because `render` never takes ownership.
 When a helper should mutate a caller-owned value, the parameter uses `mut T`:
 
 ```python
-def add_job(jobs: mut Vec[String], job: own String):
-    jobs.push(job)
+def add_job(jobs: mut list[str], job: own str):
+    jobs.append(job)
 
-mut jobs = Vec[String]()
+mut jobs = list[str]()
 add_job(jobs, "parse")
 add_job(jobs, "check")
 print(jobs.len())
@@ -189,13 +191,13 @@ A borrowed method may look at non-copy fields but cannot move them out:
 
 ```python
 class Label:
-    text: String
+    text: str
 
-    def show(self) -> String:
+    def show(self) -> str:
         return self.text.clone()
 ```
 
-`self.text.clone()` returns a new owned `String` to the caller. Returning `self.text` without cloning would try to move a `String` out through a shared borrow, which the compiler rejects.
+`self.text.clone()` returns a new owned `str` to the caller. Returning `self.text` without cloning would try to move a `str` out through a shared borrow, which the compiler rejects.
 
 ## Field Moves
 
@@ -204,7 +206,7 @@ Owned fields are independent. A program can move one field out of a class withou
 ```python
 class Packet:
     id: int32
-    body: String
+    body: str
 
 mut packet = Packet(id=1, body="hello")
 body = packet.body
@@ -219,18 +221,18 @@ print(packet.body)
 ## Collections And Ownership
 
 Collection operations that store values declare explicit `own` positions. For
-example, `Vec.push(value: own T)`, `Map.set(key: own K, value: own V)`, and
-`Set.insert(value: own T)` move non-copy values into their collection. If the
+For example, `list.append(value: own T)`, dictionary indexed assignment, and
+`set.add(value: own T)` move non-copy values into their collection. If the
 caller still needs one, clone it.
 
 ```python
-mut jobs = Vec[String]()
+mut jobs = list[str]()
 label = "compile"
-jobs.push(label.clone())
+jobs.append(label.clone())
 print(label)
 ```
 
-Lookup methods such as `Vec.get` and `Map.get` return cloned owned values. The collection keeps its element, and the caller receives an independent copy:
+Lookup methods such as `list.get` and `dict.get` return cloned owned values. The collection keeps its element, and the caller receives an independent copy:
 
 ```python
 names = ["ada", "grace"]
@@ -244,7 +246,7 @@ match names.get(0):
 
 This is why a program can read clone-safe values from a collection repeatedly
 without juggling ownership. A value containing `random.Rng` must instead leave
-through an ownership-transferring operation such as `Vec.remove`, `Map.remove`,
+through an ownership-transferring operation such as `list.pop`, `dict.remove`,
 or a Queue receive.
 
 ## Tasks And Borrowing
@@ -254,7 +256,7 @@ argument into task-owned storage before the child can outlive the caller. The
 target function can then borrow that capture or consume it:
 
 ```python
-def worker(label: String):
+def worker(label: str):
     print(label)
 
 with group = TaskGroup():
@@ -280,7 +282,7 @@ consume it. `mut` targets are rejected because
 mutation of detached capture storage would have no caller-visible writeback.
 
 Ownership alone is not enough to cross a task boundary. Every capture and
-result must also be structurally `Transfer`: Copy data, `String`, recursively
+result must also be structurally `Transfer`: Copy data, `str`, recursively
 transferable collections and user data, and Queue/Task handle identities can
 cross. `random.Rng`, `TaskGroup`, capability views, and live file, process, or
 network resources cannot. Keep a live resource on the task that creates it and

@@ -1,4 +1,4 @@
-def sum_set(values: Set[int32]) -> int32:
+def sum_set(values: set[int32]) -> int32:
     mut total: int32 = 0
     for value in values:
         total += value
@@ -6,8 +6,9 @@ def sum_set(values: Set[int32]) -> int32:
 
 def main() -> int32:
     mut values = [1, 3]
-    print(values.insert(1, 2).to_string())
-    values.push(4)
+    values.insert(1, 2)
+    print(true.to_string())
+    values.append(4)
     values.reverse()
     print(values[0].to_string())
     print(values[3].to_string())
@@ -16,38 +17,37 @@ def main() -> int32:
 
     mut counts = {"a": 1}
     other = {"b": 2, "c": 3}
-    counts.extend(other)
+    counts.update(other)
     items = counts.items()
-    match items.get(0):
-        case Option.Some(entry):
-            print(entry.key)
-        case Option.None:
-            pass
-    match items.get(2):
-        case Option.Some(entry):
-            print(entry.value.to_string())
-        case Option.None:
-            pass
-    print(counts.entries().len().to_string())
+    print(items)
+    print(counts.items().len().to_string())
     counts.clear()
     print(counts.is_empty().to_string())
 
-    mut seen: Set[int32] = {1, 2, 2, 3}
+    mut seen: set[int32] = {1, 2, 2, 3}
     print(seen.len().to_string())
-    print(seen.contains(2).to_string())
-    print(seen.insert(2).to_string())
-    print(seen.insert(4).to_string())
-    print(seen.remove(1).to_string())
+    print((2 in seen).to_string())
+    inserted_existing = 2 not in seen
+    seen.add(2)
+    print(inserted_existing.to_string())
+    inserted_four = 4 not in seen
+    seen.add(4)
+    print(inserted_four.to_string())
+    removed_one = 1 in seen
+    seen.discard(1)
+    print(removed_one.to_string())
     print(sum_set(seen).to_string())
 
-    copy = seen.clone()
+    copy = seen.copy()
     mut moved_total: int32 = 0
     for value in copy:
         moved_total += value
     print(moved_total.to_string())
 
-    mut names: Set[String] = Set[String]()
+    mut names: set[str] = set[str]()
     print(names.is_empty().to_string())
-    print(names.insert("aura").to_string())
+    inserted_name = "aura" not in names
+    names.add("aura")
+    print(inserted_name.to_string())
     print(names.len().to_string())
     return 0

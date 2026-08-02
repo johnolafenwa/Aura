@@ -1,4 +1,4 @@
-error[AU2002]: `enumerate` requires a `Vec[T]` or `Set[T]` iterable, found `Range`
+error[AU2002]: `enumerate` requires a `list[T]` or `set[T]` iterable, found `Range`
  --> crates/aura-compiler/tests/fixtures/check-fail/enumerate_requires_indexable_iterable.au:2:35
   |
 2 |     for index, value in enumerate(range(3)):

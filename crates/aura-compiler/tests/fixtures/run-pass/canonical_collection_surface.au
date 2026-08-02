@@ -1,0 +1,46 @@
+def negate(value: int64) -> int64:
+    return 0 - value
+
+def main():
+    mut values: list[int64] = list[int64].with_capacity(4)
+    values.append(3)
+    values.append(1)
+    values.insert(-100, 2)
+    values.insert(100, 4)
+    print(values)
+    print(values.index(1))
+    print(values.count(2))
+    values.sort(key=negate, reverse=true)
+    print(values)
+    print(values.pop())
+    values.remove(1)
+    values.reserve(8)
+    print(values)
+
+    mut table: dict[str, int64] = dict[str, int64].with_capacity(2)
+    table["one"] = 1
+    table["two"] = 2
+    print("one" in table)
+    print(table.get("missing"))
+    print(table.keys())
+    print(table.values())
+    print(table.items())
+    mut incoming = {"two": 20, "three": 3}
+    table.update(incoming)
+    table.reserve(4)
+    print(table)
+    print(table.remove("two"))
+    copy = table.copy()
+    table.clear()
+    print(copy)
+
+    mut tags: set[str] = set[str].with_capacity(2)
+    tags.add("a")
+    tags.add("b")
+    tags.discard("missing")
+    print("a" in tags)
+    tags.remove("a")
+    tags.reserve(4)
+    clone = tags.copy()
+    tags.clear()
+    print(clone)

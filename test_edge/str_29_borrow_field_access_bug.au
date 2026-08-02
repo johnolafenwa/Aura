@@ -1,12 +1,12 @@
-# BUG DEMO: String field access on borrow param in free function fails
+# BUG DEMO: str field access on borrow param in free function fails
 # but same access works in borrow self methods.
 # Also, error message points to wrong line (line 1 instead of actual error).
 
 class Holder:
-    text: String
+    text: str
     value: int32
 
-    def get_text_method(self) -> String:
+    def get_text_method(self) -> str:
         return self.text
 
 def get_value_free(h: Holder) -> int32:

@@ -1,6 +1,6 @@
 # Edge test: Do variables from if/while/match leak to outer scope?
 
-def make_result() -> Result[int32, String]:
+def make_result() -> Result[int32, str]:
     return Result.Ok(5)
 
 def main() -> int32:

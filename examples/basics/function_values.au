@@ -6,7 +6,7 @@ class Counter:
 
 class CapabilityPipeline:
     mutate: def(mut Counter) -> None
-    consume: def(own String) -> String
+    consume: def(own str) -> str
 
 def increment(value: int32) -> int32:
     return value + 1
@@ -17,7 +17,7 @@ def double(value: int32) -> int32:
 def bump(counter: mut Counter) -> None:
     counter.value += 1
 
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
 def offset(value: int32 = 10) -> int32:
@@ -41,7 +41,7 @@ def main() -> int32:
     known_offset = offset
     specialized = show[int32]
     pipeline = Pipeline(transform=copied)
-    transforms: Vec[def(int32) -> int32] = [pipeline.transform, double]
+    transforms: list[def(int32) -> int32] = [pipeline.transform, double]
 
     print(apply(selected, 1))
     print(apply(pipeline.transform, 2))
@@ -54,8 +54,8 @@ def main() -> int32:
     print(known_offset(value=20))
 
     mutate: def(mut Counter) -> None = bump
-    consume: def(own String) -> String = take
-    mutators: Vec[def(mut Counter) -> None] = [mutate]
+    consume: def(own str) -> str = take
+    mutators: list[def(mut Counter) -> None] = [mutate]
     capability_pipeline = CapabilityPipeline(mutate=mutate, consume=consume)
     mut counter = Counter(value=0)
     mutators[0](counter)

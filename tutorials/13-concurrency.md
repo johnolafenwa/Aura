@@ -19,7 +19,7 @@ The maintained user-facing model is:
 - `select(queue_or_task_or_duration, ...) -> SelectOutcome[Q, T]`
 - `wait_any(...)` and `wait_all(...)`
 
-Aura no longer exposes the older unstructured task forms. Every task belongs to a `TaskGroup`.
+Every task belongs to a `TaskGroup`.
 
 ## Queues
 
@@ -161,7 +161,7 @@ All four start methods apply the same boundary before a task is scheduled:
 every captured argument and the target's result must be structurally
 `Transfer`. The compiler derives that property from the fully specialized
 type; source code cannot declare or implement a `Transfer` trait. Copy data,
-`String`, structurally transferable collections, tuples, classes, enums, and
+`str`, structurally transferable collections, tuples, classes, enums, and
 Queue/Task handle identities can cross. Shared or mutable access,
 `random.Rng`, `TaskGroup`, and live host resources cannot.
 
@@ -224,7 +224,7 @@ See [examples/concurrency/task_group_associated_method.au](../examples/concurren
 `Task[T]` is always a `Transfer` handle, but it is copyable only when `T` is
 repeatable. Repeatable results are copy values, `Queue[...]` handles, and
 recursively repeatable `Task[...]` handles. A task returning
-`String`, `Vec[...]`, or another non-copy transferable value therefore has a
+`str`, `list[...]`, or another non-copy transferable value therefore has a
 move-only task handle.
 
 For a non-repeatable result, each of `result`, `result_or_none`, and
@@ -302,7 +302,7 @@ while losing queues remain unchanged. Every non-repeatable Task observation
 right is consumed at call entry, even when a Queue or deadline wins.
 
 Use `wait_any(...)` and `wait_all(...)` for an existing homogeneous
-`Vec[Task[T]]`.
+`list[Task[T]]`.
 
 `wait_any(tasks, timeout=...)` returns `WaitAny[T]`:
 
@@ -339,7 +339,7 @@ match wait_all(task_list, timeout=20ms):
 ```
 
 For repeatable `T`, the task handles and observations remain reusable. For a
-non-repeatable `T`, both helpers consume the complete `Vec[Task[T]]` on the
+non-repeatable `T`, both helpers consume the complete `list[Task[T]]` on the
 first attempt, including timeout, cancellation, and task failure.
 `wait_any` deliberately abandons the observation rights of the tasks it did
 not choose. Queue receive APIs always transfer one owned payload, but Queue
@@ -465,7 +465,7 @@ provides an explicit scheduling point sooner than the amortized native check
 when the application wants one:
 
 ```python
-def count(label: String):
+def count(label: str):
     mut step: int32 = 1
     while step <= 3:
         print(f"{label}: {step}")

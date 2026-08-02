@@ -24,7 +24,9 @@ IDENT        = (ascii-letter | "_"),
                { ascii-letter | digit | "_" } ;
 ```
 
-Examples of identifiers are `count`, `_message`, `Result`, and `worker2`. `résultat` is not an identifier because non-ASCII letters are not accepted in names. Unicode remains valid inside strings.
+Examples of identifiers are `count`, `_message`, `buffer`, `Result`, and
+`worker2`. `résultat` is not an identifier because non-ASCII letters are not
+accepted in names. Unicode remains valid inside strings.
 
 An identifier spelling can still be rejected by static checking. Builtin types and functions reserve maintained names, declarations cannot collide in the same namespace, and some positions impose additional rules. See [Names And Scopes](/manual/names-and-scopes).
 
@@ -33,7 +35,7 @@ An identifier spelling can still be rejected by static checking. Builtin types a
 The lexer recognizes these words specially:
 
 ```text
-class enum def trait impl import from mut borrow own indirect public extern opaque
+class enum def trait impl import from mut own indirect public extern opaque
 return assert if elif else and or not match case for in while break
 continue pass try with as true false
 ```
@@ -45,15 +47,12 @@ bodyless declarations described by [FFI v0](/manual/ffi). `own` is reserved
 everywhere; it marks consuming ordinary parameters, collection loops, and
 matches, as well as the consuming receiver spelling `own self`. `mut` marks
 mutable parameters, loops, matches, and the receiver spelling `mut self`, and
-also introduces a mutable local binding. `borrow` is a **reserved keyword**,
-not an accepted capability or identifier. When it appears in a capability
-position, the diagnostic names the exact bare, `mut`, or `own` spelling to
-write.
+also introduces a mutable local binding.
 
 `from` is contextual. At module level, a complete prefix of the form `from module.path import ...` begins an import. In other identifier positions, `from` can name a parameter, local binding, expression, member, type-path component, or named argument:
 
 ```python
-def replace(from: String, to: String) -> String:
+def replace(from: str, to: str) -> str:
     return from + to
 
 mut from = "left"
@@ -68,7 +67,7 @@ Several other spellings are lexed as ordinary identifiers and become special onl
 | `self` | Declares or refers to a method receiver. |
 | `Self` | Refers to the current type in supported trait and implementation type positions. |
 | `None` | The unit value, or `Option.None` when an expected option type makes that interpretation unambiguous. |
-| `Set` | Begins the explicit set literal `Set{...}` and names the builtin set type. |
+| `set` | Names the builtin set type and its constructor. |
 | `lambda` | Introduces a lambda when it appears at the start of an expression; it remains an identifier token for member and named-argument positions. |
 | `_` | The wildcard in a match pattern; elsewhere it is an identifier spelling subject to static rules. |
 
@@ -241,7 +240,7 @@ computed or negative values.
 
 `None` is lexically an identifier but statically denotes the unit value of type `None`, or the payload-free `Option.None` variant when an expected `Option[T]` type resolves the meaning. There is no null value distinct from these typed forms.
 
-## String Literals
+## str Literals
 
 Ordinary string literals use matching single or double quote delimiters and are
 single-line:
@@ -253,7 +252,7 @@ apostrophe = 'Aura\'s strings'
 quotation = 'the compiler said "ready"'
 ```
 
-Both delimiters produce a `String` and support the same escapes:
+Both delimiters produce a `str` and support the same escapes:
 
 | Escape | Decoded value |
 | --- | --- |
@@ -269,9 +268,9 @@ Both delimiters produce a `String` and support the same escapes:
 Unknown escapes, invalid Unicode scalars, missing hexadecimal digits, and
 missing or mismatched closing quotes are lexical errors. Triple-quoted, raw,
 and byte-string literals are not part of Aura 0.2. A one-character literal
-such as `'x'` is a `String`, not a distinct character type.
+such as `'x'` is a `str`, not a distinct character type.
 
-A string literal has type `String`. See [Types](/manual/types) for ownership and [Execution Model](/manual/execution-model#evaluation-order) for expression evaluation order.
+A string literal has type `str`. See [Types](/manual/types) for ownership and [Execution Model](/manual/execution-model#evaluation-order) for expression evaluation order.
 
 ## F-Strings
 
@@ -297,7 +296,7 @@ F-strings support the same escapes as ordinary strings. F-strings themselves
 remain double-quoted: `f'...'` is not Aura 0.2 syntax. They do not support
 conversion flags such as `!r` or a format-specifier mini-language.
 Interpolations are evaluated from left to right and the result is an owned
-`String`.
+`str`.
 
 ## Complexity Limits
 
@@ -317,8 +316,8 @@ Lexing does not assign expression types, but it preserves the literal kind and
 mathematical or decoded value used by static checking. Integer literals may
 later adopt an exact expected integer or floating type; floating literals may
 adopt `float32` or `float64`; duration, Boolean, ordinary-string, and f-string
-tokens enter checking as `Duration`, `bool`, `String`, and an interpolated
-`String` expression respectively. No lexical spelling performs a runtime
+tokens enter checking as `Duration`, `bool`, `str`, and an interpolated
+`str` expression respectively. No lexical spelling performs a runtime
 coercion.
 
 ## Runtime Semantics

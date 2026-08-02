@@ -1,29 +1,29 @@
 class Connection:
-    name: String
+    name: str
     active: bool = true
 
-    def query(self) -> String:
+    def query(self) -> str:
         return "result from " + self.name
 
     def close(mut self):
         print("closing " + self.name)
 
 class Logger:
-    prefix: String
+    prefix: str
 
-    def log(self, msg: String):
+    def log(self, msg: str):
         print(self.prefix + ": " + msg)
 
     def close(mut self):
         print("logger closed")
 
-def use_connection() -> Result[String, String]:
+def use_connection() -> Result[str, str]:
     with conn = Connection(name="db1"):
         result = conn.query()
         print(result)
         return Result.Ok("connection done")
 
-def use_logger() -> Result[String, String]:
+def use_logger() -> Result[str, str]:
     with logger = Logger(prefix="APP"):
         logger.log("started")
         logger.log("running")

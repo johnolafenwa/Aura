@@ -1,0 +1,4 @@
+error[AU4008]: collection value was not found
+ --> crates/aura-compiler/tests/fixtures/run-fail/list_remove_missing.au
+  = note: Aura call chain (innermost first): main at 1:1
+  = help: check `value in values` before removing when absence is expected

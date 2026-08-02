@@ -1,14 +1,14 @@
-def consume(s: String):
+def consume(s: str):
     print(s)
 
 def main() -> int32:
     # Basic clone
-    original: String = "original"
+    original: str = "original"
     copy = original.clone()
     print(copy)
 
     # Clone independence: modify original, clone unchanged
-    mut source: String = "before"
+    mut source: str = "before"
     cloned = source.clone()
     source = "after"
     print(source)
@@ -19,13 +19,13 @@ def main() -> int32:
         print("independence: FAIL")
 
     # Clone allows use after move
-    text: String = "hello"
+    text: str = "hello"
     cloned2 = text.clone()
     consume(text)
     print(cloned2)
 
     # Clone of empty string
-    empty: String = ""
+    empty: str = ""
     empty_copy = empty.clone()
     if empty_copy == "":
         print("empty clone: pass")

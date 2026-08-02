@@ -46,6 +46,13 @@ pub use native_codegen::{
 };
 pub use runtime_value::{RunOutput, Value};
 
+/// MIR whose imports, package graph, and FFI permissions were checked through
+/// the manifest-rooted path loader.
+///
+/// The inner module is deliberately private so caller-supplied MIR cannot be
+/// promoted into the trusted runtime route.
+pub struct CheckedMirModule(MirModule);
+
 #[cfg(test)]
 fn timing_limit_for_hosted_ci(
     local_limit: std::time::Duration,
@@ -386,6 +393,32 @@ pub fn run_path_entry_with_stdout_sink_and_program_args(
         stdout_sink,
         program_args,
     )
+}
+
+/// Runs one parameterless entry from a previously path-checked MIR module.
+///
+/// This is the reusable form of [`run_path_entry_with_stdout_sink_and_program_args`]:
+/// package loading and semantic checking happen once, while multiple entries
+/// may execute through the same trusted module.
+pub fn run_checked_mir_entry_with_stdout_sink_and_program_args(
+    module: &CheckedMirModule,
+    entry: Option<&str>,
+    stdout_sink: Option<StdoutSink>,
+    program_args: Vec<String>,
+) -> Result<RunOutput> {
+    mir_runtime::run_entry_with_stdout_sink_and_program_args_trusted(
+        &module.0,
+        entry,
+        stdout_sink,
+        program_args,
+    )
+}
+
+/// Loads, manifest-checks, semantically checks, and lowers a path into opaque
+/// MIR that is eligible for repeated trusted entry execution.
+pub fn lower_path_to_checked_mir(path: &Path) -> Result<CheckedMirModule> {
+    let program = check_path(path)?;
+    Ok(CheckedMirModule(lower_to_mir(&program)))
 }
 
 pub fn lower_path_to_mir(path: &Path) -> Result<MirModule> {
@@ -838,7 +871,7 @@ fn is_builtin_export_type(name: &str) -> bool {
             | "uintsize"
             | "float32"
             | "float64"
-            | "String"
+            | "str"
             | "Range"
             | "Option"
             | "Result"

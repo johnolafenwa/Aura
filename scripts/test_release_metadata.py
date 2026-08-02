@@ -78,7 +78,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("development channel", changelog.lower())
         self.assertIn("## 0.2.0 — 2026-07-31 (technical preview)", changelog)
         for heading in (
-            "Breaking changes and migration",
+            "Ownership surface",
             "Language",
             "Runtime and structured concurrency",
             "Callables and closures",
@@ -89,8 +89,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         ):
             with self.subTest(heading=heading):
                 self.assertIn(f"### {heading}", changelog)
-        self.assertIn("scripts/capability_migrate.py apply", changelog)
-        self.assertIn("one compatibility release", changelog)
+        self.assertNotIn("one compatibility release", changelog)
+        self.assertNotIn("capability_migrate.py", changelog)
         self.assertIn("ADR-0038", changelog)
 
     def test_manual_declares_release_and_dynamic_implementation_stamp(self) -> None:

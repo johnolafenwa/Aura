@@ -1,22 +1,22 @@
-def trace(label: String, value: int32) -> int32:
+def trace(label: str, value: int32) -> int32:
     print(label)
     return value
 
 def main():
-    mut values = Vec[int32]()
-    values.push(1)
-    values.push(2)
+    mut values = list[int32]()
+    values.append(1)
+    values.append(2)
     print(1 in values)
     print(3 in values)
     print(3 not in values)
 
-    mut names = Set[String]()
-    names.insert("aura")
+    mut names = set[str]()
+    names.add("aura")
     print("aura" in names)
     print("other" not in names)
 
-    mut ages = Map[String, int32]()
-    ages.set("ada", 36)
+    mut ages = dict[str, int32]()
+    ages["ada"] = 36
     print("ada" in ages)
     print("bob" in ages)
 

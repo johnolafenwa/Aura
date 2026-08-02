@@ -1,4 +1,4 @@
-error[AU2003]: cannot use `Array[int32]` as a Set element because it contains `Array[int32]`, whose equality is unavailable
+error[AU2003]: cannot use `Array[int32]` as a set element because it contains `Array[int32]`, whose equality is unavailable
  --> crates/aura-compiler/tests/fixtures/check-fail/array_set_element_equality_unavailable.au:2:14
   |
 2 |     values = {Array[int32].zeros([1])}

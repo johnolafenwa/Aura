@@ -1,2 +1,2 @@
 enum DocumentState:
-    Loaded(mut String)
+    Loaded(mut str)

@@ -501,7 +501,7 @@ fn integer_value_helpers_cover_division_remainder_comparisons_and_bounds() {
     assert_eq!(integer_type_bounds(&Type::Module("pkg".to_string())), None);
     assert_eq!(integer_type_bounds(&Type::TypeParam("T".to_string())), None);
     assert_eq!(
-        integer_type_bounds(&Type::Named("Vec".to_string(), vec![Type::named("int32")])),
+        integer_type_bounds(&Type::Named("list".to_string(), vec![Type::named("int32")])),
         None
     );
     assert_eq!(

@@ -7,11 +7,19 @@ in this file.
 
 ## 0.3.0 — development
 
-Aura 0.3.0 is the active development channel. This cycle opens with the
-coordinated Python-surface migration: the workspace and development artifacts
-carry the 0.3 identity before any breaking source change lands. The complete
-old-to-new migration tables and feature evidence will remain current here as
-Batch S1 advances.
+Aura 0.3.0 is the active development channel. It presents a compact,
+Python-shaped surface with static typing, deterministic ownership, and native
+execution. The complete canonical surface and feature evidence remain current
+here as development advances.
+
+- Unified collection positions on `int64`: ranges, list indices, slice
+  endpoints, enumeration positions, Array coordinates, and concurrent
+  source-result indices now compose directly with `len(...)`. Fixed-width
+  `int8`, `int16`, `int32`, `uint8`, `uint16`, and `uint32` values widen
+  losslessly only at these position sites.
+- Standardized owned text and collections as `str`, `list[T]`, `dict[K, V]`,
+  and `set[T]`. Collection literals are homogeneous and methods use the
+  canonical Python-shaped names with typed ownership and failures.
 
 ## 0.2.0 — 2026-07-31 (technical preview)
 
@@ -23,47 +31,27 @@ Learn and Manual tracks. It is intended for evaluation and controlled
 experiments, not production deployment or execution of untrusted code. It was
 developed under the working name Aurora before its first publication.
 
-### Breaking changes and migration
+### Ownership surface
 
-- Replaced the source `borrow` capability family with three
-  declaration-stable forms: bare parameters and receivers grant logical shared
-  access for every type, including Copy types; `mut` grants exclusive mutable
-  access; and `own` transfers ownership. Code that depended on the former bare
-  Copy snapshot must now spell `own CopyType`.
-- Changed bare `match` to shared matching. Use `match mut value` for mutable
-  matching and `match own value` when the match must consume the scrutinee or
-  owned payloads.
-- Retired every old capability spelling with an exact replacement diagnostic:
-  `value: borrow T` becomes `value: T`, `value: borrow mut T` becomes
-  `value: mut T`, `borrow self` becomes `self`, `borrow mut self` becomes
-  `mut self`, and the same change applies after `match` and
-  `for value in`. The word `borrow` remains reserved for one compatibility release
-  solely to teach these replacements; it is not an accepted alias.
-- Removed borrowed-return labels and `borrow`/`borrow mut` return capabilities.
-  Copy-valued returns are ordinary owned returns. An API that previously
-  promised access into a non-Copy owner must return an owned value, handle, or
-  index, or move the operation onto the owner. Place-based returned views are
-  designed in ADR-0038 for 0.3 and are not implemented in 0.2.
-- Run `python3 scripts/capability_migrate.py apply` from the repository root to
-  migrate maintained source, then run
-  `python3 scripts/capability_migrate.py check` to verify the recorded rewrite.
-  Review inserted `own` on former bare Copy parameters and matches: those are
-  the two old spellings whose meaning changed without containing a retired
-  keyword.
-- `String.len()`, `String.byte_len()`, `Vec.len()`, `Map.len()`, and
-  `Set.len()` now return `int64`. Update `int32` annotations and use an
-  explicit checked `as int32` conversion at still-narrow range or Vec-index
-  boundaries. `String.byte_len()` is the UTF-8 byte count; `String.len()` is
-  the Unicode-scalar count.
+- Bare parameters and receivers grant logical shared access for every type,
+  including copy types. `mut` grants exclusive mutable access and `own`
+  transfers ownership.
+- Bare `match` is shared matching. `match mut value` enables mutable matching
+  with writeback, and `match own value` consumes the scrutinee and owned
+  payloads.
+- Return annotations carry types only. Every return is an ordinary owned
+  return.
+- `str.len()`, `str.byte_len()`, `list.len()`, `dict.len()`, and
+  `set.len()` return `int64`. `str.byte_len()` is the UTF-8 byte count;
+  `str.len()` is the Unicode-scalar count.
 - The maintained builtin surface now reserves `len`, `str`, `select`,
   `SelectOutcome`, and the `control` module namespace. Rename conflicting user
   declarations.
-- Lightweight tasks now run on pinned cooperative OS workers instead of one
-  scheduler thread. Per-producer Queue order stays FIFO, but global sibling
+- Lightweight tasks run on pinned cooperative OS workers. Per-producer Queue
+  order stays FIFO, but global sibling
   scheduling and output order are unspecified. Programs must synchronize any
   order they observe.
-- The native artifact-cache format is `aura-native-cache-v5`; artifacts
-  carrying older capability or backend metadata are intentionally rebuilt.
+- The native artifact-cache format is `aura-native-cache-v5`.
 
 ### Language
 
@@ -71,13 +59,13 @@ developed under the working name Aurora before its first publication.
   equality, and whole-source copy/move behavior.
 - Added conditional expressions, `in`/`not in`, chained comparisons,
   `enumerate` and `zip` loop forms, and maintained `len` and `str` builtins.
-- Added eager owned list, set, and map comprehensions, including nested `for`
+- Added eager owned list, set, and dictionary comprehensions, including nested `for`
   clauses and left-to-right filters. Generator expressions remain rejected
   with guidance to use a comprehension or explicit loop.
-- Added owned `Vec[T]` and Unicode-scalar `String` slicing with omitted
-  endpoints and one-time negative normalization. Aura deliberately traps
-  invalid or reversed ranges with `AU4003`; unlike Python, it does not clamp
-  slice bounds. Steps, slice assignment, String integer indexing, and views
+- Added owned `list[T]` and Unicode-scalar `str` slicing with omitted
+  endpoints and one-time negative normalization. Aura traps invalid or
+  reversed ranges with `AU4003`; slice bounds are not clamped. Steps, slice
+  assignment, str integer indexing, and views
   remain unavailable.
 - Added checked contextual narrow integers, wrapping and saturating integer
   methods, multiline delimiter continuation, assertions, bytes/codecs,
@@ -121,7 +109,7 @@ developed under the working name Aurora before its first publication.
 - Added structural `def(...) -> ...` types and Copy/Transfer named-function
   values, with inference, generic specialization, cross-module use, and both
   backend implementations.
-- Added eager callable-powered `Vec.sort`, `sort_by`, `map`, and `filter`, and
+- Added eager callable-powered natural and keyed `list.sort`, plus `map` and `filter`, and
   let `control.retry` accept repeatable capturing closures as well as named
   functions.
 - Added contextually typed expression lambdas. Captures are by value: Copy
@@ -139,7 +127,7 @@ developed under the working name Aurora before its first publication.
 
 - Added explicitly authorized FFI v0 packages and direct synchronous
   `extern "C"` calls to process-global symbols.
-- The supported ABI includes fixed-width scalars, pointer-length String and
+- The supported ABI includes fixed-width scalars, pointer-length str and
   byte views, and non-null opaque handles. Package manifests must opt in and
   dependency authorization is reported exactly from the root package.
 - FFI declarations are a native trust boundary. False declarations or
@@ -152,7 +140,7 @@ developed under the working name Aurora before its first publication.
 
 - Added owned contiguous row-major `Array[T]` for `int32`, `int64`, `float32`,
   and `float64`, with shape metadata and rank of at least one.
-- Added `zeros`, `full`, and `from_vec`; multidimensional get/set; `fill`;
+- Added `zeros`, `full`, and `from_list`; multidimensional get/set; `fill`;
   first-axis owned copying slices; map; sum/min/max/mean; exact-shape
   elementwise arithmetic; and scalar arithmetic.
 - Elementwise and reduction work runs in dtype-specialized contiguous native
@@ -169,8 +157,8 @@ developed under the working name Aurora before its first publication.
   commit (`aura 0.2.0-preview (<commit>)`), so preview executables are
   distinguishable from a future final 0.2.0. Release publication is marked as
   a GitHub prerelease and includes a generated, verified `SHA256SUMS` asset.
-- Retired the last AU3002 diagnostic use of the old “shared borrowed values”
-  wording; it now says “shared values” and retains the explicit stable code.
+- AU3002 diagnostics use the concise wording “shared values” and retain the
+  explicit stable code.
 - Added `aura run --backend auto|mir|direct`, native builds with relocatable
   runtime/link manifests, a content-addressed native cache, function-level
   `aura test` discovery, recursive formatting/testing, package/workspace
@@ -180,8 +168,7 @@ developed under the working name Aurora before its first publication.
   the language server, and the VS Code extension preserve the structured
   records. A private direct-runtime trap channel keeps ordinary process exit
   status distinct from `AU####` runtime failures.
-- Added teaching diagnostics for retired syntax and unsupported Python-shaped
-  forms, stable dedicated codes for semantic defect classes, exact
+- Added stable dedicated codes for semantic defect classes, exact
   UTF-8/source spans, completion recovery on incomplete programs, hover and
   go-to-definition, and maintained example-file regression coverage.
 - Release archives carry the compiler, native runtime, and linker manifest.
@@ -206,6 +193,6 @@ developed under the working name Aurora before its first publication.
   runtime initialization side effects; package registries and publishing are
   not implemented.
 - Resource caps, protocol boundaries, backend-specific FFI availability, and
-  migration hints are normative in the Manual's
+  failure guidance are normative in the Manual's
   [Current Limits](docs/manual/current-limits.md) and
   [Status And Compatibility](docs/manual/status-and-compatibility.md) pages.

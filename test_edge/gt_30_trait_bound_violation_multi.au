@@ -2,16 +2,16 @@
 ## Expects: Compile error about missing trait implementation
 
 trait CanFly:
-    def fly(self) -> String
+    def fly(self) -> str
 
 trait CanSwim:
-    def swim(self) -> String
+    def swim(self) -> str
 
 class Duck:
-    name: String
+    name: str
 
 impl CanFly for Duck:
-    def fly(self) -> String:
+    def fly(self) -> str:
         return "flying"
 
 ## Note: CanSwim is NOT implemented for Duck

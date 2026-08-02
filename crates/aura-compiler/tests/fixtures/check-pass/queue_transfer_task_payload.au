@@ -1,11 +1,11 @@
-def make_text() -> String:
+def make_text() -> str:
     return "queued task"
 
-def send_task(queue: Queue[Task[String]], task: own Task[String]):
+def send_task(queue: Queue[Task[str]], task: own Task[str]):
     queue.put(task)
 
 def main() -> int32:
-    tasks = Queue[Task[String]]()
+    tasks = Queue[Task[str]]()
     with TaskGroup() as group:
         task = group.start(make_text)
         group.start_soon(send_task, tasks, task)

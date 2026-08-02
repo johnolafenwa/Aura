@@ -1,8 +1,8 @@
-def worker(value: own String, output: Queue[String]):
+def worker(value: own str, output: Queue[str]):
     output.put(value)
 
 def main() -> int32:
-    output = Queue[String]()
+    output = Queue[str]()
     with TaskGroup() as group:
         group.start_soon(worker, "task value", output)
         match output.get():

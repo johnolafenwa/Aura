@@ -1,6 +1,6 @@
 def collect(
     limit: int64,
-    copied: Map[int64, int64] = {
+    copied: dict[int64, int64] = {
         value: (match true:
             case true: {"fixed": f"constant"}
             case false: (lambda: limit)()

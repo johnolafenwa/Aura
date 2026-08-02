@@ -1,4 +1,4 @@
-def do_work(fail: bool) -> Result[int32, String]:
+def do_work(fail: bool) -> Result[int32, str]:
     if fail:
         return Result.Err("failed")
     return Result.Ok(0)

@@ -1,4 +1,4 @@
-def ok() -> Result[int32, String]:
+def ok() -> Result[int32, str]:
     return Result.Ok(1)
 
 def main() -> int32:

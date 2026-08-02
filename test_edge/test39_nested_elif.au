@@ -1,5 +1,5 @@
 # Test: elif inside elif inside if
-def categorize(x: int32, y: int32) -> String:
+def categorize(x: int32, y: int32) -> str:
     if x > 0:
         if y > 0:
             return "Q1"

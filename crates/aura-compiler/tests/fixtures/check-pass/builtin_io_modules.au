@@ -2,11 +2,11 @@ import io
 import fs
 import net
 
-def read_file(path: String) -> Result[String, io.Error]:
+def read_file(path: str) -> Result[str, io.Error]:
     with file = try fs.open(path):
         return file.read_all()
 
-def write_file(path: String, text: String) -> Result[None, io.Error]:
+def write_file(path: str, text: str) -> Result[None, io.Error]:
     with file = try fs.create(path):
         try file.write_all(text)
         try file.flush()

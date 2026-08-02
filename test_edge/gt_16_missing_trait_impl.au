@@ -2,10 +2,10 @@
 ## Expects: Compile error about Gadget not implementing Speakable
 
 trait Speakable:
-    def speak(self) -> String
+    def speak(self) -> str
 
 class Gadget:
-    name: String
+    name: str
 
 def announce[T: Speakable](item: T):
     print(item.speak())

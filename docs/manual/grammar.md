@@ -52,7 +52,7 @@ There are no hexadecimal, octal, binary, underscored, leading-dot, or trailing-d
 The reserved token words are:
 
 ```text
-class enum def trait impl import from mut borrow own indirect public extern opaque
+class enum def trait impl import from mut own indirect public extern opaque
 return assert if elif else and or not match case for in while break
 continue pass try with as true false
 ```
@@ -61,7 +61,7 @@ continue pass try with as true false
 be used as an identifier where the grammar expects one. `lambda` is lexed as
 an identifier but introduces a lambda at the start of an expression; member
 and named-argument positions may still use that spelling. `copy`, `self`,
-`None`, `Set`, `Self`, and `_` are lexed as identifiers and acquire special
+`None`, `set`, `Self`, and `_` are lexed as identifiers and acquire special
 meaning only in the positions defined below.
 
 ## Strings And F-Strings
@@ -225,7 +225,7 @@ bounded-type-parameter
 ```
 
 A function type contains parameter modes and types, but no names or default
-expressions: `def(int32, mut Counter, own String) -> bool`. A bare parameter
+expressions: `def(int32, mut Counter, own str) -> bool`. A bare parameter
 is shared, `mut` requires caller-visible mutable access, and `own` transfers
 the argument. Parameter names are not accepted inside the list. `indirect` is
 invalid on a function type because the value is already a code pointer.
@@ -320,10 +320,6 @@ return-annotation
 A receiver, when present, is the first method parameter. Bare `self` is the shared receiver, `mut self` is mutable, and `own self` is consuming. There is exactly one spelling per capability. A first method parameter written as `self: Type` is rejected rather than interpreted as an ordinary parameter; use one of the receiver forms above. Ordinary parameter capabilities appear after the colon: bare `T` is shared, `mut T` is mutable, and `own T` is consuming. Call sites pass the value directly and never prefix an argument with a capability.
 
 Bare means shared access for every type, including declaration-known copy types. Return annotations carry no capability: every return is an ordinary owned return.
-
-`borrow` is reserved and is not part of the accepted capability grammar. It is
-parsed only far enough to emit a diagnostic naming the accepted bare, `mut`,
-or `own` spelling.
 
 Parameter lists, calls, and return annotations do not accept trailing commas. Static checking further restricts duplicate names, default placement/availability, and mutable task targets.
 
@@ -455,7 +451,7 @@ target is rejected with `mut` iteration because the minimal tuple
 surface has no recursive writeback. Loop `else` clauses are not supported.
 For collection-place traversal, an absent modifier is shared iteration. Queue
 and Range use their iterable-specific bare defaults instead: Queue receives
-owned items, while Range yields independent copy `int32` values. Explicit
+owned items, while Range yields independent copy `int64` values. Explicit
 modifiers are rejected for Queue because it is a receive operation and for
 Range because there is no place or ownership transfer to modify.
 
@@ -624,7 +620,7 @@ prefix `not` binds looser than the comparison level, while `a not in b` is one
 comparison operator. Casts bind more tightly than arithmetic.
 
 Comma-separated index expressions are accepted only for `Array[T]`, where
-one exact `int32` coordinate is required per runtime axis. Other indexable
+one `int64` coordinate is required per runtime axis. Other indexable
 types retain one index expression.
 
 The one-colon bracket forms are owned slices. Each endpoint is optional, so
@@ -648,10 +644,9 @@ primary-expression
     | parenthesized-expression
     | list-literal
     | brace-literal
-    | explicit-set-literal
     | list-comprehension
     | set-comprehension
-    | map-comprehension ;
+    | dictionary-comprehension ;
 
 list-literal
     = "[", [ expression, { ",", expression } ], "]" ;
@@ -662,16 +657,13 @@ brace-literal
     | "{", expression, ":", expression,
       { ",", expression, ":", expression }, "}" ;
 
-explicit-set-literal
-    = "Set", "{", [ expression, { ",", expression } ], "}" ;
-
 list-comprehension
     = "[", expression, comprehension-clauses, "]" ;
 
 set-comprehension
     = "{", expression, comprehension-clauses, "}" ;
 
-map-comprehension
+dictionary-comprehension
     = "{", expression, ":", expression,
       comprehension-clauses, "}" ;
 
@@ -708,9 +700,8 @@ comma.
 expressions require parentheses; an unparenthesized comma is accepted only in
 an unpack target. `()` and a trailing comma on a multi-element tuple are
 rejected. A nonempty brace literal is a set when its first element is not
-followed by `:`, otherwise it is a map. `{}` parses as an empty map but may be
-contextually typed as an empty `Set[T]`; `Set{}` is the unambiguous empty-set
-form.
+followed by `:`, otherwise it is a dictionary. `{}` is an empty dictionary.
+An empty set uses the typed `set[T]()` constructor.
 
 A comprehension has one or more `for` clauses. A clause may be followed by
 zero or more `if` filters before another `for` clause. Clause targets use
@@ -720,7 +711,7 @@ contract. The non-conditional `or-expression` alternative keeps a following
 comprehension `if` distinct from a conditional expression; use parentheses when
 an iterable or filter itself needs a conditional expression. A lambda remains
 syntactically admissible as a component and is then subject to the ordinary
-iterable or exact-Boolean static rule. The result expression, or the map key
+iterable or exact-Boolean static rule. The result expression, or the dictionary key
 and value expressions, may be any expression. A comma after comprehension
 clauses, or a mixture of comma-separated literal entries and clauses, is
 invalid. Generator expressions are not part of this grammar.
@@ -742,7 +733,7 @@ A bare bracket suffix is initially an index expression. Static resolution
 reinterprets `function[Types]` as explicit specialization when `function`
 resolves to a generic named function and the complete expression is used as a
 function value. Otherwise the brackets remain indexing. Consequently,
-`Box[int32](value)` and `Result[int32, String].Ok(1)` specialize,
+`Box[int32](value)` and `Result[int32, str].Ok(1)` specialize,
 `show[int32]` may produce one concrete function value, and `value[index]`
 indexes.
 

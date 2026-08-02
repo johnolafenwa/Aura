@@ -1,8 +1,8 @@
-# Test: can we print an owned String field directly from main?
+# Test: can we print an owned str field directly from main?
 # (This should work since print should just borrow the value)
 
 class User:
-    name: String
+    name: str
 
 def main() -> int32:
     user = User(name="Alice")

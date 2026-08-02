@@ -25,13 +25,13 @@ enum Unit:
 class Converter[T: Processable]:
     input: T
 
-    def convert(self) -> Result[int32, String]:
+    def convert(self) -> Result[int32, str]:
         result = self.input.process()
         if result < 0:
             return Result.Err("negative result")
         return Result.Ok(result)
 
-def process_unit(unit: Unit) -> Result[int32, String]:
+def process_unit(unit: Unit) -> Result[int32, str]:
     match own unit:
         case Unit.Temp(t):
             converter = Converter(input=t)
@@ -40,7 +40,7 @@ def process_unit(unit: Unit) -> Result[int32, String]:
             converter = Converter(input=d)
             return converter.convert()
 
-def worker(jobs: Channel[Unit], results: Channel[String]):
+def worker(jobs: Channel[Unit], results: Channel[str]):
     for job in jobs:
         match process_unit(unit=job):
             case Result.Ok(v):
@@ -50,7 +50,7 @@ def worker(jobs: Channel[Unit], results: Channel[String]):
 
 def main() -> int32:
     jobs: Channel[Unit] = channel()
-    results: Channel[String] = channel()
+    results: Channel[str] = channel()
 
     task = spawn worker(jobs.clone(), results.clone())
 

@@ -24,7 +24,7 @@ Current compiler-backed analysis covers:
   go-to-definition, nested-clause completion, and owned result-type inference
 - incomplete comprehension clauses and filters retain exact `AU1101`
   diagnostics, broad recovery completions, and safe empty hover responses
-- owned Vec/String slices use compiler-owned result types, exact endpoint
+- owned list/str slices use compiler-owned result types, exact endpoint
   diagnostics, retained-source ownership analysis, and hover/navigation for
   names inside base and endpoint expressions
 - incomplete or reserved slice forms preserve the compiler's exact `AU2005`
@@ -60,11 +60,9 @@ does not classify or recreate semantic diagnostics independently.
 `task_ancestry` arrays. Their frame spans use zero-based `line`,
 `start_character`, and `end_character` coordinates and retain each frame's
 optional `file_path`; the bridge neither parses human backtrace notes nor
-reconstructs paths or ancestry. Updated compiler responses always include both
-arrays. Records from an older compatible semantic-interface-v2 compiler that
-omit the additive fields are treated as empty arrays. Compile-time diagnostics
-normally carry empty frame arrays today, while the populated shape is ready for
-editor workflows that present runtime diagnostics.
+reconstructs paths or ancestry. Compiler responses always include both arrays.
+Compile-time diagnostics normally carry empty frame arrays today, while the
+populated shape is ready for editor workflows that present runtime diagnostics.
 
 If the compiler process cannot be started, the lexical recovery layer provides only:
 

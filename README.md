@@ -71,7 +71,7 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/classes/methods.au`
   - execute user-defined instance and associated methods
 - `cargo run -p aura -- run examples/control_flow/match_literals.au`
-  - execute statement-form `match` over literal `bool`, integer, and `String` cases
+  - execute statement-form `match` over literal `bool`, integer, and `str` cases
 - `cargo run -p aura -- run examples/control_flow/conditional_expressions.au`
   - execute lazy Python-style conditional expressions with one unified result type
 - `cargo run -p aura -- run examples/enums/result_match.au`
@@ -88,26 +88,26 @@ Current compiler workflow:
   - execute contextually typed expression closures with by-value captures
 - `cargo run -p aura -- run examples/basics/len_and_str.au`
   - execute `int64` member lengths, `len(value) == value.len()`, Unicode-scalar
-    String length versus UTF-8 byte length, and `str(value)`
+    str length versus UTF-8 byte length, and `str(value)`
 - `cargo run -p aura -- run examples/collections/vec_basics.au`
-  - execute list literals, `Vec[T]` methods, and indexed element access
+  - execute list literals, `list[T]` methods, and indexed element access
 - `cargo run -p aura -- run examples/collections/vec_polish.au`
-  - execute negative Vec indexing, checked `int64`-length to `int32`-index
-    narrowing, non-copy cloned reads, mutable Vec iteration, `insert(...)`,
-    `swap(...)`, `reverse()`, `clear()`, richer Vec methods, and Vec equality
+  - execute negative list indexing, cast-free length-driven indexing,
+    non-copy cloned reads, mutable list iteration, `insert(...)`,
+    `swap(...)`, `reverse()`, `clear()`, richer list methods, and list equality
 - `cargo run -p aura -- run examples/collections/vec_algorithms.au`
   - execute stable natural/key sorting plus eager, source-retaining
-    `Vec.map(...)` and `Vec.filter(...)`
+    `list.map(...)` and `list.filter(...)`
 - `cargo run -p aura -- run examples/collections/comprehensions.au`
-  - execute eager owned list, set, and map comprehensions with filters and
+  - execute eager owned list, set, and dictionary comprehensions with filters and
     nested outer-major clauses
 - `cargo run -p aura -- run examples/collections/slices.au`
-  - execute owned Vec and Unicode-scalar String slices, omitted and negative
+  - execute owned list and Unicode-scalar str slices, omitted and negative
     endpoints, and source/result independence
 - `cargo run -p aura -- run examples/collections/map_basics.au`
-  - execute `Map[K, V]` literals, `items()` / `entries()`, `extend(...)`, and the maintained map method surface
+  - execute `dict[K, V]` literals, tuple-valued `items()`, `update(...)`, and the maintained dictionary method surface
 - `cargo run -p aura -- run examples/collections/set_basics.au`
-  - execute `Set[T]` literals, shared-borrow set iteration, and the maintained set method surface
+  - execute `set[T]` literals, shared set iteration, membership, and the maintained set method surface
 - `cargo run -p aura -- run examples/basics/pass_keyword.au`
   - execute the `pass` no-op statement in intentionally empty blocks
 - `cargo run -p aura -- run examples/basics/assertions.au`
@@ -165,10 +165,10 @@ Current compiler workflow:
     exact-shape/scalar kernels, and explicit wrapping/saturating integer modes
 - `cargo run -p aura -- run examples/strings/string_methods.au`
   - execute single-quoted strings, `int64` Unicode-scalar `len()`, `int64`
-    UTF-8 `byte_len()`, and the maintained `String` method surface including
+    UTF-8 `byte_len()`, and the maintained `str` method surface including
     `split`, `replace`, case conversion, and prefix/suffix stripping
 - `cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au`
-  - execute parsing builtins, scalar/boolean `.to_string()`, and `String.join(...)`
+  - execute parsing builtins, scalar/boolean `.to_string()`, and `str.join(...)`
 - `cargo run -p aura -- run examples/io/read_text_file.au`
   - execute the maintained builtin file I/O surface through `fs.exists(...)`, `fs.read_to_string(...)`, and `io.write(...)`
 - `cargo run -p aura -- run examples/io/bytes_file_io.au`

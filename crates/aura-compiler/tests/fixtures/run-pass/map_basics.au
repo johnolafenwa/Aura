@@ -13,15 +13,17 @@ def print_int_option(value: Option[int32]):
             print(-1)
 
 def main() -> int32:
-    mut counts: Map[String, int32] = {}
+    mut counts: dict[str, int32] = {}
     print_bool(counts.is_empty())
     counts["aura"] = 1
     counts["agents"] = 2
     print(counts["aura"])
     print_int_option(counts.get("agents"))
-    print_bool(counts.contains_key("missing"))
+    print_bool(("missing" in counts))
     print(counts.len())
-    print_int_option(counts.set("aura", 3))
+    previous_aura = counts.get("aura")
+    counts["aura"] = 3
+    print_int_option(previous_aura)
     print(counts["aura"])
     print_int_option(counts.remove("agents"))
     print_bool(counts == {"aura": 3})

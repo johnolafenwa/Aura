@@ -90,7 +90,9 @@ Each dependency table entry must choose exactly one source:
 
 `path` and `git` cannot appear together. A git entry may choose at most one of `rev`, `tag`, or `branch`; selectors without `git` are invalid.
 
-String version dependencies such as `util = "1.2.0"` and detailed `version =` dependencies are registry forms and are not implemented. Aura 0.2 has no registry resolution, publish, or install flow.
+String-valued version dependencies such as `util = "1.2.0"` and detailed
+`version =` dependencies are registry forms and are not implemented. Aura 0.2
+has no registry resolution, publish, or install flow.
 
 The dependency table key is not a free alias: it must exactly match the resolved dependency's `[package].name`. This keeps the manifest name and import root identical. A dependency package named `util` is imported with that prefix:
 
@@ -180,7 +182,10 @@ An all-dependency update refreshes tag, branch, and default-`main` selectors. Ex
 
 A git source is either an explicit URL/SSH form or an existing local path relative to the declaring manifest. Empty sources, option-like sources beginning with `-`, invalid revision text, and unsafe tag/branch spellings are rejected before invoking git.
 
-Aura disables interactive git credential prompts so package commands fail rather than hang waiting for terminal input. Each git command has a 60-second default timeout. Set `AURA_GIT_TIMEOUT_MS` to a positive millisecond value to override that timeout.
+Aura disables interactive git credential prompts so package commands fail
+without waiting for terminal input. Each git command has a 60-second default
+timeout. Set `AURA_GIT_TIMEOUT_MS` to a positive millisecond value to override
+that timeout.
 
 Resolved revisions are materialized in a content-addressed cache under `$XDG_CACHE_HOME/aura/git`, otherwise `$HOME/.cache/aura/git`, with a temporary-directory fallback when needed. Cached entries are validated against their recorded revision. Aura refuses symlinked cache paths, symlinked manifests, and symlinked content in a git checkout; clones also disable symlink materialization. Concurrent cache placement uses a compatible existing checkout only when it validates to the same revision.
 

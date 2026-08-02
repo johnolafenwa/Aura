@@ -1,8 +1,8 @@
-def get_name() -> String:
+def get_name() -> str:
     return "Aura"
 
 class Person:
-    name: String
+    name: str
     age: int32
 
 def main() -> int32:

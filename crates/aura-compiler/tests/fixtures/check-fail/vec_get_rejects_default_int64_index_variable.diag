@@ -1,5 +1,0 @@
-error[AU2002]: vector indices must have type `int32`, found `int64`
- --> crates/aura-compiler/tests/fixtures/check-fail/vec_get_rejects_default_int64_index_variable.au:4:22
-  |
-4 |     print(values.get(index))
-  |                      ^

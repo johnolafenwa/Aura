@@ -5,13 +5,13 @@ def main():
     utf8 = text.to_bytes()
     print(bytes.hex_encode(value=utf8))
 
-    match String.from_bytes(bytes=utf8):
+    match str.from_bytes(bytes=utf8):
         case Result.Ok(decoded):
             print(bytes.hex_encode(decoded.to_bytes()))
         case Result.Err(error):
             print(error)
 
-    binary: Vec[uint8] = [0, 1, 254, 255]
+    binary: list[uint8] = [0, 1, 254, 255]
     encoded_hex = bytes.hex_encode(binary)
     print(encoded_hex)
     match bytes.hex_decode(text="0001FeFf"):
@@ -35,8 +35,8 @@ def main():
     print(bytes.hex_encode(digest))
     print(bytes.hex_encode(bytes.sha256_string(text=abc)))
 
-    empty: Vec[uint8] = []
-    match String.from_bytes(empty):
+    empty: list[uint8] = []
+    match str.from_bytes(empty):
         case Result.Ok(decoded):
             print(f"empty-bytes:{decoded.byte_len()}")
         case Result.Err(error):

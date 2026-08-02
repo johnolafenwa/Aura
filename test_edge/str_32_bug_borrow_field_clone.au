@@ -1,11 +1,11 @@
-# BUG: Cannot clone String field on borrow param in free function
+# BUG: Cannot clone str field on borrow param in free function
 # Expected: h.text.clone() should work on a borrowed parameter
 # Actual: "cannot move non-copy field out of borrowed value"
 
 class Holder:
-    text: String
+    text: str
 
-def clone_text(h: Holder) -> String:
+def clone_text(h: Holder) -> str:
     return h.text.clone()
 
 def main() -> int32:

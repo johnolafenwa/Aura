@@ -62,7 +62,7 @@ def double(value: int32) -> float64:
     return value.to_float() * 2.0
 
 def main():
-    mut values = Array[int32].from_vec(values=[1, 2, 3, 4], shape=[2, 2])
+    mut values = Array[int32].from_list(values=[1, 2, 3, 4], shape=[2, 2])
     copied = values.clone()
     values.set(index=[0, 1], value=9)
     values.fill(value=2)
@@ -166,7 +166,7 @@ fn tuple_native_ownership_gates_separate_public_projection_from_private_destruct
     assert!(user_place.contains("whole-tuple destructuring"));
 
     let classes = HashMap::new();
-    let tuple_type = Type::Tuple(vec![Type::named("int64"), Type::named("String")]);
+    let tuple_type = Type::Tuple(vec![Type::named("int64"), Type::named("str")]);
     assert_eq!(
         direct_type(&tuple_type, &classes),
         Some(DirectType::Opaque(tuple_type.clone())),
@@ -175,7 +175,7 @@ fn tuple_native_ownership_gates_separate_public_projection_from_private_destruct
     assert!(validate_rvalue(
         &Rvalue::TupleLiteral {
             elements: vec![Operand::Int(1), Operand::String("one".to_string())],
-            element_types: vec![Type::named("int64"), Type::named("String")],
+            element_types: vec![Type::named("int64"), Type::named("str")],
         },
         &classes,
     )
@@ -183,7 +183,7 @@ fn tuple_native_ownership_gates_separate_public_projection_from_private_destruct
     let arity_error = validate_rvalue(
         &Rvalue::TupleLiteral {
             elements: vec![Operand::Int(1)],
-            element_types: vec![Type::named("int64"), Type::named("String")],
+            element_types: vec![Type::named("int64"), Type::named("str")],
         },
         &classes,
     )
@@ -214,7 +214,7 @@ fn tuple_native_ownership_gates_separate_public_projection_from_private_destruct
         &Rvalue::TupleTakeElement {
             place: "pair".to_string(),
             index: 1,
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
         },
         &classes,
     )
@@ -224,7 +224,7 @@ fn tuple_native_ownership_gates_separate_public_projection_from_private_destruct
         &Rvalue::TupleTakeElement {
             place: "%t4".to_string(),
             index: 1,
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
         },
         &classes,
     )
@@ -356,7 +356,7 @@ fn heterogeneous_match_arm_mutable_locals_keep_distinct_direct_slots() {
 
 #[test]
 fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
-    let tuple_type = Type::Tuple(vec![Type::named("int64"), Type::named("String")]);
+    let tuple_type = Type::Tuple(vec![Type::named("int64"), Type::named("str")]);
     let module = |instructions, local_types| crate::mir::MirModule {
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -385,7 +385,7 @@ fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
                 target: "pair".to_string(),
                 value: Rvalue::TupleLiteral {
                     elements: vec![Operand::Int(7), Operand::String("seven".to_string())],
-                    element_types: vec![Type::named("int64"), Type::named("String")],
+                    element_types: vec![Type::named("int64"), Type::named("str")],
                 },
             },
             Instruction::Assign {
@@ -432,7 +432,7 @@ fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
                 target: "pair".to_string(),
                 value: Rvalue::TupleLiteral {
                     elements: vec![Operand::Int(7), Operand::String("seven".to_string())],
-                    element_types: vec![Type::named("int64"), Type::named("String")],
+                    element_types: vec![Type::named("int64"), Type::named("str")],
                 },
             },
             Instruction::Assign {
@@ -444,7 +444,7 @@ fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
                 value: Rvalue::TupleTakeElement {
                     place: "%t0".to_string(),
                     index: 1,
-                    element_type: Type::named("String"),
+                    element_type: Type::named("str"),
                 },
             },
         ],
@@ -459,7 +459,7 @@ fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
             },
             MirLocalType {
                 name: "label".to_string(),
-                ty: Type::named("String"),
+                ty: Type::named("str"),
             },
         ],
     );
@@ -478,25 +478,25 @@ fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
 fn tuple_specialized_trait_dispatch_emits_structural_runtime_matchers() {
     let source = r#"
 trait Label:
-    def label(self) -> String
+    def label(self) -> str
 
 class Envelope[T]:
     payload: T
 
-impl Label for Envelope[(int32, String)]:
-    def label(self) -> String:
+impl Label for Envelope[(int32, str)]:
+    def label(self) -> str:
         return "integer then string"
 
-impl Label for Envelope[(String, int32)]:
-    def label(self) -> String:
+impl Label for Envelope[(str, int32)]:
+    def label(self) -> str:
         return "string then integer"
 
-def describe[T: Label](value: T) -> String:
+def describe[T: Label](value: T) -> str:
     return value.label()
 
 def main():
-    print(describe(Envelope[(int32, String)](payload=(7, "seven"))))
-    print(describe(Envelope[(String, int32)](payload=("eight", 8))))
+    print(describe(Envelope[(int32, str)](payload=(7, "seven"))))
+    print(describe(Envelope[(str, int32)](payload=("eight", 8))))
 "#;
 
     let mir = lower_source_to_mir(source).expect("tuple-specialized dispatch should lower");
@@ -532,8 +532,8 @@ def main():
             .expect("canonical structural runtime type tag")
             .to_string()
     };
-    let int_then_string = tuple_payload(vec![Type::named("int32"), Type::named("String")]);
-    let string_then_int = tuple_payload(vec![Type::named("String"), Type::named("int32")]);
+    let int_then_string = tuple_payload(vec![Type::named("int32"), Type::named("str")]);
+    let string_then_int = tuple_payload(vec![Type::named("str"), Type::named("int32")]);
     assert!(
         data_occurrences(int_then_string.as_bytes()) >= 2,
         "direct dispatch must encode a tuple matcher in addition to the enclosing class pattern"
@@ -647,7 +647,7 @@ fn direct_select_packages_variadic_sources_into_the_owned_tuple_abi() {
     );
 
     let nonrepeatable_task_source = r#"
-def worker() -> String:
+def worker() -> str:
     return "value"
 
 def main() -> int32:
@@ -673,10 +673,7 @@ fn direct_select_inference_preserves_queue_and_task_payload_types() {
     let variable_types = HashMap::from([
         (
             "messages".to_string(),
-            DirectType::Opaque(Type::Named(
-                "Queue".to_string(),
-                vec![Type::named("String")],
-            )),
+            DirectType::Opaque(Type::Named("Queue".to_string(), vec![Type::named("str")])),
         ),
         (
             "worker".to_string(),
@@ -712,7 +709,7 @@ fn direct_select_inference_preserves_queue_and_task_payload_types() {
         ),
         Some(DirectType::Opaque(Type::Named(
             "SelectOutcome".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            vec![Type::named("str"), Type::named("int32")],
         ))),
         "native result inference must preserve the homogeneous payload type of each source family"
     );
@@ -724,10 +721,10 @@ fn direct_random_api_uses_dedicated_borrowed_runtime_symbols() {
 import random
 
 class Item:
-    label: String
+    label: str
 
 class Holder:
-    values: Vec[Item]
+    values: list[Item]
 
 def main() -> int32:
     mut rng = random.Rng(seed=42)
@@ -797,7 +794,7 @@ class Rng:
     def next_int(self, lo: int64, hi: int64) -> int64:
         return self.value
 
-    def next_float(self) -> String:
+    def next_float(self) -> str:
         return "local"
 
     def shuffle(self, value: int64) -> int64:
@@ -1001,7 +998,7 @@ def relay[T](value: own T) -> T:
 def int_worker() -> int64:
     return 1
 
-def string_worker() -> String:
+def string_worker() -> str:
     return "value"
 
 def main() -> int32:
@@ -1009,7 +1006,7 @@ def main() -> int32:
         int_task = group.start(relay[int64], 1)
         int_result = int_task.result_or(0)
 
-        string_task = group.start_with_stack(262144, relay[String], "value")
+        string_task = group.start_with_stack(262144, relay[str], "value")
         string_result = string_task.result_or("")
 
         int_tasks = [group.start(int_worker)]
@@ -1283,8 +1280,8 @@ fn host_builtin_return_types_cover_the_control_plane_surface() {
         "bytes::base64_decode",
         "bytes::sha256",
         "bytes::sha256_string",
-        "String.to_bytes",
-        "String.from_bytes",
+        "str.to_bytes",
+        "str.from_bytes",
         "json::is_valid",
         "json::stringify_map",
         "json::parse_string_map",
@@ -1304,13 +1301,9 @@ fn host_builtin_return_types_cover_the_control_plane_surface() {
     }
     assert!(super::host_builtin_return_type("missing::call").is_none());
     assert_eq!(
-        super::builtin_opaque_member_return_type(
-            &Type::named("String"),
-            "to_bytes",
-            &HashMap::new()
-        ),
+        super::builtin_opaque_member_return_type(&Type::named("str"), "to_bytes", &HashMap::new()),
         Some(DirectType::Opaque(Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
             vec![Type::named("uint8")],
         )))
     );
@@ -1601,7 +1594,7 @@ def main() -> int32:
 fn ticket9_uint64_opaque_boundaries_use_typed_boxing_without_generic_detours() {
     let source = r#"
 def main() -> int32:
-    values: Vec[uint64] = [18446744073709551615]
+    values: list[uint64] = [18446744073709551615]
     maybe: Option[uint64] = Option.Some(18446744073709551615)
     print(values.len())
     print(maybe != Option.None)
@@ -1640,7 +1633,7 @@ fn direct_backend_emits_contextual_none_and_unit_equality() {
 fn direct_field_type_rejects_malformed_builtin_map_entry_shapes_without_panicking() {
     let malformed = DirectType::Opaque(Type::Named(
         "MapEntry".to_string(),
-        vec![Type::named("String")],
+        vec![Type::named("str")],
     ));
     assert!(direct_field_type(&malformed, "key", &HashMap::new()).is_none());
     assert!(direct_field_type(&malformed, "value", &HashMap::new()).is_none());
@@ -1649,7 +1642,7 @@ fn direct_field_type_rejects_malformed_builtin_map_entry_shapes_without_panickin
 #[test]
 fn direct_backend_emits_retain_and_release_hooks_for_opaque_call_and_local_flow() {
     let source = r#"
-def echo(value: String):
+def echo(value: str):
     print(value)
 
 def main() -> int32:
@@ -1824,8 +1817,8 @@ def main() -> int32:
     mut numbers = [1, 2]
     print(numbers.len())
     print(numbers.is_empty())
-    mut clone_numbers = numbers.clone()
-    clone_numbers.push(3)
+    mut clone_numbers = numbers.copy()
+    clone_numbers.append(3)
     print(clone_numbers.pop())
     print(clone_numbers.get(0))
     print(clone_numbers[1])
@@ -1843,29 +1836,29 @@ def main() -> int32:
     mut counts = {"a": 1}
     print(counts.len())
     print(counts.is_empty())
-    copy_counts = counts.clone()
+    copy_counts = counts.copy()
     print(copy_counts.get("a"))
     print(copy_counts["a"])
-    print(counts.set("a", 2))
+    print(counts["a"])
+    counts["a"] = 2
     counts["b"] = 3
     print(counts.remove("a"))
-    print(counts.contains_key("b"))
+    print("b" in counts)
     print(counts.keys().len())
     print(counts.values().len())
     print(counts.items().len())
-    print(counts.entries().len())
-    counts.extend({"c": 4})
+    counts.update({"c": 4})
     counts.clear()
     print(counts.is_empty())
 
-    mut seen = Set{"x"}
+    mut seen = {"x"}
     print(seen.len())
     print(seen.is_empty())
-    copy_seen = seen.clone()
-    print(copy_seen.contains("x"))
-    print(seen.insert("y"))
+    copy_seen = seen.copy()
+    print("x" in copy_seen)
+    print(seen.add("y"))
     print(seen.remove("x"))
-    print(seen.contains("y"))
+    print("y" in seen)
 
     jobs = Queue[int32]()
     jobs_copy = jobs
@@ -1916,7 +1909,7 @@ def main() -> int32:
     copy_into(source=first, target=second)
     print(second.value)
 
-    mut total: int32 = 0
+    mut total: int64 = 0
     for i in range(stop=3):
         total += i
     print(total)
@@ -2050,7 +2043,7 @@ fn direct_ffi_codegen_embeds_call_metadata_and_uses_only_the_runtime_adapter() {
 #[test]
 fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership() {
     let handle_ty = Type::named("ProcessHandle");
-    let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+    let bytes_ty = Type::Named("list".to_string(), vec![Type::named("uint8")]);
     let module = crate::mir::MirModule {
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -2267,7 +2260,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
         "direct backend extern argument 1 unexpectedly requests writeback"
     );
 
-    let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+    let bytes_ty = Type::Named("list".to_string(), vec![Type::named("uint8")]);
     let missing_mut_writeback = crate::mir::MirModule {
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -2363,10 +2356,10 @@ fn direct_ffi_source_types_pin_the_v0_abi_and_capability_contract() {
             .ffi_type,
         FfiType::Unit
     );
-    let string = direct_ffi_type_for_source(&Type::named("String"), Some(MirReceiverKind::Borrow))
-        .expect("shared String is a UTF-8 view");
+    let string = direct_ffi_type_for_source(&Type::named("str"), Some(MirReceiverKind::Borrow))
+        .expect("shared str is a UTF-8 view");
     assert_eq!(string.ffi_type, FfiType::StringView);
-    let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+    let bytes_ty = Type::Named("list".to_string(), vec![Type::named("uint8")]);
     assert_eq!(
         direct_ffi_type_for_source(&bytes_ty, Some(MirReceiverKind::Borrow))
             .expect("shared bytes are a const view")
@@ -2394,8 +2387,8 @@ fn direct_ffi_source_types_pin_the_v0_abi_and_capability_contract() {
         );
     }
     assert_eq!(
-        direct_ffi_type_for_source(&Type::named("String"), Some(MirReceiverKind::BorrowMut)),
-        Err("direct backend can pass `String` through FFI v0 only as a shared view".to_string())
+        direct_ffi_type_for_source(&Type::named("str"), Some(MirReceiverKind::BorrowMut)),
+        Err("direct backend can pass `str` through FFI v0 only as a shared view".to_string())
     );
     assert_eq!(
         direct_ffi_type_for_source(
@@ -2409,18 +2402,18 @@ fn direct_ffi_source_types_pin_the_v0_abi_and_capability_contract() {
     );
     assert_eq!(
         direct_ffi_type_for_source(&bytes_ty, Some(MirReceiverKind::Value)),
-        Err("direct backend cannot pass `own Vec[uint8]` through FFI v0".to_string())
+        Err("direct backend cannot pass `own list[uint8]` through FFI v0".to_string())
     );
     assert_eq!(
         direct_ffi_type_for_source(&bytes_ty, None),
-        Err("direct backend cannot return `Vec[uint8]` through FFI v0".to_string())
+        Err("direct backend cannot return `list[uint8]` through FFI v0".to_string())
     );
     assert_eq!(
         direct_ffi_type_for_source(
-            &Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            &Type::Named("list".to_string(), vec![Type::named("int32")]),
             Some(MirReceiverKind::Borrow),
         ),
-        Err("direct backend cannot lower `Vec[int32]` through FFI v0".to_string())
+        Err("direct backend cannot lower `list[int32]` through FFI v0".to_string())
     );
     assert_eq!(
         direct_ffi_type_for_source(
@@ -2508,14 +2501,14 @@ fn module_with_main_member_call_result_type(
 fn direct_backend_internal_collection_member_surface_compiles() {
     let string_byte_len = module_with_main_member_call_result_type(
         "text",
-        Type::named("String"),
+        Type::named("str"),
         Rvalue::Use(Operand::String("é🎉e\u{301}".to_string())),
         Type::named("int64"),
         "byte_len",
         Vec::new(),
     );
     assert!(!emit_host_object(&string_byte_len)
-        .expect("String.byte_len() should compile directly")
+        .expect("str.byte_len() should compile directly")
         .is_empty());
 
     let slice_args = || {
@@ -2554,19 +2547,19 @@ fn direct_backend_internal_collection_member_surface_compiles() {
     };
     let string_slice = module_with_main_member_call_result_type(
         "text",
-        Type::named("String"),
+        Type::named("str"),
         Rvalue::Use(Operand::String("Aé🙂Z".to_string())),
-        Type::named("String"),
+        Type::named("str"),
         "__slice",
         slice_args(),
     );
     assert!(!emit_host_object(&string_slice)
-        .expect("internal owned String slicing should compile directly")
+        .expect("internal owned str slicing should compile directly")
         .is_empty());
 
     let vec_slice = module_with_main_member_call_result_type(
         "values",
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Type::Named("list".to_string(), vec![Type::named("int32")]),
         Rvalue::VecLiteral {
             element_type: Type::named("int32"),
             elements: vec![
@@ -2576,7 +2569,7 @@ fn direct_backend_internal_collection_member_surface_compiles() {
                 Operand::Int(4),
             ],
         },
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Type::Named("list".to_string(), vec![Type::named("int32")]),
         "__slice",
         slice_args(),
     );
@@ -2586,7 +2579,7 @@ fn direct_backend_internal_collection_member_surface_compiles() {
 
     let vec_index_option = module_with_main_member_call_result_type(
         "values",
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Type::Named("list".to_string(), vec![Type::named("int32")]),
         Rvalue::VecLiteral {
             element_type: Type::named("int32"),
             elements: vec![Operand::Int(1), Operand::Int(2)],
@@ -2605,7 +2598,7 @@ fn direct_backend_internal_collection_member_surface_compiles() {
 
     let vec_set_index = module_with_main_member_call_result_type(
         "values",
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Type::Named("list".to_string(), vec![Type::named("int32")]),
         Rvalue::VecLiteral {
             element_type: Type::named("int32"),
             elements: vec![Operand::Int(1), Operand::Int(2)],
@@ -2642,11 +2635,11 @@ fn direct_backend_internal_collection_member_surface_compiles() {
     let map_index = module_with_main_member_call_result_type(
         "counts",
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         ),
         Rvalue::MapLiteral {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![MirMapEntry {
                 key: Operand::String("a".to_string()),
@@ -2680,11 +2673,11 @@ fn direct_backend_internal_collection_member_surface_compiles() {
     let map_set_index = module_with_main_member_call_result_type(
         "counts",
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         ),
         Rvalue::MapLiteral {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![MirMapEntry {
                 key: Operand::String("a".to_string()),
@@ -2722,12 +2715,12 @@ fn direct_backend_internal_collection_member_surface_compiles() {
 
     let set_index_option = module_with_main_member_call_result_type(
         "seen",
-        Type::Named("Set".to_string(), vec![Type::named("String")]),
+        Type::Named("set".to_string(), vec![Type::named("str")]),
         Rvalue::SetLiteral {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: vec![Operand::String("x".to_string())],
         },
-        Type::Named("Option".to_string(), vec![Type::named("String")]),
+        Type::Named("Option".to_string(), vec![Type::named("str")]),
         "__index_option",
         vec![MirArg {
             name: None,
@@ -2870,7 +2863,7 @@ fn direct_backend_internal_collection_member_errors_are_reported() {
         (
             module_with_main_member_call_result_type(
                 "values",
-                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                Type::Named("list".to_string(), vec![Type::named("int32")]),
                 Rvalue::VecLiteral {
                     element_type: Type::named("int32"),
                     elements: vec![Operand::Int(1)],
@@ -2884,7 +2877,7 @@ fn direct_backend_internal_collection_member_errors_are_reported() {
         (
             module_with_main_member_call_result_type(
                 "values",
-                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                Type::Named("list".to_string(), vec![Type::named("int32")]),
                 Rvalue::VecLiteral {
                     element_type: Type::named("int32"),
                     elements: vec![Operand::Int(1)],
@@ -2903,11 +2896,11 @@ fn direct_backend_internal_collection_member_errors_are_reported() {
             module_with_main_member_call_result_type(
                 "counts",
                 Type::Named(
-                    "Map".to_string(),
-                    vec![Type::named("String"), Type::named("int32")],
+                    "dict".to_string(),
+                    vec![Type::named("str"), Type::named("int32")],
                 ),
                 Rvalue::MapLiteral {
-                    key_type: Type::named("String"),
+                    key_type: Type::named("str"),
                     value_type: Type::named("int32"),
                     entries: vec![MirMapEntry {
                         key: Operand::String("a".to_string()),
@@ -2927,12 +2920,12 @@ fn direct_backend_internal_collection_member_errors_are_reported() {
         (
             module_with_main_member_call_result_type(
                 "seen",
-                Type::Named("Set".to_string(), vec![Type::named("String")]),
+                Type::Named("set".to_string(), vec![Type::named("str")]),
                 Rvalue::SetLiteral {
-                    element_type: Type::named("String"),
+                    element_type: Type::named("str"),
                     elements: vec![Operand::String("x".to_string())],
                 },
-                Type::Named("Option".to_string(), vec![Type::named("String")]),
+                Type::Named("Option".to_string(), vec![Type::named("str")]),
                 "__index_option",
                 Vec::new(),
             ),
@@ -2951,28 +2944,28 @@ fn direct_backend_internal_collection_member_errors_are_reported() {
 
 #[test]
 fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_runtime_paths() {
-    let string_ty = Type::named("String");
+    let string_ty = Type::named("str");
     let string_value = Rvalue::Use(Operand::String("Aura".to_string()));
-    let vec_ty = Type::Named("Vec".to_string(), vec![Type::named("int32")]);
+    let vec_ty = Type::Named("list".to_string(), vec![Type::named("int32")]);
     let vec_value = Rvalue::VecLiteral {
         element_type: Type::named("int32"),
         elements: vec![Operand::Int(1), Operand::Int(2)],
     };
     let map_ty = Type::Named(
-        "Map".to_string(),
-        vec![Type::named("String"), Type::named("int32")],
+        "dict".to_string(),
+        vec![Type::named("str"), Type::named("int32")],
     );
     let map_value = Rvalue::MapLiteral {
-        key_type: Type::named("String"),
+        key_type: Type::named("str"),
         value_type: Type::named("int32"),
         entries: vec![MirMapEntry {
             key: Operand::String("count".to_string()),
             value: Operand::Int(1),
         }],
     };
-    let set_ty = Type::Named("Set".to_string(), vec![Type::named("String")]);
+    let set_ty = Type::Named("set".to_string(), vec![Type::named("str")]);
     let set_value = Rvalue::SetLiteral {
-        element_type: Type::named("String"),
+        element_type: Type::named("str"),
         elements: vec![Operand::String("ready".to_string())],
     };
     let channel_ty = Type::Named("Queue".to_string(), vec![Type::named("int32")]);
@@ -2987,7 +2980,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
     };
     let cases = vec![
         (
-            "String.len",
+            "str.len",
             module_with_main_member_call_result_type(
                 "text",
                 string_ty.clone(),
@@ -2998,7 +2991,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "String.byte_len",
+            "str.byte_len",
             module_with_main_member_call_result_type(
                 "text",
                 string_ty.clone(),
@@ -3009,7 +3002,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "String.contains",
+            "str.contains",
             module_with_main_member_call_result_type(
                 "text",
                 string_ty.clone(),
@@ -3024,7 +3017,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "String.starts_with",
+            "str.starts_with",
             module_with_main_member_call_result_type(
                 "text",
                 string_ty.clone(),
@@ -3039,7 +3032,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "String.ends_with",
+            "str.ends_with",
             module_with_main_member_call_result_type(
                 "text",
                 string_ty.clone(),
@@ -3054,12 +3047,12 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "String.split",
+            "str.split",
             module_with_main_member_call_result_type(
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::Named("Vec".to_string(), vec![Type::named("String")]),
+                Type::Named("list".to_string(), vec![Type::named("str")]),
                 "split",
                 vec![MirArg {
                     name: None,
@@ -3069,12 +3062,12 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "String.replace",
+            "str.replace",
             module_with_main_member_call_result_type(
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::named("String"),
+                Type::named("str"),
                 "replace",
                 vec![
                     MirArg {
@@ -3091,12 +3084,12 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "String.add",
+            "str.add",
             module_with_main_member_call_result_type(
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::named("String"),
+                Type::named("str"),
                 "add",
                 vec![MirArg {
                     name: None,
@@ -3106,34 +3099,34 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "String.to_lower",
+            "str.to_lower",
             module_with_main_member_call_result_type(
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::named("String"),
+                Type::named("str"),
                 "to_lower",
                 Vec::new(),
             ),
         ),
         (
-            "String.to_upper",
+            "str.to_upper",
             module_with_main_member_call_result_type(
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::named("String"),
+                Type::named("str"),
                 "to_upper",
                 Vec::new(),
             ),
         ),
         (
-            "String.strip_prefix",
+            "str.strip_prefix",
             module_with_main_member_call_result_type(
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("String")]),
+                Type::Named("Option".to_string(), vec![Type::named("str")]),
                 "strip_prefix",
                 vec![MirArg {
                     name: None,
@@ -3143,12 +3136,12 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "String.strip_suffix",
+            "str.strip_suffix",
             module_with_main_member_call_result_type(
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("String")]),
+                Type::Named("Option".to_string(), vec![Type::named("str")]),
                 "strip_suffix",
                 vec![MirArg {
                     name: None,
@@ -3158,18 +3151,18 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "String.trim",
+            "str.trim",
             module_with_main_member_call_result_type(
                 "text",
                 string_ty.clone(),
                 Rvalue::Use(Operand::String("  Aura  ".to_string())),
-                Type::named("String"),
+                Type::named("str"),
                 "trim",
                 Vec::new(),
             ),
         ),
         (
-            "Vec.len",
+            "list.len",
             module_with_main_member_call_result_type(
                 "values",
                 vec_ty.clone(),
@@ -3180,7 +3173,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Vec.is_empty",
+            "list.is_empty",
             module_with_main_member_call_result_type(
                 "values",
                 vec_ty.clone(),
@@ -3191,13 +3184,13 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Vec.push",
+            "list.append",
             module_with_main_member_call_result_type(
                 "values",
                 vec_ty.clone(),
                 vec_value.clone(),
                 Type::Unit,
-                "push",
+                "append",
                 vec![MirArg {
                     name: None,
                     value: Operand::Int(3),
@@ -3206,18 +3199,18 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Vec.pop",
+            "list.pop",
             module_with_main_member_call_result_type(
                 "values",
                 vec_ty.clone(),
                 vec_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                Type::named("int32"),
                 "pop",
                 Vec::new(),
             ),
         ),
         (
-            "Vec.get",
+            "list.get",
             module_with_main_member_call_result_type(
                 "values",
                 vec_ty.clone(),
@@ -3232,7 +3225,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Vec.set",
+            "list.set",
             module_with_main_member_call_result_type(
                 "values",
                 vec_ty.clone(),
@@ -3254,12 +3247,12 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Vec.remove",
+            "list.remove",
             module_with_main_member_call_result_type(
                 "values",
                 vec_ty.clone(),
                 vec_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                Type::Unit,
                 "remove",
                 vec![MirArg {
                     name: None,
@@ -3269,12 +3262,12 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Vec.swap",
+            "list.swap",
             module_with_main_member_call_result_type(
                 "values",
                 vec_ty.clone(),
                 vec_value.clone(),
-                Type::named("bool"),
+                Type::Unit,
                 "swap",
                 vec![
                     MirArg {
@@ -3291,7 +3284,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Vec.contains",
+            "list.contains",
             module_with_main_member_call_result_type(
                 "values",
                 vec_ty.clone(),
@@ -3306,12 +3299,12 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Vec.insert",
+            "list.insert",
             module_with_main_member_call_result_type(
                 "values",
                 vec_ty.clone(),
                 vec_value.clone(),
-                Type::named("bool"),
+                Type::Unit,
                 "insert",
                 vec![
                     MirArg {
@@ -3328,7 +3321,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Vec.clear",
+            "list.clear",
             module_with_main_member_call_result_type(
                 "values",
                 vec_ty.clone(),
@@ -3339,7 +3332,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Vec.reverse",
+            "list.reverse",
             module_with_main_member_call_result_type(
                 "values",
                 vec_ty.clone(),
@@ -3350,7 +3343,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Map.len",
+            "dict.len",
             module_with_main_member_call_result_type(
                 "counts",
                 map_ty.clone(),
@@ -3361,7 +3354,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Map.is_empty",
+            "dict.is_empty",
             module_with_main_member_call_result_type(
                 "counts",
                 map_ty.clone(),
@@ -3372,7 +3365,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Map.get",
+            "dict.get",
             module_with_main_member_call_result_type(
                 "counts",
                 map_ty.clone(),
@@ -3387,7 +3380,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Map.set",
+            "dict.set",
             module_with_main_member_call_result_type(
                 "counts",
                 map_ty.clone(),
@@ -3409,7 +3402,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Map.remove",
+            "dict.remove",
             module_with_main_member_call_result_type(
                 "counts",
                 map_ty.clone(),
@@ -3424,7 +3417,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Map.contains_key",
+            "dict membership",
             module_with_main_member_call_result_type(
                 "counts",
                 map_ty.clone(),
@@ -3439,63 +3432,43 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Map.keys",
+            "dict.keys",
             module_with_main_member_call_result_type(
                 "counts",
                 map_ty.clone(),
                 map_value.clone(),
-                Type::Named("Vec".to_string(), vec![Type::named("String")]),
+                Type::Named("list".to_string(), vec![Type::named("str")]),
                 "keys",
                 Vec::new(),
             ),
         ),
         (
-            "Map.values",
+            "dict.values",
             module_with_main_member_call_result_type(
                 "counts",
                 map_ty.clone(),
                 map_value.clone(),
-                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                Type::Named("list".to_string(), vec![Type::named("int32")]),
                 "values",
                 Vec::new(),
             ),
         ),
         (
-            "Map.items",
+            "dict.items",
             module_with_main_member_call_result_type(
                 "counts",
                 map_ty.clone(),
                 map_value.clone(),
                 Type::Named(
-                    "Vec".to_string(),
-                    vec![Type::Named(
-                        "MapEntry".to_string(),
-                        vec![Type::named("String"), Type::named("int32")],
-                    )],
+                    "list".to_string(),
+                    vec![Type::Tuple(vec![Type::named("str"), Type::named("int32")])],
                 ),
                 "items",
                 Vec::new(),
             ),
         ),
         (
-            "Map.entries",
-            module_with_main_member_call_result_type(
-                "counts",
-                map_ty.clone(),
-                map_value.clone(),
-                Type::Named(
-                    "Vec".to_string(),
-                    vec![Type::Named(
-                        "MapEntry".to_string(),
-                        vec![Type::named("String"), Type::named("int32")],
-                    )],
-                ),
-                "entries",
-                Vec::new(),
-            ),
-        ),
-        (
-            "Map.clear",
+            "dict.clear",
             module_with_main_member_call_result_type(
                 "counts",
                 map_ty.clone(),
@@ -3506,7 +3479,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Set.len",
+            "set.len",
             module_with_main_member_call_result_type(
                 "seen",
                 set_ty.clone(),
@@ -3517,7 +3490,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Set.is_empty",
+            "set.is_empty",
             module_with_main_member_call_result_type(
                 "seen",
                 set_ty.clone(),
@@ -3528,7 +3501,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Set.contains",
+            "set.contains",
             module_with_main_member_call_result_type(
                 "seen",
                 set_ty.clone(),
@@ -3543,13 +3516,13 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Set.insert",
+            "set.add",
             module_with_main_member_call_result_type(
                 "seen",
                 set_ty.clone(),
                 set_value.clone(),
-                Type::named("bool"),
-                "insert",
+                Type::Unit,
+                "add",
                 vec![MirArg {
                     name: None,
                     value: Operand::String("go".to_string()),
@@ -3558,12 +3531,12 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Set.remove",
+            "set.remove",
             module_with_main_member_call_result_type(
                 "seen",
                 set_ty.clone(),
                 set_value.clone(),
-                Type::named("bool"),
+                Type::Unit,
                 "remove",
                 vec![MirArg {
                     name: None,
@@ -4127,95 +4100,95 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
         writeback_place: None,
     };
     let opaque_value = || Rvalue::Use(Operand::String("opaque-resource".to_string()));
-    let vec_int = || Type::Named("Vec".to_string(), vec![Type::named("int32")]);
+    let vec_int = || Type::Named("list".to_string(), vec![Type::named("int32")]);
     let map_string_int = || {
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         )
     };
-    let set_string = || Type::Named("Set".to_string(), vec![Type::named("String")]);
+    let set_string = || Type::Named("set".to_string(), vec![Type::named("str")]);
     let queue_int = || Type::Named("Queue".to_string(), vec![Type::named("int32")]);
     let task_int = || Type::Named("Task".to_string(), vec![Type::named("int32")]);
 
     let cases = vec![
         (
-            Type::named("String"),
+            Type::named("str"),
             "to_string",
             vec![arg(None, Operand::Int(1))],
             "expected `to_string()` to take no arguments",
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "clone",
             vec![arg(None, Operand::Int(1))],
             "expected `clone()` to take no arguments",
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "len",
             vec![arg(None, Operand::Int(1))],
             "expected `len()` to take no arguments",
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "contains",
             Vec::new(),
             "expected `contains`() to receive one string argument",
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "split",
             Vec::new(),
             "expected `split()` to receive one string argument",
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "replace",
             vec![arg(None, Operand::String("from".to_string()))],
             "expected `replace()` to receive `from` and `to` string arguments",
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "add",
             Vec::new(),
             "expected `add()` to receive one string argument",
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "to_lower",
             vec![arg(None, Operand::Int(1))],
             "expected `to_lower()` to take no arguments",
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "to_upper",
             vec![arg(None, Operand::Int(1))],
             "expected `to_upper()` to take no arguments",
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "join",
             Vec::new(),
-            "expected `join()` to receive one vector argument",
+            "expected `join()` to receive one list argument",
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "strip_prefix",
             Vec::new(),
             "expected `strip_prefix`() to receive one string argument",
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "trim",
             vec![arg(None, Operand::Int(1))],
             "expected `trim()` to take no arguments",
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `String.unknown`",
+            "does not know runtime member `str.unknown`",
         ),
         (
             vec_int(),
@@ -4231,15 +4204,15 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
         ),
         (
             vec_int(),
-            "push",
+            "append",
             Vec::new(),
-            "expected `push()` to receive one argument",
+            "expected `append()` to receive one argument",
         ),
         (
             vec_int(),
             "pop",
-            vec![arg(None, Operand::Int(1))],
-            "expected `pop()` to take no arguments",
+            vec![arg(None, Operand::Int(1)), arg(None, Operand::Int(2))],
+            "expected `pop()` to receive at most one index",
         ),
         (
             vec_int(),
@@ -4275,7 +4248,7 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             vec_int(),
             "remove",
             Vec::new(),
-            "expected `remove()` to receive one index argument",
+            "expected `remove()` to receive one value argument",
         ),
         (
             vec_int(),
@@ -4311,13 +4284,13 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             vec_int(),
             "extend",
             Vec::new(),
-            "expected `extend()` to receive one vector argument",
+            "expected `extend()` to receive one list argument",
         ),
         (
             vec_int(),
             "unknown",
             Vec::new(),
-            "does not know runtime member `Vec.unknown`",
+            "does not know runtime member `list.unknown`",
         ),
         (
             map_string_int(),
@@ -4383,7 +4356,7 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             map_string_int(),
             "items",
             vec![arg(None, Operand::Int(1))],
-            "expected `items`() to take no arguments",
+            "expected `items()` to take no arguments",
         ),
         (
             map_string_int(),
@@ -4393,15 +4366,15 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
         ),
         (
             map_string_int(),
-            "extend",
+            "update",
             Vec::new(),
-            "expected `extend()` to receive one map argument",
+            "expected `update()` to receive one dict argument",
         ),
         (
             map_string_int(),
             "unknown",
             Vec::new(),
-            "does not know runtime member `Map.unknown`",
+            "does not know runtime member `dict.unknown`",
         ),
         (
             set_string(),
@@ -4423,9 +4396,9 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
         ),
         (
             set_string(),
-            "insert",
+            "add",
             Vec::new(),
-            "expected `insert()` to receive one value argument",
+            "expected `add()` to receive one value argument",
         ),
         (
             set_string(),
@@ -4443,7 +4416,7 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             set_string(),
             "unknown",
             Vec::new(),
-            "does not know runtime member `Set.unknown`",
+            "does not know runtime member `set.unknown`",
         ),
         (
             queue_int(),
@@ -4515,7 +4488,7 @@ fn direct_backend_resource_member_success_paths_cover_remaining_network_surfaces
     };
     let opaque_value = || Rvalue::Use(Operand::String("opaque-resource".to_string()));
     let named = |name: &str| Type::Named(name.to_string(), Vec::new());
-    let vec_uint8 = || Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+    let vec_uint8 = || Type::Named("list".to_string(), vec![Type::named("uint8")]);
     let option = |ty: Type| Type::Named("Option".to_string(), vec![ty]);
     let result = |ok: Type| {
         Type::Named(
@@ -4536,7 +4509,7 @@ fn direct_backend_resource_member_success_paths_cover_remaining_network_surfaces
             named("fs.File"),
             "read_all",
             Vec::new(),
-            result(Type::named("String")),
+            result(Type::named("str")),
         ),
         (
             named("fs.File"),
@@ -4611,13 +4584,13 @@ fn direct_backend_resource_member_success_paths_cover_remaining_network_surfaces
             named("process.Pipe"),
             "read_all",
             Vec::new(),
-            process_result(Type::named("String")),
+            process_result(Type::named("str")),
         ),
         (
             named("process.Pipe"),
             "read_line",
             Vec::new(),
-            process_result(option(Type::named("String"))),
+            process_result(option(Type::named("str"))),
         ),
         (
             named("process.Pipe"),
@@ -4660,13 +4633,13 @@ fn direct_backend_resource_member_success_paths_cover_remaining_network_surfaces
             named("process.Completed"),
             "stdout",
             Vec::new(),
-            Type::named("String"),
+            Type::named("str"),
         ),
         (
             named("process.Completed"),
             "stderr",
             Vec::new(),
-            Type::named("String"),
+            Type::named("str"),
         ),
         (
             named("process.Completed"),
@@ -4742,19 +4715,19 @@ fn direct_backend_resource_member_success_paths_cover_remaining_network_surfaces
             named("net.TcpStream"),
             "local_addr",
             Vec::new(),
-            result(Type::named("String")),
+            result(Type::named("str")),
         ),
         (
             named("net.TcpStream"),
             "read_all",
             Vec::new(),
-            result(Type::named("String")),
+            result(Type::named("str")),
         ),
         (
             named("net.TcpStream"),
             "peer_addr",
             Vec::new(),
-            result(Type::named("String")),
+            result(Type::named("str")),
         ),
         (
             named("net.TcpStream"),
@@ -4793,7 +4766,7 @@ fn direct_backend_resource_member_success_paths_cover_remaining_network_surfaces
             named("net.UdpSocket"),
             "peer_addr",
             Vec::new(),
-            result(Type::named("String")),
+            result(Type::named("str")),
         ),
         (named("net.UdpSocket"), "close", Vec::new(), Type::Unit),
         (named("net.UdpDatagram"), "bytes", Vec::new(), vec_uint8()),
@@ -4801,7 +4774,7 @@ fn direct_backend_resource_member_success_paths_cover_remaining_network_surfaces
             named("net.UdpDatagram"),
             "text",
             Vec::new(),
-            result(Type::named("String")),
+            result(Type::named("str")),
         ),
         (
             named("net.HttpExchange"),
@@ -4823,15 +4796,15 @@ fn direct_backend_resource_member_success_paths_cover_remaining_network_surfaces
             named("net.HttpResponse"),
             "reason",
             Vec::new(),
-            Type::named("String"),
+            Type::named("str"),
         ),
         (
             named("net.HttpResponse"),
             "headers",
             Vec::new(),
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("String")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("str")],
             ),
         ),
         (named("net.HttpResponse"), "bytes", Vec::new(), vec_uint8()),
@@ -4865,7 +4838,7 @@ fn direct_backend_resource_member_success_paths_cover_remaining_network_surfaces
             named("net.TlsStream"),
             "read_line",
             Vec::new(),
-            result(option(Type::named("String"))),
+            result(option(Type::named("str"))),
         ),
         (
             named("net.TlsStream"),
@@ -4898,28 +4871,28 @@ fn direct_backend_resource_member_success_paths_cover_remaining_network_surfaces
 
 #[test]
 fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtime_paths() {
-    let string_ty = Type::named("String");
+    let string_ty = Type::named("str");
     let string_value = Rvalue::Use(Operand::String("Aura".to_string()));
-    let vec_ty = Type::Named("Vec".to_string(), vec![Type::named("int32")]);
+    let vec_ty = Type::Named("list".to_string(), vec![Type::named("int32")]);
     let vec_value = Rvalue::VecLiteral {
         element_type: Type::named("int32"),
         elements: vec![Operand::Int(1), Operand::Int(2)],
     };
     let map_ty = Type::Named(
-        "Map".to_string(),
-        vec![Type::named("String"), Type::named("int32")],
+        "dict".to_string(),
+        vec![Type::named("str"), Type::named("int32")],
     );
     let map_value = Rvalue::MapLiteral {
-        key_type: Type::named("String"),
+        key_type: Type::named("str"),
         value_type: Type::named("int32"),
         entries: vec![MirMapEntry {
             key: Operand::String("count".to_string()),
             value: Operand::Int(1),
         }],
     };
-    let set_ty = Type::Named("Set".to_string(), vec![Type::named("String")]);
+    let set_ty = Type::Named("set".to_string(), vec![Type::named("str")]);
     let set_value = Rvalue::SetLiteral {
-        element_type: Type::named("String"),
+        element_type: Type::named("str"),
         elements: vec![Operand::String("ready".to_string())],
     };
     let channel_ty = Type::Named("Queue".to_string(), vec![Type::named("int32")]);
@@ -4946,7 +4919,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 "to_bytes",
                 vec![arg(Operand::Int(1))],
             ),
@@ -4983,7 +4956,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::named("String"),
+                Type::named("str"),
                 "replace",
                 vec![MirArg {
                     name: None,
@@ -4998,7 +4971,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::named("String"),
+                Type::named("str"),
                 "trim",
                 vec![MirArg {
                     name: None,
@@ -5013,7 +4986,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::named("String"),
+                Type::named("str"),
                 "to_string",
                 vec![arg(Operand::Int(1))],
             ),
@@ -5024,7 +4997,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::Named("Vec".to_string(), vec![Type::named("String")]),
+                Type::Named("list".to_string(), vec![Type::named("str")]),
                 "split",
                 Vec::new(),
             ),
@@ -5035,7 +5008,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::named("String"),
+                Type::named("str"),
                 "add",
                 Vec::new(),
             ),
@@ -5046,7 +5019,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::named("String"),
+                Type::named("str"),
                 "to_lower",
                 vec![arg(Operand::String("x".to_string()))],
             ),
@@ -5057,7 +5030,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::named("String"),
+                Type::named("str"),
                 "to_upper",
                 vec![arg(Operand::String("x".to_string()))],
             ),
@@ -5068,7 +5041,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("String")]),
+                Type::Named("Option".to_string(), vec![Type::named("str")]),
                 "strip_prefix",
                 Vec::new(),
             ),
@@ -5079,11 +5052,11 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "text",
                 string_ty.clone(),
                 string_value,
-                Type::named("String"),
+                Type::named("str"),
                 "unknown",
                 Vec::new(),
             ),
-            "does not know runtime member `String.unknown`",
+            "does not know runtime member `str.unknown`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -5091,10 +5064,10 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 vec_ty.clone(),
                 vec_value.clone(),
                 Type::named("bool"),
-                "push",
+                "append",
                 Vec::new(),
             ),
-            "expected `push()` to receive one argument",
+            "expected `append()` to receive one argument",
         ),
         (
             module_with_main_member_call_result_type(
@@ -5112,11 +5085,11 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "values",
                 vec_ty.clone(),
                 vec_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                Type::named("int32"),
                 "pop",
-                vec![arg(Operand::Int(1))],
+                vec![arg(Operand::Int(1)), arg(Operand::Int(2))],
             ),
-            "expected `pop()` to take no arguments",
+            "expected `pop()` to receive at most one index",
         ),
         (
             module_with_main_member_call_result_type(
@@ -5194,7 +5167,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "remove",
                 Vec::new(),
             ),
-            "expected `remove()` to receive one index argument",
+            "expected `remove()` to receive one value argument",
         ),
         (
             module_with_main_member_call_result_type(
@@ -5227,7 +5200,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "extend",
                 Vec::new(),
             ),
-            "expected `extend()` to receive one vector argument",
+            "expected `extend()` to receive one list argument",
         ),
         (
             module_with_main_member_call_result_type(
@@ -5238,7 +5211,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "unknown",
                 Vec::new(),
             ),
-            "does not know runtime member `Vec.unknown`",
+            "does not know runtime member `list.unknown`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -5319,7 +5292,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "counts",
                 map_ty.clone(),
                 map_value.clone(),
-                Type::Named("Vec".to_string(), vec![Type::named("String")]),
+                Type::Named("list".to_string(), vec![Type::named("str")]),
                 "keys",
                 vec![MirArg {
                     name: None,
@@ -5334,22 +5307,22 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "counts",
                 map_ty.clone(),
                 map_value.clone(),
-                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
-                "entries",
+                Type::Named("list".to_string(), vec![Type::named("int32")]),
+                "items",
                 vec![MirArg {
                     name: None,
                     value: Operand::Int(1),
                     writeback_place: None,
                 }],
             ),
-            "expected `entries`() to take no arguments",
+            "expected `items()` to take no arguments",
         ),
         (
             module_with_main_member_call_result_type(
                 "counts",
                 map_ty.clone(),
                 map_value.clone(),
-                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                Type::Named("list".to_string(), vec![Type::named("int32")]),
                 "values",
                 vec![arg(Operand::Int(1))],
             ),
@@ -5375,7 +5348,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "unknown",
                 Vec::new(),
             ),
-            "does not know runtime member `Map.unknown`",
+            "does not know runtime member `dict.unknown`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -5405,10 +5378,10 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 set_ty.clone(),
                 set_value.clone(),
                 Type::named("bool"),
-                "insert",
+                "add",
                 Vec::new(),
             ),
-            "expected `insert()` to receive one value argument",
+            "expected `add()` to receive one value argument",
         ),
         (
             module_with_main_member_call_result_type(
@@ -5426,7 +5399,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "seen",
                 set_ty.clone(),
                 set_value.clone(),
-                Type::Named("Option".to_string(), vec![Type::named("String")]),
+                Type::Named("Option".to_string(), vec![Type::named("str")]),
                 "__index_option",
                 Vec::new(),
             ),
@@ -5441,7 +5414,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "unknown",
                 Vec::new(),
             ),
-            "does not know runtime member `Set.unknown`",
+            "does not know runtime member `set.unknown`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -5851,7 +5824,7 @@ def main() -> int32:
 
 #[test]
 fn direct_backend_wait_helpers_cover_unknown_task_payload_fallback() {
-    let string_vec = Type::Named("Vec".to_string(), vec![Type::named("String")]);
+    let string_vec = Type::Named("list".to_string(), vec![Type::named("str")]);
     let wait_all_unknown = crate::mir::MirModule {
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -5879,7 +5852,7 @@ fn direct_backend_wait_helpers_cover_unknown_task_payload_fallback() {
                         target: "tasks".to_string(),
                         value: Rvalue::VecLiteral {
                             elements: vec![Operand::String("not-a-task".to_string())],
-                            element_type: Type::named("String"),
+                            element_type: Type::named("str"),
                         },
                     },
                     Instruction::Assign {
@@ -6003,7 +5976,7 @@ def process_members() -> Result[None, process.Error]:
     with supervisor = process.supervisor():
         try supervisor.start(name="defaulted", command=["/usr/bin/false"])
         print(supervisor.wait(timeout=2s))
-        env: Map[String, String] = {}
+        env: dict[str, str] = {}
         try supervisor.start(name="explicit", command=["/usr/bin/false"], cwd=Option.None, env=env, stdin=process.null(), stdout=process.null(), stderr=process.null(), restart=process.RestartPolicy.Never, backoff=100ms, max_restarts=0, group=true)
         print(try supervisor.wait_or_none(timeout=2s))
         print(supervisor.is_empty())
@@ -6314,8 +6287,8 @@ def main() -> int32:
     factor: int64 = 2
     worker: def(int64) -> int64 = lambda value: value * factor + offset
     direct: int64 = worker(3)
-    values: Vec[int64] = [1, 2]
-    mapped: Vec[int64] = values.map(worker)
+    values: list[int64] = [1, 2]
+    mapped: list[int64] = values.map(worker)
     with TaskGroup() as group:
         task: Task[int64] = group.start(worker, 7)
     return 0
@@ -6864,12 +6837,12 @@ def main() -> int32:
     parsed32 = parse_int32("7")
     parsed64 = parse_int64("7")
     parsedf = parse_float64("7.0")
-    headers: Map[String, String] = {"X-Test": "ok"}
-    body: Vec[uint8] = [1 as uint8, 2 as uint8]
+    headers: dict[str, str] = {"X-Test": "ok"}
+    body: list[uint8] = [1 as uint8, 2 as uint8]
     http_bytes = net.http_request_bytes_timeout("POST", "http://127.0.0.1/", body, headers, 5ms)
-    values: Vec[int32] = Vec[int32]()
-    names: Set[String] = Set[String]()
-    counts: Map[String, int32] = Map[String, int32]()
+    values: list[int32] = list[int32]()
+    names: set[str] = set[str]()
+    counts: dict[str, int32] = dict[str, int32]()
     short = range(3)
     long = range(start=1, stop=4)
     print(ready)
@@ -7045,16 +7018,16 @@ def main() -> int32:
             "expected `sqrt()` to receive one argument",
         ),
         (
-            "Vec extra arg",
+            "list extra arg",
             module_with_main_call(Rvalue::Call {
-                callee: CallTarget::Name("Vec".to_string()),
+                callee: CallTarget::Name("list".to_string()),
                 args: vec![MirArg {
                     name: None,
                     value: Operand::Int(1),
                     writeback_place: None,
                 }],
             }),
-            "expected `Vec`() to take no arguments",
+            "expected `list`() to take no arguments",
         ),
         (
             "range too many args",
@@ -7153,15 +7126,15 @@ def main() -> int32:
 
     for (label, module) in [
         (
-            "untyped Map constructor",
+            "untyped dict constructor",
             module_with_main_call_result_type(
                 Rvalue::Call {
-                    callee: CallTarget::Name("Map".to_string()),
+                    callee: CallTarget::Name("dict".to_string()),
                     args: Vec::new(),
                 },
                 Type::Named(
-                    "Map".to_string(),
-                    vec![Type::named("String"), Type::named("int32")],
+                    "dict".to_string(),
+                    vec![Type::named("str"), Type::named("int32")],
                 ),
             ),
         ),
@@ -7719,10 +7692,10 @@ def main() -> int32:
 fn direct_backend_emits_object_for_member_call_surface_matrix() {
     let source = r#"
 trait Named:
-    def tag(self) -> String
+    def tag(self) -> str
 
 impl Named for int32:
-    def tag(self) -> String:
+    def tag(self) -> str:
         return "number"
 
 class Counter:
@@ -7759,10 +7732,10 @@ def main() -> int32:
     tagged = value.tag()
     root = 9.0.sqrt()
 
-    mut values: Vec[int32] = [1, 2, 3]
+    mut values: list[int32] = [1, 2, 3]
     empty = values.is_empty()
     length2 = values.len()
-    values.push(4)
+    values.append(4)
     popped = values.pop()
     first = values.get(0)
     direct = values[0]
@@ -7772,31 +7745,31 @@ def main() -> int32:
     contains = values.contains(2)
     inserted = values.insert(0, 5)
     values.reverse()
-    other_values: Vec[int32] = [8, 9]
+    other_values: list[int32] = [8, 9]
     values.extend(other_values)
     values.clear()
 
-    mut counts: Map[String, int32] = {"a": 1, "b": 2}
+    mut counts: dict[str, int32] = {"a": 1, "b": 2}
     map_empty = counts.is_empty()
     map_len = counts.len()
     current = counts.get("a")
     direct_count = counts["a"]
-    previous_count = counts.set("a", 3)
+    previous_count = counts["a"]
+    counts["a"] = 3
     removed_count = counts.remove("b")
-    has_key = counts.contains_key("a")
+    has_key = "a" in counts
     keys = counts.keys()
     vals = counts.values()
-    entries = counts.entries()
     items = counts.items()
-    counts.extend({"c": 4})
+    counts.update({"c": 4})
     counts.clear()
 
-    mut names = Set[String]()
+    mut names = set[str]()
     set_empty = names.is_empty()
-    names.insert("aura")
-    names.insert("repo")
+    names.add("aura")
+    names.add("repo")
     set_len = names.len()
-    has_name = names.contains("aura")
+    has_name = "aura" in names
     removed_name = names.remove("repo")
 
     jobs = Queue[int32]()
@@ -7888,10 +7861,10 @@ fn direct_member_lengths_do_not_emit_implicit_int32_range_checks() {
 
     let cases = vec![
         (
-            "String.len",
+            "str.len",
             module_with_main_member_call_result_type(
                 "text",
-                Type::named("String"),
+                Type::named("str"),
                 Rvalue::Use(Operand::String("Aura".to_string())),
                 Type::named("int64"),
                 "len",
@@ -7900,10 +7873,10 @@ fn direct_member_lengths_do_not_emit_implicit_int32_range_checks() {
             "aura_direct_string_len",
         ),
         (
-            "String.byte_len",
+            "str.byte_len",
             module_with_main_member_call_result_type(
                 "text",
-                Type::named("String"),
+                Type::named("str"),
                 Rvalue::Use(Operand::String("é🎉e\u{301}".to_string())),
                 Type::named("int64"),
                 "byte_len",
@@ -7912,12 +7885,12 @@ fn direct_member_lengths_do_not_emit_implicit_int32_range_checks() {
             "aura_direct_string_byte_len",
         ),
         (
-            "Vec.len",
+            "list.len",
             module_with_main_member_call_result_type(
                 "values",
-                Type::Named("Vec".to_string(), vec![Type::named("String")]),
+                Type::Named("list".to_string(), vec![Type::named("str")]),
                 Rvalue::VecLiteral {
-                    element_type: Type::named("String"),
+                    element_type: Type::named("str"),
                     elements: vec![Operand::String("value".to_string())],
                 },
                 Type::named("int64"),
@@ -7927,16 +7900,16 @@ fn direct_member_lengths_do_not_emit_implicit_int32_range_checks() {
             "aura_direct_vec_len",
         ),
         (
-            "Map.len",
+            "dict.len",
             module_with_main_member_call_result_type(
                 "counts",
                 Type::Named(
-                    "Map".to_string(),
-                    vec![Type::named("String"), Type::named("String")],
+                    "dict".to_string(),
+                    vec![Type::named("str"), Type::named("str")],
                 ),
                 Rvalue::MapLiteral {
-                    key_type: Type::named("String"),
-                    value_type: Type::named("String"),
+                    key_type: Type::named("str"),
+                    value_type: Type::named("str"),
                     entries: vec![MirMapEntry {
                         key: Operand::String("key".to_string()),
                         value: Operand::String("value".to_string()),
@@ -7949,12 +7922,12 @@ fn direct_member_lengths_do_not_emit_implicit_int32_range_checks() {
             "aura_direct_map_len",
         ),
         (
-            "Set.len",
+            "set.len",
             module_with_main_member_call_result_type(
                 "values",
-                Type::Named("Set".to_string(), vec![Type::named("String")]),
+                Type::Named("set".to_string(), vec![Type::named("str")]),
                 Rvalue::SetLiteral {
-                    element_type: Type::named("String"),
+                    element_type: Type::named("str"),
                     elements: vec![Operand::String("value".to_string())],
                 },
                 Type::named("int64"),
@@ -8022,7 +7995,7 @@ def main() -> int32:
         referenced
             .iter()
             .any(|symbol| symbol.contains("aura_direct_string_len")),
-        "member-length narrowing should call the String length runtime: {referenced:?}"
+        "member-length narrowing should call the str length runtime: {referenced:?}"
     );
     assert!(
         referenced
@@ -8159,7 +8132,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
         elements: vec![Operand::Int(1), Operand::Int(2)],
     };
     let map_object = || Rvalue::MapLiteral {
-        key_type: Type::named("String"),
+        key_type: Type::named("str"),
         value_type: Type::named("int32"),
         entries: vec![MirMapEntry {
             key: Operand::String("a".to_string()),
@@ -8167,7 +8140,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
         }],
     };
     let set_object = || Rvalue::SetLiteral {
-        element_type: Type::named("String"),
+        element_type: Type::named("str"),
         elements: vec![Operand::String("aura".to_string())],
     };
     let channel_object = || Rvalue::Call {
@@ -8191,7 +8164,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             "string clone extra arg",
             module_with_main_member_call(
                 "text",
-                Type::named("String"),
+                Type::named("str"),
                 string_object(),
                 "clone",
                 one_arg.clone(),
@@ -8213,7 +8186,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             "string len extra arg",
             module_with_main_member_call(
                 "text",
-                Type::named("String"),
+                Type::named("str"),
                 string_object(),
                 "len",
                 one_arg.clone(),
@@ -8224,7 +8197,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             "string contains missing arg",
             module_with_main_member_call(
                 "text",
-                Type::named("String"),
+                Type::named("str"),
                 string_object(),
                 "contains",
                 vec![],
@@ -8235,7 +8208,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             "vec len extra arg",
             module_with_main_member_call(
                 "values",
-                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                Type::Named("list".to_string(), vec![Type::named("int32")]),
                 vec_object(),
                 "len",
                 one_arg.clone(),
@@ -8243,21 +8216,21 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             "expected `len()` to take no arguments",
         ),
         (
-            "vec push missing arg",
+            "list append missing arg",
             module_with_main_member_call(
                 "values",
-                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                Type::Named("list".to_string(), vec![Type::named("int32")]),
                 vec_object(),
-                "push",
+                "append",
                 vec![],
             ),
-            "expected `push()` to receive one argument",
+            "expected `append()` to receive one argument",
         ),
         (
             "vec clear extra arg",
             module_with_main_member_call(
                 "values",
-                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                Type::Named("list".to_string(), vec![Type::named("int32")]),
                 vec_object(),
                 "clear",
                 one_arg.clone(),
@@ -8269,8 +8242,8 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             module_with_main_member_call(
                 "counts",
                 Type::Named(
-                    "Map".to_string(),
-                    vec![Type::named("String"), Type::named("int32")],
+                    "dict".to_string(),
+                    vec![Type::named("str"), Type::named("int32")],
                 ),
                 map_object(),
                 "len",
@@ -8283,8 +8256,8 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             module_with_main_member_call(
                 "counts",
                 Type::Named(
-                    "Map".to_string(),
-                    vec![Type::named("String"), Type::named("int32")],
+                    "dict".to_string(),
+                    vec![Type::named("str"), Type::named("int32")],
                 ),
                 map_object(),
                 "set",
@@ -8296,7 +8269,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             "set contains missing arg",
             module_with_main_member_call(
                 "names",
-                Type::Named("Set".to_string(), vec![Type::named("String")]),
+                Type::Named("set".to_string(), vec![Type::named("str")]),
                 set_object(),
                 "contains",
                 vec![],
@@ -8329,7 +8302,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             "vec swap missing arg",
             module_with_main_member_call(
                 "values",
-                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                Type::Named("list".to_string(), vec![Type::named("int32")]),
                 vec_object(),
                 "swap",
                 one_arg.clone(),
@@ -8337,24 +8310,24 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             "expected `swap()` to receive two index arguments",
         ),
         (
-            "map extend missing arg",
+            "dict update missing arg",
             module_with_main_member_call(
                 "counts",
                 Type::Named(
-                    "Map".to_string(),
-                    vec![Type::named("String"), Type::named("int32")],
+                    "dict".to_string(),
+                    vec![Type::named("str"), Type::named("int32")],
                 ),
                 map_object(),
-                "extend",
+                "update",
                 vec![],
             ),
-            "expected `extend()` to receive one map argument",
+            "expected `update()` to receive one dict argument",
         ),
         (
             "set remove missing arg",
             module_with_main_member_call(
                 "names",
-                Type::Named("Set".to_string(), vec![Type::named("String")]),
+                Type::Named("set".to_string(), vec![Type::named("str")]),
                 set_object(),
                 "remove",
                 vec![],
@@ -8365,12 +8338,12 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             "unknown runtime member",
             module_with_main_member_call(
                 "text",
-                Type::named("String"),
+                Type::named("str"),
                 string_object(),
                 "missing",
                 vec![],
             ),
-            "does not know runtime member `String.missing`",
+            "does not know runtime member `str.missing`",
         ),
         (
             "unknown scalar member",
@@ -8387,7 +8360,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             "string replace missing arg",
             module_with_main_member_call(
                 "text",
-                Type::named("String"),
+                Type::named("str"),
                 string_object(),
                 "replace",
                 one_arg.clone(),
@@ -8398,7 +8371,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             "vec insert missing arg",
             module_with_main_member_call(
                 "values",
-                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                Type::Named("list".to_string(), vec![Type::named("int32")]),
                 vec_object(),
                 "insert",
                 one_arg.clone(),
@@ -8410,20 +8383,20 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             module_with_main_member_call(
                 "counts",
                 Type::Named(
-                    "Map".to_string(),
-                    vec![Type::named("String"), Type::named("int32")],
+                    "dict".to_string(),
+                    vec![Type::named("str"), Type::named("int32")],
                 ),
                 map_object(),
                 "items",
                 one_arg.clone(),
             ),
-            "expected `items`() to take no arguments",
+            "expected `items()` to take no arguments",
         ),
         (
             "set len extra arg",
             module_with_main_member_call(
                 "names",
-                Type::Named("Set".to_string(), vec![Type::named("String")]),
+                Type::Named("set".to_string(), vec![Type::named("str")]),
                 set_object(),
                 "len",
                 one_arg,
@@ -8434,18 +8407,18 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             "string join missing arg",
             module_with_main_member_call(
                 "text",
-                Type::named("String"),
+                Type::named("str"),
                 string_object(),
                 "join",
                 vec![],
             ),
-            "expected `join()` to receive one vector argument",
+            "expected `join()` to receive one list argument",
         ),
         (
             "string trim extra arg",
             module_with_main_member_call(
                 "text",
-                Type::named("String"),
+                Type::named("str"),
                 string_object(),
                 "trim",
                 two_args[..1].to_vec(),
@@ -8904,10 +8877,10 @@ fn native_codegen_rejects_try_between_non_result_types() {
 #[test]
 fn direct_try_moves_noncopy_ok_payloads_through_the_destructive_runtime_path() {
     let source = r#"
-def produce() -> Result[String, String]:
+def produce() -> Result[str, str]:
     return Result.Ok("owned payload")
 
-def forward() -> Result[String, String]:
+def forward() -> Result[str, str]:
     result = produce()
     value = try result
     return Result.Ok(value)
@@ -8958,14 +8931,14 @@ fn native_codegen_thunk_helpers_cover_roundtrip_paths() {
         &mut codegen,
         &mut builder,
         &[opaque_raw],
-        &DirectType::Opaque(Type::named("String")),
+        &DirectType::Opaque(Type::named("str")),
     )
     .expect("opaque thunk values should pass through");
     let opaque_unboxed = unbox_thunk_value(
         &mut codegen,
         &mut builder,
         opaque_boxed,
-        &DirectType::Opaque(Type::named("String")),
+        &DirectType::Opaque(Type::named("str")),
     )
     .expect("opaque thunk values should unbox directly");
     assert_eq!(opaque_unboxed.len(), 1);
@@ -9056,7 +9029,7 @@ fn native_codegen_thunk_helpers_cover_roundtrip_paths() {
         &mut codegen,
         &mut builder,
         &[],
-        &DirectType::Opaque(Type::named("String")),
+        &DirectType::Opaque(Type::named("str")),
     )
     .expect_err("opaque thunk boxing should require a raw value");
     assert!(opaque_missing.contains("task-start thunk expected an opaque value"));
@@ -9103,7 +9076,7 @@ fn native_codegen_release_helpers_cover_cleanup_error_paths() {
     let raw_opaque = builder.ins().iconst(types::I64, 7);
     let raw_unit = builder.ins().iconst(types::I64, 0);
     let raw_bool = builder.ins().iconst(types::I64, 1);
-    let opaque_string = DirectType::Opaque(Type::named("String"));
+    let opaque_string = DirectType::Opaque(Type::named("str"));
     let plain_pair = DirectType::PlainClass(PlainClassType {
         class_name: "Pair".to_string(),
         fields: vec![
@@ -9134,7 +9107,7 @@ fn native_codegen_release_helpers_cover_cleanup_error_paths() {
     let missing_opaque_error =
         release_direct_values(&mut codegen, &mut builder, &[], &opaque_string)
             .expect_err("opaque cleanup release should require one value");
-    assert!(missing_opaque_error.contains("expected an opaque `String` result"));
+    assert!(missing_opaque_error.contains("expected an opaque `str` result"));
 
     codegen.function_return_types.insert(
         "unit_with_writeback".to_string(),
@@ -9514,34 +9487,31 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
     variable_types.insert("flag".to_string(), DirectType::Scalar(ScalarKind::Bool));
     variable_types.insert("number".to_string(), DirectType::Scalar(ScalarKind::Int32));
     variable_types.insert("ratio".to_string(), DirectType::Scalar(ScalarKind::Float64));
-    variable_types.insert(
-        "word".to_string(),
-        DirectType::Opaque(Type::named("String")),
-    );
+    variable_types.insert("word".to_string(), DirectType::Opaque(Type::named("str")));
     variable_types.insert("node".to_string(), DirectType::Opaque(Type::named("Node")));
     variable_types.insert(
         "tasks".to_string(),
         DirectType::Opaque(Type::Named(
-            "Vec".to_string(),
-            vec![Type::Named("Task".to_string(), vec![Type::named("String")])],
+            "list".to_string(),
+            vec![Type::Named("Task".to_string(), vec![Type::named("str")])],
         )),
     );
     variable_types.insert(
         "unit_tasks".to_string(),
         DirectType::Opaque(Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
             vec![Type::Named("Task".to_string(), Vec::new())],
         )),
     );
     variable_types.insert(
         "strings".to_string(),
-        DirectType::Opaque(Type::Named("Vec".to_string(), vec![Type::named("String")])),
+        DirectType::Opaque(Type::Named("list".to_string(), vec![Type::named("str")])),
     );
     variable_types.insert(
         "result".to_string(),
         DirectType::Opaque(Type::Named(
             "Result".to_string(),
-            vec![Type::named("String"), Type::named("io.Error")],
+            vec![Type::named("str"), Type::named("io.Error")],
         )),
     );
     variable_types.insert(
@@ -9750,7 +9720,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             &returns,
             &classes,
         ),
-        Some(DirectType::Opaque(Type::named("String")))
+        Some(DirectType::Opaque(Type::named("str")))
     );
     assert_eq!(
         infer_rvalue_type(
@@ -9776,14 +9746,14 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             &classes,
         ),
         Some(DirectType::Opaque(Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
             vec![Type::named("int32")],
         )))
     );
     assert_eq!(
         infer_rvalue_type(
             &Rvalue::MapLiteral {
-                key_type: Type::named("String"),
+                key_type: Type::named("str"),
                 value_type: Type::named("int32"),
                 entries: vec![MirMapEntry {
                     key: Operand::String("count".to_string()),
@@ -9795,14 +9765,14 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             &classes,
         ),
         Some(DirectType::Opaque(Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         )))
     );
     assert_eq!(
         infer_rvalue_type(
             &Rvalue::SetLiteral {
-                element_type: Type::named("String"),
+                element_type: Type::named("str"),
                 elements: vec![Operand::String("x".to_string())],
             },
             &variable_types,
@@ -9810,8 +9780,8 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             &classes,
         ),
         Some(DirectType::Opaque(Type::Named(
-            "Set".to_string(),
-            vec![Type::named("String")],
+            "set".to_string(),
+            vec![Type::named("str")],
         )))
     );
     for (name, expected) in [
@@ -9824,17 +9794,20 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             )),
         ),
         (
-            "Vec",
-            DirectType::Opaque(Type::Named("Vec".to_string(), vec![Type::named("Unknown")])),
-        ),
-        (
-            "Set",
-            DirectType::Opaque(Type::Named("Set".to_string(), vec![Type::named("Unknown")])),
-        ),
-        (
-            "Map",
+            "list",
             DirectType::Opaque(Type::Named(
-                "Map".to_string(),
+                "list".to_string(),
+                vec![Type::named("Unknown")],
+            )),
+        ),
+        (
+            "set",
+            DirectType::Opaque(Type::Named("set".to_string(), vec![Type::named("Unknown")])),
+        ),
+        (
+            "dict",
+            DirectType::Opaque(Type::Named(
+                "dict".to_string(),
                 vec![Type::named("Unknown"), Type::named("Unknown")],
             )),
         ),
@@ -9846,21 +9819,21 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             "parse_int32",
             DirectType::Opaque(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("int32"), Type::named("String")],
+                vec![Type::named("int32"), Type::named("str")],
             )),
         ),
         (
             "parse_int64",
             DirectType::Opaque(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("int64"), Type::named("String")],
+                vec![Type::named("int64"), Type::named("str")],
             )),
         ),
         (
             "parse_float64",
             DirectType::Opaque(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("float64"), Type::named("String")],
+                vec![Type::named("float64"), Type::named("str")],
             )),
         ),
     ] {
@@ -9896,7 +9869,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             ),
             Some(DirectType::Opaque(Type::Named(
                 expected_variant.to_string(),
-                vec![Type::named("String")],
+                vec![Type::named("str")],
             ))),
             "expected `{name}` to infer the task payload type",
         );
@@ -9970,19 +9943,19 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
         (
             "io::read_line",
             result_type(
-                Type::Named("Option".to_string(), vec![Type::named("String")]),
+                Type::Named("Option".to_string(), vec![Type::named("str")]),
                 io_error.clone(),
             ),
         ),
         ("fs::exists", DirectType::Scalar(ScalarKind::Bool)),
         (
             "fs::read_to_string",
-            result_type(Type::named("String"), io_error.clone()),
+            result_type(Type::named("str"), io_error.clone()),
         ),
         (
             "fs::read_bytes",
             result_type(
-                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 io_error.clone(),
             ),
         ),
@@ -10004,7 +9977,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
         (
             "fs::read_dir",
             result_type(
-                Type::Named("Vec".to_string(), vec![Type::named("String")]),
+                Type::Named("list".to_string(), vec![Type::named("str")]),
                 io_error.clone(),
             ),
         ),
@@ -10141,7 +10114,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
         (
             Operand::Place("number".to_string()),
             "to_string",
-            Some(DirectType::Opaque(Type::named("String"))),
+            Some(DirectType::Opaque(Type::named("str"))),
         ),
         (
             Operand::Place("point".to_string()),
@@ -10188,7 +10161,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             &returns,
             &classes,
         ),
-        Some(DirectType::Opaque(Type::named("String")))
+        Some(DirectType::Opaque(Type::named("str")))
     );
     assert_eq!(
         infer_rvalue_type(
@@ -10404,9 +10377,9 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
 
 #[test]
 fn ensure_direct_type_maps_runtime_backed_types_to_opaque_values() {
-    let ty = ensure_direct_type(&Type::named("String"), &HashMap::new(), "test type")
+    let ty = ensure_direct_type(&Type::named("str"), &HashMap::new(), "test type")
         .expect("runtime-backed types should still be representable directly");
-    assert_eq!(ty, DirectType::Opaque(Type::named("String")));
+    assert_eq!(ty, DirectType::Opaque(Type::named("str")));
 }
 
 #[test]
@@ -10648,66 +10621,46 @@ fn builtin_member_type_helpers_cover_collection_runtime_surface() {
 
     assert_eq!(
         builtin_opaque_member_return_type(
-            &Type::Named("String".to_string(), vec![]),
+            &Type::Named("str".to_string(), vec![]),
             "split",
             &classes,
         ),
         Some(DirectType::Opaque(Type::Named(
-            "Vec".to_string(),
-            vec![Type::named("String")],
+            "list".to_string(),
+            vec![Type::named("str")],
         )))
     );
     assert_eq!(
         builtin_opaque_member_return_type(
-            &Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            &Type::Named("list".to_string(), vec![Type::named("int32")]),
             "insert",
             &classes,
         ),
-        Some(DirectType::Scalar(ScalarKind::Bool))
+        Some(DirectType::Scalar(ScalarKind::Unit))
     );
     assert_eq!(
         builtin_opaque_member_return_type(
             &Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             "items",
             &classes,
         ),
         Some(DirectType::Opaque(Type::Named(
-            "Vec".to_string(),
-            vec![Type::Named(
-                "MapEntry".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
-            )],
+            "list".to_string(),
+            vec![Type::Tuple(vec![Type::named("str"), Type::named("int32")])],
         )))
     );
     assert_eq!(
         builtin_opaque_member_return_type(
-            &Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
-            ),
-            "entries",
-            &classes,
-        ),
-        Some(DirectType::Opaque(Type::Named(
-            "Vec".to_string(),
-            vec![Type::Named(
-                "MapEntry".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
-            )],
-        )))
-    );
-    assert_eq!(
-        builtin_opaque_member_return_type(
-            &Type::Named("Set".to_string(), vec![Type::named("String")]),
+            &Type::Named("set".to_string(), vec![Type::named("str")]),
             "__index_option",
             &classes,
         ),
         Some(DirectType::Opaque(Type::Named(
             "Option".to_string(),
-            vec![Type::named("String")],
+            vec![Type::named("str")],
         )))
     );
     assert_eq!(
@@ -10723,13 +10676,13 @@ fn builtin_member_type_helpers_cover_collection_runtime_surface() {
     );
     assert_eq!(
         builtin_opaque_member_return_type(
-            &Type::Named("Set".to_string(), vec![Type::named("String")]),
-            "clone",
+            &Type::Named("set".to_string(), vec![Type::named("str")]),
+            "copy",
             &classes,
         ),
         Some(DirectType::Opaque(Type::Named(
-            "Set".to_string(),
-            vec![Type::named("String")],
+            "set".to_string(),
+            vec![Type::named("str")],
         )))
     );
     assert_eq!(
@@ -10750,40 +10703,37 @@ fn builtin_member_type_helpers_cover_collection_runtime_surface() {
     );
     for (object_ty, field, expected) in [
         (
-            Type::Named("String".to_string(), vec![]),
+            Type::Named("str".to_string(), vec![]),
             "replace",
-            DirectType::Opaque(Type::named("String")),
+            DirectType::Opaque(Type::named("str")),
         ),
         (
-            Type::Named("String".to_string(), vec![]),
+            Type::Named("str".to_string(), vec![]),
             "strip_prefix",
-            DirectType::Opaque(Type::Named(
-                "Option".to_string(),
-                vec![Type::named("String")],
-            )),
+            DirectType::Opaque(Type::Named("Option".to_string(), vec![Type::named("str")])),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "clear",
             DirectType::Scalar(ScalarKind::Unit),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "__index",
             DirectType::Scalar(ScalarKind::Int32),
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             "values",
-            DirectType::Opaque(Type::Named("Vec".to_string(), vec![Type::named("int32")])),
+            DirectType::Opaque(Type::Named("list".to_string(), vec![Type::named("int32")])),
         ),
         (
-            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            Type::Named("set".to_string(), vec![Type::named("str")]),
             "remove",
-            DirectType::Scalar(ScalarKind::Bool),
+            DirectType::Scalar(ScalarKind::Unit),
         ),
         (
             Type::Named("Queue".to_string(), vec![Type::named("int32")]),
@@ -10830,15 +10780,12 @@ fn builtin_member_type_helpers_cover_collection_runtime_surface() {
     );
     for (object_ty, field, expected) in [
         (
-            Type::Named("Vec".to_string(), Vec::new()),
+            Type::Named("list".to_string(), Vec::new()),
             "pop",
-            DirectType::Opaque(Type::Named(
-                "Option".to_string(),
-                vec![Type::named("Unknown")],
-            )),
+            DirectType::Opaque(Type::named("Unknown")),
         ),
         (
-            Type::Named("Map".to_string(), vec![Type::named("String")]),
+            Type::Named("dict".to_string(), vec![Type::named("str")]),
             "get",
             DirectType::Opaque(Type::Named(
                 "Option".to_string(),
@@ -10846,23 +10793,26 @@ fn builtin_member_type_helpers_cover_collection_runtime_surface() {
             )),
         ),
         (
-            Type::Named("Map".to_string(), Vec::new()),
+            Type::Named("dict".to_string(), Vec::new()),
             "keys",
-            DirectType::Opaque(Type::Named("Vec".to_string(), vec![Type::named("Unknown")])),
-        ),
-        (
-            Type::Named("Map".to_string(), Vec::new()),
-            "items",
             DirectType::Opaque(Type::Named(
-                "Vec".to_string(),
-                vec![Type::Named(
-                    "MapEntry".to_string(),
-                    vec![Type::named("Unknown"), Type::named("Unknown")],
-                )],
+                "list".to_string(),
+                vec![Type::named("Unknown")],
             )),
         ),
         (
-            Type::Named("Set".to_string(), Vec::new()),
+            Type::Named("dict".to_string(), Vec::new()),
+            "items",
+            DirectType::Opaque(Type::Named(
+                "list".to_string(),
+                vec![Type::Tuple(vec![
+                    Type::named("Unknown"),
+                    Type::named("Unknown"),
+                ])],
+            )),
+        ),
+        (
+            Type::Named("set".to_string(), Vec::new()),
             "__index_option",
             DirectType::Opaque(Type::Named(
                 "Option".to_string(),
@@ -10912,7 +10862,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
                     name: "name".to_string(),
-                    ty: Type::named("String"),
+                    ty: Type::named("str"),
                 }],
                 methods: Vec::new(),
             },
@@ -10935,7 +10885,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
             "result".to_string(),
             DirectType::Opaque(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("int32"), Type::named("String")],
+                vec![Type::named("int32"), Type::named("str")],
             )),
         ),
         (
@@ -10951,18 +10901,18 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
         direct_field_type(
             &DirectType::Opaque(Type::Named(
                 "MapEntry".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                vec![Type::named("str"), Type::named("int32")],
             )),
             "key",
             &classes,
         ),
-        Some(DirectType::Opaque(Type::named("String")))
+        Some(DirectType::Opaque(Type::named("str")))
     );
     assert_eq!(
         direct_field_type(
             &DirectType::Opaque(Type::Named(
                 "MapEntry".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                vec![Type::named("str"), Type::named("int32")],
             )),
             "value",
             &classes,
@@ -10975,7 +10925,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
             "name",
             &classes,
         ),
-        Some(DirectType::Opaque(Type::named("String")))
+        Some(DirectType::Opaque(Type::named("str")))
     );
     assert_eq!(
         direct_field_type(
@@ -10987,11 +10937,11 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
     );
     assert_eq!(
         direct_field_type(
-            &DirectType::Opaque(Type::Named("Box".to_string(), vec![Type::named("String")],)),
+            &DirectType::Opaque(Type::Named("Box".to_string(), vec![Type::named("str")],)),
             "value",
             &classes,
         ),
-        Some(DirectType::Opaque(Type::named("String")))
+        Some(DirectType::Opaque(Type::named("str")))
     );
     assert_eq!(
         infer_try_type(
@@ -11011,7 +10961,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
             &variable_types,
             &classes,
         ),
-        Some(DirectType::Opaque(Type::named("String")))
+        Some(DirectType::Opaque(Type::named("str")))
     );
     assert_eq!(
         infer_operand_type(&Operand::Duration(5), &variable_types, &classes),
@@ -11047,9 +10997,10 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
     let opaque_named =
         |name: &str, args: Vec<Type>| DirectType::Opaque(Type::Named(name.to_string(), args));
     let direct_int = DirectType::Scalar(ScalarKind::Int32);
-    let direct_string = DirectType::Opaque(Type::named("String"));
+    let direct_index = DirectType::Scalar(ScalarKind::Int64);
+    let direct_string = DirectType::Opaque(Type::named("str"));
     let direct_vec_int =
-        DirectType::Opaque(Type::Named("Vec".to_string(), vec![Type::named("int32")]));
+        DirectType::Opaque(Type::Named("list".to_string(), vec![Type::named("int32")]));
 
     for (target, enum_name, variant, expected) in [
         (
@@ -11065,13 +11016,13 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
             Some(Vec::new()),
         ),
         (
-            opaque_named("Result", vec![Type::named("String"), named("io.Error")]),
+            opaque_named("Result", vec![Type::named("str"), named("io.Error")]),
             "Result",
             "Ok",
             Some(vec![direct_string.clone()]),
         ),
         (
-            opaque_named("Result", vec![Type::named("String"), named("io.Error")]),
+            opaque_named("Result", vec![Type::named("str"), named("io.Error")]),
             "Result",
             "Err",
             Some(vec![DirectType::Opaque(named("io.Error"))]),
@@ -11083,13 +11034,13 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
             Some(vec![direct_int.clone()]),
         ),
         (
-            opaque_named("QueueReceive", vec![Type::named("String")]),
+            opaque_named("QueueReceive", vec![Type::named("str")]),
             "QueueReceive",
             "Item",
             Some(vec![direct_string.clone()]),
         ),
         (
-            opaque_named("QueueReceive", vec![Type::named("String")]),
+            opaque_named("QueueReceive", vec![Type::named("str")]),
             "QueueReceive",
             "Closed",
             Some(Vec::new()),
@@ -11113,19 +11064,19 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
             Some(Vec::new()),
         ),
         (
-            opaque_named("WaitAny", vec![Type::named("String")]),
+            opaque_named("WaitAny", vec![Type::named("str")]),
             "WaitAny",
             "Ready",
-            Some(vec![direct_int.clone(), direct_string.clone()]),
+            Some(vec![direct_index.clone(), direct_string.clone()]),
         ),
         (
-            opaque_named("WaitAny", vec![Type::named("String")]),
+            opaque_named("WaitAny", vec![Type::named("str")]),
             "WaitAny",
             "Error",
-            Some(vec![direct_int.clone(), direct_string.clone()]),
+            Some(vec![direct_index.clone(), direct_string.clone()]),
         ),
         (
-            opaque_named("WaitAny", vec![Type::named("String")]),
+            opaque_named("WaitAny", vec![Type::named("str")]),
             "WaitAny",
             "Cancelled",
             Some(Vec::new()),
@@ -11140,7 +11091,7 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
             opaque_named("WaitAll", vec![Type::named("int32")]),
             "WaitAll",
             "Error",
-            Some(vec![direct_int.clone(), direct_string.clone()]),
+            Some(vec![direct_index.clone(), direct_string.clone()]),
         ),
         (
             opaque_named("WaitAll", vec![Type::named("int32")]),
@@ -11149,13 +11100,46 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
             Some(Vec::new()),
         ),
         (
-            opaque_named("Result", vec![Type::named("String"), named("io.Error")]),
+            opaque_named(
+                "SelectOutcome",
+                vec![Type::named("str"), Type::named("int32")],
+            ),
+            "SelectOutcome",
+            "Queue",
+            Some(vec![
+                direct_index.clone(),
+                opaque_named("QueueReceive", vec![Type::named("str")]),
+            ]),
+        ),
+        (
+            opaque_named(
+                "SelectOutcome",
+                vec![Type::named("str"), Type::named("int32")],
+            ),
+            "SelectOutcome",
+            "Task",
+            Some(vec![
+                direct_index.clone(),
+                opaque_named("TaskResult", vec![Type::named("int32")]),
+            ]),
+        ),
+        (
+            opaque_named(
+                "SelectOutcome",
+                vec![Type::named("str"), Type::named("int32")],
+            ),
+            "SelectOutcome",
+            "Deadline",
+            Some(vec![direct_index.clone()]),
+        ),
+        (
+            opaque_named("Result", vec![Type::named("str"), named("io.Error")]),
             "Option",
             "Some",
             None,
         ),
         (
-            opaque_named("Result", vec![Type::named("String"), named("io.Error")]),
+            opaque_named("Result", vec![Type::named("str"), named("io.Error")]),
             "Result",
             "Missing",
             None,
@@ -11184,7 +11168,7 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
         ),
         (
             "result".to_string(),
-            opaque_named("Result", vec![Type::named("String"), named("io.Error")]),
+            opaque_named("Result", vec![Type::named("str"), named("io.Error")]),
         ),
         (
             "send".to_string(),
@@ -11192,7 +11176,7 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
         ),
         (
             "recv".to_string(),
-            opaque_named("QueueReceive", vec![Type::named("String")]),
+            opaque_named("QueueReceive", vec![Type::named("str")]),
         ),
         (
             "task".to_string(),
@@ -11200,11 +11184,18 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
         ),
         (
             "any".to_string(),
-            opaque_named("WaitAny", vec![Type::named("String")]),
+            opaque_named("WaitAny", vec![Type::named("str")]),
         ),
         (
             "all".to_string(),
             opaque_named("WaitAll", vec![Type::named("int32")]),
+        ),
+        (
+            "selected".to_string(),
+            opaque_named(
+                "SelectOutcome",
+                vec![Type::named("str"), Type::named("int32")],
+            ),
         ),
         ("count".to_string(), direct_int.clone()),
     ]);
@@ -11222,12 +11213,27 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
         ("recv", "Item", 0, Some(direct_string.clone())),
         ("task", "Ready", 0, Some(direct_int.clone())),
         ("task", "Error", 0, Some(direct_string.clone())),
-        ("any", "Ready", 0, Some(direct_int.clone())),
+        ("any", "Ready", 0, Some(direct_index.clone())),
         ("any", "Ready", 1, Some(direct_string.clone())),
         ("any", "Error", 1, Some(direct_string.clone())),
         ("all", "Ready", 0, Some(direct_vec_int.clone())),
-        ("all", "Error", 0, Some(direct_int.clone())),
+        ("all", "Error", 0, Some(direct_index.clone())),
         ("all", "Error", 1, Some(direct_string.clone())),
+        ("selected", "Queue", 0, Some(direct_index.clone())),
+        (
+            "selected",
+            "Queue",
+            1,
+            Some(opaque_named("QueueReceive", vec![Type::named("str")])),
+        ),
+        ("selected", "Task", 0, Some(direct_index.clone())),
+        (
+            "selected",
+            "Task",
+            1,
+            Some(opaque_named("TaskResult", vec![Type::named("int32")])),
+        ),
+        ("selected", "Deadline", 0, Some(direct_index.clone())),
         ("count", "Ready", 0, None),
         ("result", "Missing", 0, None),
     ] {
@@ -11289,19 +11295,16 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
     );
     assert_eq!(
         direct_type_to_type(&DirectType::Opaque(Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
             vec![Type::named("int32")],
         ))),
-        Type::Named("Vec".to_string(), vec![Type::named("int32")])
+        Type::Named("list".to_string(), vec![Type::named("int32")])
     );
     assert_eq!(
         DirectType::Scalar(ScalarKind::Bool).scalar_kind(),
         Some(ScalarKind::Bool)
     );
-    assert_eq!(
-        DirectType::Opaque(Type::named("String")).scalar_kind(),
-        None
-    );
+    assert_eq!(DirectType::Opaque(Type::named("str")).scalar_kind(), None);
     assert_eq!(
         render_direct_type(&DirectType::Scalar(ScalarKind::Float32)),
         "float32"
@@ -11321,7 +11324,7 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
         vec![cranelift_codegen::ir::types::F64]
     );
     assert_eq!(
-        DirectType::Opaque(Type::named("String")).abi_types(),
+        DirectType::Opaque(Type::named("str")).abi_types(),
         vec![cranelift_codegen::ir::types::I64]
     );
     let flat_class = DirectType::PlainClass(PlainClassType {
@@ -11360,7 +11363,7 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
     builder.seal_block(block);
 
     let scalar_zero = DirectType::Scalar(ScalarKind::Int32).zero_values(&mut builder);
-    let opaque_zero = DirectType::Opaque(Type::named("String")).zero_values(&mut builder);
+    let opaque_zero = DirectType::Opaque(Type::named("str")).zero_values(&mut builder);
     let class_zero = flat_class.zero_values(&mut builder);
     assert_eq!(scalar_zero.len(), 1);
     assert_eq!(opaque_zero.len(), 1);
@@ -11370,20 +11373,20 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
 
     assert!(is_numeric_type_name(&Type::named("uint64")));
     assert!(is_numeric_type_name(&Type::named("float32")));
-    assert!(!is_numeric_type_name(&Type::named("String")));
+    assert!(!is_numeric_type_name(&Type::named("str")));
     assert!(!is_numeric_type_name(&Type::Named(
-        "Vec".to_string(),
+        "list".to_string(),
         vec![Type::named("int32")],
     )));
 
     assert!(runtime_type_is_wildcard(&Type::TypeParam("T".to_string())));
     assert!(runtime_type_is_wildcard(&Type::named("Unknown")));
     assert!(runtime_type_is_wildcard(&Type::Named(
-        "Map".to_string(),
-        vec![Type::named("String"), Type::named("Unknown")],
+        "dict".to_string(),
+        vec![Type::named("str"), Type::named("Unknown")],
     )));
     assert!(!runtime_type_is_wildcard(&Type::Named(
-        "Vec".to_string(),
+        "list".to_string(),
         vec![Type::named("int32")],
     )));
     assert!(!runtime_type_is_wildcard(&Type::Unit));
@@ -11522,170 +11525,167 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             Type::named("int32"),
             "to_string",
-            Some(DirectType::Opaque(Type::named("String"))),
+            Some(DirectType::Opaque(Type::named("str"))),
         ),
         (
             Type::named("float64"),
             "to_string",
-            Some(DirectType::Opaque(Type::named("String"))),
+            Some(DirectType::Opaque(Type::named("str"))),
         ),
         (
             Type::named("bool"),
             "to_string",
-            Some(DirectType::Opaque(Type::named("String"))),
+            Some(DirectType::Opaque(Type::named("str"))),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "len",
             direct_type(&Type::named("int64"), &classes),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "byte_len",
             direct_type(&Type::named("int64"), &classes),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "contains",
             Some(DirectType::Scalar(ScalarKind::Bool)),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "starts_with",
             Some(DirectType::Scalar(ScalarKind::Bool)),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "ends_with",
             Some(DirectType::Scalar(ScalarKind::Bool)),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "split",
             Some(DirectType::Opaque(Type::Named(
-                "Vec".to_string(),
-                vec![Type::named("String")],
+                "list".to_string(),
+                vec![Type::named("str")],
             ))),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "replace",
-            Some(DirectType::Opaque(Type::named("String"))),
+            Some(DirectType::Opaque(Type::named("str"))),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "add",
-            Some(DirectType::Opaque(Type::named("String"))),
+            Some(DirectType::Opaque(Type::named("str"))),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "to_lower",
-            Some(DirectType::Opaque(Type::named("String"))),
+            Some(DirectType::Opaque(Type::named("str"))),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "to_upper",
-            Some(DirectType::Opaque(Type::named("String"))),
+            Some(DirectType::Opaque(Type::named("str"))),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "trim",
-            Some(DirectType::Opaque(Type::named("String"))),
+            Some(DirectType::Opaque(Type::named("str"))),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "clone",
-            Some(DirectType::Opaque(Type::named("String"))),
+            Some(DirectType::Opaque(Type::named("str"))),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "join",
-            Some(DirectType::Opaque(Type::named("String"))),
+            Some(DirectType::Opaque(Type::named("str"))),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "strip_prefix",
             Some(DirectType::Opaque(Type::Named(
                 "Option".to_string(),
-                vec![Type::named("String")],
+                vec![Type::named("str")],
             ))),
         ),
         (
-            Type::named("String"),
+            Type::named("str"),
             "strip_suffix",
             Some(DirectType::Opaque(Type::Named(
                 "Option".to_string(),
-                vec![Type::named("String")],
+                vec![Type::named("str")],
             ))),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "len",
             direct_type(&Type::named("int64"), &classes),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "is_empty",
             Some(DirectType::Scalar(ScalarKind::Bool)),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
-            "clone",
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
+            "copy",
             Some(DirectType::Opaque(Type::Named(
-                "Vec".to_string(),
+                "list".to_string(),
                 vec![Type::named("int32")],
             ))),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
-            "push",
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
+            "append",
             Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "extend",
             Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "clear",
             Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "reverse",
             Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "__set_index",
             Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "swap",
-            Some(DirectType::Scalar(ScalarKind::Bool)),
+            Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "contains",
             Some(DirectType::Scalar(ScalarKind::Bool)),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "insert",
-            Some(DirectType::Scalar(ScalarKind::Bool)),
+            Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "pop",
-            Some(DirectType::Opaque(Type::Named(
-                "Option".to_string(),
-                vec![Type::named("int32")],
-            ))),
+            direct_type(&Type::named("int32"), &classes),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "get",
             Some(DirectType::Opaque(Type::Named(
                 "Option".to_string(),
@@ -11693,23 +11693,17 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
             ))),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "set",
-            Some(DirectType::Opaque(Type::Named(
-                "Option".to_string(),
-                vec![Type::named("int32")],
-            ))),
+            direct_type(&Type::named("int32"), &classes),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "remove",
-            Some(DirectType::Opaque(Type::Named(
-                "Option".to_string(),
-                vec![Type::named("int32")],
-            ))),
+            Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "__index_option",
             Some(DirectType::Opaque(Type::Named(
                 "Option".to_string(),
@@ -11717,49 +11711,49 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
             ))),
         ),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             "__index",
             direct_type(&Type::named("int32"), &classes),
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             "len",
             direct_type(&Type::named("int64"), &classes),
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             "is_empty",
             Some(DirectType::Scalar(ScalarKind::Bool)),
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             "contains_key",
             Some(DirectType::Scalar(ScalarKind::Bool)),
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
-            "clone",
+            "copy",
             Some(DirectType::Opaque(Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ))),
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             "get",
             Some(DirectType::Opaque(Type::Named(
@@ -11769,19 +11763,8 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
-            ),
-            "set",
-            Some(DirectType::Opaque(Type::Named(
-                "Option".to_string(),
-                vec![Type::named("int32")],
-            ))),
-        ),
-        (
-            Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             "remove",
             Some(DirectType::Opaque(Type::Named(
@@ -11791,125 +11774,108 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             "keys",
             Some(DirectType::Opaque(Type::Named(
-                "Vec".to_string(),
-                vec![Type::named("String")],
+                "list".to_string(),
+                vec![Type::named("str")],
             ))),
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             "values",
             Some(DirectType::Opaque(Type::Named(
-                "Vec".to_string(),
+                "list".to_string(),
                 vec![Type::named("int32")],
             ))),
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             "items",
             Some(DirectType::Opaque(Type::Named(
-                "Vec".to_string(),
-                vec![Type::Named(
-                    "MapEntry".to_string(),
-                    vec![Type::named("String"), Type::named("int32")],
-                )],
+                "list".to_string(),
+                vec![Type::Tuple(vec![Type::named("str"), Type::named("int32")])],
             ))),
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
-            ),
-            "entries",
-            Some(DirectType::Opaque(Type::Named(
-                "Vec".to_string(),
-                vec![Type::Named(
-                    "MapEntry".to_string(),
-                    vec![Type::named("String"), Type::named("int32")],
-                )],
-            ))),
-        ),
-        (
-            Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             "clear",
             Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
-            "extend",
+            "update",
             Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             "__index",
             direct_type(&Type::named("int32"), &classes),
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             "__set_index",
             Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
         (
-            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            Type::Named("set".to_string(), vec![Type::named("str")]),
             "len",
             direct_type(&Type::named("int64"), &classes),
         ),
         (
-            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            Type::Named("set".to_string(), vec![Type::named("str")]),
             "is_empty",
             Some(DirectType::Scalar(ScalarKind::Bool)),
         ),
         (
-            Type::Named("Set".to_string(), vec![Type::named("String")]),
-            "clone",
+            Type::Named("set".to_string(), vec![Type::named("str")]),
+            "copy",
             Some(DirectType::Opaque(Type::Named(
-                "Set".to_string(),
-                vec![Type::named("String")],
+                "set".to_string(),
+                vec![Type::named("str")],
             ))),
         ),
         (
-            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            Type::Named("set".to_string(), vec![Type::named("str")]),
             "contains",
             Some(DirectType::Scalar(ScalarKind::Bool)),
         ),
         (
-            Type::Named("Set".to_string(), vec![Type::named("String")]),
-            "insert",
-            Some(DirectType::Scalar(ScalarKind::Bool)),
+            Type::Named("set".to_string(), vec![Type::named("str")]),
+            "add",
+            Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
         (
-            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            Type::Named("set".to_string(), vec![Type::named("str")]),
             "remove",
-            Some(DirectType::Scalar(ScalarKind::Bool)),
+            Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
         (
-            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            Type::Named("set".to_string(), vec![Type::named("str")]),
             "__index_option",
             Some(DirectType::Opaque(Type::Named(
                 "Option".to_string(),
-                vec![Type::named("String")],
+                vec![Type::named("str")],
             ))),
         ),
         (
@@ -11981,7 +11947,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
             "close",
             Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
-        (Type::named("String"), "missing", None),
+        (Type::named("str"), "missing", None),
     ] {
         assert_eq!(
             builtin_opaque_member_return_type(&object_ty, field, &classes),
@@ -11991,7 +11957,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
     }
 
     let named_type = |name: &str| Type::Named(name.to_string(), Vec::new());
-    let vec_type = |inner: Type| Type::Named("Vec".to_string(), vec![inner]);
+    let vec_type = |inner: Type| Type::Named("list".to_string(), vec![inner]);
     let option_type = |inner: Type| Type::Named("Option".to_string(), vec![inner]);
     let result_direct =
         |ok: Type, err: Type| DirectType::Opaque(Type::Named("Result".to_string(), vec![ok, err]));
@@ -12003,7 +11969,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("fs.File"),
             "read_all",
-            result_direct(Type::named("String"), io_error.clone()),
+            result_direct(Type::named("str"), io_error.clone()),
         ),
         (
             named_type("fs.File"),
@@ -12068,12 +12034,12 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("process.Pipe"),
             "read_all",
-            result_direct(Type::named("String"), process_error.clone()),
+            result_direct(Type::named("str"), process_error.clone()),
         ),
         (
             named_type("process.Pipe"),
             "read_line",
-            result_direct(option_type(Type::named("String")), process_error.clone()),
+            result_direct(option_type(Type::named("str")), process_error.clone()),
         ),
         (
             named_type("process.Pipe"),
@@ -12116,12 +12082,12 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("process.Completed"),
             "stdout",
-            direct_named("String"),
+            direct_named("str"),
         ),
         (
             named_type("process.Completed"),
             "stderr",
-            direct_named("String"),
+            direct_named("str"),
         ),
         (
             named_type("process.Completed"),
@@ -12174,7 +12140,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("net.TcpListener"),
             "local_addr",
-            result_direct(Type::named("String"), io_error.clone()),
+            result_direct(Type::named("str"), io_error.clone()),
         ),
         (
             named_type("net.TcpListener"),
@@ -12184,22 +12150,22 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("net.TcpStream"),
             "read_all",
-            result_direct(Type::named("String"), io_error.clone()),
+            result_direct(Type::named("str"), io_error.clone()),
         ),
         (
             named_type("net.TcpStream"),
             "local_addr",
-            result_direct(Type::named("String"), io_error.clone()),
+            result_direct(Type::named("str"), io_error.clone()),
         ),
         (
             named_type("net.TcpStream"),
             "peer_addr",
-            result_direct(Type::named("String"), io_error.clone()),
+            result_direct(Type::named("str"), io_error.clone()),
         ),
         (
             named_type("net.TcpStream"),
             "read_line",
-            result_direct(option_type(Type::named("String")), io_error.clone()),
+            result_direct(option_type(Type::named("str")), io_error.clone()),
         ),
         (
             named_type("net.TcpStream"),
@@ -12275,12 +12241,12 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("net.UdpSocket"),
             "local_addr",
-            result_direct(Type::named("String"), io_error.clone()),
+            result_direct(Type::named("str"), io_error.clone()),
         ),
         (
             named_type("net.UdpSocket"),
             "peer_addr",
-            result_direct(Type::named("String"), io_error.clone()),
+            result_direct(Type::named("str"), io_error.clone()),
         ),
         (
             named_type("net.UdpSocket"),
@@ -12290,7 +12256,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("net.UdpDatagram"),
             "address",
-            direct_named("String"),
+            direct_named("str"),
         ),
         (
             named_type("net.UdpDatagram"),
@@ -12300,7 +12266,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("net.UdpDatagram"),
             "text",
-            result_direct(Type::named("String"), io_error.clone()),
+            result_direct(Type::named("str"), io_error.clone()),
         ),
         (
             named_type("net.HttpListener"),
@@ -12310,7 +12276,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("net.HttpListener"),
             "local_addr",
-            result_direct(Type::named("String"), io_error.clone()),
+            result_direct(Type::named("str"), io_error.clone()),
         ),
         (
             named_type("net.HttpListener"),
@@ -12320,38 +12286,34 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("net.HttpExchange"),
             "method",
-            direct_named("String"),
+            direct_named("str"),
         ),
-        (
-            named_type("net.HttpExchange"),
-            "path",
-            direct_named("String"),
-        ),
+        (named_type("net.HttpExchange"), "path", direct_named("str")),
         (
             named_type("net.HttpExchange"),
             "headers",
             DirectType::Opaque(Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("String")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("str")],
             )),
         ),
         (
             named_type("net.HttpResponse"),
             "headers",
             DirectType::Opaque(Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("String")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("str")],
             )),
         ),
         (
             named_type("net.HttpExchange"),
             "body_text",
-            result_direct(Type::named("String"), io_error.clone()),
+            result_direct(Type::named("str"), io_error.clone()),
         ),
         (
             named_type("net.HttpResponse"),
             "text",
-            result_direct(Type::named("String"), io_error.clone()),
+            result_direct(Type::named("str"), io_error.clone()),
         ),
         (
             named_type("net.HttpExchange"),
@@ -12386,7 +12348,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("net.HttpResponse"),
             "reason",
-            direct_named("String"),
+            direct_named("str"),
         ),
         (
             named_type("net.HttpResponse"),
@@ -12401,7 +12363,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("net.WebSocketListener"),
             "local_addr",
-            result_direct(Type::named("String"), io_error.clone()),
+            result_direct(Type::named("str"), io_error.clone()),
         ),
         (
             named_type("net.WebSocketListener"),
@@ -12421,7 +12383,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("net.WebSocket"),
             "recv_text",
-            result_direct(option_type(Type::named("String")), io_error.clone()),
+            result_direct(option_type(Type::named("str")), io_error.clone()),
         ),
         (
             named_type("net.WebSocket"),
@@ -12449,7 +12411,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("net.UnixStream"),
             "read_line",
-            result_direct(option_type(Type::named("String")), io_error.clone()),
+            result_direct(option_type(Type::named("str")), io_error.clone()),
         ),
         (
             named_type("net.UnixStream"),
@@ -12474,7 +12436,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("net.TlsListener"),
             "local_addr",
-            result_direct(Type::named("String"), io_error.clone()),
+            result_direct(Type::named("str"), io_error.clone()),
         ),
         (
             named_type("net.TlsListener"),
@@ -12484,7 +12446,7 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         (
             named_type("net.TlsStream"),
             "read_line",
-            result_direct(option_type(Type::named("String")), io_error.clone()),
+            result_direct(option_type(Type::named("str")), io_error.clone()),
         ),
         (
             named_type("net.TlsStream"),
@@ -12555,7 +12517,7 @@ fn native_codegen_type_helpers_cover_nested_type_params_and_opaque_fallbacks() {
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
                     name: "value".to_string(),
-                    ty: Type::named("String"),
+                    ty: Type::named("str"),
                 }],
                 methods: Vec::new(),
             },
@@ -12565,10 +12527,10 @@ fn native_codegen_type_helpers_cover_nested_type_params_and_opaque_fallbacks() {
     let mut collected = BTreeSet::new();
     collect_type_params_from_type(
         &Type::Named(
-            "Map".to_string(),
+            "dict".to_string(),
             vec![
                 Type::TypeParam("K".to_string()),
-                Type::Named("Vec".to_string(), vec![Type::TypeParam("V".to_string())]),
+                Type::Named("list".to_string(), vec![Type::TypeParam("V".to_string())]),
             ],
         ),
         &mut collected,
@@ -12652,7 +12614,7 @@ fn validate_function_rejects_unreachable_terminators_for_direct_backend() {
                             key: Operand::String("a".to_string()),
                             value: Operand::Int(1),
                         }],
-                        key_type: Type::named("String"),
+                        key_type: Type::named("str"),
                         value_type: Type::named("int32"),
                     },
                 },
@@ -12892,7 +12854,7 @@ fn native_codegen_cleanup_thunks_cover_scalar_plain_opaque_and_metadata_errors()
         .define_cleanup_thunk(&plain_function, "resource")
         .expect("plain-class cleanup without close should return unit");
 
-    let opaque_function = cleanup_test_function("text", Type::named("String"), "text");
+    let opaque_function = cleanup_test_function("text", Type::named("str"), "text");
     let opaque_module = cleanup_test_module(vec![opaque_function.clone()]);
     let mut opaque_codegen =
         super::NativeCodegen::new(&opaque_module, "/tmp/direct_opaque_cleanup.au", "")
@@ -12947,7 +12909,7 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
         classes: vec![crate::mir::MirClass {
             name: "Managed".to_string(),
             type_params: Vec::new(),
-            fields: vec![class_field("handle", Type::named("String"))],
+            fields: vec![class_field("handle", Type::named("str"))],
             methods: vec![close_method("Managed.close")],
         }],
         trait_impls: Vec::new(),

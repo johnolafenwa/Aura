@@ -12,7 +12,7 @@ def next_light(l: Light) -> Light:
         case Light.Yellow:
             return Light.Red
 
-def light_name(l: Light) -> String:
+def light_name(l: Light) -> str:
     match own l:
         case Light.Red:
             return "red"

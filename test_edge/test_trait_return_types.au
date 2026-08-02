@@ -1,7 +1,7 @@
 # Test trait methods with various return types
 
 trait Stringifier:
-    def to_str(self) -> String
+    def to_str(self) -> str
 
 trait Counter:
     def count(self) -> int32
@@ -13,13 +13,13 @@ trait Checker:
     def is_ok(self) -> bool
 
 class Item:
-    name: String
+    name: str
     qty: int32
     rating: float64
     active: bool
 
 impl Stringifier for Item:
-    def to_str(self) -> String:
+    def to_str(self) -> str:
         return self.name
 
 impl Counter for Item:

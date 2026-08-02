@@ -6,15 +6,15 @@ import toml
 import trace
 
 def main() -> int32:
-    metadata: Map[String, String] = {"service": "router", "model": "small"}
+    metadata: dict[str, str] = {"service": "router", "model": "small"}
     print(path.join("artifacts", "manifest.json"))
-    match json.stringify_map(metadata.clone()):
+    match json.stringify_map(metadata.copy()):
         case Result.Ok(text):
             print(text)
         case Result.Err(error):
             print(error)
             return 1
-    match toml.stringify_map(metadata.clone()):
+    match toml.stringify_map(metadata.copy()):
         case Result.Ok(text):
             print(toml.is_valid(text))
         case Result.Err(error):
@@ -23,6 +23,6 @@ def main() -> int32:
     metrics.reset()
     metrics.increment("requests", 1)
     print(metrics.get("requests"))
-    log.info("router ready", metadata.clone())
+    log.info("router ready", metadata.copy())
     trace.event("startup", metadata)
     return 0

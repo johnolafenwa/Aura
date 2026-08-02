@@ -1144,7 +1144,7 @@ fn borrow_mir_string<'a>(operand: &'a Operand, env: &'a Env, call: &str) -> Resu
             Value::String(value) => Ok(value),
             other => Err(Diagnostic::coded(
                 "AU4001",
-                format!("`{call}` expects `String`, found `{}`", other.render()),
+                format!("`{call}` expects `str`, found `{}`", other.render()),
             )),
         },
         Operand::MovePlace(place) => Err(Diagnostic::new(format!(
@@ -1156,7 +1156,7 @@ fn borrow_mir_string<'a>(operand: &'a Operand, env: &'a Env, call: &str) -> Resu
             Err(Diagnostic::coded(
                 "AU4001",
                 format!(
-                    "`{call}` expects `String`, found `{}`",
+                    "`{call}` expects `str`, found `{}`",
                     value.as_value().render()
                 ),
             ))
@@ -1476,18 +1476,16 @@ fn evaluate_json_mir_host_call(
 
 fn evaluate_bytes_mir_host_call(name: &str, args: &[MirArg], env: &Env) -> Option<Result<Value>> {
     let expected_name = match name {
-        "bytes::hex_encode" | "bytes::base64_encode" | "bytes::sha256" | "String.to_bytes" => {
-            "value"
-        }
+        "bytes::hex_encode" | "bytes::base64_encode" | "bytes::sha256" | "str.to_bytes" => "value",
         "bytes::hex_decode" | "bytes::base64_decode" | "bytes::sha256_string" => "text",
-        "String.from_bytes" => "bytes",
+        "str.from_bytes" => "bytes",
         _ => return None,
     };
     let bound = match bind_mir_arg_refs(&[expected_name], args) {
         Ok(bound) => bound,
         Err(error) => return Some(Err(error)),
     };
-    if name == "String.to_bytes" {
+    if name == "str.to_bytes" {
         if let Operand::String(text) = &bound[0].value {
             return Some(evaluate_string_to_bytes_host_ref(text));
         }
@@ -1847,21 +1845,21 @@ impl MirRuntime {
             Value::Int(value) => Some(Type::named(value.runtime_type_name().unwrap_or("int64"))),
             Value::Float(_) => Some(Type::named("float64")),
             Value::Bool(_) => Some(Type::named("bool")),
-            Value::String(_) => Some(Type::named("String")),
+            Value::String(_) => Some(Type::named("str")),
             Value::Tuple(tuple) => Some(Type::Tuple(tuple.element_types.clone())),
             Value::Vec(vector) => Some(Type::Named(
-                "Vec".to_string(),
+                "list".to_string(),
                 vec![vector.element_type.clone()],
             )),
             Value::Array(array) => {
                 Some(Type::Named("Array".to_string(), vec![array.element_type()]))
             }
             Value::Set(set) => Some(Type::Named(
-                "Set".to_string(),
+                "set".to_string(),
                 vec![set.element_type.clone()],
             )),
             Value::Map(map) => Some(Type::Named(
-                "Map".to_string(),
+                "dict".to_string(),
                 vec![map.key_type.clone(), map.value_type.clone()],
             )),
             Value::Duration(_) => Some(Type::named("Duration")),
@@ -2108,7 +2106,7 @@ impl MirRuntime {
             Operand::Duration(_) => Some(Type::named("Duration")),
             Operand::Float(_) => Some(Type::named("float64")),
             Operand::Bool(_) => Some(Type::named("bool")),
-            Operand::String(_) => Some(Type::named("String")),
+            Operand::String(_) => Some(Type::named("str")),
             Operand::Unit => Some(Type::Unit),
         }
     }
@@ -2576,7 +2574,7 @@ impl MirRuntime {
                                 "AU4001",
                                 *span,
                                 format!(
-                                    "MIR assertion message must evaluate to `String`, found `{}`",
+                                    "MIR assertion message must evaluate to `str`, found `{}`",
                                     other.render()
                                 ),
                             ))
@@ -3186,7 +3184,7 @@ impl MirRuntime {
                     }));
                 }
 
-                if name == "Vec" {
+                if name == "list" {
                     let values = evaluate_named_args(args, env)?;
                     bind_builtin_args(&[], values)?;
                     return Ok(Value::Vec(VecValue {
@@ -3195,7 +3193,7 @@ impl MirRuntime {
                     }));
                 }
 
-                if name == "Set" {
+                if name == "set" {
                     let values = evaluate_named_args(args, env)?;
                     bind_builtin_args(&[], values)?;
                     return Ok(Value::Set(SetValue {
@@ -3204,7 +3202,7 @@ impl MirRuntime {
                     }));
                 }
 
-                if name == "Map" {
+                if name == "dict" {
                     let values = evaluate_named_args(args, env)?;
                     bind_builtin_args(&[], values)?;
                     return Ok(Value::Map(MapValue {
@@ -3274,7 +3272,7 @@ impl MirRuntime {
                         let shape = array_shape_from_runtime(&bound[0].value)?;
                         ArrayValue::full(dtype, shape, &bound[1].value)?
                     } else {
-                        debug_assert_eq!(member_name, "from_vec");
+                        debug_assert_eq!(member_name, "from_list");
                         let bound = bind_builtin_args(&["values", "shape"], values)?;
                         let vector = checked_mir_vec_ref(&bound[0].value);
                         debug_assert_eq!(ArrayDType::from_type(&vector.element_type), Some(dtype));
@@ -3324,6 +3322,55 @@ impl MirRuntime {
                             .map(Value::Duration)
                             .ok_or_else(|| Diagnostic::new("duration overflow"));
                     }
+                }
+
+                if let Some((type_name, "with_capacity")) = name
+                    .split_once('.')
+                    .filter(|(type_name, _)| matches!(*type_name, "list" | "dict" | "set"))
+                {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(&["minimum"], values)?;
+                    let minimum = expect_i64_value(
+                        &bound[0].value,
+                        &format!("{type_name}.with_capacity(...)"),
+                    )?;
+                    let minimum = usize::try_from(minimum).map_err(|_| {
+                        Diagnostic::coded("AU4003", "collection capacity cannot be negative")
+                    })?;
+                    return match (type_name, expected_return_type) {
+                        ("list", Some(Type::Named(_, args))) if args.len() == 1 => {
+                            let mut elements = Vec::new();
+                            elements.try_reserve(minimum).map_err(|_| {
+                                Diagnostic::coded("AU4005", "list capacity allocation failed")
+                            })?;
+                            Ok(Value::Vec(VecValue {
+                                element_type: args[0].clone(),
+                                elements,
+                            }))
+                        }
+                        ("dict", Some(Type::Named(_, args))) if args.len() == 2 => {
+                            let mut entries = Vec::new();
+                            entries.try_reserve(minimum).map_err(|_| {
+                                Diagnostic::coded("AU4005", "dictionary capacity allocation failed")
+                            })?;
+                            Ok(Value::Map(MapValue {
+                                key_type: args[0].clone(),
+                                value_type: args[1].clone(),
+                                entries,
+                            }))
+                        }
+                        ("set", Some(Type::Named(_, args))) if args.len() == 1 => {
+                            let mut elements = Vec::new();
+                            elements.try_reserve(minimum).map_err(|_| {
+                                Diagnostic::coded("AU4005", "set capacity allocation failed")
+                            })?;
+                            Ok(Value::Set(SetValue {
+                                element_type: args[0].clone(),
+                                elements,
+                            }))
+                        }
+                        _ => Err(Diagnostic::new("invalid collection capacity constructor")),
+                    };
                 }
 
                 if name == "cancelled" {
@@ -3457,7 +3504,7 @@ impl MirRuntime {
                             Err(error) => Ok(result_err(Value::String(error.to_string()))),
                         },
                         other => Err(Diagnostic::new(format!(
-                            "`parse_int32(...)` expects `String`, found `{}`",
+                            "`parse_int32(...)` expects `str`, found `{}`",
                             other.render()
                         ))),
                     };
@@ -3474,7 +3521,7 @@ impl MirRuntime {
                             Err(error) => Ok(result_err(Value::String(error.to_string()))),
                         },
                         other => Err(Diagnostic::new(format!(
-                            "`parse_int64(...)` expects `String`, found `{}`",
+                            "`parse_int64(...)` expects `str`, found `{}`",
                             other.render()
                         ))),
                     };
@@ -3492,7 +3539,7 @@ impl MirRuntime {
                             Err(error) => Ok(result_err(Value::String(error.to_string()))),
                         },
                         other => Err(Diagnostic::new(format!(
-                            "`parse_float64(...)` expects `String`, found `{}`",
+                            "`parse_float64(...)` expects `str`, found `{}`",
                             other.render()
                         ))),
                     };
@@ -3512,7 +3559,7 @@ impl MirRuntime {
                             Ok(result_ok(Value::Unit))
                         }
                         other => Err(Diagnostic::new(format!(
-                            "`io.write(...)` expects `String`, found `{}`",
+                            "`io.write(...)` expects `str`, found `{}`",
                             other.render()
                         ))),
                     };
@@ -3540,7 +3587,7 @@ impl MirRuntime {
                     return match &bound[0].value {
                         Value::String(path) => Ok(Value::Bool(std::path::Path::new(path).exists())),
                         other => Err(Diagnostic::new(format!(
-                            "`fs.exists(...)` expects `String`, found `{}`",
+                            "`fs.exists(...)` expects `str`, found `{}`",
                             other.render()
                         ))),
                     };
@@ -3758,7 +3805,7 @@ impl MirRuntime {
                             _ => None,
                         };
                         if builtin_name
-                            .and_then(|name| BuiltinMember::resolve(name, field))
+                            .and_then(|name| BuiltinMember::resolve_runtime(name, field))
                             .is_none()
                         {
                             if let Some(method) = self
@@ -4525,13 +4572,13 @@ impl MirRuntime {
                     Value::Vec(vector) => vector.clone(),
                     other => {
                         return Err(Diagnostic::new(format!(
-                            "`Rng.shuffle(...)` expects `Vec[T]`, found `{}`",
+                            "`Rng.shuffle(...)` expects `list[T]`, found `{}`",
                             other.render()
                         )))
                     }
                 };
                 let place = bound[0].writeback_place.as_deref().ok_or_else(|| {
-                    Diagnostic::new("`Rng.shuffle(...)` requires a mutable vector place")
+                    Diagnostic::new("`Rng.shuffle(...)` requires a mutable list place")
                 })?;
                 rng.shuffle(&mut vector.elements);
                 env.write_place(place, Value::Vec(vector))?;
@@ -4885,40 +4932,54 @@ impl MirRuntime {
                 }
                 Ok(Value::Bool(vector.elements.is_empty()))
             }
-            "clone" => {
+            "copy" => {
                 if !args.is_empty() {
-                    return Err(Diagnostic::new("`clone` does not take arguments"));
+                    return Err(Diagnostic::new("`copy` does not take arguments"));
                 }
                 Ok(Value::Vec(vector))
             }
-            "push" => {
+            "append" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["value"], values)?;
                 let mut updated = vector;
                 let Some(value) = bound.into_iter().next().map(|arg| arg.value) else {
                     return Err(Diagnostic::new(
-                        "internal error: `push` should bind one argument",
+                        "internal error: `append` should bind one argument",
                     ));
                 };
                 updated.elements.push(value);
                 let updated_value = Value::Vec(updated);
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`push` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`append` requires a mutable list place"));
                 };
                 env.write_place(place, updated_value)?;
                 Ok(Value::Unit)
             }
             "pop" => {
-                if !args.is_empty() {
-                    return Err(Diagnostic::new("`pop` does not take arguments"));
-                }
+                let values = evaluate_named_args(args, env)?;
                 let mut updated = vector;
-                let value = updated.elements.pop();
+                let index_value = if values.is_empty() {
+                    Value::Int(IntegerValue::from_signed(-1))
+                } else {
+                    bind_builtin_args(&["index"], values)?[0].value.clone()
+                };
+                let (supplied_index, index) =
+                    self.mir_vec_index_from_value(index_value, updated.elements.len())?;
+                let Some(index) = index.filter(|index| *index < updated.elements.len()) else {
+                    return Err(Diagnostic::coded(
+                        "AU4003",
+                        format!(
+                            "list pop index `{supplied_index}` is out of bounds for length `{}`",
+                            updated.elements.len()
+                        ),
+                    ));
+                };
+                let value = updated.elements.remove(index);
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`pop` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`pop` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(value.map(option_some).unwrap_or_else(option_none))
+                Ok(value)
             }
             "get" | "__index_option" => {
                 let values = evaluate_named_args(args, env)?;
@@ -4964,7 +5025,7 @@ impl MirRuntime {
                         Diagnostic::at(
                             crate::diag::Span::new(line, column),
                             format!(
-                                "vector index `{}` is out of bounds for length `{}`",
+                                "list index `{}` is out of bounds for length `{}`",
                                 supplied_index,
                                 vector.elements.len()
                             ),
@@ -4998,17 +5059,17 @@ impl MirRuntime {
                     self.mir_vec_index_from_value(index_value, updated.elements.len())?;
                 let Some(index) = index.filter(|index| *index < updated.elements.len()) else {
                     return Err(Diagnostic::new(format!(
-                        "vector set index `{}` is out of bounds for length `{}`",
+                        "list set index `{}` is out of bounds for length `{}`",
                         supplied_index,
                         updated.elements.len()
                     )));
                 };
                 let previous = std::mem::replace(&mut updated.elements[index], value);
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`set` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`set` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(option_some(previous))
+                Ok(previous)
             }
             "__set_index" => {
                 let values = evaluate_named_args(args, env)?;
@@ -5031,7 +5092,7 @@ impl MirRuntime {
                     return Err(Diagnostic::at(
                         crate::diag::Span::new(line, column),
                         format!(
-                            "vector index `{}` is out of bounds for length `{}`",
+                            "list index `{}` is out of bounds for length `{}`",
                             supplied_index,
                             updated.elements.len()
                         ),
@@ -5040,7 +5101,7 @@ impl MirRuntime {
                 updated.elements[index] = value;
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new(
-                        "indexed assignment requires a mutable vector place",
+                        "indexed assignment requires a mutable list place",
                     ));
                 };
                 env.write_place(place, Value::Vec(updated))?;
@@ -5048,23 +5109,49 @@ impl MirRuntime {
             }
             "remove" => {
                 let values = evaluate_named_args(args, env)?;
-                let bound = bind_builtin_args(&["index"], values)?;
+                let bound = bind_builtin_args(&["value"], values)?;
                 let mut updated = vector;
-                let (supplied_index, index) =
-                    self.mir_vec_index_from_value(bound[0].value.clone(), updated.elements.len())?;
-                let Some(index) = index.filter(|index| *index < updated.elements.len()) else {
-                    return Err(Diagnostic::new(format!(
-                        "vector remove index `{}` is out of bounds for length `{}`",
-                        supplied_index,
-                        updated.elements.len()
-                    )));
+                let Some(index) = updated
+                    .elements
+                    .iter()
+                    .position(|candidate| *candidate == bound[0].value)
+                else {
+                    return Err(
+                        Diagnostic::coded("AU4008", "collection value was not found").with_help(
+                            "check `value in values` before removing when absence is expected",
+                        ),
+                    );
                 };
-                let previous = updated.elements.remove(index);
+                updated.elements.remove(index);
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`remove` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`remove` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(option_some(previous))
+                Ok(Value::Unit)
+            }
+            "index" | "count" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["value"], values)?;
+                if field == "count" {
+                    let count = vector
+                        .elements
+                        .iter()
+                        .filter(|candidate| **candidate == bound[0].value)
+                        .count();
+                    return Ok(Value::Int(IntegerValue::from_literal(count as u128)));
+                }
+                let Some(index) = vector
+                    .elements
+                    .iter()
+                    .position(|candidate| *candidate == bound[0].value)
+                else {
+                    return Err(
+                        Diagnostic::coded("AU4008", "collection value was not found").with_help(
+                            "check `value in values` before searching when absence is expected",
+                        ),
+                    );
+                };
+                Ok(Value::Int(IntegerValue::from_literal(index as u128)))
             }
             "swap" => {
                 let values = evaluate_named_args(args, env)?;
@@ -5079,7 +5166,7 @@ impl MirRuntime {
                     second.filter(|index| *index < updated.elements.len()),
                 ) else {
                     return Err(Diagnostic::new(format!(
-                        "vector swap indices `{}` and `{}` are out of bounds for length `{}`",
+                        "list swap indices `{}` and `{}` are out of bounds for length `{}`",
                         supplied_first,
                         supplied_second,
                         updated.elements.len()
@@ -5087,10 +5174,10 @@ impl MirRuntime {
                 };
                 updated.elements.swap(first, second);
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`swap` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`swap` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(Value::Bool(true))
+                Ok(Value::Unit)
             }
             "contains" => {
                 let values = evaluate_named_args(args, env)?;
@@ -5114,21 +5201,20 @@ impl MirRuntime {
                     .expect("bound Vec.insert value should exist")
                     .value;
                 let mut updated = vector;
-                let (supplied_index, index) =
-                    self.mir_vec_index_from_value(index_value, updated.elements.len())?;
-                let Some(index) = index.filter(|index| *index <= updated.elements.len()) else {
-                    return Err(Diagnostic::new(format!(
-                        "vector insert index `{}` is out of bounds for length `{}`",
-                        supplied_index,
-                        updated.elements.len()
-                    )));
+                let supplied_index = expect_i64_value(&index_value, "list.insert index")? as i128;
+                let len = updated.elements.len() as i128;
+                let adjusted = if supplied_index < 0 {
+                    len.saturating_add(supplied_index)
+                } else {
+                    supplied_index
                 };
+                let index = adjusted.clamp(0, len) as usize;
                 updated.elements.insert(index, value);
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`insert` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`insert` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(Value::Bool(true))
+                Ok(Value::Unit)
             }
             "clear" => {
                 if !args.is_empty() {
@@ -5137,7 +5223,7 @@ impl MirRuntime {
                 let mut updated = vector;
                 updated.elements.clear();
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`clear` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`clear` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
                 Ok(Value::Unit)
@@ -5149,7 +5235,7 @@ impl MirRuntime {
                 let mut updated = vector;
                 updated.elements.reverse();
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`reverse` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`reverse` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
                 Ok(Value::Unit)
@@ -5163,12 +5249,30 @@ impl MirRuntime {
                     .expect("bound Vec.extend value should exist")
                     .value
                 else {
-                    return Err(Diagnostic::new("`extend` requires another `Vec[T]` value"));
+                    return Err(Diagnostic::new("`extend` requires another `list[T]` value"));
                 };
                 let mut updated = vector;
                 updated.elements.extend(other.elements);
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`extend` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`extend` requires a mutable list place"));
+                };
+                env.write_place(place, Value::Vec(updated))?;
+                Ok(Value::Unit)
+            }
+            "reserve" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["additional"], values)?;
+                let additional = expect_i64_value(&bound[0].value, "list.reserve(...)")?;
+                let additional = usize::try_from(additional).map_err(|_| {
+                    Diagnostic::coded("AU4003", "collection capacity cannot be negative")
+                })?;
+                let mut updated = vector;
+                updated
+                    .elements
+                    .try_reserve(additional)
+                    .map_err(|_| Diagnostic::coded("AU4005", "list capacity allocation failed"))?;
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`reserve` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
                 Ok(Value::Unit)
@@ -5203,9 +5307,9 @@ impl MirRuntime {
                 }
                 Ok(Value::Bool(map.entries.is_empty()))
             }
-            "clone" => {
+            "copy" => {
                 if !args.is_empty() {
-                    return Err(Diagnostic::new("`clone` does not take arguments"));
+                    return Err(Diagnostic::new("`copy` does not take arguments"));
                 }
                 Ok(Value::Map(map))
             }
@@ -5240,7 +5344,7 @@ impl MirRuntime {
                         Diagnostic::coded_at(
                             "AU4003",
                             crate::diag::Span::new(line, column),
-                            format!("map key `{}` was not present", key.render()),
+                            format!("dict key `{}` was not present", key.render()),
                         )
                     })?;
                 try_clone_mir_value(value)
@@ -5265,7 +5369,9 @@ impl MirRuntime {
                     None
                 };
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`set` requires a mutable map place"));
+                    return Err(Diagnostic::new(
+                        "indexed assignment requires a mutable dict place",
+                    ));
                 };
                 env.write_place(place, Value::Map(updated))?;
                 Ok(previous.map(option_some).unwrap_or_else(option_none))
@@ -5292,7 +5398,7 @@ impl MirRuntime {
                 }
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new(
-                        "indexed assignment requires a mutable map place",
+                        "indexed assignment requires a mutable dict place",
                     ));
                 };
                 env.write_place(place, Value::Map(updated))?;
@@ -5312,7 +5418,7 @@ impl MirRuntime {
                     None
                 };
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`remove` requires a mutable map place"));
+                    return Err(Diagnostic::new("`remove` requires a mutable dict place"));
                 };
                 env.write_place(place, Value::Map(updated))?;
                 Ok(removed.map(option_some).unwrap_or_else(option_none))
@@ -5352,7 +5458,7 @@ impl MirRuntime {
                     elements,
                 }))
             }
-            "items" | "entries" => {
+            "items" => {
                 if !args.is_empty() {
                     return Err(Diagnostic::new(format!(
                         "`{}` does not take arguments",
@@ -5362,19 +5468,13 @@ impl MirRuntime {
                 let mut elements =
                     try_array_buffer(map.entries.len(), "Array-containing Map entry copy")?;
                 for (key, value) in &map.entries {
-                    elements.push(Value::Instance(InstanceValue {
-                        class_name: "MapEntry".to_string(),
-                        fields: BTreeMap::from([
-                            ("key".to_string(), try_clone_mir_value(key)?),
-                            ("value".to_string(), try_clone_mir_value(value)?),
-                        ]),
+                    elements.push(Value::Tuple(TupleValue {
+                        element_types: vec![map.key_type.clone(), map.value_type.clone()],
+                        elements: vec![try_clone_mir_value(key)?, try_clone_mir_value(value)?],
                     }));
                 }
                 Ok(Value::Vec(VecValue {
-                    element_type: Type::Named(
-                        "MapEntry".to_string(),
-                        vec![map.key_type.clone(), map.value_type.clone()],
-                    ),
+                    element_type: Type::Tuple(vec![map.key_type.clone(), map.value_type.clone()]),
                     elements,
                 }))
             }
@@ -5390,17 +5490,17 @@ impl MirRuntime {
                 env.write_place(place, Value::Map(updated))?;
                 Ok(Value::Unit)
             }
-            "extend" => {
+            "update" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["other"], values)?;
                 let Value::Map(other) = bound
                     .into_iter()
                     .next()
-                    .expect("bound Map.extend value should exist")
+                    .expect("bound dict.update value should exist")
                     .value
                 else {
                     return Err(Diagnostic::new(
-                        "`extend` requires another `Map[K, V]` value",
+                        "`update` requires another `dict[K, V]` value",
                     ));
                 };
                 let mut updated = map;
@@ -5416,13 +5516,30 @@ impl MirRuntime {
                     }
                 }
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`extend` requires a mutable map place"));
+                    return Err(Diagnostic::new("`update` requires a mutable dict place"));
+                };
+                env.write_place(place, Value::Map(updated))?;
+                Ok(Value::Unit)
+            }
+            "reserve" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["additional"], values)?;
+                let additional = expect_i64_value(&bound[0].value, "dict.reserve(...)")?;
+                let additional = usize::try_from(additional).map_err(|_| {
+                    Diagnostic::coded("AU4003", "collection capacity cannot be negative")
+                })?;
+                let mut updated = map;
+                updated.entries.try_reserve(additional).map_err(|_| {
+                    Diagnostic::coded("AU4005", "dictionary capacity allocation failed")
+                })?;
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`reserve` requires a mutable dict place"));
                 };
                 env.write_place(place, Value::Map(updated))?;
                 Ok(Value::Unit)
             }
             _ => Err(Diagnostic::new(format!(
-                "unsupported map method `{}`",
+                "unsupported dict method `{}`",
                 field
             ))),
         }
@@ -5464,7 +5581,7 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["text"], values)?;
                 let Value::String(needle) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new("`contains` requires a `String` argument"));
+                    return Err(Diagnostic::new("`contains` requires a `str` argument"));
                 };
                 Ok(Value::Bool(text.contains(&needle)))
             }
@@ -5472,9 +5589,7 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["text"], values)?;
                 let Value::String(prefix) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new(
-                        "`starts_with` requires a `String` argument",
-                    ));
+                    return Err(Diagnostic::new("`starts_with` requires a `str` argument"));
                 };
                 Ok(Value::Bool(text.starts_with(&prefix)))
             }
@@ -5482,7 +5597,7 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["text"], values)?;
                 let Value::String(suffix) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new("`ends_with` requires a `String` argument"));
+                    return Err(Diagnostic::new("`ends_with` requires a `str` argument"));
                 };
                 Ok(Value::Bool(text.ends_with(&suffix)))
             }
@@ -5490,10 +5605,10 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["text"], values)?;
                 let Value::String(separator) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new("`split` requires a `String` argument"));
+                    return Err(Diagnostic::new("`split` requires a `str` argument"));
                 };
                 Ok(Value::Vec(VecValue {
-                    element_type: Type::named("String"),
+                    element_type: Type::named("str"),
                     elements: text
                         .split(&separator)
                         .map(|part| Value::String(part.to_string()))
@@ -5504,10 +5619,10 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["from", "to"], values)?;
                 let Value::String(from) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new("`replace` requires `String` for `from`"));
+                    return Err(Diagnostic::new("`replace` requires `str` for `from`"));
                 };
                 let Value::String(to) = bound[1].value.clone() else {
-                    return Err(Diagnostic::new("`replace` requires `String` for `to`"));
+                    return Err(Diagnostic::new("`replace` requires `str` for `to`"));
                 };
                 Ok(Value::String(text.replace(&from, &to)))
             }
@@ -5527,12 +5642,12 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["parts"], values)?;
                 let Value::Vec(parts) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new("`join` requires `Vec[String]`"));
+                    return Err(Diagnostic::new("`join` requires `list[str]`"));
                 };
                 let mut rendered_parts = Vec::new();
                 for value in parts.elements {
                     let Value::String(part) = value else {
-                        return Err(Diagnostic::new("`join` requires `Vec[String]`"));
+                        return Err(Diagnostic::new("`join` requires `list[str]`"));
                     };
                     rendered_parts.push(part);
                 }
@@ -5542,7 +5657,7 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["other"], values)?;
                 let Value::String(other) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new("`add` requires a `String` argument"));
+                    return Err(Diagnostic::new("`add` requires a `str` argument"));
                 };
                 Ok(Value::String(text + &other))
             }
@@ -5550,9 +5665,7 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["text"], values)?;
                 let Value::String(prefix) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new(
-                        "`strip_prefix` requires a `String` argument",
-                    ));
+                    return Err(Diagnostic::new("`strip_prefix` requires a `str` argument"));
                 };
                 Ok(text
                     .strip_prefix(&prefix)
@@ -5563,9 +5676,7 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["text"], values)?;
                 let Value::String(suffix) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new(
-                        "`strip_suffix` requires a `String` argument",
-                    ));
+                    return Err(Diagnostic::new("`strip_suffix` requires a `str` argument"));
                 };
                 Ok(text
                     .strip_suffix(&suffix)
@@ -5583,8 +5694,8 @@ impl MirRuntime {
                     return Err(Diagnostic::new("`to_bytes` does not take arguments"));
                 }
                 let value = Value::String(text);
-                evaluate_bytes_host_builtin_ref("String.to_bytes", &value)
-                    .expect("String.to_bytes should be a registered byte host builtin")
+                evaluate_bytes_host_builtin_ref("str.to_bytes", &value)
+                    .expect("str.to_bytes should be a registered byte host builtin")
             }
             "clone" => {
                 if !args.is_empty() {
@@ -5622,9 +5733,9 @@ impl MirRuntime {
                 }
                 Ok(Value::Bool(set.elements.is_empty()))
             }
-            "clone" => {
+            "copy" => {
                 if !args.is_empty() {
-                    return Err(Diagnostic::new("`clone` does not take arguments"));
+                    return Err(Diagnostic::new("`copy` does not take arguments"));
                 }
                 Ok(Value::Set(set))
             }
@@ -5637,12 +5748,12 @@ impl MirRuntime {
                         .any(|candidate| *candidate == bound[0].value),
                 ))
             }
-            "insert" => {
+            "add" => {
                 let values = evaluate_named_args(args, env)?;
                 let value = bind_builtin_args(&["value"], values)?
                     .into_iter()
                     .next()
-                    .expect("bound Set.insert value should exist")
+                    .expect("bound set.add value should exist")
                     .value;
                 let mut updated = set;
                 let inserted = if updated.elements.contains(&value) {
@@ -5652,12 +5763,13 @@ impl MirRuntime {
                     true
                 };
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`insert` requires a mutable set place"));
+                    return Err(Diagnostic::new("`add` requires a mutable set place"));
                 };
                 env.write_place(place, Value::Set(updated))?;
-                Ok(Value::Bool(inserted))
+                let _ = inserted;
+                Ok(Value::Unit)
             }
-            "remove" => {
+            "remove" | "discard" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["value"], values)?;
                 let mut updated = set;
@@ -5671,11 +5783,48 @@ impl MirRuntime {
                 } else {
                     false
                 };
+                if !removed && field == "remove" {
+                    return Err(
+                        Diagnostic::coded("AU4008", "collection value was not found").with_help(
+                            "check `value in values` before removing when absence is expected",
+                        ),
+                    );
+                }
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`remove` requires a mutable set place"));
                 };
                 env.write_place(place, Value::Set(updated))?;
-                Ok(Value::Bool(removed))
+                Ok(Value::Unit)
+            }
+            "clear" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`clear` does not take arguments"));
+                }
+                let mut updated = set;
+                updated.elements.clear();
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`clear` requires a mutable set place"));
+                };
+                env.write_place(place, Value::Set(updated))?;
+                Ok(Value::Unit)
+            }
+            "reserve" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["additional"], values)?;
+                let additional = expect_i64_value(&bound[0].value, "set.reserve(...)")?;
+                let additional = usize::try_from(additional).map_err(|_| {
+                    Diagnostic::coded("AU4003", "collection capacity cannot be negative")
+                })?;
+                let mut updated = set;
+                updated
+                    .elements
+                    .try_reserve(additional)
+                    .map_err(|_| Diagnostic::coded("AU4005", "set capacity allocation failed"))?;
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`reserve` requires a mutable set place"));
+                };
+                env.write_place(place, Value::Set(updated))?;
+                Ok(Value::Unit)
             }
             "__index_option" => {
                 let values = evaluate_named_args(args, env)?;
@@ -5756,28 +5905,28 @@ impl MirRuntime {
 
     fn mir_index_from_value(&self, value: Value) -> Result<usize> {
         let Value::Int(value) = value else {
-            return Err(Diagnostic::new("vector indices must be integers"));
+            return Err(Diagnostic::new("list indices must be integers"));
         };
         let index = value
             .as_i128()
-            .ok_or_else(|| Diagnostic::new("vector index is outside the supported signed range"))?;
+            .ok_or_else(|| Diagnostic::new("list index is outside the supported signed range"))?;
         if index < 0 {
             return Err(Diagnostic::new(format!(
-                "vector index `{}` cannot be negative",
+                "list index `{}` cannot be negative",
                 index
             )));
         }
         usize::try_from(index)
-            .map_err(|_| Diagnostic::new("vector index does not fit in the MIR address space"))
+            .map_err(|_| Diagnostic::new("list index does not fit in the MIR address space"))
     }
 
     fn mir_vec_index_from_value(&self, value: Value, len: usize) -> Result<(i128, Option<usize>)> {
         let Value::Int(value) = value else {
-            return Err(Diagnostic::new("vector indices must be integers"));
+            return Err(Diagnostic::new("list indices must be integers"));
         };
         let supplied = value
             .as_i128()
-            .ok_or_else(|| Diagnostic::new("vector index is outside the supported signed range"))?;
+            .ok_or_else(|| Diagnostic::new("list index is outside the supported signed range"))?;
         // Rust's supported pointer widths fit losslessly in i128, so this conversion
         // has no runtime failure case to defend or cover.
         let len = len as i128;
@@ -6077,13 +6226,13 @@ impl MirRuntime {
                     (Value::String(path), Value::String(text)) => (path, text),
                     (other, _) if !matches!(other, Value::String(_)) => {
                         return Err(Diagnostic::new(format!(
-                            "`{}` expects `String` for `path`",
+                            "`{}` expects `str` for `path`",
                             name
                         )))
                     }
                     (_, other) => {
                         return Err(Diagnostic::new(format!(
-                            "`{}` expects `String` for `text`, found `{}`",
+                            "`{}` expects `str` for `text`, found `{}`",
                             name,
                             other.render()
                         )))
@@ -6163,7 +6312,7 @@ impl MirRuntime {
                     Some(&self.cancellation),
                 ) {
                     Ok(names) => Ok(result_ok(Value::Vec(VecValue {
-                        element_type: Type::named("String"),
+                        element_type: Type::named("str"),
                         elements: names.into_iter().map(Value::String).collect(),
                     }))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -6196,7 +6345,7 @@ impl MirRuntime {
                         }
                     }
                     other => Err(Diagnostic::new(format!(
-                        "`{}` expects `String`, found `{}`",
+                        "`{}` expects `str`, found `{}`",
                         name,
                         other.render()
                     ))),
@@ -6212,7 +6361,7 @@ impl MirRuntime {
                         }
                     }
                     other => Err(Diagnostic::new(format!(
-                        "`net.connect(...)` expects `String`, found `{}`",
+                        "`net.connect(...)` expects `str`, found `{}`",
                         other.render()
                     ))),
                 }
@@ -6235,7 +6384,7 @@ impl MirRuntime {
                         Err(error) => Ok(result_err(io_error(error))),
                     },
                     other => Err(Diagnostic::new(format!(
-                        "`net.listen(...)` expects `String`, found `{}`",
+                        "`net.listen(...)` expects `str`, found `{}`",
                         other.render()
                     ))),
                 }
@@ -6448,7 +6597,7 @@ impl MirRuntime {
                                 ))
                             }),
                         other => Err(Diagnostic::new(format!(
-                            "process {} capture returned `{}` inside `Vec[uint8]`",
+                            "process {} capture returned `{}` inside `list[uint8]`",
                             label,
                             other.render()
                         ))),
@@ -6456,7 +6605,7 @@ impl MirRuntime {
                     .collect()
             }
             TaskWaitStatus::Ready(Ok(other)) => Err(Diagnostic::new(format!(
-                "process {} capture returned `{}` instead of `Vec[uint8]`",
+                "process {} capture returned `{}` instead of `list[uint8]`",
                 label,
                 other.render()
             ))),
@@ -6502,7 +6651,7 @@ impl MirRuntime {
                         Err(error) => Ok(result_err(io_error(error))),
                     },
                     other => Err(Diagnostic::new(format!(
-                        "`write_all(...)` expects `String`, found `{}`",
+                        "`write_all(...)` expects `str`, found `{}`",
                         other.render()
                     ))),
                 }
@@ -7067,7 +7216,7 @@ impl MirRuntime {
                         }
                     }
                     other => Err(Diagnostic::new(format!(
-                        "`write_all(...)` expects `String`, found `{}`",
+                        "`write_all(...)` expects `str`, found `{}`",
                         other.render()
                     ))),
                 }
@@ -7646,7 +7795,7 @@ impl MirRuntime {
     fn expect_task_list(&self, value: &Value, label: &str) -> Result<Vec<TaskValue>> {
         let Value::Vec(tasks) = value else {
             return Err(Diagnostic::new(format!(
-                "`{label}` expects `Vec[Task[T]]`, found `{}`",
+                "`{label}` expects `list[Task[T]]`, found `{}`",
                 value.render()
             )));
         };
@@ -7654,7 +7803,7 @@ impl MirRuntime {
         for task in &tasks.elements {
             let Value::Task(task) = task else {
                 return Err(Diagnostic::new(format!(
-                    "`{label}` expects `Vec[Task[T]]`, found `{}`",
+                    "`{label}` expects `list[Task[T]]`, found `{}`",
                     value.render()
                 )));
             };
@@ -7691,8 +7840,8 @@ impl MirRuntime {
         loop {
             for (index, task) in tasks.iter().enumerate() {
                 if let Some(result) = task.completed_result_observed() {
-                    let index = i32::try_from(index).map_err(|_| {
-                        Diagnostic::new("wait_any result index exceeds int32 range")
+                    let index = i64::try_from(index).map_err(|_| {
+                        Diagnostic::new("wait_any result index exceeds int64 range")
                     })?;
                     return match result {
                         crate::runtime_value::TaskExecutionResult::Ready(result) => match result {
@@ -7738,8 +7887,8 @@ impl MirRuntime {
                 TaskWaitStatus::Ready(result) => match result {
                     Ok(value) => results.push(value),
                     Err(error) => {
-                        let index = i32::try_from(index).map_err(|_| {
-                            Diagnostic::new("wait_all result index exceeds int32 range")
+                        let index = i64::try_from(index).map_err(|_| {
+                            Diagnostic::new("wait_all result index exceeds int64 range")
                         })?;
                         return Ok(wait_all_error(index, error.message));
                     }
@@ -8029,7 +8178,7 @@ enum BlockOutcome {
 fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
     match (&param.ty, param.passing) {
         (Type::Named(name, args), MirReceiverKind::BorrowMut)
-            if name == "Vec" && args.as_slice() == [Type::named("uint8")] =>
+            if name == "list" && args.as_slice() == [Type::named("uint8")] =>
         {
             Ok(FfiType::BytesViewMut)
         }
@@ -8052,12 +8201,12 @@ fn ffi_type_for_extern_result(ty: &Type) -> Result<FfiType> {
             "uint64" => FfiType::U64,
             "float32" => FfiType::F32,
             "float64" => FfiType::F64,
-            "String" => FfiType::StringView,
+            "str" => FfiType::StringView,
             // Every other argument-less nominal admitted by semantic analysis
             // is a declared extern opaque handle.
             _ => FfiType::OpaqueHandle,
         },
-        Type::Named(name, args) if name == "Vec" && args.as_slice() == [Type::named("uint8")] => {
+        Type::Named(name, args) if name == "list" && args.as_slice() == [Type::named("uint8")] => {
             FfiType::BytesView
         }
         other => {
@@ -8129,13 +8278,13 @@ fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
                 Value::Float(value) => Ok(FfiValue::F64(*value)),
                 _ => Err(mismatch()),
             },
-            "String" => match value {
+            "str" => match value {
                 Value::String(value) => Ok(FfiValue::String(value.clone())),
                 _ => Err(mismatch()),
             },
             _ => opaque_handle_from_runtime(value).ok_or_else(mismatch),
         },
-        Type::Named(name, args) if name == "Vec" && args.as_slice() == [Type::named("uint8")] => {
+        Type::Named(name, args) if name == "list" && args.as_slice() == [Type::named("uint8")] => {
             let Value::Vec(vector) = value else {
                 return Err(mismatch());
             };
@@ -8301,26 +8450,26 @@ fn array_shape_from_runtime(value: &Value) -> Result<Box<[usize]>> {
         .map(Vec::into_boxed_slice)
 }
 
-fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i32]>> {
-    fn coordinate(value: &Value) -> i32 {
+fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i64]>> {
+    fn coordinate(value: &Value) -> i64 {
         let value = checked_mir_integer_ref(value);
         debug_assert!(matches!(
             value.runtime_kind(),
-            None | Some(IntegerKind::Int32)
+            None | Some(IntegerKind::Int64)
         ));
-        i32::try_from(
+        i64::try_from(
             value
                 .as_i128()
-                .expect("int32 runtime values always fit i128"),
+                .expect("int64 runtime values always fit i128"),
         )
-        .expect("semantic analysis validates int32 coordinate literal bounds")
+        .expect("semantic analysis validates int64 coordinate literal bounds")
     }
 
     if matches!(value, Value::Int(_)) {
         return Ok(vec![coordinate(value)].into_boxed_slice());
     }
     let elements = if let Value::Vec(vector) = value {
-        debug_assert_eq!(vector.element_type, Type::named("int32"));
+        debug_assert_eq!(vector.element_type, Type::named("int64"));
         vector.elements.as_slice()
     } else {
         let tuple = checked_mir_tuple_ref(value);
@@ -8328,7 +8477,7 @@ fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i32]>> {
         debug_assert!(tuple
             .element_types
             .iter()
-            .all(|ty| *ty == Type::named("int32")));
+            .all(|ty| *ty == Type::named("int64")));
         tuple.elements.as_slice()
     };
     Ok(elements
@@ -8348,7 +8497,7 @@ fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMi
                 Operand::Duration(_) => Some(Type::named("Duration")),
                 Operand::Float(_) => Some(Type::named("float64")),
                 Operand::Bool(_) => Some(Type::named("bool")),
-                Operand::String(_) => Some(Type::named("String")),
+                Operand::String(_) => Some(Type::named("str")),
                 Operand::Unit => Some(Type::Unit),
             };
             let value = match &arg.value {
@@ -8707,7 +8856,7 @@ fn expect_string_value(value: &Value, label: &str) -> Result<String> {
     match value {
         Value::String(text) => Ok(text.clone()),
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `String`, found `{}`",
+            "`{}` expects `str`, found `{}`",
             label,
             other.render()
         ))),
@@ -8718,7 +8867,7 @@ fn expect_owned_string_value(value: Value, label: &str) -> Result<String> {
     match value {
         Value::String(text) => Ok(text),
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `String`, found `{}`",
+            "`{}` expects `str`, found `{}`",
             label,
             other.render()
         ))),
@@ -8727,13 +8876,13 @@ fn expect_owned_string_value(value: Value, label: &str) -> Result<String> {
 
 fn expect_command_vec(value: &Value, label: &str) -> Result<Vec<String>> {
     match value {
-        Value::Vec(vector) if vector.element_type == Type::named("String") => vector
+        Value::Vec(vector) if vector.element_type == Type::named("str") => vector
             .elements
             .iter()
             .map(|element| expect_string_value(element, label))
             .collect(),
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Vec[String]`, found `{}`",
+            "`{}` expects `list[str]`, found `{}`",
             label,
             other.render()
         ))),
@@ -8742,13 +8891,13 @@ fn expect_command_vec(value: &Value, label: &str) -> Result<Vec<String>> {
 
 fn expect_owned_command_vec(value: Value, label: &str) -> Result<Vec<String>> {
     match value {
-        Value::Vec(vector) if vector.element_type == Type::named("String") => vector
+        Value::Vec(vector) if vector.element_type == Type::named("str") => vector
             .elements
             .into_iter()
             .map(|element| expect_owned_string_value(element, label))
             .collect(),
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Vec[String]`, found `{}`",
+            "`{}` expects `list[str]`, found `{}`",
             label,
             other.render()
         ))),
@@ -8772,15 +8921,15 @@ fn expect_bytes_value(value: &Value, label: &str) -> Result<Vec<u8>> {
                 };
                 let byte = value
                     .as_i128()
-                    .ok_or_else(|| Diagnostic::new(format!("`{}` expects `Vec[uint8]`", label)))?;
+                    .ok_or_else(|| Diagnostic::new(format!("`{}` expects `list[uint8]`", label)))?;
                 let byte = u8::try_from(byte)
-                    .map_err(|_| Diagnostic::new(format!("`{}` expects `Vec[uint8]`", label)))?;
+                    .map_err(|_| Diagnostic::new(format!("`{}` expects `list[uint8]`", label)))?;
                 bytes.push(byte);
             }
             Ok(bytes)
         }
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Vec[uint8]`, found `{}`",
+            "`{}` expects `list[uint8]`, found `{}`",
             label,
             other.render()
         ))),
@@ -8804,15 +8953,15 @@ fn expect_owned_bytes_value(value: Value, label: &str) -> Result<Vec<u8>> {
                 };
                 let byte = value
                     .as_i128()
-                    .ok_or_else(|| Diagnostic::new(format!("`{}` expects `Vec[uint8]`", label)))?;
+                    .ok_or_else(|| Diagnostic::new(format!("`{}` expects `list[uint8]`", label)))?;
                 let byte = u8::try_from(byte)
-                    .map_err(|_| Diagnostic::new(format!("`{}` expects `Vec[uint8]`", label)))?;
+                    .map_err(|_| Diagnostic::new(format!("`{}` expects `list[uint8]`", label)))?;
                 bytes.push(byte);
             }
             Ok(bytes)
         }
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Vec[uint8]`, found `{}`",
+            "`{}` expects `list[uint8]`, found `{}`",
             label,
             other.render()
         ))),
@@ -8844,13 +8993,13 @@ fn expect_optional_string_value(value: &Value, label: &str) -> Result<Option<Str
             match variant.payloads.as_slice() {
                 [text] => Ok(Some(expect_string_value(text, label)?)),
                 _ => Err(Diagnostic::new(format!(
-                    "`{}` expects `Option[String]`, found malformed option payload",
+                    "`{}` expects `Option[str]`, found malformed option payload",
                     label
                 ))),
             }
         }
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Option[String]`, found `{}`",
+            "`{}` expects `Option[str]`, found `{}`",
             label,
             other.render()
         ))),
@@ -8870,7 +9019,7 @@ fn expect_owned_optional_string_value(value: Value, label: &str) -> Result<Optio
         {
             if variant.payloads.len() != 1 {
                 return Err(Diagnostic::new(format!(
-                    "`{}` expects `Option[String]`, found malformed option payload",
+                    "`{}` expects `Option[str]`, found malformed option payload",
                     label
                 )));
             }
@@ -8880,7 +9029,7 @@ fn expect_owned_optional_string_value(value: Value, label: &str) -> Result<Optio
             )?))
         }
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Option[String]`, found `{}`",
+            "`{}` expects `Option[str]`, found `{}`",
             label,
             other.render()
         ))),
@@ -9039,8 +9188,7 @@ fn process_error_from_io(error: std::io::Error) -> Value {
 fn expect_headers_map(value: &Value, label: &str) -> Result<Vec<(String, String)>> {
     match value {
         Value::Map(map)
-            if (map.key_type == Type::named("String")
-                && map.value_type == Type::named("String"))
+            if (map.key_type == Type::named("str") && map.value_type == Type::named("str"))
                 || map.entries.is_empty() =>
         {
             let mut headers = Vec::with_capacity(map.entries.len());
@@ -9053,7 +9201,7 @@ fn expect_headers_map(value: &Value, label: &str) -> Result<Vec<(String, String)
             Ok(headers)
         }
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Map[String, String]`, found `{}`",
+            "`{}` expects `dict[str, str]`, found `{}`",
             label,
             other.render()
         ))),
@@ -9063,8 +9211,7 @@ fn expect_headers_map(value: &Value, label: &str) -> Result<Vec<(String, String)
 fn expect_owned_headers_map(value: Value, label: &str) -> Result<Vec<(String, String)>> {
     match value {
         Value::Map(map)
-            if (map.key_type == Type::named("String")
-                && map.value_type == Type::named("String"))
+            if (map.key_type == Type::named("str") && map.value_type == Type::named("str"))
                 || map.entries.is_empty() =>
         {
             let mut headers = Vec::with_capacity(map.entries.len());
@@ -9077,7 +9224,7 @@ fn expect_owned_headers_map(value: Value, label: &str) -> Result<Vec<(String, St
             Ok(headers)
         }
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Map[String, String]`, found `{}`",
+            "`{}` expects `dict[str, str]`, found `{}`",
             label,
             other.render()
         ))),
@@ -9086,8 +9233,8 @@ fn expect_owned_headers_map(value: Value, label: &str) -> Result<Vec<(String, St
 
 fn headers_map_value(headers: Vec<(String, String)>) -> Value {
     Value::Map(MapValue {
-        key_type: Type::named("String"),
-        value_type: Type::named("String"),
+        key_type: Type::named("str"),
+        value_type: Type::named("str"),
         entries: headers
             .into_iter()
             .map(|(key, value)| (Value::String(key), Value::String(value)))

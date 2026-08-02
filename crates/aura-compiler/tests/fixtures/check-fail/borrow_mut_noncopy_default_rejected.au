@@ -1,5 +1,5 @@
 class Box:
-    value: String
+    value: str
 
 def replace(value: mut Box = Box(value="before")):
     value.value = "after"

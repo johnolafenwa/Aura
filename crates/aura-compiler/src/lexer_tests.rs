@@ -23,7 +23,7 @@ fn lexes_keywords_operators_and_delimiters() {
     assert!(tokens.contains(&TokenKind::KwImport));
     assert!(tokens.contains(&TokenKind::KwFrom));
     assert!(tokens.contains(&TokenKind::KwMut));
-    assert!(tokens.contains(&TokenKind::KwBorrow));
+    assert!(tokens.contains(&TokenKind::Identifier("borrow".to_string())));
     assert!(tokens.contains(&TokenKind::KwOwn));
     assert!(tokens.contains(&TokenKind::KwIndirect));
     assert!(tokens.contains(&TokenKind::KwPublic));

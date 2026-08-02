@@ -44,14 +44,14 @@ Built binaries embed source and frame metadata for runtime failures. A simple
 failure at minimum renders its stable code, file, line, and caret:
 
 ```
-error[AU4003]: vector index `10` is out of bounds for length `3`
+error[AU4003]: list index `10` is out of bounds for length `3`
  --> app.au:5:20
   |
 5 |     x: int32 = values[10]
   |                      ^
 ```
 
-Arithmetic traps, vector bounds errors, recursion-limit failures, and resource cleanup paths are expected to behave identically between `aura run` and the native binary. If you observe a difference, it is a bug worth reporting.
+Arithmetic traps, list bounds errors, recursion-limit failures, and resource cleanup paths are expected to behave identically between `aura run` and the native binary. If you observe a difference, it is a bug worth reporting.
 
 The frame data is captured once at the trap site, before runtime cleanup can
 discard the active call/task state. Human output synthesizes readable

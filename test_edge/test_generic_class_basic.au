@@ -19,7 +19,7 @@ def main() -> int32:
     b1 = Box(value=42)
     print(b1.get())
 
-    # Box with String
+    # Box with str
     b2 = Box(value="hello")
     print(b2.get())
 
@@ -36,7 +36,7 @@ def main() -> int32:
     print(h1.get_item())
     print(h1.get_count())
 
-    # Holder with String
+    # Holder with str
     h2 = Holder(item="world", count=5)
     print(h2.get_item())
     print(h2.get_count())

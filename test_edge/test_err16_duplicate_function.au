@@ -1,7 +1,7 @@
-def greet() -> String:
+def greet() -> str:
     return "hello"
 
-def greet() -> String:
+def greet() -> str:
     return "hi"
 
 def main() -> int32:

@@ -1,5 +1,5 @@
-def take(value: own String):
+def take(value: own str):
     pass
 
-def relay(value: String):
+def relay(value: str):
     take(value)

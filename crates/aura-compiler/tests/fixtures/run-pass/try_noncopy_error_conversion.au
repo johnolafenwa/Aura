@@ -2,7 +2,7 @@ trait From[T]:
     def from(value: own T) -> Self
 
 enum ReadError:
-    Missing(String)
+    Missing(str)
 
 enum AppError:
     Read(ReadError)
@@ -11,12 +11,12 @@ impl From[ReadError] for AppError:
     def from(value: own ReadError) -> AppError:
         return AppError.Read(value)
 
-def read(available: bool) -> Result[String, ReadError]:
+def read(available: bool) -> Result[str, ReadError]:
     if available:
         return Result.Ok("payload")
     return Result.Err(ReadError.Missing("missing.au"))
 
-def load(available: bool) -> Result[String, AppError]:
+def load(available: bool) -> Result[str, AppError]:
     value = try read(available)
     return Result.Ok(value)
 

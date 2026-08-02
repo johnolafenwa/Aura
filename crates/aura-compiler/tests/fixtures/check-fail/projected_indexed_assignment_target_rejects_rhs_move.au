@@ -1,5 +1,5 @@
 class Node:
-    children: indirect Vec[Node]
+    children: indirect list[Node]
 
 def main():
     mut node = Node(children=[])

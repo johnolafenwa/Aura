@@ -12,8 +12,8 @@ def main() -> int32:
     print(unwrap_or(a, 0))
     print(unwrap_or(b, -1))
 
-    c: Option[String] = Option.Some("hello")
-    d: Option[String] = Option.None
+    c: Option[str] = Option.Some("hello")
+    d: Option[str] = Option.None
     print(unwrap_or(c, "default"))
     print(unwrap_or(d, "default"))
 

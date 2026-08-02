@@ -13,7 +13,7 @@ class Outer:
 def print_int64(value: int64):
     print(value)
 
-def print_first(values: Vec[int64]):
+def print_first(values: list[int64]):
     print(values[0])
 
 def print_optional(value: Option[int64]):

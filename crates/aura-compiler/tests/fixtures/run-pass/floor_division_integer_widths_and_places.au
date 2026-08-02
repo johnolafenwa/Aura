@@ -75,13 +75,13 @@ def main() -> int32:
     print(totals.wide)
     print(totals.ratio)
 
-    mut values: Vec[int32] = [-7, 7]
+    mut values: list[int32] = [-7, 7]
     values[0] //= 3
     values[1] %= -3
     print(values[0])
     print(values[1])
 
-    mut counts: Map[String, int32] = {"left": -7, "right": 7}
+    mut counts: dict[str, int32] = {"left": -7, "right": 7}
     counts["left"] //= 3
     counts["right"] %= -3
     print(counts["left"])

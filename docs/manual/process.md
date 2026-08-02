@@ -1,6 +1,6 @@
 # Process Module
 
-The `process` module runs child processes without a shell by default. Commands are explicit `Vec[String]` argv values. That means `["/bin/echo", "hello world"]` runs exactly one executable with one argument; Aura does not split strings or expand shell syntax.
+The `process` module runs child processes without a shell by default. Commands are explicit `list[str]` argv values. That means `["/bin/echo", "hello world"]` runs exactly one executable with one argument; Aura does not split strings or expand shell syntax.
 
 ```python
 import process
@@ -31,7 +31,7 @@ the same result as the qualified direct call.
 
 ## process.run
 
-Signature: `process.run(command: Vec[String], cwd: Option[String] = None, env: Map[String, String] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.pipe(), stderr: process.Stdio = process.pipe(), timeout: Duration = ..., group: bool = false) -> Result[process.Completed, process.Error]`
+Signature: `process.run(command: list[str], cwd: Option[str] = None, env: dict[str, str] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.pipe(), stderr: process.Stdio = process.pipe(), timeout: Duration = ..., group: bool = false) -> Result[process.Completed, process.Error]`
 
 `process.run(...)` starts a child, waits for it, and returns a `process.Completed` value. By default, stdin is null and stdout/stderr are captured. Omitting `timeout` uses an internal absence marker and supplies no caller deadline. No Duration value is that marker: an explicit negative timeout is invalid rather than unlimited.
 
@@ -42,7 +42,7 @@ null stdin, captured stdout/stderr, and no caller deadline. Storing the value
 behind a structural function annotation, class field, or mutable collection
 erases those call-site extras and requires every positional argument.
 
-The `env` map augments the inherited host environment and replaces inherited values with matching names. Aura never invokes a shell for `run` or `start`. Capture occurs only for streams configured with `process.pipe()` and each captured stream is capped at 64 MiB.
+The `env` dictionary augments the inherited host environment and replaces inherited values with matching names. Aura never invokes a shell for `run` or `start`. Capture occurs only for streams configured with `process.pipe()` and each captured stream is capped at 64 MiB.
 
 ```python
 def run_echo() -> Result[None, process.Error]:
@@ -58,7 +58,7 @@ Set `group=true` when the child may spawn descendants and the parent should clea
 
 ## process.start
 
-Signature: `process.start(command: Vec[String], cwd: Option[String] = None, env: Map[String, String] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.inherit(), stderr: process.Stdio = process.inherit(), group: bool = false) -> Result[process.Child, process.Error]`
+Signature: `process.start(command: list[str], cwd: Option[str] = None, env: dict[str, str] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.inherit(), stderr: process.Stdio = process.inherit(), group: bool = false) -> Result[process.Child, process.Error]`
 
 `process.start(...)` returns a live `process.Child`. The default is interactive-friendly: stdout and stderr inherit the parent's streams unless you ask for pipes.
 
@@ -105,11 +105,11 @@ The caller is responsible for waiting, killing, terminating, or closing the chil
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `read_all` | `read_all() -> Result[String, process.Error]` | Reads remaining strict UTF-8 text until EOF, capped at 64 MiB. Use byte APIs for arbitrary output. |
-| `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[String], process.Error]` | Reads one strict UTF-8 line without its trailing LF/CRLF, `Ok(None)` only on EOF, or an error. |
-| `read_bytes` | `read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], process.Error]` | Reads up to `max_bytes` raw bytes and returns `Ok(None)` only at EOF. `max_bytes` must be in `1..=67108864`. |
-| `write_all` | `write_all(text: String, timeout: Duration = ...) -> Result[None, process.Error]` | Writes all text. |
-| `write_bytes` | `write_bytes(bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, process.Error]` | Writes all bytes. |
+| `read_all` | `read_all() -> Result[str, process.Error]` | Reads remaining strict UTF-8 text until EOF, capped at 64 MiB. Use byte APIs for arbitrary output. |
+| `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[str], process.Error]` | Reads one strict UTF-8 line without its trailing LF/CRLF, `Ok(None)` only on EOF, or an error. |
+| `read_bytes` | `read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[list[uint8]], process.Error]` | Reads up to `max_bytes` raw bytes and returns `Ok(None)` only at EOF. `max_bytes` must be in `1..=67108864`. |
+| `write_all` | `write_all(text: str, timeout: Duration = ...) -> Result[None, process.Error]` | Writes all text. |
+| `write_bytes` | `write_bytes(bytes: list[uint8], timeout: Duration = ...) -> Result[None, process.Error]` | Writes all bytes. |
 | `flush` | `flush() -> Result[None, process.Error]` | Flushes buffered pipe output. |
 | `close` | `close() -> None` | Closes the pipe handle. |
 
@@ -136,10 +136,10 @@ def close_stdin(child: process.Child) -> Result[None, process.Error]:
 | --- | --- | --- |
 | `status` | `status() -> process.ExitStatus` | Returns the captured exit status. |
 | `success` | `success() -> bool` | Returns `true` when the status is exit code `0`. |
-| `stdout` | `stdout() -> String` | Returns captured stdout decoded as strict UTF-8. Invalid UTF-8 raises a runtime diagnostic; use `stdout_bytes` for untrusted output. |
-| `stdout_bytes` | `stdout_bytes() -> Vec[uint8]` | Returns captured stdout as raw bytes. |
-| `stderr` | `stderr() -> String` | Returns captured stderr decoded as strict UTF-8. Invalid UTF-8 raises a runtime diagnostic; use `stderr_bytes` for untrusted output. |
-| `stderr_bytes` | `stderr_bytes() -> Vec[uint8]` | Returns captured stderr as raw bytes. |
+| `stdout` | `stdout() -> str` | Returns captured stdout decoded as strict UTF-8. Invalid UTF-8 raises a runtime diagnostic; use `stdout_bytes` for untrusted output. |
+| `stdout_bytes` | `stdout_bytes() -> list[uint8]` | Returns captured stdout as raw bytes. |
+| `stderr` | `stderr() -> str` | Returns captured stderr decoded as strict UTF-8. Invalid UTF-8 raises a runtime diagnostic; use `stderr_bytes` for untrusted output. |
+| `stderr_bytes` | `stderr_bytes() -> list[uint8]` | Returns captured stderr as raw bytes. |
 | `check` | `check() -> Result[None, process.Error]` | Returns `Ok(None)` for successful exit status, otherwise `Err(...)`. |
 
 Use `check` when a command failure should stop the current `Result`-returning function:
@@ -172,7 +172,7 @@ def wait_for_worker() -> Result[process.SupervisorWait, process.Error]:
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `start` | `start(name: own String, command: own Vec[String], cwd: own Option[String] = ..., env: own Map[String, String] = ..., stdin: own process.Stdio = ..., stdout: own process.Stdio = ..., stderr: own process.Stdio = ..., restart: own process.RestartPolicy = ..., backoff: own Duration = ..., max_restarts: own int32 = ..., group: own bool = ...) -> Result[None, process.Error]` | Starts a named child under supervision and retains the owned configuration needed for restarts. Names must be unique within the supervisor. |
+| `start` | `start(name: own str, command: own list[str], cwd: own Option[str] = ..., env: own dict[str, str] = ..., stdin: own process.Stdio = ..., stdout: own process.Stdio = ..., stderr: own process.Stdio = ..., restart: own process.RestartPolicy = ..., backoff: own Duration = ..., max_restarts: own int32 = ..., group: own bool = ...) -> Result[None, process.Error]` | Starts a named child under supervision and retains the owned configuration needed for restarts. Names must be unique within the supervisor. |
 | `wait` | `wait(timeout: Duration = ...) -> process.SupervisorWait` | Waits for the next supervisor event, timeout, or cancellation. |
 | `wait_or_none` | `wait_or_none(timeout: Duration = ...) -> Result[Option[process.SupervisorEvent], process.Error]` | Returns `Ok(Some(event))`, `Ok(None)` on timeout, or `Err(...)` on cancellation or wait failure. |
 | `stop` | `stop() -> Result[None, process.Error]` | Stops every supervised child and clears the supervisor. |
@@ -184,7 +184,7 @@ Runtime defaults for `Supervisor.start(...)` are:
 | Parameter | Default |
 | --- | --- |
 | `cwd` | `None` |
-| `env` | empty map |
+| `env` | empty dictionary |
 | `stdin` | `process.null()` |
 | `stdout` | `process.inherit()` |
 | `stderr` | `process.inherit()` |
@@ -207,9 +207,9 @@ When restart is enabled, `backoff` must be at least `10ms`.
 
 | Variant | Meaning |
 | --- | --- |
-| `Exited(name: own String, status: own process.ExitStatus, restart_count: own int32)` | A child exited and was not restarted. |
-| `Restarted(name: own String, status: own process.ExitStatus, restart_count: own int32)` | A child exited and a replacement was started. |
-| `Failed(name: own String, error: own process.Error, restart_count: own int32)` | A child failed to start or restart. |
+| `Exited(name: own str, status: own process.ExitStatus, restart_count: own int32)` | A child exited and was not restarted. |
+| `Restarted(name: own str, status: own process.ExitStatus, restart_count: own int32)` | A child exited and a replacement was started. |
+| `Failed(name: own str, error: own process.Error, restart_count: own int32)` | A child failed to start or restart. |
 
 `process.SupervisorWait` variants:
 
@@ -231,12 +231,12 @@ returns `Result.Err(process.Error.Io(io.Error.InvalidInput))` instead.
 
 | Variant | Meaning |
 | --- | --- |
-| `NoCommand` | The command vector was empty. |
+| `NoCommand` | The command list was empty. |
 | `TimedOut` | A process operation timed out. |
 | `Cancelled` | Cancellation interrupted the operation. |
 | `Io(error: own io.Error)` | The operation failed with an I/O error. |
-| `Spawn(message: own String)` | The child could not be spawned. |
-| `Other(message: own String)` | A process-specific failure not covered by another variant. |
+| `Spawn(message: own str)` | The child could not be spawned. |
+| `Other(message: own str)` | A process-specific failure not covered by another variant. |
 
 ## Cleanup Rules
 
@@ -248,7 +248,7 @@ When `process.run` times out or its Aura task is cancelled, the runtime terminat
 
 ## Grammar
 
-The process module adds no source-language grammar. Commands are ordinary `Vec[String]` expressions passed to ordinary calls; Aura does not parse shell syntax, split one command string, expand variables, interpret redirections, or construct pipelines. Named arguments, `Duration` literals, `Result`, `Option`, `try`, `match`, and `with` use their general grammar.
+The process module adds no source-language grammar. Commands are ordinary `list[str]` expressions passed to ordinary calls; Aura does not parse shell syntax, split one command string, expand variables, interpret redirections, or construct pipelines. Named arguments, `Duration` literals, `Result`, `Option`, `try`, `match`, and `with` use their general grammar.
 
 An omitted parameter displayed with `= ...` selects the documented builtin default. The ellipsis is reference notation, not a source expression. Process and standard-I/O variants use ordinary qualified enum construction and pattern syntax.
 
@@ -259,13 +259,13 @@ ADR-0019.
 
 ## Typing Rules
 
-The function and method signatures above are normative. Commands are `Vec[String]`, environment overlays are `Map[String, String]`, working directories are `Option[String]`, and timeout parameters are `Duration`. Fallible start/run/pipe/control operations use `process.Error`; wait APIs deliberately distinguish enum, `Option`, and `Result` outcomes as shown in their tables.
+The function and method signatures above are normative. Commands are `list[str]`, environment overlays are `dict[str, str]`, working directories are `Option[str]`, and timeout parameters are `Duration`. Fallible start/run/pipe/control operations use `process.Error`; wait APIs deliberately distinguish enum, `Option`, and `Result` outcomes as shown in their tables.
 
 `process.Child`, `process.Pipe`, and `process.Supervisor` are non-copy resources. Kill, terminate, pipe write/flush/close, and supervisor start/stop/close operations require mutable receiver places. `Supervisor.start` consumes every configuration argument marked `own`, because the supervisor retains that configuration for possible restart. `Completed.stdout()` and `stderr()` are trapping text accessors; the byte accessors are total over captured bytes.
 
 ## Runtime Semantics
 
-`run` and `start` invoke exactly the executable and argument vector supplied, inherit the host environment, then apply `env` entries as replacements or additions. `run` waits and captures only streams configured as pipes. `start` returns immediately with a live child and any configured pipe endpoints. Repeated child pipe accessors return handles to the same underlying endpoint, so cursor state and close state are shared.
+`run` and `start` invoke exactly the executable and argument list supplied, inherit the host environment, then apply `env` entries as replacements or additions. `run` waits and captures only streams configured as pipes. `start` returns immediately with a live child and any configured pipe endpoints. Repeated child pipe accessors return handles to the same underlying endpoint, so cursor state and close state are shared.
 
 `Child.wait` reports exit, timeout, cancellation, or failure without automatically terminating a still-live child. By contrast, timeout or cancellation of `process.run` terminates the child and waits for cleanup. A negative, host-unrepresentable, or deadline-overflowing timeout/backoff is `process.Error.Io(io.Error.InvalidInput)` wherever the declared process outcome can carry that error; deadline overflow never becomes an unlimited wait. `Completed.check` converts a non-success status into `process.Error`; invalid captured UTF-8 in `stdout()` or `stderr()` is a runtime diagnostic, while the byte accessors return the original bytes. Supervisor restarts, counts, events, defaults, and minimum backoff follow the tables above.
 
@@ -290,7 +290,7 @@ not guaranteed.
 
 ## Backend Support
 
-Process creation, capture, pipes, waiting, supervisor behavior, typed errors, and cleanup are implemented in the MIR runtime and direct native backend. Command-vector handling, environment overlay, capture bytes, timeout outcomes, and ownership are backend-parity requirements.
+Process creation, capture, pipes, waiting, supervisor behavior, typed errors, and cleanup are implemented in the MIR runtime and direct native backend. Command-list handling, environment overlay, capture bytes, timeout outcomes, and ownership are backend-parity requirements.
 
 Process-group creation and signaling are maintained on Unix hosts. On unsupported hosts, requesting group behavior returns a typed process error rather than silently weakening cleanup. Executable lookup, signals, and exit-status details otherwise follow host process facilities.
 

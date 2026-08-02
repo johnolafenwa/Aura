@@ -1,4 +1,4 @@
-def count(label: String):
+def count(label: str):
     mut step: int32 = 1
     while step <= 3:
         print(f"{label}: {step}")

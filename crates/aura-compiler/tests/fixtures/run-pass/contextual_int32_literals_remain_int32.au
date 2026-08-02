@@ -2,14 +2,14 @@ def identity[T](value: own T) -> T:
     return value
 
 trait Show:
-    def show(self) -> String
+    def show(self) -> str
 
 impl Show for int32:
-    def show(self) -> String:
+    def show(self) -> str:
         return "int32"
 
 impl Show for int64:
-    def show(self) -> String:
+    def show(self) -> str:
         return "int64"
 
 def contextual[T: Show](value: own T) -> T:
@@ -19,7 +19,7 @@ def contextual[T: Show](value: own T) -> T:
 def print_int32(value: int32):
     print(value)
 
-def print_first(values: Vec[int32]):
+def print_first(values: list[int32]):
     print(values[0])
 
 def print_optional(value: Option[int32]):
@@ -32,7 +32,7 @@ def print_optional(value: Option[int32]):
 def main() -> int32:
     positive: int32 = 2147483647
     negative: int32 = -2147483648
-    collection: Vec[int32] = [3, 4]
+    collection: list[int32] = [3, 4]
     generic: int32 = identity(value=5)
     visible_generic: int32 = contextual(value=7)
     optional: Option[int32] = Option.Some(6)

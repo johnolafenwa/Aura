@@ -592,15 +592,6 @@ impl Parser {
             return Ok(TypeRef::named("None", Vec::new(), false, span));
         }
 
-        // ADR-0022 supersedes ADR-0009's borrowed-return syntax: labels are
-        // gone and every return is an ordinary owned return.
-        if self.at_simple(&TokenKind::KwBorrow) {
-            return Err(parse_error(
-                self.current_span(),
-                "borrowed returns were removed; return an owned value instead",
-            ));
-        }
-
         self.parse_type()
     }
 
@@ -653,17 +644,6 @@ impl Parser {
                     ));
                 }
 
-                if self.at_borrow_receiver_start() {
-                    let span = self.current_span();
-                    self.bump();
-                    let message = if self.at_simple(&TokenKind::KwMut) {
-                        "`borrow mut self` was removed; write `mut self`"
-                    } else {
-                        "`borrow self` was removed; write `self` for a shared receiver"
-                    };
-                    return Err(parse_error(span, message));
-                }
-
                 if self.at_mut_receiver_start() {
                     if !params.is_empty() {
                         return Err(parse_error(
@@ -713,12 +693,6 @@ impl Parser {
             }
 
             let span = self.current_span();
-            if self.at_simple(&TokenKind::KwBorrow) {
-                return Err(parse_error(
-                    self.current_span(),
-                    "ordinary parameters are written as `name: Type`, `name: mut Type`, or `name: own Type`",
-                ));
-            }
             if self.at_simple(&TokenKind::KwOwn) {
                 return Err(parse_error(
                     self.current_span(),
@@ -730,15 +704,6 @@ impl Parser {
             self.expect_simple(TokenKind::Colon)?;
             if self.eat_simple(&TokenKind::KwOwn).is_some() {
                 mode = ParamMode::Own;
-            } else if self.at_simple(&TokenKind::KwBorrow) {
-                let span = self.current_span();
-                self.bump();
-                let message = if self.at_simple(&TokenKind::KwMut) {
-                    "`borrow mut T` was removed; write `mut T`"
-                } else {
-                    "`borrow T` was removed; write `T` for shared access"
-                };
-                return Err(parse_error(span, message));
             } else if self.eat_simple(&TokenKind::KwMut).is_some() {
                 mode = ParamMode::BorrowMut;
             }
@@ -762,21 +727,6 @@ impl Parser {
         }
 
         Ok((receiver, params))
-    }
-
-    fn at_borrow_receiver_start(&self) -> bool {
-        if !self.at_simple(&TokenKind::KwBorrow) {
-            return false;
-        }
-
-        let mut index = self.index + 1;
-        if matches!(self.peek_kind_at(index), Some(TokenKind::KwMut)) {
-            index += 1;
-        }
-        matches!(
-            (self.peek_kind_at(index), self.peek_kind_at(index + 1)),
-            (Some(TokenKind::Identifier(name)), next) if name == "self" && !matches!(next, Some(TokenKind::Colon))
-        )
     }
 
     fn at_mut_receiver_start(&self) -> bool {
@@ -1355,23 +1305,10 @@ impl Parser {
                         ParamMode::BorrowMut
                     } else if self.eat_simple(&TokenKind::KwOwn).is_some() {
                         ParamMode::Own
-                    } else if self.at_simple(&TokenKind::KwBorrow) {
-                        let replacement = if matches!(self.peek_kind(1), Some(TokenKind::KwMut)) {
-                            "write `mut T` for mutable access"
-                        } else {
-                            "omit `borrow` for shared access"
-                        };
-                        return Err(parse_error(
-                            param_span,
-                            format!("`borrow` was removed from function types; {replacement}"),
-                        ));
                     } else {
                         ParamMode::Default
                     };
-                    if matches!(
-                        self.current_kind(),
-                        TokenKind::KwMut | TokenKind::KwOwn | TokenKind::KwBorrow
-                    ) {
+                    if matches!(self.current_kind(), TokenKind::KwMut | TokenKind::KwOwn) {
                         return Err(parse_error(
                             self.current_span(),
                             "function type parameters accept only one capability modifier",
@@ -1518,12 +1455,6 @@ impl Parser {
         let mut params: Vec<LambdaParam> = Vec::new();
         if !self.at_simple(&TokenKind::Colon) {
             loop {
-                if self.at_simple(&TokenKind::KwBorrow) {
-                    return Err(parse_error(
-                        self.current_span(),
-                        "`borrow` lambda parameters were removed; use a bare parameter for shared access or `mut name` for mutable access",
-                    ));
-                }
                 let mode = if self.eat_simple(&TokenKind::KwOwn).is_some() {
                     ParamMode::Own
                 } else if self.eat_simple(&TokenKind::KwMut).is_some() {
@@ -2100,29 +2031,10 @@ impl Parser {
         let token = self.bump();
 
         match token.kind {
-            TokenKind::Identifier(name) => {
-                if name == "Set" && self.eat_simple(&TokenKind::LBrace).is_some() {
-                    let mut elements = Vec::new();
-                    if !self.at_simple(&TokenKind::RBrace) {
-                        loop {
-                            elements.push(self.parse_expr()?);
-                            if self.eat_simple(&TokenKind::Comma).is_none() {
-                                break;
-                            }
-                        }
-                    }
-                    self.expect_simple(TokenKind::RBrace)?;
-                    Ok(Expr {
-                        kind: ExprKind::Set(elements),
-                        span: token.span,
-                    })
-                } else {
-                    Ok(Expr {
-                        kind: ExprKind::Name(name),
-                        span: token.span,
-                    })
-                }
-            }
+            TokenKind::Identifier(name) => Ok(Expr {
+                kind: ExprKind::Name(name),
+                span: token.span,
+            }),
             TokenKind::KwFrom => Ok(Expr {
                 kind: ExprKind::Name("from".to_string()),
                 span: token.span,
@@ -2301,10 +2213,6 @@ impl Parser {
                     span: token.span,
                 })
             }
-            TokenKind::KwBorrow => Err(parse_error(
-                token.span,
-                "call arguments cannot start with `borrow`; pass the value directly",
-            )),
             TokenKind::KwMut => Err(parse_error(
                 token.span,
                 "`mut` cannot prefix a call argument or other expression; pass the value directly because the callee parameter declares shared, mutable, or owned access. Capability modifiers belong only on parameters and receivers or on supported `for` and `match` selectors (`mut` also declares mutable local bindings)",
@@ -2793,7 +2701,7 @@ impl Parser {
     fn skip_type_tokens(&self, mut idx: usize) -> usize {
         while matches!(
             self.peek_kind_at(idx),
-            Some(TokenKind::KwMut | TokenKind::KwOwn | TokenKind::KwBorrow)
+            Some(TokenKind::KwMut | TokenKind::KwOwn)
         ) {
             idx += 1;
         }
@@ -2921,9 +2829,6 @@ impl Parser {
     }
 
     fn parse_optional_for_mode(&mut self) -> Result<Option<ReceiverKind>> {
-        if self.at_simple(&TokenKind::KwBorrow) {
-            return Err(self.retired_borrow_error("in", "in", "shared iteration"));
-        }
         if self.eat_simple(&TokenKind::KwOwn).is_some() {
             return Ok(Some(ReceiverKind::Value));
         }
@@ -2934,9 +2839,6 @@ impl Parser {
     }
 
     fn parse_match_capability(&mut self) -> Result<ReceiverKind> {
-        if self.at_simple(&TokenKind::KwBorrow) {
-            return Err(self.retired_borrow_error("match", "match", "shared access"));
-        }
         if self.eat_simple(&TokenKind::KwOwn).is_some() {
             return Ok(ReceiverKind::Value);
         }
@@ -2944,28 +2846,6 @@ impl Parser {
             return Ok(ReceiverKind::BorrowMut);
         }
         Ok(ReceiverKind::Borrow)
-    }
-
-    /// Builds the exact replacement diagnostic for a retired `borrow`
-    /// spelling in statement position.
-    ///
-    /// `borrow` stays reserved for one announced compatibility window and is
-    /// parsed only far enough to say what to write instead, so `prefix` is
-    /// consumed context (`match`, `in`) and `bare` is what the shared form
-    /// spells today.
-    fn retired_borrow_error(&mut self, prefix: &str, bare: &str, shared: &str) -> Diagnostic {
-        let span = self.current_span();
-        self.bump();
-        if self.eat_simple(&TokenKind::KwMut).is_some() {
-            return parse_error(
-                span,
-                format!("`{prefix} borrow mut` was removed; write `{bare} mut`"),
-            );
-        }
-        parse_error(
-            span,
-            format!("`{prefix} borrow` was removed; write `{bare}` for {shared}"),
-        )
     }
 
     fn starts_specialization_suffix(&self, expr: &Expr) -> bool {
@@ -3319,10 +3199,12 @@ fn specialization_target_name(expr: &Expr) -> Option<&str> {
 }
 
 fn is_static_specialization_target_name(name: &str) -> bool {
-    name.chars()
-        .next()
-        .map(|ch| ch.is_ascii_uppercase())
-        .unwrap_or(false)
+    matches!(name, "list" | "dict" | "set")
+        || name
+            .chars()
+            .next()
+            .map(|ch| ch.is_ascii_uppercase())
+            .unwrap_or(false)
 }
 
 fn assign_target_to_expr(target: AssignTarget, span: Span) -> Expr {

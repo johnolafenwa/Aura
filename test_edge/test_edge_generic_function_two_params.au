@@ -1,6 +1,6 @@
 # Test: generic function with two independent type parameters
 
-def pair_up[A, B](a: A, b: B) -> String:
+def pair_up[A, B](a: A, b: B) -> str:
     return "paired"
 
 class Box[T]:

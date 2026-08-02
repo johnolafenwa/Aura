@@ -1,11 +1,11 @@
-# Test matching on enum variants that carry String payloads
+# Test matching on enum variants that carry str payloads
 
 enum Message:
-    Text(String)
-    Error(String)
+    Text(str)
+    Error(str)
     Empty
 
-def describe(msg: own Message) -> String:
+def describe(msg: own Message) -> str:
     match own msg:
         case Message.Text(t):
             return f"Text: {t}"

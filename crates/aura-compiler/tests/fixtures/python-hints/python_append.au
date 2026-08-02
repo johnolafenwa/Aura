@@ -1,3 +1,0 @@
-def main():
-    mut values = Vec[int32]()
-    values.append(1)

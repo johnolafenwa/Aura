@@ -1,9 +1,9 @@
-# Test: can we pass String arguments positionally (without named args)?
+# Test: can we pass str arguments positionally (without named args)?
 
-def greet(name: str) -> String:
+def greet(name: str) -> str:
     return f"Hi {name}"
 
-def consume(text: String):
+def consume(text: str):
     print(text)
 
 def main() -> int32:
@@ -11,7 +11,7 @@ def main() -> int32:
     r = greet("World")
     print(r)
 
-    # Positional owned String
+    # Positional owned str
     consume("owned")
 
     return 0

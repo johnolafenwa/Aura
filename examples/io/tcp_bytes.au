@@ -1,7 +1,7 @@
 import io
 import net
 
-def serve(addresses: Queue[String]) -> Result[None, io.Error]:
+def serve(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.listen("127.0.0.1:0"):
         addresses.put(try server_listener.local_addr())
         stream = try server_listener.accept(timeout=5s)
@@ -13,7 +13,7 @@ def serve(addresses: Queue[String]) -> Result[None, io.Error]:
 
 def run() -> Result[None, io.Error]:
     with TaskGroup() as group:
-        addresses = Queue[String](capacity=1)
+        addresses = Queue[str](capacity=1)
         server = group.start(serve, addresses)
         address = try receive_address(addresses)
 
@@ -37,7 +37,7 @@ def run() -> Result[None, io.Error]:
                 return Result.Ok(None)
         return Result.Ok(None)
 
-def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
+def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
     match own addresses.get(timeout=5s):
         case QueueReceive.Item(address):
             return Result.Ok(address)

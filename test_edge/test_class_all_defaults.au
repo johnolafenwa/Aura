@@ -1,7 +1,7 @@
 class Defaults:
     a: int32 = 1
     b: int32 = 2
-    c: String = "three"
+    c: str = "three"
     d: bool = true
 
 def main() -> int32:

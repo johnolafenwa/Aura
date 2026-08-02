@@ -53,7 +53,7 @@ def main() -> int32:
             return 1
 ```
 
-`io.read_line()` returns `Result[Option[String], io.Error]`:
+`io.read_line()` returns `Result[Option[str], io.Error]`:
 
 - `Result.Ok(Option.Some(text))` when a line was read
 - `Result.Ok(Option.None)` on end-of-file
@@ -99,7 +99,7 @@ Text example:
 import fs
 import io
 
-def load_text(path: String) -> Result[String, io.Error]:
+def load_text(path: str) -> Result[str, io.Error]:
     with file = try fs.open(path):
         return file.read_all()
 ```
@@ -110,14 +110,14 @@ Binary example:
 import fs
 import io
 
-def copy_bytes(path: String) -> Result[Vec[uint8], io.Error]:
+def copy_bytes(path: str) -> Result[list[uint8], io.Error]:
     with file = try fs.open(path):
         bytes = try file.read_bytes()
         return Result.Ok(bytes)
 ```
 
 Crossing between raw data and UTF-8 text is explicit. Use `text.to_bytes()` or
-`String.from_bytes(payload)`. [22-bytes.md](22-bytes.md) covers those
+`str.from_bytes(payload)`. [22-bytes.md](22-bytes.md) covers those
 conversions plus strict
 hex/base64 codecs and SHA-256.
 
@@ -139,7 +139,7 @@ Process constructors:
 - `process.null()`
 - `process.pipe()`
 
-`command` is always an explicit `Vec[String]` argv list. Aura does not provide a shell-string subprocess API.
+`command` is always an explicit `list[str]` argv list. Aura does not provide a shell-string subprocess API.
 When `group=true`, Aura starts the child in its own process group and applies terminate/kill/close cleanup to that full group. On current maintained hosts, grouped children are supported on Unix.
 
 `process.start(...)` returns `Result[process.Child, process.Error]`. `process.Child` works with `with` and exposes:
@@ -306,7 +306,7 @@ Text example:
 import io
 import net
 
-def serve(addresses: Queue[String]) -> Result[None, io.Error]:
+def serve(addresses: Queue[str]) -> Result[None, io.Error]:
     with server = try net.listen("127.0.0.1:0"):
         addresses.put(try server.local_addr())
         with stream = try server.accept(timeout=1s):
@@ -321,7 +321,7 @@ def serve(addresses: Queue[String]) -> Result[None, io.Error]:
 
 Listeners and other live network resources are not `Transfer`, so a worker task
 creates and owns its listener. The copy queue handle crosses the task boundary,
-and the worker sends the listener's owned `String` address back after binding.
+and the worker sends the listener's owned `str` address back after binding.
 
 See:
 

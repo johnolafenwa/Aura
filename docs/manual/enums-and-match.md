@@ -9,14 +9,14 @@ Aura uses enums for user data and for maintained runtime outcomes including `Opt
 ```python
 enum Status:
     Ready(count: int32)
-    Failed(String)
+    Failed(str)
     Empty
 ```
 
 A variant has one of three shapes:
 
 - no payload, written without parentheses: `Empty`
-- positional payloads, written as types: `Failed(String)` or `Pair(int32, int32)`
+- positional payloads, written as types: `Failed(str)` or `Pair(int32, int32)`
 - named payloads, written as `name: Type`: `Ready(count: int32)`
 
 One variant cannot mix positional and named payload declarations. Empty parentheses are not a payload-free declaration; omit them. Variant names must be unique within the enum. Every payload type must exist with the correct arity.
@@ -26,7 +26,7 @@ Enums may be generic and bounded:
 ```python
 enum Load[T: Named]:
     Ready(T)
-    Failed(message: String)
+    Failed(message: str)
     Empty
 ```
 
@@ -48,8 +48,8 @@ empty = Status.Empty
 
 A payload-free variant is a value and is not called. A payload variant is called with its exact payload shape:
 
-Every payload slot is owned. A declaration such as `Failed(String)` therefore
-has the constructor contract `Failed(own String)`, and a named `Ready(value:
+Every payload slot is owned. A declaration such as `Failed(str)` therefore
+has the constructor contract `Failed(own str)`, and a named `Ready(value:
 T)` slot is constructed as `Ready(value: own T)`. This rule also applies to
 builtin variants such as `Option.Some(own T)`, `Result.Ok(own T)`, and
 `Result.Err(own E)`.
@@ -73,15 +73,15 @@ payload positions continue to correspond to that declaration order.
 Explicit specialization fixes generic arguments:
 
 ```python
-ok = Result[int32, String].Ok(7)
-missing = Option[String].None
+ok = Result[int32, str].Ok(7)
+missing = Option[str].None
 ```
 
 Generic enum arguments may instead be inferred from payloads or an expected annotation, argument, or return type:
 
 ```python
-ok: Result[int32, String] = Result.Ok(7)
-missing: Option[String] = Option.None
+ok: Result[int32, str] = Result.Ok(7)
+missing: Option[str] = Option.None
 ```
 
 Every type parameter must resolve. A payload-free generic variant such as `Option.None` usually needs an expected type or explicit specialization because it carries no value from which to infer `T`.
@@ -131,7 +131,7 @@ The wildcard binds nothing, may appear only once, and must be the final arm. Dup
 A match expression produces a value:
 
 ```python
-def status_label(status: own Status) -> String:
+def status_label(status: own Status) -> str:
     return match status:
         case Status.Ready(count):
             f"ready: {count}"
@@ -201,7 +201,7 @@ Use the qualified form in public examples and reference material when ambiguity 
 bindings:
 
 ```python
-result: Result[String, String] = Result.Ok("hello")
+result: Result[str, str] = Result.Ok("hello")
 
 match own result:
     case Result.Ok(message):
@@ -214,7 +214,7 @@ Use bare `match` to retain the scrutinee and expose shared non-copy payload
 bindings:
 
 ```python
-result: Result[String, String] = Result.Ok("hello")
+result: Result[str, str] = Result.Ok("hello")
 
 match result:
     case Result.Ok(message):
@@ -241,7 +241,7 @@ Borrowed payloads cannot be moved as owned values. Copy payloads are ordinary co
 
 ## Literal Matches
 
-Literal patterns are supported for `bool`, integer, floating-point, and `String` scrutinees:
+Literal patterns are supported for `bool`, integer, floating-point, and `str` scrutinees:
 
 ```python
 match code:
@@ -269,10 +269,10 @@ visible; enum declarations themselves continue to write only the payload type:
 | `Result[T, E]` | `Ok(value: own T)`, `Err(error: own E)` |
 | `SendError[T]` | `Closed(value: own T)`, `Cancelled(value: own T)`, `TimedOut(value: own T)`, `Full(value: own T)` |
 | `QueueReceive[T]` | `Item(value: own T)`, `Closed`, `TimedOut`, `Cancelled` |
-| `TaskResult[T]` | `Ready(value: own T)`, `Error(message: own String)`, `TimedOut`, `Cancelled` |
-| `SelectOutcome[Q, T]` | `Queue(index: own int32, outcome: own QueueReceive[Q])`, `Task(index: own int32, outcome: own TaskResult[T])`, `Deadline(index: own int32)`, `Cancelled` |
-| `WaitAny[T]` | `Ready(index: own int32, value: own T)`, `Error(index: own int32, message: own String)`, `TimedOut`, `Cancelled` |
-| `WaitAll[T]` | `Ready(values: own Vec[T])`, `Error(index: own int32, message: own String)`, `TimedOut`, `Cancelled` |
+| `TaskResult[T]` | `Ready(value: own T)`, `Error(message: own str)`, `TimedOut`, `Cancelled` |
+| `SelectOutcome[Q, T]` | `Queue(index: own int64, outcome: own QueueReceive[Q])`, `Task(index: own int64, outcome: own TaskResult[T])`, `Deadline(index: own int64)`, `Cancelled` |
+| `WaitAny[T]` | `Ready(index: own int64, value: own T)`, `Error(index: own int64, message: own str)`, `TimedOut`, `Cancelled` |
+| `WaitAll[T]` | `Ready(values: own list[T])`, `Error(index: own int64, message: own str)`, `TimedOut`, `Cancelled` |
 
 Module-qualified builtin enums are specified by their API chapters:
 

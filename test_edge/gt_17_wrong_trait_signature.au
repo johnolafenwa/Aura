@@ -2,7 +2,7 @@
 ## Expects: Compile error about mismatched signature
 
 trait Printable:
-    def to_string(self) -> String
+    def to_string(self) -> str
 
 class Widget:
     id: int32

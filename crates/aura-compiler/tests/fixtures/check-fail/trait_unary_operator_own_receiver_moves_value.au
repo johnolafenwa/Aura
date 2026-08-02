@@ -2,7 +2,7 @@ trait Neg[Out]:
     def neg(own self) -> Out
 
 class Token:
-    value: String
+    value: str
 
 impl Neg[Token] for Token:
     def neg(own self) -> Token:

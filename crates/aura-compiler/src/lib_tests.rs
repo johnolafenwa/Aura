@@ -3,9 +3,10 @@ use super::{
     check_path_with_source, check_source, emit_host_native_object, exported_binding,
     exported_namespace, find_type_namespace_path, import_exists_from_root, infer_package_root,
     insert_namespace_import, is_builtin_export_type, local_item_exists, logical_module_name,
-    lower_path_to_mir, lower_path_with_source_to_mir, lower_source_to_mir, parse_source,
-    qualify_enum_decl_for_export, qualify_export_bounds, qualify_export_type,
-    qualify_export_type_ref, qualify_impl_decl_for_export, qualify_imported_module_namespaces,
+    lower_path_to_checked_mir, lower_path_to_mir, lower_path_with_source_to_mir,
+    lower_source_to_mir, parse_source, qualify_enum_decl_for_export, qualify_export_bounds,
+    qualify_export_type, qualify_export_type_ref, qualify_impl_decl_for_export,
+    qualify_imported_module_namespaces, run_checked_mir_entry_with_stdout_sink_and_program_args,
     run_mir, run_path, run_path_entry_with_stdout_sink_and_program_args, run_path_with_source,
     run_path_with_source_and_stdout_sink, run_path_with_source_and_stdout_sink_and_program_args,
     run_path_with_stdout_sink, run_path_with_stdout_sink_and_program_args, run_serialized_mir,
@@ -246,6 +247,25 @@ def main():
             .as_str(),
         "true\n1\n"
     );
+
+    let checked_mir = lower_path_to_checked_mir(&main_path)
+        .expect("manifest checking should produce an opaque trusted MIR module");
+    let first = run_checked_mir_entry_with_stdout_sink_and_program_args(
+        &checked_mir,
+        Some("selected"),
+        None,
+        vec!["first".to_string()],
+    )
+    .expect("checked MIR should preserve manifest-authorized FFI for a selected entry");
+    let second = run_checked_mir_entry_with_stdout_sink_and_program_args(
+        &checked_mir,
+        Some("main"),
+        None,
+        vec!["one".to_string(), "two".to_string()],
+    )
+    .expect("the same checked MIR should be reusable for another selected entry");
+    assert_eq!(first.stdout, "true\n1\n");
+    assert_eq!(second.stdout, "true\n2\n");
 }
 
 const EXAMPLE_CASES: &[(&str, &str)] = &[
@@ -667,7 +687,7 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
     (
         "examples/traits/builtin_target_traits.au",
         include_str!("../../../examples/traits/builtin_target_traits.au"),
-        "vec of 2\ntext of 5\n",
+        "list of 2\ntext of 5\n",
     ),
     (
         "examples/control_flow/membership_and_chains.au",
@@ -1053,12 +1073,12 @@ fn imported_rng_clone_obligations_and_qualified_wrapper_identity_survive_namespa
     let other_path = temp.path().join("other.au");
     fs::write(
         &utils_path,
-        r#"public def duplicate[T](values: Vec[T]) -> Vec[T]:
-    return values.clone()
+        r#"public def duplicate[T](values: list[T]) -> list[T]:
+    return values.copy()
 
 public class Duplicator:
-    public def duplicate[T](values: Vec[T]) -> Vec[T]:
-        return values.clone()
+    public def duplicate[T](values: list[T]) -> list[T]:
+        return values.copy()
 "#,
     )
     .expect("write generic clone helper module");
@@ -1138,7 +1158,7 @@ class Holder:
 
 def main() -> int32:
     holders = [wrapped.Holder(random.Rng(seed=1))]
-    copies = holders.clone()
+    copies = holders.copy()
     print(copies)
     return 0
 "#,
@@ -1161,7 +1181,7 @@ enum Status:
 
 def main() -> int32:
     statuses = [wrapped.Status.Value(random.Rng(seed=1))]
-    copies = statuses.clone()
+    copies = statuses.copy()
     print(copies)
     return 0
 "#,
@@ -1183,7 +1203,7 @@ def make() -> Holder:
 
 def main() -> int32:
     holders = [make()]
-    copies = holders.clone()
+    copies = holders.copy()
     print(copies)
     return 0
 "#,
@@ -1205,7 +1225,7 @@ fn imported_same_leaf_class_identity_survives_mir_and_direct_lowering() {
     fs::write(
         &named_path,
         r#"public trait Named:
-    def name(self) -> String
+    def name(self) -> str
 "#,
     )
     .expect("write shared trait module");
@@ -1214,16 +1234,16 @@ fn imported_same_leaf_class_identity_survives_mir_and_direct_lowering() {
         r#"from named import Named
 
 public class User:
-    public label: String
+    public label: str
 
-    public def associated() -> String:
+    public def associated() -> str:
         return "remote-associated"
 
-    public def inherent(self) -> String:
+    public def inherent(self) -> str:
         return f"remote-inherent:{self.label}"
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return f"remote:{self.label}"
 "#,
     )
@@ -1234,16 +1254,16 @@ impl Named for User:
 import remote
 
 class User:
-    label: String
+    label: str
 
-    def associated() -> String:
+    def associated() -> str:
         return "local-associated"
 
-    def inherent(self) -> String:
+    def inherent(self) -> str:
         return f"local-inherent:{self.label}"
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return f"local:{self.label}"
 
 def main() -> int32:
@@ -1280,8 +1300,8 @@ fn qualified_inherent_associated_methods_use_class_type_arguments_for_clone_safe
         &factory_path,
         r#"public class Factory[T]:
     public def probe() -> int32:
-        values = Vec[T]()
-        copies = values.clone()
+        values = list[T]()
+        copies = values.copy()
         print(copies)
         return 0
 "#,
@@ -1351,7 +1371,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
 
     fs::write(
         &named_path,
-        "public trait Named:\n    def name(self) -> String\n",
+        "public trait Named:\n    def name(self) -> str\n",
     )
     .expect("write named module");
     fs::write(
@@ -1375,7 +1395,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
             "    Hidden",
             "",
             "public trait Show[T]:",
-            "    def render(self, other: T) -> String",
+            "    def render(self, other: T) -> str",
             "",
             "trait HiddenTrait:",
             "    def hide(self)",
@@ -1387,7 +1407,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
             "    return 0",
             "",
             "impl[T] Show[T] for Box[T]:",
-            "    def render(self, other: T) -> String:",
+            "    def render(self, other: T) -> str:",
             "        return \"ok\"",
         ]
         .join("\n"),
@@ -1448,7 +1468,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
         &["pkg".to_string(), "named".to_string()]
     ));
     assert_eq!(logical_module_name(temp.path(), &user_path), "pkg.user");
-    assert!(is_builtin_export_type("String"));
+    assert!(is_builtin_export_type("str"));
     assert!(is_builtin_export_type("int"));
     assert!(!is_builtin_export_type("Box"));
 
@@ -1818,7 +1838,7 @@ fn module_loader_reports_import_resolution_and_export_errors() {
             "    Ready",
             "",
             "public trait Show:",
-            "    def render(self) -> String",
+            "    def render(self) -> str",
         ]
         .join("\n"),
     )
@@ -2774,7 +2794,7 @@ fn categorized_examples_run_with_expected_output() {
             (
                 "examples/collections/map_basics.au",
                 EXAMPLE_CASES[38].1,
-                "3\ntrue\n1\n1\n5\naura\n3\n3\n3\n3\ntrue\n",
+                "3\ntrue\n1\n1\n5\n(aura, 5)\n(repo, 3)\n3\n3\n3\ntrue\n",
             ),
             (
                 "examples/collections/set_basics.au",
@@ -2886,14 +2906,14 @@ def main() -> int32:
     mut numbers = [1, 2]
     print(numbers.len())
     print(numbers.is_empty())
-    mut clone_numbers = numbers.clone()
-    clone_numbers.push(3)
+    mut clone_numbers = numbers.copy()
+    clone_numbers.append(3)
     print(clone_numbers.pop())
     print(clone_numbers.get(0))
     print(clone_numbers[1])
     print(clone_numbers.set(0, 9))
     clone_numbers[1] = 8
-    print(clone_numbers.remove(0))
+    print(clone_numbers.remove(9))
     print(clone_numbers.swap(0, 0))
     print(clone_numbers.contains(8))
     print(clone_numbers.insert(1, 7))
@@ -2905,29 +2925,29 @@ def main() -> int32:
     mut counts = {"a": 1}
     print(counts.len())
     print(counts.is_empty())
-    copy_counts = counts.clone()
+    copy_counts = counts.copy()
     print(copy_counts.get("a"))
     print(copy_counts["a"])
-    print(counts.set("a", 2))
+    print(counts["a"])
+    counts["a"] = 2
     counts["b"] = 3
     print(counts.remove("a"))
-    print(counts.contains_key("b"))
+    print("b" in counts)
     print(counts.keys().len())
     print(counts.values().len())
     print(counts.items().len())
-    print(counts.entries().len())
-    counts.extend({"c": 4})
+    counts.update({"c": 4})
     counts.clear()
     print(counts.is_empty())
 
-    mut seen = Set{"x"}
+    mut seen = {"x"}
     print(seen.len())
     print(seen.is_empty())
-    copy_seen = seen.clone()
-    print(copy_seen.contains("x"))
-    print(seen.insert("y"))
+    copy_seen = seen.copy()
+    print("x" in copy_seen)
+    print(seen.add("y"))
     print(seen.remove("x"))
-    print(seen.contains("y"))
+    print("y" in seen)
 
     jobs = Queue[int32]()
     jobs_copy = jobs
@@ -2981,7 +3001,7 @@ def main() -> int32:
     copy_into(source=first, target=second)
     print(second.value)
 
-    mut total: int32 = 0
+    mut total: int64 = 0
     for i in range(stop=3):
         total += i
     print(total)
@@ -3026,12 +3046,12 @@ fn cancellation_wakes_sleep_tasks_promptly() {
     let blocked_sleep = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
     let source = format!(
         r#"
-def sleeper(started: Queue[String], finished: Queue[String]) -> None:
+def sleeper(started: Queue[str], finished: Queue[str]) -> None:
     started.put("sleep")
     sleep({blocked_sleep_ms}ms)
     finished.put("sleep")
 
-def wait_for_one(queue: Queue[String]):
+def wait_for_one(queue: Queue[str]):
     while true:
         match queue.get():
             case QueueReceive.Item(_):
@@ -3044,9 +3064,9 @@ def wait_for_one(queue: Queue[String]):
                 pass
 
 def main() -> int32:
-    started = Queue[String]()
+    started = Queue[str]()
     with TaskGroup() as group:
-        finished = Queue[String]()
+        finished = Queue[str]()
         group.start(sleeper, started, finished)
         wait_for_one(started)
         group.cancel()
@@ -3072,7 +3092,7 @@ fn cancellation_wakes_queue_wait_tasks_promptly() {
     let blocked_wait = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
     let source = format!(
         r#"
-def waiter(started: Queue[String], jobs: Queue[int32], finished: Queue[String]) -> None:
+def waiter(started: Queue[str], jobs: Queue[int32], finished: Queue[str]) -> None:
     started.put("wait")
     while not cancelled():
         match jobs.get(timeout={blocked_wait_ms}ms):
@@ -3086,7 +3106,7 @@ def waiter(started: Queue[String], jobs: Queue[int32], finished: Queue[String]) 
                 pass
     finished.put("wait")
 
-def wait_for_one(queue: Queue[String]):
+def wait_for_one(queue: Queue[str]):
     while true:
         match queue.get():
             case QueueReceive.Item(_):
@@ -3099,8 +3119,8 @@ def wait_for_one(queue: Queue[String]):
                 pass
 
 def main() -> int32:
-    started = Queue[String]()
-    finished = Queue[String]()
+    started = Queue[str]()
+    finished = Queue[str]()
     jobs = Queue[int32]()
     with TaskGroup() as group:
         group.start(waiter, started, jobs, finished)
@@ -3143,8 +3163,8 @@ import fs
 
 def consumer(
     jobs: Queue[int32],
-    after_get_path: String,
-    release_path: String
+    after_get_path: str,
+    release_path: str
 ) -> None:
     while not fs.exists(release_path):
         sleep(5ms)
@@ -3257,14 +3277,14 @@ fn async_file_io_keeps_the_scheduler_running_while_a_fifo_read_waits() {
         r#"
 import fs
 
-def wait_for_text(path: String):
+def wait_for_text(path: str):
     match fs.read_to_string(path):
         case Result.Ok(text):
             print(text)
         case Result.Err(err):
             print(err)
 
-def mark_ready(path: String):
+def mark_ready(path: str):
     sleep(20ms)
     match fs.write_string(path, "ready"):
         case Result.Ok(_):

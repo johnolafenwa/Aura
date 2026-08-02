@@ -2,20 +2,20 @@
 ## Expects: "Robot says beep" then "Dog says woof"
 
 trait Speakable:
-    def speak(self) -> String
+    def speak(self) -> str
 
 class Robot:
-    sound: String
+    sound: str
 
 class Dog:
-    sound: String
+    sound: str
 
 impl Speakable for Robot:
-    def speak(self) -> String:
+    def speak(self) -> str:
         return "Robot says " + self.sound
 
 impl Speakable for Dog:
-    def speak(self) -> String:
+    def speak(self) -> str:
         return "Dog says " + self.sound
 
 def announce[T: Speakable](creature: T):

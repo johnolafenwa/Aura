@@ -1,7 +1,7 @@
 class User:
-    name: String
+    name: str
 
-def name_ref(user: User) -> String:
+def name_ref(user: User) -> str:
     return user.name
 
 def main():

@@ -1,5 +1,5 @@
 def main() -> int32:
-    mut xs: Vec[int32] = []
-    xs.push(1)
-    xs.push(2)
+    mut xs: list[int32] = []
+    xs.append(1)
+    xs.append(2)
     return 0

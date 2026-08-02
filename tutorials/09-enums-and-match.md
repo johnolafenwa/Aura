@@ -20,14 +20,14 @@ Variants can carry a single value:
 ```python
 enum ParseResult:
     Success(int32)
-    Failure(String)
+    Failure(str)
 
 ok = ParseResult.Success(42)
 bad = ParseResult.Failure("invalid input")
 ```
 
-Variant payloads are owned constructor positions. `Failure(String)` therefore
-acts like `Failure(own String)`, and the same is true of builtins such as
+Variant payloads are owned constructor positions. `Failure(str)` therefore
+acts like `Failure(own str)`, and the same is true of builtins such as
 `Option.Some(own T)` and `Result.Err(own E)`.
 
 ## Generic Enums
@@ -43,7 +43,7 @@ enum Wrapper[T]:
 You can provide explicit type arguments when the compiler needs help:
 
 ```python
-wrapped = Result[int32, String].Ok(7)
+wrapped = Result[int32, str].Ok(7)
 ```
 
 See [examples/enums/explicit_type_args.au](../examples/enums/explicit_type_args.au).
@@ -88,7 +88,7 @@ case ParseResult.Success(value):
 When the scrutinee type is already known, you can omit the enum name:
 
 ```python
-result: Result[String, String] = Result.Ok("ok")
+result: Result[str, str] = Result.Ok("ok")
 
 match result:
     case Ok(value):       # same as Result.Ok(value)
@@ -106,11 +106,11 @@ arm must receive owned payloads. This distinction matters for non-copy types
 (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
 
 ```python
-result: Result[String, String] = Result.Ok("ok")
+result: Result[str, str] = Result.Ok("ok")
 
 match result:
     case Ok(value):
-        print(value.clone())    # value is a borrowed String
+        print(value.clone())    # value is a borrowed str
     case Err(message):
         print(message)
 
@@ -120,10 +120,10 @@ match result:
 Use `match mut` when you need to modify the matched value:
 
 ```python
-mut result: Result[String, String] = Result.Ok("hello")
+mut result: Result[str, str] = Result.Ok("hello")
 match mut result:
     case Ok(msg):
-        pass    # msg is mut String
+        pass    # msg is mut str
     case Err(e):
         pass
 ```
@@ -134,10 +134,10 @@ See [examples/enums/match_borrow.au](../examples/enums/match_borrow.au).
 
 ## Literal Match Patterns
 
-You can also match on literal values of `bool`, integer, and `String`:
+You can also match on literal values of `bool`, integer, and `str`:
 
 ```python
-def describe_number(value: int32) -> String:
+def describe_number(value: int32) -> str:
     match value:
         case 0:
             return "zero"
@@ -150,7 +150,7 @@ def describe_number(value: int32) -> String:
 Boolean matches are exhaustive when they cover both `true` and `false`:
 
 ```python
-def describe_flag(flag: bool) -> String:
+def describe_flag(flag: bool) -> str:
     match flag:
         case true:
             return "yes"
@@ -158,7 +158,7 @@ def describe_flag(flag: bool) -> String:
             return "no"
 ```
 
-Integer and `String` matches always need a final wildcard arm because the domain is open-ended.
+Integer and `str` matches always need a final wildcard arm because the domain is open-ended.
 
 See [examples/control_flow/match_literals.au](../examples/control_flow/match_literals.au).
 

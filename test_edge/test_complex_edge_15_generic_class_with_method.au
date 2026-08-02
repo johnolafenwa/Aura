@@ -24,7 +24,7 @@ def main() -> int32:
     print(swapped.get_first())
     print(swapped.get_second())
 
-    # String pair
+    # str pair
     sp = Pair(first="hello", second="world")
     print(sp.get_first())
     print(sp.get_second())

@@ -1,8 +1,8 @@
 def main() -> int32:
-    integer_source: Vec[int32] = [8, 12]
-    integer_rhs_source: Vec[int32] = [2, 3]
-    integers = Array[int32].from_vec(integer_source, [2])
-    integer_rhs = Array[int32].from_vec(integer_rhs_source, [2])
+    integer_source: list[int32] = [8, 12]
+    integer_rhs_source: list[int32] = [2, 3]
+    integers = Array[int32].from_list(integer_source, [2])
+    integer_rhs = Array[int32].from_list(integer_rhs_source, [2])
     print(integers + integer_rhs)
     print(integers - integer_rhs)
     print(integers * integer_rhs)
@@ -12,23 +12,23 @@ def main() -> int32:
     print(2 + integers)
     print(20 - integers)
     print(2 * integers)
-    matrix_source: Vec[int32] = [1, 2, 3, 4]
-    matrix = Array[int32].from_vec(matrix_source, [2, 2])
+    matrix_source: list[int32] = [1, 2, 3, 4]
+    matrix = Array[int32].from_list(matrix_source, [2, 2])
     print(matrix[(0, 1)])
     print(integers.map[int64](f=lambda value: value as int64))
 
-    float_source: Vec[float64] = [8.0, 12.0]
-    float_rhs_source: Vec[float64] = [2.0, 3.0]
-    floats = Array[float64].from_vec(float_source, [2])
-    float_rhs = Array[float64].from_vec(float_rhs_source, [2])
+    float_source: list[float64] = [8.0, 12.0]
+    float_rhs_source: list[float64] = [2.0, 3.0]
+    floats = Array[float64].from_list(float_source, [2])
+    float_rhs = Array[float64].from_list(float_rhs_source, [2])
     print(floats / float_rhs)
     print(floats / 2.0)
     print(24.0 / floats)
 
-    boundary_source: Vec[int32] = [2147483647, -2147483648, 6]
-    mode_rhs_source: Vec[int32] = [1, 1, 2]
-    boundaries = Array[int32].from_vec(boundary_source, [3])
-    mode_rhs = Array[int32].from_vec(mode_rhs_source, [3])
+    boundary_source: list[int32] = [2147483647, -2147483648, 6]
+    mode_rhs_source: list[int32] = [1, 1, 2]
+    boundaries = Array[int32].from_list(boundary_source, [3])
+    mode_rhs = Array[int32].from_list(mode_rhs_source, [3])
     print(boundaries.wrapping_add(1))
     print(boundaries.wrapping_sub(1))
     print(boundaries.wrapping_mul(2))

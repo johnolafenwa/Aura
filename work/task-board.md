@@ -21,13 +21,23 @@ Last updated: 2026-08-02
   functions, and 94.62% regions. One downward-truncated re-ratchet is reserved
   for the final checkpoint.
 - User amendment: Aura has no users and carries no backward-compatibility
-  burden. Old names and meanings receive no aliases, shims, grace periods, or
-  staged activation. `list.remove(x)` activates for integer lists in the same
-  migration as every other element type; maintained old index-removal calls
-  rewrite to `pop(index)`. Focused tests run continuously, while the expensive
-  full local gate is reserved for completed migration families and checkpoint.
-- Current phase: build the S1/S2 pre-flip inventory and migration tooling,
-  complete focused version-stamp validation, then begin S2 test-first.
+  burden. The prior surface is treated as though it never existed: no aliases,
+  shims, reserved spellings, specialized retirement diagnostics, fix-its,
+  grace periods, or public migration guidance. `list.remove(x)` activates for
+  integer lists in the same migration as every other element type; the
+  internal repository rewrite changes old index-removal calls to `pop(index)`.
+  Focused tests run continuously, while the expensive full local gate is
+  reserved for completed migration families and checkpoint.
+- Current phase: S2's unified `int64` index domain and S1's canonical
+  `list`/`dict`/`set`/`str` surface are implemented across the compiler, both
+  backends, fixtures, diagnostics, examples, tutorials, Manual, LSP, and editor
+  tooling. The S3 test runner foundation is also implemented and its 17 focused
+  tests pass. The expanded clean-slate identity gate, 1,499-test initial broad
+  replay, complete 9-family fixture harness, 101 LSP tests, 20 extension tests,
+  all 123 compiler-verified Manual blocks, and the final 1,500-test compiler
+  replay are green. Formatting and owned-file diff hygiene are the active
+  checkpoint item before the S1/S2 family is committed and merged locally with
+  the now-landed PR.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
 - Work note: `work/2026-08-02-batch-s1-python-surface.md`.

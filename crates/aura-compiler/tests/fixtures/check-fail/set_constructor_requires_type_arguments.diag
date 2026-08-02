@@ -1,0 +1,6 @@
+error[AU2005]: empty set construction requires an explicit element type
+ --> crates/aura-compiler/tests/fixtures/check-fail/set_constructor_requires_type_arguments.au:2:14
+  |
+2 |     values = set()
+  |              ^
+  = help: write `set[T]()` with the intended element type

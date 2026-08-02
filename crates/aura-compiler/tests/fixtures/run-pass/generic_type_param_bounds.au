@@ -1,17 +1,17 @@
 trait Named:
-    def name(self) -> String
+    def name(self) -> str
 
 class User:
-    label: String
+    label: str
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.label.clone()
 
 class Wrapper[T: Named]:
     value: T
 
-    def render(self) -> String:
+    def render(self) -> str:
         return self.value.name()
 
 enum MaybeNamed[T: Named]:

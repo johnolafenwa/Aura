@@ -1,9 +1,9 @@
 enum Token:
-    Word(String)
-    Punct(String)
+    Word(str)
+    Punct(str)
     Whitespace
 
-def show(t: own Token) -> String:
+def show(t: own Token) -> str:
     match own t:
         case Token.Word(w):
             return "word(" + w + ")"

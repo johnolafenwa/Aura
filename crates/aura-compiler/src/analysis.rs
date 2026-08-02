@@ -314,8 +314,23 @@ impl<'a> AnalysisBuilder<'a> {
                 }
             }
             if let ExprKind::Index { object, .. } = &receiver_expr.kind {
-                if matches!(&object.kind, ExprKind::Name(name) if name == "Array") {
-                    return Ok(builtin_associated_function_completions("Array"));
+                if let ExprKind::Name(name) = &object.kind {
+                    if matches!(name.as_str(), "Array" | "list" | "dict" | "set") {
+                        return Ok(builtin_specialized_associated_function_completions(
+                            name,
+                            &receiver_text,
+                        ));
+                    }
+                }
+            }
+            if let ExprKind::Specialize { expr, .. } = &receiver_expr.kind {
+                if let ExprKind::Name(name) = &expr.kind {
+                    if matches!(name.as_str(), "Array" | "list" | "dict" | "set") {
+                        return Ok(builtin_specialized_associated_function_completions(
+                            name,
+                            &receiver_text,
+                        ));
+                    }
                 }
             }
             let Some(receiver_type) = self.infer_expr_type(&receiver_expr, &scope) else {
@@ -2392,9 +2407,9 @@ impl<'a> AnalysisBuilder<'a> {
             if !scope.contains_key(type_name) {
                 let associated_ty = match (type_name.as_str(), field) {
                     ("Duration", "ms" | "seconds" | "minutes") => Some(Type::named("Duration")),
-                    ("String", "from_bytes") => Some(Type::Named(
+                    ("str", "from_bytes") => Some(Type::Named(
                         "Result".to_string(),
-                        vec![Type::named("String"), Type::named("bytes.Error")],
+                        vec![Type::named("str"), Type::named("bytes.Error")],
                     )),
                     _ => None,
                 };
@@ -2606,95 +2621,98 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         if let Some(builtin_member) = BuiltinMember::resolve(base_name, field) {
-            let ty = match builtin_member {
-                BuiltinMember::FloatSqrt
-                | BuiltinMember::IntegerToFloat
-                | BuiltinMember::DurationToMilliseconds
-                | BuiltinMember::DurationToSeconds => Some(Type::named("float64")),
-                BuiltinMember::IntegerWrappingAdd
-                | BuiltinMember::IntegerWrappingSub
-                | BuiltinMember::IntegerWrappingMul
-                | BuiltinMember::IntegerSaturatingAdd
-                | BuiltinMember::IntegerSaturatingSub
-                | BuiltinMember::IntegerSaturatingMul => Some(receiver_type.clone()),
-                BuiltinMember::StringLen | BuiltinMember::StringByteLen => {
-                    Some(Type::named("int64"))
-                }
-                BuiltinMember::StringToBytes => {
-                    Some(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
-                }
-                BuiltinMember::StringContains
-                | BuiltinMember::StringStartsWith
-                | BuiltinMember::StringEndsWith => Some(Type::named("bool")),
-                BuiltinMember::StringSplit => {
-                    Some(Type::Named("Vec".to_string(), vec![Type::named("String")]))
-                }
-                BuiltinMember::StringReplace
-                | BuiltinMember::StringToLower
-                | BuiltinMember::StringToUpper
-                | BuiltinMember::StringTrim
-                | BuiltinMember::StringJoin
-                | BuiltinMember::ScalarToString => Some(Type::named("String")),
-                BuiltinMember::StringStripPrefix | BuiltinMember::StringStripSuffix => Some(
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
-                ),
-                BuiltinMember::ArrayShape => {
-                    Some(Type::Named("Vec".to_string(), vec![Type::named("int64")]))
-                }
-                BuiltinMember::ArrayLen => Some(Type::named("int64")),
-                BuiltinMember::ArrayClone
-                | BuiltinMember::ArrayWrappingAdd
-                | BuiltinMember::ArrayWrappingSub
-                | BuiltinMember::ArrayWrappingMul
-                | BuiltinMember::ArraySaturatingAdd
-                | BuiltinMember::ArraySaturatingSub
-                | BuiltinMember::ArraySaturatingMul => Some(receiver_type.clone()),
-                BuiltinMember::ArrayGet | BuiltinMember::ArraySet => {
-                    let payload = receiver_type
+            let ty =
+                match builtin_member {
+                    BuiltinMember::FloatSqrt
+                    | BuiltinMember::IntegerToFloat
+                    | BuiltinMember::DurationToMilliseconds
+                    | BuiltinMember::DurationToSeconds => Some(Type::named("float64")),
+                    BuiltinMember::IntegerWrappingAdd
+                    | BuiltinMember::IntegerWrappingSub
+                    | BuiltinMember::IntegerWrappingMul
+                    | BuiltinMember::IntegerSaturatingAdd
+                    | BuiltinMember::IntegerSaturatingSub
+                    | BuiltinMember::IntegerSaturatingMul => Some(receiver_type.clone()),
+                    BuiltinMember::StringLen | BuiltinMember::StringByteLen => {
+                        Some(Type::named("int64"))
+                    }
+                    BuiltinMember::StringToBytes => {
+                        Some(Type::Named("list".to_string(), vec![Type::named("uint8")]))
+                    }
+                    BuiltinMember::StringContains
+                    | BuiltinMember::StringStartsWith
+                    | BuiltinMember::StringEndsWith => Some(Type::named("bool")),
+                    BuiltinMember::StringSplit => {
+                        Some(Type::Named("list".to_string(), vec![Type::named("str")]))
+                    }
+                    BuiltinMember::StringReplace
+                    | BuiltinMember::StringToLower
+                    | BuiltinMember::StringToUpper
+                    | BuiltinMember::StringTrim
+                    | BuiltinMember::StringJoin
+                    | BuiltinMember::ScalarToString => Some(Type::named("str")),
+                    BuiltinMember::StringStripPrefix | BuiltinMember::StringStripSuffix => {
+                        Some(Type::Named("Option".to_string(), vec![Type::named("str")]))
+                    }
+                    BuiltinMember::ArrayShape => {
+                        Some(Type::Named("list".to_string(), vec![Type::named("int64")]))
+                    }
+                    BuiltinMember::ArrayLen => Some(Type::named("int64")),
+                    BuiltinMember::ArrayClone
+                    | BuiltinMember::ArrayWrappingAdd
+                    | BuiltinMember::ArrayWrappingSub
+                    | BuiltinMember::ArrayWrappingMul
+                    | BuiltinMember::ArraySaturatingAdd
+                    | BuiltinMember::ArraySaturatingSub
+                    | BuiltinMember::ArraySaturatingMul => Some(receiver_type.clone()),
+                    BuiltinMember::ArrayGet | BuiltinMember::ArraySet => {
+                        let payload = receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit);
+                        Some(Type::Named("Option".to_string(), vec![payload]))
+                    }
+                    BuiltinMember::ArrayFill => Some(Type::Unit),
+                    BuiltinMember::ArrayMap => None,
+                    BuiltinMember::ArraySum | BuiltinMember::ArrayMin | BuiltinMember::ArrayMax => {
+                        receiver_type.type_arguments().first().cloned()
+                    }
+                    BuiltinMember::ArrayMean => Some(Type::named("float64")),
+                    BuiltinMember::VecLen => Some(Type::named("int64")),
+                    BuiltinMember::VecIsEmpty => Some(Type::named("bool")),
+                    BuiltinMember::VecClone => Some(receiver_type.clone()),
+                    BuiltinMember::VecPush
+                    | BuiltinMember::VecRemove
+                    | BuiltinMember::VecClear
+                    | BuiltinMember::VecReverse
+                    | BuiltinMember::VecSort
+                    | BuiltinMember::VecSortBy
+                    | BuiltinMember::VecInsert
+                    | BuiltinMember::VecSwap
+                    | BuiltinMember::VecExtend
+                    | BuiltinMember::VecReserve => Some(Type::Unit),
+                    BuiltinMember::VecIndex | BuiltinMember::VecCount => Some(Type::named("int64")),
+                    BuiltinMember::VecMap => None,
+                    BuiltinMember::VecFilter => Some(receiver_type.clone()),
+                    BuiltinMember::VecContains => Some(Type::named("bool")),
+                    BuiltinMember::MapLen => Some(Type::named("int64")),
+                    BuiltinMember::MapIsEmpty => Some(Type::named("bool")),
+                    BuiltinMember::MapClone => Some(receiver_type.clone()),
+                    BuiltinMember::MapContainsKey => Some(Type::named("bool")),
+                    BuiltinMember::MapKeys => receiver_type
                         .type_arguments()
                         .first()
                         .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
-                }
-                BuiltinMember::ArrayFill => Some(Type::Unit),
-                BuiltinMember::ArrayMap => None,
-                BuiltinMember::ArraySum | BuiltinMember::ArrayMin | BuiltinMember::ArrayMax => {
-                    receiver_type.type_arguments().first().cloned()
-                }
-                BuiltinMember::ArrayMean => Some(Type::named("float64")),
-                BuiltinMember::VecLen => Some(Type::named("int64")),
-                BuiltinMember::VecIsEmpty => Some(Type::named("bool")),
-                BuiltinMember::VecClone => Some(receiver_type.clone()),
-                BuiltinMember::VecPush
-                | BuiltinMember::VecClear
-                | BuiltinMember::VecReverse
-                | BuiltinMember::VecSort
-                | BuiltinMember::VecSortBy => Some(Type::Unit),
-                BuiltinMember::VecMap => None,
-                BuiltinMember::VecFilter => Some(receiver_type.clone()),
-                BuiltinMember::VecInsert => Some(Type::named("bool")),
-                BuiltinMember::VecSwap | BuiltinMember::VecContains => Some(Type::named("bool")),
-                BuiltinMember::VecExtend => Some(Type::Unit),
-                BuiltinMember::MapLen => Some(Type::named("int64")),
-                BuiltinMember::MapIsEmpty => Some(Type::named("bool")),
-                BuiltinMember::MapClone => Some(receiver_type.clone()),
-                BuiltinMember::MapContainsKey => Some(Type::named("bool")),
-                BuiltinMember::MapKeys => receiver_type
-                    .type_arguments()
-                    .first()
-                    .cloned()
-                    .map(|key| Type::Named("Vec".to_string(), vec![key])),
-                BuiltinMember::MapValues => receiver_type
-                    .type_arguments()
-                    .get(1)
-                    .cloned()
-                    .map(|value| Type::Named("Vec".to_string(), vec![value])),
-                BuiltinMember::MapItems | BuiltinMember::MapEntries => Some(Type::Named(
-                    "Vec".to_string(),
-                    vec![Type::Named(
-                        "MapEntry".to_string(),
-                        vec![
+                        .map(|key| Type::Named("list".to_string(), vec![key])),
+                    BuiltinMember::MapValues => receiver_type
+                        .type_arguments()
+                        .get(1)
+                        .cloned()
+                        .map(|value| Type::Named("list".to_string(), vec![value])),
+                    BuiltinMember::MapItems | BuiltinMember::MapEntries => Some(Type::Named(
+                        "list".to_string(),
+                        vec![Type::Tuple(vec![
                             receiver_type
                                 .type_arguments()
                                 .first()
@@ -2705,500 +2723,485 @@ impl<'a> AnalysisBuilder<'a> {
                                 .get(1)
                                 .cloned()
                                 .unwrap_or(Type::Unit),
-                        ],
-                    )],
-                )),
-                BuiltinMember::MapClear | BuiltinMember::MapExtend => Some(Type::Unit),
-                BuiltinMember::MapGet | BuiltinMember::MapSet | BuiltinMember::MapRemove => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .get(1)
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
-                }
-                BuiltinMember::VecPop => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
-                }
-                BuiltinMember::VecGet => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
-                }
-                BuiltinMember::VecSet => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
-                }
-                BuiltinMember::VecRemove => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
-                }
-                BuiltinMember::StringClone => Some(Type::named("String")),
-                BuiltinMember::SetLen => Some(Type::named("int64")),
-                BuiltinMember::SetIsEmpty => Some(Type::named("bool")),
-                BuiltinMember::SetClone => Some(receiver_type.clone()),
-                BuiltinMember::SetContains
-                | BuiltinMember::SetInsert
-                | BuiltinMember::SetRemove => Some(Type::named("bool")),
-                BuiltinMember::QueuePut | BuiltinMember::QueueTryPut => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named(
+                        ])],
+                    )),
+                    BuiltinMember::MapClear
+                    | BuiltinMember::MapExtend
+                    | BuiltinMember::MapReserve => Some(Type::Unit),
+                    BuiltinMember::MapGet | BuiltinMember::MapSet | BuiltinMember::MapRemove => {
+                        let payload = receiver_type
+                            .type_arguments()
+                            .get(1)
+                            .cloned()
+                            .unwrap_or(Type::Unit);
+                        Some(Type::Named("Option".to_string(), vec![payload]))
+                    }
+                    BuiltinMember::VecPop | BuiltinMember::VecSet => {
+                        let payload = receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit);
+                        Some(payload)
+                    }
+                    BuiltinMember::VecGet => {
+                        let payload = receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit);
+                        Some(Type::Named("Option".to_string(), vec![payload]))
+                    }
+                    BuiltinMember::StringClone => Some(Type::named("str")),
+                    BuiltinMember::SetLen => Some(Type::named("int64")),
+                    BuiltinMember::SetIsEmpty => Some(Type::named("bool")),
+                    BuiltinMember::SetClone => Some(receiver_type.clone()),
+                    BuiltinMember::SetContains => Some(Type::named("bool")),
+                    BuiltinMember::SetInsert
+                    | BuiltinMember::SetRemove
+                    | BuiltinMember::SetDiscard
+                    | BuiltinMember::SetClear
+                    | BuiltinMember::SetReserve => Some(Type::Unit),
+                    BuiltinMember::QueuePut | BuiltinMember::QueueTryPut => {
+                        let payload = receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit);
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![
+                                Type::Unit,
+                                Type::Named("SendError".to_string(), vec![payload]),
+                            ],
+                        ))
+                    }
+                    BuiltinMember::QueueGet => {
+                        let payload = receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit);
+                        Some(Type::Named("QueueReceive".to_string(), vec![payload]))
+                    }
+                    BuiltinMember::QueueGetOrNone => {
+                        let payload = receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit);
+                        Some(Type::Named("Option".to_string(), vec![payload]))
+                    }
+                    BuiltinMember::QueueGetOr => receiver_type.type_arguments().first().cloned(),
+                    BuiltinMember::QueueClose | BuiltinMember::TaskGroupCancel => Some(Type::Unit),
+                    BuiltinMember::TaskResult => Some(Type::Named(
+                        "TaskResult".to_string(),
+                        vec![receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit)],
+                    )),
+                    BuiltinMember::TaskResultOrNone => Some(Type::Named(
+                        "Option".to_string(),
+                        vec![receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit)],
+                    )),
+                    BuiltinMember::TaskResultOr => receiver_type.type_arguments().first().cloned(),
+                    BuiltinMember::TaskGroupStart | BuiltinMember::TaskGroupStartWithStack => {
+                        Some(Type::Named("Task".to_string(), vec![Type::Unit]))
+                    }
+                    BuiltinMember::TaskGroupStartSoon
+                    | BuiltinMember::TaskGroupStartSoonWithStack => Some(Type::Unit),
+                    BuiltinMember::ProcessChildStdin
+                    | BuiltinMember::ProcessChildStdout
+                    | BuiltinMember::ProcessChildStderr => Some(Type::Named(
+                        "Option".to_string(),
+                        vec![Type::Named("process.Pipe".to_string(), Vec::new())],
+                    )),
+                    BuiltinMember::ProcessChildWait => {
+                        Some(Type::Named("process.Wait".to_string(), Vec::new()))
+                    }
+                    BuiltinMember::ProcessChildWaitOrNone => Some(Type::Named(
                         "Result".to_string(),
                         vec![
-                            Type::Unit,
-                            Type::Named("SendError".to_string(), vec![payload]),
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("process.ExitStatus".to_string(), Vec::new())],
+                            ),
+                            Type::Named("process.Error".to_string(), Vec::new()),
                         ],
-                    ))
-                }
-                BuiltinMember::QueueGet => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("QueueReceive".to_string(), vec![payload]))
-                }
-                BuiltinMember::QueueGetOrNone => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
-                }
-                BuiltinMember::QueueGetOr => receiver_type.type_arguments().first().cloned(),
-                BuiltinMember::QueueClose | BuiltinMember::TaskGroupCancel => Some(Type::Unit),
-                BuiltinMember::TaskResult => Some(Type::Named(
-                    "TaskResult".to_string(),
-                    vec![receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit)],
-                )),
-                BuiltinMember::TaskResultOrNone => Some(Type::Named(
-                    "Option".to_string(),
-                    vec![receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit)],
-                )),
-                BuiltinMember::TaskResultOr => receiver_type.type_arguments().first().cloned(),
-                BuiltinMember::TaskGroupStart | BuiltinMember::TaskGroupStartWithStack => {
-                    Some(Type::Named("Task".to_string(), vec![Type::Unit]))
-                }
-                BuiltinMember::TaskGroupStartSoon | BuiltinMember::TaskGroupStartSoonWithStack => {
-                    Some(Type::Unit)
-                }
-                BuiltinMember::ProcessChildStdin
-                | BuiltinMember::ProcessChildStdout
-                | BuiltinMember::ProcessChildStderr => Some(Type::Named(
-                    "Option".to_string(),
-                    vec![Type::Named("process.Pipe".to_string(), Vec::new())],
-                )),
-                BuiltinMember::ProcessChildWait => {
-                    Some(Type::Named("process.Wait".to_string(), Vec::new()))
-                }
-                BuiltinMember::ProcessChildWaitOrNone => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named(
-                            "Option".to_string(),
-                            vec![Type::Named("process.ExitStatus".to_string(), Vec::new())],
-                        ),
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessChildWaitOk => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("process.ExitStatus".to_string(), Vec::new()),
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessChildKill | BuiltinMember::ProcessChildTerminate => {
-                    Some(Type::Named(
+                    )),
+                    BuiltinMember::ProcessChildWaitOk => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("process.ExitStatus".to_string(), Vec::new()),
+                            Type::Named("process.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::ProcessChildKill | BuiltinMember::ProcessChildTerminate => {
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![
+                                Type::Unit,
+                                Type::Named("process.Error".to_string(), Vec::new()),
+                            ],
+                        ))
+                    }
+                    BuiltinMember::ProcessChildClose => Some(Type::Unit),
+                    BuiltinMember::ProcessPipeReadAll => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
+                            Type::Named("process.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::ProcessPipeReadLine => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("Option".to_string(), vec![Type::named("str")]),
+                            Type::Named("process.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::ProcessPipeReadBytes => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
+                            ),
+                            Type::Named("process.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::ProcessPipeWriteAll
+                    | BuiltinMember::ProcessPipeWriteBytes
+                    | BuiltinMember::ProcessPipeFlush => Some(Type::Named(
                         "Result".to_string(),
                         vec![
                             Type::Unit,
                             Type::Named("process.Error".to_string(), Vec::new()),
                         ],
-                    ))
-                }
-                BuiltinMember::ProcessChildClose => Some(Type::Unit),
-                BuiltinMember::ProcessPipeReadAll => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessPipeReadLine => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Option".to_string(), vec![Type::named("String")]),
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessPipeReadBytes => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named(
-                            "Option".to_string(),
-                            vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
-                        ),
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessPipeWriteAll
-                | BuiltinMember::ProcessPipeWriteBytes
-                | BuiltinMember::ProcessPipeFlush => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Unit,
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessPipeClose => Some(Type::Unit),
-                BuiltinMember::ProcessCompletedStatus => {
-                    Some(Type::Named("process.ExitStatus".to_string(), Vec::new()))
-                }
-                BuiltinMember::ProcessCompletedSuccess => Some(Type::named("bool")),
-                BuiltinMember::ProcessCompletedStdout | BuiltinMember::ProcessCompletedStderr => {
-                    Some(Type::named("String"))
-                }
-                BuiltinMember::ProcessCompletedStdoutBytes
-                | BuiltinMember::ProcessCompletedStderrBytes => {
-                    Some(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
-                }
-                BuiltinMember::ProcessCompletedCheck => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Unit,
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessSupervisorStart | BuiltinMember::ProcessSupervisorStop => {
-                    Some(Type::Named(
+                    )),
+                    BuiltinMember::ProcessPipeClose => Some(Type::Unit),
+                    BuiltinMember::ProcessCompletedStatus => {
+                        Some(Type::Named("process.ExitStatus".to_string(), Vec::new()))
+                    }
+                    BuiltinMember::ProcessCompletedSuccess => Some(Type::named("bool")),
+                    BuiltinMember::ProcessCompletedStdout
+                    | BuiltinMember::ProcessCompletedStderr => Some(Type::named("str")),
+                    BuiltinMember::ProcessCompletedStdoutBytes
+                    | BuiltinMember::ProcessCompletedStderrBytes => {
+                        Some(Type::Named("list".to_string(), vec![Type::named("uint8")]))
+                    }
+                    BuiltinMember::ProcessCompletedCheck => Some(Type::Named(
                         "Result".to_string(),
                         vec![
                             Type::Unit,
                             Type::Named("process.Error".to_string(), Vec::new()),
                         ],
-                    ))
-                }
-                BuiltinMember::ProcessSupervisorWait => Some(Type::Named(
-                    "process.SupervisorWait".to_string(),
-                    Vec::new(),
-                )),
-                BuiltinMember::ProcessSupervisorWaitOrNone => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named(
-                            "Option".to_string(),
-                            vec![Type::Named(
-                                "process.SupervisorEvent".to_string(),
-                                Vec::new(),
-                            )],
-                        ),
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessSupervisorIsEmpty => Some(Type::named("bool")),
-                BuiltinMember::ProcessSupervisorClose => Some(Type::Unit),
-                BuiltinMember::RngNextInt => Some(Type::named("int64")),
-                BuiltinMember::RngNextFloat => Some(Type::named("float64")),
-                BuiltinMember::RngShuffle => Some(Type::Unit),
-                BuiltinMember::FileReadAll => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::FileReadBytes => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::FileWriteAll
-                | BuiltinMember::FileWriteBytes
-                | BuiltinMember::FileFlush => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                )),
-                BuiltinMember::FileClose => Some(Type::Unit),
-                BuiltinMember::TcpListenerAccept => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("net.TcpStream".to_string(), Vec::new()),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TcpListenerLocalAddr => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TcpListenerClose => Some(Type::Unit),
-                BuiltinMember::TcpStreamReadAll
-                | BuiltinMember::TcpStreamLocalAddr
-                | BuiltinMember::TcpStreamPeerAddr => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TcpStreamReadLine => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Option".to_string(), vec![Type::named("String")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TcpStreamReadBytes => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named(
-                            "Option".to_string(),
-                            vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
-                        ),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TcpStreamReadExact => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TcpStreamWriteAll
-                | BuiltinMember::TcpStreamWriteBytes
-                | BuiltinMember::TcpStreamFlush
-                | BuiltinMember::TcpStreamShutdownRead
-                | BuiltinMember::TcpStreamShutdownWrite
-                | BuiltinMember::TcpStreamShutdownBoth => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                )),
-                BuiltinMember::TcpStreamClose => Some(Type::Unit),
-                BuiltinMember::UdpSocketSendText | BuiltinMember::UdpSocketSendBytes => {
-                    Some(Type::Named(
-                        "Result".to_string(),
-                        vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                    ))
-                }
-                BuiltinMember::UdpSocketRecv => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named(
-                            "Option".to_string(),
-                            vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
-                        ),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::UdpSocketRecvFrom => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named(
-                            "Option".to_string(),
-                            vec![Type::Named("net.UdpDatagram".to_string(), Vec::new())],
-                        ),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::UdpSocketLocalAddr | BuiltinMember::UdpSocketPeerAddr => {
-                    Some(Type::Named(
+                    )),
+                    BuiltinMember::ProcessSupervisorStart
+                    | BuiltinMember::ProcessSupervisorStop => Some(Type::Named(
                         "Result".to_string(),
                         vec![
-                            Type::named("String"),
-                            Type::Named("io.Error".to_string(), Vec::new()),
+                            Type::Unit,
+                            Type::Named("process.Error".to_string(), Vec::new()),
                         ],
-                    ))
-                }
-                BuiltinMember::UdpSocketClose => Some(Type::Unit),
-                BuiltinMember::UdpDatagramAddress => Some(Type::named("String")),
-                BuiltinMember::UdpDatagramBytes => {
-                    Some(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
-                }
-                BuiltinMember::UdpDatagramText => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::HttpListenerAccept => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("net.HttpExchange".to_string(), Vec::new()),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::HttpListenerLocalAddr => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::HttpListenerClose => Some(Type::Unit),
-                BuiltinMember::HttpExchangeMethod | BuiltinMember::HttpExchangePath => {
-                    Some(Type::named("String"))
-                }
-                BuiltinMember::HttpExchangeHeaders | BuiltinMember::HttpResponseHeaders => {
-                    Some(Type::Named(
-                        "Map".to_string(),
-                        vec![Type::named("String"), Type::named("String")],
-                    ))
-                }
-                BuiltinMember::HttpExchangeBodyText | BuiltinMember::HttpResponseText => {
-                    Some(Type::Named(
+                    )),
+                    BuiltinMember::ProcessSupervisorWait => Some(Type::Named(
+                        "process.SupervisorWait".to_string(),
+                        Vec::new(),
+                    )),
+                    BuiltinMember::ProcessSupervisorWaitOrNone => Some(Type::Named(
                         "Result".to_string(),
                         vec![
-                            Type::named("String"),
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named(
+                                    "process.SupervisorEvent".to_string(),
+                                    Vec::new(),
+                                )],
+                            ),
+                            Type::Named("process.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::ProcessSupervisorIsEmpty => Some(Type::named("bool")),
+                    BuiltinMember::ProcessSupervisorClose => Some(Type::Unit),
+                    BuiltinMember::RngNextInt => Some(Type::named("int64")),
+                    BuiltinMember::RngNextFloat => Some(Type::named("float64")),
+                    BuiltinMember::RngShuffle => Some(Type::Unit),
+                    BuiltinMember::FileReadAll => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
                             Type::Named("io.Error".to_string(), Vec::new()),
                         ],
-                    ))
-                }
-                BuiltinMember::HttpExchangeBodyBytes | BuiltinMember::HttpResponseBytes => {
-                    Some(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
-                }
-                BuiltinMember::HttpExchangeRespondText
-                | BuiltinMember::HttpExchangeRespondBytes => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                )),
-                BuiltinMember::HttpResponseStatus => Some(Type::named("int32")),
-                BuiltinMember::HttpResponseReason => Some(Type::named("String")),
-                BuiltinMember::WebSocketListenerAccept => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("net.WebSocket".to_string(), Vec::new()),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::WebSocketListenerLocalAddr => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::WebSocketSendText | BuiltinMember::WebSocketSendBytes => {
-                    Some(Type::Named(
+                    )),
+                    BuiltinMember::FileReadBytes => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::FileWriteAll
+                    | BuiltinMember::FileWriteBytes
+                    | BuiltinMember::FileFlush => Some(Type::Named(
                         "Result".to_string(),
                         vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                    ))
-                }
-                BuiltinMember::WebSocketRecvText => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Option".to_string(), vec![Type::named("String")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::WebSocketRecvBytes => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named(
-                            "Option".to_string(),
-                            vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
-                        ),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::WebSocketClose => Some(Type::Unit),
-                BuiltinMember::UnixListenerAccept => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("net.UnixStream".to_string(), Vec::new()),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::UnixListenerClose => Some(Type::Unit),
-                BuiltinMember::UnixStreamReadLine => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Option".to_string(), vec![Type::named("String")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::UnixStreamReadExact => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::UnixStreamWriteAll => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                )),
-                BuiltinMember::UnixStreamClose => Some(Type::Unit),
-                BuiltinMember::TlsListenerAccept => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("net.TlsStream".to_string(), Vec::new()),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TlsListenerLocalAddr => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TlsListenerClose => Some(Type::Unit),
-                BuiltinMember::TlsStreamReadLine => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Option".to_string(), vec![Type::named("String")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TlsStreamReadExact => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TlsStreamWriteAll => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                )),
-                BuiltinMember::TlsStreamClose => Some(Type::Unit),
-            };
+                    )),
+                    BuiltinMember::FileClose => Some(Type::Unit),
+                    BuiltinMember::TcpListenerAccept => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("net.TcpStream".to_string(), Vec::new()),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TcpListenerLocalAddr => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TcpListenerClose => Some(Type::Unit),
+                    BuiltinMember::TcpStreamReadAll
+                    | BuiltinMember::TcpStreamLocalAddr
+                    | BuiltinMember::TcpStreamPeerAddr => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TcpStreamReadLine => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("Option".to_string(), vec![Type::named("str")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TcpStreamReadBytes => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
+                            ),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TcpStreamReadExact => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TcpStreamWriteAll
+                    | BuiltinMember::TcpStreamWriteBytes
+                    | BuiltinMember::TcpStreamFlush
+                    | BuiltinMember::TcpStreamShutdownRead
+                    | BuiltinMember::TcpStreamShutdownWrite
+                    | BuiltinMember::TcpStreamShutdownBoth => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                    )),
+                    BuiltinMember::TcpStreamClose => Some(Type::Unit),
+                    BuiltinMember::UdpSocketSendText | BuiltinMember::UdpSocketSendBytes => {
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                        ))
+                    }
+                    BuiltinMember::UdpSocketRecv => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
+                            ),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::UdpSocketRecvFrom => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("net.UdpDatagram".to_string(), Vec::new())],
+                            ),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::UdpSocketLocalAddr | BuiltinMember::UdpSocketPeerAddr => {
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![
+                                Type::named("str"),
+                                Type::Named("io.Error".to_string(), Vec::new()),
+                            ],
+                        ))
+                    }
+                    BuiltinMember::UdpSocketClose => Some(Type::Unit),
+                    BuiltinMember::UdpDatagramAddress => Some(Type::named("str")),
+                    BuiltinMember::UdpDatagramBytes => {
+                        Some(Type::Named("list".to_string(), vec![Type::named("uint8")]))
+                    }
+                    BuiltinMember::UdpDatagramText => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::HttpListenerAccept => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("net.HttpExchange".to_string(), Vec::new()),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::HttpListenerLocalAddr => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::HttpListenerClose => Some(Type::Unit),
+                    BuiltinMember::HttpExchangeMethod | BuiltinMember::HttpExchangePath => {
+                        Some(Type::named("str"))
+                    }
+                    BuiltinMember::HttpExchangeHeaders | BuiltinMember::HttpResponseHeaders => {
+                        Some(Type::Named(
+                            "dict".to_string(),
+                            vec![Type::named("str"), Type::named("str")],
+                        ))
+                    }
+                    BuiltinMember::HttpExchangeBodyText | BuiltinMember::HttpResponseText => {
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![
+                                Type::named("str"),
+                                Type::Named("io.Error".to_string(), Vec::new()),
+                            ],
+                        ))
+                    }
+                    BuiltinMember::HttpExchangeBodyBytes | BuiltinMember::HttpResponseBytes => {
+                        Some(Type::Named("list".to_string(), vec![Type::named("uint8")]))
+                    }
+                    BuiltinMember::HttpExchangeRespondText
+                    | BuiltinMember::HttpExchangeRespondBytes => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                    )),
+                    BuiltinMember::HttpResponseStatus => Some(Type::named("int32")),
+                    BuiltinMember::HttpResponseReason => Some(Type::named("str")),
+                    BuiltinMember::WebSocketListenerAccept => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("net.WebSocket".to_string(), Vec::new()),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::WebSocketListenerLocalAddr => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::WebSocketSendText | BuiltinMember::WebSocketSendBytes => {
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                        ))
+                    }
+                    BuiltinMember::WebSocketRecvText => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("Option".to_string(), vec![Type::named("str")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::WebSocketRecvBytes => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
+                            ),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::WebSocketClose => Some(Type::Unit),
+                    BuiltinMember::UnixListenerAccept => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("net.UnixStream".to_string(), Vec::new()),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::UnixListenerClose => Some(Type::Unit),
+                    BuiltinMember::UnixStreamReadLine => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("Option".to_string(), vec![Type::named("str")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::UnixStreamReadExact => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::UnixStreamWriteAll => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                    )),
+                    BuiltinMember::UnixStreamClose => Some(Type::Unit),
+                    BuiltinMember::TlsListenerAccept => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("net.TlsStream".to_string(), Vec::new()),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TlsListenerLocalAddr => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TlsListenerClose => Some(Type::Unit),
+                    BuiltinMember::TlsStreamReadLine => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("Option".to_string(), vec![Type::named("str")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TlsStreamReadExact => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TlsStreamWriteAll => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                    )),
+                    BuiltinMember::TlsStreamClose => Some(Type::Unit),
+                };
             return Some(ResolvedMember {
                 hover: builtin_function_hover(builtin_member.detail(), builtin_member.docs()),
                 definition: None,
@@ -3252,7 +3255,7 @@ impl<'a> AnalysisBuilder<'a> {
                 ty: Some(Type::named("TaskResult")),
             }),
             "TaskResult" if field == "Error" => Some(ResolvedMember {
-                hover: format_variant_hover("TaskResult", field, Some(&Type::named("String"))),
+                hover: format_variant_hover("TaskResult", field, Some(&Type::named("str"))),
                 definition: None,
                 ty: Some(Type::named("TaskResult")),
             }),
@@ -3265,7 +3268,7 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: format_variant_hover_payloads(
                     "WaitAny",
                     field,
-                    ["own int32".to_string(), "own T".to_string()],
+                    ["own int64".to_string(), "own T".to_string()],
                 ),
                 definition: None,
                 ty: Some(Type::named("WaitAny")),
@@ -3274,7 +3277,7 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: format_variant_hover_payloads(
                     "WaitAny",
                     field,
-                    ["own int32".to_string(), "own String".to_string()],
+                    ["own int64".to_string(), "own str".to_string()],
                 ),
                 definition: None,
                 ty: Some(Type::named("WaitAny")),
@@ -3285,7 +3288,7 @@ impl<'a> AnalysisBuilder<'a> {
                 ty: Some(Type::named("WaitAny")),
             }),
             "WaitAll" if field == "Ready" => Some(ResolvedMember {
-                hover: format_variant_hover_payloads("WaitAll", field, ["own Vec[T]".to_string()]),
+                hover: format_variant_hover_payloads("WaitAll", field, ["own list[T]".to_string()]),
                 definition: None,
                 ty: Some(Type::named("WaitAll")),
             }),
@@ -3293,7 +3296,7 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: format_variant_hover_payloads(
                     "WaitAll",
                     field,
-                    ["own int32".to_string(), "own String".to_string()],
+                    ["own int64".to_string(), "own str".to_string()],
                 ),
                 definition: None,
                 ty: Some(Type::named("WaitAll")),
@@ -3307,7 +3310,7 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: format_variant_hover_payloads(
                     "SelectOutcome",
                     field,
-                    ["own int32".to_string(), "own QueueReceive[Q]".to_string()],
+                    ["own int64".to_string(), "own QueueReceive[Q]".to_string()],
                 ),
                 definition: None,
                 ty: Some(Type::named("SelectOutcome")),
@@ -3316,13 +3319,13 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: format_variant_hover_payloads(
                     "SelectOutcome",
                     field,
-                    ["own int32".to_string(), "own TaskResult[T]".to_string()],
+                    ["own int64".to_string(), "own TaskResult[T]".to_string()],
                 ),
                 definition: None,
                 ty: Some(Type::named("SelectOutcome")),
             }),
             "SelectOutcome" if field == "Deadline" => Some(ResolvedMember {
-                hover: format_variant_hover("SelectOutcome", field, Some(&Type::named("int32"))),
+                hover: format_variant_hover("SelectOutcome", field, Some(&Type::named("int64"))),
                 definition: None,
                 ty: Some(Type::named("SelectOutcome")),
             }),
@@ -3364,7 +3367,7 @@ impl<'a> AnalysisBuilder<'a> {
                     return Type::Unit;
                 }
                 let name = match name.as_str() {
-                    "str" => "String",
+                    "str" => "str",
                     "int" => "int64",
                     name => name,
                 };
@@ -3422,7 +3425,7 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::BuiltinOmitted => None,
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
-            ExprKind::String(_) => Some(Type::named("String")),
+            ExprKind::String(_) => Some(Type::named("str")),
             ExprKind::Lambda { .. } => self.closure_info(expr).map(ClosureInfo::ty),
             ExprKind::Tuple(elements) => Some(Type::Tuple(
                 elements
@@ -3434,21 +3437,21 @@ impl<'a> AnalysisBuilder<'a> {
                     .collect(),
             )),
             ExprKind::List(elements) => Some(Type::Named(
-                "Vec".to_string(),
+                "list".to_string(),
                 vec![elements
                     .first()
                     .and_then(|element| self.infer_expr_type(element, scope))
                     .unwrap_or(Type::named("Unknown"))],
             )),
             ExprKind::Set(elements) => Some(Type::Named(
-                "Set".to_string(),
+                "set".to_string(),
                 vec![elements
                     .first()
                     .and_then(|element| self.infer_expr_type(element, scope))
                     .unwrap_or(Type::named("Unknown"))],
             )),
             ExprKind::Map(entries) => Some(Type::Named(
-                "Map".to_string(),
+                "dict".to_string(),
                 vec![
                     entries
                         .first()
@@ -3463,7 +3466,7 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Comprehension { .. } => self
                 .comprehension_info(expr)
                 .map(|info| info.result_type.clone()),
-            ExprKind::FString(_) => Some(Type::named("String")),
+            ExprKind::FString(_) => Some(Type::named("str")),
             ExprKind::Specialize { expr, type_args } => match &expr.kind {
                 ExprKind::Name(name)
                     if self.program.classes.contains_key(name)
@@ -3475,9 +3478,9 @@ impl<'a> AnalysisBuilder<'a> {
                                 | "SendError"
                                 | "Queue"
                                 | "Array"
-                                | "Vec"
-                                | "Set"
-                                | "Map"
+                                | "list"
+                                | "set"
+                                | "dict"
                                 | "Task"
                         ) =>
                 {
@@ -3592,14 +3595,14 @@ impl<'a> AnalysisBuilder<'a> {
                         },
                         _ => match base_type_name(&ty) {
                             "Array" => ty.type_arguments().first().cloned(),
-                            "Vec" => ty.type_arguments().first().cloned(),
-                            "Map" => ty.type_arguments().get(1).cloned(),
+                            "list" => ty.type_arguments().first().cloned(),
+                            "dict" => ty.type_arguments().get(1).cloned(),
                             _ => None,
                         },
                     })
             }
             ExprKind::Slice { object, .. } => self.infer_expr_type(object, scope).and_then(|ty| {
-                matches!(base_type_name(&ty), "Array" | "Vec" | "String").then_some(ty)
+                matches!(base_type_name(&ty), "Array" | "list" | "str").then_some(ty)
             }),
             ExprKind::Call { callee, args } => self.infer_call_type(callee, args, scope),
             ExprKind::Conditional {
@@ -3682,10 +3685,9 @@ impl<'a> AnalysisBuilder<'a> {
                     | BinaryOp::Greater
                     | BinaryOp::GreaterEq => Some(Type::named("bool")),
                     BinaryOp::Add
-                        if left_ty == Type::named("String")
-                            && right_ty == Type::named("String") =>
+                        if left_ty == Type::named("str") && right_ty == Type::named("str") =>
                     {
-                        Some(Type::named("String"))
+                        Some(Type::named("str"))
                     }
                     _ if left_ty == Type::named("float64")
                         || right_ty == Type::named("float64") =>
@@ -3783,7 +3785,7 @@ impl<'a> AnalysisBuilder<'a> {
                         let task_list = self.infer_expr_type(&arg.value, scope)?;
                         match task_list {
                             Type::Named(vec_name, vec_args)
-                                if vec_name == "Vec" && vec_args.len() == 1 =>
+                                if vec_name == "list" && vec_args.len() == 1 =>
                             {
                                 match &vec_args[0] {
                                     Type::Named(task_name, task_args)
@@ -3804,7 +3806,7 @@ impl<'a> AnalysisBuilder<'a> {
                         let task_list = self.infer_expr_type(&arg.value, scope)?;
                         match task_list {
                             Type::Named(vec_name, vec_args)
-                                if vec_name == "Vec" && vec_args.len() == 1 =>
+                                if vec_name == "list" && vec_args.len() == 1 =>
                             {
                                 match &vec_args[0] {
                                     Type::Named(task_name, task_args)
@@ -3831,10 +3833,10 @@ impl<'a> AnalysisBuilder<'a> {
                             ("Duration", "ms" | "seconds" | "minutes") => {
                                 return Some(Type::named("Duration"));
                             }
-                            ("String", "from_bytes") => {
+                            ("str", "from_bytes") => {
                                 return Some(Type::Named(
                                     "Result".to_string(),
-                                    vec![Type::named("String"), Type::named("bytes.Error")],
+                                    vec![Type::named("str"), Type::named("bytes.Error")],
                                 ));
                             }
                             _ => {}
@@ -3865,7 +3867,7 @@ impl<'a> AnalysisBuilder<'a> {
                         }
                         _ => return None,
                     };
-                    return Some(Type::Named("Vec".to_string(), vec![*return_type]));
+                    return Some(Type::Named("list".to_string(), vec![*return_type]));
                 }
                 if BuiltinMember::resolve(base_type_name(&receiver_type), field)
                     == Some(BuiltinMember::ArrayMap)
@@ -3895,7 +3897,7 @@ impl<'a> AnalysisBuilder<'a> {
                     if self.program.classes.contains_key(name)
                         || matches!(
                             name.as_str(),
-                            "Queue" | "Array" | "Vec" | "Set" | "Map" | "Task"
+                            "Queue" | "Array" | "list" | "set" | "dict" | "Task"
                         ) =>
                 {
                     let args = type_args
@@ -3986,7 +3988,7 @@ impl<'a> AnalysisBuilder<'a> {
 
         let iterable_ty = self.infer_expr_type(iterable, scope)?;
         match base_type_name(&iterable_ty) {
-            "Queue" | "Vec" | "Set" => iterable_ty.type_arguments().first().cloned(),
+            "Queue" | "list" | "set" => iterable_ty.type_arguments().first().cloned(),
             _ => None,
         }
     }
@@ -3997,7 +3999,7 @@ impl<'a> AnalysisBuilder<'a> {
         scope: &BTreeMap<String, BindingInfo>,
     ) -> Option<Type> {
         let iterable_ty = self.infer_expr_type(iterable, scope)?;
-        matches!(base_type_name(&iterable_ty), "Vec" | "Set")
+        matches!(base_type_name(&iterable_ty), "list" | "set")
             .then(|| iterable_ty.type_arguments().first().cloned())
             .flatten()
     }
@@ -4522,7 +4524,7 @@ fn lower_type_ref(ty: &TypeRef) -> Type {
         crate::ast::TypeRefKind::Named { name, args } if name == "None" => Type::Unit,
         crate::ast::TypeRefKind::Named { name, args } => {
             let name = match name.as_str() {
-                "str" => "String",
+                "str" => "str",
                 "int" => "int64",
                 name => name,
             };
@@ -5107,7 +5109,7 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
             AnalysisCompletion {
                 name: "Error".to_string(),
                 kind: "variant".to_string(),
-                detail: "Error(own String) -> TaskResult".to_string(),
+                detail: "Error(own str) -> TaskResult".to_string(),
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
@@ -5124,12 +5126,12 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
             AnalysisCompletion {
                 name: "Ready".to_string(),
                 kind: "variant".to_string(),
-                detail: "Ready(own int32, own T) -> WaitAny".to_string(),
+                detail: "Ready(own int64, own T) -> WaitAny".to_string(),
             },
             AnalysisCompletion {
                 name: "Error".to_string(),
                 kind: "variant".to_string(),
-                detail: "Error(own int32, own String) -> WaitAny".to_string(),
+                detail: "Error(own int64, own str) -> WaitAny".to_string(),
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
@@ -5146,12 +5148,12 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
             AnalysisCompletion {
                 name: "Ready".to_string(),
                 kind: "variant".to_string(),
-                detail: "Ready(own Vec[T]) -> WaitAll".to_string(),
+                detail: "Ready(own list[T]) -> WaitAll".to_string(),
             },
             AnalysisCompletion {
                 name: "Error".to_string(),
                 kind: "variant".to_string(),
-                detail: "Error(own int32, own String) -> WaitAll".to_string(),
+                detail: "Error(own int64, own str) -> WaitAll".to_string(),
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
@@ -5168,17 +5170,17 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
             AnalysisCompletion {
                 name: "Queue".to_string(),
                 kind: "variant".to_string(),
-                detail: "Queue(own int32, own QueueReceive[Q]) -> SelectOutcome".to_string(),
+                detail: "Queue(own int64, own QueueReceive[Q]) -> SelectOutcome".to_string(),
             },
             AnalysisCompletion {
                 name: "Task".to_string(),
                 kind: "variant".to_string(),
-                detail: "Task(own int32, own TaskResult[T]) -> SelectOutcome".to_string(),
+                detail: "Task(own int64, own TaskResult[T]) -> SelectOutcome".to_string(),
             },
             AnalysisCompletion {
                 name: "Deadline".to_string(),
                 kind: "variant".to_string(),
-                detail: "Deadline(own int32) -> SelectOutcome".to_string(),
+                detail: "Deadline(own int64) -> SelectOutcome".to_string(),
             },
             AnalysisCompletion {
                 name: "Cancelled".to_string(),
@@ -5193,7 +5195,7 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
 fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
     let mut completions = Vec::new();
     match base_type_name(receiver_type) {
-        "Vec" => {
+        "list" => {
             completions.extend([
                 AnalysisCompletion {
                     name: "len".to_string(),
@@ -5206,24 +5208,24 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                     detail: "is_empty() -> bool".to_string(),
                 },
                 AnalysisCompletion {
-                    name: "clone".to_string(),
+                    name: "copy".to_string(),
                     kind: "method".to_string(),
-                    detail: "clone() -> Vec[T]".to_string(),
+                    detail: "copy() -> list[T]".to_string(),
                 },
                 AnalysisCompletion {
-                    name: "push".to_string(),
+                    name: "append".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::VecPush.detail().to_string(),
                 },
                 AnalysisCompletion {
                     name: "pop".to_string(),
                     kind: "method".to_string(),
-                    detail: "pop() -> Option[T]".to_string(),
+                    detail: "pop(index: int64 = -1) -> T".to_string(),
                 },
                 AnalysisCompletion {
                     name: "get".to_string(),
                     kind: "method".to_string(),
-                    detail: "get(index: int32) -> Option[T]".to_string(),
+                    detail: "get(index: int64) -> Option[T]".to_string(),
                 },
                 AnalysisCompletion {
                     name: "set".to_string(),
@@ -5233,17 +5235,12 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 AnalysisCompletion {
                     name: "remove".to_string(),
                     kind: "method".to_string(),
-                    detail: "remove(index: int32) -> Option[T]".to_string(),
+                    detail: "remove(value: T) -> None".to_string(),
                 },
                 AnalysisCompletion {
                     name: "swap".to_string(),
                     kind: "method".to_string(),
-                    detail: "swap(first: int32, second: int32) -> bool".to_string(),
-                },
-                AnalysisCompletion {
-                    name: "contains".to_string(),
-                    kind: "method".to_string(),
-                    detail: "contains(value: T) -> bool".to_string(),
+                    detail: "swap(first: int64, second: int64) -> None".to_string(),
                 },
                 AnalysisCompletion {
                     name: "insert".to_string(),
@@ -5271,11 +5268,6 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                     detail: BuiltinMember::VecSort.detail().to_string(),
                 },
                 AnalysisCompletion {
-                    name: "sort_by".to_string(),
-                    kind: "method".to_string(),
-                    detail: BuiltinMember::VecSortBy.detail().to_string(),
-                },
-                AnalysisCompletion {
                     name: "map".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::VecMap.detail().to_string(),
@@ -5287,17 +5279,12 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 },
             ]);
         }
-        "Map" => {
+        "dict" => {
             completions.extend([
                 AnalysisCompletion {
                     name: "items".to_string(),
                     kind: "method".to_string(),
-                    detail: "items() -> Vec[MapEntry[K, V]]".to_string(),
-                },
-                AnalysisCompletion {
-                    name: "entries".to_string(),
-                    kind: "method".to_string(),
-                    detail: "entries() -> Vec[MapEntry[K, V]]".to_string(),
+                    detail: "items() -> list[(K, V)]".to_string(),
                 },
                 AnalysisCompletion {
                     name: "clear".to_string(),
@@ -5305,13 +5292,13 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                     detail: "clear() -> None".to_string(),
                 },
                 AnalysisCompletion {
-                    name: "extend".to_string(),
+                    name: "update".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::MapExtend.detail().to_string(),
                 },
             ]);
         }
-        "Set" => {
+        "set" => {
             completions.extend([
                 AnalysisCompletion {
                     name: "is_empty".to_string(),
@@ -5319,24 +5306,19 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                     detail: "is_empty() -> bool".to_string(),
                 },
                 AnalysisCompletion {
-                    name: "clone".to_string(),
+                    name: "copy".to_string(),
                     kind: "method".to_string(),
-                    detail: "clone() -> Set[T]".to_string(),
+                    detail: "copy() -> set[T]".to_string(),
                 },
                 AnalysisCompletion {
-                    name: "contains".to_string(),
-                    kind: "method".to_string(),
-                    detail: "contains(value: T) -> bool".to_string(),
-                },
-                AnalysisCompletion {
-                    name: "insert".to_string(),
+                    name: "add".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::SetInsert.detail().to_string(),
                 },
                 AnalysisCompletion {
                     name: "remove".to_string(),
                     kind: "method".to_string(),
-                    detail: "remove(value: T) -> bool".to_string(),
+                    detail: "remove(value: T) -> None".to_string(),
                 },
             ]);
         }
@@ -5492,6 +5474,9 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::StringClone,
         BuiltinMember::ScalarToString,
         BuiltinMember::VecInsert,
+        BuiltinMember::VecIndex,
+        BuiltinMember::VecCount,
+        BuiltinMember::VecReserve,
         BuiltinMember::VecClear,
         BuiltinMember::VecReverse,
         BuiltinMember::VecSort,
@@ -5511,12 +5496,16 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::MapEntries,
         BuiltinMember::MapClear,
         BuiltinMember::MapExtend,
+        BuiltinMember::MapReserve,
         BuiltinMember::SetLen,
         BuiltinMember::SetIsEmpty,
         BuiltinMember::SetClone,
         BuiltinMember::SetContains,
         BuiltinMember::SetInsert,
         BuiltinMember::SetRemove,
+        BuiltinMember::SetDiscard,
+        BuiltinMember::SetClear,
+        BuiltinMember::SetReserve,
         BuiltinMember::QueuePut,
         BuiltinMember::QueueTryPut,
         BuiltinMember::QueueGet,
@@ -5594,6 +5583,28 @@ fn builtin_associated_function_completions(type_name: &str) -> Vec<AnalysisCompl
         .collect()
 }
 
+fn builtin_specialized_associated_function_completions(
+    type_name: &str,
+    specialized_type: &str,
+) -> Vec<AnalysisCompletion> {
+    builtin_associated_function_completions(type_name)
+        .into_iter()
+        .map(|completion| {
+            if completion.name == "with_capacity" {
+                AnalysisCompletion {
+                    detail: format!(
+                        "with_capacity(minimum: int64) -> {}",
+                        specialized_type.trim()
+                    ),
+                    ..completion
+                }
+            } else {
+                completion
+            }
+        })
+        .collect()
+}
+
 fn builtin_function_return_type(name: &str) -> Option<Type> {
     match BuiltinFunction::from_name(name)? {
         BuiltinFunction::Print => Some(Type::Unit),
@@ -5605,22 +5616,22 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
         BuiltinFunction::WaitAny => None,
         BuiltinFunction::WaitAll => None,
         BuiltinFunction::Len => Some(Type::named("int64")),
-        BuiltinFunction::Str => Some(Type::named("String")),
+        BuiltinFunction::Str => Some(Type::named("str")),
         BuiltinFunction::Abs => None,
         BuiltinFunction::Min => None,
         BuiltinFunction::Max => None,
         BuiltinFunction::Sqrt => None,
         BuiltinFunction::ParseInt32 => Some(Type::Named(
             "Result".to_string(),
-            vec![Type::named("int32"), Type::named("String")],
+            vec![Type::named("int32"), Type::named("str")],
         )),
         BuiltinFunction::ParseInt64 => Some(Type::Named(
             "Result".to_string(),
-            vec![Type::named("int64"), Type::named("String")],
+            vec![Type::named("int64"), Type::named("str")],
         )),
         BuiltinFunction::ParseFloat64 => Some(Type::Named(
             "Result".to_string(),
-            vec![Type::named("float64"), Type::named("String")],
+            vec![Type::named("float64"), Type::named("str")],
         )),
     }
 }
@@ -6055,7 +6066,7 @@ fn placeholder_stmt_for_return_type(return_type: &str) -> Option<String> {
         "None" => Some("return".to_string()),
         "bool" => Some("return false".to_string()),
         "float32" | "float64" => Some("return 0.0".to_string()),
-        "String" | "str" => Some("return \"\"".to_string()),
+        "str" => Some("return \"\"".to_string()),
         "Duration" => Some("return 0ms".to_string()),
         "int" | "int8" | "int16" | "int32" | "int64" | "int128" | "intsize" | "uint8"
         | "uint16" | "uint32" | "uint64" | "uint128" | "uintsize" => Some("return 0".to_string()),

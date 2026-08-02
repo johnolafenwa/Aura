@@ -1,10 +1,10 @@
-# Test borrow semantics with classes having String fields
+# Test borrow semantics with classes having str fields
 
 class Counter:
     value: int32
-    label: String
+    label: str
 
-    def get_label(self) -> String:
+    def get_label(self) -> str:
         return self.label.clone()
 
     def get_value(self) -> int32:

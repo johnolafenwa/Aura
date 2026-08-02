@@ -170,7 +170,7 @@ fn nested_package_module_can_be_checked_and_analyzed_directly() {
     temp.write(
         "pkg/named.au",
         r#"public trait Named:
-    def name(self) -> String
+    def name(self) -> str
 "#,
     );
     let user_path = temp.write(
@@ -178,10 +178,10 @@ fn nested_package_module_can_be_checked_and_analyzed_directly() {
         r#"from pkg.named import Named
 
 public class User:
-    public label: String
+    public label: str
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.label.clone()
 "#,
     );
@@ -449,7 +449,7 @@ fn imported_trait_impls_apply_across_module_boundaries() {
     temp.write(
         "pkg/named.au",
         r#"public trait Named:
-    def name(self) -> String
+    def name(self) -> str
 "#,
     );
     temp.write(
@@ -457,10 +457,10 @@ fn imported_trait_impls_apply_across_module_boundaries() {
         r#"from pkg.named import Named
 
 public class User:
-    public label: String
+    public label: str
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.label.clone()
 "#,
     );
@@ -469,7 +469,7 @@ impl Named for User:
         r#"from pkg.named import Named
 from pkg.user import User
 
-def show[T: Named](value: T) -> String:
+def show[T: Named](value: T) -> str:
     return value.name()
 
 def main() -> int32:

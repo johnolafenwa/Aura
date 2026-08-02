@@ -69,10 +69,10 @@ The container decides what the test means and what the value must be:
 
 | Container | Tests | Value must be |
 | --- | --- | --- |
-| `Vec[T]` | element membership | `T` |
-| `Set[T]` | element membership | `T` |
-| `Map[K, V]` | key membership | `K` |
-| `String` | substring containment | `String` |
+| `list[T]` | element membership | `T` |
+| `set[T]` | element membership | `T` |
+| `dict[K, V]` | key membership | `K` |
+| `str` | substring containment | `str` |
 
 Membership reads both operands and moves neither, so a non-copy container and
 a non-copy value are both still usable afterwards. A container Aura cannot
@@ -153,7 +153,7 @@ See [examples/basics/pass_keyword.au](../examples/basics/pass_keyword.au).
 ## `for` Over `range`
 
 ```python
-mut total: int32 = 0
+mut total: int64 = 0
 
 for value in range(6):
     if value == 3:
@@ -202,7 +202,7 @@ for item in mut scores:
 
 Use bare `for x in collection` for ordinary reads, `for x in own collection`
 when you are done with it, and `for x in mut collection` when you need
-to update vector elements.
+to update list elements.
 
 See [examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au) and [examples/collections/vec_polish.au](../examples/collections/vec_polish.au).
 
@@ -237,8 +237,8 @@ for host, port in zip(hosts, ports):
 Both are compiler-known `for` loop forms. They do not produce values that can
 be stored, so `pairs = enumerate(hosts)` is rejected with guidance to use the
 loop spelling.
-Both read their operands by position, so each one must be a `Vec[T]` or a
-`Set[T]`, and both iterate over the bare-loop shared default: no `own` or
+Both read their operands by position, so each one must be a `list[T]` or a
+`set[T]`, and both iterate over the bare-loop shared default: no `own` or
 `mut` modifier, the operands stay borrowed for the whole
 loop, and a non-copy element binding cannot be moved out.
 
@@ -263,13 +263,13 @@ pairs = [
 
 The output expression is written first, but the first iterable runs first.
 Filters run left to right and nested clauses are outer-major, so `pairs` is
-`[11, 12, 21, 22]`. A map comprehension evaluates its key before its value:
+`[11, 12, 21, 22]`. A dictionary comprehension evaluates its key before its value:
 
 ```python
 labels = {value: value * 10 for value in values if value >= 3}
 ```
 
-Every clause uses the bare-loop contract. Vec and Set sources are shared,
+Every clause uses the bare-loop contract. List and set sources are shared,
 Range yields copy values, `enumerate`/`zip` keep their loop behavior, and
 Queue receives owned items through its existing carve-out. Comprehension
 targets do not leak outside the expression.
@@ -286,18 +286,18 @@ See
 The current compiler supports `for` over:
 
 - `range(stop)` and `range(start, stop)` with named-argument forms
-- bare/`own` `Vec[T]`, plus `mut Vec[T]`
-- bare/`own` `Set[T]`
+- bare/`own` `list[T]`, plus `mut list[T]`
+- bare/`own` `set[T]`
 - `Queue[T]` (iterates until the queue closes)
 
 It also supports the `enumerate(seq)` and `zip(first, second)` loop forms over
-`Vec[T]` and `Set[T]`.
+`list[T]` and `set[T]`.
 
 Not yet supported:
 
 - user-defined iterable protocols
 - `enumerate` or `zip` over a `Range` or `Queue[T]`
-- `mut Set[T]`
+- `mut set[T]`
 - custom step values for `range`
 
 Queue iteration is different: it receives each item already owned, and the

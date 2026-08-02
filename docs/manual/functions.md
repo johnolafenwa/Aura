@@ -20,7 +20,7 @@ Every ordinary parameter has an explicit type. A return annotation is optional; 
 def square(value: int32) -> int32:
     return value * value
 
-def log(message: String):
+def log(message: str):
     print(message)
 ```
 
@@ -28,7 +28,7 @@ def log(message: String):
 
 A function may return one fixed structural tuple. Both the return annotation
 and value use parentheses, and a comma distinguishes a singleton tuple from
-grouping: `def locate() -> (String, int64):` may
+grouping: `def locate() -> (str, int64):` may
 `return ("north", 7)`. The caller may bind the result with
 `name, number = locate()`. Tuple return copy/move behavior follows the complete
 tuple's recursive classification; see [Tuples](/manual/tuples).
@@ -36,7 +36,7 @@ tuple's recursive classification; see [Tuples](/manual/tuples).
 A function with any other return type must return on every statically reachable path:
 
 ```python
-def classify(value: int32) -> String:
+def classify(value: int32) -> str:
     if value < 0:
         return "negative"
     return "non-negative"
@@ -70,21 +70,21 @@ The passing mode is part of the function signature:
 | `value: mut T` | Exclusive mutable borrow. The argument must be a mutable place. |
 
 ```python
-def consume(name: own String):
+def consume(name: own str):
     print(name)
 
-def length(text: String) -> int64:
+def length(text: str) -> int64:
     return text.len()
 
-def push_name(names: mut Vec[String], name: own String):
-    names.push(name)
+def push_name(names: mut list[str], name: own str):
+    names.append(name)
 ```
 
 The modifier is written in the declaration after the colon. Calls pass the
 expression directly; Aura has no call-site capability prefix:
 
 ```python
-mut names = Vec[String]()
+mut names = list[str]()
 push_name(names, "Ada")
 ```
 
@@ -107,7 +107,7 @@ function must consume or return its argument.
 Calls accept positional arguments followed by named arguments:
 
 ```python
-def render(name: String, count: int32 = 1):
+def render(name: str, count: int32 = 1):
     print(name)
 
 render("Aura")
@@ -134,7 +134,7 @@ A default is permitted on a bare shared or `own` parameter of a top-level
 function or class method:
 
 ```python
-def greet(name: String = "world"):
+def greet(name: str = "world"):
     print("hello " + name)
 ```
 
@@ -186,7 +186,7 @@ The module chapters and [API Index](/manual/api-index) are authoritative for bui
 `try` is valid only when its operand has type `Result[T, E1]` and the enclosing function returns `Result[U, E2]`:
 
 ```python
-def parse_total(left: String, right: String) -> Result[int32, String]:
+def parse_total(left: str, right: str) -> Result[int32, str]:
     a = try parse_int32(left)
     b = try parse_int32(right)
     return Result.Ok(a + b)
@@ -200,7 +200,7 @@ Every return annotation describes an owned result:
 
 ```python
 class User:
-    name: String
+    name: str
     score: int32
 
 def score(user: User) -> int32:
@@ -215,10 +215,10 @@ fresh value, clone a clone-safe value, move from an `own` parameter, or invoke
 an operation that consumes an owner:
 
 ```python
-def copy_name(user: User) -> String:
+def copy_name(user: User) -> str:
     return user.name.clone()
 
-def into_name(user: own User) -> String:
+def into_name(user: own User) -> str:
     return user.name
 ```
 
@@ -241,7 +241,7 @@ def identity[T](value: own T) -> T:
 Bounds restrict substitutions:
 
 ```python
-def describe[T: Greeter](value: T) -> String:
+def describe[T: Greeter](value: T) -> str:
     return value.greet()
 
 def use_both[T: First + Second](value: T) -> int32:
@@ -307,7 +307,7 @@ A generic named function must receive explicit type arguments, for example
 `show_int = show[int32]`, or a concrete expected function type. Expected types
 can specialize a variable annotation, argument, field, collection element, or
 parameter default such as a generic `empty` used where
-`def() -> Option[String]` is required. A generic name with neither source of
+`def() -> Option[str]` is required. A generic name with neither source of
 type arguments does not have one concrete function-value type.
 
 This stage is deliberately capture-free. Instance-method, associated-method,

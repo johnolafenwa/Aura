@@ -1,4 +1,4 @@
 def main():
     numbers = Queue[int32]()
-    labels = Queue[String]()
+    labels = Queue[str]()
     print(select(numbers, labels))

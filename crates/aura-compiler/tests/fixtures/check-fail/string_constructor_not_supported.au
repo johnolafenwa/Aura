@@ -1,4 +1,0 @@
-def main() -> int32:
-    value = String("hello")
-    print(value)
-    return 0

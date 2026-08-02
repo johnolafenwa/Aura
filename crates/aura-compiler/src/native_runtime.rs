@@ -1244,7 +1244,7 @@ fn embedded_runtime_type_name(value: &Value) -> Option<String> {
             tuple.element_types.clone(),
         ))),
         Value::Vec(vector) => Some(canonical_runtime_type_name(&Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
             vec![vector.element_type.clone()],
         ))),
         Value::Array(array) => Some(canonical_runtime_type_name(&Type::Named(
@@ -1252,11 +1252,11 @@ fn embedded_runtime_type_name(value: &Value) -> Option<String> {
             vec![array.element_type()],
         ))),
         Value::Set(set) => Some(canonical_runtime_type_name(&Type::Named(
-            "Set".to_string(),
+            "set".to_string(),
             vec![set.element_type.clone()],
         ))),
         Value::Map(map) => Some(canonical_runtime_type_name(&Type::Named(
-            "Map".to_string(),
+            "dict".to_string(),
             vec![map.key_type.clone(), map.value_type.clone()],
         ))),
         Value::Instance(instance) => {
@@ -1517,21 +1517,21 @@ unsafe fn set_explicit_runtime_type_name(ptr: *mut OpaqueValue, runtime_type_nam
             }
             Value::Vec(vector) => {
                 if let Type::Named(name, args) = &parsed {
-                    if name == "Vec" && args.len() == 1 {
+                    if name == "list" && args.len() == 1 {
                         vector.element_type = args[0].clone();
                     }
                 }
             }
             Value::Set(set) => {
                 if let Type::Named(name, args) = &parsed {
-                    if name == "Set" && args.len() == 1 {
+                    if name == "set" && args.len() == 1 {
                         set.element_type = args[0].clone();
                     }
                 }
             }
             Value::Map(map) => {
                 if let Type::Named(name, args) = &parsed {
-                    if name == "Map" && args.len() == 2 {
+                    if name == "dict" && args.len() == 2 {
                         map.key_type = args[0].clone();
                         map.value_type = args[1].clone();
                     }
@@ -1794,8 +1794,8 @@ fn is_dynamic_bytes_host_builtin(name: &str) -> bool {
             | "bytes::base64_decode"
             | "bytes::sha256"
             | "bytes::sha256_string"
-            | "String.to_bytes"
-            | "String.from_bytes"
+            | "str.to_bytes"
+            | "str.from_bytes"
     )
 }
 
@@ -1926,7 +1926,7 @@ fn evaluate_direct_json_host_builtin(
                     let Value::String(text) = value else {
                         return Err(Diagnostic::coded(
                             "AU4001",
-                            format!("`{name}` expects argument 1 to be `String`"),
+                            format!("`{name}` expects argument 1 to be `str`"),
                         ));
                     };
                     clone_json_codec_source(text)
@@ -2498,8 +2498,8 @@ pub extern "C-unwind" fn aura_direct_ffi_call(
 
 fn headers_map_value(headers: Vec<(String, String)>) -> Value {
     Value::Map(MapValue {
-        key_type: Type::named("String"),
-        value_type: Type::named("String"),
+        key_type: Type::named("str"),
+        value_type: Type::named("str"),
         entries: headers
             .into_iter()
             .map(|(key, value)| (Value::String(key), Value::String(value)))
@@ -2511,7 +2511,7 @@ fn expect_string_value(value: &Value, label: &str) -> String {
     match value {
         Value::String(text) => text.clone(),
         other => runtime_error(format!(
-            "`{}` expects `String`, found `{}`",
+            "`{}` expects `str`, found `{}`",
             label,
             value_type_name(other)
         )),
@@ -2531,18 +2531,18 @@ fn expect_bytes_value(value: &Value, label: &str) -> Vec<u8> {
             let mut bytes = Vec::with_capacity(vector.elements.len());
             for element in &vector.elements {
                 let Value::Int(value) = element else {
-                    runtime_error(format!("`{}` expects `Vec[uint8]`", label));
+                    runtime_error(format!("`{}` expects `list[uint8]`", label));
                 };
                 let byte = value
                     .as_i128()
                     .and_then(|value| u8::try_from(value).ok())
-                    .unwrap_or_else(|| runtime_error(format!("`{}` expects `Vec[uint8]`", label)));
+                    .unwrap_or_else(|| runtime_error(format!("`{}` expects `list[uint8]`", label)));
                 bytes.push(byte);
             }
             bytes
         }
         other => runtime_error(format!(
-            "`{}` expects `Vec[uint8]`, found `{}`",
+            "`{}` expects `list[uint8]`, found `{}`",
             label,
             value_type_name(other)
         )),
@@ -2577,9 +2577,8 @@ fn expect_i32_value(value: &Value, label: &str) -> i32 {
 fn expect_headers_map(value: &Value, label: &str) -> Vec<(String, String)> {
     match value {
         Value::Map(map)
-            if (map.key_type == Type::named("String")
-                || map.key_type == Type::named("Unknown"))
-                && (map.value_type == Type::named("String")
+            if (map.key_type == Type::named("str") || map.key_type == Type::named("Unknown"))
+                && (map.value_type == Type::named("str")
                     || map.value_type == Type::named("Unknown")) =>
         {
             map.entries
@@ -2593,7 +2592,7 @@ fn expect_headers_map(value: &Value, label: &str) -> Vec<(String, String)> {
                 .collect()
         }
         other => runtime_error(format!(
-            "`{}` expects `Map[String, String]`, found `{}`",
+            "`{}` expects `dict[str, str]`, found `{}`",
             label,
             value_type_name(other)
         )),
@@ -2692,7 +2691,7 @@ fn supervisor_max_restarts_from_ptr(value: *mut OpaqueValue, label: &str) -> Opt
 fn expect_command_vec(value: &Value, label: &str) -> Vec<String> {
     match value {
         Value::Vec(vector)
-            if vector.element_type == Type::named("String")
+            if vector.element_type == Type::named("str")
                 || vector.element_type == Type::named("Unknown") =>
         {
             vector
@@ -2702,7 +2701,7 @@ fn expect_command_vec(value: &Value, label: &str) -> Vec<String> {
                 .collect()
         }
         other => runtime_error(format!(
-            "`{}` expects `Vec[String]`, found `{}`",
+            "`{}` expects `list[str]`, found `{}`",
             label,
             value_type_name(other)
         )),
@@ -2725,13 +2724,13 @@ fn expect_optional_string_value(value: &Value, label: &str) -> Option<String> {
             match variant.payloads.as_slice() {
                 [text] => Some(expect_string_value(text, label)),
                 _ => runtime_error(format!(
-                    "`{}` expects `Option[String]`, found malformed option payload",
+                    "`{}` expects `Option[str]`, found malformed option payload",
                     label
                 )),
             }
         }
         other => runtime_error(format!(
-            "`{}` expects `Option[String]`, found `{}`",
+            "`{}` expects `Option[str]`, found `{}`",
             label,
             value_type_name(other)
         )),
@@ -2770,7 +2769,7 @@ fn await_process_capture_task(task: Option<TaskValue>, label: &str) -> Vec<u8> {
                             ))
                         }),
                     other => runtime_error(format!(
-                        "process {} capture returned `{}` inside `Vec[uint8]`",
+                        "process {} capture returned `{}` inside `list[uint8]`",
                         label,
                         other.render()
                     )),
@@ -2778,7 +2777,7 @@ fn await_process_capture_task(task: Option<TaskValue>, label: &str) -> Vec<u8> {
                 .collect()
         }
         TaskWaitStatus::Ready(Ok(other)) => runtime_error(format!(
-            "process {} capture returned `{}` instead of `Vec[uint8]`",
+            "process {} capture returned `{}` instead of `list[uint8]`",
             label,
             other.render()
         )),
@@ -3038,14 +3037,14 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::Int(_) => "integer".to_string(),
         Value::Float(_) => "float64".to_string(),
         Value::Bool(_) => "bool".to_string(),
-        Value::String(_) => "String".to_string(),
+        Value::String(_) => "str".to_string(),
         Value::Tuple(_) => "tuple".to_string(),
-        Value::Vec(_) => "Vec".to_string(),
+        Value::Vec(_) => "list".to_string(),
         Value::Array(array) => {
             format!("Array[{}]", array.dtype().runtime_type_name())
         }
-        Value::Set(_) => "Set".to_string(),
-        Value::Map(_) => "Map".to_string(),
+        Value::Set(_) => "set".to_string(),
+        Value::Map(_) => "dict".to_string(),
         Value::Duration(_) => "Duration".to_string(),
         Value::Rng(_) => "random.Rng".to_string(),
         Value::Range(_) => "Range".to_string(),
@@ -3087,15 +3086,15 @@ fn inferred_collection_type(value: &Value) -> Type {
         return runtime_type_from_name(&runtime_type_name);
     }
     match value {
-        Value::String(_) => Type::named("String"),
+        Value::String(_) => Type::named("str"),
         Value::Bool(_) => Type::named("bool"),
         Value::Float(_) => Type::named("float64"),
         Value::Tuple(tuple) => Type::Tuple(tuple.element_types.clone()),
-        Value::Vec(vector) => Type::Named("Vec".to_string(), vec![vector.element_type.clone()]),
+        Value::Vec(vector) => Type::Named("list".to_string(), vec![vector.element_type.clone()]),
         Value::Array(array) => Type::Named("Array".to_string(), vec![array.element_type()]),
-        Value::Set(set) => Type::Named("Set".to_string(), vec![set.element_type.clone()]),
+        Value::Set(set) => Type::Named("set".to_string(), vec![set.element_type.clone()]),
         Value::Map(map) => Type::Named(
-            "Map".to_string(),
+            "dict".to_string(),
             vec![map.key_type.clone(), map.value_type.clone()],
         ),
         Value::Duration(_) => Type::named("Duration"),
@@ -3978,7 +3977,7 @@ pub extern "C-unwind" fn aura_direct_string_len(value: *mut OpaqueValue) -> i64 
             Err(_) => runtime_error("string length does not fit in the direct runtime range"),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -3992,7 +3991,7 @@ pub extern "C-unwind" fn aura_direct_string_byte_len(value: *mut OpaqueValue) ->
             Err(_) => runtime_error("string byte length does not fit in the direct runtime range"),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -4017,7 +4016,7 @@ pub extern "C-unwind" fn aura_direct_string_slice(
                     (has_end != 0).then_some(i128::from(end)),
                 ),
                 other => runtime_error(format!(
-                    "expected `String`, found `{}`",
+                    "expected `str`, found `{}`",
                     value_type_name(other)
                 )),
             })
@@ -4039,12 +4038,12 @@ pub extern "C-unwind" fn aura_direct_string_contains(
 ) -> i64 {
     task_runtime_boundary(|| {
         let Value::String(needle) = (unsafe { take_value(needle) }) else {
-            runtime_error("`contains` requires a `String` argument");
+            runtime_error("`contains` requires a `str` argument");
         };
         match unsafe { value_ref(value) } {
             Value::String(text) => i64::from(text.contains(&needle)),
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         }
@@ -4058,12 +4057,12 @@ pub extern "C-unwind" fn aura_direct_string_starts_with(
 ) -> i64 {
     task_runtime_boundary(|| {
         let Value::String(prefix) = (unsafe { take_value(prefix) }) else {
-            runtime_error("`starts_with` requires a `String` argument");
+            runtime_error("`starts_with` requires a `str` argument");
         };
         match unsafe { value_ref(value) } {
             Value::String(text) => i64::from(text.starts_with(&prefix)),
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         }
@@ -4077,12 +4076,12 @@ pub extern "C-unwind" fn aura_direct_string_ends_with(
 ) -> i64 {
     task_runtime_boundary(|| {
         let Value::String(suffix) = (unsafe { take_value(suffix) }) else {
-            runtime_error("`ends_with` requires a `String` argument");
+            runtime_error("`ends_with` requires a `str` argument");
         };
         match unsafe { value_ref(value) } {
             Value::String(text) => i64::from(text.ends_with(&suffix)),
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         }
@@ -4096,18 +4095,18 @@ pub extern "C-unwind" fn aura_direct_string_split(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let Value::String(separator) = (unsafe { take_value(separator) }) else {
-            runtime_error("`split` requires a `String` argument");
+            runtime_error("`split` requires a `str` argument");
         };
         match unsafe { value_ref(value) } {
             Value::String(text) => boxed_value(Value::Vec(VecValue {
-                element_type: Type::named("String"),
+                element_type: Type::named("str"),
                 elements: text
                     .split(&separator)
                     .map(|part| Value::String(part.to_string()))
                     .collect(),
             })),
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         }
@@ -4122,15 +4121,15 @@ pub extern "C-unwind" fn aura_direct_string_replace(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let Value::String(from) = (unsafe { take_value(from) }) else {
-            runtime_error("`replace` requires `String` for `from`");
+            runtime_error("`replace` requires `str` for `from`");
         };
         let Value::String(to) = (unsafe { take_value(to) }) else {
-            runtime_error("`replace` requires `String` for `to`");
+            runtime_error("`replace` requires `str` for `to`");
         };
         match unsafe { value_ref(value) } {
             Value::String(text) => boxed_value(Value::String(text.replace(&from, &to))),
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         }
@@ -4142,7 +4141,7 @@ pub extern "C-unwind" fn aura_direct_string_to_lower(value: *mut OpaqueValue) ->
     task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::String(text) => boxed_value(Value::String(text.to_lowercase())),
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -4153,7 +4152,7 @@ pub extern "C-unwind" fn aura_direct_string_to_upper(value: *mut OpaqueValue) ->
     task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::String(text) => boxed_value(Value::String(text.to_uppercase())),
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -4166,7 +4165,7 @@ pub extern "C-unwind" fn aura_direct_string_strip_prefix(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let Value::String(prefix) = (unsafe { take_value(prefix) }) else {
-            runtime_error("`strip_prefix` requires a `String` argument");
+            runtime_error("`strip_prefix` requires a `str` argument");
         };
         match unsafe { value_ref(value) } {
             Value::String(text) => boxed_value(
@@ -4175,7 +4174,7 @@ pub extern "C-unwind" fn aura_direct_string_strip_prefix(
                     .unwrap_or_else(option_none),
             ),
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         }
@@ -4189,7 +4188,7 @@ pub extern "C-unwind" fn aura_direct_string_strip_suffix(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let Value::String(suffix) = (unsafe { take_value(suffix) }) else {
-            runtime_error("`strip_suffix` requires a `String` argument");
+            runtime_error("`strip_suffix` requires a `str` argument");
         };
         match unsafe { value_ref(value) } {
             Value::String(text) => boxed_value(
@@ -4198,7 +4197,7 @@ pub extern "C-unwind" fn aura_direct_string_strip_suffix(
                     .unwrap_or_else(option_none),
             ),
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         }
@@ -4210,7 +4209,7 @@ pub extern "C-unwind" fn aura_direct_string_trim(value: *mut OpaqueValue) -> *mu
     task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::String(text) => boxed_value(Value::String(text.trim().to_string())),
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -4223,21 +4222,21 @@ pub extern "C-unwind" fn aura_direct_string_join(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let Value::Vec(parts) = (unsafe { take_value(parts) }) else {
-            runtime_error("`join` requires `Vec[String]`");
+            runtime_error("`join` requires `list[str]`");
         };
         match unsafe { value_ref(separator) } {
             Value::String(separator) => {
                 let mut rendered_parts = Vec::new();
                 for value in parts.elements {
                     let Value::String(part) = value else {
-                        runtime_error("`join` requires `Vec[String]`");
+                        runtime_error("`join` requires `list[str]`");
                     };
                     rendered_parts.push(part);
                 }
                 boxed_value(Value::String(rendered_parts.join(&separator)))
             }
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         }
@@ -4359,7 +4358,7 @@ pub extern "C-unwind" fn aura_direct_parse_int32(value: *mut OpaqueValue) -> *mu
                 Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
             },
             other => runtime_error(format!(
-                "`parse_int32(...)` expects `String`, found `{}`",
+                "`parse_int32(...)` expects `str`, found `{}`",
                 value_type_name(&other)
             )),
         }
@@ -4378,7 +4377,7 @@ pub extern "C-unwind" fn aura_direct_parse_int64(value: *mut OpaqueValue) -> *mu
                 Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
             },
             other => runtime_error(format!(
-                "`parse_int64(...)` expects `String`, found `{}`",
+                "`parse_int64(...)` expects `str`, found `{}`",
                 value_type_name(&other)
             )),
         }
@@ -4398,7 +4397,7 @@ pub extern "C-unwind" fn aura_direct_parse_float64(value: *mut OpaqueValue) -> *
                 Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
             },
             other => runtime_error(format!(
-                "`parse_float64(...)` expects `String`, found `{}`",
+                "`parse_float64(...)` expects `str`, found `{}`",
                 value_type_name(&other)
             )),
         }
@@ -4567,7 +4566,7 @@ fn with_vector<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&VecValue) -> T) -> T
         with_value(ptr, |value| match value {
             Value::Vec(vector) => read(vector),
             other => runtime_error(format!(
-                "expected `Vec`, found `{}`",
+                "expected `list`, found `{}`",
                 value_type_name(other)
             )),
         })
@@ -4579,7 +4578,7 @@ fn with_vector_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut VecValue) -
         value_mut(ptr, |value| match value {
             Value::Vec(vector) => write(vector),
             other => runtime_error(format!(
-                "expected `Vec`, found `{}`",
+                "expected `list`, found `{}`",
                 value_type_name(other)
             )),
         })
@@ -4591,7 +4590,7 @@ fn with_map<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&MapValue) -> T) -> T {
         with_value(ptr, |value| match value {
             Value::Map(map) => read(map),
             other => runtime_error(format!(
-                "expected `Map`, found `{}`",
+                "expected `dict`, found `{}`",
                 value_type_name(other)
             )),
         })
@@ -4603,7 +4602,7 @@ fn with_map_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut MapValue) -> T
         value_mut(ptr, |value| match value {
             Value::Map(map) => write(map),
             other => runtime_error(format!(
-                "expected `Map`, found `{}`",
+                "expected `dict`, found `{}`",
                 value_type_name(other)
             )),
         })
@@ -4615,7 +4614,7 @@ fn with_set<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&SetValue) -> T) -> T {
         with_value(ptr, |value| match value {
             Value::Set(set) => read(set),
             other => runtime_error(format!(
-                "expected `Set`, found `{}`",
+                "expected `set`, found `{}`",
                 value_type_name(other)
             )),
         })
@@ -4627,7 +4626,7 @@ fn with_set_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut SetValue) -> T
         value_mut(ptr, |value| match value {
             Value::Set(set) => write(set),
             other => runtime_error(format!(
-                "expected `Set`, found `{}`",
+                "expected `set`, found `{}`",
                 value_type_name(other)
             )),
         })
@@ -4661,7 +4660,7 @@ pub extern "C-unwind" fn aura_direct_vec_len(vec: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| {
         match i64::try_from(with_vector(vec, |vector| vector.elements.len())) {
             Ok(length) => length,
-            Err(_) => runtime_error("vector length does not fit in the direct runtime range"),
+            Err(_) => runtime_error("list length does not fit in the direct runtime range"),
         }
     })
 }
@@ -4758,14 +4757,14 @@ pub extern "C-unwind" fn aura_direct_vec_set_in_place(
                 .filter(|normalized| *normalized < vector.elements.len())
             else {
                 runtime_error(format!(
-                    "vector set index `{}` is out of bounds for length `{}`",
+                    "list set index `{}` is out of bounds for length `{}`",
                     index,
                     vector.elements.len()
                 ));
             };
             std::mem::replace(&mut vector.elements[normalized], value)
         });
-        boxed_value(option_some(previous))
+        boxed_value(previous)
     })
 }
 
@@ -4780,7 +4779,7 @@ pub extern "C-unwind" fn aura_direct_vec_remove_in_place(
                 .filter(|normalized| *normalized < vector.elements.len())
             else {
                 runtime_error(format!(
-                    "vector remove index `{}` is out of bounds for length `{}`",
+                    "list remove index `{}` is out of bounds for length `{}`",
                     index,
                     vector.elements.len()
                 ));
@@ -4806,7 +4805,7 @@ pub extern "C-unwind" fn aura_direct_vec_swap_in_place(
                 normalized_second.filter(|index| *index < vector.elements.len()),
             ) else {
                 runtime_error(format!(
-                    "vector swap indices `{}` and `{}` are out of bounds for length `{}`",
+                    "list swap indices `{}` and `{}` are out of bounds for length `{}`",
                     first,
                     second,
                     vector.elements.len()
@@ -4838,14 +4837,11 @@ pub extern "C-unwind" fn aura_direct_vec_insert_in_place(
     task_runtime_boundary(|| {
         let value = unsafe { consume_owned_value(value) };
         with_vector_mut(vec, |vector| {
-            let Some(normalized) = normalize_vec_index(index, vector.elements.len())
-                .filter(|normalized| *normalized <= vector.elements.len())
-            else {
-                runtime_error(format!(
-                    "vector insert index `{}` is out of bounds for length `{}`",
-                    index,
-                    vector.elements.len()
-                ));
+            let len = vector.elements.len();
+            let normalized = if index < 0 {
+                usize::try_from((len as i128 + i128::from(index)).max(0)).unwrap_or(0)
+            } else {
+                usize::try_from(index).unwrap_or(usize::MAX).min(len)
             };
             vector.elements.insert(normalized, value);
         });
@@ -4871,6 +4867,122 @@ pub extern "C-unwind" fn aura_direct_vec_reverse_in_place(
     })
 }
 
+/// Shared direct-runtime implementation for canonical collection operations
+/// whose result shape is naturally represented as an owned Aura value.
+/// `arg` is an opaque value for value-search operations, while `scalar` is
+/// used for positions and capacity requests.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_collection_operation(
+    collection: *mut OpaqueValue,
+    arg: *mut OpaqueValue,
+    scalar: i64,
+    opcode: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match opcode {
+        0 => {
+            let value = with_vector_mut(collection, |vector| {
+                let Some(index) = normalize_vec_index(scalar, vector.elements.len())
+                    .filter(|index| *index < vector.elements.len())
+                else {
+                    runtime_diagnostic_error(Diagnostic::coded(
+                        "AU4003",
+                        format!(
+                            "list pop index `{scalar}` is out of bounds for length `{}`",
+                            vector.elements.len()
+                        ),
+                    ));
+                };
+                vector.elements.remove(index)
+            });
+            boxed_value(value)
+        }
+        1..=3 => {
+            let needle = unsafe { value_ref(arg) };
+            if opcode == 3 {
+                let count = with_vector(collection, |vector| {
+                    vector
+                        .elements
+                        .iter()
+                        .filter(|candidate| **candidate == needle)
+                        .count()
+                });
+                return boxed_value(Value::Int(IntegerValue::from_literal(count as u128)));
+            }
+            let index = with_vector(collection, |vector| {
+                vector
+                    .elements
+                    .iter()
+                    .position(|candidate| *candidate == needle)
+            });
+            let Some(index) = index else {
+                runtime_diagnostic_error(
+                    Diagnostic::coded("AU4008", "collection value was not found").with_help(
+                        if opcode == 1 {
+                            "check `value in values` before removing when absence is expected"
+                        } else {
+                            "check `value in values` before searching when absence is expected"
+                        },
+                    ),
+                );
+            };
+            if opcode == 1 {
+                with_vector_mut(collection, |vector| {
+                    vector.elements.remove(index);
+                });
+                boxed_value(Value::Unit)
+            } else {
+                boxed_value(Value::Int(IntegerValue::from_literal(index as u128)))
+            }
+        }
+        4 => {
+            let additional = usize::try_from(scalar).unwrap_or_else(|_| {
+                runtime_diagnostic_error(Diagnostic::coded(
+                    "AU4003",
+                    "collection capacity cannot be negative",
+                ))
+            });
+            unsafe {
+                value_mut(collection, |value| match value {
+                    Value::Vec(vector) => vector.elements.try_reserve(additional),
+                    Value::Map(map) => map.entries.try_reserve(additional),
+                    Value::Set(set) => set.elements.try_reserve(additional),
+                    _ => runtime_error("reserve requires a collection"),
+                })
+            }
+            .unwrap_or_else(|_| {
+                runtime_diagnostic_error(Diagnostic::coded(
+                    "AU4005",
+                    "collection capacity allocation failed",
+                ))
+            });
+            boxed_value(Value::Unit)
+        }
+        5 | 6 => {
+            let needle = unsafe { value_ref(arg) };
+            let removed = with_set_mut(collection, |set| {
+                set.elements
+                    .iter()
+                    .position(|candidate| *candidate == needle)
+                    .map(|index| set.elements.remove(index))
+                    .is_some()
+            });
+            if opcode == 5 && !removed {
+                runtime_diagnostic_error(
+                    Diagnostic::coded("AU4008", "collection value was not found").with_help(
+                        "check `value in values` before removing when absence is expected",
+                    ),
+                );
+            }
+            boxed_value(Value::Unit)
+        }
+        7 => {
+            with_set_mut(collection, |set| set.elements.clear());
+            boxed_value(Value::Unit)
+        }
+        _ => runtime_error("unknown direct collection operation"),
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_extend_in_place(
     vec: *mut OpaqueValue,
@@ -4879,7 +4991,7 @@ pub extern "C-unwind" fn aura_direct_vec_extend_in_place(
     task_runtime_boundary(|| {
         let other = unsafe { consume_owned_value(other) };
         let Value::Vec(other) = other else {
-            runtime_error("`extend` requires another `Vec[T]` value");
+            runtime_error("`extend` requires another `list[T]` value");
         };
         with_vector_mut(vec, |vector| vector.elements.extend(other.elements));
         boxed_value(Value::Unit)
@@ -4907,12 +5019,12 @@ pub extern "C-unwind" fn aura_direct_vec_index(
                 Some(span) => runtime_error_at(
                     span,
                     format!(
-                        "vector index `{}` is out of bounds for length `{}`",
+                        "list index `{}` is out of bounds for length `{}`",
                         index, len
                     ),
                 ),
                 None => runtime_error(format!(
-                    "vector index `{}` is out of bounds for length `{}`",
+                    "list index `{}` is out of bounds for length `{}`",
                     index, len
                 )),
             }
@@ -4978,12 +5090,12 @@ pub extern "C-unwind" fn aura_direct_vec_set_index_in_place(
                 Some(span) => runtime_error_at(
                     span,
                     format!(
-                        "vector index `{}` is out of bounds for length `{}`",
+                        "list index `{}` is out of bounds for length `{}`",
                         index, len
                     ),
                 ),
                 None => runtime_error(format!(
-                    "vector index `{}` is out of bounds for length `{}`",
+                    "list index `{}` is out of bounds for length `{}`",
                     index, len
                 )),
             }
@@ -5069,7 +5181,7 @@ fn direct_array_shape(shape: *mut OpaqueValue) -> std::result::Result<Box<[usize
             return Err(Diagnostic::coded(
                 "AU4007",
                 format!(
-                    "array shape requires `Vec[int64]`, found `Vec[{}]`",
+                    "array shape requires `list[int64]`, found `list[{}]`",
                     shape.element_type
                 ),
             ));
@@ -5108,48 +5220,48 @@ fn direct_array_shape(shape: *mut OpaqueValue) -> std::result::Result<Box<[usize
 
 fn direct_array_coordinates(
     coordinates: *mut OpaqueValue,
-) -> std::result::Result<Box<[i32]>, Diagnostic> {
+) -> std::result::Result<Box<[i64]>, Diagnostic> {
     unsafe {
         with_value(coordinates, |coordinates| {
-            let (element_types_are_int32, elements): (bool, &[Value]) = match coordinates {
+            let (element_types_are_int64, elements): (bool, &[Value]) = match coordinates {
                 Value::Int(coordinate) => {
-                    if coordinate.runtime_kind() != Some(IntegerKind::Int32) {
+                    if coordinate.runtime_kind() != Some(IntegerKind::Int64) {
                         return Err(Diagnostic::coded(
                             "AU4007",
-                            "array coordinates require int32 values",
+                            "array coordinates require int64 values",
                         ));
                     }
                     let value = match coordinate.representation() {
-                        IntegerRepresentation::Signed(value) => value as i32,
-                        IntegerRepresentation::Unsigned(value) => value as i32,
+                        IntegerRepresentation::Signed(value) => value as i64,
+                        IntegerRepresentation::Unsigned(value) => value as i64,
                     };
                     return Ok(vec![value].into_boxed_slice());
                 }
                 Value::Vec(coordinates) => (
-                    coordinates.element_type == Type::named("int32"),
+                    coordinates.element_type == Type::named("int64"),
                     &coordinates.elements,
                 ),
                 Value::Tuple(coordinates) => (
                     coordinates
                         .element_types
                         .iter()
-                        .all(|ty| *ty == Type::named("int32")),
+                        .all(|ty| *ty == Type::named("int64")),
                     &coordinates.elements,
                 ),
                 other => {
                     return Err(Diagnostic::coded(
                         "AU4007",
                         format!(
-                            "array coordinates require `Vec[int32]` or an int32 tuple, found `{}`",
+                            "array coordinates require `list[int64]` or an int64 tuple, found `{}`",
                             value_type_name(other)
                         ),
                     ))
                 }
             };
-            if !element_types_are_int32 {
+            if !element_types_are_int64 {
                 return Err(Diagnostic::coded(
                     "AU4007",
-                    "array coordinates require int32 values",
+                    "array coordinates require int64 values",
                 ));
             }
             elements
@@ -5159,18 +5271,18 @@ fn direct_array_coordinates(
                     let Value::Int(coordinate) = coordinate else {
                         return Err(Diagnostic::coded(
                             "AU4007",
-                            format!("array coordinate on axis {axis} is not an int32 value"),
+                            format!("array coordinate on axis {axis} is not an int64 value"),
                         ));
                     };
-                    if coordinate.runtime_kind() != Some(IntegerKind::Int32) {
+                    if coordinate.runtime_kind() != Some(IntegerKind::Int64) {
                         return Err(Diagnostic::coded(
                             "AU4007",
-                            format!("array coordinate on axis {axis} is not an int32 value"),
+                            format!("array coordinate on axis {axis} is not an int64 value"),
                         ));
                     }
                     Ok(match coordinate.representation() {
-                        IntegerRepresentation::Signed(value) => value as i32,
-                        IntegerRepresentation::Unsigned(value) => value as i32,
+                        IntegerRepresentation::Signed(value) => value as i64,
+                        IntegerRepresentation::Unsigned(value) => value as i64,
                     })
                 })
                 .collect::<std::result::Result<Vec<_>, _>>()
@@ -5230,7 +5342,7 @@ pub extern "C-unwind" fn aura_direct_array_from_vec(
                 return Err(Diagnostic::coded(
                     "AU4007",
                     format!(
-                        "Array[{}].from_vec requires `Vec[{}]`, found `Vec[{}]`",
+                        "Array[{}].from_list requires `list[{}]`, found `list[{}]`",
                         dtype.runtime_type_name(),
                         dtype.runtime_type_name(),
                         values.element_type
@@ -5488,7 +5600,7 @@ pub extern "C-unwind" fn aura_direct_map_len(map: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(
         || match i64::try_from(with_map(map, |map| map.entries.len())) {
             Ok(length) => length,
-            Err(_) => runtime_error("map length does not fit in the direct runtime range"),
+            Err(_) => runtime_error("dict length does not fit in the direct runtime range"),
         },
     )
 }
@@ -5632,22 +5744,16 @@ pub extern "C-unwind" fn aura_direct_map_values(map: *mut OpaqueValue) -> *mut O
 pub extern "C-unwind" fn aura_direct_map_items(map: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let result = with_map(map, |map| {
-            let element_type = Type::Named(
-                "MapEntry".to_string(),
-                vec![map.key_type.clone(), map.value_type.clone()],
-            );
+            let element_type = Type::Tuple(vec![map.key_type.clone(), map.value_type.clone()]);
             let mut elements =
                 try_array_buffer(map.entries.len(), "Array-containing Map items copy")?;
             for (key, value) in &map.entries {
-                elements.push(Value::Instance(InstanceValue {
-                    class_name: "MapEntry".to_string(),
-                    fields: BTreeMap::from([
-                        ("key".to_string(), try_clone_array_containing_value(key)?),
-                        (
-                            "value".to_string(),
-                            try_clone_array_containing_value(value)?,
-                        ),
-                    ]),
+                elements.push(Value::Tuple(TupleValue {
+                    element_types: vec![map.key_type.clone(), map.value_type.clone()],
+                    elements: vec![
+                        try_clone_array_containing_value(key)?,
+                        try_clone_array_containing_value(value)?,
+                    ],
                 }));
             }
             Ok((element_type, elements))
@@ -5681,7 +5787,7 @@ pub extern "C-unwind" fn aura_direct_map_index(
                 .map(|(_, value)| try_clone_array_containing_value(value))
         });
         let Some(value) = value else {
-            let message = format!("map key `{}` was not present", key.render());
+            let message = format!("dict key `{}` was not present", key.render());
             match runtime_span(line, column) {
                 Some(span) => {
                     runtime_diagnostic_error(Diagnostic::coded_at("AU4003", span, message))
@@ -5735,7 +5841,7 @@ pub extern "C-unwind" fn aura_direct_map_extend_in_place(
     task_runtime_boundary(|| {
         let other = unsafe { consume_owned_value(other) };
         let Value::Map(other) = other else {
-            runtime_error("`extend` requires another `Map[K, V]` value");
+            runtime_error("`update` requires another `dict[K, V]` value");
         };
         with_map_mut(map, |map| {
             for (key, value) in other.entries {
@@ -5843,7 +5949,7 @@ pub extern "C-unwind" fn aura_direct_set_index_option(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         if index < 0 {
-            runtime_error(format!("vector index `{}` cannot be negative", index));
+            runtime_error(format!("list index `{}` cannot be negative", index));
         }
         // Every supported Aura release target is 64-bit, so a validated
         // non-negative int64 index always fits usize.
@@ -6389,18 +6495,18 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
             Value::EnumVariant(variant) => {
                 nominal_runtime_base_name(&variant.enum_name) == expected
             }
-            Value::String(_) => expected == "String",
+            Value::String(_) => expected == "str",
             Value::Tuple(tuple) => {
                 expected == "tuple"
                     || Type::Tuple(tuple.element_types.clone()).to_string() == expected
             }
-            Value::Vec(_) => expected == "Vec",
+            Value::Vec(_) => expected == "list",
             Value::Array(array) => {
                 expected == "Array"
                     || expected == format!("Array[{}]", array.dtype().runtime_type_name())
             }
-            Value::Set(_) => expected == "Set",
-            Value::Map(_) => expected == "Map",
+            Value::Set(_) => expected == "set",
+            Value::Map(_) => expected == "dict",
             Value::Channel(_) => expected == "Queue",
             Value::Task(_) => expected == "Task",
             Value::TaskGroup(_) => expected == "TaskGroup",
@@ -7647,7 +7753,7 @@ fn expect_task_vec(value: &Value, context: &str) -> Vec<TaskValue> {
             })
             .collect(),
         other => runtime_error(format!(
-            "expected `{}` to receive `Vec[Task]`, found `{}`",
+            "expected `{}` to receive `list[Task]`, found `{}`",
             context,
             value_type_name(other)
         )),
@@ -7671,8 +7777,8 @@ fn wait_any_tasks(
     loop {
         for (index, task) in tasks.iter().enumerate() {
             if let Some(result) = task.completed_result_observed() {
-                let index = i32::try_from(index)
-                    .map_err(|_| Diagnostic::new("wait_any result index exceeds int32 range"))?;
+                let index = i64::try_from(index)
+                    .map_err(|_| Diagnostic::new("wait_any result index exceeds int64 range"))?;
                 return match result {
                     crate::runtime_value::TaskExecutionResult::Ready(result) => match result {
                         Ok(value) => Ok(wait_any_ready(index, value)),
@@ -7720,8 +7826,8 @@ fn wait_all_tasks(
             TaskWaitStatus::Ready(result) => match result {
                 Ok(value) => results.push(value),
                 Err(error) => {
-                    let index = i32::try_from(index).map_err(|_| {
-                        Diagnostic::new("wait_all result index exceeds int32 range")
+                    let index = i64::try_from(index).map_err(|_| {
+                        Diagnostic::new("wait_all result index exceeds int64 range")
                     })?;
                     return Ok(wait_all_error(index, error.message));
                 }
@@ -8027,7 +8133,7 @@ pub extern "C-unwind" fn aura_direct_io_write(text: *mut OpaqueValue) -> *mut Op
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -8055,7 +8161,7 @@ pub extern "C-unwind" fn aura_direct_fs_exists(path: *mut OpaqueValue) -> *mut O
     task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => boxed_value(Value::Bool(std::path::Path::new(&path).exists())),
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -8076,7 +8182,7 @@ pub extern "C-unwind" fn aura_direct_fs_read_to_string(path: *mut OpaqueValue) -
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -8093,7 +8199,7 @@ pub extern "C-unwind" fn aura_direct_fs_read_bytes(path: *mut OpaqueValue) -> *m
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -8108,14 +8214,14 @@ pub extern "C-unwind" fn aura_direct_fs_write_string(
         let path = match unsafe { value_ref(path) } {
             Value::String(path) => path.clone(),
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         };
         let text = match unsafe { value_ref(text) } {
             Value::String(text) => text.clone(),
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         };
@@ -8156,14 +8262,14 @@ pub extern "C-unwind" fn aura_direct_fs_append_string(
         let path = match unsafe { value_ref(path) } {
             Value::String(path) => path.clone(),
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         };
         let text = match unsafe { value_ref(text) } {
             Value::String(text) => text.clone(),
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         };
@@ -8218,7 +8324,7 @@ pub extern "C-unwind" fn aura_direct_fs_create_dir(path: *mut OpaqueValue) -> *m
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -8239,13 +8345,13 @@ pub extern "C-unwind" fn aura_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut
             Some(&current_cancellation()),
         ) {
             Ok(names) => boxed_value(result_ok(Value::Vec(VecValue {
-                element_type: Type::named("String"),
+                element_type: Type::named("str"),
                 elements: names.into_iter().map(Value::String).collect(),
             }))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -8262,7 +8368,7 @@ pub extern "C-unwind" fn aura_direct_fs_remove_file(path: *mut OpaqueValue) -> *
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -8276,7 +8382,7 @@ pub extern "C-unwind" fn aura_direct_fs_open(path: *mut OpaqueValue) -> *mut Opa
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -8290,7 +8396,7 @@ pub extern "C-unwind" fn aura_direct_fs_create(path: *mut OpaqueValue) -> *mut O
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -8304,7 +8410,7 @@ pub extern "C-unwind" fn aura_direct_fs_append(path: *mut OpaqueValue) -> *mut O
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -8347,7 +8453,7 @@ pub extern "C-unwind" fn aura_direct_file_write_all(
         let text = match unsafe { value_ref(text) } {
             Value::String(text) => text.clone(),
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         };
@@ -9172,7 +9278,7 @@ pub extern "C-unwind" fn aura_direct_net_connect(address: *mut OpaqueValue) -> *
             }
         }
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -9193,7 +9299,7 @@ pub extern "C-unwind" fn aura_direct_net_connect_timeout(
                 }
             }
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         }
@@ -9208,7 +9314,7 @@ pub extern "C-unwind" fn aura_direct_net_listen(address: *mut OpaqueValue) -> *m
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -9222,7 +9328,7 @@ pub extern "C-unwind" fn aura_direct_net_udp_bind(address: *mut OpaqueValue) -> 
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -9236,7 +9342,7 @@ pub extern "C-unwind" fn aura_direct_net_unix_listen(path: *mut OpaqueValue) -> 
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -9252,7 +9358,7 @@ pub extern "C-unwind" fn aura_direct_net_unix_connect(path: *mut OpaqueValue) ->
             }
         }
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -9273,7 +9379,7 @@ pub extern "C-unwind" fn aura_direct_net_unix_connect_timeout(
                 }
             }
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         }
@@ -9368,7 +9474,7 @@ pub extern "C-unwind" fn aura_direct_net_http_listen(
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -9522,7 +9628,7 @@ pub extern "C-unwind" fn aura_direct_net_websocket_listen(
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -9538,7 +9644,7 @@ pub extern "C-unwind" fn aura_direct_net_websocket_connect(
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
-            "expected `String`, found `{}`",
+            "expected `str`, found `{}`",
             value_type_name(other)
         )),
     })
@@ -9557,7 +9663,7 @@ pub extern "C-unwind" fn aura_direct_net_websocket_connect_timeout(
                 Err(error) => boxed_value(result_err(io_error(error))),
             },
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         }
@@ -9727,7 +9833,7 @@ pub extern "C-unwind" fn aura_direct_tcp_stream_write_all(
         let text = match unsafe { value_ref(text) } {
             Value::String(text) => text.clone(),
             other => runtime_error(format!(
-                "expected `String`, found `{}`",
+                "expected `str`, found `{}`",
                 value_type_name(other)
             )),
         };
@@ -11426,7 +11532,7 @@ pub extern "C-unwind" fn aura_direct_assert_fail(message: i64, line: i64, column
                 with_value(message as *mut OpaqueValue, |value| match value {
                     Value::String(message) => Ok(message.clone()),
                     other => Err(format!(
-                        "direct assertion message must be `String`, found `{}`",
+                        "direct assertion message must be `str`, found `{}`",
                         value_type_name(other)
                     )),
                 })

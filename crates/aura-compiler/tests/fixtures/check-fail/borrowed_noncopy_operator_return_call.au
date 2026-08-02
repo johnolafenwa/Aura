@@ -2,10 +2,10 @@ trait Add[Rhs, Out]:
     def add(self, rhs: Rhs) -> Out
 
 class Label:
-    value: String
+    value: str
 
-impl Add[Label, String] for Label:
-    def add(self, rhs: Label) -> String:
+impl Add[Label, str] for Label:
+    def add(self, rhs: Label) -> str:
         return self.value
 
 def main():

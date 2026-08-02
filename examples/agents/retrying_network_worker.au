@@ -2,7 +2,7 @@ import io
 import net
 import random
 
-def serve(addresses: Queue[String]) -> Result[int32, io.Error]:
+def serve(addresses: Queue[str]) -> Result[int32, io.Error]:
     with server = try net.http_listen("127.0.0.1:0"):
         addresses.put(try server.local_addr())
         mut recover_requests: int32 = 0
@@ -35,7 +35,7 @@ def serve(addresses: Queue[String]) -> Result[int32, io.Error]:
 
         return Result.Ok(total_requests)
 
-def request_with_retry(address: String, path: String, name: String, max_attempts: int32, initial_backoff: Duration, rng: mut random.Rng) -> Result[int32, io.Error]:
+def request_with_retry(address: str, path: str, name: str, max_attempts: int32, initial_backoff: Duration, rng: mut random.Rng) -> Result[int32, io.Error]:
     mut attempt: int32 = 1
     mut backoff = initial_backoff
 
@@ -60,7 +60,7 @@ def request_with_retry(address: String, path: String, name: String, max_attempts
 
     return Result.Ok(500)
 
-def work(address: String) -> Result[None, io.Error]:
+def work(address: str) -> Result[None, io.Error]:
     mut rng = random.Rng(42)
 
     recovered = try request_with_retry(address, "/recover", "recover", 3, 2ms, rng)
@@ -76,7 +76,7 @@ def work(address: String) -> Result[None, io.Error]:
 
 def run() -> Result[None, io.Error]:
     with TaskGroup() as group:
-        addresses = Queue[String](capacity=1)
+        addresses = Queue[str](capacity=1)
         server = group.start(serve, addresses)
         address = try receive_address(addresses)
         worker = group.start(work, address)
@@ -104,7 +104,7 @@ def run() -> Result[None, io.Error]:
 
         return Result.Ok(None)
 
-def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
+def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
     match own addresses.get(timeout=5s):
         case QueueReceive.Item(address):
             return Result.Ok(address)

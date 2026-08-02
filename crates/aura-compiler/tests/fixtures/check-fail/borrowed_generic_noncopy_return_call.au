@@ -3,5 +3,5 @@ def identity[T](value: T) -> T:
 
 def main():
     text = "aura"
-    alias = identity[String](value=text)
+    alias = identity[str](value=text)
     print(alias)

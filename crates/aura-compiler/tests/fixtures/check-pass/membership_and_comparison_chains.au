@@ -2,12 +2,12 @@ def bounded(value: int32, low: int32, high: int32) -> bool:
     return low <= value < high
 
 def main():
-    mut values = Vec[int32]()
-    values.push(1)
-    mut names = Set[String]()
-    names.insert("aura")
-    mut ages = Map[String, int32]()
-    ages.set("ada", 36)
+    mut values = list[int32]()
+    values.append(1)
+    mut names = set[str]()
+    names.add("aura")
+    mut ages = dict[str, int32]()
+    ages["ada"] = 36
     text = "hello world"
 
     print(1 in values)

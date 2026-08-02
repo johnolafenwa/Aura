@@ -1,11 +1,11 @@
-def parse_positive(n: int32) -> Result[int32, String]:
+def parse_positive(n: int32) -> Result[int32, str]:
     if n < 0:
         return Result.Err("negative number")
     if n == 0:
         return Result.Err("zero not allowed")
     return Result.Ok(n)
 
-def safe_sqrt_approx(n: int32) -> Result[int32, String]:
+def safe_sqrt_approx(n: int32) -> Result[int32, str]:
     if n < 0:
         return Result.Err("negative input")
     # Simple integer square root approximation

@@ -1,4 +1,4 @@
-error[AU4003]: map key `missing` was not present
+error[AU4003]: dict key `missing` was not present
  --> crates/aura-compiler/tests/fixtures/run-fail/map_index_missing_key.au:3:18
   |
 3 |     print(values["missing"])

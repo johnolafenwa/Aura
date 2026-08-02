@@ -1,4 +1,4 @@
 def main():
-    payload: Vec[uint8] = [65]
-    text = String.from_bytes(payload, "utf-8")
+    payload: list[uint8] = [65]
+    text = str.from_bytes(payload, "utf-8")
     print(text)

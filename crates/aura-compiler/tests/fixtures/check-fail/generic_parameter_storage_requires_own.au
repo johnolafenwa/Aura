@@ -1,7 +1,7 @@
-def store[T](values: mut Vec[T], value: T):
-    values.push(value)
+def store[T](values: mut list[T], value: T):
+    values.append(value)
 
 def main() -> int32:
-    mut values: Vec[int64] = []
+    mut values: list[int64] = []
     store(values, 7)
     return 0

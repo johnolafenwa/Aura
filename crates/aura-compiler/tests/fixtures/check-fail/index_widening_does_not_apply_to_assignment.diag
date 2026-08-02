@@ -1,0 +1,5 @@
+error[AU2002]: binding `wide` has annotated type `int64`, but value has type `int32`
+ --> crates/aura-compiler/tests/fixtures/check-fail/index_widening_does_not_apply_to_assignment.au:3:5
+  |
+3 |     wide: int64 = narrow
+  |     ^

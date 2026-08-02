@@ -11,12 +11,12 @@ def main() -> int32:
     first: int64 = invoke(lambda value: value + 1, 1)
     second: int64 = identity(add_offset(first))
 
-    mut values: Vec[int64] = [3, 1, 2]
-    values.sort_by(lambda value: 0 - value)
-    mapped: Vec[int64] = values.map(lambda value: value + offset)
-    retained: Vec[int64] = values.filter(lambda value: value > 1)
-    outcome: Result[int64, String] = control.retry(
-        lambda: Result[int64, String].Ok(second),
+    mut values: list[int64] = [3, 1, 2]
+    values.sort(key = lambda value: 0 - value)
+    mapped: list[int64] = values.map(lambda value: value + offset)
+    retained: list[int64] = values.filter(lambda value: value > 1)
+    outcome: Result[int64, str] = control.retry(
+        lambda: Result[int64, str].Ok(second),
         max_attempts=2,
         initial_backoff=0ms
     )

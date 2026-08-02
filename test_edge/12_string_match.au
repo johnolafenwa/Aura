@@ -1,9 +1,9 @@
 enum Message:
-    Text(String)
+    Text(str)
     Number(int32)
     Empty
 
-def describe(msg: own Message) -> String:
+def describe(msg: own Message) -> str:
     match own msg:
         case Message.Text(content):
             return "text: " + content

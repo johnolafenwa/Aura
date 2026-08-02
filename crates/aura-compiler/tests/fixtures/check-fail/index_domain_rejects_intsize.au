@@ -1,0 +1,4 @@
+def main():
+    values: list[int32] = [10]
+    index: intsize = 0
+    print(values[index])

@@ -1,5 +1,5 @@
 class Node:
-    value: String
+    value: str
     next: indirect Node?
 
 def consume(node: own Node) -> int32:

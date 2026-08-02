@@ -1,14 +1,14 @@
 trait Displayable:
-    def display(self) -> String
+    def display(self) -> str
 
 class Box[T]:
     value: T
 
-impl Displayable for Box[String]:
-    def display(self) -> String:
+impl Displayable for Box[str]:
+    def display(self) -> str:
         return self.value.clone()
 
 def main() -> int32:
-    box: Box[String] = Box(value="hello")
+    box: Box[str] = Box(value="hello")
     print(box.display())
     return 0

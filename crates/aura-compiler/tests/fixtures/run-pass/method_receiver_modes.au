@@ -1,17 +1,17 @@
 class Record:
-    label: String
+    label: str
     count: int32
 
-    def label_copy(self) -> String:
+    def label_copy(self) -> str:
         return self.label.clone()
 
-    def label_copy_explicit(self) -> String:
+    def label_copy_explicit(self) -> str:
         return self.label.clone()
 
     def bump(mut self):
         self.count += 1
 
-    def into_label(own self) -> String:
+    def into_label(own self) -> str:
         return self.label
 
 copy class Ticket:

@@ -1,5 +1,5 @@
 class Token:
-    value: String
+    value: str
 
     def consume(own self):
         print(self.value)

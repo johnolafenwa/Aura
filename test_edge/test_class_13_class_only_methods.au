@@ -2,7 +2,7 @@
 class Greeter:
     pass
 
-    def hello() -> String:
+    def hello() -> str:
         return "Hello, World!"
 
 def main() -> int32:

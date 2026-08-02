@@ -5,7 +5,7 @@ enum Pair[A, B]:
     Second(B)
     Neither
 
-def show_pair(p: own Pair[int32, String]) -> String:
+def show_pair(p: own Pair[int32, str]) -> str:
     match own p:
         case Pair.Both(a):
             print(a)
@@ -19,10 +19,10 @@ def show_pair(p: own Pair[int32, String]) -> String:
             return "neither"
 
 def main() -> int32:
-    p1: Pair[int32, String] = Pair.Both(42)
-    p2: Pair[int32, String] = Pair.First(10)
-    p3: Pair[int32, String] = Pair.Second("hello")
-    p4: Pair[int32, String] = Pair.Neither
+    p1: Pair[int32, str] = Pair.Both(42)
+    p2: Pair[int32, str] = Pair.First(10)
+    p3: Pair[int32, str] = Pair.Second("hello")
+    p4: Pair[int32, str] = Pair.Neither
 
     print(show_pair(p1))
     print(show_pair(p2))

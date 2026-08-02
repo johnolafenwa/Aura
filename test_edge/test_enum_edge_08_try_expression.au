@@ -1,16 +1,16 @@
-def validate_age(age: int32) -> Result[int32, String]:
+def validate_age(age: int32) -> Result[int32, str]:
     if age < 0:
         return Result.Err("age cannot be negative")
     if age > 150:
         return Result.Err("age too large")
     return Result.Ok(age)
 
-def validate_name_len(len: int32) -> Result[int32, String]:
+def validate_name_len(len: int32) -> Result[int32, str]:
     if len == 0:
         return Result.Err("name cannot be empty")
     return Result.Ok(len)
 
-def create_user(age: int32, name_len: int32) -> Result[int32, String]:
+def create_user(age: int32, name_len: int32) -> Result[int32, str]:
     valid_age = try validate_age(age)
     valid_len = try validate_name_len(name_len)
     return Result.Ok(valid_age + valid_len)

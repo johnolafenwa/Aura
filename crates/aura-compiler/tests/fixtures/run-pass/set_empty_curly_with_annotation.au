@@ -1,5 +1,5 @@
 def main() -> int32:
-    mut values: Set[int32] = {}
-    values.insert(7)
+    mut values: set[int32] = {}
+    values.add(7)
     print(values.len())
     return 0

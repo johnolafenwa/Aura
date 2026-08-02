@@ -1,7 +1,7 @@
-def push_and_index(values: mut Vec[int32]) -> int32:
-    values.push(2)
+def push_and_index(values: mut list[int32]) -> int32:
+    values.append(2)
     return 1
 
 def main():
-    mut values: Vec[int32] = [1]
+    mut values: list[int32] = [1]
     values[push_and_index(values)] = 9

@@ -1,5 +1,5 @@
 def main():
     x: int32 = 5
-    y: String = "hello"
+    y: str = "hello"
     z = x + y
     print(z)

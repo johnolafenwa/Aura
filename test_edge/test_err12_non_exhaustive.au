@@ -4,7 +4,7 @@ enum Direction:
     East
     West
 
-def describe(d: Direction) -> String:
+def describe(d: Direction) -> str:
     match own d:
         case Direction.North:
             return "north"

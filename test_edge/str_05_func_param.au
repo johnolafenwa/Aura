@@ -1,12 +1,12 @@
 # Test string as function parameter: owned vs borrow
 
-def consume_string(s: String):
+def consume_string(s: str):
     print(s)
 
 def borrow_string(s: str):
     print(s)
 
-def borrow_and_build(s: str) -> String:
+def borrow_and_build(s: str) -> str:
     return f"Got: {s}"
 
 def main() -> int32:

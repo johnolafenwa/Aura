@@ -1,18 +1,18 @@
 class Box:
-    value: String
+    value: str
 
-def store(values: mut Vec[String], unique: mut Set[String], labels: mut Map[String, String], output: Queue[String], vec_value: own String, set_value: own String, map_key: own String, map_value: own String, queue_value: own String, field_value: own String) -> Box:
-    values.push(vec_value)
-    unique.insert(set_value)
-    labels.set(map_key, map_value)
+def store(values: mut list[str], unique: mut set[str], labels: mut dict[str, str], output: Queue[str], vec_value: own str, set_value: own str, map_key: own str, map_value: own str, queue_value: own str, field_value: own str) -> Box:
+    values.append(vec_value)
+    unique.add(set_value)
+    labels[map_key] = map_value
     output.try_put(queue_value)
     return Box(value=field_value)
 
 def main() -> int32:
-    mut values: Vec[String] = []
-    mut unique: Set[String] = Set[String]()
-    mut labels: Map[String, String] = Map[String, String]()
-    output = Queue[String]()
+    mut values: list[str] = []
+    mut unique: set[str] = set[str]()
+    mut labels: dict[str, str] = dict[str, str]()
+    output = Queue[str]()
     boxed = store(values, unique, labels, output, "vec", "set", "key", "map", "queue", "field")
 
     print(values.len())

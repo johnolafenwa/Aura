@@ -1,7 +1,7 @@
 # Edge test: Generic class containing a Result field
 
 class Validated[T]:
-    result: Result[T, String]
+    result: Result[T, str]
 
     def is_valid(self) -> bool:
         match self.result:

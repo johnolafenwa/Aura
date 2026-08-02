@@ -17,8 +17,8 @@ def make_argument() -> int32:
     print("argument")
     return 7
 
-def push_and_return(values: mut Vec[int32]) -> int32:
-    values.push(2)
+def push_and_return(values: mut list[int32]) -> int32:
+    values.append(2)
     return 0
 
 def bump_and_return(value: mut int32) -> int32:
@@ -44,7 +44,7 @@ def main():
     print("f-string")
     print(f"{value}{bump(value)}")
 
-    mut vector: Vec[int32] = [1]
+    mut vector: list[int32] = [1]
     print("non-copy f-string")
     print(f"{vector}{push_and_return(vector)}")
     print(vector)

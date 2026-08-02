@@ -1,7 +1,7 @@
-def duplicate[T](values: Vec[T]) -> Vec[T]:
-    return values.clone()
+def duplicate[T](values: list[T]) -> list[T]:
+    return values.copy()
 
-def forward[T](values: Vec[T]) -> Vec[T]:
+def forward[T](values: list[T]) -> list[T]:
     return duplicate(values)
 
 def main() -> int32:

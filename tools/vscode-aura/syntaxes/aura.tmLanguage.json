@@ -230,10 +230,6 @@
           "match": "\\b(public|mut|own|indirect|copy)\\b"
         },
         {
-          "name": "invalid.deprecated.aura",
-          "match": "\\bborrow\\b"
-        },
-        {
           "name": "constant.language.aura",
           "match": "\\b(None|Some|true|false|self|Self)\\b"
         }
@@ -243,7 +239,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.aura",
-          "match": "\\b(bool|int|int8|int16|int32|int64|int128|intsize|uint8|uint16|uint32|uint64|uint128|uintsize|float32|float64|String|Duration|Option|Result|SendError|Queue|QueueReceive|Task|TaskResult|TaskGroup|SelectOutcome|WaitAny|WaitAll|Vec|Map|MapEntry|Set|Array|process\\.Child|fs\\.File|net\\.TcpStream)\\b"
+          "match": "\\b(bool|int|int8|int16|int32|int64|int128|intsize|uint8|uint16|uint32|uint64|uint128|uintsize|float32|float64|str|list|dict|set|Duration|Option|Result|SendError|Queue|QueueReceive|Task|TaskResult|TaskGroup|SelectOutcome|WaitAny|WaitAll|Array|process\\.Child|fs\\.File|net\\.TcpStream)\\b"
         }
       ]
     },

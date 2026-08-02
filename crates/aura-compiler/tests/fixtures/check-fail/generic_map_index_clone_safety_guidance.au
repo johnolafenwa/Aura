@@ -1,4 +1,4 @@
-def lookup[V](values: Map[String, V], key: String) -> V:
+def lookup[V](values: dict[str, V], key: str) -> V:
     return values[key]
 
 def main():

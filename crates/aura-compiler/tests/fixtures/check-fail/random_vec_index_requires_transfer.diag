@@ -1,4 +1,4 @@
-error[AU3005]: cannot implicitly copy `random.Rng` out of a vector index; `get(index)` cannot clone it because `random.Rng` is directly non-cloneable, so use `remove(index)` to transfer ownership instead
+error[AU3005]: cannot implicitly copy `random.Rng` out of a list index; `get(index)` cannot clone it because `random.Rng` is directly non-cloneable, so use `pop(index)` to transfer ownership instead
  --> crates/aura-compiler/tests/fixtures/check-fail/random_vec_index_requires_transfer.au:6:14
   |
 6 |     chosen = generators[0]

@@ -5,6 +5,6 @@ class Holder:
 
 def main() -> int32:
     holders = [Holder(random.Rng(seed=1))]
-    copies = holders.clone()
+    copies = holders.copy()
     print(copies)
     return 0

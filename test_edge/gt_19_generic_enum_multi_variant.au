@@ -3,7 +3,7 @@
 
 enum Status[T]:
     Ok(T)
-    Error(String)
+    Error(str)
     Pending
 
 def main() -> int32:

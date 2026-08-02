@@ -2,16 +2,16 @@
 ## Expects: "hello world"
 
 trait Transformable:
-    def transform(self) -> String
+    def transform(self) -> str
 
 class Word:
-    text: String
+    text: str
 
 impl Transformable for Word:
-    def transform(self) -> String:
+    def transform(self) -> str:
         return self.text.clone()
 
-def combine[T: Transformable](a: T, b: T) -> String:
+def combine[T: Transformable](a: T, b: T) -> str:
     return a.transform() + " " + b.transform()
 
 def main() -> int32:

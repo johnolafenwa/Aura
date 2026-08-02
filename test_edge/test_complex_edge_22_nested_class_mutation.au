@@ -5,7 +5,7 @@ class Inner:
 
 class Outer:
     inner: Inner
-    name: String
+    name: str
 
     def bump_inner(mut self):
         self.inner.value += 1

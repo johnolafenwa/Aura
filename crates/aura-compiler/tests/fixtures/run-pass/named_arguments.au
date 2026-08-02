@@ -1,10 +1,10 @@
 class Greeter:
-    prefix: String
+    prefix: str
 
-    def say(self, name: String) -> String:
+    def say(self, name: str) -> str:
         return self.prefix + name
 
-    def named(prefix: own String) -> Greeter:
+    def named(prefix: own str) -> Greeter:
         return Greeter(prefix=prefix)
 
 def subtract(left: int32, right: int32) -> int32:

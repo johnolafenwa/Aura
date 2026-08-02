@@ -1,5 +1,5 @@
-error[AU2002]: function parameter 1 has `own` capability, but `def(String) -> int64` requires `shared`; update that function type parameter to use the matching bare, `mut`, or `own` prefix
+error[AU2002]: function parameter 1 has `own` capability, but `def(str) -> int64` requires `shared`; update that function type parameter to use the matching bare, `mut`, or `own` prefix
  --> crates/aura-compiler/tests/fixtures/check-fail/function_value_owned_annotation_mismatch.au:5:5
   |
-5 |     shared_only: def(String) -> int64 = consume
+5 |     shared_only: def(str) -> int64 = consume
   |     ^

@@ -1,6 +1,6 @@
 trait Sized:
     def len(self) -> int64
 
-impl Sized for Vec[int32]:
+impl Sized for list[int32]:
     def len(self) -> int64:
         return 99

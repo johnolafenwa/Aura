@@ -45,11 +45,11 @@ fn builtin_io_modules_type_check_from_path_context() {
 import fs
 import net
 
-def read_file(path: String) -> Result[String, io.Error]:
+def read_file(path: str) -> Result[str, io.Error]:
     with file = try fs.open(path):
         return file.read_all()
 
-def send_line(stream: own net.TcpStream, text: String) -> Result[None, io.Error]:
+def send_line(stream: own net.TcpStream, text: str) -> Result[None, io.Error]:
     with socket = stream:
         try socket.write_all(text)
         try socket.flush()
@@ -72,7 +72,7 @@ fn builtin_fs_and_net_modules_run_through_public_api() {
 import fs
 import net
 
-def serve(addresses: Queue[String]) -> Result[None, io.Error]:
+def serve(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.listen("127.0.0.1:0"):
         addresses.put(try server_listener.local_addr())
         socket = try server_listener.accept()
@@ -86,7 +86,7 @@ def serve(addresses: Queue[String]) -> Result[None, io.Error]:
                     pass
             return Result.Ok(None)
 
-def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
+def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
     match own addresses.get(timeout=1s):
         case QueueReceive.Item(address):
             return Result.Ok(address)
@@ -103,7 +103,7 @@ def run() -> Result[None, io.Error]:
     try io.write(text + "\n")
 
     with TaskGroup() as group:
-        addresses = Queue[String](capacity=1)
+        addresses = Queue[str](capacity=1)
         server = group.start(serve, addresses)
         address = try receive_address(addresses)
         client = try net.connect(address)
@@ -182,8 +182,8 @@ fn advanced_io_and_network_surface_type_checks_from_path_context() {
 import fs
 import net
 
-def touch_bytes(path: String) -> Result[Vec[uint8], io.Error]:
-    seed: Vec[uint8] = [65 as uint8, 66 as uint8]
+def touch_bytes(path: str) -> Result[list[uint8], io.Error]:
+    seed: list[uint8] = [65 as uint8, 66 as uint8]
     try fs.write_bytes(path.clone(), seed)
     try fs.append_bytes(path.clone(), [67 as uint8])
     with file = try fs.append(path.clone()):
@@ -191,7 +191,7 @@ def touch_bytes(path: String) -> Result[Vec[uint8], io.Error]:
         try file.flush()
     return fs.read_bytes(path)
 
-def inspect_udp(socket: own net.UdpSocket) -> Result[String, io.Error]:
+def inspect_udp(socket: own net.UdpSocket) -> Result[str, io.Error]:
     with bound = socket:
         match own try bound.recv_from(1024, timeout=100ms):
             case Option.Some(packet):
@@ -212,11 +212,11 @@ def inspect_http(listener: own net.HttpListener) -> Result[None, io.Error]:
             headers = request.headers()
             body_text = try request.body_text()
             body_bytes = request.body_bytes()
-            try request.respond_text(200, method + path + body_text, headers.clone())
+            try request.respond_text(200, method + path + body_text, headers.copy())
             try request.respond_bytes(201, body_bytes, headers)
             return Result.Ok(None)
 
-def inspect_http_response(response: own net.HttpResponse) -> Result[String, io.Error]:
+def inspect_http_response(response: own net.HttpResponse) -> Result[str, io.Error]:
     with received = response:
         print(received.status())
         print(received.reason())
@@ -281,10 +281,10 @@ def inspect_tls(listener: own net.TlsListener, stream: own net.TlsStream) -> Res
         return Result.Ok(None)
 
 def main() -> int32:
-    headers: Map[String, String] = {"Content-Type": "text/plain"}
-    print(net.http_request_text("GET", "http://127.0.0.1:1", "", headers.clone()))
-    print(net.http_request_text_timeout("GET", "http://127.0.0.1:1", "", headers.clone(), 1s))
-    print(net.http_request_bytes("POST", "http://127.0.0.1:1", [1 as uint8], headers.clone()))
+    headers: dict[str, str] = {"Content-Type": "text/plain"}
+    print(net.http_request_text("GET", "http://127.0.0.1:1", "", headers.copy()))
+    print(net.http_request_text_timeout("GET", "http://127.0.0.1:1", "", headers.copy(), 1s))
+    print(net.http_request_bytes("POST", "http://127.0.0.1:1", [1 as uint8], headers.copy()))
     print(net.http_request_bytes_timeout("POST", "http://127.0.0.1:1", [1 as uint8], headers, 1s))
     print(net.connect_timeout("127.0.0.1:1", 1s))
     print(net.udp_bind("127.0.0.1:0"))
@@ -315,7 +315,7 @@ fn advanced_io_and_network_modules_run_through_public_api() {
 import fs
 import net
 
-def serve_udp(addresses: Queue[String]) -> Result[String, io.Error]:
+def serve_udp(addresses: Queue[str]) -> Result[str, io.Error]:
     with server_socket = try net.udp_bind("127.0.0.1:0"):
         addresses.put(try server_socket.local_addr())
         match own try server_socket.recv_from(1024, timeout=1s):
@@ -326,7 +326,7 @@ def serve_udp(addresses: Queue[String]) -> Result[String, io.Error]:
             case Option.None:
                 return Result.Ok("missing")
 
-def serve_http(addresses: Queue[String]) -> Result[None, io.Error]:
+def serve_http(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.http_listen("127.0.0.1:0"):
         addresses.put(try server_listener.local_addr())
         exchange = try server_listener.accept(timeout=1s)
@@ -342,7 +342,7 @@ def serve_http(addresses: Queue[String]) -> Result[None, io.Error]:
                 case Option.None:
                     return Result.Ok(None)
 
-def serve_http_bytes(addresses: Queue[String]) -> Result[None, io.Error]:
+def serve_http_bytes(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.http_listen("127.0.0.1:0"):
         addresses.put(try server_listener.local_addr())
         exchange = try server_listener.accept(timeout=1s)
@@ -351,7 +351,7 @@ def serve_http_bytes(addresses: Queue[String]) -> Result[None, io.Error]:
             try request.respond_bytes(202, body, {{"Content-Type": "application/octet-stream"}})
             return Result.Ok(None)
 
-def serve_ws(addresses: Queue[String]) -> Result[None, io.Error]:
+def serve_ws(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.websocket_listen("127.0.0.1:0"):
         addresses.put(try server_listener.local_addr())
         socket = try server_listener.accept(timeout=1s)
@@ -363,7 +363,7 @@ def serve_ws(addresses: Queue[String]) -> Result[None, io.Error]:
                 case Option.None:
                     return Result.Ok(None)
 
-def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
+def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
     match own addresses.get(timeout=1s):
         case QueueReceive.Item(address):
             return Result.Ok(address)
@@ -375,7 +375,7 @@ def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
             return Result.Err(io.Error.Cancelled)
 
 def run() -> Result[None, io.Error]:
-    bytes: Vec[uint8] = [65 as uint8, 66 as uint8]
+    bytes: list[uint8] = [65 as uint8, 66 as uint8]
     try fs.write_bytes("{path}", bytes)
     try fs.append_bytes("{path}", [67 as uint8, 10 as uint8])
     read_back = try fs.read_bytes("{path}")
@@ -384,7 +384,7 @@ def run() -> Result[None, io.Error]:
     print(read_back[2])
 
     with TaskGroup() as group:
-        udp_addresses = Queue[String](capacity=1)
+        udp_addresses = Queue[str](capacity=1)
         udp_task = group.start(serve_udp, udp_addresses)
         udp_addr = try receive_address(udp_addresses)
         udp_client = try net.udp_bind("127.0.0.1:0")
@@ -408,11 +408,11 @@ def run() -> Result[None, io.Error]:
                 print("udp task timed out")
                 return Result.Ok(None)
 
-        http_addresses = Queue[String](capacity=1)
+        http_addresses = Queue[str](capacity=1)
         http_task = group.start(serve_http, http_addresses)
         http_addr = try receive_address(http_addresses)
-        headers: Map[String, String] = {{"X-Test": "ok"}}
-        response = try net.http_request_text("POST", "http://" + http_addr + "/hello", "body", headers.clone())
+        headers: dict[str, str] = {{"X-Test": "ok"}}
+        response = try net.http_request_text("POST", "http://" + http_addr + "/hello", "body", headers.copy())
         with http_response = response:
             print(http_response.status())
             print(try http_response.text())
@@ -429,7 +429,7 @@ def run() -> Result[None, io.Error]:
                 print("http task timed out")
                 return Result.Ok(None)
 
-        http_bytes_addresses = Queue[String](capacity=1)
+        http_bytes_addresses = Queue[str](capacity=1)
         http_bytes_task = group.start(serve_http_bytes, http_bytes_addresses)
         http_bytes_addr = try receive_address(http_bytes_addresses)
         bytes_response = try net.http_request_bytes("POST", "http://" + http_bytes_addr + "/bytes", [1 as uint8, 2 as uint8], headers)
@@ -449,7 +449,7 @@ def run() -> Result[None, io.Error]:
                 print("http bytes task timed out")
                 return Result.Ok(None)
 
-        ws_addresses = Queue[String](capacity=1)
+        ws_addresses = Queue[str](capacity=1)
         ws_task = group.start(serve_ws, ws_addresses)
         ws_addr = try receive_address(ws_addresses)
         client = try net.websocket_connect_timeout("ws://" + ws_addr + "/", 1s)
@@ -522,7 +522,7 @@ fn unix_and_tls_modules_run_through_public_api() {
         r#"import io
 import net
 
-def serve_unix(path: String, ready: Queue[bool]) -> Result[None, io.Error]:
+def serve_unix(path: str, ready: Queue[bool]) -> Result[None, io.Error]:
     with server_listener = try net.unix_listen(path):
         ready.put(true)
         stream = try server_listener.accept(timeout=1s)
@@ -534,7 +534,7 @@ def serve_unix(path: String, ready: Queue[bool]) -> Result[None, io.Error]:
                 case Option.None:
                     return Result.Ok(None)
 
-def serve_tls(cert_path: String, key_path: String, addresses: Queue[String]) -> Result[None, io.Error]:
+def serve_tls(cert_path: str, key_path: str, addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.tls_listen("127.0.0.1:0", cert_path, key_path):
         addresses.put(try server_listener.local_addr())
         stream = try server_listener.accept(timeout=2s)
@@ -546,7 +546,7 @@ def serve_tls(cert_path: String, key_path: String, addresses: Queue[String]) -> 
                 case Option.None:
                     return Result.Ok(None)
 
-def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
+def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
     match own addresses.get(timeout=2s):
         case QueueReceive.Item(address):
             return Result.Ok(address)
@@ -591,7 +591,7 @@ def run() -> Result[None, io.Error]:
                 print("unix task timed out")
                 return Result.Ok(None)
 
-        tls_addresses = Queue[String](capacity=1)
+        tls_addresses = Queue[str](capacity=1)
         tls_task = group.start(serve_tls, "{cert_path}", "{key_path}", tls_addresses)
         tls_addr = try receive_address(tls_addresses)
         stream = try net.tls_connect_timeout(tls_addr, "localhost", "{cert_path}", 2s)

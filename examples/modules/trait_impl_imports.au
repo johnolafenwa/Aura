@@ -1,7 +1,7 @@
 from pkg.named import Named
 from pkg.user import User
 
-def show[T: Named](value: T) -> String:
+def show[T: Named](value: T) -> str:
     return value.name()
 
 def main() -> int32:

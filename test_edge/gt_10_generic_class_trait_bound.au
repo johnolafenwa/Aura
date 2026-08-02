@@ -2,19 +2,19 @@
 ## Expects: "aura" then "empty"
 
 trait Named:
-    def name(self) -> String
+    def name(self) -> str
 
 class User:
-    label: String
+    label: str
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.label.clone()
 
 class Container[T: Named]:
     item: T
 
-    def display(self) -> String:
+    def display(self) -> str:
         return self.item.name()
 
 enum MaybeNamed[T: Named]:

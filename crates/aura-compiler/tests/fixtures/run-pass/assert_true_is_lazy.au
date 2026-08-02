@@ -5,7 +5,7 @@ class Probe:
         self.calls += 1
         return true
 
-    def message(mut self) -> String:
+    def message(mut self) -> str:
         self.calls += 100
         return "message should stay lazy"
 

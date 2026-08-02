@@ -15,14 +15,14 @@ This page documents known current limits of the Aura compiler and runtime.
 - Return values are always owned. Copy results are ordinary copies; a non-copy
   result must be constructed, cloned when clone-safe, moved from owned input,
   or produced by an owner operation.
-- Empty list, map, and set literals need an expected collection type.
+- Empty list, dictionary, and set literals need an expected collection type.
 - Class field defaults cannot call user-defined functions in the current compiler. Compute the value before construction and pass it as an explicit field argument.
-- `String(...)` is not a constructor; use string literals and string methods.
+- `str(...)` is not a constructor; use string literals and string methods.
 - Ordinary strings may use single or double quotes, but triple-quoted, raw, and byte-string literals are not implemented. F-strings remain double-quoted.
-- `String` has scalar-count `len()`, UTF-8 `byte_len()`, and owned
+- `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned
   Unicode-scalar slicing, but no integer indexing, `chars()`, `ord()`, or
   `chr()`.
-- `Vec[uint8]` is the bytes type. UTF-8 conversion is explicit; the reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and HMAC are not implemented.
+- `list[uint8]` is the bytes type. UTF-8 conversion is explicit; the reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and HMAC are not implemented.
 - Physical newlines continue a logical line only while `(`, `[`, or `{`
   remains open. Continuation indentation is visual; delimiter kinds must
   match.
@@ -56,20 +56,20 @@ This page documents known current limits of the Aura compiler and runtime.
   Conditional and `match` expressions cannot merge capturing closures from
   multiple branches because Phase 6.3 has no closure-union type; invoke the
   closure within each branch or use capture-free lambdas or named functions.
-- List, set, and map comprehensions are eager and always return fresh owned
+- List, set, and dictionary comprehensions are eager and always return fresh owned
   collections. Their clauses use bare-loop iteration only; there is no
   comprehension `mut`/`own` source form, early `break`/`continue`, or lazy
   result. Nested clauses are outer-major and Queue comprehensions receive
   until ordinary Queue iteration ends. Generator expressions
   remain unavailable and report `AU2005` with an eager-comprehension or
-  explicit-loop migration.
-- Vec and String slices accept one contiguous half-open range and return fresh
-  owned copies. Written endpoints are exact `int32`; negatives normalize once,
-  and invalid or reversed ranges trap with `AU4003` rather than clamping.
-  String endpoints count Unicode scalar values and slicing is O(n). Slice
+  an explicit loop.
+- list and str slices accept one contiguous half-open range and return fresh
+  owned copies. Written endpoints use `int64`; negatives normalize once,
+  and invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
+  str endpoints count Unicode scalar values and slicing is O(n). Slice
   steps and slice assignment remain reserved `AU2005` forms; arbitrary
-  sliceable types, zero-copy views, String integer indexing, grapheme slicing,
-  and Python-style endpoint clamping are unavailable. Vec slicing requires
+  sliceable types, zero-copy views, str integer indexing, grapheme slicing,
+  and Python-style endpoint clamping are unavailable. List slicing requires
   clone-safe, repeatably observable elements.
 - Numeric `Array[T]` is CPU-only, contiguous, row-major, and specialized only
   by `int32`, `int64`, `float32`, or `float64`. Shape is runtime metadata and
@@ -79,12 +79,14 @@ This page documents known current limits of the Aura compiler and runtime.
   multidimensional or step slicing, slice assignment, autograd, accelerator
   placement, distributed storage, or foreign-buffer aliasing. First-axis
   slices are fresh owned copies. Maintained NumPy comparisons record exact
-  post-reboot workloads and provenance.
+  post-reboot workloads and provenance. Shape elements, coordinates, and
+  element counts use `int64`; practical Array size is bounded by address space,
+  allocation limits, element size, and available memory.
 - FFI v0 is package-only and requires `[package] allow_ffi = true`; a root
   package also reports every reachable FFI-enabled dependency under exact
   `[ffi] dependencies`. Calls resolve already-loaded process-global symbols
   and are synchronous on the current worker. The accepted ABI is limited to
-  fixed-width scalars, temporary String/byte pointer-length views,
+  fixed-width scalars, temporary str/byte pointer-length views,
   same-length mutable byte scratch copy-in/out, and non-null opaque handles.
   Empty views use `(NULL, 0)`. There is no library-loading/link-name syntax,
   callback, variadic, raw-pointer arithmetic, returned view, nullable handle,
@@ -92,14 +94,14 @@ This page documents known current limits of the Aura compiler and runtime.
   Process-global lookup is currently supported on Unix-family hosts. A false C
   signature or misbehaving native function remains outside Aura's safety
   guarantees and may terminate or corrupt the process.
-- Callable-powered Vec algorithms are eager. `map` and `filter` return owned
-  vectors rather than iterators; `filter` requires clone-safe elements.
+- Callable-powered list algorithms are eager. `map` and `filter` return owned
+  lists; `filter` requires clone-safe elements.
   Built-in natural sorting covers all integer types, `float32`, `float64`, and
-  `Duration`; `String` has no built-in `Ord[String]` in Aura 0.2. Preserve
-  insertion order, use `sort_by` with an orderable key/index, or define a
+  `Duration`; `str` has no built-in `Ord[str]`. Preserve insertion order, use
+  `sort(key=callback)` with an orderable key/index, or define a
   nominal type with an application-specific `Ord` implementation when text
   records require ordering.
-  `sort_by`, `map`, and `filter` accept only their exact bare/shared callback
+  Keyed `sort`, `map`, and `filter` accept only their exact bare/shared callback
   parameter capabilities. There is no comparator-form sort, lazy map/filter,
   parallel traversal, or algorithm callback with mutable/owned element access.
 - `TaskGroup.start(...)` and `start_soon(...)` support bare shared and `own`
@@ -198,7 +200,7 @@ This page documents known current limits of the Aura compiler and runtime.
 - Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aura 0.2 has no chunked file-read API.
 - Process-pipe and captured-output reads plus TCP, Unix, and TLS whole/bounded reads remain capped at 64 MiB. TLS certificate, private-key, and CA-file loading uses the same independent 64 MiB ceiling. A bounded byte count of zero is invalid.
 - UDP receives accept `max_bytes` from 1 through 65,535.
-- Incoming HTTP parsing accepts at most 64 headers and 16 MiB of wire data per message, including the start line, headers, transfer framing, trailers, and body. Outbound HTTP writers have no separate size cap. The high-level map header model cannot preserve repeated equal field names losslessly.
+- Incoming HTTP parsing accepts at most 64 headers and 16 MiB of wire data per message, including the start line, headers, transfer framing, trailers, and body. Outbound HTTP writers have no separate size cap. The high-level dictionary header model cannot preserve repeated equal field names losslessly.
 - WebSocket messages are capped at 64 MiB; individual frames and write buffers are capped at 16 MiB.
 - TLS handshakes have a 10-second hard cap even when the caller supplies no shorter timeout.
 - Duration is a signed i128 nanosecond language value, but host timer ranges are narrower. Negative values, out-of-range host conversions, and overflowing deadline calculations are invalid input rather than unlimited waits. The exact error classification is accepted under ADR-0019.
@@ -207,7 +209,7 @@ This page documents known current limits of the Aura compiler and runtime.
   hex/padded-base64 codecs preflight each fresh destination against a fixed
   2,147,483,647-byte safety ceiling. Crossing this codec output/resource cap
   or failing allocation traps with `AU4005`. This ceiling is independent of
-  the public String and `Vec` length domains. SHA-256 always returns 32 raw
+  the public str and `list` length domains. SHA-256 always returns 32 raw
   bytes.
 - JSON supports the recursive `json.Value` tree, typed `json.Error` parse
   failures, deterministic dumps, a 128-container depth limit, a shared
@@ -223,11 +225,11 @@ This page documents known current limits of the Aura compiler and runtime.
   process-lifetime and has no 0.2 sizing or shutdown API. The bounded
   `json.is_valid` and `json.parse_string_map` helpers retain their bounded
   caller-side paths and do not use that service; JSON
-  string-map and TOML helpers remain restricted to typed
-  `Map[String, String]`. JSON has no arbitrary-precision number, streaming
+  flat-dictionary and TOML helpers remain restricted to typed
+  `dict[str, str]`. JSON has no arbitrary-precision number, streaming
   codec, or derived class/enum schemas.
 - `random.Rng` provides one fixed deterministic stream with integer, floating,
-  and mutable-Vec shuffle operations. There is no global generator, state
+  and mutable-list shuffle operations. There is no global generator, state
   serialization, reseeding, jump/substream operation, distribution library,
   choice helper, public direct or transitive clone route, secure floating
   function, or `random.Error`. Clone-producing collection operations are
@@ -242,7 +244,7 @@ This page documents known current limits of the Aura compiler and runtime.
   it. Recursive nominal inspection terminates conservatively when safety cannot
   be proved.
   `secure_bytes` accepts at most 2,147,483,647 bytes as a fixed per-request
-  resource and safety ceiling, independently of the public `Vec` length
+  resource and safety ceiling, independently of the public `list` length
   domain. Larger counts fail with `AU4005` before allocation or entropy.
   Within that request ceiling, unsatisfied allocation or OS entropy requests
   also trap with `AU4005`.
@@ -261,12 +263,12 @@ This page documents known current limits of the Aura compiler and runtime.
 - TLS APIs require PEM certificate/key assets.
 - Package support has local path and git dependencies, but no registry publish/install flow.
 - `fs.read_dir` silently skips an individual directory entry that fails after the directory itself was opened.
-- High-level HTTP header conversion may expose duplicate equal map keys when the wire message repeats a header name; repeated headers are not a lossless 0.2 contract.
+- High-level HTTP header conversion may expose duplicate equal dictionary keys when the wire message repeats a header name; repeated headers are not a lossless 0.2 contract.
 - Accepted ADR-0033 rejects non-Transfer task captures, task results, and
   Queue payloads with `AU3008`. Every other non-repeatable transferable task
   result has one statically enforced observation right: direct result methods
   consume it on every outcome, and multi-task waits consume the complete task
-  vector. A second runtime claim that reaches the atomic containment check
+  list. A second runtime claim that reaches the atomic containment check
   traps with `AU4001` rather than returning or cloning the stored value.
 - Cancelling filesystem and other blocking-worker I/O cancels Aura's wait,
   not an accepted operating-system call. Before insertion into the pending

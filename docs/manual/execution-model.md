@@ -36,7 +36,7 @@ Except for short-circuit boolean operators and control-flow constructs, subexpre
 
 - a binary expression evaluates its left operand before its right operand
 - collection literal elements are evaluated in source order
-- a map evaluates each key before its value and entries in source order
+- a dictionary evaluates each key before its value and entries in source order
 - f-string interpolations are evaluated from left to right
 - an index evaluates its base before its index
 - a slice evaluates its base, written start, and written end exactly once from
@@ -47,7 +47,7 @@ Except for short-circuit boolean operators and control-flow constructs, subexpre
   is evaluated, before any later sibling expression
 - a comprehension allocates its result, then evaluates clause iterables and
   filters in nested outer-major order before evaluating its textually leading
-  output; a map output evaluates its key before its value
+  output; a dictionary output evaluates its key before its value
 
 Evaluating a copy place captures its copied value at that point. A non-copy
 place selected as a binary left operand, index base, method receiver, or
@@ -56,16 +56,16 @@ all of its inputs. A later shared borrow is permitted, but an overlapping
 mutable borrow or consumption is rejected with `AU3002`; the diagnostic points
 to both the conflicting access and the retained-borrow origin. This applies to
 name roots and projected member places, and no backend may insert a hidden deep
-clone. Each f-string interpolation is converted to its rendered `String` at
+clone. Each f-string interpolation is converted to its rendered `str` at
 its own position before the next interpolation begins.
 
-A Vec or String slice captures its base, then any written start, then any
+A list or str slice captures its base, then any written start, then any
 written end. A non-Copy base remains retained while the endpoint expressions
 run. Negative endpoints are normalized once after those expressions complete;
 both effective bounds are checked in `0..=len`, followed by the `start <= end`
 check. A failure traps with `AU4003` and returns no partial value. A successful
-slice copies the selected range in source order into a fresh owned Vec or
-String. String endpoints count Unicode scalar values and locating them is
+slice copies the selected range in source order into a fresh owned `list` or
+`str`. String endpoints count Unicode scalar values and locating them is
 O(n). No maintained backend may substitute Python-style endpoint clamping or a
 view into source storage.
 
@@ -86,7 +86,7 @@ Enum-variant constructor arguments also evaluate in call-site source order.
 Named arguments are then bound by name to the variant's declaration-order
 payload slots; declaration-slot order never reorders their evaluation.
 
-When two evaluated keys in one map literal compare equal, the later value
+When two evaluated keys in one dictionary literal compare equal, the later value
 replaces the earlier value and the key keeps its first insertion position.
 
 `and` evaluates the right operand only when the left value is `true`. `or` evaluates the right operand only when the left value is `false`. Both operands have static type `bool`.
@@ -133,7 +133,7 @@ foreign function returns. A missing symbol or pre-call marshalling failure
 prevents entry. Return validation occurs after the foreign function and cannot
 roll back native side effects or mutable-byte writeback.
 
-Empty `String`, `Vec[uint8]`, and `mut Vec[uint8]` views pass a null pointer
+Empty `str`, `list[uint8]`, and `mut list[uint8]` views pass a null pointer
 with length zero. A non-empty shared view passes a valid const pointer and byte
 length. A non-empty mutable byte view uses a same-length scratch buffer:
 initial bytes are copied in, then exactly that length is copied back after the
@@ -161,13 +161,13 @@ Arithmetic is checked under the selected concrete numeric type.
 - integer `.to_float()` converts to `float64` with IEEE-754 round-to-nearest, ties-to-even and may round; integer `as float32` or `as float64` retains its exactness check and fails instead of rounding
 - Duration addition, subtraction, and multiplication operate on signed 128-bit nanoseconds and reject overflow with `AU4002`
 - `Duration // int64` returns a Duration whose signed nanosecond count is the mathematical quotient rounded toward negative infinity; a zero divisor is `AU4004` and the signed-minimum divided by `-1` is `AU4002`
-- string `+` creates a new concatenated `String`
+- string `+` creates a new concatenated `str`
 - numeric Array `+`, `-`, and `*` traverse exact-shape row-major buffers and
   return fresh owned storage; float Arrays also support `/`
 - ordinary integer scalar and Array arithmetic remains checked; the explicit
   `wrapping_*` methods use fixed-width modular arithmetic and `saturating_*`
   methods clamp to the declared width
-- Array rank-zero/negative-dimension construction, `from_vec` count mismatch,
+- Array rank-zero/negative-dimension construction, `from_list` count mismatch,
   exact-shape/rank mismatch, and empty reductions use `AU4007`;
   shape-product/element-count overflow and allocation failure use `AU4005`;
   direct coordinate and first-axis-slice bounds failures use `AU4003`
@@ -210,17 +210,24 @@ metadata-based tuple ordering.
 
 `print`, f-string interpolation, and scalar `.to_string()` use Aura's maintained value rendering where applicable. Strings render as their contents without quotes and `None` renders as the empty string. A directly printed `float32` or `float64` uses the shortest decimal spelling that round-trips to the same value in its source type. Integral finite values retain a decimal marker, scientific notation is used when it is shorter, and signed zero remains `-0.0`. A Duration renders as an exact decimal millisecond value with an `ms` suffix, using at most six fractional digits and trimming trailing fractional zeros; for example, `2s` renders as `2000ms` and `1ms // 3` renders as `0.333333ms`. This rendering policy is accepted under ADR-0019.
 
-Vectors render as `[a, b]`, sets as `Set{a, b}`, and maps as `{key: value}` in their maintained insertion order. Class values render as `Class(field=value, ...)`; enum values render as `Enum.Variant(...)`. Nested strings remain unquoted, so this display form is for people and is not a round-trippable serialization format. A deterministic random generator renders exactly `<rng>` without exposing or advancing its state. Live resources render opaque labels such as `<file>` or `<tcp-stream>` rather than host identifiers.
+Lists render as `[a, b]`, non-empty sets as `{a, b}`, empty sets as `set()`,
+and dictionaries as `{key: value}` in their defined order. Class values render
+as `Class(field=value, ...)`; enum values render as `Enum.Variant(...)`.
+Nested strings remain unquoted, so this display form is for people and is not
+a round-trippable serialization format. A deterministic random generator
+renders exactly `<rng>` without exposing or advancing its state. Live
+resources render opaque labels such as `<file>` or `<tcp-stream>` without host
+identifiers.
 An FFI opaque handle renders as `<opaque TypeName>`, using its canonical Aura
 type name and never exposing the foreign pointer address.
 
 ## Assignment And Mutation
 
 A simple assignment ordinarily evaluates the right side before creating or
-updating the target. Simple Map indexed assignment is the deliberate exception:
+updating the target. Simple dict indexed assignment is the deliberate exception:
 it evaluates and captures its owned key, consuming it when non-copy, before
 evaluating and consuming the assigned value. A side effect in the value
-therefore cannot retarget the write. Simple Map assignment accepts any `V`.
+therefore cannot retarget the write. Simple dict assignment accepts any `V`.
 Reassignment preserves the target's type. A compound assignment selects its
 target place once and uses exactly the corresponding binary operator dispatch,
 including an applicable user-defined operator trait for a root or projected
@@ -229,14 +236,14 @@ evaluating the right operand and stores the operator result into the originally
 selected place, so right-side effects neither change the left operand nor
 retarget the store. A non-copy root or projected target remains borrowed across
 the right operand; overlapping mutable borrow or consumption is rejected with
-`AU3002`. Direct indexed compound assignment requires a copy `Vec` element or
-`Map` value. A non-copy indexed element is rejected rather than implicitly
+`AU3002`. Direct indexed compound assignment requires a copy `list` element or
+`dict` value. A non-copy indexed element is rejected rather than implicitly
 cloned or destructively moved, with `AU3006`. A non-copy direct indexed read is
 rejected with `AU3005`.
 
-Field and index assignment mutate the selected place. Vector indices are
-zero-based. Simple Map assignment replaces an equal existing key or adds a new
-entry; an absent key is therefore not a simple-assignment failure. Compound Map
+Field and index assignment mutate the selected place. List indices are
+zero-based. Simple dict assignment replaces an equal existing key or adds a new
+entry; an absent key is therefore not a simple-assignment failure. Compound dict
 assignment requires an existing key and traps with `AU4003` if its initial read
 finds none. Failed checked mutation leaves the operation incomplete and
 produces its documented runtime failure or typed error.
@@ -245,34 +252,34 @@ Moving a field marks that field unavailable while leaving disjoint fields usable
 
 ## Collections And Iteration
 
-`Vec` preserves element order. `Map` uses insertion order for its `keys()`,
-`values()`, `items()`, and `entries()` projections. Replacing an equal Map key,
-including from a later literal entry, retains that key's existing slot. `Set`
+`list` preserves element order. `dict` uses insertion order for its `keys()`,
+`values()`, and `items()` projections. Replacing an equal dict key,
+including from a later literal entry, retains that key's existing slot. `set`
 uses an insertion-oriented runtime representation, but its public order is not
 promised. Algorithms should rely on ordering only where the relevant API
 promises it.
 
-`Vec.map` and `Vec.filter` traverse from first element to last and produce
+`list.map` and `list.filter` traverse from first element to last and produce
 their eager result in that order. Their shared receiver remains unchanged.
 `map` invokes its callback once per source element and owns each returned value
-in the new vector. `filter` invokes its predicate once per source element and
-clones accepted elements into the new vector.
+in the new list. `filter` invokes its predicate once per source element and
+clones accepted elements into the new list.
 
-`Vec.sort` and `Vec.sort_by` mutate their receiver into a stable order: equal
-elements or keys retain their prior relative order. `sort_by` evaluates its key
+Natural and keyed `list.sort` calls mutate their receiver into a stable order:
+equal elements or keys retain their prior relative order. Keyed sorting evaluates its key
 function exactly once for every element, from first to last, and stores all
 keys before moving any receiver element. A trap during key evaluation
 therefore propagates before mutation and leaves the complete source order
 unchanged.
 
-Bare iteration over a `Vec` or `Set` retains and freezes the selected collection
+Bare iteration over a `list` or `set` retains and freezes the selected collection
 for the loop and yields shared element access. `own` iteration moves the
 collection into a loop-private source once at entry and yields owned elements;
 reinitializing the consumed source binding in the body does not switch or
 truncate the active iteration. That one-time source selection is accepted
 under ADR-0017 and does not alter ADR-0006's ownership modes. `mut` iteration
-over a mutable Vec grants exclusive element access with writeback and retains
-the collection; mutable Set iteration is rejected. Range iteration yields
+over a mutable list grants exclusive element access with writeback and retains
+the collection; mutable set iteration is rejected. Range iteration yields
 independent `int32` values from `start` inclusive to `end` exclusive. Explicit
 `mut` and `own` Range modifiers are rejected with `AU3004` because there is no
 place access or ownership transfer to modify; use the bare form.
@@ -281,26 +288,26 @@ Queue iteration receives items until the queue closes, cancellation is observed,
 
 ### Comprehensions
 
-A list, set, or map comprehension creates a fresh empty owned result and
+A list, set, or dictionary comprehension creates a fresh empty owned result and
 executes its clauses like nested bare loops. The first source is selected once.
 For each selected item, filters execute left to right and stop that item at the
 first `false`. Each inner source is selected once for every combination that
 survives the earlier filters. The traversal is outer-major: the complete inner
 traversal for one outer item finishes before the next outer item begins.
 
-At an innermost surviving combination, the list/set element or map key/value
+At an innermost surviving combination, the list/set element or dictionary key/value
 is evaluated and inserted. The output is written first in source but executes
-last. A map captures its key before evaluating its value. Set deduplication and
-Map equal-key replacement use their literal/storage contracts.
+last. A dictionary captures its key before evaluating its value. Set
+deduplication and dictionary equal-key replacement use their literal/storage contracts.
 
-Every clause inherits the selected bare-loop behavior above. Vec/Set sources
+Every clause inherits the selected bare-loop behavior above. List/set sources
 remain shared and frozen through downstream filters, sources, and output.
-Range targets are copy `int32`. `enumerate` and `zip` retain their lockstep
+Range targets are copy `int64`. `enumerate` and `zip` retain their lockstep
 rules. Queue copies its handle for the clause and yields each received item
 owned; a Queue comprehension ends only when ordinary Queue iteration ends.
 
 Insertion owns its output. Copy values copy; owned non-Copy values move; a
-shared non-Copy Vec/Set element needs an explicit clone-safe clone. Each
+shared non-Copy list/set element needs an explicit clone-safe clone. Each
 reached lambda creation uses ADR-0037. A trap or `try` propagation destroys the
 partial result and all active temporary sources exactly once before continuing
 the ordinary failure or early-return path.
@@ -417,7 +424,7 @@ The separate isolated runtime round trip that forces protocol callers to
 does not measure the full compiled task stack.
 
 `yield_now()` places the current lightweight task back in its worker's ready
-set and returns when that worker selects it again. It gives other runnable
+Set and returns when that worker selects it again. It gives other runnable
 local tasks an opportunity to proceed without waiting for an event or
 deadline, but it does not migrate the coroutine, steal work, guarantee that a
 different task runs, or specify a ready-task order. With no current
@@ -529,7 +536,7 @@ A task stores its completed result. Copy results, Queue handles, and
 recursively repeatable Task handles permit repeated observation. Every other
 transferable result has a unique observation right;
 each direct result call consumes it on every outcome, and multi-task waits
-consume the complete task vector. `wait_any` abandons the unchosen rights.
+consume the complete task list. `wait_any` abandons the unchosen rights.
 Task captures, results, and Queue payloads must also satisfy the structural
 Transfer check before the child is admitted to its spawn-time pinned worker.
 Queue and Task handle state is synchronized for cross-worker notification and
@@ -625,8 +632,8 @@ Pure expression evaluation, ordinary control flow, and collection operations are
 - operating-system secure random output
 - the exact wording of host operating-system errors
 
-An explicitly seeded `random.Rng` is deterministic rather than part of that
-list: its xoshiro256** sequence, integer/float mapping, and shuffle order are
+An explicitly seeded `random.Rng` is deterministic. Its xoshiro256** sequence,
+integer/float mapping, and shuffle order are
 fixed for Aura 0.2.x and specified in [Randomness Module](/manual/randomness).
 Secure random calls are external effects and never draw from that stream.
 Aura converts host effects into typed values and ordering primitives where

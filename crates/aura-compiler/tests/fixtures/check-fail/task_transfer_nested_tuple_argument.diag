@@ -1,4 +1,4 @@
-error[AU3008]: task argument `value` cannot cross a task boundary because element 2 of `(String, random.Rng)` -> `random.Rng` is a stateful generator and is not Transfer
+error[AU3008]: task argument `value` cannot cross a task boundary because element 2 of `(str, random.Rng)` -> `random.Rng` is a stateful generator and is not Transfer
  --> crates/aura-compiler/tests/fixtures/check-fail/task_transfer_nested_tuple_argument.au:8:31
   |
 8 |     group.start_soon(consume, value)

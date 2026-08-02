@@ -1,4 +1,4 @@
-def print_string_option(value: own Option[String]):
+def print_string_option(value: own Option[str]):
     match own value:
         case Some(inner):
             print(inner)

@@ -5,7 +5,7 @@ class Flags:
     trace: bool = false
     count: int32 = 0
     ratio: float64 = 1.0
-    name: String = "default"
+    name: str = "default"
 
 def main() -> int32:
     f = Flags()

@@ -1,5 +1,5 @@
 trait Serializable:
-    def serialize(self) -> String
+    def serialize(self) -> str
 
 trait Validatable:
     def is_valid(self) -> bool
@@ -8,11 +8,11 @@ trait Copyable:
     def copy(self) -> Email
 
 class Email:
-    address: String
+    address: str
     verified: bool
 
 impl Serializable for Email:
-    def serialize(self) -> String:
+    def serialize(self) -> str:
         return self.address
 
 impl Validatable for Email:

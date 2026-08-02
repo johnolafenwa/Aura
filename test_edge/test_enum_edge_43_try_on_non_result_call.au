@@ -2,7 +2,7 @@
 def normal_func(x: int32) -> int32:
     return x + 1
 
-def wrapper() -> Result[int32, String]:
+def wrapper() -> Result[int32, str]:
     v = try normal_func(5)
     return Result.Ok(v)
 

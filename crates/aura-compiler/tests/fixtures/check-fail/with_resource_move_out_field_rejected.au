@@ -1,10 +1,10 @@
 class Handle:
-    name: Vec[int32]
+    name: list[int32]
 
     def close(mut self):
         print(self.name.len())
 
-def mutate(s: own Vec[int32]) -> int32:
+def mutate(s: own list[int32]) -> int32:
     return s.len() as int32
 
 def main() -> int32:

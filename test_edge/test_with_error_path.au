@@ -1,14 +1,14 @@
 ## Test: With statement where the function returns an error
 class Connection:
-    name: String
+    name: str
 
-    def query(self) -> String:
+    def query(self) -> str:
         return self.name
 
     def close(mut self):
         print("closed " + self.name)
 
-def failing_op() -> Result[String, String]:
+def failing_op() -> Result[str, str]:
     with conn = Connection(name="db"):
         print("opened")
         return Result.Err("something went wrong")

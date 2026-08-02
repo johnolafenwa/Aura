@@ -1,13 +1,13 @@
-# Test: Result[String, String] various operations
+# Test: Result[str, str] various operations
 
-def parse_int(s: str) -> Result[int32, String]:
+def parse_int(s: str) -> Result[int32, str]:
     if s == "42":
         return Result.Ok(42)
     if s == "0":
         return Result.Ok(0)
     return Result.Err(f"invalid: {s}")
 
-def try_parse(s: str) -> Result[String, String]:
+def try_parse(s: str) -> Result[str, str]:
     v = try parse_int(s)
     return Result.Ok(f"parsed: {v}")
 
@@ -29,8 +29,8 @@ def main() -> int32:
             print(e)
 
     # Direct Result construction
-    ok: Result[String, String] = Result.Ok("success")
-    err: Result[String, String] = Result.Err("failure")
+    ok: Result[str, str] = Result.Ok("success")
+    err: Result[str, str] = Result.Err("failure")
 
     match own ok:
         case Result.Ok(v):

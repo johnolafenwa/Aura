@@ -14,7 +14,7 @@ assert response_code == 200, "worker expected a successful response"
 ```
 
 The condition must have type `bool`. Aura does not apply Python-style
-truthiness. The optional message must have type `String`.
+truthiness. The optional message must have type `str`.
 
 ## Evaluation Is Deliberately Lazy
 
@@ -24,7 +24,7 @@ message is evaluated exactly once and becomes the failure text. This makes it
 safe to construct an expensive diagnostic only for the failure path:
 
 ```python
-def explain(value: int64) -> String:
+def explain(value: int64) -> str:
     print("building failure message")
     return f"unexpected value {value}"
 
@@ -41,7 +41,7 @@ failure and never reaches the assertion result.
 
 `assert false` fails with diagnostic code `AU4001` and the exact message
 `assertion failed`. A custom message is preserved exactly, including an empty
-or whitespace-only String. The diagnostic points to the `assert` keyword.
+or whitespace-only str. The diagnostic points to the `assert` keyword.
 
 Assertions are never removed by an optimization or release mode. Aura has no
 assertion-stripping option, so do not use an assertion as a substitute for

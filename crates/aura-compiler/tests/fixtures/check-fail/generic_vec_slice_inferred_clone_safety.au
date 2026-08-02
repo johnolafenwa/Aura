@@ -1,6 +1,6 @@
 import random
 
-def duplicate[T](values: Vec[T]) -> Vec[T]:
+def duplicate[T](values: list[T]) -> list[T]:
     return values[:]
 
 def main():

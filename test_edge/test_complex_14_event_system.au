@@ -25,7 +25,7 @@ def event_producer(events: Channel[Event]):
     events.send(Event.Quit)
     events.close()
 
-def handle_event(event: Event) -> String:
+def handle_event(event: Event) -> str:
     match own event:
         case Event.Click(data):
             return f"click at {data.x},{data.y}"

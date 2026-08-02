@@ -2,18 +2,18 @@
 
 class Container[T]:
     value: T
-    label: String
+    label: str
 
     def get_value(self) -> T:
         return self.value
 
-    def get_label(self) -> String:
+    def get_label(self) -> str:
         return self.label
 
     def has_label(self) -> bool:
         return true
 
-    def with_label(self, new_label: String) -> Container[T]:
+    def with_label(self, new_label: str) -> Container[T]:
         return Container(value=self.value, label=new_label)
 
 def main() -> int32:

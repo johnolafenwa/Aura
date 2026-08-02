@@ -1,6 +1,6 @@
 def main() -> int32:
     payload = "once"
-    take_payload: def() -> String = lambda: payload
+    take_payload: def() -> str = lambda: payload
     print(take_payload())
     print(take_payload())
     return 0

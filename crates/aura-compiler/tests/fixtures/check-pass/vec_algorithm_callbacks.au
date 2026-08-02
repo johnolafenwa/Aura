@@ -8,7 +8,7 @@ impl Ord[Score] for Score:
     def lt(self, rhs: Score) -> bool:
         return self.value < rhs.value
 
-def show(value: int64) -> String:
+def show(value: int64) -> str:
     return value.to_string()
 
 def keep(value: int64) -> bool:
@@ -23,10 +23,10 @@ def identity(value: int64) -> int64:
 def main():
     mut values = [3, 1, 2]
     values.sort()
-    values.sort_by(key=identity)
-    labels: Vec[String] = values.map(f=show)
-    retained: Vec[int64] = values.filter(f=keep)
+    values.sort(key=identity)
+    labels: list[str] = values.map(f=show)
+    retained: list[int64] = values.filter(f=keep)
 
     mut scores = [Score(value=2), Score(value=1)]
     scores.sort()
-    scores.sort_by(score_key)
+    scores.sort(key = score_key)

@@ -51,8 +51,8 @@ Move types are values that own heap-allocated data or manage a unique resource. 
 
 The built-in move types include:
 
-- `String`
-- `Vec[T]`, `Map[K, V]`, `Set[T]`
+- `str`
+- `list[T]`, `dict[K, V]`, `set[T]`
 - `random.Rng`
 - `TaskGroup`
 - user-defined classes (by default)
@@ -60,14 +60,14 @@ The built-in move types include:
 `Queue[T]` is a copy handle to shared runtime state. `Task[T]` is always safe
 to transfer between tasks, but it is copyable only when its result can be
 observed repeatedly: `T` must be copyable, a `Queue[...]` handle, or a
-recursively repeatable `Task[...]` handle. A task returning `String`,
-`Vec[...]`, or another non-copy owned value therefore has a move-only handle.
+recursively repeatable `Task[...]` handle. A task returning `str`,
+`list[...]`, or another non-copy owned value therefore has a move-only handle.
 Copying an allowed handle never copies a queued value or task result.
 
 Here is where Python intuition breaks down:
 
 ```python
-name: String = "aura"
+name: str = "aura"
 other = name          # ownership moves to `other`
 print(other)          # "aura" -- works fine
 ```
@@ -75,7 +75,7 @@ print(other)          # "aura" -- works fine
 If you try to use `name` after the move:
 
 ```python
-name: String = "aura"
+name: str = "aura"
 other = name
 print(name)           # COMPILE ERROR
 ```
@@ -101,43 +101,44 @@ error: use of moved value `name`
 When a move type supports independent duplication, call `.clone()`:
 
 ```python
-name: String = "aura"
+name: str = "aura"
 other = name.clone()   # explicit copy -- name stays valid
 print(name)            # "aura"
 print(other)           # "aura"
 ```
 
-Collections can be cloned too:
+Collections expose `copy()`:
 
 ```python
-mut xs: Vec[int32] = [1, 2, 3]
-ys = xs.clone()        # independent copy
-xs.push(4)
+mut xs: list[int32] = [1, 2, 3]
+ys = xs.copy()         # independent copy
+xs.append(4)
 print(xs.len())        # 4
 print(ys.len())        # 3 -- unaffected
 ```
 
-`.clone()` is explicit because copying a large data structure is expensive. Aura makes sure you know when you are paying that cost, unlike Python where every `=` on a list is a cheap reference but every mutation might surprise you via aliasing.
+Explicit duplication makes the allocation and element-copying cost visible.
+Assignment continues to follow the ordinary copy-or-move rule.
 
 Move types are not automatically cloneable. `random.Rng` exposes no clone
 route, and a class, enum, or collection containing one cannot be cloned through
 a public clone-producing operation. Generic clone helpers infer this
 requirement and reject an unsafe concrete specialization with `AU3007`.
 
-Vec and String slices are another explicit owned-copy boundary:
+List and str slices are another explicit owned-copy boundary:
 
 ```python
 names = ["Ada", "Grace", "Margaret"]
-selected = names[1:]       # fresh owned Vec[String]
-label = "A🎉Z"[1:2]       # fresh owned String containing 🎉
+selected = names[1:]       # fresh owned list[str]
+label = "A🎉Z"[1:2]       # fresh owned str containing 🎉
 print(names.len())         # the sources remain valid
 ```
 
-A Vec slice copies Copy elements and clones non-Copy elements, so its element
+A list slice copies Copy elements and clones non-Copy elements, so its element
 type must be clone-safe. It rejects a value containing `random.Rng` with
-`AU3007` and a non-repeatable Task result right with `AU3009`. A String slice
+`AU3007` and a non-repeatable Task result right with `AU3009`. A str slice
 copies its Unicode-scalar range. Neither slice is a view: mutating the returned
-Vec cannot mutate the source, and the slice cannot be an assignment target.
+List cannot mutate the source, and the slice cannot be an assignment target.
 
 ## Closures Capture By Value
 
@@ -186,7 +187,7 @@ source-level contract. To transfer a move value to a function, write `own`:
 
 ```python
 class Document:
-    title: String
+    title: str
     pages: int32
 
 def archive(doc: own Document):
@@ -301,7 +302,7 @@ Methods on classes use the same borrowing system through **receivers**. The rece
 class Account:
     balance: float64
 
-    def display(self) -> String:
+    def display(self) -> str:
         return f"Balance: {self.balance}"
 ```
 
@@ -323,7 +324,7 @@ class Account:
     def deposit(mut self, amount: float64):
         self.balance += amount
 
-    def display(self) -> String:
+    def display(self) -> str:
         return f"Balance: {self.balance}"
 ```
 
@@ -346,9 +347,9 @@ account.deposit(50.0)       # COMPILE ERROR: must be a mutable place
 
 ```python
 class Connection:
-    host: String
+    host: str
 
-    def into_host(own self) -> String:
+    def into_host(own self) -> str:
         return self.host
 ```
 
@@ -397,7 +398,7 @@ When you own a value, reading a non-copy field **moves** that field out of the i
 
 ```python
 class User:
-    name: String
+    name: str
     age: int32
 
 user = User(name="Ada", age=36)
@@ -411,14 +412,14 @@ print(user.name)             # COMPILE ERROR: use of moved field `name` from `us
 error: use of moved field `name` from `user`
 ```
 
-**Why?** The `String` in `user.name` is a move type. Reading it transfers ownership to `greeting`. The `user` instance no longer has a valid `name` field. The `age` field is `int32` (a copy type), so it is unaffected.
+**Why?** The `str` in `user.name` is a move type. Reading it transfers ownership to `greeting`. The `user` instance no longer has a valid `name` field. The `age` field is `int32` (a copy type), so it is unaffected.
 
 ### Reading fields from borrowed values
 
 When you borrow a value, you cannot move non-copy fields out of it because you do not own it:
 
 ```python
-def get_name(user: User) -> String:
+def get_name(user: User) -> str:
     return user.name       # COMPILE ERROR
 ```
 
@@ -431,14 +432,14 @@ The function only borrowed `user` -- it has no right to take the `name` away. Th
 **Option 1: clone the field**
 
 ```python
-def get_name(user: User) -> String:
+def get_name(user: User) -> str:
     return user.name.clone()   # explicit copy, user keeps its name
 ```
 
 **Option 2: take ownership of the whole value**
 
 ```python
-def get_name(user: own User) -> String:
+def get_name(user: own User) -> str:
     return user.name           # consumes user, moves name out
 ```
 
@@ -468,42 +469,42 @@ If any field is a move type, the compiler rejects the `copy` annotation:
 
 ```python
 copy class Bad:
-    name: String       # COMPILE ERROR
+    name: str       # COMPILE ERROR
     value: int32
 ```
 
 ```
-error: field `name` on `copy class Bad` must be a copy type, found `String`
+error: field `name` on `copy class Bad` must be a copy type, found `str`
 ```
 
 **When to use `copy class`:** Use it for small, value-like types where copying is cheap and expected -- coordinates, colors, dimensions, ranges. Do not use it for types that hold resources or large data.
 
 ## Borrowing In Loops
 
-Loops use the same readable default. Bare `Vec` and `Set` iteration borrows the
+Loops use the same readable default. Bare `list` and `set` iteration borrows the
 collection, so it remains usable:
 
 ```python
-mut names: Vec[String] = ["Ada", "Grace", "Margaret"]
+mut names: list[str] = ["Ada", "Grace", "Margaret"]
 for name in names:
     print(name)
 print(names.len())     # 3 -- still usable
 ```
 
-Write `own` when you intend to move each element out and consume the vector:
+Write `own` when you intend to move each element out and consume the list:
 
 ```python
-names: Vec[String] = ["Ada", "Grace", "Margaret"]
+names: list[str] = ["Ada", "Grace", "Margaret"]
 for name in own names:
     print(name)
 # names is moved
 ```
 
-**Note:** Even `Vec[int32]` is itself a move type, but its bare loop still
+**Note:** Even `list[int32]` is itself a move type, but its bare loop still
 borrows. Only `own` consumes it:
 
 ```python
-mut xs: Vec[int32] = [1, 2, 3]
+mut xs: list[int32] = [1, 2, 3]
 for x in xs:
     print(x)
 for x in own xs:
@@ -516,7 +517,7 @@ for x in own xs:
 Bare iteration is the shared form:
 
 ```python
-mut names: Vec[String] = ["Ada", "Grace", "Margaret"]
+mut names: list[str] = ["Ada", "Grace", "Margaret"]
 for name in names:
     print(name)
 print(names.len())     # 3 -- names is still valid
@@ -538,7 +539,7 @@ class Score:
     def double(mut self):
         self.value = self.value * 2
 
-mut scores: Vec[Score] = [Score(value=1), Score(value=2), Score(value=3)]
+mut scores: list[Score] = [Score(value=1), Score(value=2), Score(value=3)]
 for score in mut scores:
     score.double()
 
@@ -570,9 +571,9 @@ lengths = [name.len() for name in names]
 copies = [name.clone() for name in names]
 ```
 
-The result collection is newly owned, while a Vec or Set clause shares and
-freezes its source. `name.len()` only reads the shared `String`. Storing the
-non-copy `String` itself requires the explicit `.clone()` shown in `copies`;
+The result collection is newly owned, while a list or set clause shares and
+freezes its source. `name.len()` only reads the shared `str`. Storing the
+non-copy `str` itself requires the explicit `.clone()` shown in `copies`;
 the compiler never inserts that clone.
 
 Comprehension clauses have no `mut` or `own` modifier. Use a statement loop for
@@ -586,7 +587,7 @@ Pattern matching follows the same ownership rules. Bare `match` shares the
 value, so the caller keeps ownership:
 
 ```python
-result: Result[String, String] = Result.Ok("success")
+result: Result[str, str] = Result.Ok("success")
 match result:
     case Ok(msg):
         print(msg)
@@ -598,7 +599,7 @@ print(result)          # still valid
 To consume the value and receive owned payloads, use `match own`:
 
 ```python
-result: Result[String, String] = Result.Ok("success")
+result: Result[str, str] = Result.Ok("success")
 match own result:
     case Ok(msg):
         print(msg)     # msg is owned
@@ -610,10 +611,10 @@ match own result:
 To match and mutate the payload, use `match mut`:
 
 ```python
-mut result: Result[String, String] = Result.Ok("hello")
+mut result: Result[str, str] = Result.Ok("hello")
 match mut result:
     case Ok(msg):
-        # msg is mut String -- can call mutating methods
+        # msg is mut str -- can call mutating methods
         pass
     case Err(e):
         pass
@@ -624,13 +625,13 @@ match mut result:
 Queues transfer ownership of sent values. When you put a value into a queue, it moves:
 
 ```python
-jobs = Queue[String]()
+jobs = Queue[str]()
 jobs.put("hello")      # "hello" moves into the queue
 # the sent string is now owned by whichever task receives it
 ```
 
 Queue construction and sending require the payload type to satisfy Aura's
-compiler-derived `Transfer` rule. Copy values, `String`, and aggregates whose
+compiler-derived `Transfer` rule. Copy values, `str`, and aggregates whose
 stored components are all `Transfer` may cross. `random.Rng`, `TaskGroup`,
 shared or mutable access, and live file, process, or network resources may
 not. Keep a live resource on the task that owns it and exchange owned
@@ -641,11 +642,11 @@ Queue handles are cheap copy references. Passing a queue to
 `.clone()` for the common case:
 
 ```python
-def send_message(jobs: Queue[String]):
+def send_message(jobs: Queue[str]):
     jobs.put("from task")
     jobs.close()
 
-jobs = Queue[String]()
+jobs = Queue[str]()
 with TaskGroup() as group:
     task = group.start(send_message, jobs)
     match jobs.get():
@@ -670,7 +671,7 @@ Task result observation has a separate repeatability rule. A copy result, a
 observed repeatedly. For any other transferable result,
 `result()`, `result_or_none()`, and `result_or()` consume the task handle on
 the first attempt, even if that attempt times out, is cancelled, fails, or
-returns a fallback. `wait_any` and `wait_all` consume the complete task vector
+returns a fallback. `wait_any` and `wait_all` consume the complete task list
 for such results; `wait_any` deliberately abandons the unchosen observation
 rights.
 
@@ -702,17 +703,17 @@ archive(doc.clone())
 print(doc.title)       # doc still valid
 ```
 
-### Pattern: "I need to read a String field without consuming the owner"
+### Pattern: "I need to read a str field without consuming the owner"
 
 **Problem:**
 ```python
-def get_title(doc: Document) -> String:
+def get_title(doc: Document) -> str:
     return doc.title   # COMPILE ERROR: cannot move out of shared access
 ```
 
 **Fix -- clone the field:**
 ```python
-def get_title(doc: Document) -> String:
+def get_title(doc: Document) -> str:
     return doc.title.clone()
 ```
 
@@ -767,7 +768,7 @@ Here is how to translate your Python intuition:
 | Python concept | Aura equivalent |
 |----------------|-------------------|
 | `x = y` (always a reference) | `x = y` copies if copy type, moves if move type |
-| `x = copy.deepcopy(y)` | `x = y.clone()` when `y` supports clone and is clone-safe |
+| `x = copy.deepcopy(y)` | `x = y.copy()` for collections; `x = y.clone()` for other clone-safe move types that expose it |
 | `def f(x): ...` reads x | `def f(x: T): ...` for shared access |
 | `def f(x): x.mutate()` | `def f(x: mut T): ...` |
 | `del x` (deferred to GC) | Automatic when owner goes out of scope |
@@ -779,9 +780,10 @@ The key shift is: in Python, assignment creates aliases. In Aura, assignment tra
 ## Summary
 
 1. Every value has one owner. When the owner goes out of scope, the value is freed.
-2. Copy types (numbers, `bool`, `Duration`) are duplicated on assignment. Move types (`String`, `Vec`, `random.Rng`, classes) transfer ownership.
-3. Use `.clone()` when you need an explicit independent copy and the move type
-   supports clone; `random.Rng` and values containing it do not.
+2. Copy types (numbers, `bool`, `Duration`) are duplicated on assignment. Move types (`str`, `list`, `random.Rng`, classes) transfer ownership.
+3. Use collection `.copy()` or the `.clone()` method exposed by another
+   clone-safe move type when you need an independent owned value;
+   `random.Rng` and values containing it support neither operation.
 4. Bare parameters grant logical shared access for every type. Use `mut T` to
    lend mutable access and `own T` to transfer ownership.
 5. `mut` access is exclusive -- no other overlapping access can exist at the

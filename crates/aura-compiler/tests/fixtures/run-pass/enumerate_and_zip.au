@@ -1,22 +1,22 @@
 def main():
-    mut names = Vec[String]()
-    names.push("ada")
-    names.push("grace")
+    mut names = list[str]()
+    names.append("ada")
+    names.append("grace")
     for index, name in enumerate(names):
         print(f"{index}:{name}")
 
-    mut tags = Set[String]()
-    tags.insert("beta")
+    mut tags = set[str]()
+    tags.add("beta")
     for index, tag in enumerate(tags):
         print(f"set {index}:{tag}")
 
-    mut numbers = Vec[int64]()
-    numbers.push(1)
-    numbers.push(2)
-    numbers.push(3)
-    mut words = Vec[String]()
-    words.push("one")
-    words.push("two")
+    mut numbers = list[int64]()
+    numbers.append(1)
+    numbers.append(2)
+    numbers.append(3)
+    mut words = list[str]()
+    words.append("one")
+    words.append("two")
     for number, word in zip(numbers, words):
         print(f"{number}={word}")
 

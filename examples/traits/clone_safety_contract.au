@@ -1,6 +1,6 @@
 trait Duplicator[T]:
-    def duplicate(self, values: Vec[T]) -> Vec[T]:
-        return values.clone()
+    def duplicate(self, values: list[T]) -> list[T]:
+        return values.copy()
 
 class Marker[T]:
     value: T
@@ -8,7 +8,7 @@ class Marker[T]:
 impl[T] Duplicator[T] for Marker[T]:
     pass
 
-def duplicate_through_bound[T, M: Duplicator[T]](marker: M, values: Vec[T]) -> Vec[T]:
+def duplicate_through_bound[T, M: Duplicator[T]](marker: M, values: list[T]) -> list[T]:
     return marker.duplicate(values)
 
 def main() -> int32:

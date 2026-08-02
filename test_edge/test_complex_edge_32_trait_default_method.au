@@ -1,15 +1,15 @@
 # Edge test: Trait with a default method implementation (if supported)
 
 trait Describable:
-    def name(self) -> String
-    def describe(self) -> String:
+    def name(self) -> str
+    def describe(self) -> str:
         return "Object: " + self.name()
 
 class Person:
-    label: String
+    label: str
 
 impl Describable for Person:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.label.clone()
 
 def main() -> int32:

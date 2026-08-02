@@ -1,4 +1,4 @@
-def classify(x: int32) -> String:
+def classify(x: int32) -> str:
     if x < 0:
         if x < -100:
             return "very negative"

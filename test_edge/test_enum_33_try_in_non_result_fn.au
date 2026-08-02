@@ -1,4 +1,4 @@
-def divide(a: int32, b: int32) -> Result[int32, String]:
+def divide(a: int32, b: int32) -> Result[int32, str]:
     if b == 0:
         return Result.Err("zero")
     return Result.Ok(a // b)

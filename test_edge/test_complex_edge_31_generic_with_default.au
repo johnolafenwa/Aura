@@ -9,7 +9,7 @@ def main() -> int32:
     print(c1.value)
     print(c1.enabled)
 
-    c2: Config[String] = Config(value="hello", enabled=false)
+    c2: Config[str] = Config(value="hello", enabled=false)
     print(c2.value)
     print(c2.enabled)
 

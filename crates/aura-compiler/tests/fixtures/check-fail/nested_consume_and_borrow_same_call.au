@@ -1,7 +1,7 @@
-def id_s(s: own String) -> String:
+def id_s(s: own str) -> str:
     return s
 
-def use_both(text: String, owned: own String) -> None:
+def use_both(text: str, owned: own str) -> None:
     print(text)
     print(owned)
 

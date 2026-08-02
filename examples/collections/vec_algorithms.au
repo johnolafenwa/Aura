@@ -1,5 +1,5 @@
 class Job:
-    label: String
+    label: str
     priority: int32
 
 def doubled(value: int32) -> int32:
@@ -15,22 +15,22 @@ def job_priority(job: Job) -> int32:
     return job.priority
 
 def main():
-    values: Vec[int32] = [3, 1, 2, 4]
+    values: list[int32] = [3, 1, 2, 4]
     mapped = values.map(doubled)
     filtered = values.filter(is_even)
 
-    mut ascending = values.clone()
+    mut ascending = values.copy()
     ascending.sort()
 
-    mut descending = values.clone()
-    descending.sort_by(descending_key)
+    mut descending = values.copy()
+    descending.sort(key = descending_key)
 
     mut jobs = [
         Job(label="first", priority=2),
         Job(label="second", priority=1),
         Job(label="third", priority=2)
     ]
-    jobs.sort_by(job_priority)
+    jobs.sort(key = job_priority)
 
     print(mapped)
     print(filtered)

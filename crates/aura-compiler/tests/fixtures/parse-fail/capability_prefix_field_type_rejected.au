@@ -1,2 +1,2 @@
 class Document:
-    text: mut String
+    text: mut str

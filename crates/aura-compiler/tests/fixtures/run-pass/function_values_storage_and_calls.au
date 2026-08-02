@@ -10,7 +10,7 @@ def double(value: int32) -> int32:
 def offset(value: int32 = 10) -> int32:
     return value + 1
 
-def mark(label: String, value: int32) -> int32:
+def mark(label: str, value: int32) -> int32:
     print(label)
     return value
 
@@ -46,7 +46,7 @@ def main() -> int32:
     selected_default = first_default if false else second_default
     known_combine = combine
     pipeline = Pipeline(transform=copied)
-    transforms: Vec[def(int32) -> int32] = [pipeline.transform, double]
+    transforms: list[def(int32) -> int32] = [pipeline.transform, double]
 
     print(selected(1))
     print(copied(2))
