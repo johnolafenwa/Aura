@@ -26,9 +26,10 @@ NONCANONICAL_COLLECTION_METHODS = (
     "sort" + "_by",
     "contains" + "_key",
     "entr" + "ies",
+    "from" + "_vec",
 )
 CANONICAL_COLLECTION_TYPES = ("list", "dict", "set", "str")
-CANONICAL_COLLECTION_METHODS = ("append", "sort", "contains", "items")
+CANONICAL_COLLECTION_METHODS = ("append", "sort", "contains", "items", "from_list")
 
 
 def _mask_aura_comments_and_strings(source: str) -> str:
@@ -221,6 +222,15 @@ def scan_aura_collection_surface(source: str) -> list[tuple[int, str]]:
         if nominal is not None and method in methods.get(nominal, set()):
             continue
         findings.append((line, f"builtin method {method}"))
+
+    array_from_vec = re.compile(
+        rf"\bArray\s*\[[^\]\n]+\]\s*\.\s*"
+        rf"{re.escape(NONCANONICAL_COLLECTION_METHODS[-1])}\s*\("
+    )
+    findings.extend(
+        (_line_number(code, match.start()), "builtin method from_vec")
+        for match in array_from_vec.finditer(code)
+    )
 
     return sorted(set(findings))
 
@@ -886,6 +896,7 @@ class AuraIdentityTests(unittest.TestCase):
                 "    values.sort_by(key = identity)",
                 "    table.contains_key(label)",
                 "    table.entries()",
+                "    array = Array[int64].from_vec(values, [1])",
             )
         )
         labels = {label for _, label in scan_aura_collection_surface(source)}
@@ -899,6 +910,7 @@ class AuraIdentityTests(unittest.TestCase):
                 "builtin method sort_by",
                 "builtin method contains_key",
                 "builtin method entries",
+                "builtin method from_vec",
             },
         )
 

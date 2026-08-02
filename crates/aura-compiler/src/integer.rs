@@ -70,6 +70,17 @@ impl IntegerKind {
         )
     }
 
+    pub const fn bit_width(self) -> u32 {
+        match self {
+            Self::Int8 | Self::Uint8 => 8,
+            Self::Int16 | Self::Uint16 => 16,
+            Self::Int32 | Self::Uint32 => 32,
+            Self::Int64 | Self::Uint64 => 64,
+            Self::Int128 | Self::Uint128 => 128,
+            Self::IntSize | Self::UintSize => usize::BITS,
+        }
+    }
+
     pub const fn bounds(self) -> IntegerBounds {
         match self {
             Self::Int8 => IntegerBounds::Signed {
@@ -143,6 +154,27 @@ enum WidthArithmetic {
     SaturatingAdd,
     SaturatingSub,
     SaturatingMul,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum IntegerShiftError {
+    MismatchedKinds,
+    InvalidCount { count: IntegerValue, width: u32 },
+    Overflow,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum IntegerPowerError {
+    MismatchedKinds,
+    NegativeExponent,
+    Overflow,
+}
+
+#[derive(Copy, Clone)]
+enum BitwiseOperation {
+    And,
+    Or,
+    Xor,
 }
 
 impl PartialEq for IntegerValue {
@@ -425,6 +457,39 @@ impl IntegerValue {
         Self::from_sign_and_magnitude(sign, magnitude)?.with_optional_runtime_kind(runtime_kind)
     }
 
+    pub fn checked_pow(self, exponent: Self) -> Result<Self, IntegerPowerError> {
+        let kind = self
+            .common_runtime_kind(exponent)
+            .ok_or(IntegerPowerError::MismatchedKinds)?;
+        let mut remaining = exponent
+            .as_nonnegative_u128()
+            .ok_or(IntegerPowerError::NegativeExponent)?;
+        let mut result = if kind.is_signed() {
+            Self::from_typed_signed(1, kind)
+        } else {
+            Self::from_typed_unsigned(1, kind)
+        }
+        .ok_or(IntegerPowerError::Overflow)?;
+        let mut factor = self;
+
+        while remaining != 0 {
+            if remaining & 1 == 1 {
+                result = result
+                    .checked_mul(factor)
+                    .and_then(|value| value.with_runtime_kind(kind))
+                    .ok_or(IntegerPowerError::Overflow)?;
+            }
+            remaining >>= 1;
+            if remaining != 0 {
+                factor = factor
+                    .checked_mul(factor)
+                    .and_then(|value| value.with_runtime_kind(kind))
+                    .ok_or(IntegerPowerError::Overflow)?;
+            }
+        }
+        Ok(result)
+    }
+
     pub fn checked_div(self, rhs: Self) -> Option<Self> {
         if rhs.is_zero() {
             return None;
@@ -522,6 +587,223 @@ impl IntegerValue {
 
     pub fn saturating_mul(self, rhs: Self) -> Option<Self> {
         self.width_arithmetic(rhs, WidthArithmetic::SaturatingMul)
+    }
+
+    pub fn checked_bitand(self, rhs: Self) -> Option<Self> {
+        self.bitwise(rhs, BitwiseOperation::And)
+    }
+
+    pub fn checked_bitor(self, rhs: Self) -> Option<Self> {
+        self.bitwise(rhs, BitwiseOperation::Or)
+    }
+
+    pub fn checked_bitxor(self, rhs: Self) -> Option<Self> {
+        self.bitwise(rhs, BitwiseOperation::Xor)
+    }
+
+    pub fn bitnot(self) -> Option<Self> {
+        let kind = self.runtime_kind?;
+        macro_rules! signed {
+            ($native:ty) => {{
+                let value = <$native>::try_from(self.as_i128()?).ok()?;
+                Self::from_typed_signed((!value) as i128, kind)
+            }};
+        }
+        macro_rules! unsigned {
+            ($native:ty) => {{
+                let value = <$native>::try_from(self.as_nonnegative_u128()?).ok()?;
+                Self::from_typed_unsigned((!value) as u128, kind)
+            }};
+        }
+        match kind {
+            IntegerKind::Int8 => signed!(i8),
+            IntegerKind::Int16 => signed!(i16),
+            IntegerKind::Int32 => signed!(i32),
+            IntegerKind::Int64 => signed!(i64),
+            IntegerKind::Int128 => signed!(i128),
+            IntegerKind::IntSize => signed!(isize),
+            IntegerKind::Uint8 => unsigned!(u8),
+            IntegerKind::Uint16 => unsigned!(u16),
+            IntegerKind::Uint32 => unsigned!(u32),
+            IntegerKind::Uint64 => unsigned!(u64),
+            IntegerKind::Uint128 => unsigned!(u128),
+            IntegerKind::UintSize => unsigned!(usize),
+        }
+    }
+
+    pub fn checked_shl(self, count: Self) -> Result<Self, IntegerShiftError> {
+        let (kind, count) = self.valid_shift_count(count)?;
+        let (sign, magnitude) = self.sign_magnitude();
+        let allowed_magnitude = match kind.bounds() {
+            IntegerBounds::Signed { min, max } => match sign {
+                IntegerSign::Negative => min.unsigned_abs(),
+                IntegerSign::Zero | IntegerSign::Positive => max as u128,
+            },
+            IntegerBounds::Unsigned { max } => max,
+        };
+        if magnitude > (allowed_magnitude >> count) {
+            return Err(IntegerShiftError::Overflow);
+        }
+        let shifted = magnitude << count;
+        Self::from_sign_and_magnitude(sign, shifted)
+            .and_then(|value| value.with_runtime_kind(kind))
+            .ok_or(IntegerShiftError::Overflow)
+    }
+
+    pub fn checked_shr(self, count: Self) -> Result<Self, IntegerShiftError> {
+        let (kind, count) = self.valid_shift_count(count)?;
+        macro_rules! signed {
+            ($native:ty) => {{
+                let value = <$native>::try_from(self.as_i128().expect("typed signed value"))
+                    .expect("value fits its runtime kind");
+                Self::from_typed_signed((value >> count) as i128, kind)
+                    .expect("right shift remains in range")
+            }};
+        }
+        macro_rules! unsigned {
+            ($native:ty) => {{
+                let value =
+                    <$native>::try_from(self.as_nonnegative_u128().expect("typed unsigned value"))
+                        .expect("value fits its runtime kind");
+                Self::from_typed_unsigned((value >> count) as u128, kind)
+                    .expect("right shift remains in range")
+            }};
+        }
+        Ok(match kind {
+            IntegerKind::Int8 => signed!(i8),
+            IntegerKind::Int16 => signed!(i16),
+            IntegerKind::Int32 => signed!(i32),
+            IntegerKind::Int64 => signed!(i64),
+            IntegerKind::Int128 => signed!(i128),
+            IntegerKind::IntSize => signed!(isize),
+            IntegerKind::Uint8 => unsigned!(u8),
+            IntegerKind::Uint16 => unsigned!(u16),
+            IntegerKind::Uint32 => unsigned!(u32),
+            IntegerKind::Uint64 => unsigned!(u64),
+            IntegerKind::Uint128 => unsigned!(u128),
+            IntegerKind::UintSize => unsigned!(usize),
+        })
+    }
+
+    pub fn wrapping_shl(self, count: Self) -> Result<Self, IntegerShiftError> {
+        let (kind, count) = self.valid_shift_count(count)?;
+        macro_rules! signed {
+            ($native:ty) => {{
+                let value = <$native>::try_from(self.as_i128().expect("typed signed value"))
+                    .expect("value fits its runtime kind");
+                Self::from_typed_signed(value.wrapping_shl(count) as i128, kind)
+                    .expect("wrapping shift remains in range")
+            }};
+        }
+        macro_rules! unsigned {
+            ($native:ty) => {{
+                let value =
+                    <$native>::try_from(self.as_nonnegative_u128().expect("typed unsigned value"))
+                        .expect("value fits its runtime kind");
+                Self::from_typed_unsigned(value.wrapping_shl(count) as u128, kind)
+                    .expect("wrapping shift remains in range")
+            }};
+        }
+        Ok(match kind {
+            IntegerKind::Int8 => signed!(i8),
+            IntegerKind::Int16 => signed!(i16),
+            IntegerKind::Int32 => signed!(i32),
+            IntegerKind::Int64 => signed!(i64),
+            IntegerKind::Int128 => signed!(i128),
+            IntegerKind::IntSize => signed!(isize),
+            IntegerKind::Uint8 => unsigned!(u8),
+            IntegerKind::Uint16 => unsigned!(u16),
+            IntegerKind::Uint32 => unsigned!(u32),
+            IntegerKind::Uint64 => unsigned!(u64),
+            IntegerKind::Uint128 => unsigned!(u128),
+            IntegerKind::UintSize => unsigned!(usize),
+        })
+    }
+
+    pub fn wrapping_shr(self, count: Self) -> Result<Self, IntegerShiftError> {
+        self.checked_shr(count)
+    }
+
+    pub fn saturating_shl(self, count: Self) -> Result<Self, IntegerShiftError> {
+        let kind = self
+            .common_runtime_kind(count)
+            .ok_or(IntegerShiftError::MismatchedKinds)?;
+        match self.checked_shl(count) {
+            Ok(value) => Ok(value),
+            Err(IntegerShiftError::Overflow) => match kind.bounds() {
+                IntegerBounds::Signed { min, max } => {
+                    if self.sign_magnitude().0 == IntegerSign::Negative {
+                        Self::from_typed_signed(min, kind)
+                    } else {
+                        Self::from_typed_signed(max, kind)
+                    }
+                    .ok_or(IntegerShiftError::Overflow)
+                }
+                IntegerBounds::Unsigned { max } => {
+                    Self::from_typed_unsigned(max, kind).ok_or(IntegerShiftError::Overflow)
+                }
+            },
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn saturating_shr(self, count: Self) -> Result<Self, IntegerShiftError> {
+        self.checked_shr(count)
+    }
+
+    fn bitwise(self, rhs: Self, operation: BitwiseOperation) -> Option<Self> {
+        let kind = self.common_runtime_kind(rhs)?;
+        macro_rules! apply {
+            ($left:expr, $right:expr) => {{
+                match operation {
+                    BitwiseOperation::And => $left & $right,
+                    BitwiseOperation::Or => $left | $right,
+                    BitwiseOperation::Xor => $left ^ $right,
+                }
+            }};
+        }
+        macro_rules! signed {
+            ($native:ty) => {{
+                let left = <$native>::try_from(self.as_i128()?).ok()?;
+                let right = <$native>::try_from(rhs.as_i128()?).ok()?;
+                Self::from_typed_signed(apply!(left, right) as i128, kind)
+            }};
+        }
+        macro_rules! unsigned {
+            ($native:ty) => {{
+                let left = <$native>::try_from(self.as_nonnegative_u128()?).ok()?;
+                let right = <$native>::try_from(rhs.as_nonnegative_u128()?).ok()?;
+                Self::from_typed_unsigned(apply!(left, right) as u128, kind)
+            }};
+        }
+        match kind {
+            IntegerKind::Int8 => signed!(i8),
+            IntegerKind::Int16 => signed!(i16),
+            IntegerKind::Int32 => signed!(i32),
+            IntegerKind::Int64 => signed!(i64),
+            IntegerKind::Int128 => signed!(i128),
+            IntegerKind::IntSize => signed!(isize),
+            IntegerKind::Uint8 => unsigned!(u8),
+            IntegerKind::Uint16 => unsigned!(u16),
+            IntegerKind::Uint32 => unsigned!(u32),
+            IntegerKind::Uint64 => unsigned!(u64),
+            IntegerKind::Uint128 => unsigned!(u128),
+            IntegerKind::UintSize => unsigned!(usize),
+        }
+    }
+
+    fn valid_shift_count(self, count: Self) -> Result<(IntegerKind, u32), IntegerShiftError> {
+        let kind = self
+            .common_runtime_kind(count)
+            .ok_or(IntegerShiftError::MismatchedKinds)?;
+        let width = kind.bit_width();
+        let valid = count
+            .as_nonnegative_u128()
+            .filter(|value| *value < width as u128)
+            .and_then(|value| u32::try_from(value).ok());
+        valid
+            .map(|count| (kind, count))
+            .ok_or(IntegerShiftError::InvalidCount { count, width })
     }
 
     fn width_arithmetic(self, rhs: Self, operation: WidthArithmetic) -> Option<Self> {

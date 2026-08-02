@@ -46,11 +46,19 @@ pub struct ImportDecl {
 pub enum ImportKind {
     Module {
         path: Vec<String>,
+        alias: Option<String>,
     },
     From {
         module_path: Vec<String>,
-        names: Vec<String>,
+        names: Vec<ImportName>,
     },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ImportName {
+    pub name: String,
+    pub alias: Option<String>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -592,6 +600,7 @@ pub struct MapEntryExpr {
 pub enum UnaryOp {
     Neg,
     Not,
+    BitNot,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -604,6 +613,12 @@ pub enum BinaryOp {
     Div,
     FloorDiv,
     Mod,
+    Pow,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
     Eq,
     NotEq,
     Less,

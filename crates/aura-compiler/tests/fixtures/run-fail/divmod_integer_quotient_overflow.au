@@ -1,0 +1,3 @@
+def main():
+    minimum: int64 = -9223372036854775808
+    print(divmod(minimum, -1))

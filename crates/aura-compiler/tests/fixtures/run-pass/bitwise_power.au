@@ -1,0 +1,19 @@
+def main():
+    print(0xF0 & 0xCC)
+    print(0xF0 | 0x0F)
+    print(0xAA ^ 0xFF)
+    print(~5)
+    print(3 << 4)
+    print(-5 >> 1)
+    print(2 ** 3 ** 2)
+    print(-2 ** 2)
+    print(2.0 ** -2.0)
+
+    mut value: int8 = 3
+    value <<= 1
+    value |= 1
+    value ^= 2
+    value &= 7
+    value >>= 1
+    value **= 2
+    print(value)

@@ -115,6 +115,10 @@ render("Aura", 2)
 render(name="Aura", count=2)
 ```
 
+Every declared parameter is positionally bindable. Aura 0.3 structural
+callable types do not encode keyword-only callability, so a `*` marker in a
+parameter list is rejected with `AU1101`.
+
 Binding is deterministic:
 
 1. positional arguments fill parameters in declaration order

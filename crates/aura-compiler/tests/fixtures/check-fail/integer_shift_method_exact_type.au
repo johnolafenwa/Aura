@@ -1,0 +1,4 @@
+def main():
+    value: int8 = 1
+    count: uint8 = 1
+    print(value.wrapping_shl(count))

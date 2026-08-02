@@ -124,18 +124,26 @@ The following table runs from lowest to highest precedence:
 | 3 | `and` | left |
 | 4 | prefix `not` | right |
 | 5 | `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `not in` | chained left to right |
-| 6 | `+`, `-` | left |
-| 7 | `*`, `/`, `//`, `%` | left |
-| 8 | prefix `match`, `try`, unary `-` | prefix/right |
-| 9 | specialization, indexing, member access, call, numeric cast | left-to-right postfix chain |
-| 10 | primary expression | — |
+| 6 | `|` | left |
+| 7 | `^` | left |
+| 8 | `&` | left |
+| 9 | `<<`, `>>` | left |
+| 10 | `+`, `-` | left |
+| 11 | `*`, `/`, `//`, `%` | left |
+| 12 | prefix `match`, `try`, unary `-`, unary `~` | prefix/right |
+| 13 | `**` | right |
+| 14 | specialization, indexing, member access, call, numeric cast | left-to-right postfix chain |
+| 15 | primary expression | — |
 
-Arithmetic and boolean chains are left-folded. For example:
+Arithmetic, shift, bitwise, and boolean chains are left-folded. Power is the
+right-associative exception. For example:
 
 ```text
 a - b - c       means (a - b) - c
 not a == b      means not (a == b)
 a + b * c       means a + (b * c)
+2 ** 3 ** 2     means 2 ** (3 ** 2)
+-2 ** 2         means -(2 ** 2)
 ```
 
 Equality, ordering, and membership share one precedence level and chain the
@@ -201,10 +209,13 @@ Built-in arithmetic supports equal integer types or equal floating-point types. 
 | `+` | Same numeric type, `str` for string concatenation, or `Duration` for two Duration operands |
 | `-` | Same numeric type, or `Duration` for two Duration operands |
 | `*` | Same numeric type; `Duration` for `Duration * int64` or `int64 * Duration` |
+| `**` | Same exact integer or floating type |
 | `//` | Same numeric type, or `Duration` for `Duration // int64` |
 | `%` | Same numeric type |
 | `/` | Same floating-point type |
 | unary `-` | Same numeric type |
+| `&`, `|`, `^`, unary `~` | Same exact integer type |
+| `<<`, `>>` | Same exact integer type for value and count |
 | `==`, `!=` | `bool` for equal operand types |
 | `<`, `<=`, `>`, `>=` | `bool` for equal numeric types or two Duration values |
 | `in`, `not in` | `bool` for a supported container |
@@ -249,6 +260,31 @@ tuple type.
 
 Builtin integer `/` is a static error, as is integer `/=`. The diagnostic directs callers to `//` for a floor quotient or to `.to_float()` on both operands for floating true division. Integer `//` rounds the mathematical quotient toward negative infinity, and integer `%` is its paired remainder. Floating `//` and `%` use the corresponding CPython-compatible divmod correction. In both numeric domains, a nonzero remainder has the divisor's sign. Integer and floating `//` or `%` by zero, and floating `/` by zero, are runtime failures. See [Execution Model](/manual/execution-model#operators) for the complete runtime contract.
 
+Integer power is checked and preserves the exact operand type. Its exponent
+must be non-negative. `x ** 0` is `1`, including `0 ** 0`. A negative exponent
+visible in source is rejected with `AU2003`; a negative value discovered at
+runtime fails with `AU4001`. Overflow fails with `AU4002`. Floating power also
+requires equal operand types. It returns that type, reports a domain error for
+zero to a negative exponent or a negative finite base with a non-integral
+finite exponent, and reports a finite-input overflow with `AU4002`.
+
+Bitwise operators use each integer's fixed declared width. `&`, `|`, and `^`
+combine corresponding bits; `~` flips every bit. Binary operands must have the
+same exact concrete integer type. A shift's count has the same exact type as
+the shifted value and must satisfy `0 <= count < width`. Signed right shift is
+arithmetic and unsigned right shift is logical. Ordinary `<<` is checked and
+fails with `AU4002` when the mathematical result does not fit.
+
+`divmod(left, right)` evaluates both arguments once and returns the same floor
+quotient and remainder as `(left // right, left % right)` in one tuple. Both
+arguments have one exact integer or floating type, which is also the type of
+both tuple elements. A zero divisor fails with `AU4004`.
+
+`round(value)` returns an integer unchanged with its exact type. A `float32`
+or `float64` value rounds to `int64` using nearest-integer ties-to-even. Signed
+zero becomes integer zero. NaN, infinity, and a rounded result outside the
+`int64` range fail with `AU4002`. Aura has no digit-count overload.
+
 An unsuffixed integer literal may take the type of a `float32` or `float64` operand when the integer value is exactly representable in that floating type. Thus `7.5 // 2` is floating floor division and `-7.5 % 2` is floating remainder. This rule never converts a bound integer variable. An inexact literal is rejected; use an explicit floating spelling when rounding at the literal is intentional, or `.to_float()` for an intentional integer-to-`float64` conversion.
 
 Every integer type provides `.to_float() -> float64`. This conversion uses IEEE-754 round-to-nearest, ties-to-even and may lose integer precision:
@@ -264,9 +300,14 @@ Use this method when rounding into the floating domain is intentional. An explic
 
 Every scalar integer type also provides exact-width `wrapping_add`,
 `wrapping_sub`, `wrapping_mul`, `saturating_add`, `saturating_sub`, and
-`saturating_mul`. `Array[int32]` and `Array[int64]` provide the same named
-operations with a same-dtype scalar or exact-shape Array right operand.
-Ordinary `+`, `-`, and `*` remain checked.
+`saturating_mul`. The scalar methods `wrapping_shl`, `wrapping_shr`,
+`saturating_shl`, and `saturating_shr` take a count of the receiver's exact
+type and apply the same `0 <= count < width` rule as the shift operators.
+Wrapping left shift discards high bits; saturating left shift clamps to the
+integer type's bounds. Both named right-shift modes produce the same value as
+ordinary `>>` after validating the count. `Array[int32]` and `Array[int64]`
+provide the add/subtract/multiply named operations with a same-dtype scalar or
+exact-shape Array right operand. Ordinary arithmetic remains checked.
 
 Duration arithmetic operates on the exact signed nanosecond representation.
 Addition, subtraction, and multiplication are checked. `Duration // int64`
@@ -756,6 +797,41 @@ capture owned outer locals by value. See [Closures](/manual/closures).
 Instance and associated method values and trait-object interactions remain
 unavailable.
 
+## Fixed-Width Numeric Example
+
+This program packs three bytes into a `uint32`, extracts them again, and uses
+the numeric helpers that return more than one value:
+
+```aura
+def pack_rgb(red: uint32, green: uint32, blue: uint32) -> uint32:
+    sixteen: uint32 = 16
+    eight: uint32 = 8
+    return (red << sixteen) | (green << eight) | blue
+
+def main() -> int32:
+    red: uint32 = 0xFF
+    green: uint32 = 0x80
+    blue: uint32 = 0b0000_0000
+    packed = pack_rgb(red, green, blue)
+    mask: uint32 = 0xFF
+    eight: uint32 = 8
+    sixteen: uint32 = 16
+
+    print(packed)
+    print((packed >> sixteen) & mask)
+    print((packed >> eight) & mask)
+    print(packed & mask)
+    print(3 ** 4)
+    print(round(2.5))
+    quotient, remainder = divmod(-17, 5)
+    print(quotient)
+    print(remainder)
+    return 0
+```
+
+The program prints `16744448`, `255`, `128`, `0`, `81`, `2`, `-4`, and `3`,
+one value per line.
+
 ## Forms Not Implemented
 
 Aura 0.2 expressions do not include generator expressions, method values,
@@ -768,7 +844,8 @@ implemented expression language.
 
 ## Grammar
 
-Primary, postfix, unary, multiplicative, additive, comparison, Boolean,
+Primary, postfix, power, unary, multiplicative, additive, shift, bitwise,
+comparison, Boolean,
 conditional, `match`, `try`, lambda, collection literal/comprehension,
 constructor, and f-string expression
 productions are normative in [Grammar](/manual/grammar). The comparison
@@ -801,6 +878,9 @@ slots. `and` and `or` short circuit. Conditional expressions evaluate the
 condition first and exactly one selected arm. A membership test evaluates its
 value before its container. A comparison chain evaluates its operands left to
 right, evaluates each at most once, and stops at its first `false` link. A
+binary power, shift, or bitwise expression evaluates its left operand once
+before evaluating its right operand once. A compound form selects its target
+place once and writes only after the operation succeeds. A
 member receiver is evaluated before arguments; an index base is evaluated
 before its index; a slice base is evaluated before its written start and end;
 collection entries preserve source order; a match scrutinee
@@ -863,6 +943,9 @@ At runtime, `AU4001` means a general expression trap, `AU4002` means arithmetic
 overflow, underflow, range, or conversion-exactness failure, `AU4003` means a
 bounds or lookup violation, `AU4004` means a zero divisor, and `AU4005` means a
 trapping resource or I/O failure propagated by a call expression.
+For numeric operations, `AU4001` includes a runtime negative integer exponent
+and floating power domain errors. `AU4002` includes integer power overflow,
+invalid shift counts, and checked-left-shift overflow.
 
 ## Backend Support
 
@@ -897,3 +980,6 @@ contextually typed by-value expression closures are implemented. Method
 values, generator expressions, assignment expressions, nonnumeric casts, and
 call-site capability modifiers are unavailable. Eager owned list, set, and dictionary
 comprehensions are implemented under Accepted ADR-0039.
+Integer base spellings, fixed-width bitwise operations, and shifts are
+Accepted under ADR-0047. Power, `round`, and `divmod` are Accepted under
+ADR-0048.

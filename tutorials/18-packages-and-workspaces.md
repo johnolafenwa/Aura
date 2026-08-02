@@ -34,6 +34,13 @@ The compiler treats the directory containing `Aura.toml` as the package root and
 import helpers.math    # resolves to src/helpers/math.au
 ```
 
+An alias changes the local spelling without changing that resolution path:
+
+```python
+import helpers.math as integer_math
+from helpers.math import double as twice
+```
+
 ## Local Path Dependencies
 
 Declare dependencies relative to the manifest directory:
@@ -76,6 +83,13 @@ Imports work the same way as path dependencies -- use the package name:
 ```python
 import util.math
 import jsonx.parser
+```
+
+The complete dependency path may be aliased after it resolves:
+
+```python
+import util.math as util_math
+from jsonx.parser import parse as parse_json
 ```
 
 ## Workspaces

@@ -3,10 +3,10 @@ use crate::ast::{
     BreakStmt, ClassDecl, CompareLink, CompareOp, ComprehensionClause, ComprehensionOutput,
     ContinueStmt, DestructureStmt, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind,
     ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl, FieldDecl, ForStmt, FormatPart,
-    FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, Item,
-    LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm,
-    MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, ReturnStmt, Stmt, TraitDecl,
-    TuplePattern, TypeRef, TypeRefKind, UnaryOp, VariantPattern, WhileStmt, WithStmt,
+    FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind,
+    ImportName, Item, LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm,
+    MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, ReturnStmt, Stmt,
+    TraitDecl, TuplePattern, TypeRef, TypeRefKind, UnaryOp, VariantPattern, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -261,9 +261,14 @@ impl Parser {
         if self.at_keyword_import() {
             let span = self.expect_keyword(TokenKind::KwImport)?.span;
             let path = self.parse_identifier_path()?;
+            let alias = if self.eat_simple(&TokenKind::KwAs).is_some() {
+                Some(self.parse_import_alias()?)
+            } else {
+                None
+            };
             self.expect_newline()?;
             return Ok(ImportDecl {
-                kind: ImportKind::Module { path },
+                kind: ImportKind::Module { path, alias },
                 span,
             });
         }
@@ -272,8 +277,35 @@ impl Parser {
         let module_path = self.parse_identifier_path()?;
         self.expect_keyword(TokenKind::KwImport)?;
         let mut names = Vec::new();
+        let mut targets = std::collections::BTreeSet::new();
+        let mut local_names = std::collections::BTreeSet::new();
         loop {
-            names.push(self.expect_identifier()?);
+            let (name, name_span) = self.expect_identifier_with_span()?;
+            if !targets.insert(name.clone()) {
+                return Err(Diagnostic::coded_at(
+                    "AU2999",
+                    name_span,
+                    format!("import target `{name}` appears more than once in this declaration"),
+                ));
+            }
+            let alias = if self.eat_simple(&TokenKind::KwAs).is_some() {
+                Some(self.parse_import_alias()?)
+            } else {
+                None
+            };
+            let local_name = alias.as_deref().unwrap_or(&name);
+            if !local_names.insert(local_name.to_string()) {
+                return Err(Diagnostic::coded_at(
+                    "AU2999",
+                    name_span,
+                    format!("duplicate import binding `{local_name}`"),
+                ));
+            }
+            names.push(ImportName {
+                name,
+                alias,
+                span: name_span,
+            });
             if self.eat_simple(&TokenKind::Comma).is_none() {
                 break;
             }
@@ -283,6 +315,26 @@ impl Parser {
             kind: ImportKind::From { module_path, names },
             span,
         })
+    }
+
+    fn parse_import_alias(&mut self) -> Result<String> {
+        let token = self.bump();
+        match token.kind {
+            TokenKind::Identifier(name) if name == "_" => Err(Diagnostic::coded_at(
+                "AU2999",
+                token.span,
+                "`_` cannot be used as an import alias",
+            )),
+            TokenKind::Identifier(name) => Ok(name),
+            TokenKind::Newline | TokenKind::Eof => {
+                Err(parse_error(token.span, "expected identifier after `as`"))
+            }
+            _ => Err(Diagnostic::coded_at(
+                "AU2999",
+                token.span,
+                "reserved words cannot be used as import aliases",
+            )),
+        }
     }
 
     fn parse_class(&mut self, public: bool) -> Result<ClassDecl> {
@@ -635,6 +687,13 @@ impl Parser {
         }
 
         loop {
+            if self.at_simple(&TokenKind::Star) {
+                return Err(Diagnostic::coded_at(
+                    "AU1101",
+                    self.current_span(),
+                    "keyword-only parameters are not part of Aura 0.3's structural callable model",
+                ));
+            }
             if allow_receiver && receiver.is_none() {
                 if self.at_typed_receiver_start() {
                     return Err(Diagnostic::coded_at(
@@ -1633,7 +1692,7 @@ impl Parser {
     /// membership share one precedence and chain left to right, so
     /// `a < b <= c` is one chain rather than a comparison of a comparison.
     fn parse_comparison_chain(&mut self) -> Result<Expr> {
-        let first = self.parse_additive()?;
+        let first = self.parse_binary_precedence(0)?;
         let mut links: Vec<CompareLink> = Vec::new();
 
         loop {
@@ -1648,7 +1707,7 @@ impl Parser {
                 break;
             };
             self.check_expression_chain_limit(links.len().saturating_add(1))?;
-            let operand = self.parse_additive()?;
+            let operand = self.parse_binary_precedence(0)?;
             links.push(CompareLink {
                 op,
                 op_span,
@@ -1691,6 +1750,51 @@ impl Parser {
         })
     }
 
+    /// Parses the complete left-associative arithmetic and bitwise ladder in
+    /// one precedence-climbing frame. Keeping the ladder iterative avoids
+    /// multiplying parser stack use by every precedence level inside nested
+    /// grouping expressions.
+    fn parse_binary_precedence(&mut self, minimum_precedence: u8) -> Result<Expr> {
+        let mut expr = self.parse_prefix()?;
+        let mut chain_len = 0usize;
+        while let Some((op, precedence)) = self.current_binary_precedence() {
+            if precedence < minimum_precedence {
+                break;
+            }
+            self.bump();
+            chain_len += 1;
+            self.check_expression_chain_limit(chain_len)?;
+            let right = self.parse_binary_precedence(precedence.saturating_add(1))?;
+            let span = expr.span;
+            expr = Expr {
+                kind: ExprKind::Binary {
+                    op,
+                    left: Box::new(expr),
+                    right: Box::new(right),
+                },
+                span,
+            };
+        }
+        Ok(expr)
+    }
+
+    fn current_binary_precedence(&self) -> Option<(BinaryOp, u8)> {
+        Some(match self.current_kind() {
+            TokenKind::Pipe => (BinaryOp::BitOr, 0),
+            TokenKind::Caret => (BinaryOp::BitXor, 1),
+            TokenKind::Ampersand => (BinaryOp::BitAnd, 2),
+            TokenKind::ShiftLeft => (BinaryOp::Shl, 3),
+            TokenKind::ShiftRight => (BinaryOp::Shr, 3),
+            TokenKind::Plus => (BinaryOp::Add, 4),
+            TokenKind::Minus => (BinaryOp::Sub, 4),
+            TokenKind::Star => (BinaryOp::Mul, 5),
+            TokenKind::Slash => (BinaryOp::Div, 5),
+            TokenKind::DoubleSlash => (BinaryOp::FloorDiv, 5),
+            TokenKind::Percent => (BinaryOp::Mod, 5),
+            _ => return None,
+        })
+    }
+
     /// Consumes one comparison operator, including the two-token `not in`.
     fn eat_comparison_operator(&mut self) -> Option<(CompareOp, Span)> {
         if self.at_simple(&TokenKind::KwNot) && matches!(self.peek_kind(1), Some(TokenKind::KwIn)) {
@@ -1713,72 +1817,6 @@ impl Parser {
             }
         }
         None
-    }
-
-    fn parse_additive(&mut self) -> Result<Expr> {
-        let mut expr = self.parse_multiplicative()?;
-        let mut chain_len = 0usize;
-
-        loop {
-            let op = if self.eat_simple(&TokenKind::Plus).is_some() {
-                Some(BinaryOp::Add)
-            } else if self.eat_simple(&TokenKind::Minus).is_some() {
-                Some(BinaryOp::Sub)
-            } else {
-                None
-            };
-
-            let Some(op) = op else { break };
-            chain_len += 1;
-            self.check_expression_chain_limit(chain_len)?;
-            let right = self.parse_multiplicative()?;
-            let span = expr.span;
-            expr = Expr {
-                kind: ExprKind::Binary {
-                    op,
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                },
-                span,
-            };
-        }
-
-        Ok(expr)
-    }
-
-    fn parse_multiplicative(&mut self) -> Result<Expr> {
-        let mut expr = self.parse_prefix()?;
-        let mut chain_len = 0usize;
-
-        loop {
-            let op = if self.eat_simple(&TokenKind::Star).is_some() {
-                Some(BinaryOp::Mul)
-            } else if self.eat_simple(&TokenKind::Slash).is_some() {
-                Some(BinaryOp::Div)
-            } else if self.eat_simple(&TokenKind::DoubleSlash).is_some() {
-                Some(BinaryOp::FloorDiv)
-            } else if self.eat_simple(&TokenKind::Percent).is_some() {
-                Some(BinaryOp::Mod)
-            } else {
-                None
-            };
-
-            let Some(op) = op else { break };
-            chain_len += 1;
-            self.check_expression_chain_limit(chain_len)?;
-            let right = self.parse_prefix()?;
-            let span = expr.span;
-            expr = Expr {
-                kind: ExprKind::Binary {
-                    op,
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                },
-                span,
-            };
-        }
-
-        Ok(expr)
     }
 
     fn parse_prefix(&mut self) -> Result<Expr> {
@@ -1836,7 +1874,35 @@ impl Parser {
             });
         }
 
-        self.parse_postfix()
+        if let Some(token) = self.eat_simple(&TokenKind::Tilde) {
+            let value = self.parse_prefix()?;
+            return Ok(Expr {
+                kind: ExprKind::Unary {
+                    op: UnaryOp::BitNot,
+                    expr: Box::new(value),
+                },
+                span: token.span,
+            });
+        }
+
+        self.parse_power()
+    }
+
+    fn parse_power(&mut self) -> Result<Expr> {
+        let left = self.parse_postfix()?;
+        if self.eat_simple(&TokenKind::DoubleStar).is_none() {
+            return Ok(left);
+        }
+        let right = self.parse_prefix()?;
+        let span = left.span;
+        Ok(Expr {
+            kind: ExprKind::Binary {
+                op: BinaryOp::Pow,
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+            span,
+        })
     }
 
     fn parse_postfix(&mut self) -> Result<Expr> {
@@ -2673,9 +2739,15 @@ impl Parser {
             TokenKind::PlusEqual => Ok(Some(BinaryOp::Add)),
             TokenKind::MinusEqual => Ok(Some(BinaryOp::Sub)),
             TokenKind::StarEqual => Ok(Some(BinaryOp::Mul)),
+            TokenKind::DoubleStarEqual => Ok(Some(BinaryOp::Pow)),
             TokenKind::SlashEqual => Ok(Some(BinaryOp::Div)),
             TokenKind::DoubleSlashEqual => Ok(Some(BinaryOp::FloorDiv)),
             TokenKind::PercentEqual => Ok(Some(BinaryOp::Mod)),
+            TokenKind::AmpersandEqual => Ok(Some(BinaryOp::BitAnd)),
+            TokenKind::PipeEqual => Ok(Some(BinaryOp::BitOr)),
+            TokenKind::CaretEqual => Ok(Some(BinaryOp::BitXor)),
+            TokenKind::ShiftLeftEqual => Ok(Some(BinaryOp::Shl)),
+            TokenKind::ShiftRightEqual => Ok(Some(BinaryOp::Shr)),
             other => Err(parse_error(
                 token.span,
                 format!("expected assignment operator, found {:?}", other),
@@ -2691,9 +2763,15 @@ impl Parser {
                     | TokenKind::PlusEqual
                     | TokenKind::MinusEqual
                     | TokenKind::StarEqual
+                    | TokenKind::DoubleStarEqual
                     | TokenKind::SlashEqual
                     | TokenKind::DoubleSlashEqual
                     | TokenKind::PercentEqual
+                    | TokenKind::AmpersandEqual
+                    | TokenKind::PipeEqual
+                    | TokenKind::CaretEqual
+                    | TokenKind::ShiftLeftEqual
+                    | TokenKind::ShiftRightEqual
             )
         )
     }

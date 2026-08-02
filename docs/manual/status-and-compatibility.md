@@ -100,6 +100,14 @@ mixed promotion, views, shape transformations, equality, autograd, or
 accelerator placement. `mean()` returns `float64` for every dtype; integer
 Array `/` remains rejected under ADR-0002.
 
+Batch S1 adds the Accepted ADR-0047 and ADR-0048 numeric surface. Integer
+literals support decimal separators and hexadecimal, binary, and octal bases.
+Every integer width supports fixed-width bitwise operators, checked shifts,
+and explicit wrapping and saturating shift modes. `**` provides checked
+same-type integer power and same-type floating power. `round` implements
+ties-to-even floating conversion to `int64` and exact integer identity;
+`divmod` returns the paired floor quotient and divisor-signed remainder.
+
 See [Language Specification](/manual/language-specification) and [Conformance](/manual/conformance).
 
 ## Stability Policy
@@ -196,9 +204,9 @@ youngest-first task ancestry. Each public schema-version-1 frame span has its
 own required source `path`; the analysis/LSP editor shape permits an optional
 `file_path` for source-only analysis. The public diagnostic schema remains
 version `1` because the always-present arrays are an additive extension;
-compiler-service/editor transport uses semantic schema version `3`, which adds
-structural function types and function-value operands, and
-forwards the same records.
+compiler-service/editor transport uses semantic schema version `4`. This
+version includes structural function values, import aliases, and the expanded
+numeric expression surface, and forwards the same diagnostic records.
 
 ## Platform And Distribution Support
 

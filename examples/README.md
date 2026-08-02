@@ -553,6 +553,11 @@ printed-output order unless they explicitly coordinate that order.
   - prints:
     - `10`
     - `2`
+- `import_aliases.au`
+  - local module and from-import aliases with canonical target identity
+  - prints:
+    - `10`
+    - `2`
 - `function_values.au`
   - stores a namespace-qualified imported function, then calls it directly and
     through a `def(int32) -> int32` parameter
@@ -805,6 +810,23 @@ single task-result right on the first attempt.
 
 ### `numbers/`
 
+- `bit_packing.au`
+  - hexadecimal and binary literals, fixed-width masks and shifts, wrapping
+    and saturating shift modes, power, ties-to-even `round`, and `divmod`
+  - prints:
+    - `16744448`
+    - `255`
+    - `128`
+    - `0`
+    - `0`
+    - `255`
+    - `64`
+    - `64`
+    - `81`
+    - `2`
+    - `4`
+    - `-4`
+    - `3`
 - `float_sqrt.au`
   - `float64` values and `.sqrt()`
   - prints `9.0`
@@ -990,6 +1012,7 @@ cargo run -p aura -- run examples/concurrency/queue_get_timeout_named.au
 cargo run -p aura -- run examples/concurrency/sleep_builtin.au
 cargo run -p aura -- run examples/concurrency/minute_duration.au
 cargo run -p aura -- run examples/concurrency/duration_arithmetic.au
+cargo run -p aura -- run examples/numbers/bit_packing.au
 cargo run -p aura -- run examples/numbers/float32_values.au
 cargo run -p aura -- run examples/numbers/numeric_casts.au
 cargo run -p aura -- run examples/numbers/numeric_builtins.au

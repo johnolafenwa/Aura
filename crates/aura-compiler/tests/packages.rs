@@ -148,10 +148,12 @@ util = { path = "../util" }
     let main_path = temp.write(
         "app/src/main.au",
         r#"import util.math
+import util.math as util_math
 import helpers.math
 
 def main() -> int32:
     print(util.math.double(value=helpers.math.triple(value=2)))
+    print(util_math.double(value=helpers.math.triple(value=2)))
     return 0
 "#,
     );
@@ -195,7 +197,7 @@ public def double(value: int32) -> int32:
     );
 
     let output = run_path(&main_path).expect("manifest-aware package should run");
-    assert_eq!(output.stdout, "12\n");
+    assert_eq!(output.stdout, "12\n12\n");
 
     let source = fs::read_to_string(&main_path).expect("main source should be readable");
     let analysis = analyze_path_source(&main_path, &source);

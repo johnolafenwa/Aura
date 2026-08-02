@@ -97,7 +97,11 @@ The current tutorial set covers:
   relative-Duration sources, `wait_any(...)`, `wait_all(...)`, send-result
   errors, structural `Transfer` boundaries, single-consumer task results, and
   cooperative cancellation
-- arithmetic including explicit floor division, integer-to-float conversion, and computed signed Duration values; strings, string parsing/formatting, booleans, and comparisons
+- arithmetic including decimal/hexadecimal/binary/octal integer literals,
+  fixed-width bitwise and shift operations, checked power, ties-to-even
+  `round`, paired `divmod`, explicit floor division, integer-to-float
+  conversion, and computed signed Duration values; strings, string
+  parsing/formatting, booleans, and comparisons
 - deterministic seeded randomness, unbiased ranges, mutable-list shuffle, and
   the separate OS-secure integer/byte boundary
 - `control.retry` for eager `Result` workers with an attempt budget and

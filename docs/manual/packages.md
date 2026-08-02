@@ -227,7 +227,14 @@ See [Current Limits](/manual/current-limits#runtime) for the broader maintained 
 
 ## Grammar
 
-Source imports have the maintained forms `import dotted.module` and `from dotted.module import name`, as specified in [Grammar](/manual/grammar#imports). Import paths are absolute within the resolved local or dependency namespace. Relative imports, wildcard imports, aliases, and package-name prefixes for the current package are not grammar.
+Source imports have the maintained forms `import dotted.module [as local]`
+and `from dotted.module import name [as local]`, as specified in
+[Grammar](/manual/grammar#imports). A from-import may contain several direct or
+aliased names. Import paths are absolute within the resolved local or
+dependency namespace. The resolver uses the path before `as`; the alias is a
+local binding and is never interpreted as a package, directory, or dependency
+key. Relative imports, wildcard imports, and package-name prefixes for the
+current package are not grammar.
 
 `Aura.toml` and `Aura.lock` use TOML as external tooling formats, not Aura source grammar. Their accepted keys, table shapes, selector combinations, identifier rules, FFI opt-in/report fields, and lockfile version are exactly the contracts documented above; unrecognized source kinds or unsupported dependency forms are rejected rather than inferred.
 
@@ -281,9 +288,13 @@ Git commands default to a 60-second timeout, disable interactive credential prom
 
 ## Status
 
-Single packages, exact-path workspaces, path dependencies, pinned and moving git selectors, deterministic lockfile version 1, package visibility, cross-package trait dispatch, editor no-lockfile analysis, package-local FFI authorization, and exact root FFI dependency reporting are implemented and maintained in Aura 0.2. No package semantics on this page are provisional.
+Single packages, exact-path workspaces, path dependencies, pinned and moving
+git selectors, deterministic lockfile version 1, package visibility, import
+aliases, cross-package trait dispatch, editor no-lockfile analysis,
+package-local FFI authorization, and exact root FFI dependency reporting are
+implemented and maintained. No package semantics on this page are
+provisional.
 
 Registry resolution, publishing, installation, alternative source roots,
-workspace globs, import aliases, wildcard or relative imports, implicit
-re-exports, and import-time initialization are outside the Aura 0.2 language
-contract.
+workspace globs, wildcard or relative imports, implicit re-exports, and
+import-time initialization are outside the Aura 0.3 language contract.

@@ -44,7 +44,16 @@ Last updated: 2026-08-02
   LSP is 102/102 at 100% coverage, the extension is 21/21, and the 38-page
   executable reference gate is green.
   The checkpoint-wide forced-backend matrix and full local/hosted gates have not
-  run for S3. S4 Python polish is next.
+  run for S3. S4 is in progress. Import aliases and focused keyword-only
+  rejection are complete. Integer base prefixes/separators, power, bitwise
+  operators, checked shifts, every wrapping/saturating shift method, `round`,
+  and `divmod` are implemented across checking, analysis, MIR, direct codegen,
+  fixtures, examples, tutorials, and the Manual. Float power now executes at
+  its destination width through one shared helper, including float32-only
+  overflow detection. The semantic tooling schema is version 4. Remaining S4
+  families are strings/format specs, match guards/or-patterns, module constants,
+  and the `math` module, followed by clean-slate naming closure and the five
+  design-paper adoption sections.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
 - Work note: `work/2026-08-02-batch-s1-python-surface.md`.

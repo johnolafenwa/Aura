@@ -140,6 +140,10 @@ def main():
     print(signed.saturating_mul(signed_rhs))
     print(unsigned.wrapping_add(unsigned_rhs))
     print(unsigned.saturating_sub(unsigned_rhs))
+    print(signed.wrapping_shl(signed_rhs))
+    print(signed.wrapping_shr(signed_rhs))
+    print(signed.saturating_shl(signed_rhs))
+    print(signed.saturating_shr(signed_rhs))
 "#;
     let mir = lower_source_to_mir(source).expect("fixed-width methods should lower to MIR");
     let object =
@@ -6835,6 +6839,9 @@ def main() -> int32:
     floor = min(1, 2)
     ceil = max(1, 2)
     root = sqrt(9.0)
+    rounded = round(2.5)
+    pair = divmod(-7, 3)
+    print(pair)
     parsed32 = parse_int32("7")
     parsed64 = parse_int64("7")
     parsedf = parse_float64("7.0")
@@ -6847,7 +6854,7 @@ def main() -> int32:
     short = range(3)
     long = range(start=1, stop=4)
     print(ready)
-    return (value + floor + ceil) as int32 + root as int32
+    return (value + floor + ceil) as int32 + root as int32 + rounded as int32
 "#;
     let success_mir =
         lower_source_to_mir(success_source).expect("builtin matrix source should lower");
@@ -7017,6 +7024,26 @@ def main() -> int32:
                 args: vec![],
             }),
             "expected `sqrt()` to receive one argument",
+        ),
+        (
+            "round missing arg",
+            module_with_main_call(Rvalue::Call {
+                callee: CallTarget::Name("round".to_string()),
+                args: vec![],
+            }),
+            "direct backend is missing a builtin argument",
+        ),
+        (
+            "divmod missing arg",
+            module_with_main_call(Rvalue::Call {
+                callee: CallTarget::Name("divmod".to_string()),
+                args: vec![MirArg {
+                    name: None,
+                    value: Operand::Int(1),
+                    writeback_place: None,
+                }],
+            }),
+            "direct backend is missing a builtin argument",
         ),
         (
             "list extra arg",

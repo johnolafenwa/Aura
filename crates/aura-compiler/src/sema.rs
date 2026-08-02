@@ -246,6 +246,7 @@ pub(crate) fn unary_operator_trait(op: UnaryOp) -> Option<(&'static str, &'stati
     match op {
         UnaryOp::Neg => Some(("Neg", "neg")),
         UnaryOp::Not => Some(("Not", "not")),
+        UnaryOp::BitNot => None,
     }
 }
 
@@ -261,7 +262,16 @@ pub(crate) fn binary_operator_trait(op: BinaryOp) -> Option<(&'static str, &'sta
         BinaryOp::LessEq => Some(("Ord", "le")),
         BinaryOp::Greater => Some(("Ord", "gt")),
         BinaryOp::GreaterEq => Some(("Ord", "ge")),
-        BinaryOp::And | BinaryOp::Or | BinaryOp::Eq | BinaryOp::NotEq => None,
+        BinaryOp::And
+        | BinaryOp::Or
+        | BinaryOp::Eq
+        | BinaryOp::NotEq
+        | BinaryOp::Pow
+        | BinaryOp::BitAnd
+        | BinaryOp::BitOr
+        | BinaryOp::BitXor
+        | BinaryOp::Shl
+        | BinaryOp::Shr => None,
     }
 }
 
@@ -12226,6 +12236,18 @@ impl<'a> FunctionChecker<'a> {
                         ))
                     }
                 }
+                UnaryOp::BitNot => {
+                    let value_ty = self.type_of_expr_hint(value, locals, expected)?;
+                    if is_integer_type(&value_ty) {
+                        Ok(value_ty)
+                    } else {
+                        Err(Diagnostic::coded_at(
+                            "AU2003",
+                            expr.span,
+                            format!("unary `~` expects an integer value, found `{value_ty}`"),
+                        ))
+                    }
+                }
             },
             ExprKind::Try(inner) => {
                 let current_return_type = self.current_return_type.as_ref().ok_or_else(|| {
@@ -12464,6 +12486,25 @@ impl<'a> FunctionChecker<'a> {
                         || matches!(right.kind, ExprKind::Float(_)))
                 {
                     right_ty = self.type_of_expr_hint(right, locals, Some(&left_ty))?;
+                }
+                if *op == BinaryOp::Pow
+                    && is_integer_type(&left_ty)
+                    && matches!(
+                        &right.kind,
+                        ExprKind::Unary {
+                            op: UnaryOp::Neg,
+                            expr: inner,
+                        } if matches!(inner.kind, ExprKind::Int(_))
+                    )
+                {
+                    return Err(Diagnostic::coded_at(
+                        "AU2003",
+                        right.span,
+                        "integer power does not accept a negative exponent",
+                    )
+                    .with_help(
+                        "use explicit floating operands such as `base.to_float() ** exponent.to_float()` for fractional power",
+                    ));
                 }
                 let operator_access =
                     if Self::binary_uses_builtin_value_semantics(*op, &left_ty, &right_ty) {
@@ -13077,6 +13118,12 @@ impl<'a> FunctionChecker<'a> {
             BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Mod => {
                 is_integer_type(left_ty) || is_float_type(left_ty)
             }
+            BinaryOp::Pow => is_integer_type(left_ty) || is_float_type(left_ty),
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => is_integer_type(left_ty),
             BinaryOp::Eq | BinaryOp::NotEq => true,
             BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq => {
                 is_integer_type(left_ty) || is_float_type(left_ty)
@@ -13371,6 +13418,44 @@ impl<'a> FunctionChecker<'a> {
                 "integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division",
             ));
         }
+        if matches!(
+            op,
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr
+        ) && (!is_integer_type(&left_ty) || !is_integer_type(&right_ty))
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2003",
+                span,
+                format!(
+                    "bitwise and shift operators require integer operands, found `{left_ty}` and `{right_ty}`"
+                ),
+            ));
+        }
+        if op == BinaryOp::Pow && (!is_numeric_type(&left_ty) || !is_numeric_type(&right_ty)) {
+            return Err(Diagnostic::coded_at(
+                "AU2003",
+                span,
+                format!("power requires numeric operands, found `{left_ty}` and `{right_ty}`"),
+            ));
+        }
+        if matches!(
+            op,
+            BinaryOp::Pow
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+        ) && left_ty != right_ty
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                format!(
+                    "binary operator operands must match exactly, found `{left_ty}` and `{right_ty}`"
+                ),
+            ));
+        }
         match (op, &left_ty, &right_ty) {
             (BinaryOp::And | BinaryOp::Or, Type::Named(name, args), _)
                 if args.is_empty() && name == "bool" && left_ty == right_ty =>
@@ -13391,6 +13476,21 @@ impl<'a> FunctionChecker<'a> {
             ) if left_ty == right_ty && (is_integer_type(&left_ty) || is_float_type(&left_ty)) => {
                 Ok(left_ty)
             }
+            (BinaryOp::Pow, _, _)
+                if left_ty == right_ty
+                    && (is_integer_type(&left_ty) || is_float_type(&left_ty)) =>
+            {
+                Ok(left_ty)
+            }
+            (
+                BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr,
+                _,
+                _,
+            ) if left_ty == right_ty && is_integer_type(&left_ty) => Ok(left_ty),
             (BinaryOp::Eq | BinaryOp::NotEq, _, _) if left_ty == right_ty => {
                 Ok(Type::named("bool"))
             }
@@ -14919,6 +15019,69 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         }
                         Ok(value_ty)
+                    }
+                    BuiltinFunction::Round => {
+                        let value_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            "internal error: `round` should bind exactly one argument",
+                        )?;
+                        let value_ty = self.type_of_expr(&value_arg.value, locals)?;
+                        if is_integer_type(&value_ty) {
+                            Ok(value_ty)
+                        } else if matches!(
+                            value_ty,
+                            Type::Named(ref name, ref args)
+                                if args.is_empty()
+                                    && matches!(name.as_str(), "float32" | "float64")
+                        ) {
+                            Ok(Type::named("int64"))
+                        } else {
+                            Err(Diagnostic::coded_at(
+                                "AU2003",
+                                value_arg.span,
+                                format!(
+                                    "`round(...)` expects an integer, `float32`, or `float64`, found `{value_ty}`"
+                                ),
+                            ))
+                        }
+                    }
+                    BuiltinFunction::Divmod => {
+                        let left_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            "internal error: `divmod` should bind a left argument",
+                        )?;
+                        let left_ty = self.type_of_expr(&left_arg.value, locals)?;
+                        if !is_numeric_type(&left_ty) {
+                            return Err(Diagnostic::coded_at(
+                                "AU2003",
+                                left_arg.span,
+                                format!(
+                                    "`divmod(...)` expects numeric arguments, found `{left_ty}`"
+                                ),
+                            ));
+                        }
+                        let right_arg = required_ordered_arg(
+                            &ordered_args,
+                            1,
+                            span,
+                            "internal error: `divmod` should bind a right argument",
+                        )?;
+                        let right_ty =
+                            self.type_of_expr_hint(&right_arg.value, locals, Some(&left_ty))?;
+                        if right_ty != left_ty {
+                            return Err(Diagnostic::coded_at(
+                                "AU2002",
+                                right_arg.span,
+                                format!(
+                                    "`divmod(...)` arguments must have one exact type, found `{left_ty}` and `{right_ty}`"
+                                ),
+                            ));
+                        }
+                        Ok(Type::Tuple(vec![left_ty.clone(), left_ty]))
                     }
                     BuiltinFunction::ParseInt32 => {
                         let text_arg = required_ordered_arg(
@@ -16681,15 +16844,7 @@ impl<'a> FunctionChecker<'a> {
                                         receiver_args[0].clone(),
                                         receiver_args[1].clone(),
                                     ]);
-                                    self.reject_rng_duplication(
-                                        if matches!(builtin_member, BuiltinMember::MapItems) {
-                                            "dict.items"
-                                        } else {
-                                            "dict.items"
-                                        },
-                                        &entry_type,
-                                        span,
-                                    )?;
+                                    self.reject_rng_duplication("dict.items", &entry_type, span)?;
                                     Ok(Type::Named("list".to_string(), vec![entry_type]))
                                 }
                                 BuiltinMember::MapClear => {
@@ -19040,16 +19195,26 @@ impl<'a> FunctionChecker<'a> {
                                     | "saturating_add"
                                     | "saturating_sub"
                                     | "saturating_mul"
+                                    | "wrapping_shl"
+                                    | "wrapping_shr"
+                                    | "saturating_shl"
+                                    | "saturating_shr"
                             ) =>
                     {
                         let builtin = BuiltinMember::resolve(name, method_name)
                             .expect("integer arithmetic method should resolve");
                         let ordered_args = builtin.bind_args(args, span)?;
+                        let argument_name =
+                            if method_name.ends_with("shl") || method_name.ends_with("shr") {
+                                "count"
+                            } else {
+                                "rhs"
+                            };
                         let rhs = self.bound_argument(
                             &ordered_args,
                             0,
                             span,
-                            format!("`{method_name}` requires an `rhs` argument"),
+                            format!("`{method_name}` requires a `{argument_name}` argument"),
                         )?;
                         let actual =
                             self.type_of_expr_hint(&rhs.value, locals, Some(&receiver_ty))?;

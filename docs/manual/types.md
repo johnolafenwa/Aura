@@ -41,7 +41,14 @@ Integer bounds are exact:
 
 `float32` and `float64` use IEEE-754 binary32 and binary64 representations. Literal lexing first requires a finite binary64 value; contextual `float32` conversion may round or overflow as recorded in [Current Limits](/manual/current-limits). Runtime operations may produce NaN, but Aura 0.2 makes `/`, `//`, or `%` by a floating zero explicit runtime failures rather than producing infinity or NaN through those operators.
 
-`int` is an alias for `int64`, so the two spellings have identical bounds, type identity, layout, and runtime behavior. An unsuffixed integer literal uses an expected integer type when one is available. It may also use an expected `float32` or `float64` when its value is exactly representable in that target; this is literal typing, not a conversion available to integer variables. Otherwise it defaults to `int64`.
+`int` is an alias for `int64`, so the two spellings have identical bounds,
+type identity, layout, and runtime behavior. Integer literals may be decimal,
+hexadecimal (`0x`), binary (`0b`), or octal (`0o`), with underscores between
+digits. Every spelling follows the same contextual typing and bounds rules. An
+unsuffixed integer literal uses an expected integer type when one is available.
+It may also use an expected `float32` or `float64` when its value is exactly
+representable in that target; this is literal typing, not a conversion
+available to integer variables. Otherwise it defaults to `int64`.
 
 The default does not widen explicitly typed APIs. Existing fixed `int32`
 contracts remain `int32`, including `main()` exit statuses, queue capacities,

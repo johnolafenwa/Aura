@@ -260,6 +260,7 @@ fn builtin_function_bind_args_cover_remaining_variants() {
         BuiltinFunction::Sleep,
         BuiltinFunction::Abs,
         BuiltinFunction::Sqrt,
+        BuiltinFunction::Round,
         BuiltinFunction::ParseInt32,
         BuiltinFunction::ParseInt64,
         BuiltinFunction::ParseFloat64,
@@ -271,7 +272,11 @@ fn builtin_function_bind_args_cover_remaining_variants() {
         assert_eq!(bound.len(), 1);
     }
 
-    for builtin in [BuiltinFunction::Min, BuiltinFunction::Max] {
+    for builtin in [
+        BuiltinFunction::Min,
+        BuiltinFunction::Max,
+        BuiltinFunction::Divmod,
+    ] {
         let args = [dummy_arg(None), dummy_arg(None)];
         let bound = builtin
             .bind_args(&args, Span::new(1, 1))
@@ -552,6 +557,30 @@ fn array_call_metadata_pins_constructors_members_and_integer_modes() {
             "saturating_mul",
             "saturating_mul(rhs: Self) -> Self",
         ),
+        (
+            BuiltinMember::IntegerWrappingShl,
+            "int8",
+            "wrapping_shl",
+            "wrapping_shl(count: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerWrappingShr,
+            "uint16",
+            "wrapping_shr",
+            "wrapping_shr(count: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerSaturatingShl,
+            "int128",
+            "saturating_shl",
+            "saturating_shl(count: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerSaturatingShr,
+            "uintsize",
+            "saturating_shr",
+            "saturating_shr(count: Self) -> Self",
+        ),
     ] {
         assert_eq!(BuiltinMember::resolve(receiver, name), Some(member));
         assert_eq!(member.name(), name);
@@ -607,6 +636,22 @@ fn integer_and_array_arithmetic_hover_contracts_name_each_operation() {
             BuiltinMember::IntegerSaturatingMul,
             "saturating_mul(rhs: Self) -> Self",
         ),
+        (
+            BuiltinMember::IntegerWrappingShl,
+            "wrapping_shl(count: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerWrappingShr,
+            "wrapping_shr(count: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerSaturatingShl,
+            "saturating_shl(count: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerSaturatingShr,
+            "saturating_shr(count: Self) -> Self",
+        ),
     ] {
         assert_eq!(member.detail(), detail);
         assert!(
@@ -615,6 +660,14 @@ fn integer_and_array_arithmetic_hover_contracts_name_each_operation() {
             member.name()
         );
     }
+    assert_eq!(
+        BuiltinMember::IntegerWrappingShl.argument_name(0),
+        Some("count")
+    );
+    assert_eq!(
+        BuiltinMember::IntegerSaturatingShr.argument_passing(0),
+        Some(ReceiverKind::Borrow)
+    );
 
     for (member, expected) in [
         (BuiltinMember::ArrayLen, "total number"),
@@ -638,6 +691,8 @@ fn builtin_function_call_shapes_expose_bare_shared_argument_metadata() {
         (BuiltinFunction::Range, &[0, 1][..]),
         (BuiltinFunction::Min, &[0, 1][..]),
         (BuiltinFunction::Max, &[0, 1][..]),
+        (BuiltinFunction::Divmod, &[0, 1][..]),
+        (BuiltinFunction::Round, &[0][..]),
     ] {
         for &position in positions {
             assert_eq!(
@@ -652,6 +707,9 @@ fn builtin_function_call_shapes_expose_bare_shared_argument_metadata() {
     assert_eq!(BuiltinFunction::Range.argument_name(1), Some("stop"));
     assert_eq!(BuiltinFunction::Min.argument_name(0), Some("left"));
     assert_eq!(BuiltinFunction::Max.argument_name(1), Some("right"));
+    assert_eq!(BuiltinFunction::Divmod.argument_name(0), Some("left"));
+    assert_eq!(BuiltinFunction::Divmod.argument_name(1), Some("right"));
+    assert_eq!(BuiltinFunction::Round.argument_name(0), Some("value"));
 }
 
 #[test]

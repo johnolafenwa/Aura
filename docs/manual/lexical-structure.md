@@ -172,15 +172,15 @@ Aura 0.2 recognizes:
 ```text
 ( ) [ ] { } : , . ?
 = == != < <= > >=
-+ += - -= * *= / /= // //= % %=
++ += - -= * *= ** **= / /= // //= % %=
+& &= | |= ^ ^= ~ << <<= >> >>=
 ->
 ```
 
 There is no semicolon. Multiple statements cannot share one physical line.
-Aura 0.2 also has no exponentiation, unary `+`, bitwise operators, assignment
-expressions or a lambda arrow; lambdas use `lambda parameters: expression`. The lexer
-chooses the longest operator spelling, so `//=` is one token rather than `//`
-followed by `=`.
+Aura has no unary `+`, assignment expressions, or lambda arrow; lambdas use
+`lambda parameters: expression`. The lexer chooses the longest operator
+spelling, so `**=`, `<<=`, `>>=`, and `//=` are each one token.
 
 Comma-separated lists do not accept a trailing comma. This applies to
 arguments, parameters, imports, type arguments, generic parameters, enum
@@ -190,29 +190,49 @@ comma, while multi-element tuples reject a trailing comma.
 
 ## Integer Literals
 
-An integer literal is one or more decimal digits:
+Integer literals may use decimal, hexadecimal, binary, or octal digits:
 
 ```ebnf
-INTEGER = digit, { digit } ;
+decimal-digit   = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+binary-digit    = "0" | "1" ;
+octal-digit     = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" ;
+hex-digit       = decimal-digit | "a" | "b" | "c" | "d" | "e" | "f"
+                  | "A" | "B" | "C" | "D" | "E" | "F" ;
+decimal-digits  = decimal-digit, { decimal-digit } ;
+decimal-integer = decimal-digit, { decimal-digit | ("_", decimal-digit) } ;
+hex-integer     = ("0x" | "0X"), hex-digit,
+                  { hex-digit | ("_", hex-digit) } ;
+binary-integer  = ("0b" | "0B"), binary-digit,
+                  { binary-digit | ("_", binary-digit) } ;
+octal-integer   = ("0o" | "0O"), octal-digit,
+                  { octal-digit | ("_", octal-digit) } ;
+INTEGER         = decimal-integer | hex-integer | binary-integer | octal-integer ;
 ```
 
-Examples are `0`, `42`, and `170000`. The lexical value must fit an unsigned
-128-bit integer. Static checking selects an expected integer type when
-available and verifies that the value fits. It may instead select an expected
-`float32` or `float64` when the integer's value is exactly representable in
-that type; otherwise the literal defaults to `int64`. The source spelling
-`int` is an alias for `int64`.
+Examples include `0`, `42`, `1_000_000`, `0xFF`, `0b1010_0110`, and
+`0o755`. Hexadecimal digits are case-insensitive. An underscore is valid only
+between two digits from the literal's selected base. It cannot follow the
+prefix, begin or end the digit sequence, or repeat without an intervening
+digit. Separators and base prefixes do not apply to floating-point or duration
+literals.
 
-`-7` is not one signed token. It is unary `-` applied to the positive integer literal `7`. Aura has no hexadecimal, octal, binary, or underscore-separated integer syntax.
+The lexical value must fit an unsigned 128-bit integer. Static checking
+selects an expected integer type when available and verifies that the value
+fits. It may instead select an expected `float32` or `float64` when the
+integer's value is exactly representable in that type; otherwise the literal
+defaults to `int64`. The source spelling `int` is an alias for `int64`.
+
+`-0x7F` is not one signed token. It is unary `-` applied to the positive
+integer literal `0x7F`.
 
 ## Floating-Point Literals
 
 Floating literals use a required fractional digit or an exponent:
 
 ```ebnf
-EXPONENT = ("e" | "E"), [ "+" | "-" ], digit, { digit } ;
-FLOAT    = INTEGER, ".", digit, { digit }, [ EXPONENT ]
-         | INTEGER, EXPONENT ;
+EXPONENT = ("e" | "E"), [ "+" | "-" ], decimal-digits ;
+FLOAT    = decimal-digits, ".", decimal-digits, [ EXPONENT ]
+         | decimal-digits, EXPONENT ;
 ```
 
 Valid examples include `1.0`, `0.25`, `1e3`, `2.5e-1`, and `3E+4`. `.5` and `3.` are not floating literals. The lexical value must be finite as an `f64`. Static checking defaults it to `float64` or adopts an expected `float32`/`float64` type.
@@ -222,7 +242,7 @@ Valid examples include `1.0`, `0.25`, `1e3`, `2.5e-1`, and `3E+4`. `.5` and `3.`
 A duration literal is a non-negative integral count followed immediately by `ms`, `s`, or `m`:
 
 ```ebnf
-DURATION = INTEGER, ("ms" | "s" | "m") ;
+DURATION = decimal-digits, ("ms" | "s" | "m") ;
 ```
 
 `10ms`, `2s`, and `1m` represent 10, 2,000, and 60,000 milliseconds

@@ -111,6 +111,9 @@ print(subtract(left=10, right=3))
 print(subtract(10, right=3))
 ```
 
+Function parameters remain positionally bindable. A `*` keyword-only marker
+is not part of Aura 0.3's structural callable model and receives `AU1101`.
+
 Rules:
 
 - positional arguments come before named arguments

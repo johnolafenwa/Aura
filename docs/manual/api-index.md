@@ -22,6 +22,8 @@ backend-parity contract is indexed separately in [Assertions](/manual/assertions
 | `min` | `min(left: number, right: number) -> number` | Smaller value of the same numeric type. |
 | `max` | `max(left: number, right: number) -> number` | Larger value of the same numeric type. |
 | `sqrt` | `sqrt(value: float32|float64) -> float32|float64` | Square root. |
+| `round` | `round(value: T) -> T` for integers; `round(value: float32\|float64) -> int64` | Integer identity or nearest-integer ties-to-even rounding. |
+| `divmod` | `divmod(left: T, right: T) -> (T, T)` for one exact integer or float type | Paired floor quotient and divisor-signed remainder. |
 | `parse_int32` | `parse_int32(text: str) -> Result[int32, str]` | Parses a signed 32-bit integer. |
 | `parse_int64` | `parse_int64(text: str) -> Result[int64, str]` | Parses a signed 64-bit integer. |
 | `parse_float64` | `parse_float64(text: str) -> Result[float64, str]` | Parses a 64-bit float. |
@@ -54,6 +56,8 @@ backend rules are in [FFI v0](/manual/ffi).
 | integer `.to_float` | `to_float() -> float64` | Converts any integer type with IEEE-754 round-to-nearest, ties-to-even; may round. |
 | integer wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | Same-type fixed-width two's-complement modular arithmetic. |
 | integer saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | Same-type arithmetic clamped to the declared width. |
+| integer wrapping shifts | `wrapping_shl(count)`, `wrapping_shr(count)` | Same-type count; left shift discards high bits and right shift matches `>>` after count validation. |
+| integer saturating shifts | `saturating_shl(count)`, `saturating_shr(count)` | Same-type count; left shift clamps and right shift matches `>>` after count validation. |
 | scalar `.to_string` | `to_string() -> str` | Supported on `bool`, integer types, `float32`, and `float64`. |
 | `Duration.ms` | `Duration.ms(value: int64) -> Duration` | Exact signed millisecond constructor. |
 | `Duration.seconds` | `Duration.seconds(value: int64) -> Duration` | Exact signed second constructor. |

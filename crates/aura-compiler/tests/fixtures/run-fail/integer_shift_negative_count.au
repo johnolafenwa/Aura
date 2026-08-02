@@ -1,0 +1,6 @@
+def negative_count() -> int8:
+    return -1
+
+def main():
+    value: int8 = 1
+    print(value >> negative_count())

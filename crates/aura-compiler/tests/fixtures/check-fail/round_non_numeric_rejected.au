@@ -1,0 +1,2 @@
+def main():
+    value = round("1")

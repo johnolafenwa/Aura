@@ -65,10 +65,10 @@ print(-10.5 // 3.0) # -4.0
 print(-10.5 % 3.0)  # 1.5
 ```
 
-The matching compound assignments are `+=`, `-=`, `*=`, `/=`, `%=`, and
-`//=`. Integer `/=` is rejected for the same reason as integer `/`; floating
-`/=` remains true division. `//` can also use the `FloorDiv` operator trait
-when no builtin numeric or Duration rule applies.
+The matching compound assignments are `+=`, `-=`, `*=`, `**=`, `/=`, `%=`,
+and `//=`. Integer `/=` is rejected for the same reason as integer `/`;
+floating `/=` remains true division. `//` can also use the `FloorDiv`
+operator trait when no builtin numeric or Duration rule applies.
 
 Unary minus works on integers and floats:
 
@@ -80,6 +80,82 @@ temperature: float64 = -3.5
 See [examples/numbers/unary_minus.au](../examples/numbers/unary_minus.au).
 
 Aura does not do implicit numeric widening. Mixed expressions like `int32 + int64` are rejected -- use explicit casts instead (see below).
+
+## Integer Literal Bases
+
+Integer literals can use decimal, hexadecimal, binary, or octal notation.
+Underscores can group digits without changing the value:
+
+```python
+requests = 1_000_000
+red: uint32 = 0xFF
+permissions: uint16 = 0o755
+flags: uint8 = 0b1010_0110
+```
+
+The prefixes are case-insensitive. An underscore must sit between two digits
+that are valid in the selected base. The sign remains a unary operator, so
+`-0x7F` means unary minus applied to `0x7F`. Contextual typing and integer
+range checks are identical for every literal spelling.
+
+## Bitwise Operators And Shifts
+
+Every integer type supports `&`, `|`, `^`, `~`, `<<`, and `>>`. Both operands
+of a binary operation have the same exact integer type. This includes a shift
+count:
+
+```python
+value: uint32 = 0b1010_0000
+mask: uint32 = 0b1111_0000
+four: uint32 = 4
+
+print(value & mask)       # 160
+print(value | 0b0000_1111) # 175
+print(value ^ mask)       # 80
+print(~value)             # 4294967135
+print(value >> four)      # 10
+print(value << four)      # 2560
+```
+
+A shift count must be in `0..width`. Signed right shift extends the sign bit;
+unsigned right shift fills with zero. Ordinary left shift is checked and
+reports `AU4002` when the mathematical result does not fit. The compound forms
+are `&=`, `|=`, `^=`, `<<=`, and `>>=`.
+
+## Power, Rounding, And Divmod
+
+`**` is right-associative and more tightly bound than unary minus on its left:
+
+```python
+print(2 ** 3 ** 2) # 512
+print(-2 ** 2)     # -4
+print((-2) ** 2)   # 4
+print(2.0 ** -2.0) # 0.25
+```
+
+Integer power preserves the exact integer type, rejects negative exponents,
+and checks overflow. Floating power preserves the exact floating type and
+reports defined domain and overflow failures.
+
+`round` uses nearest-integer ties-to-even for floating inputs and returns
+`int64`. An integer input is returned unchanged with its exact type:
+
+```python
+print(round(2.5)) # 2
+print(round(3.5)) # 4
+```
+
+`divmod(left, right)` evaluates both values once and returns the floor quotient
+and divisor-signed remainder together:
+
+```python
+quotient, remainder = divmod(-17, 5)
+print(quotient)  # -4
+print(remainder) # 3
+```
+
+The two arguments have one exact integer or floating type. A zero divisor
+reports `AU4004`.
 
 ## Explicit Integer Arithmetic Modes
 
@@ -95,6 +171,21 @@ print(top.saturating_add(1))  # 2147483647
 print(top.wrapping_sub(-1))   # -2147483648
 print(top.saturating_mul(2))  # 2147483647
 ```
+
+Shift operations have the same explicit arithmetic modes. The count has the
+receiver's exact type and must remain below its bit width:
+
+```python
+high: uint8 = 0b1000_0000
+one: uint8 = 1
+
+print(high.wrapping_shl(one))   # 0
+print(high.saturating_shl(one)) # 255
+print(high.wrapping_shr(one))   # 64
+print(high.saturating_shr(one)) # 64
+```
+
+The two right-shift methods match ordinary `>>` after count validation.
 
 The same six method names are available on integer `Array[T]`. Their right
 operand is either another same-shape `Array[T]` or one scalar of exactly `T`.
@@ -159,7 +250,9 @@ print(value.sqrt())   # 9.0
 
 Printed `float32` and `float64` values use the shortest decimal spelling that round-trips to the same source type. Whole-number floats keep a trailing `.0`, signed zero stays `-0.0`, and large or tiny values use concise scientific notation. For example, `9007199254740992.0`, `1e300`, and `1e-300` print without being routed through lower `float32` precision.
 
-See [examples/numbers/numeric_builtins.au](../examples/numbers/numeric_builtins.au) and [examples/numbers/float_sqrt.au](../examples/numbers/float_sqrt.au).
+See [examples/numbers/numeric_builtins.au](../examples/numbers/numeric_builtins.au),
+[examples/numbers/float_sqrt.au](../examples/numbers/float_sqrt.au), and
+[examples/numbers/bit_packing.au](../examples/numbers/bit_packing.au).
 
 ## `.to_string()`
 

@@ -1,0 +1,113 @@
+def main():
+    signed: int8 = 120
+    signed_negative: int8 = -100
+    signed_count: int8 = 2
+    signed_one: int8 = 1
+    unsigned: uint8 = 200
+    unsigned_count: uint8 = 1
+
+    print(signed.wrapping_shl(count=signed_count))
+    print(signed.saturating_shl(signed_count))
+    print(signed_negative.saturating_shl(signed_count))
+    print(signed_negative.wrapping_shr(signed_one))
+    print(signed_negative.saturating_shr(signed_one))
+    print(unsigned.wrapping_shl(unsigned_count))
+    print(unsigned.saturating_shl(unsigned_count))
+    print(unsigned.wrapping_shr(unsigned_count))
+    print(unsigned.saturating_shr(unsigned_count))
+
+    signed8_one: int8 = 1
+    signed8_negative: int8 = -1
+    signed8_last: int8 = 7
+    print(signed8_negative.wrapping_shr(signed8_last))
+    print(signed8_negative.saturating_shr(signed8_last))
+    print(signed8_one.wrapping_shl(signed8_last))
+    print(signed8_one.saturating_shl(signed8_last))
+
+    signed16_one: int16 = 1
+    signed16_negative: int16 = -1
+    signed16_last: int16 = 15
+    print(signed16_negative.wrapping_shr(signed16_last))
+    print(signed16_negative.saturating_shr(signed16_last))
+    print(signed16_one.wrapping_shl(signed16_last))
+    print(signed16_one.saturating_shl(signed16_last))
+
+    signed32_one: int32 = 1
+    signed32_negative: int32 = -1
+    signed32_last: int32 = 31
+    print(signed32_negative.wrapping_shr(signed32_last))
+    print(signed32_negative.saturating_shr(signed32_last))
+    print(signed32_one.wrapping_shl(signed32_last))
+    print(signed32_one.saturating_shl(signed32_last))
+
+    signed64_one: int64 = 1
+    signed64_negative: int64 = -1
+    signed64_last: int64 = 63
+    print(signed64_negative.wrapping_shr(signed64_last))
+    print(signed64_negative.saturating_shr(signed64_last))
+    print(signed64_one.wrapping_shl(signed64_last))
+    print(signed64_one.saturating_shl(signed64_last))
+
+    signed128_one: int128 = 1
+    signed128_negative: int128 = -1
+    signed128_last: int128 = 127
+    print(signed128_negative.wrapping_shr(signed128_last))
+    print(signed128_negative.saturating_shr(signed128_last))
+    print(signed128_one.wrapping_shl(signed128_last))
+    print(signed128_one.saturating_shl(signed128_last))
+
+    signed_size_one: intsize = 1
+    signed_size_negative: intsize = -1
+    signed_size_last: intsize = 63
+    print(signed_size_negative.wrapping_shr(signed_size_last))
+    print(signed_size_negative.saturating_shr(signed_size_last))
+    print(signed_size_one.wrapping_shl(signed_size_last))
+    print(signed_size_one.saturating_shl(signed_size_last))
+
+    unsigned8_one: uint8 = 1
+    unsigned8_max: uint8 = 255
+    unsigned8_last: uint8 = 7
+    print(unsigned8_max.wrapping_shr(unsigned8_last))
+    print(unsigned8_max.saturating_shr(unsigned8_last))
+    print(unsigned8_one.wrapping_shl(unsigned8_last))
+    print(unsigned8_one.saturating_shl(unsigned8_last))
+
+    unsigned16_one: uint16 = 1
+    unsigned16_max: uint16 = 65535
+    unsigned16_last: uint16 = 15
+    print(unsigned16_max.wrapping_shr(unsigned16_last))
+    print(unsigned16_max.saturating_shr(unsigned16_last))
+    print(unsigned16_one.wrapping_shl(unsigned16_last))
+    print(unsigned16_one.saturating_shl(unsigned16_last))
+
+    unsigned32_one: uint32 = 1
+    unsigned32_max: uint32 = 4294967295
+    unsigned32_last: uint32 = 31
+    print(unsigned32_max.wrapping_shr(unsigned32_last))
+    print(unsigned32_max.saturating_shr(unsigned32_last))
+    print(unsigned32_one.wrapping_shl(unsigned32_last))
+    print(unsigned32_one.saturating_shl(unsigned32_last))
+
+    unsigned64_one: uint64 = 1
+    unsigned64_max: uint64 = 18446744073709551615
+    unsigned64_last: uint64 = 63
+    print(unsigned64_max.wrapping_shr(unsigned64_last))
+    print(unsigned64_max.saturating_shr(unsigned64_last))
+    print(unsigned64_one.wrapping_shl(unsigned64_last))
+    print(unsigned64_one.saturating_shl(unsigned64_last))
+
+    unsigned128_one: uint128 = 1
+    unsigned128_max: uint128 = 340282366920938463463374607431768211455
+    unsigned128_last: uint128 = 127
+    print(unsigned128_max.wrapping_shr(unsigned128_last))
+    print(unsigned128_max.saturating_shr(unsigned128_last))
+    print(unsigned128_one.wrapping_shl(unsigned128_last))
+    print(unsigned128_one.saturating_shl(unsigned128_last))
+
+    unsigned_size_one: uintsize = 1
+    unsigned_size_max: uintsize = 18446744073709551615
+    unsigned_size_last: uintsize = 63
+    print(unsigned_size_max.wrapping_shr(unsigned_size_last))
+    print(unsigned_size_max.saturating_shr(unsigned_size_last))
+    print(unsigned_size_one.wrapping_shl(unsigned_size_last))
+    print(unsigned_size_one.saturating_shl(unsigned_size_last))

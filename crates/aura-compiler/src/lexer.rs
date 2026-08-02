@@ -43,12 +43,25 @@ pub enum TokenKind {
     MinusEqual,
     Star,
     StarEqual,
+    DoubleStar,
+    DoubleStarEqual,
     Slash,
     SlashEqual,
     DoubleSlash,
     DoubleSlashEqual,
     Percent,
     PercentEqual,
+    Ampersand,
+    AmpersandEqual,
+    Pipe,
+    PipeEqual,
+    Caret,
+    CaretEqual,
+    Tilde,
+    ShiftLeft,
+    ShiftLeftEqual,
+    ShiftRight,
+    ShiftRightEqual,
     Arrow,
     KwClass,
     KwEnum,
@@ -639,7 +652,15 @@ fn tokenize_line(
                 }
             }
             '<' => {
-                if let Some((_, '=')) = chars.get(index + 1) {
+                if matches!(chars.get(index + 1), Some((_, '<')))
+                    && matches!(chars.get(index + 2), Some((_, '=')))
+                {
+                    tokens.push(simple(TokenKind::ShiftLeftEqual, line_no, column));
+                    index += 3;
+                } else if matches!(chars.get(index + 1), Some((_, '<'))) {
+                    tokens.push(simple(TokenKind::ShiftLeft, line_no, column));
+                    index += 2;
+                } else if let Some((_, '=')) = chars.get(index + 1) {
                     tokens.push(simple(TokenKind::LessEq, line_no, column));
                     index += 2;
                 } else {
@@ -648,7 +669,15 @@ fn tokenize_line(
                 }
             }
             '>' => {
-                if let Some((_, '=')) = chars.get(index + 1) {
+                if matches!(chars.get(index + 1), Some((_, '>')))
+                    && matches!(chars.get(index + 2), Some((_, '=')))
+                {
+                    tokens.push(simple(TokenKind::ShiftRightEqual, line_no, column));
+                    index += 3;
+                } else if matches!(chars.get(index + 1), Some((_, '>'))) {
+                    tokens.push(simple(TokenKind::ShiftRight, line_no, column));
+                    index += 2;
+                } else if let Some((_, '=')) = chars.get(index + 1) {
                     tokens.push(simple(TokenKind::GreaterEq, line_no, column));
                     index += 2;
                 } else {
@@ -666,7 +695,15 @@ fn tokenize_line(
                 }
             }
             '*' => {
-                if let Some((_, '=')) = chars.get(index + 1) {
+                if matches!(chars.get(index + 1), Some((_, '*')))
+                    && matches!(chars.get(index + 2), Some((_, '=')))
+                {
+                    tokens.push(simple(TokenKind::DoubleStarEqual, line_no, column));
+                    index += 3;
+                } else if matches!(chars.get(index + 1), Some((_, '*'))) {
+                    tokens.push(simple(TokenKind::DoubleStar, line_no, column));
+                    index += 2;
+                } else if let Some((_, '=')) = chars.get(index + 1) {
                     tokens.push(simple(TokenKind::StarEqual, line_no, column));
                     index += 2;
                 } else {
@@ -699,6 +736,37 @@ fn tokenize_line(
                     tokens.push(simple(TokenKind::Percent, line_no, column));
                     index += 1;
                 }
+            }
+            '&' => {
+                if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::AmpersandEqual, line_no, column));
+                    index += 2;
+                } else {
+                    tokens.push(simple(TokenKind::Ampersand, line_no, column));
+                    index += 1;
+                }
+            }
+            '|' => {
+                if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::PipeEqual, line_no, column));
+                    index += 2;
+                } else {
+                    tokens.push(simple(TokenKind::Pipe, line_no, column));
+                    index += 1;
+                }
+            }
+            '^' => {
+                if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::CaretEqual, line_no, column));
+                    index += 2;
+                } else {
+                    tokens.push(simple(TokenKind::Caret, line_no, column));
+                    index += 1;
+                }
+            }
+            '~' => {
+                tokens.push(simple(TokenKind::Tilde, line_no, column));
+                index += 1;
             }
             '-' => {
                 if let Some((_, '>')) = chars.get(index + 1) {
@@ -839,10 +907,102 @@ fn tokenize_line(
             }
             '0'..='9' => {
                 let start = index;
-                index += 1;
+                let prefixed_base = if ch == '0' {
+                    match chars.get(index + 1).map(|(_, next)| *next) {
+                        Some('x' | 'X') => Some((16, "hexadecimal")),
+                        Some('b' | 'B') => Some((2, "binary")),
+                        Some('o' | 'O') => Some((8, "octal")),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
 
-                while matches!(chars.get(index), Some((_, '0'..='9'))) {
+                if let Some((radix, base_name)) = prefixed_base {
+                    let prefix = &content[chars[start].0
+                        ..chars
+                            .get(start + 2)
+                            .map(|(offset, _)| *offset)
+                            .unwrap_or(content.len())];
+                    index += 2;
+                    let digits_start = index;
+                    while matches!(
+                        chars.get(index),
+                        Some((_, '0'..='9' | 'a'..='z' | 'A'..='Z' | '_'))
+                    ) {
+                        index += 1;
+                    }
+                    if index == digits_start {
+                        return Err(lexical_error(
+                            Span::new(line_no, column),
+                            format!("integer literal requires digits after `{prefix}`"),
+                        ));
+                    }
+                    for digit_index in digits_start..index {
+                        let (_, digit) = chars[digit_index];
+                        if digit == '_' {
+                            let previous_is_digit = digit_index > digits_start
+                                && chars[digit_index - 1].1.is_digit(radix);
+                            let next_is_digit = chars
+                                .get(digit_index + 1)
+                                .is_some_and(|(_, next)| next.is_digit(radix));
+                            if !previous_is_digit || !next_is_digit {
+                                return Err(lexical_error(
+                                    Span::new(line_no, base_column + chars[digit_index].0),
+                                    "an underscore in an integer literal must appear between two digits valid for its base",
+                                ));
+                            }
+                        } else if digit.to_digit(radix).is_none() {
+                            return Err(lexical_error(
+                                Span::new(line_no, base_column + chars[digit_index].0),
+                                format!("invalid digit `{digit}` in {base_name} integer literal"),
+                            ));
+                        }
+                    }
+                    if matches!(chars.get(index), Some((_, '.')))
+                        && matches!(chars.get(index + 1), Some((_, '0'..='9')))
+                    {
+                        return Err(lexical_error(
+                            Span::new(line_no, column),
+                            "base prefixes do not apply to floating-point literals",
+                        ));
+                    }
+                    let end_offset = chars
+                        .get(index)
+                        .map(|(next_offset, _)| *next_offset)
+                        .unwrap_or_else(|| content.len());
+                    let digits = content[chars[digits_start].0..end_offset].replace('_', "");
+                    let value = u128::from_str_radix(&digits, radix).map_err(|_| {
+                        lexical_error(Span::new(line_no, column), "invalid integer literal")
+                    })?;
+                    tokens.push(Token {
+                        kind: TokenKind::IntLiteral(value),
+                        span: Span::new(line_no, column),
+                    });
+                    continue;
+                }
+
+                index += 1;
+                while matches!(chars.get(index), Some((_, '0'..='9' | '_'))) {
                     index += 1;
+                }
+                let integer_end = index;
+                let has_separator = chars[start..integer_end]
+                    .iter()
+                    .any(|(_, digit)| *digit == '_');
+                for digit_index in start..integer_end {
+                    if chars[digit_index].1 != '_' {
+                        continue;
+                    }
+                    let between_digits = digit_index > start
+                        && matches!(chars.get(digit_index - 1), Some((_, '0'..='9')))
+                        && matches!(chars.get(digit_index + 1), Some((_, '0'..='9')));
+                    if !between_digits {
+                        return Err(lexical_error(
+                            Span::new(line_no, base_column + chars[digit_index].0),
+                            "an underscore in an integer literal must appear between two decimal digits",
+                        ));
+                    }
                 }
 
                 let mut is_float = false;
@@ -854,6 +1014,12 @@ fn tokenize_line(
 
                     while matches!(chars.get(index), Some((_, '0'..='9'))) {
                         index += 1;
+                    }
+                    if matches!(chars.get(index), Some((_, '_'))) {
+                        return Err(lexical_error(
+                            Span::new(line_no, base_column + chars[index].0),
+                            "integer separators do not apply to floating-point literals",
+                        ));
                     }
                 }
 
@@ -874,6 +1040,12 @@ fn tokenize_line(
                     while matches!(chars.get(index), Some((_, '0'..='9'))) {
                         index += 1;
                     }
+                    if matches!(chars.get(index), Some((_, '_'))) {
+                        return Err(lexical_error(
+                            Span::new(line_no, base_column + chars[index].0),
+                            "integer separators do not apply to floating-point literals",
+                        ));
+                    }
                 }
 
                 let end_offset = match chars.get(index) {
@@ -883,6 +1055,12 @@ fn tokenize_line(
                 let text = &content[chars[start].0..end_offset];
 
                 if is_float {
+                    if has_separator {
+                        return Err(lexical_error(
+                            Span::new(line_no, column),
+                            "integer separators do not apply to floating-point literals",
+                        ));
+                    }
                     let value = text
                         .parse::<f64>()
                         .expect("lexer should only build syntactically valid float literals");
@@ -897,7 +1075,8 @@ fn tokenize_line(
                         span: Span::new(line_no, column),
                     });
                 } else {
-                    let value = match text.parse::<u128>() {
+                    let normalized = text.replace('_', "");
+                    let value = match normalized.parse::<u128>() {
                         Ok(value) => value,
                         Err(_) => {
                             return Err(lexical_error(
@@ -909,6 +1088,12 @@ fn tokenize_line(
                     let duration_kind = if let Some((_, suffix_start)) = chars.get(index) {
                         match suffix_start {
                             'm' => {
+                                if has_separator {
+                                    return Err(lexical_error(
+                                        Span::new(line_no, column),
+                                        "integer separators do not apply to duration literals",
+                                    ));
+                                }
                                 if matches!(chars.get(index + 1), Some((_, 's'))) {
                                     index += 2;
                                     Some(duration_literal_nanos(
@@ -926,6 +1111,12 @@ fn tokenize_line(
                                 }
                             }
                             's' => {
+                                if has_separator {
+                                    return Err(lexical_error(
+                                        Span::new(line_no, column),
+                                        "integer separators do not apply to duration literals",
+                                    ));
+                                }
                                 index += 1;
                                 Some(duration_literal_nanos(
                                     value,
@@ -938,6 +1129,14 @@ fn tokenize_line(
                     } else {
                         None
                     };
+                    if duration_kind.is_none()
+                        && matches!(chars.get(index), Some((_, '_' | 'a'..='z' | 'A'..='Z')))
+                    {
+                        return Err(lexical_error(
+                            Span::new(line_no, base_column + chars[index].0),
+                            "invalid integer literal",
+                        ));
+                    }
                     tokens.push(Token {
                         kind: duration_kind.unwrap_or(TokenKind::IntLiteral(value)),
                         span: Span::new(line_no, column),

@@ -41,6 +41,28 @@ from helpers.counter import Counter
 
 This is the most concise way to use types without repeating module paths. You can import functions, classes, enums, and traits.
 
+## Import Aliases
+
+Use `as` to choose a concise or collision-free local name for a module:
+
+```python
+import helpers.math as integer_math
+
+print(integer_math.double(value=5))
+```
+
+Individual from-import entries may also be aliased:
+
+```python
+from helpers.counter import Counter as ReadableCounter
+
+counter = ReadableCounter(value=2)
+```
+
+A from-import may mix direct and aliased entries. The alias changes only the
+local spelling. Visibility, type identity, trait implementations, and module
+resolution continue to use the original declaration.
+
 ## `public` Visibility
 
 Top-level items are private by default. Mark items with `public` to make them available to other modules:
@@ -94,6 +116,7 @@ See [18-packages-and-workspaces.md](18-packages-and-workspaces.md) for the full 
 ## Maintained Examples
 
 - [examples/modules/simple_import.au](../examples/modules/simple_import.au) with helpers under [examples/modules/helpers](../examples/modules/helpers)
+- [examples/modules/import_aliases.au](../examples/modules/import_aliases.au) demonstrates module and from-import aliases
 - [examples/modules/namespace_import_types.au](../examples/modules/namespace_import_types.au) with modules under [examples/modules/pkg](../examples/modules/pkg)
 - [examples/modules/trait_impl_imports.au](../examples/modules/trait_impl_imports.au) with modules under [examples/modules/pkg](../examples/modules/pkg)
 - [examples/packages/local_path_dependencies/app/src/main.au](../examples/packages/local_path_dependencies/app/src/main.au) with a sibling dependency

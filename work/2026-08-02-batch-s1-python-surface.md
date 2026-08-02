@@ -159,6 +159,34 @@ source-visible compatibility path.
   until its registration API and full completion matrix are ratified at the
   Batch S1 checkpoint.
 
+### S4 Python polish: numeric and import foundation
+
+- Module and from-import aliases are implemented for builtin, local, and
+  dependency-package imports. Only the alias binds, while nominal identity,
+  visibility, hover, completion, and definition behavior remain intact.
+- Integer literals accept binary, octal, hexadecimal, and between-digit
+  separators. Power and the complete bitwise precedence ladder preserve exact
+  integer widths.
+- Checked shifts reject negative or width-reaching counts and reject left-shift
+  overflow. Every fixed-width signed and unsigned integer exposes
+  `wrapping_shl`, `wrapping_shr`, `saturating_shl`, and `saturating_shr` with
+  exact-type counts. Tests cover all 12 widths, arithmetic versus logical right
+  shift, both saturation bounds, and MIR/direct diagnostics.
+- `round` uses ties-to-even, preserves integer types, and returns `int64` for
+  floats. `divmod` preserves the exact matching numeric type and shares checked
+  floor-division behavior, including zero and signed-minimum overflow traps.
+- Floating power is computed at the destination width through one shared
+  runtime helper. A regression pins float32 overflow that remains finite as
+  float64, eliminating backend double-rounding and overflow-classification
+  drift.
+- The maintained bit-packing example and executable Manual blocks prove the
+  binary-protocol surface. The semantic compiler/editor interface advances to
+  schema version 4 for this incompatible AST and analysis expansion.
+- The broad run-pass harness initially exposed a stack-guard SIGBUS in an
+  existing imported-builtin-default fixture. Nested MIR checked-dispatch frames
+  exceeded the 512 KiB lightweight-task stack before a blocking host call; the
+  default is now 768 KiB and the full run-pass family is green.
+
 ## Verification
 
 Current focused version-stamp evidence:
@@ -218,6 +246,12 @@ Current focused version-stamp evidence:
 - The coordinated S1/S2 family passed formatting and owned-file diff hygiene,
   was committed, and was merged locally with the landed documentation/CI pull
   request before S3 began.
+- S4 import-alias parser/module/package/analysis/LSP fixtures pass. Numeric
+  unit partitions and all parse/check/run fixture families pass; the maintained
+  numeric example and focused float32-power failure are byte-identical on MIR
+  and direct backends. Reference integrity is green across 38 Manual pages,
+  264 fences, 206 Aura blocks, and 124 compiler-verified blocks; the docs build
+  is green.
 
 The opening full-gate attempt stopped at the expected old identity guard that
 classified “Aura 0.3” as future narration. That guard now advances to 0.4 and

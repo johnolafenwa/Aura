@@ -9,14 +9,16 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
-use crate::ast::UnaryOp;
+use crate::ast::{BinaryOp, UnaryOp};
 use crate::builtin_modules::host_builtin_metadata;
 use crate::call::{BuiltinAssociatedFunction, BuiltinMember};
 use crate::diag::{
     Diagnostic, Result, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span,
 };
 use crate::ffi::{FfiError, FfiSignature, FfiType, FfiValue};
-use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
+use crate::integer::{
+    IntegerKind, IntegerPowerError, IntegerRepresentation, IntegerShiftError, IntegerValue,
+};
 use crate::json_codec;
 use crate::mir::{
     CallTarget, Instruction, MirArg, MirClass, MirExternCall, MirExternParam, MirFormatPart,
@@ -27,10 +29,10 @@ use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
     cast_numeric_value, catch_lightweight_task_failure, claim_task_result_observations,
     clone_json_codec_source, decode_process_restart_policy, decode_process_stdio,
-    duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
+    divmod_numeric_values, duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
     evaluate_bytes_host_builtin_ref, evaluate_host_builtin_with_program_args,
-    evaluate_string_to_bytes_host_ref, float_floor_divmod, host_process_args, io_error,
-    io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
+    evaluate_string_to_bytes_host_ref, float_floor_divmod, float_power, host_process_args,
+    io_error, io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
     json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_owned_to_runtime,
     nominal_runtime_base_name, option_none, option_some, poll_cancellation,
     prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
@@ -41,10 +43,10 @@ use crate::runtime_value::{
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
     queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
-    render_float32, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
-    runtime_value_to_json, select_runtime_values, send_error_cancelled, send_error_closed,
-    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned,
-    slice_vec_owned, spawn_lightweight_task,
+    render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
+    run_lightweight_root_task, runtime_value_to_json, select_runtime_values, send_error_cancelled,
+    send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
+    slice_string_owned, slice_vec_owned, spawn_lightweight_task,
     spawn_lightweight_task_with_result_repeatability_registered,
     spawn_lightweight_task_with_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
@@ -53,14 +55,14 @@ use crate::runtime_value::{
     wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
     CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
-    FfiHandleValue, FileValue, FunctionValue, HttpExchangeValue, HttpListenerValue,
-    HttpResponseValue, InstanceValue, IntegerArithmeticMode, MapValue, ProcessChildValue,
-    ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue, ProcessRestartPolicy,
-    ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue,
-    RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskCancelledSignal,
-    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
-    TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue,
-    UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, HttpExchangeValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode, MapValue,
+    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
+    ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
+    RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
+    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
+    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
     NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
 };
 use crate::sema::{substitute_type, Type};
@@ -2848,8 +2850,18 @@ impl MirRuntime {
                 }
                 Ok(RvalueOutcome::Value(Value::String(rendered)))
             }
-            Rvalue::Unary { op, value, .. } => {
+            Rvalue::Unary { op, value, span } => {
                 let value = self.evaluate_operand(value, env)?;
+                let value = if *op == UnaryOp::BitNot {
+                    match expected_type {
+                        Some(expected) => {
+                            self.coerce_value_to_type(value, expected, Some(*span))?
+                        }
+                        None => value,
+                    }
+                } else {
+                    value
+                };
                 let result = match (op, value) {
                     (UnaryOp::Not, Value::Bool(value)) => Value::Bool(!value),
                     (UnaryOp::Neg, Value::Int(value)) => Value::Int(
@@ -2858,6 +2870,11 @@ impl MirRuntime {
                             .ok_or_else(|| Diagnostic::new("integer overflow"))?,
                     ),
                     (UnaryOp::Neg, Value::Float(value)) => Value::Float(-value),
+                    (UnaryOp::BitNot, Value::Int(value)) => {
+                        Value::Int(value.bitnot().ok_or_else(|| {
+                            Diagnostic::coded("AU4001", "invalid typed integer for unary `~`")
+                        })?)
+                    }
                     (UnaryOp::Not, other) => {
                         return Err(Diagnostic::new(format!(
                             "`not` expects `bool`, found `{}`",
@@ -2869,6 +2886,15 @@ impl MirRuntime {
                             "unary `-` expects a numeric value, found `{}`",
                             other.render()
                         )))
+                    }
+                    (UnaryOp::BitNot, other) => {
+                        return Err(Diagnostic::coded(
+                            "AU2003",
+                            format!(
+                                "unary `~` expects an integer value, found `{}`",
+                                other.render()
+                            ),
+                        ))
                     }
                 };
                 Ok(RvalueOutcome::Value(result))
@@ -2976,8 +3002,39 @@ impl MirRuntime {
                         Some(*span),
                     )?));
                 }
-                let left = self.evaluate_operand(left, env)?;
-                let right = self.evaluate_operand(right, env)?;
+                let mut left = self.evaluate_operand(left, env)?;
+                let mut right = self.evaluate_operand(right, env)?;
+                let coerce_operands = matches!(
+                    op,
+                    BinaryOp::Pow
+                        | BinaryOp::BitAnd
+                        | BinaryOp::BitOr
+                        | BinaryOp::BitXor
+                        | BinaryOp::Shl
+                        | BinaryOp::Shr
+                );
+                if coerce_operands {
+                    if let Some(expected) = expected_type {
+                        left = self.coerce_value_to_type(left, expected, Some(*span))?;
+                        right = self.coerce_value_to_type(right, expected, Some(*span))?;
+                    }
+                }
+                if *op == BinaryOp::Pow {
+                    if let (Value::Float(left), Value::Float(right)) = (&left, &right) {
+                        let width = match expected_type {
+                            Some(Type::Named(name, args))
+                                if name == "float32" && args.is_empty() =>
+                            {
+                                FloatPowerWidth::Float32
+                            }
+                            _ => FloatPowerWidth::Float64,
+                        };
+                        return float_power(*left, *right, width)
+                            .map(Value::Float)
+                            .map(RvalueOutcome::Value)
+                            .map_err(|error| with_optional_diagnostic_span(error, Some(*span)));
+                    }
+                }
                 Ok(RvalueOutcome::Value(self.eval_binary(
                     *op,
                     left,
@@ -3546,6 +3603,14 @@ impl MirRuntime {
                     };
                 }
 
+                if name == "round" {
+                    return evaluate_round_builtin(args, env);
+                }
+
+                if name == "divmod" {
+                    return evaluate_divmod_builtin(args, env);
+                }
+
                 if name == "parse_int32" {
                     let values = evaluate_named_args(args, env)?;
                     let bound = bind_builtin_args(&["text"], values)?;
@@ -3981,6 +4046,50 @@ impl MirRuntime {
                             }
                         };
                         result.map(Value::Int).ok_or_else(mismatch)
+                    }
+                    Value::Int(value)
+                        if matches!(
+                            field.as_str(),
+                            "wrapping_shl" | "wrapping_shr" | "saturating_shl" | "saturating_shr"
+                        ) =>
+                    {
+                        let values = evaluate_named_args(args, env)?;
+                        let bound = bind_builtin_args(&["count"], values)?;
+                        let mismatch = || {
+                            Diagnostic::coded(
+                                "AU4001",
+                                format!("`{field}` expects matching fixed-width integer operands"),
+                            )
+                        };
+                        let receiver_kind = receiver_static_ty
+                            .as_ref()
+                            .and_then(|ty| match ty {
+                                Type::Named(name, args) if args.is_empty() => {
+                                    IntegerKind::from_runtime_type_name(name)
+                                }
+                                _ => None,
+                            })
+                            .or_else(|| value.runtime_kind())
+                            .ok_or_else(mismatch)?;
+                        let with_receiver_kind =
+                            |operand: IntegerValue| operand.with_runtime_kind(receiver_kind);
+                        let left = with_receiver_kind(*value).ok_or_else(mismatch)?;
+                        let Value::Int(count) = &bound[0].value else {
+                            return Err(mismatch());
+                        };
+                        let count = with_receiver_kind(*count).ok_or_else(mismatch)?;
+                        let result = match field.as_str() {
+                            "wrapping_shl" => left.wrapping_shl(count),
+                            "wrapping_shr" => left.wrapping_shr(count),
+                            "saturating_shl" => left.saturating_shl(count),
+                            _ => {
+                                debug_assert_eq!(field, "saturating_shr");
+                                left.saturating_shr(count)
+                            }
+                        };
+                        result
+                            .map(Value::Int)
+                            .map_err(|error| integer_shift_diagnostic(error, None))
                     }
                     Value::Float(value) if field == "to_string" => {
                         if !args.is_empty() {
@@ -8196,11 +8305,93 @@ impl MirRuntime {
                     "MIR binary remainder requires matching numeric operands",
                 )),
             },
+            BinaryOp::Pow => match (left, right) {
+                (Value::Int(left), Value::Int(right)) => left
+                    .checked_pow(right)
+                    .map(Value::Int)
+                    .map_err(|error| integer_power_diagnostic(error, span)),
+                (Value::Float(left), Value::Float(right)) => {
+                    float_power(left, right, FloatPowerWidth::Float64)
+                        .map(Value::Float)
+                        .map_err(|error| with_optional_diagnostic_span(error, span))
+                }
+                _ => Err(Diagnostic::coded(
+                    "AU2003",
+                    "MIR power requires matching numeric operands",
+                )),
+            },
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => match (left, right) {
+                (Value::Int(left), Value::Int(right)) => {
+                    let result = match op {
+                        BinaryOp::BitAnd => left.checked_bitand(right),
+                        BinaryOp::BitOr => left.checked_bitor(right),
+                        BinaryOp::BitXor => left.checked_bitxor(right),
+                        _ => unreachable!(),
+                    };
+                    result.map(Value::Int).ok_or_else(|| {
+                        Diagnostic::coded("AU2002", "bitwise integer operand types must match")
+                    })
+                }
+                _ => Err(Diagnostic::coded(
+                    "AU2003",
+                    "bitwise operators require matching integer operands",
+                )),
+            },
+            BinaryOp::Shl | BinaryOp::Shr => match (left, right) {
+                (Value::Int(left), Value::Int(right)) => {
+                    let result = if op == BinaryOp::Shl {
+                        left.checked_shl(right)
+                    } else {
+                        left.checked_shr(right)
+                    };
+                    result
+                        .map(Value::Int)
+                        .map_err(|error| integer_shift_diagnostic(error, span))
+                }
+                _ => Err(Diagnostic::coded(
+                    "AU2003",
+                    "shift operators require matching integer operands",
+                )),
+            },
             BinaryOp::Less => eval_ordering(BinaryOp::Less, left, right),
             BinaryOp::LessEq => eval_ordering(BinaryOp::LessEq, left, right),
             BinaryOp::Greater => eval_ordering(BinaryOp::Greater, left, right),
             BinaryOp::GreaterEq => eval_ordering(BinaryOp::GreaterEq, left, right),
         }
+    }
+}
+
+fn integer_power_diagnostic(error: IntegerPowerError, span: Option<Span>) -> Diagnostic {
+    let (code, message) = match error {
+        IntegerPowerError::MismatchedKinds => {
+            ("AU2002", "integer power operand types must match")
+        }
+        IntegerPowerError::NegativeExponent => (
+            "AU4001",
+            "runtime negative integer exponent; use explicit floating operands for fractional power",
+        ),
+        IntegerPowerError::Overflow => ("AU4002", "integer power overflow"),
+    };
+    match span {
+        Some(span) => Diagnostic::coded_at(code, span, message),
+        None => Diagnostic::coded(code, message),
+    }
+}
+
+fn integer_shift_diagnostic(error: IntegerShiftError, span: Option<Span>) -> Diagnostic {
+    let (code, message) = match error {
+        IntegerShiftError::MismatchedKinds => {
+            ("AU2002", "shift operand types must match".to_string())
+        }
+        IntegerShiftError::InvalidCount { count, width } => (
+            "AU4002",
+            format!("integer shift count `{count}` is outside the required range `0..{width}`"),
+        ),
+        IntegerShiftError::Overflow => ("AU4002", "integer left shift overflow".to_string()),
+    };
+    match span {
+        Some(span) => Diagnostic::coded_at(code, span, message),
+        None => Diagnostic::coded(code, message),
     }
 }
 
@@ -8572,6 +8763,28 @@ fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMi
             })
         })
         .collect()
+}
+
+#[inline(never)]
+fn evaluate_round_builtin(args: &[MirArg], env: &mut Env) -> Result<Value> {
+    let values = evaluate_named_args(args, env)?;
+    let bound = bind_builtin_args(&["value"], values)?;
+    round_numeric_value(&bound[0].value)
+}
+
+#[inline(never)]
+fn evaluate_divmod_builtin(args: &[MirArg], env: &mut Env) -> Result<Value> {
+    let values = evaluate_named_args(args, env)?;
+    let bound = bind_builtin_args(&["left", "right"], values)?;
+    let operand_type = bound[0]
+        .ty
+        .clone()
+        .unwrap_or_else(|| match &bound[0].value {
+            Value::Int(value) => Type::named(value.runtime_type_name().unwrap_or("int64")),
+            Value::Float(_) => Type::named("float64"),
+            _ => Type::named("Unknown"),
+        });
+    divmod_numeric_values(&bound[0].value, &bound[1].value, &operand_type)
 }
 
 fn validate_mir_select_sources(args: Vec<EvaluatedMirArg>) -> Result<Vec<Value>> {

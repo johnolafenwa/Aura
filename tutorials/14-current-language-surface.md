@@ -240,10 +240,15 @@ The current compiler supports these expression forms:
 
 - names
 - parenthesized tuple values such as `(name, count)` and singleton `(value,)`
-- integer, float, string, f-string, boolean, `None`, and duration literals
+- decimal, hexadecimal, binary, and octal integer literals with digit
+  separators; float, string, f-string, boolean, `None`, and duration literals
   - ordinary strings accept matching single or double quotes with shared escapes
   - f-strings remain double-quoted as `f"..."`, while interpolations may contain either ordinary quote form
 - arithmetic, comparison, and boolean operators
+  - integer `&`, `|`, `^`, `~`, `<<`, and `>>` preserve exact widths and use
+    exact same-type operands; left shift is checked
+  - `**` is right-associative, preserves exact numeric types, and checks
+    integer overflow and exponent domain
   - `//` is builtin floor division for matching integer or floating types
   - builtin integer `/` and `/=` are rejected; floating `/` and `/=` remain true division
   - builtin `%` follows the divisor's sign for matching integer or floating types
@@ -257,6 +262,9 @@ The current compiler supports these expression forms:
 - explicit numeric casts with `expr as Type`
   - integer casts are range-checked and integer-to-float casts reject silent precision loss
 - integer `.to_float() -> float64`, which uses nearest-even conversion and may round
+- `round(value)`, which preserves integer types or rounds a float to `int64`
+  with ties-to-even, and `divmod(left, right)`, which returns the floor
+  quotient and divisor-signed remainder together
 - shortest-roundtrip `float32`/`float64` rendering through `print`, preserving integral `.0` and signed zero
 - list literals such as `[1, 2, 3]`
 - dictionary literals such as `{"aura": 1}`

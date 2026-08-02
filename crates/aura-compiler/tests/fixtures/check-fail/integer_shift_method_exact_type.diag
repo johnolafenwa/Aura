@@ -1,0 +1,5 @@
+error[AU2002]: `wrapping_shl` expects `int8`, found `uint8`
+ --> crates/aura-compiler/tests/fixtures/check-fail/integer_shift_method_exact_type.au:4:30
+  |
+4 |     print(value.wrapping_shl(count))
+  |                              ^

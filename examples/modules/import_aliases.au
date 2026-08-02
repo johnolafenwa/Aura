@@ -1,0 +1,8 @@
+import helpers.math as integer_math
+from helpers.counter import Counter as ReadableCounter
+
+def main() -> int32:
+    print(integer_math.double(value=5))
+    counter = ReadableCounter(value=2)
+    print(counter.read())
+    return 0

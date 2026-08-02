@@ -135,7 +135,12 @@ The first simple-name assignment introduces a binding. Its type is the annotatio
 
 `mut` makes the new binding assignable and a mutable place. Reassignment requires an existing mutable place and preserves the original type. Reassignment reinitializes a fully moved binding or field when the assigned value has the correct type.
 
-Compound assignments `+=`, `-=`, `*=`, `/=`, `%=`, and `//=` read the current target, apply the corresponding binary operation, and write the result. The target must already exist, be mutable, not be moved, and have the operation's result type. Integer `/=` is rejected by the same rule and teaching diagnostic as integer `/`; floating `/=` remains valid.
+Compound assignments `+=`, `-=`, `*=`, `**=`, `/=`, `%=`, `//=`, `&=`,
+`|=`, `^=`, `<<=`, and `>>=` read the current target, apply the corresponding
+binary operation, and write the result only after success. The target must
+already exist, be mutable, not be moved, and have the operation's result type.
+Integer `/=` is rejected by the same rule and teaching diagnostic as integer
+`/`; floating `/=` remains valid.
 
 Field assignment requires a mutable base place and a declared field. Index
 assignment supports `list[T]` with the `int64` index domain and `dict[K, V]`
@@ -154,6 +159,7 @@ are not permitted on member or index assignment.
 
 - `not value` accepts `bool` and returns `bool`, or resolves a matching `Not.not` trait operation.
 - `-value` accepts an integer or float and returns the same type, or resolves a matching `Neg.neg` operation.
+- `~value` accepts an integer and returns the same exact integer type.
 - `try value` requires `value: Result[T, E1]` and an enclosing return type `Result[U, E2]`; it has type `T` when `E1 == E2` or an applicable `impl From[E1] for E2` exists.
 
 ### Binary Operators
@@ -166,9 +172,12 @@ Built-in operator typing is:
 | `+` | equal integer types, equal float types, two `str` values, or two Duration values | operand type |
 | `-` | equal integer types, equal float types, or two Duration values | operand type |
 | `*` | equal integer types, equal float types, `Duration` and `int64` in either order | numeric operand type, or `Duration` |
+| `**` | equal integer types or equal float types | operand type |
 | `//` | equal integer types, equal float types, or `Duration // int64` | numeric operand type, or `Duration` |
 | `%` | equal integer or equal float types | operand type |
 | `/` | equal float types | operand type |
+| `&`, `|`, `^` | equal concrete integer types | operand type |
+| `<<`, `>>` | equal concrete integer types | left operand type |
 | `==`, `!=` | equal operand types | `bool` |
 | `<`, `<=`, `>`, `>=` | equal integer types, equal float types, or two Duration values | `bool` |
 
@@ -198,6 +207,11 @@ symmetric. Each equality link in a comparison chain applies the same
 contextual typing before enforcing exact operand-type equality.
 
 Operator operands are not implicitly widened. An integer literal may be contextually typed to match an integer operand, or a `float32`/`float64` operand when the literal is exactly representable in that floating type. A floating literal may adopt the other operand's floating type. Non-literal values require an explicit numeric cast or integer `.to_float()` conversion.
+
+Integer power requires a non-negative exponent. A negative exponent visible in
+source is `AU2003`; a negative value discovered only during execution is a
+runtime failure. Bitwise operations, shifts, and power are builtin numeric
+operations and do not dispatch through operator traits.
 
 ### Conditions
 

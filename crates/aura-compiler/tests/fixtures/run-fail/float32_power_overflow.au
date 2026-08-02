@@ -1,0 +1,4 @@
+def main():
+    base: float32 = 100.0
+    exponent: float32 = 100.0
+    print(base ** exponent)

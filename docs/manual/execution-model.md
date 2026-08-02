@@ -150,13 +150,26 @@ process. The complete type, ownership, package, and safety contract is in
 
 Arithmetic is checked under the selected concrete numeric type.
 
-- integer addition, subtraction, multiplication, floor division, remainder, negation, and casts reject overflow
+- integer addition, subtraction, multiplication, power, floor division,
+  remainder, checked left shift, negation, and casts reject overflow
 - builtin integer `/` and `/=` do not reach execution because static checking rejects them
 - for integers with nonzero divisor `b`, `q = a // b` is the mathematical quotient rounded toward negative infinity and `r = a % b` satisfies `a == q * b + r`; a nonzero `r` has `b`'s sign
 - integer `//` or `%` by zero is a runtime failure; an unrepresentable floor quotient, including the signed minimum divided by `-1`, is integer overflow
 - floating `/` is ordinary true division, except that a zero divisor is an explicit runtime failure rather than IEEE infinity or NaN
 - floating `//` and `%` use the CPython-compatible divmod correction: start from the host remainder and `(a - remainder) / b`; when a nonzero remainder's sign differs from `b`, add `b` to the remainder and subtract one from the provisional quotient; give a zero remainder `b`'s sign; for a nonzero quotient, take its floor and add one when the provisional quotient minus that floor is greater than `0.5`; preserve the quotient's division-result signed zero when it is zero
 - floating `//` and `%` by either signed zero are runtime failures
+- integer `**` is checked, defines `x ** 0` as `1` including `0 ** 0`, and
+  rejects a runtime negative exponent with `AU4001`; floating `**` follows the
+  maintained floating power domain and overflow classification
+- `&`, `|`, `^`, and `~` operate on the declared fixed-width integer bit
+  representation; all shift counts require `0 <= count < width`
+- signed `>>` is arithmetic and unsigned `>>` is logical; `<<` is checked,
+  while `wrapping_shl` discards high bits and `saturating_shl` clamps at the
+  declared bounds
+- `wrapping_shr` and `saturating_shr` have the same result as ordinary `>>`
+  after the common count check
+- `divmod(a, b)` computes the same corrected quotient and remainder together from one evaluation of each operand; a zero divisor is `AU4004`
+- `round(integer)` preserves the exact integer type; `round(float)` uses ties-to-even and returns `int64`, with NaN, infinity, and out-of-range results classified as `AU4002`
 - ordinary floating operations otherwise use host IEEE-754 `float32`/`float64` behavior, including possible runtime NaN results from operations such as square root of a negative value
 - integer `.to_float()` converts to `float64` with IEEE-754 round-to-nearest, ties-to-even and may round; integer `as float32` or `as float64` retains its exactness check and fails instead of rounding
 - Duration addition, subtraction, and multiplication operate on signed 128-bit nanoseconds and reject overflow with `AU4002`

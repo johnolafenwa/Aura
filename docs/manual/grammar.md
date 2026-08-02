@@ -31,21 +31,37 @@ productions; it does not add a trailing comma to any list form.
 ```ebnf
 ascii-letter = "A" … "Z" | "a" … "z" ;
 digit        = "0" … "9" ;
+binary-digit = "0" | "1" ;
+octal-digit  = "0" … "7" ;
 hex-digit    = digit | "a" … "f" | "A" … "F" ;
 
 IDENT = (ascii-letter | "_"), { ascii-letter | digit | "_" } ;
 
-INTEGER  = digit, { digit } ;
+decimal-digits  = digit, { digit } ;
+decimal-integer = digit, { digit | ("_", digit) } ;
+hex-integer     = ("0x" | "0X"), hex-digit,
+                  { hex-digit | ("_", hex-digit) } ;
+binary-integer  = ("0b" | "0B"), binary-digit,
+                  { binary-digit | ("_", binary-digit) } ;
+octal-integer   = ("0o" | "0O"), octal-digit,
+                  { octal-digit | ("_", octal-digit) } ;
+INTEGER  = decimal-integer | hex-integer | binary-integer | octal-integer ;
 EXPONENT = ("e" | "E"), [ "+" | "-" ], digit, { digit } ;
-FLOAT    = INTEGER, ".", digit, { digit }, [ EXPONENT ]
-         | INTEGER, EXPONENT ;
-DURATION = INTEGER, ("ms" | "s" | "m") ;
+FLOAT    = decimal-digits, ".", decimal-digits, [ EXPONENT ]
+         | decimal-digits, EXPONENT ;
+DURATION = decimal-digits, ("ms" | "s" | "m") ;
 BOOLEAN  = "true" | "false" ;
 ```
 
-Identifiers are ASCII and case-sensitive. Unicode is allowed in string contents. Integers are decimal and must fit the lexer’s unsigned 128-bit literal representation before contextual typing. Floats must be finite `f64` values at lexing time. Duration literals represent non-negative integral milliseconds, seconds, or minutes and must fit signed 128-bit nanoseconds after scaling.
-
-There are no hexadecimal, octal, binary, underscored, leading-dot, or trailing-dot numeric forms. A negative number is unary `-` applied to a positive literal, not one lexical token.
+Identifiers are ASCII and case-sensitive. Unicode is allowed in string
+contents. Integers may be decimal, hexadecimal, binary, or octal and must fit
+the lexer’s unsigned 128-bit literal representation before contextual typing.
+An underscore is accepted only between digits valid for the selected base.
+Floats must be finite `f64` values at lexing time. Duration literals represent
+non-negative integral decimal milliseconds, seconds, or minutes and must fit
+signed 128-bit nanoseconds after scaling. A negative number is unary `-`
+applied to a positive literal, not one lexical token. Leading-dot and
+trailing-dot float forms are not accepted.
 
 ## Keywords And Contextual Words
 
@@ -136,12 +152,12 @@ trailing comma.
 ```text
 ( ) [ ] { } : , . ?
 = == != < <= > >=
-+ += - -= * *= / /= // //= % %=
++ += - -= * *= ** **= / /= // //= % %=
+& &= | |= ^ ^= ~ << <<= >> >>=
 ->
 ```
 
-There is no semicolon, assignment expression, exponentiation, unary plus,
-bitwise operator, or lambda arrow.
+There is no semicolon, assignment expression, unary plus, or lambda arrow.
 
 ## Modules And Imports
 
@@ -151,9 +167,12 @@ module = { module-element }, EOF ;
 module-element = import-declaration | item | statement ;
 
 import-declaration
-    = "import", identifier-path, NEWLINE
+    = "import", identifier-path, [ "as", import-alias ], NEWLINE
     | "from", identifier-path, "import",
-      identifier, { ",", identifier }, NEWLINE ;
+      import-name, { ",", import-name }, NEWLINE ;
+
+import-name  = identifier, [ "as", import-alias ] ;
+import-alias = IDENT ;
 
 identifier-path = identifier, { ".", identifier } ;
 identifier      = IDENT | "from" ;
@@ -161,7 +180,13 @@ identifier      = IDENT | "from" ;
 
 Imports, items, and executable top-level statements may be interleaved syntactically. The compiled module represents imports, items, and top-level statements as separate categories; programs MUST NOT depend on their original cross-category interleaving as an execution order.
 
-There are no import aliases, wildcard imports, relative-dot imports, parenthesized import lists, or trailing import commas.
+An `as` clause binds the complete imported module or declaration under the
+written local alias. A from-import may mix direct and aliased names in one
+declaration. Aliasing does not change the target module identity, visibility,
+type identity, or package resolution path.
+
+Wildcard imports, relative-dot imports, parenthesized import lists, and
+trailing import commas are not part of the grammar.
 
 ## Items
 
@@ -406,7 +431,9 @@ binding-target
     = identifier
     | "(", binding-target-list, ")" ;
 
-assignment-operator = "=" | "+=" | "-=" | "*=" | "/=" | "//=" | "%=" ;
+assignment-operator
+    = "=" | "+=" | "-=" | "*=" | "**=" | "/=" | "//=" | "%="
+    | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
 
 return-statement     = "return", [ expression ], statement-end ;
 assert-statement     = "assert", non-tuple-expression,
@@ -533,12 +560,17 @@ From lowest to highest precedence:
 | 2 | `or` | left |
 | 3 | `and` | left |
 | 4 | prefix `not` | right |
-| 5 | `==`, `!=`, `<`, `<=`, `>`, `>=` | non-associative in 0.2 |
-| 6 | `+`, `-` | left |
-| 7 | `*`, `/`, `//`, `%` | left |
-| 8 | prefix `match`, `try`, unary `-` | right/prefix |
-| 9 | specialization, indexing, slicing, member access, call, numeric cast | left-to-right postfix chain |
-| 10 | primary | — |
+| 5 | `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `not in` | chained left to right |
+| 6 | `|` | left |
+| 7 | `^` | left |
+| 8 | `&` | left |
+| 9 | `<<`, `>>` | left |
+| 10 | `+`, `-` | left |
+| 11 | `*`, `/`, `//`, `%` | left |
+| 12 | prefix `match`, `try`, unary `-`, unary `~` | right/prefix |
+| 13 | `**` | right |
+| 14 | specialization, indexing, slicing, member access, call, numeric cast | left-to-right postfix chain |
+| 15 | primary | — |
 
 ```ebnf
 expression           = lambda-expression | non-tuple-expression ;
@@ -565,11 +597,23 @@ not-expression
     = { "not" }, comparison-expression ;
 
 comparison-expression
-    = additive-expression,
-      { comparison-operator, additive-expression } ;
+    = bitwise-or-expression,
+      { comparison-operator, bitwise-or-expression } ;
 
 comparison-operator
     = "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" | "not", "in" ;
+
+bitwise-or-expression
+    = bitwise-xor-expression, { "|", bitwise-xor-expression } ;
+
+bitwise-xor-expression
+    = bitwise-and-expression, { "^", bitwise-and-expression } ;
+
+bitwise-and-expression
+    = shift-expression, { "&", shift-expression } ;
+
+shift-expression
+    = additive-expression, { ("<<" | ">>"), additive-expression } ;
 
 additive-expression
     = multiplicative-expression,
@@ -583,7 +627,11 @@ prefix-expression
     = match-expression
     | "try", prefix-expression
     | "-", prefix-expression
-    | postfix-expression ;
+    | "~", prefix-expression
+    | power-expression ;
+
+power-expression
+    = postfix-expression, [ "**", prefix-expression ] ;
 
 postfix-expression
     = primary-expression,
@@ -610,14 +658,17 @@ numeric-type
 
 Conditional expressions associate to the right, their condition is an
 `or-expression`, and their two value arms may contain nested conditional
-expressions through grouping or the recursive alternative arm. Arithmetic and
-Boolean chains are left-folded. Equality, ordering, and membership share the
+expressions through grouping or the recursive alternative arm. Arithmetic,
+shift, bitwise, and Boolean chains are left-folded except for power, which
+associates to the right. Power binds more tightly than a unary operator on its
+left, while its right operand may begin with unary `-` or `~`. Equality,
+ordering, and membership share the
 one comparison level and chain the Python way rather than left-folding, so
 `a < b <= c` is one chain of two links over three operands. A chain of `n`
 operators means the conjunction of its `n` adjacent comparisons, with each
 operand evaluated at most once. `not a == b` means `not (a == b)`, because
 prefix `not` binds looser than the comparison level, while `a not in b` is one
-comparison operator. Casts bind more tightly than arithmetic.
+comparison operator. Casts bind more tightly than power and arithmetic.
 
 Comma-separated index expressions are accepted only for `Array[T]`, where
 one `int64` coordinate is required per runtime axis. Other indexable

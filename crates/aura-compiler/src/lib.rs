@@ -84,7 +84,7 @@ pub const MAX_INTERNAL_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
 /// Every persisted artifact or long-lived tooling cache that can contain
 /// compiler semantic metadata must bind this value. Bump it whenever the
 /// meaning or representation of checked source changes incompatibly.
-pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 3;
+pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 4;
 
 /// Lowercase hexadecimal SHA-256 of `bytes`, for content-addressed identities.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -266,23 +266,34 @@ fn builtin_imports(module: &ast::Module) -> Result<BTreeMap<String, ImportedBind
     let mut bindings = BTreeMap::new();
     for import in &module.imports {
         match &import.kind {
-            ImportKind::Module { path } => {
+            ImportKind::Module { path, alias } => {
                 if let Some(namespace) = builtin_modules::builtin_module_namespace(path) {
-                    insert_namespace_import(&mut bindings, path, namespace, import.span)?;
+                    if let Some(alias) = alias {
+                        insert_aliased_namespace_import(
+                            &mut bindings,
+                            alias,
+                            namespace,
+                            import.span,
+                        )?;
+                    } else {
+                        insert_namespace_import(&mut bindings, path, namespace, import.span)?;
+                    }
                 }
             }
             ImportKind::From { module_path, names } => {
                 if builtin_modules::builtin_module_namespace(module_path).is_some() {
-                    for name in names {
+                    for imported_name in names {
                         let binding = builtin_modules::builtin_imported_binding(
                             module_path,
-                            name,
+                            &imported_name.name,
                             import.span,
                         )?;
-                        if bindings.insert(name.clone(), binding).is_some() {
+                        let local_name =
+                            imported_name.alias.as_ref().unwrap_or(&imported_name.name);
+                        if bindings.insert(local_name.clone(), binding).is_some() {
                             return Err(Diagnostic::at(
-                                import.span,
-                                format!("duplicate import binding `{}`", name),
+                                imported_name.span,
+                                format!("duplicate import binding `{}`", local_name),
                             ));
                         }
                     }
@@ -558,16 +569,18 @@ impl ModuleLoader {
             match &import.kind {
                 ImportKind::From { module_path, names } => {
                     if builtin_modules::builtin_module_namespace(module_path).is_some() {
-                        for name in names {
+                        for imported_name in names {
                             let binding = builtin_modules::builtin_imported_binding(
                                 module_path,
-                                name,
+                                &imported_name.name,
                                 import.span,
                             )?;
-                            if bindings.insert(name.clone(), binding).is_some() {
+                            let local_name =
+                                imported_name.alias.as_ref().unwrap_or(&imported_name.name);
+                            if bindings.insert(local_name.clone(), binding).is_some() {
                                 return Err(Diagnostic::at(
-                                    import.span,
-                                    format!("duplicate import binding `{}`", name),
+                                    imported_name.span,
+                                    format!("duplicate import binding `{}`", local_name),
                                 ));
                             }
                         }
@@ -575,43 +588,59 @@ impl ModuleLoader {
                     }
                     let imported =
                         self.load_imported_module(current_path, module_path, import.span)?;
-                    for name in names {
-                        let binding = exported_binding(&imported, name).ok_or_else(|| {
-                            let logical_name = module_path.join(".");
-                            if local_item_exists(&imported, name) {
-                                Diagnostic::at(
-                                    import.span,
-                                    format!(
-                                        "item `{}` is private in module `{}`",
-                                        name, logical_name
-                                    ),
-                                )
-                            } else {
-                                Diagnostic::at(
-                                    import.span,
-                                    format!(
-                                        "module `{}` has no export named `{}`",
-                                        logical_name, name
-                                    ),
-                                )
-                            }
-                        })?;
-                        if bindings.insert(name.clone(), binding).is_some() {
+                    for imported_name in names {
+                        let binding =
+                            exported_binding(&imported, &imported_name.name).ok_or_else(|| {
+                                let logical_name = module_path.join(".");
+                                if local_item_exists(&imported, &imported_name.name) {
+                                    Diagnostic::at(
+                                        imported_name.span,
+                                        format!(
+                                            "item `{}` is private in module `{}`",
+                                            imported_name.name, logical_name
+                                        ),
+                                    )
+                                } else {
+                                    Diagnostic::at(
+                                        imported_name.span,
+                                        format!(
+                                            "module `{}` has no export named `{}`",
+                                            logical_name, imported_name.name
+                                        ),
+                                    )
+                                }
+                            })?;
+                        let local_name =
+                            imported_name.alias.as_ref().unwrap_or(&imported_name.name);
+                        if bindings.insert(local_name.clone(), binding).is_some() {
                             return Err(Diagnostic::at(
-                                import.span,
-                                format!("duplicate import binding `{}`", name),
+                                imported_name.span,
+                                format!("duplicate import binding `{}`", local_name),
                             ));
                         }
                     }
                 }
-                ImportKind::Module { path } => {
+                ImportKind::Module { path, alias } => {
                     if let Some(leaf) = builtin_modules::builtin_module_namespace(path) {
-                        insert_namespace_import(&mut bindings, path, leaf, import.span)?;
+                        if let Some(alias) = alias {
+                            insert_aliased_namespace_import(
+                                &mut bindings,
+                                alias,
+                                leaf,
+                                import.span,
+                            )?;
+                        } else {
+                            insert_namespace_import(&mut bindings, path, leaf, import.span)?;
+                        }
                         continue;
                     }
                     let imported = self.load_imported_module(current_path, path, import.span)?;
                     let leaf = exported_namespace(path, &imported);
-                    insert_namespace_import(&mut bindings, path, leaf, import.span)?;
+                    if let Some(alias) = alias {
+                        insert_aliased_namespace_import(&mut bindings, alias, leaf, import.span)?;
+                    } else {
+                        insert_namespace_import(&mut bindings, path, leaf, import.span)?;
+                    }
                 }
             }
         }
@@ -678,10 +707,28 @@ impl ModuleLoader {
             return;
         };
         let dependency_aliases = graph.dependency_aliases_for_path(path);
+        let dependency_bindings = program
+            .module
+            .imports
+            .iter()
+            .filter_map(|import| {
+                let ImportKind::Module {
+                    path: imported_path,
+                    alias,
+                } = &import.kind
+                else {
+                    return None;
+                };
+                let root = imported_path.first()?;
+                dependency_aliases
+                    .contains(root)
+                    .then(|| alias.as_ref().unwrap_or(root).clone())
+            })
+            .collect::<BTreeSet<_>>();
         qualify_imported_module_namespaces(
             &mut program.imported_modules,
             prefix,
-            &dependency_aliases,
+            &dependency_bindings,
         );
     }
 
@@ -741,7 +788,7 @@ fn infer_package_root(entry_path: &Path, source_override: Option<&str>) -> Resul
             .iter()
             .map(|import| match &import.kind {
                 ImportKind::From { module_path, .. } => module_path.clone(),
-                ImportKind::Module { path } => path.clone(),
+                ImportKind::Module { path, .. } => path.clone(),
             })
             .collect::<Vec<_>>();
 
@@ -1552,6 +1599,24 @@ fn insert_namespace_import(
     }
     let last = path[path.len() - 1].clone();
     current.modules.insert(last, leaf);
+    Ok(())
+}
+
+fn insert_aliased_namespace_import(
+    bindings: &mut BTreeMap<String, ImportedBinding>,
+    alias: &str,
+    namespace: ModuleNamespace,
+    span: Span,
+) -> Result<()> {
+    if bindings
+        .insert(alias.to_string(), ImportedBinding::Module(namespace))
+        .is_some()
+    {
+        return Err(Diagnostic::at(
+            span,
+            format!("duplicate import binding `{alias}`"),
+        ));
+    }
     Ok(())
 }
 

@@ -256,6 +256,7 @@ impl<'a> AnalysisBuilder<'a> {
     }
 
     fn build(mut self) -> AnalysisOutput {
+        self.visit_import_aliases();
         let mut top_level_scope = BTreeMap::new();
         self.visit_stmts(&self.program.top_level_stmts, &mut top_level_scope);
 
@@ -284,6 +285,82 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         self.output
+    }
+
+    fn visit_import_aliases(&mut self) {
+        let empty_scope = BTreeMap::new();
+        let imports = self.program.module.imports.clone();
+        for import in &imports {
+            match &import.kind {
+                ImportKind::Module {
+                    path,
+                    alias: Some(alias),
+                } => {
+                    let Some(range) = self.find_module_alias_range(import.span.line, alias) else {
+                        continue;
+                    };
+                    let target = path.join(".");
+                    let definition = self.find_imported_module_range(&target);
+                    self.push_occurrence(
+                        range,
+                        format!("```aura\nmodule {alias} = {target}\n```"),
+                        definition,
+                    );
+                }
+                ImportKind::From { names, .. } => {
+                    for imported_name in names {
+                        let Some(alias) = imported_name.alias.as_deref() else {
+                            continue;
+                        };
+                        let Some(range) = self.find_from_import_alias_range(
+                            imported_name.span.line,
+                            imported_name.span.column,
+                            alias,
+                        ) else {
+                            continue;
+                        };
+                        let Some(resolved) = self.resolve_name(alias, &empty_scope) else {
+                            continue;
+                        };
+                        self.push_occurrence(range, resolved.hover, resolved.definition);
+                    }
+                }
+                ImportKind::Module { alias: None, .. } => {}
+            }
+        }
+    }
+
+    fn find_module_alias_range(&self, line_number: usize, alias: &str) -> Option<AnalysisRange> {
+        let line_index = line_number.checked_sub(1)?;
+        let line = *self.source_lines.get(line_index)?;
+        let start = line.rfind(alias)?;
+        Some(AnalysisRange {
+            file_path: self.current_source_path(),
+            line: line_index,
+            start_character: start,
+            end_character: start + alias.len(),
+        })
+    }
+
+    fn find_from_import_alias_range(
+        &self,
+        line_number: usize,
+        imported_name_column: usize,
+        alias: &str,
+    ) -> Option<AnalysisRange> {
+        let line_index = line_number.checked_sub(1)?;
+        let line = *self.source_lines.get(line_index)?;
+        let segment_start = imported_name_column.saturating_sub(1);
+        let remainder = line.get(segment_start..)?;
+        let segment = remainder.split(',').next()?;
+        let relative_start = segment.rfind(alias)?;
+        let start = segment_start + relative_start;
+        Some(AnalysisRange {
+            file_path: self.current_source_path(),
+            line: line_index,
+            start_character: start,
+            end_character: start + alias.len(),
+        })
     }
 
     fn complete(
@@ -1160,23 +1237,23 @@ impl<'a> AnalysisBuilder<'a> {
                 detail: "Aura keyword".to_string(),
             });
         }
-        for class_info in self.program.classes.values() {
+        for (visible_name, class_info) in &self.program.classes {
             completions.push(AnalysisCompletion {
-                name: class_info.decl.name.clone(),
+                name: visible_name.clone(),
                 kind: "class".to_string(),
                 detail: format_class_detail(class_info),
             });
         }
-        for enum_info in self.program.enums.values() {
+        for visible_name in self.program.enums.keys() {
             completions.push(AnalysisCompletion {
-                name: enum_info.decl.name.clone(),
+                name: visible_name.clone(),
                 kind: "enum".to_string(),
                 detail: "Aura enum".to_string(),
             });
         }
-        for trait_info in self.program.traits.values() {
+        for visible_name in self.program.traits.keys() {
             completions.push(AnalysisCompletion {
-                name: trait_info.decl.name.clone(),
+                name: visible_name.clone(),
                 kind: "trait".to_string(),
                 detail: "Aura trait".to_string(),
             });
@@ -1193,23 +1270,23 @@ impl<'a> AnalysisBuilder<'a> {
             kind: "class".to_string(),
             detail: "Array[T] numeric multidimensional array".to_string(),
         });
-        for function_info in self.program.functions.values() {
+        for (visible_name, function_info) in &self.program.functions {
             completions.push(AnalysisCompletion {
-                name: function_info.decl.name.clone(),
+                name: visible_name.clone(),
                 kind: "function".to_string(),
                 detail: format_function_detail(&function_info.decl),
             });
         }
-        for function_info in self.program.extern_functions.values() {
+        for (visible_name, function_info) in &self.program.extern_functions {
             completions.push(AnalysisCompletion {
-                name: function_info.decl.name.clone(),
+                name: visible_name.clone(),
                 kind: "function".to_string(),
                 detail: format_extern_function_detail(&function_info.decl),
             });
         }
-        for handle_info in self.program.opaque_handles.values() {
+        for (visible_name, handle_info) in &self.program.opaque_handles {
             completions.push(AnalysisCompletion {
-                name: handle_info.decl.name.clone(),
+                name: visible_name.clone(),
                 kind: "class".to_string(),
                 detail: format_extern_opaque_detail(&handle_info.decl),
             });
@@ -1221,9 +1298,9 @@ impl<'a> AnalysisBuilder<'a> {
                 detail: builtin.detail().to_string(),
             });
         }
-        for namespace in self.program.imported_modules.values() {
+        for (visible_name, namespace) in &self.program.imported_modules {
             completions.push(AnalysisCompletion {
-                name: namespace.name.clone(),
+                name: visible_name.clone(),
                 kind: "module".to_string(),
                 detail: format!("module {}", namespace.path),
             });
@@ -1482,6 +1559,9 @@ impl<'a> AnalysisBuilder<'a> {
     }
 
     fn module_namespace(&self, path: &str) -> Option<&crate::sema::ModuleNamespace> {
+        if let Some(namespace) = self.program.module_registry.get(path) {
+            return Some(namespace);
+        }
         let mut segments = path.split('.');
         let first = segments.next()?;
         let mut namespace = self.program.imported_modules.get(first)?;
@@ -1586,7 +1666,7 @@ impl<'a> AnalysisBuilder<'a> {
         }
         let target_segments = target_path.split('.').collect::<Vec<_>>();
         for import in &self.program.module.imports {
-            let ImportKind::Module { path } = &import.kind else {
+            let ImportKind::Module { path, .. } = &import.kind else {
                 continue;
             };
             if path.len() < target_segments.len() {
@@ -2293,36 +2373,73 @@ impl<'a> AnalysisBuilder<'a> {
 
         if let Some(function) = self.program.functions.get(name) {
             return Some(ResolvedSymbol {
-                hover: format_function_hover(&function.decl),
+                hover: append_alias_target(
+                    format_function_hover(&function.decl),
+                    name,
+                    &function.module_name,
+                    &function.decl.name,
+                ),
                 definition: Some(self.function_definition(function)),
             });
         }
 
         if let Some(function) = self.program.extern_functions.get(name) {
             return Some(ResolvedSymbol {
-                hover: format_extern_function_hover(&function.decl),
+                hover: append_alias_target(
+                    format_extern_function_hover(&function.decl),
+                    name,
+                    &function.module_name,
+                    &function.decl.name,
+                ),
                 definition: Some(self.extern_function_definition(function)),
             });
         }
 
         if let Some(handle) = self.program.opaque_handles.get(name) {
             return Some(ResolvedSymbol {
-                hover: format_extern_opaque_hover(&handle.decl),
+                hover: append_alias_target(
+                    format_extern_opaque_hover(&handle.decl),
+                    name,
+                    &handle.module_name,
+                    &handle.decl.name,
+                ),
                 definition: Some(self.opaque_handle_definition(handle)),
             });
         }
 
         if let Some(class_info) = self.program.classes.get(name) {
             return Some(ResolvedSymbol {
-                hover: format_class_hover(class_info),
+                hover: append_alias_target(
+                    format_class_hover(class_info),
+                    name,
+                    &class_info.module_name,
+                    &class_info.decl.name,
+                ),
                 definition: Some(self.class_definition(class_info)),
             });
         }
 
         if let Some(enum_info) = self.program.enums.get(name) {
             return Some(ResolvedSymbol {
-                hover: format_enum_hover_named(&self.canonical_enum_identity(name, enum_info)),
+                hover: append_alias_target(
+                    format_enum_hover_named(&self.canonical_enum_identity(name, enum_info)),
+                    name,
+                    &enum_info.module_name,
+                    &enum_info.decl.name,
+                ),
                 definition: Some(self.enum_definition(enum_info)),
+            });
+        }
+
+        if let Some(trait_info) = self.program.traits.get(name) {
+            return Some(ResolvedSymbol {
+                hover: append_alias_target(
+                    format!("```aura\ntrait {}\n```", trait_info.decl.name),
+                    name,
+                    &trait_info.module_name,
+                    &trait_info.decl.name,
+                ),
+                definition: Some(self.trait_definition(trait_info)),
             });
         }
 
@@ -2335,7 +2452,11 @@ impl<'a> AnalysisBuilder<'a> {
 
         if let Some(namespace) = self.program.imported_modules.get(name) {
             return Some(ResolvedSymbol {
-                hover: format!("```aura\nmodule {}\n```", namespace.path),
+                hover: if namespace.path == name {
+                    format!("```aura\nmodule {}\n```", namespace.path)
+                } else {
+                    format!("```aura\nmodule {name} = {}\n```", namespace.path)
+                },
                 definition: self.find_imported_module_range(&namespace.path),
             });
         }
@@ -2632,7 +2753,11 @@ impl<'a> AnalysisBuilder<'a> {
                     | BuiltinMember::IntegerWrappingMul
                     | BuiltinMember::IntegerSaturatingAdd
                     | BuiltinMember::IntegerSaturatingSub
-                    | BuiltinMember::IntegerSaturatingMul => Some(receiver_type.clone()),
+                    | BuiltinMember::IntegerSaturatingMul
+                    | BuiltinMember::IntegerWrappingShl
+                    | BuiltinMember::IntegerWrappingShr
+                    | BuiltinMember::IntegerSaturatingShl
+                    | BuiltinMember::IntegerSaturatingShr => Some(receiver_type.clone()),
                     BuiltinMember::StringLen | BuiltinMember::StringByteLen => {
                         Some(Type::named("int64"))
                     }
@@ -3515,7 +3640,7 @@ impl<'a> AnalysisBuilder<'a> {
                 let inner_ty = self.infer_expr_type(expr, scope)?;
                 match op {
                     crate::ast::UnaryOp::Not => Some(Type::named("bool")),
-                    crate::ast::UnaryOp::Neg => Some(inner_ty),
+                    crate::ast::UnaryOp::Neg | crate::ast::UnaryOp::BitNot => Some(inner_ty),
                 }
             }
             ExprKind::Try(inner) => {
@@ -3736,6 +3861,25 @@ impl<'a> AnalysisBuilder<'a> {
                     BuiltinFunction::Sqrt => args
                         .first()
                         .and_then(|arg| self.infer_expr_type(&arg.value, scope)),
+                    BuiltinFunction::Round => args.first().and_then(|arg| {
+                        let ty = self.infer_expr_type(&arg.value, scope)?;
+                        Some(
+                            if matches!(
+                                ty,
+                                Type::Named(ref name, ref type_args)
+                                    if type_args.is_empty()
+                                        && matches!(name.as_str(), "float32" | "float64")
+                            ) {
+                                Type::named("int64")
+                            } else {
+                                ty
+                            },
+                        )
+                    }),
+                    BuiltinFunction::Divmod => args.first().and_then(|arg| {
+                        let ty = self.infer_expr_type(&arg.value, scope)?;
+                        Some(Type::Tuple(vec![ty.clone(), ty]))
+                    }),
                     BuiltinFunction::Select => {
                         if args.iter().any(|argument| argument.name.is_some()) {
                             return None;
@@ -4826,6 +4970,19 @@ fn format_param_decl(param: &Param) -> String {
     )
 }
 
+fn append_alias_target(
+    hover: String,
+    local_name: &str,
+    module_name: &str,
+    target_name: &str,
+) -> String {
+    if local_name == target_name {
+        hover
+    } else {
+        format!("{hover}\n\nAlias `{local_name}` for `{module_name}.{target_name}`.")
+    }
+}
+
 fn format_function_hover(function_decl: &FunctionDecl) -> String {
     let params = function_decl
         .params
@@ -5346,6 +5503,10 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::IntegerSaturatingAdd,
         BuiltinMember::IntegerSaturatingSub,
         BuiltinMember::IntegerSaturatingMul,
+        BuiltinMember::IntegerWrappingShl,
+        BuiltinMember::IntegerWrappingShr,
+        BuiltinMember::IntegerSaturatingShl,
+        BuiltinMember::IntegerSaturatingShr,
         BuiltinMember::ArrayShape,
         BuiltinMember::ArrayLen,
         BuiltinMember::ArrayClone,
@@ -5621,6 +5782,8 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
         BuiltinFunction::Min => None,
         BuiltinFunction::Max => None,
         BuiltinFunction::Sqrt => None,
+        BuiltinFunction::Round => None,
+        BuiltinFunction::Divmod => None,
         BuiltinFunction::ParseInt32 => Some(Type::Named(
             "Result".to_string(),
             vec![Type::named("int32"), Type::named("str")],

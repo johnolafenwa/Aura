@@ -108,6 +108,64 @@ fn lexes_strings_fstrings_numbers_and_durations() {
 }
 
 #[test]
+fn lexes_integer_base_prefixes_and_between_digit_separators() {
+    let tokens = kinds(concat!(
+        "decimal = 1_000_000\n",
+        "hex_lower = 0xdead_BEEF\n",
+        "hex_upper = 0XCAFE\n",
+        "binary_lower = 0b1010_0110\n",
+        "binary_upper = 0B1111\n",
+        "octal_lower = 0o755\n",
+        "octal_upper = 0O7_7\n",
+        "negative = -0x80\n",
+    ));
+
+    for value in [
+        1_000_000,
+        0xdead_beef,
+        0xcafe,
+        0b1010_0110,
+        0b1111,
+        0o755,
+        0o77,
+    ] {
+        assert!(tokens.contains(&TokenKind::IntLiteral(value)));
+    }
+    assert!(tokens
+        .windows(2)
+        .any(|pair| pair == [TokenKind::Minus, TokenKind::IntLiteral(0x80)]));
+}
+
+#[test]
+fn invalid_integer_base_digits_and_separator_positions_are_au1001() {
+    for source in [
+        "value = 0x\n",
+        "value = 0b\n",
+        "value = 0o\n",
+        "value = 0x_1\n",
+        "value = -0x_1\n",
+        "value = 0b_1\n",
+        "value = 0o_1\n",
+        "value = 1_0_\n",
+        "value = 1__0\n",
+        "value = 0x1_\n",
+        "value = 0x1__0\n",
+        "value = 0b102\n",
+        "value = 0o78\n",
+        "value = 0xG\n",
+        "value = 0x1g\n",
+        "value = 0x1.0\n",
+        "value = 1_0.0\n",
+        "value = 1.0_0\n",
+        "value = 1e1_0\n",
+        "value = 1_0ms\n",
+    ] {
+        let error = lex(source).expect_err(source);
+        assert_eq!(error.code, "AU1001", "{source}: {error}");
+    }
+}
+
+#[test]
 fn d4_lexer_accepts_single_quoted_strings_with_shared_escape_semantics() {
     let tokens = lex(concat!(
         r#"text = 'line\ntext\t\"double\"\'single\'\\\0\x41\u{1F600}'"#,

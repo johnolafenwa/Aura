@@ -1,0 +1,27 @@
+def left_value() -> int64:
+    print("left")
+    return -7
+
+def right_value() -> int64:
+    print("right")
+    return 3
+
+def main():
+    tiny: int8 = -7
+    unsigned: uint8 = 255
+    half: float32 = 2.5
+
+    print(round(tiny))
+    print(round(unsigned))
+    print(round(1.5))
+    print(round(half))
+    print(round(-1.5))
+    print(round(-2.5))
+
+    print(divmod(tiny, 3 as int8))
+    print(divmod(7, -3))
+    print(divmod(-7, -3))
+    print(divmod(7.5, -2.0))
+    float_pair: (float32, float32) = divmod(half, 1.0 as float32)
+    print(float_pair)
+    print(divmod(right=right_value(), left=left_value()))

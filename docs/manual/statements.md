@@ -416,9 +416,21 @@ Imports are module elements rather than executable statements. Aura accepts:
 ```python
 import util.math
 from util.math import double, triple
+import agents.telemetry as telemetry
+from agents.telemetry import record as record_event, Event
 ```
 
-Import paths are dot-separated identifiers. There are no aliases, wildcard imports, relative-dot imports, parenthesized import lists, or trailing import commas. Import resolution and visibility are defined in [Packages](/manual/packages#imports).
+Import paths are dot-separated identifiers. A module import may bind the
+complete module under a local alias. Each name in a from-import may also have
+its own local name, and renamed and direct imports may appear together. A
+renamed import introduces only its local name into the importing module.
+
+Aliases are static local names for resolved modules and declarations. They do
+not change visibility, nominal identity, trait implementations, initialization
+storage, or the package path used for resolution. Wildcard imports,
+relative-dot imports, parenthesized import lists, and trailing import commas
+are not accepted. Import resolution and visibility are defined in
+[Packages](/manual/packages#imports).
 
 An entry module may contain executable top-level statements:
 

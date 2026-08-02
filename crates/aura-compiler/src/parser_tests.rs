@@ -1538,6 +1538,100 @@ fn parse_module_imports_and_generic_bounds_cover_success_paths() {
 }
 
 #[test]
+fn parse_import_aliases_preserve_target_and_local_names() {
+    let module = parse(
+        [
+            "import pkg.tools as tools",
+            "from pkg.user import Box as UserBox, wrap, User as Person",
+            "",
+            "def main():",
+            "    return",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("import aliases should parse");
+
+    let ImportKind::Module { path, alias } = &module.imports[0].kind else {
+        panic!("expected module import");
+    };
+    assert_eq!(path, &vec!["pkg".to_string(), "tools".to_string()]);
+    assert_eq!(alias.as_deref(), Some("tools"));
+
+    let ImportKind::From { module_path, names } = &module.imports[1].kind else {
+        panic!("expected from import");
+    };
+    assert_eq!(module_path, &vec!["pkg".to_string(), "user".to_string()]);
+    assert_eq!(names.len(), 3);
+    assert_eq!(names[0].name, "Box");
+    assert_eq!(names[0].alias.as_deref(), Some("UserBox"));
+    assert_eq!(names[1].name, "wrap");
+    assert_eq!(names[1].alias, None);
+    assert_eq!(names[2].name, "User");
+    assert_eq!(names[2].alias.as_deref(), Some("Person"));
+}
+
+#[test]
+fn keyword_only_parameter_markers_receive_a_focused_rejection() {
+    let error = parse("def configure(path: str, *, retries: int32):\n    return\n")
+        .expect_err("keyword-only parameters remain outside Aura 0.3");
+    assert_eq!(error.code, "AU1101");
+    assert!(
+        error.message.contains(
+            "keyword-only parameters are not part of Aura 0.3's structural callable model"
+        ),
+        "unexpected diagnostic: {}",
+        error.message
+    );
+}
+
+#[test]
+fn import_alias_diagnostics_cover_invalid_and_duplicate_bindings() {
+    let cases = [
+        (
+            "import pkg.tools as\n",
+            "AU1101",
+            "expected identifier after `as`",
+        ),
+        (
+            "from pkg.tools import run as\n",
+            "AU1101",
+            "expected identifier after `as`",
+        ),
+        (
+            "import pkg.tools as _\n",
+            "AU2999",
+            "`_` cannot be used as an import alias",
+        ),
+        (
+            "import pkg.tools as def\n",
+            "AU2999",
+            "reserved words cannot be used as import aliases",
+        ),
+        (
+            "from pkg.tools import run, run as again\n",
+            "AU2999",
+            "import target `run` appears more than once",
+        ),
+        (
+            "from pkg.tools import run as task, stop as task\n",
+            "AU2999",
+            "duplicate import binding `task`",
+        ),
+    ];
+
+    for (source, code, message) in cases {
+        let error = parse(source).expect_err(source);
+        assert_eq!(error.code, code, "unexpected code for {source:?}");
+        assert!(
+            error.message.contains(message),
+            "unexpected diagnostic for {source:?}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
 fn parse_structural_items_tolerate_blank_lines_and_pass() {
     let class_item = parse_item_from(
         [
@@ -1899,6 +1993,110 @@ fn parse_statement_and_operator_variants_cover_remaining_forms() {
     assert!(bad
         .message
         .contains("expected assignment operator, found EqEq"));
+}
+
+#[test]
+fn bitwise_shift_and_power_precedence_matches_the_accepted_grammar() {
+    let expression = parse_expression("1 | 2 ^ 3 & 4 << 1 + 1 < 100")
+        .expect("bitwise precedence expression should parse");
+    let ExprKind::Binary {
+        op: BinaryOp::Less,
+        left,
+        ..
+    } = expression.kind
+    else {
+        panic!("comparison should remain looser than bitwise operators");
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::BitOr,
+        right: xor,
+        ..
+    } = left.kind
+    else {
+        panic!("bitwise-or should be the loosest bitwise level");
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::BitXor,
+        right: and,
+        ..
+    } = xor.kind
+    else {
+        panic!("bitwise-xor should bind inside bitwise-or");
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::BitAnd,
+        right: shift,
+        ..
+    } = and.kind
+    else {
+        panic!("bitwise-and should bind inside bitwise-xor");
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::Shl,
+        right: additive,
+        ..
+    } = shift.kind
+    else {
+        panic!("shift should bind inside bitwise-and");
+    };
+    assert!(matches!(
+        additive.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Add,
+            ..
+        }
+    ));
+
+    let power = parse_expression("2 ** 3 ** 2").expect("power should parse");
+    assert!(matches!(
+        power.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Pow,
+            right,
+            ..
+        } if matches!(right.kind, ExprKind::Binary { op: BinaryOp::Pow, .. })
+    ));
+    let negated = parse_expression("-2 ** 2").expect("unary-left power should parse");
+    assert!(matches!(
+        negated.kind,
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr,
+        } if matches!(expr.kind, ExprKind::Binary { op: BinaryOp::Pow, .. })
+    ));
+    let negative_exponent = parse_expression("2 ** -2").expect("unary exponent should parse");
+    assert!(matches!(
+        negative_exponent.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Pow,
+            right,
+            ..
+        } if matches!(right.kind, ExprKind::Unary { op: UnaryOp::Neg, .. })
+    ));
+    assert!(matches!(
+        parse_expression("~1")
+            .expect("bitwise not should parse")
+            .kind,
+        ExprKind::Unary {
+            op: UnaryOp::BitNot,
+            ..
+        }
+    ));
+
+    for (source, expected) in [
+        ("value &= 1\n", BinaryOp::BitAnd),
+        ("value |= 1\n", BinaryOp::BitOr),
+        ("value ^= 1\n", BinaryOp::BitXor),
+        ("value <<= 1\n", BinaryOp::Shl),
+        ("value >>= 1\n", BinaryOp::Shr),
+        ("value **= 2\n", BinaryOp::Pow),
+    ] {
+        let Stmt::Assign(assign) = parse_stmt_from(source).expect("compound operator should parse")
+        else {
+            panic!("expected assignment statement");
+        };
+        assert_eq!(assign.op, Some(expected), "{source}");
+    }
 }
 
 #[test]

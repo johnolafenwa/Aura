@@ -1,0 +1,6 @@
+error[AU4002]: integer left shift overflow
+ --> crates/aura-compiler/tests/fixtures/run-fail/integer_left_shift_overflow.au:4:11
+  |
+4 |     print(base << count)
+  |           ^
+  = note: Aura call chain (innermost first): main at 1:1

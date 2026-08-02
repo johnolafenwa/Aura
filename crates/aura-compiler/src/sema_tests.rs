@@ -35,6 +35,74 @@ fn check_ffi_source_for_test(source: &str) -> Result<Program> {
     crate::check_module_with_builtin_imports(module)
 }
 
+#[test]
+fn round_and_divmod_builtin_overloads_preserve_exact_static_types() {
+    crate::check_source(
+        r#"
+def main():
+    tiny: int8 = -7
+    other: int8 = 3
+    same: int8 = round(tiny)
+    half: float32 = 2.5
+    rounded: int64 = round(value=half)
+    integer_pair: (int8, int8) = divmod(left=tiny, right=other)
+    float_pair: (float32, float32) = divmod(half, 1.5)
+    i16: int16 = round(7 as int16)
+    i32: int32 = round(7 as int32)
+    i64: int64 = round(7 as int64)
+    i128: int128 = round(7 as int128)
+    isize: intsize = round(7 as intsize)
+    u8: uint8 = round(7 as uint8)
+    u16: uint16 = round(7 as uint16)
+    u32: uint32 = round(7 as uint32)
+    u64: uint64 = round(7 as uint64)
+    u128: uint128 = round(7 as uint128)
+    usize: uintsize = round(7 as uintsize)
+    pair_i128: (int128, int128) = divmod(7 as int128, 3 as int128)
+    pair_u128: (uint128, uint128) = divmod(7 as uint128, 3 as uint128)
+"#,
+    )
+    .expect("round and divmod overloads should preserve their ratified result types");
+
+    let round_domain = crate::check_source(
+        r#"
+def main():
+    value = round("1")
+"#,
+    )
+    .expect_err("round must reject non-numeric values");
+    assert_eq!(round_domain.code, "AU2003");
+    assert!(round_domain.message.contains("expects an integer"));
+
+    let divmod_domain = crate::check_source(
+        r#"
+def main():
+    value = divmod("1", "2")
+"#,
+    )
+    .expect_err("divmod must reject non-numeric values");
+    assert_eq!(divmod_domain.code, "AU2003");
+
+    let divmod_mismatch = crate::check_source(
+        r#"
+def main():
+    value = divmod(1, 2.0)
+"#,
+    )
+    .expect_err("divmod operands must have one exact type");
+    assert_eq!(divmod_mismatch.code, "AU2002");
+    assert!(divmod_mismatch.message.contains("one exact type"));
+
+    let arity = crate::check_source(
+        r#"
+def main():
+    value = round(1, 2)
+"#,
+    )
+    .expect_err("round has no digit-count overload");
+    assert_eq!(arity.code, "AU2004");
+}
+
 fn public_ffi_handle_namespace(module_name: &str) -> ModuleNamespace {
     let remote = check_ffi_source_for_test("public extern \"C\" opaque class Handle\n")
         .expect("public remote opaque handle should check");
@@ -6213,6 +6281,100 @@ def main() -> int32:
         "def main() -> int32:\n    positive: int128 = 9223372036854775808\n    negative: int128 = -9223372036854775809\n    narrow: int32 = 2147483647\n    return 0\n",
     )
     .expect("explicit wider and fixed-width integer contexts should remain authoritative");
+}
+
+#[test]
+fn integer_base_spellings_preserve_contextual_fixed_width_typing() {
+    crate::check_source(
+        r#"
+def main():
+    signed8_max: int8 = 0x7f
+    signed8_min: int8 = -0x80
+    unsigned8_max: uint8 = 0Xff
+    signed16_max: int16 = 0x7fff
+    signed16_min: int16 = -0x8000
+    unsigned16_max: uint16 = 0xffff
+    signed32_max: int32 = 0x7fff_ffff
+    signed32_min: int32 = -0x8000_0000
+    unsigned32_max: uint32 = 0xffff_ffff
+    signed64_max: int64 = 0x7fff_ffff_ffff_ffff
+    signed64_min: int64 = -0x8000_0000_0000_0000
+    unsigned64_max: uint64 = 0xffff_ffff_ffff_ffff
+    signed128_max: int128 = 0x7fff_ffff_ffff_ffff_ffff_ffff_ffff_ffff
+    signed128_min: int128 = -0x8000_0000_0000_0000_0000_0000_0000_0000
+    unsigned128_max: uint128 = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffff
+    alias: int = 0b1010_0110
+    octal: uint16 = 0O17_777
+"#,
+    )
+    .expect("base-prefixed values should retain ordinary contextual integer typing");
+
+    let narrow = crate::check_source("def main():\n    value: int8 = 0x80\n")
+        .expect_err("base spelling must not bypass contextual range checking");
+    assert_eq!(
+        narrow.message,
+        "integer literal `128` does not fit in `int8`"
+    );
+
+    let defaulted = crate::check_source("def main():\n    value = 0x8000_0000_0000_0000\n")
+        .expect_err("unhinted base spelling must still default to int64");
+    assert_eq!(
+        defaulted.message,
+        "integer literal `9223372036854775808` does not fit in `int64`"
+    );
+}
+
+#[test]
+fn bitwise_shift_and_power_operators_require_the_accepted_exact_numeric_types() {
+    crate::check_source(
+        r#"
+def main():
+    mut a: int8 = 5
+    b: int8 = 3
+    anded: int8 = a & b
+    ored: int8 = a | b
+    xored: int8 = a ^ b
+    inverted: int8 = ~a
+    left: int8 = b << 1
+    right: int8 = a >> 1
+    powered: int8 = b ** 3
+    float_power: float64 = 2.0 ** -2.0
+    a &= b
+    a |= b
+    a ^= b
+    a <<= 1
+    a >>= 1
+    a **= 2
+"#,
+    )
+    .expect("accepted bitwise, shift, power, and compound forms should type check");
+
+    for (source, code, fragment) in [
+        (
+            "def main():\n    value = 1 & 1.0\n",
+            "AU2003",
+            "require integer operands",
+        ),
+        (
+            "def main():\n    value = 1.0 << 1.0\n",
+            "AU2003",
+            "require integer operands",
+        ),
+        (
+            "def main():\n    value = ~1.0\n",
+            "AU2003",
+            "expects an integer",
+        ),
+        (
+            "def main():\n    value = 2 ** -1\n",
+            "AU2003",
+            "negative exponent",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}: {error}");
+        assert!(error.message.contains(fragment), "{source}: {error}");
+    }
 }
 
 #[test]

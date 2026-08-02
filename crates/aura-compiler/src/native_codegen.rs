@@ -438,6 +438,8 @@ struct NativeCodegen<'a> {
     min_value: FuncId,
     max_value: FuncId,
     sqrt_value: FuncId,
+    round_value: FuncId,
+    divmod_value: FuncId,
     parse_int32: FuncId,
     parse_int64: FuncId,
     parse_float64: FuncId,
@@ -937,6 +939,8 @@ impl<'a> NativeCodegen<'a> {
             min_value => ("aura_direct_min", [types::I64, types::I64], Some(types::I64)),
             max_value => ("aura_direct_max", [types::I64, types::I64], Some(types::I64)),
             sqrt_value => ("aura_direct_sqrt", [types::I64], Some(types::I64)),
+            round_value => ("aura_direct_round", [types::I64], Some(types::I64)),
+            divmod_value => ("aura_direct_divmod", [types::I64, types::I64], Some(types::I64)),
             parse_int32 => ("aura_direct_parse_int32", [types::I64], Some(types::I64)),
             parse_int64 => ("aura_direct_parse_int64", [types::I64], Some(types::I64)),
             parse_float64 => ("aura_direct_parse_float64", [types::I64], Some(types::I64)),
@@ -1023,7 +1027,7 @@ impl<'a> NativeCodegen<'a> {
             unbox_bool => ("aura_direct_unbox_bool", [types::I64], Some(types::I64)),
             value_as_condition => ("aura_direct_value_as_condition", [types::I64], Some(types::I64)),
             unary_value => ("aura_direct_unary_value_at", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            binary_value => ("aura_direct_binary_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            binary_value => ("aura_direct_binary_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             cast_value => ("aura_direct_cast_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             cast_integer_to_integer => ("aura_direct_cast_integer_to_integer", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             cast_integer_to_float => ("aura_direct_cast_integer_to_float", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::F64)),
@@ -1370,6 +1374,8 @@ impl<'a> NativeCodegen<'a> {
             min_value,
             max_value,
             sqrt_value,
+            round_value,
+            divmod_value,
             parse_int32,
             parse_int64,
             parse_float64,
@@ -2084,6 +2090,12 @@ impl<'a> NativeCodegen<'a> {
         let sqrt_value = self
             .object
             .declare_func_in_func(self.sqrt_value, builder.func);
+        let round_value = self
+            .object
+            .declare_func_in_func(self.round_value, builder.func);
+        let divmod_value = self
+            .object
+            .declare_func_in_func(self.divmod_value, builder.func);
         let parse_int32 = self
             .object
             .declare_func_in_func(self.parse_int32, builder.func);
@@ -3004,6 +3016,8 @@ impl<'a> NativeCodegen<'a> {
             min_value,
             max_value,
             sqrt_value,
+            round_value,
+            divmod_value,
             parse_int32,
             parse_int64,
             parse_float64,
@@ -3835,6 +3849,8 @@ struct FunctionCompiler<'a> {
     min_value: cranelift_codegen::ir::FuncRef,
     max_value: cranelift_codegen::ir::FuncRef,
     sqrt_value: cranelift_codegen::ir::FuncRef,
+    round_value: cranelift_codegen::ir::FuncRef,
+    divmod_value: cranelift_codegen::ir::FuncRef,
     parse_int32: cranelift_codegen::ir::FuncRef,
     parse_int64: cranelift_codegen::ir::FuncRef,
     parse_float64: cranelift_codegen::ir::FuncRef,
@@ -4808,10 +4824,13 @@ impl<'a> FunctionCompiler<'a> {
         value: ValueRef,
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
-        if matches!(value.ty, DirectType::Opaque(_)) {
+        if matches!(value.ty, DirectType::Opaque(_)) || op == UnaryOp::BitNot {
+            let target_ty = value.ty.clone();
+            let value = self.ensure_opaque(value)?;
             let opcode = match op {
                 UnaryOp::Neg => 0,
                 UnaryOp::Not => 1,
+                UnaryOp::BitNot => 2,
             };
             let opcode = self.builder.ins().iconst(types::I64, opcode);
             let (line, column) = self.span_values(span);
@@ -4819,10 +4838,15 @@ impl<'a> FunctionCompiler<'a> {
                 .builder
                 .ins()
                 .call(self.unary_value, &[opcode, value.values[0], line, column]);
-            return Ok(self.owned_opaque_result(
+            let result = self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
                 Type::named("Unknown"),
-            ));
+            );
+            return if matches!(target_ty, DirectType::Opaque(_)) {
+                Ok(result)
+            } else {
+                self.coerce_value(result, &target_ty)
+            };
         }
         match (op, value.ty.scalar_kind()) {
             (UnaryOp::Neg, Some(ScalarKind::Int32)) => Ok(ValueRef {
@@ -5008,6 +5032,48 @@ impl<'a> FunctionCompiler<'a> {
         right: ValueRef,
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
+        if matches!(
+            op,
+            BinaryOp::Pow
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+        ) {
+            let target_ty = left.ty.clone();
+            let float_width = match &target_ty {
+                DirectType::Scalar(ScalarKind::Float32) => 32,
+                DirectType::Scalar(ScalarKind::Float64) => 64,
+                _ => 0,
+            };
+            let left = self.ensure_opaque(left)?;
+            let right = self.ensure_opaque(right)?;
+            let opcode_value = self.binary_opcode(op);
+            let opcode = self.builder.ins().iconst(types::I64, opcode_value);
+            let float_width = self.builder.ins().iconst(types::I64, float_width);
+            let (line, column) = self.span_values(span);
+            let inst = self.builder.ins().call(
+                self.binary_value,
+                &[
+                    opcode,
+                    left.values[0],
+                    right.values[0],
+                    float_width,
+                    line,
+                    column,
+                ],
+            );
+            let result = self.owned_opaque_result(
+                self.builder.inst_results(inst).to_vec(),
+                Type::named("Unknown"),
+            );
+            return if matches!(target_ty, DirectType::Opaque(_)) {
+                Ok(result)
+            } else {
+                self.coerce_value(result, &target_ty)
+            };
+        }
         let left_array_element = direct_array_element_type(&left.ty).cloned();
         let right_array_element = direct_array_element_type(&right.ty).cloned();
         if left_array_element.is_some() || right_array_element.is_some() {
@@ -5061,10 +5127,18 @@ impl<'a> FunctionCompiler<'a> {
             let right = self.ensure_opaque(right)?;
             let binary_opcode = self.binary_opcode(op);
             let opcode = self.builder.ins().iconst(types::I64, binary_opcode);
+            let float_width = self.builder.ins().iconst(types::I64, 0);
             let (line, column) = self.span_values(span);
             let inst = self.builder.ins().call(
                 self.binary_value,
-                &[opcode, left.values[0], right.values[0], line, column],
+                &[
+                    opcode,
+                    left.values[0],
+                    right.values[0],
+                    float_width,
+                    line,
+                    column,
+                ],
             );
             return Ok(self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
@@ -5387,10 +5461,11 @@ impl<'a> FunctionCompiler<'a> {
                 let left_boxed = self.builder.inst_results(left_box)[0];
                 let right_boxed = self.builder.inst_results(right_box)[0];
                 let opcode = self.builder.ins().iconst(types::I64, opcode_value);
+                let float_width = self.builder.ins().iconst(types::I64, 0);
                 let (line, column) = self.span_values(span);
                 let result = self.builder.ins().call(
                     self.binary_value,
-                    &[opcode, left_boxed, right_boxed, line, column],
+                    &[opcode, left_boxed, right_boxed, float_width, line, column],
                 );
                 let result_boxed = self.builder.inst_results(result)[0];
                 self.release_opaque_handle(left_boxed);
@@ -6413,6 +6488,44 @@ impl<'a> FunctionCompiler<'a> {
             );
             return self.coerce_value(result, &return_ty);
         }
+        if name == "round" {
+            let ordered = ordered_named_args(&["value"], args)?;
+            let loaded = self.load_operand(&ordered[0].value)?;
+            let input_ty = loaded.ty.clone();
+            let return_ty = match input_ty.scalar_kind() {
+                Some(ScalarKind::Float32 | ScalarKind::Float64) => {
+                    DirectType::Scalar(ScalarKind::Int64)
+                }
+                _ => input_ty.clone(),
+            };
+            let value = self.ensure_opaque(loaded)?;
+            let inst = self
+                .builder
+                .ins()
+                .call(self.round_value, &[value.values[0]]);
+            let result = self.owned_opaque_result(
+                self.builder.inst_results(inst).to_vec(),
+                Type::named("Unknown"),
+            );
+            return self.coerce_value(result, &return_ty);
+        }
+        if name == "divmod" {
+            let ordered = ordered_named_args(&["left", "right"], args)?;
+            let left = self.load_operand(&ordered[0].value)?;
+            let operand_ty = direct_type_to_type(&left.ty);
+            let left = self.ensure_opaque(left)?;
+            self.tag_opaque_runtime_type(&left, &operand_ty)?;
+            let right = self.load_operand(&ordered[1].value)?;
+            let right = self.ensure_opaque(right)?;
+            let inst = self
+                .builder
+                .ins()
+                .call(self.divmod_value, &[left.values[0], right.values[0]]);
+            let result_ty = Type::Tuple(vec![operand_ty.clone(), operand_ty]);
+            return Ok(
+                self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), result_ty)
+            );
+        }
         if let Some(type_name) = name.strip_suffix(".with_capacity") {
             if matches!(type_name, "list" | "set" | "dict") {
                 let ordered = ordered_named_args(&["minimum"], args)?;
@@ -7221,9 +7334,18 @@ impl<'a> FunctionCompiler<'a> {
                             | "saturating_add"
                             | "saturating_sub"
                             | "saturating_mul"
+                            | "wrapping_shl"
+                            | "wrapping_shr"
+                            | "saturating_shl"
+                            | "saturating_shr"
                     )
                 {
-                    let ordered = ordered_named_args(&["rhs"], args)?;
+                    let argument_name = if field.ends_with("shl") || field.ends_with("shr") {
+                        "count"
+                    } else {
+                        "rhs"
+                    };
+                    let ordered = ordered_named_args(&[argument_name], args)?;
                     let argument = ordered[0];
                     let target = object.ty.clone();
                     let left = self.ensure_opaque(object)?;
@@ -7231,6 +7353,8 @@ impl<'a> FunctionCompiler<'a> {
                     let operation = match field {
                         "wrapping_add" | "saturating_add" => 0,
                         "wrapping_sub" | "saturating_sub" => 1,
+                        "wrapping_shl" | "saturating_shl" => 3,
+                        "wrapping_shr" | "saturating_shr" => 4,
                         _ => {
                             debug_assert!(matches!(field, "wrapping_mul" | "saturating_mul"));
                             2
@@ -8183,6 +8307,12 @@ impl<'a> FunctionCompiler<'a> {
             BinaryOp::And => 11,
             BinaryOp::Or => 12,
             BinaryOp::FloorDiv => 13,
+            BinaryOp::Pow => 14,
+            BinaryOp::BitAnd => 15,
+            BinaryOp::BitOr => 16,
+            BinaryOp::BitXor => 17,
+            BinaryOp::Shl => 18,
+            BinaryOp::Shr => 19,
         }
     }
 
@@ -9031,9 +9161,18 @@ impl<'a> FunctionCompiler<'a> {
                     | "saturating_add"
                     | "saturating_sub"
                     | "saturating_mul"
+                    | "wrapping_shl"
+                    | "wrapping_shr"
+                    | "saturating_shl"
+                    | "saturating_shr"
             )
         {
-            let ordered = ordered_named_args(&["rhs"], args)?;
+            let argument_name = if field.ends_with("shl") || field.ends_with("shr") {
+                "count"
+            } else {
+                "rhs"
+            };
+            let ordered = ordered_named_args(&[argument_name], args)?;
             let argument = ordered[0];
             let target = ensure_direct_type(object_ty, &self.classes, "integer receiver")?;
             let left = self.ensure_opaque(object)?;
@@ -9041,6 +9180,8 @@ impl<'a> FunctionCompiler<'a> {
             let operation = match field {
                 "wrapping_add" | "saturating_add" => 0,
                 "wrapping_sub" | "saturating_sub" => 1,
+                "wrapping_shl" | "saturating_shl" => 3,
+                "wrapping_shr" | "saturating_shr" => 4,
                 _ => {
                     debug_assert!(matches!(field, "wrapping_mul" | "saturating_mul"));
                     2
@@ -9280,7 +9421,7 @@ impl<'a> FunctionCompiler<'a> {
                         let zero = self.builder.ins().iconst(types::I64, 0);
                         let inst = self.builder.ins().call(
                             self.binary_value,
-                            &[opcode, object.values[0], value.values[0], zero, zero],
+                            &[opcode, object.values[0], value.values[0], zero, zero, zero],
                         );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
@@ -14553,7 +14694,13 @@ fn infer_rvalue_type(
             | BinaryOp::Mul
             | BinaryOp::Div
             | BinaryOp::FloorDiv
-            | BinaryOp::Mod => infer_operand_type(left, variable_types, classes),
+            | BinaryOp::Mod
+            | BinaryOp::Pow
+            | BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => infer_operand_type(left, variable_types, classes),
         },
         Rvalue::Call { callee, args } => match callee {
             CallTarget::Value(function) => {
@@ -14904,6 +15051,27 @@ fn infer_rvalue_type(
                     vec![Type::named("float64"), Type::named("str")],
                 )))
             }
+            CallTarget::Name(name) if name == "round" => {
+                let operand = args.first().and_then(|argument| {
+                    infer_operand_type(&argument.value, variable_types, classes)
+                })?;
+                Some(match operand.scalar_kind() {
+                    Some(ScalarKind::Float32 | ScalarKind::Float64) => {
+                        DirectType::Scalar(ScalarKind::Int64)
+                    }
+                    _ => operand,
+                })
+            }
+            CallTarget::Name(name) if name == "divmod" => {
+                let operand = args.first().and_then(|argument| {
+                    infer_operand_type(&argument.value, variable_types, classes)
+                })?;
+                let operand = direct_type_to_type(&operand);
+                Some(DirectType::Opaque(Type::Tuple(vec![
+                    operand.clone(),
+                    operand,
+                ])))
+            }
             CallTarget::Name(name)
                 if matches!(
                     name.strip_prefix("Duration."),
@@ -14938,6 +15106,10 @@ fn infer_rvalue_type(
                             | "saturating_add"
                             | "saturating_sub"
                             | "saturating_mul"
+                            | "wrapping_shl"
+                            | "wrapping_shr"
+                            | "saturating_shl"
+                            | "saturating_shr"
                     )
                 {
                     return Some(object_ty);
@@ -15061,6 +15233,10 @@ fn builtin_opaque_member_return_type(
                 | "saturating_add"
                 | "saturating_sub"
                 | "saturating_mul"
+                | "wrapping_shl"
+                | "wrapping_shr"
+                | "saturating_shl"
+                | "saturating_shr"
         )
     {
         return direct_type(object_ty, classes);

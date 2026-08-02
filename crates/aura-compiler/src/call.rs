@@ -280,6 +280,8 @@ const ARRAY_CALLBACK_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "f", ReceiverKind::Borrow)];
 const ARITHMETIC_RHS_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "rhs", ReceiverKind::Borrow)];
+const SHIFT_COUNT_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "count", ReceiverKind::Borrow)];
 const FILE_WRITE_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "text", ReceiverKind::Borrow)];
 const FILE_WRITE_BYTES_PARAMS: [BuiltinParam; 1] =
@@ -421,6 +423,8 @@ pub enum BuiltinFunction {
     Min,
     Max,
     Sqrt,
+    Round,
+    Divmod,
     ParseInt32,
     ParseInt64,
     ParseFloat64,
@@ -443,6 +447,8 @@ pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
     BuiltinFunction::Min,
     BuiltinFunction::Max,
     BuiltinFunction::Sqrt,
+    BuiltinFunction::Round,
+    BuiltinFunction::Divmod,
     BuiltinFunction::ParseInt32,
     BuiltinFunction::ParseInt64,
     BuiltinFunction::ParseFloat64,
@@ -463,6 +469,8 @@ impl BuiltinFunction {
             "min" => Some(Self::Min),
             "max" => Some(Self::Max),
             "sqrt" => Some(Self::Sqrt),
+            "round" => Some(Self::Round),
+            "divmod" => Some(Self::Divmod),
             "parse_int32" => Some(Self::ParseInt32),
             "parse_int64" => Some(Self::ParseInt64),
             "parse_float64" => Some(Self::ParseFloat64),
@@ -486,6 +494,8 @@ impl BuiltinFunction {
             Self::Min => "min",
             Self::Max => "max",
             Self::Sqrt => "sqrt",
+            Self::Round => "round",
+            Self::Divmod => "divmod",
             Self::ParseInt32 => "parse_int32",
             Self::ParseInt64 => "parse_int64",
             Self::ParseFloat64 => "parse_float64",
@@ -514,6 +524,8 @@ impl BuiltinFunction {
             Self::Min => "min(left: number, right: number) -> number",
             Self::Max => "max(left: number, right: number) -> number",
             Self::Sqrt => "sqrt(value: float32|float64) -> float32|float64",
+            Self::Round => "round(value: integer|float32|float64) -> integer|int64",
+            Self::Divmod => "divmod(left: number, right: number) -> (number, number)",
             Self::ParseInt32 => "parse_int32(text: str) -> Result[int32, str]",
             Self::ParseInt64 => "parse_int64(text: str) -> Result[int64, str]",
             Self::ParseFloat64 => "parse_float64(text: str) -> Result[float64, str]",
@@ -546,6 +558,8 @@ impl BuiltinFunction {
             Self::Min => "Returns the smaller of two numeric values of the same type.",
             Self::Max => "Returns the larger of two numeric values of the same type.",
             Self::Sqrt => "Returns the square root of a `float32` or `float64` value.",
+            Self::Round => "Returns an integer unchanged, or rounds a float to the nearest `int64` using ties-to-even.",
+            Self::Divmod => "Returns the paired floor quotient and divisor-signed remainder for two values of one exact numeric type.",
             Self::ParseInt32 => "Parses a `str` into an `int32`, returning `Result.Err(str)` on failure.",
             Self::ParseInt64 => "Parses a `str` into an `int64`, returning `Result.Err(str)` on failure.",
             Self::ParseFloat64 => "Parses a `str` into a `float64`, returning `Result.Err(str)` on failure.",
@@ -640,8 +654,10 @@ impl BuiltinFunction {
                 &TASK_LIST_TIMEOUT_PARAMS,
                 CallConvention::PositionalOrNamed,
             ),
-            Self::Abs => BuiltinCallShape::fixed(&ABS_PARAMS, CallConvention::PositionalOrNamed),
-            Self::Min | Self::Max => {
+            Self::Abs | Self::Round => {
+                BuiltinCallShape::fixed(&ABS_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::Min | Self::Max | Self::Divmod => {
                 BuiltinCallShape::fixed(&MIN_MAX_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::Sqrt => BuiltinCallShape::fixed(&SQRT_PARAMS, CallConvention::PositionalOrNamed),
@@ -900,6 +916,10 @@ pub enum BuiltinMember {
     IntegerSaturatingAdd,
     IntegerSaturatingSub,
     IntegerSaturatingMul,
+    IntegerWrappingShl,
+    IntegerWrappingShr,
+    IntegerSaturatingShl,
+    IntegerSaturatingShr,
     DurationToMilliseconds,
     DurationToSeconds,
     StringLen,
@@ -1094,6 +1114,24 @@ pub enum BuiltinMember {
     RngShuffle,
 }
 
+fn is_builtin_integer_name(name: &str) -> bool {
+    matches!(
+        name,
+        "int8"
+            | "int16"
+            | "int32"
+            | "int64"
+            | "int128"
+            | "intsize"
+            | "uint8"
+            | "uint16"
+            | "uint32"
+            | "uint64"
+            | "uint128"
+            | "uintsize"
+    )
+}
+
 impl BuiltinMember {
     /// Resolves private operations emitted by checked MIR as well as public
     /// source methods. Private operations never participate in source member
@@ -1196,6 +1234,18 @@ impl BuiltinMember {
             | ("uint64", "saturating_mul")
             | ("uint128", "saturating_mul")
             | ("uintsize", "saturating_mul") => Some(Self::IntegerSaturatingMul),
+            (receiver, "wrapping_shl") if is_builtin_integer_name(receiver) => {
+                Some(Self::IntegerWrappingShl)
+            }
+            (receiver, "wrapping_shr") if is_builtin_integer_name(receiver) => {
+                Some(Self::IntegerWrappingShr)
+            }
+            (receiver, "saturating_shl") if is_builtin_integer_name(receiver) => {
+                Some(Self::IntegerSaturatingShl)
+            }
+            (receiver, "saturating_shr") if is_builtin_integer_name(receiver) => {
+                Some(Self::IntegerSaturatingShr)
+            }
             ("Duration", "to_ms") => Some(Self::DurationToMilliseconds),
             ("Duration", "to_seconds") => Some(Self::DurationToSeconds),
             ("bool", "to_string") => Some(Self::ScalarToString),
@@ -1411,6 +1461,10 @@ impl BuiltinMember {
             Self::IntegerSaturatingAdd | Self::ArraySaturatingAdd => "saturating_add",
             Self::IntegerSaturatingSub | Self::ArraySaturatingSub => "saturating_sub",
             Self::IntegerSaturatingMul | Self::ArraySaturatingMul => "saturating_mul",
+            Self::IntegerWrappingShl => "wrapping_shl",
+            Self::IntegerWrappingShr => "wrapping_shr",
+            Self::IntegerSaturatingShl => "saturating_shl",
+            Self::IntegerSaturatingShr => "saturating_shr",
             Self::DurationToMilliseconds => "to_ms",
             Self::DurationToSeconds => "to_seconds",
             Self::ScalarToString => "to_string",
@@ -1609,6 +1663,10 @@ impl BuiltinMember {
             Self::IntegerSaturatingAdd => "saturating_add(rhs: Self) -> Self",
             Self::IntegerSaturatingSub => "saturating_sub(rhs: Self) -> Self",
             Self::IntegerSaturatingMul => "saturating_mul(rhs: Self) -> Self",
+            Self::IntegerWrappingShl => "wrapping_shl(count: Self) -> Self",
+            Self::IntegerWrappingShr => "wrapping_shr(count: Self) -> Self",
+            Self::IntegerSaturatingShl => "saturating_shl(count: Self) -> Self",
+            Self::IntegerSaturatingShr => "saturating_shr(count: Self) -> Self",
             Self::DurationToMilliseconds => "to_ms() -> float64",
             Self::DurationToSeconds => "to_seconds() -> float64",
             Self::ScalarToString => "to_string() -> str",
@@ -1855,6 +1913,18 @@ impl BuiltinMember {
             | Self::IntegerSaturatingSub
             | Self::IntegerSaturatingMul => {
                 "Performs fixed-width integer arithmetic clamped to the receiver type's range."
+            }
+            Self::IntegerWrappingShl => {
+                "Performs fixed-width integer arithmetic by shifting left and discarding high bits after validating the count."
+            }
+            Self::IntegerWrappingShr => {
+                "Performs fixed-width integer arithmetic by shifting right after validating the count, preserving signed arithmetic or unsigned logical semantics."
+            }
+            Self::IntegerSaturatingShl => {
+                "Performs fixed-width integer arithmetic by shifting left and clamping overflow to the receiver type's range after validating the count."
+            }
+            Self::IntegerSaturatingShr => {
+                "Performs fixed-width integer arithmetic by shifting right after validating the count, preserving signed arithmetic or unsigned logical semantics."
             }
             Self::DurationToMilliseconds => {
                 "Converts the Duration to the nearest representable number of milliseconds as `float64`."
@@ -2270,6 +2340,12 @@ impl BuiltinMember {
             | Self::ArraySaturatingSub
             | Self::ArraySaturatingMul => {
                 BuiltinCallShape::fixed(&ARITHMETIC_RHS_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::IntegerWrappingShl
+            | Self::IntegerWrappingShr
+            | Self::IntegerSaturatingShl
+            | Self::IntegerSaturatingShr => {
+                BuiltinCallShape::fixed(&SHIFT_COUNT_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::ArrayGet => {
                 BuiltinCallShape::fixed(&ARRAY_INDEX_PARAMS, CallConvention::PositionalOrNamed)

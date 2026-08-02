@@ -10,6 +10,10 @@ This page documents known current limits of the Aura compiler and runtime.
   singleton tuple values, types, targets, and patterns. Multi-element tuples
   still reject a trailing comma.
 - Parser nesting/postfix/binary-chain guards are limited to 128 operations; deeper input is rejected with a diagnostic.
+- Integers are fixed-width. Aura has no arbitrary-precision integer, implicit
+  width promotion, rotate operator, literal suffix, hexadecimal floating
+  literal, or distinct unsigned-right-shift operator. Power is builtin-only;
+  `round` has no digit-count overload.
 - Non-numeric casts are not implemented.
 - Direct recursive fields require `indirect`.
 - Return values are always owned. Copy results are ordinary copies; a non-copy

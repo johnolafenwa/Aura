@@ -679,7 +679,7 @@ test("compiler bridge reuses one persistent compiler process", async () => {
 });
 
 test("persistent compiler service sends and accepts the current semantic schema", async () => {
-  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 3);
+  assert.equal(SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION, 4);
   const script = [
     "const readline = require('node:readline');",
     "const lines = readline.createInterface({ input: process.stdin });",
@@ -732,7 +732,7 @@ test("persistent compiler service rejects and disposes a mismatched semantic sch
       path: "/virtual/main.au",
       source: "def main():\n    pass\n"
     }),
-    /semantic schema mismatch.*received `1`.*expected `3`/
+    /semantic schema mismatch.*received `1`.*expected `4`/
   );
   assert.equal(service.closed, true);
   assert.equal(invalidations, 1);
@@ -2753,6 +2753,149 @@ test("compiler bridge resolves local module imports for analysis and completions
 
   assert.ok(completions);
   assert.ok(completions.some((item) => item.name === "double"));
+});
+
+test("compiler bridge preserves import aliases in hover, definitions, and completions", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-import-aliases-"));
+  try {
+    fs.mkdirSync(path.join(tempRoot, "pkg"));
+    const mathPath = path.join(tempRoot, "pkg/math.au");
+    fs.writeFileSync(
+      mathPath,
+      "public def double(value: int32) -> int32:\n    return value * 2\n"
+    );
+    const canonicalMathPath = fs.realpathSync(mathPath);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+
+    const moduleAliasSource = [
+      "import pkg.math as numbers",
+      "",
+      "def main() -> int32:",
+      "    return numbers.double(21)"
+    ].join("\n");
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const moduleAnalysis = await analyzeWithCompiler(mainUri, moduleAliasSource);
+    assert.ok(moduleAnalysis);
+    assert.equal(moduleAnalysis.diagnostics.length, 0);
+    const moduleAliasDeclaration = moduleAnalysis.occurrences.find(
+      (occurrence) =>
+        occurrence.line === 0 && occurrence.hover.includes("module numbers = pkg.math")
+    );
+    assert.ok(moduleAliasDeclaration, JSON.stringify(moduleAnalysis.occurrences, null, 2));
+    assert.equal(moduleAliasDeclaration.definition?.file_path, canonicalMathPath);
+    const moduleAlias = moduleAnalysis.occurrences.find(
+      (occurrence) =>
+        occurrence.line === 3 && occurrence.hover.includes("module numbers = pkg.math")
+    );
+    assert.ok(moduleAlias, JSON.stringify(moduleAnalysis.occurrences, null, 2));
+    assert.equal(moduleAlias.definition?.file_path, canonicalMathPath);
+    const moduleMember = moduleAnalysis.occurrences.find(
+      (occurrence) => occurrence.line === 3 && occurrence.hover.includes("function double")
+    );
+    assert.ok(moduleMember, JSON.stringify(moduleAnalysis.occurrences, null, 2));
+    assert.equal(moduleMember.definition?.file_path, canonicalMathPath);
+
+    const moduleAliasCompletions = await completeWithCompiler(
+      mainUri,
+      moduleAliasSource,
+      2,
+      0,
+      null
+    );
+    assert.ok(moduleAliasCompletions);
+    assert.ok(
+      moduleAliasCompletions.some(
+        (completion) => completion.name === "numbers" && completion.kind === "module"
+      )
+    );
+    assert.ok(!moduleAliasCompletions.some((completion) => completion.name === "math"));
+
+    const memberCompletionSource = moduleAliasSource.replace(
+      "    return numbers.double(21)",
+      "    numbers.\n    return 0"
+    );
+    const memberLine = memberCompletionSource
+      .split("\n")
+      .findIndex((line) => line.trim() === "numbers.");
+    const memberCompletions = await completeWithCompiler(
+      mainUri,
+      memberCompletionSource,
+      memberLine,
+      memberCompletionSource.split("\n")[memberLine].length,
+      "."
+    );
+    assert.ok(memberCompletions);
+    assert.ok(memberCompletions.some((completion) => completion.name === "double"));
+
+    const bindingAliasSource = [
+      "from pkg.math import double as twice",
+      "",
+      "def main() -> int32:",
+      "    return twice(21)"
+    ].join("\n");
+    const bindingAnalysis = await analyzeWithCompiler(mainUri, bindingAliasSource);
+    assert.ok(bindingAnalysis);
+    assert.equal(bindingAnalysis.diagnostics.length, 0);
+    const bindingAliasDeclaration = bindingAnalysis.occurrences.find(
+      (occurrence) =>
+        occurrence.line === 0 && occurrence.hover.includes("Alias `twice` for `pkg.math.double`")
+    );
+    assert.ok(bindingAliasDeclaration, JSON.stringify(bindingAnalysis.occurrences, null, 2));
+    assert.equal(bindingAliasDeclaration.definition?.file_path, canonicalMathPath);
+    const bindingAlias = bindingAnalysis.occurrences.find(
+      (occurrence) => occurrence.line === 3 && occurrence.hover.includes("function double")
+    );
+    assert.ok(bindingAlias, JSON.stringify(bindingAnalysis.occurrences, null, 2));
+    assert.equal(bindingAlias.definition?.file_path, canonicalMathPath);
+
+    const bindingCompletions = await completeWithCompiler(
+      mainUri,
+      bindingAliasSource,
+      2,
+      0,
+      null
+    );
+    assert.ok(bindingCompletions);
+    assert.ok(
+      bindingCompletions.some(
+        (completion) => completion.name === "twice" && completion.kind === "function"
+      )
+    );
+    assert.ok(!bindingCompletions.some((completion) => completion.name === "double"));
+
+    const builtinAliasSource = [
+      "import path as paths",
+      "",
+      "def main() -> int32:",
+      "    print(paths.join(\"root\", \"item.au\"))",
+      "    return 0"
+    ].join("\n");
+    const builtinAnalysis = await analyzeWithCompiler(mainUri, builtinAliasSource);
+    assert.ok(builtinAnalysis);
+    assert.equal(builtinAnalysis.diagnostics.length, 0);
+    assert.ok(
+      builtinAnalysis.occurrences.some(
+        (occurrence) => occurrence.hover.includes("module paths = path")
+      )
+    );
+    const builtinMemberSource = builtinAliasSource.replace(
+      "    print(paths.join(\"root\", \"item.au\"))",
+      "    paths."
+    );
+    const builtinMembers = await completeWithCompiler(
+      mainUri,
+      builtinMemberSource,
+      3,
+      10,
+      "."
+    );
+    assert.ok(builtinMembers);
+    assert.ok(builtinMembers.some((completion) => completion.name === "join"));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("compiler bridge preserves definitions for namespace-imported symbols", async () => {

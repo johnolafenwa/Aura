@@ -1,18 +1,19 @@
 use super::{
     cancel_current_lightweight_task_boundary, cast_numeric_value, claim_task_result_observations,
-    create_dir_once, decode_process_restart_policy, decode_process_stdio, finalize_task_execution,
-    float_floor_divmod, io_decode_utf8, io_error, lock_mutex, next_retry_runtime_backoff,
-    non_unix_tls_listener_wait_timeout, option_none, option_some, process_error_cancelled,
-    process_error_no_command, process_error_other, process_error_spawn, process_error_timed_out,
-    process_supervisor_event_failed, process_supervisor_wait_cancelled,
+    create_dir_once, decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
+    finalize_task_execution, float_floor_divmod, float_power, io_decode_utf8, io_error, lock_mutex,
+    next_retry_runtime_backoff, non_unix_tls_listener_wait_timeout, option_none, option_some,
+    process_error_cancelled, process_error_no_command, process_error_other, process_error_spawn,
+    process_error_timed_out, process_supervisor_event_failed, process_supervisor_wait_cancelled,
     process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
     queue_receive_item, queue_receive_timed_out, recv_for_task_group_iteration,
-    remove_file_checked, render_float, render_float32, result_err, result_ok, run_blocking_io,
-    run_lightweight_root_task, run_protocol_step, select_outcome_deadline, select_outcome_queue,
-    select_outcome_task, select_runtime_values, send_error_cancelled, send_error_closed,
-    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned,
-    slice_vec_owned, spawn_lightweight_task, spawn_lightweight_task_with_cancellation,
+    remove_file_checked, render_float, render_float32, result_err, result_ok, round_numeric_value,
+    run_blocking_io, run_lightweight_root_task, run_protocol_step, select_outcome_deadline,
+    select_outcome_queue, select_outcome_task, select_runtime_values, send_error_cancelled,
+    send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
+    slice_string_owned, slice_vec_owned, spawn_lightweight_task,
+    spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
     spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
     task_result_error, task_result_ready, task_result_timed_out, validate_read_line_capacity,
@@ -21,7 +22,7 @@ use super::{
     wait_any_ready, wait_any_timed_out, wait_condvar, wait_for_runtime_scheduler,
     wait_timeout_condvar, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayStorage, ArrayValue,
     BlockingIoPool, CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment,
-    EnumVariantValue, FfiHandleValue, FileValue, FunctionValue, HttpListenerValue,
+    EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, HttpListenerValue,
     HttpResponseValue, InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal,
     MapValue, ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus,
     ProcessCompletedValue, ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue,
@@ -31,6 +32,7 @@ use super::{
     Value, VecValue, WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
+use crate::integer::IntegerKind;
 
 #[test]
 fn dense_arrays_validate_shape_storage_and_deep_clone() {
@@ -4422,6 +4424,227 @@ fn float_floor_divmod_matches_python_sign_precision_and_zero_rules() {
     let (negative_zero_quotient, negative_zero_remainder) = float_floor_divmod(0.0, -3.0);
     assert_eq!(negative_zero_quotient.to_bits(), (-0.0_f64).to_bits());
     assert_eq!(negative_zero_remainder.to_bits(), (-0.0_f64).to_bits());
+}
+
+#[test]
+fn float_power_uses_destination_width_and_shared_exception_rules() {
+    assert_eq!(
+        float_power(1.5, 2.0, FloatPowerWidth::Float32).expect("float32 power should succeed"),
+        (1.5_f32.powf(2.0)) as f64
+    );
+    assert_eq!(
+        float_power(1.5, 2.0, FloatPowerWidth::Float64).expect("float64 power should succeed"),
+        1.5_f64.powf(2.0)
+    );
+
+    let float32_overflow = float_power(100.0, 100.0, FloatPowerWidth::Float32)
+        .expect_err("destination-width overflow must be diagnosed");
+    assert_eq!(float32_overflow.code, "AU4002");
+    assert!(float_power(100.0, 100.0, FloatPowerWidth::Float64).is_ok());
+
+    assert_eq!(
+        float_power(f64::NAN, 0.0, FloatPowerWidth::Float64).unwrap(),
+        1.0
+    );
+    assert!(
+        float_power(-2.0, 0.5, FloatPowerWidth::Float64)
+            .expect_err("fractional power of a negative base is a domain error")
+            .code
+            == "AU4001"
+    );
+}
+
+#[test]
+fn numeric_round_preserves_integers_and_uses_checked_ties_to_even_int64_results() {
+    let mut integer_values = [
+        IntegerKind::Int8,
+        IntegerKind::Int16,
+        IntegerKind::Int32,
+        IntegerKind::Int64,
+        IntegerKind::Int128,
+        IntegerKind::IntSize,
+    ]
+    .map(|kind| IntegerValue::from_typed_signed(-7, kind).unwrap())
+    .to_vec();
+    integer_values.extend(
+        [
+            IntegerKind::Uint8,
+            IntegerKind::Uint16,
+            IntegerKind::Uint32,
+            IntegerKind::Uint64,
+            IntegerKind::Uint128,
+            IntegerKind::UintSize,
+        ]
+        .map(|kind| IntegerValue::from_typed_unsigned(7, kind).unwrap()),
+    );
+    integer_values.push(IntegerValue::from_i64(i64::MAX));
+    for value in integer_values {
+        assert_eq!(
+            round_numeric_value(&Value::Int(value)).expect("integer round is identity"),
+            Value::Int(value)
+        );
+    }
+
+    for (value, expected) in [
+        (0.0, 0),
+        (-0.0, 0),
+        (1.5, 2),
+        (2.5, 2),
+        (-1.5, -2),
+        (-2.5, -2),
+        (3.499_999_999, 3),
+    ] {
+        assert_eq!(
+            round_numeric_value(&Value::Float(value)).expect("finite round should succeed"),
+            Value::Int(IntegerValue::from_i64(expected)),
+        );
+    }
+
+    for value in [
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        9_223_372_036_854_775_808.0,
+        -9_223_372_036_854_777_856.0,
+    ] {
+        let error = round_numeric_value(&Value::Float(value))
+            .expect_err("invalid float-to-int64 round must trap");
+        assert_eq!(error.code, "AU4002");
+        assert!(error.message.contains("`round(...)`"));
+    }
+
+    let unsupported = round_numeric_value(&Value::String("1".to_string()))
+        .expect_err("round's private runtime helper must validate its domain");
+    assert_eq!(unsupported.code, "AU4001");
+}
+
+#[test]
+fn numeric_divmod_returns_matching_typed_pairs_and_classifies_failures() {
+    for kind in [
+        IntegerKind::Int8,
+        IntegerKind::Int16,
+        IntegerKind::Int32,
+        IntegerKind::Int64,
+        IntegerKind::Int128,
+        IntegerKind::IntSize,
+    ] {
+        let ty = Type::named(kind.runtime_type_name());
+        let result = divmod_numeric_values(
+            &Value::Int(IntegerValue::from_typed_signed(-7, kind).unwrap()),
+            &Value::Int(IntegerValue::from_typed_signed(3, kind).unwrap()),
+            &ty,
+        )
+        .expect("every signed integer width should use floor divmod");
+        assert_eq!(
+            result,
+            Value::Tuple(TupleValue {
+                element_types: vec![ty.clone(), ty],
+                elements: vec![
+                    Value::Int(IntegerValue::from_typed_signed(-3, kind).unwrap()),
+                    Value::Int(IntegerValue::from_typed_signed(2, kind).unwrap()),
+                ],
+            })
+        );
+    }
+    for kind in [
+        IntegerKind::Uint8,
+        IntegerKind::Uint16,
+        IntegerKind::Uint32,
+        IntegerKind::Uint64,
+        IntegerKind::Uint128,
+        IntegerKind::UintSize,
+    ] {
+        let ty = Type::named(kind.runtime_type_name());
+        let result = divmod_numeric_values(
+            &Value::Int(IntegerValue::from_typed_unsigned(7, kind).unwrap()),
+            &Value::Int(IntegerValue::from_typed_unsigned(3, kind).unwrap()),
+            &ty,
+        )
+        .expect("every unsigned integer width should preserve its exact kind");
+        assert_eq!(
+            result,
+            Value::Tuple(TupleValue {
+                element_types: vec![ty.clone(), ty],
+                elements: vec![
+                    Value::Int(IntegerValue::from_typed_unsigned(2, kind).unwrap()),
+                    Value::Int(IntegerValue::from_typed_unsigned(1, kind).unwrap()),
+                ],
+            })
+        );
+    }
+
+    for (left, right, quotient, remainder) in [
+        (-7, 3, -3, 2),
+        (7, -3, -3, -2),
+        (-7, -3, 2, -1),
+        (7, 3, 2, 1),
+    ] {
+        let ty = Type::named("int32");
+        let result = divmod_numeric_values(
+            &Value::Int(IntegerValue::from_typed_signed(left, IntegerKind::Int32).unwrap()),
+            &Value::Int(IntegerValue::from_typed_signed(right, IntegerKind::Int32).unwrap()),
+            &ty,
+        )
+        .expect("matching non-zero integers should produce a pair");
+        assert_eq!(
+            result,
+            Value::Tuple(TupleValue {
+                element_types: vec![ty.clone(), ty],
+                elements: vec![
+                    Value::Int(
+                        IntegerValue::from_typed_signed(quotient, IntegerKind::Int32).unwrap()
+                    ),
+                    Value::Int(
+                        IntegerValue::from_typed_signed(remainder, IntegerKind::Int32).unwrap()
+                    ),
+                ],
+            })
+        );
+    }
+
+    let float_ty = Type::named("float32");
+    let floating = divmod_numeric_values(&Value::Float(-7.0), &Value::Float(3.0), &float_ty)
+        .expect("matching floats should produce the corrected floor-divmod pair");
+    assert_eq!(
+        floating,
+        Value::Tuple(TupleValue {
+            element_types: vec![float_ty.clone(), float_ty],
+            elements: vec![Value::Float(-3.0), Value::Float(2.0)],
+        })
+    );
+
+    for (left, right, ty) in [
+        (
+            Value::Int(IntegerValue::from_i64(1)),
+            Value::Int(IntegerValue::from_i64(0)),
+            Type::named("int64"),
+        ),
+        (
+            Value::Float(1.0),
+            Value::Float(-0.0),
+            Type::named("float64"),
+        ),
+    ] {
+        let error = divmod_numeric_values(&left, &right, &ty)
+            .expect_err("zero divisor must be classified uniformly");
+        assert_eq!(error.code, "AU4004");
+    }
+
+    let min_overflow = divmod_numeric_values(
+        &Value::Int(IntegerValue::from_i64(i64::MIN)),
+        &Value::Int(IntegerValue::from_i64(-1)),
+        &Type::named("int64"),
+    )
+    .expect_err("minimum divided by negative one must not panic");
+    assert_eq!(min_overflow.code, "AU4002");
+
+    let mismatch = divmod_numeric_values(
+        &Value::Int(IntegerValue::from_i64(1)),
+        &Value::Float(1.0),
+        &Type::named("int64"),
+    )
+    .expect_err("the private helper must reject mismatched runtime domains");
+    assert_eq!(mismatch.code, "AU4001");
 }
 
 #[test]

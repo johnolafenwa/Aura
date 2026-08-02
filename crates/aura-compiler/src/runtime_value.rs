@@ -2782,7 +2782,10 @@ struct LightweightWorkerCoordinator {
 
 // Deep HTTP, TLS, and WebSocket library frames run on the bounded protocol
 // service, keeping ordinary guarded lightweight-task stacks compact.
-const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 512 * 1024;
+// The MIR interpreter can nest several large checked-dispatch frames before a
+// task reaches a blocking host call. Keep enough headroom for ordinary builtin
+// function values; the run-pass fixture suite pins this path.
+const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 768 * 1024;
 #[cfg(test)]
 thread_local! {
     static FAIL_NEXT_LIGHTWEIGHT_TASK_STACK_ALLOCATION: Cell<bool> = const { Cell::new(false) };
@@ -6832,6 +6835,139 @@ pub(crate) fn float_floor_divmod(left: f64, right: f64) -> (f64, f64) {
     };
 
     (quotient, remainder)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FloatPowerWidth {
+    Float32,
+    Float64,
+}
+
+/// Implements the shared floating-power contract at the destination type's
+/// width. Computing float32 power in f64 and narrowing afterwards can both
+/// double-round finite results and hide destination-width overflow.
+pub(crate) fn float_power(left: f64, right: f64, width: FloatPowerWidth) -> Result<f64> {
+    if right == 0.0 || left == 1.0 {
+        return Ok(1.0);
+    }
+    if left.is_nan() || right.is_nan() {
+        return Ok(f64::NAN);
+    }
+    if left == 0.0 && right.is_finite() && right < 0.0 {
+        return Err(Diagnostic::coded("AU4001", "floating power domain error"));
+    }
+    if left.is_finite() && left < 0.0 && right.is_finite() && right != right.trunc() {
+        return Err(Diagnostic::coded("AU4001", "floating power domain error"));
+    }
+
+    let result = match width {
+        FloatPowerWidth::Float32 => (left as f32).powf(right as f32) as f64,
+        FloatPowerWidth::Float64 => left.powf(right),
+    };
+    if left.is_finite() && right.is_finite() && result.is_infinite() {
+        return Err(Diagnostic::coded("AU4002", "floating power overflow"));
+    }
+    if result.is_nan() {
+        return Err(Diagnostic::coded("AU4001", "floating power domain error"));
+    }
+    Ok(result)
+}
+
+/// Implements Aura's exact `round(value)` numeric contract for both
+/// execution backends. Floating results use ties-to-even and must fit the
+/// complete mathematical `int64` range; integer values retain their exact
+/// runtime kind.
+pub(crate) fn round_numeric_value(value: &Value) -> Result<Value> {
+    match value {
+        Value::Int(value) => Ok(Value::Int(*value)),
+        Value::Float(value) => {
+            let rounded = value.round_ties_even();
+            const I64_MIN_AS_F64: f64 = -9_223_372_036_854_775_808.0;
+            const I64_MAX_EXCLUSIVE_AS_F64: f64 = 9_223_372_036_854_775_808.0;
+            if !rounded.is_finite()
+                || !(I64_MIN_AS_F64..I64_MAX_EXCLUSIVE_AS_F64).contains(&rounded)
+            {
+                return Err(Diagnostic::coded(
+                    "AU4002",
+                    format!(
+                        "`round(...)` cannot represent `{}` as `int64`",
+                        render_float(*value)
+                    ),
+                ));
+            }
+            Ok(Value::Int(IntegerValue::from_i64(rounded as i64)))
+        }
+        other => Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "`round(...)` expects an integer, `float32`, or `float64`, found `{}`",
+                other.render()
+            ),
+        )),
+    }
+}
+
+/// Implements Aura's paired floor quotient/remainder contract once so MIR
+/// and direct execution cannot drift. `operand_type` is the statically
+/// checked exact type used for both tuple elements.
+pub(crate) fn divmod_numeric_values(
+    left: &Value,
+    right: &Value,
+    operand_type: &Type,
+) -> Result<Value> {
+    let integer_kind = match operand_type {
+        Type::Named(name, args) if args.is_empty() => IntegerKind::from_runtime_type_name(name),
+        _ => None,
+    };
+    let (quotient, remainder) = match (left, right) {
+        (Value::Int(_), Value::Int(right)) if right.is_zero() => {
+            return Err(Diagnostic::coded(
+                "AU4004",
+                "`divmod(...)` divisor cannot be zero",
+            ))
+        }
+        (Value::Int(left), Value::Int(right)) => {
+            let mut quotient = left.checked_floor_div(*right).ok_or_else(|| {
+                Diagnostic::coded("AU4002", "`divmod(...)` integer quotient overflow")
+            })?;
+            let mut remainder = left.checked_floor_rem(*right).ok_or_else(|| {
+                Diagnostic::coded("AU4002", "`divmod(...)` integer remainder overflow")
+            })?;
+            if let Some(kind) = integer_kind {
+                quotient = quotient.with_runtime_kind(kind).ok_or_else(|| {
+                    Diagnostic::coded("AU4002", "`divmod(...)` integer quotient overflow")
+                })?;
+                remainder = remainder.with_runtime_kind(kind).ok_or_else(|| {
+                    Diagnostic::coded("AU4002", "`divmod(...)` integer remainder overflow")
+                })?;
+            }
+            (Value::Int(quotient), Value::Int(remainder))
+        }
+        (Value::Float(_), Value::Float(right)) if *right == 0.0 => {
+            return Err(Diagnostic::coded(
+                "AU4004",
+                "`divmod(...)` divisor cannot be zero",
+            ))
+        }
+        (Value::Float(left), Value::Float(right)) => {
+            let (quotient, remainder) = float_floor_divmod(*left, *right);
+            (Value::Float(quotient), Value::Float(remainder))
+        }
+        _ => {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                format!(
+                "`divmod(...)` expects two values of one exact numeric type, found `{}` and `{}`",
+                left.render(),
+                right.render()
+            ),
+            ))
+        }
+    };
+    Ok(Value::Tuple(TupleValue {
+        element_types: vec![operand_type.clone(), operand_type.clone()],
+        elements: vec![quotient, remainder],
+    }))
 }
 
 impl ChannelValue {

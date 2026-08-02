@@ -1117,6 +1117,175 @@ fn p64_path_analysis_exposes_imported_extern_members_and_handle_types() {
 }
 
 #[test]
+fn import_alias_analysis_preserves_visible_names_and_canonical_definitions() {
+    let temp_dir = TempDir::new("aura-analysis-import-aliases");
+    let source_dir = temp_dir.path().join("src");
+    let package_dir = source_dir.join("pkg");
+    fs::create_dir_all(&package_dir).expect("failed to create package source directories");
+    fs::write(
+        temp_dir.path().join("Aura.toml"),
+        concat!(
+            "[package]\n",
+            "name = \"alias_analysis\"\n",
+            "version = \"0.1.0\"\n",
+            "edition = \"2026\"\n",
+        ),
+    )
+    .expect("failed to write package manifest");
+    let math_path = package_dir.join("math.au");
+    fs::write(
+        &math_path,
+        concat!(
+            "public def double(value: int32) -> int32:\n",
+            "    return value * 2\n",
+        ),
+    )
+    .expect("failed to write imported module");
+    let canonical_math_path = fs::canonicalize(&math_path)
+        .expect("imported module path should canonicalize")
+        .display()
+        .to_string();
+    let main_path = source_dir.join("main.au");
+
+    let module_alias_source = concat!(
+        "import pkg.math as numbers\n",
+        "\n",
+        "def main() -> int32:\n",
+        "    return numbers.double(21)\n",
+    );
+    fs::write(&main_path, module_alias_source).expect("failed to write module-alias source");
+    let analysis = analyze_path_source(&main_path, module_alias_source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 0
+            && occurrence.hover.contains("module numbers = pkg.math")
+            && occurrence
+                .definition
+                .as_ref()
+                .and_then(|definition| definition.file_path.as_deref())
+                == Some(canonical_math_path.as_str())
+    }));
+    for hover in ["module numbers = pkg.math", "function double"] {
+        assert!(analysis.occurrences.iter().any(|occurrence| {
+            occurrence.line == 3
+                && occurrence.hover.contains(hover)
+                && occurrence
+                    .definition
+                    .as_ref()
+                    .and_then(|definition| definition.file_path.as_deref())
+                    == Some(canonical_math_path.as_str())
+        }));
+    }
+
+    let top_level = complete_path_source(&main_path, module_alias_source, 2, 0, None)
+        .expect("module alias should participate in completion");
+    assert!(top_level
+        .iter()
+        .any(|completion| completion.name == "numbers" && completion.kind == "module"));
+    assert!(!top_level.iter().any(|completion| completion.name == "math"));
+
+    let member_source = concat!(
+        "import pkg.math as numbers\n",
+        "\n",
+        "def main() -> int32:\n",
+        "    numbers.\n",
+        "    return 0\n",
+    );
+    let members = complete_path_source(&main_path, member_source, 3, 12, Some('.'))
+        .expect("module alias should retain its imported namespace");
+    assert!(members
+        .iter()
+        .any(|completion| completion.name == "double" && completion.kind == "function"));
+
+    let binding_alias_source = concat!(
+        "from pkg.math import double as twice\n",
+        "\n",
+        "def main() -> int32:\n",
+        "    return twice(21)\n",
+    );
+    fs::write(&main_path, binding_alias_source).expect("failed to write binding-alias source");
+    let binding_analysis = analyze_path_source(&main_path, binding_alias_source);
+    assert!(
+        binding_analysis.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        binding_analysis.diagnostics
+    );
+    assert!(binding_analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 0
+            && occurrence
+                .hover
+                .contains("Alias `twice` for `pkg.math.double`")
+            && occurrence
+                .definition
+                .as_ref()
+                .and_then(|definition| definition.file_path.as_deref())
+                == Some(canonical_math_path.as_str())
+    }));
+    assert!(binding_analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 3
+            && occurrence.hover.contains("function double")
+            && occurrence
+                .definition
+                .as_ref()
+                .and_then(|definition| definition.file_path.as_deref())
+                == Some(canonical_math_path.as_str())
+    }));
+    let binding_completions = complete_path_source(&main_path, binding_alias_source, 2, 0, None)
+        .expect("from-import alias should participate in completion");
+    assert!(binding_completions
+        .iter()
+        .any(|completion| completion.name == "twice" && completion.kind == "function"));
+    assert!(!binding_completions
+        .iter()
+        .any(|completion| completion.name == "double"));
+}
+
+#[test]
+fn builtin_module_alias_analysis_uses_the_visible_name_and_canonical_members() {
+    let source = concat!(
+        "import path as paths\n",
+        "\n",
+        "def main() -> int32:\n",
+        "    print(paths.join(\"root\", \"item.au\"))\n",
+        "    return 0\n",
+    );
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 0 && occurrence.hover.contains("module paths = path")
+    }));
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 3 && occurrence.hover.contains("module paths = path")
+    }));
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| { occurrence.line == 3 && occurrence.hover.contains("function join") }));
+
+    let top_level = complete_source(source, 2, 0, None).expect("builtin alias completion");
+    assert!(top_level
+        .iter()
+        .any(|completion| completion.name == "paths" && completion.kind == "module"));
+    assert!(!top_level.iter().any(|completion| completion.name == "path"));
+
+    let member_source =
+        source.replace("    print(paths.join(\"root\", \"item.au\"))", "    paths.");
+    let members =
+        complete_source(&member_source, 3, 10, Some('.')).expect("builtin alias member completion");
+    assert!(members
+        .iter()
+        .any(|completion| completion.name == "join" && completion.kind == "function"));
+}
+
+#[test]
 fn d3_assert_analysis_visits_condition_and_lazy_message_without_defining_scope() {
     let source = r#"
 def verify(ready: bool, message: str):
@@ -1765,6 +1934,8 @@ fn compiler_top_level_completion_includes_keywords_and_builtins() {
     assert!(names.contains(&"min".to_string()));
     assert!(names.contains(&"max".to_string()));
     assert!(names.contains(&"sqrt".to_string()));
+    assert!(names.contains(&"round".to_string()));
+    assert!(names.contains(&"divmod".to_string()));
     let yield_now = completions
         .iter()
         .find(|item| item.name == "yield_now")
@@ -1775,6 +1946,32 @@ fn compiler_top_level_completion_includes_keywords_and_builtins() {
         .find(|item| item.name == "range")
         .expect("range builtin should appear in completions");
     assert!(range.detail.contains("start: int64"));
+}
+
+#[test]
+fn compiler_analysis_infers_round_and_divmod_results_and_builtin_hover() {
+    let analysis = analyze_source(
+        r#"
+def main():
+    rounded: int64 = round(2.5)
+    pair: (int64, int64) = divmod(-7, 3)
+    print(rounded)
+    print(pair)
+"#,
+    );
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("round(value:")));
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("divmod(left:")));
 }
 
 fn completion_names_after_marker(source: &str, marker: &str) -> Vec<String> {
@@ -7139,6 +7336,24 @@ fn completion_preserves_array_types_through_group_call_index_and_slice_receivers
                 .iter()
                 .any(|completion| completion.name == expected_member),
             "`{expected_member}` missing for `{source}`: {completions:?}"
+        );
+    }
+}
+
+#[test]
+fn fixed_width_integer_completion_exposes_all_shift_arithmetic_modes() {
+    let completions = builtin_member_completions(&Type::named("int32"));
+    for (name, detail) in [
+        ("wrapping_shl", "wrapping_shl(count: Self) -> Self"),
+        ("wrapping_shr", "wrapping_shr(count: Self) -> Self"),
+        ("saturating_shl", "saturating_shl(count: Self) -> Self"),
+        ("saturating_shr", "saturating_shr(count: Self) -> Self"),
+    ] {
+        assert!(
+            completions
+                .iter()
+                .any(|completion| completion.name == name && completion.detail == detail),
+            "missing `{name}` completion with `{detail}`: {completions:?}"
         );
     }
 }

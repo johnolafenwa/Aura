@@ -111,6 +111,7 @@ pub(crate) fn has_runtime_named_function(name: &str) -> bool {
 fn is_builtin_unary_operator(op: UnaryOp, ty: &Type) -> bool {
     match op {
         UnaryOp::Not => *ty == Type::named("bool"),
+        UnaryOp::BitNot => crate::sema::integer_type_bounds(ty).is_some(),
         UnaryOp::Neg => {
             crate::sema::integer_type_bounds(ty).is_some()
                 || matches!(ty, Type::Named(name, _) if name == "float32" || name == "float64")
@@ -161,7 +162,16 @@ fn is_builtin_binary_operator(op: BinaryOp, left_ty: &Type, right_ty: &Type) -> 
         | BinaryOp::LessEq
         | BinaryOp::Greater
         | BinaryOp::GreaterEq => left_ty == &duration && right_ty == &duration,
-        BinaryOp::And | BinaryOp::Or | BinaryOp::Div | BinaryOp::Mod => false,
+        BinaryOp::And
+        | BinaryOp::Or
+        | BinaryOp::Div
+        | BinaryOp::Mod
+        | BinaryOp::Pow
+        | BinaryOp::BitAnd
+        | BinaryOp::BitOr
+        | BinaryOp::BitXor
+        | BinaryOp::Shl
+        | BinaryOp::Shr => false,
     } {
         return true;
     }
@@ -177,6 +187,13 @@ fn is_builtin_binary_operator(op: BinaryOp, left_ty: &Type, right_ty: &Type) -> 
         BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Mod => {
             crate::sema::integer_type_bounds(left_ty).is_some()
                 || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64")
+        }
+        BinaryOp::Pow => {
+            crate::sema::integer_type_bounds(left_ty).is_some()
+                || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64")
+        }
+        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr => {
+            crate::sema::integer_type_bounds(left_ty).is_some()
         }
         BinaryOp::Eq | BinaryOp::NotEq => true,
         BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq => {
@@ -8807,6 +8824,10 @@ impl<'a> Lowerer<'a> {
             ExprKind::BuiltinOmitted => None,
             ExprKind::Unary { op, expr } => match op {
                 UnaryOp::Not => Some(Type::named("bool")),
+                UnaryOp::BitNot => {
+                    let value_ty = self.infer_expr_type(expr)?;
+                    is_builtin_unary_operator(*op, &value_ty).then_some(value_ty)
+                }
                 UnaryOp::Neg => match &expr.kind {
                     ExprKind::Int(value) => minimal_signed_type_for_negative_literal(*value),
                     _ => {
@@ -8944,10 +8965,33 @@ impl<'a> Lowerer<'a> {
                         if name == "str" {
                             return Some(Type::named("str"));
                         }
-                        if name == "abs" || name == "min" || name == "max" || name == "sqrt" {
+                        if matches!(name.as_str(), "abs" | "min" | "max" | "sqrt") {
                             return args
                                 .first()
                                 .and_then(|argument| self.infer_expr_type(&argument.value));
+                        }
+                        if name == "round" {
+                            let ty = args
+                                .first()
+                                .and_then(|argument| self.infer_expr_type(&argument.value))?;
+                            return Some(
+                                if matches!(
+                                    ty,
+                                    Type::Named(ref type_name, ref type_args)
+                                        if type_args.is_empty()
+                                            && matches!(type_name.as_str(), "float32" | "float64")
+                                ) {
+                                    Type::named("int64")
+                                } else {
+                                    ty
+                                },
+                            );
+                        }
+                        if name == "divmod" {
+                            let ty = args
+                                .first()
+                                .and_then(|argument| self.infer_expr_type(&argument.value))?;
+                            return Some(Type::Tuple(vec![ty.clone(), ty]));
                         }
                         if name == "parse_int32" {
                             return Some(Type::Named(
@@ -10019,6 +10063,25 @@ impl<'a> Lowerer<'a> {
             )
         {
             return Some(Type::named("float64"));
+        }
+        if args.is_empty()
+            && matches!(
+                BuiltinMember::resolve(name, field),
+                Some(
+                    BuiltinMember::IntegerWrappingAdd
+                        | BuiltinMember::IntegerWrappingSub
+                        | BuiltinMember::IntegerWrappingMul
+                        | BuiltinMember::IntegerSaturatingAdd
+                        | BuiltinMember::IntegerSaturatingSub
+                        | BuiltinMember::IntegerSaturatingMul
+                        | BuiltinMember::IntegerWrappingShl
+                        | BuiltinMember::IntegerWrappingShr
+                        | BuiltinMember::IntegerSaturatingShl
+                        | BuiltinMember::IntegerSaturatingShr
+                )
+            )
+        {
+            return Some(receiver_type.clone());
         }
         if args.is_empty()
             && field == "to_string"

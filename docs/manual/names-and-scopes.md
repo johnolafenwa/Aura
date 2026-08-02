@@ -26,12 +26,21 @@ Imports are module-level regardless of their textual position in the file. They 
 
 ## Imports
 
-Module imports bind the first path component as a namespace:
+An unaliased module import binds the first path component as a namespace:
 
 ```python
 import tools.text
 
 value = tools.text.parse("input")
+```
+
+An aliased module import binds the complete module under the alias and does
+not introduce the path's first component:
+
+```python
+import tools.text as text_tools
+
+value = text_tools.parse("input")
 ```
 
 From-imports bind the requested public items directly:
@@ -40,13 +49,27 @@ From-imports bind the requested public items directly:
 from tools.text import parse, ResultRow
 ```
 
+Each from-import entry may bind a local alias. Direct and aliased entries may
+appear together:
+
+```python
+from tools.text import parse as parse_text, ResultRow
+```
+
+An alias occupies the same module-level namespace as items, module constants,
+and other imports. Duplicate aliases, collisions, reserved names, `_`, and
+duplicate imports of one target in a declaration are rejected. Aliasing
+changes only the local spelling. The target keeps its defining-module and
+nominal identity, visibility, trait implementations, initialization storage,
+and documentation target.
+
 An import path consists of dot-separated identifiers and maps to a module path inside the current package/dependency graph. Filesystem path traversal is not part of import syntax. Package roots and dependency aliases are described by [Packages](/manual/packages).
 
 Only `public` top-level classes, enums, Aura functions, extern functions,
-extern opaque handle types, and traits may be imported from another module.
-Class fields and methods also have individual visibility. A non-public member
-remains accessible inside its defining module but is rejected across a module
-boundary.
+extern opaque handle types, traits, and module constants may be imported from
+another module. Class fields and methods also have individual visibility. A
+non-public member remains accessible inside its defining module but is
+rejected across a module boundary. An alias does not bypass that boundary.
 
 Imports do not mean "include this file". Imported declarations retain their defining module identity, which is used for private access, qualified type names, diagnostics, trait implementations, and go-to-definition.
 
@@ -265,15 +288,16 @@ hover, definitions, and diagnostics use that same resolution result.
 Local declarations and comprehension targets cannot shadow visible locals in
 the positions listed above;
 items cannot be nested in function suites; wildcard or relative-dot imports and
-import aliases are unavailable; and imported top-level execution is absent.
+imported top-level execution are unavailable. Import aliases remain subject to
+the ordinary no-collision and visibility rules.
 Package filesystem mapping is specified by [Packages](/manual/packages), not
 left to implementation-defined name lookup.
 
 ## Status
 
-Static lexical scope, module imports, visibility, generic/type namespaces,
-member lookup, comprehension scopes, and the documented entry-module top-level
-scope are implemented.
+Static lexical scope, module imports and aliases, visibility, generic/type
+namespaces, member lookup, comprehension scopes, and the documented
+entry-module top-level scope are implemented.
 Dynamic names, reflection-based lookup, nested items, import side effects,
 wildcard imports, and user-selectable shadowing are unavailable. No future
 name-resolution form is implied by an identifier that happens to lex today.

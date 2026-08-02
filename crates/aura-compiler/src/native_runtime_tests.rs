@@ -672,6 +672,7 @@ fn direct_integer_width_public_abi_preserves_validation_diagnostics() {
     let int32 = super::aura_direct_box_i32(1);
     let other_int32 = super::aura_direct_box_i32(2);
     let int64 = super::aura_direct_box_i64(2);
+    let int32_width = super::aura_direct_box_i32(32);
     let boolean = bool_value(true);
 
     let diagnostic = capture(int32, other_int32, 9, 1, 181, 191);
@@ -706,7 +707,15 @@ fn direct_integer_width_public_abi_preserves_validation_diagnostics() {
     );
     assert_eq!(diagnostic.span, Some(Span::new(223, 227)));
 
-    for value in [int32, other_int32, int64, boolean] {
+    let diagnostic = capture(int32, int32_width, 3, 1, 229, 233);
+    assert_eq!(diagnostic.code, "AU4002");
+    assert_eq!(
+        diagnostic.message,
+        "integer shift count `32` is outside the required range `0..32`"
+    );
+    assert_eq!(diagnostic.span, Some(Span::new(229, 233)));
+
+    for value in [int32, other_int32, int64, int32_width, boolean] {
         unsafe {
             release_value(value);
         }
@@ -7649,6 +7658,50 @@ fn direct_runtime_string_and_numeric_helpers_cover_builtin_surface() {
 }
 
 #[test]
+fn direct_runtime_round_and_divmod_use_shared_checked_numeric_contracts() {
+    assert_eq!(expect_int(super::aura_direct_round(int_value(7))), 7);
+    for (value, expected) in [(1.5, 2), (2.5, 2), (-1.5, -2), (-2.5, -2)] {
+        assert_eq!(
+            expect_int(super::aura_direct_round(float_value(value))),
+            expected
+        );
+    }
+
+    let pair = super::aura_direct_divmod(int_value(-7), int_value(3));
+    let pair_value = unsafe { value_ref(pair) };
+    assert_eq!(
+        pair_value,
+        Value::Tuple(TupleValue {
+            element_types: vec![Type::named("int64"), Type::named("int64")],
+            elements: vec![
+                Value::Int(IntegerValue::from_i64(-3)),
+                Value::Int(IntegerValue::from_i64(2)),
+            ],
+        })
+    );
+    unsafe { release_value(pair) };
+
+    let round_error = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            super::aura_direct_round(float_value(f64::INFINITY));
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("non-finite round must trap");
+    assert_eq!(round_error.code, "AU4002");
+
+    let divmod_error = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            super::aura_direct_divmod(int_value(1), int_value(0));
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("zero divmod divisor must trap");
+    assert_eq!(divmod_error.code, "AU4004");
+    assert_eq!(divmod_error.message, "`divmod(...)` divisor cannot be zero");
+}
+
+#[test]
 fn direct_owned_slice_runtime_copies_values_and_preserves_au4003_spans() {
     let source = int_vec(&[10, 20, 30, 40]);
     let source_elements = unsafe {
@@ -9155,6 +9208,7 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
             0,
             string_value("aura"),
             string_value(" repo"),
+            0,
             1,
             1,
         )),
@@ -9170,7 +9224,7 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
         (12, bool_value(false), bool_value(true), true),
     ] {
         assert_eq!(
-            expect_bool_boxed(super::aura_direct_binary_value_at(op, left, right, 2, 3)),
+            expect_bool_boxed(super::aura_direct_binary_value_at(op, left, right, 0, 2, 3)),
             expected
         );
     }
@@ -12599,10 +12653,24 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                 super::aura_direct_binary_value(13, int_value(1), int_value(0));
             }
             "binary-at-no-span" => {
-                super::aura_direct_binary_value_at(0, string_value("aura"), bool_value(true), 0, 0);
+                super::aura_direct_binary_value_at(
+                    0,
+                    string_value("aura"),
+                    bool_value(true),
+                    0,
+                    0,
+                    0,
+                );
             }
             "binary-at-span" => {
-                super::aura_direct_binary_value_at(0, string_value("aura"), bool_value(true), 2, 9);
+                super::aura_direct_binary_value_at(
+                    0,
+                    string_value("aura"),
+                    bool_value(true),
+                    0,
+                    2,
+                    9,
+                );
             }
             "cast-no-span" => {
                 super::aura_direct_cast_value(
@@ -18284,6 +18352,7 @@ fn native_runtime_operator_and_io_helpers_cover_additional_paths() {
             0,
             int_value(10),
             int_value(1),
+            0,
             5,
             6,
         )),

@@ -5280,7 +5280,7 @@ fn numeric_array_matrix_matches_forced_mir_and_direct_backends() {
     let rank_one_source = [
         "def main() -> int32:",
         "    source: list[int32] = [4, 5, 6]",
-        "    mut values = Array[int32].from_vec(source, [3])",
+        "    mut values = Array[int32].from_list(source, [3])",
         "    print(values[-1])",
         "    values[0] = 9",
         "    print(values[0])",
@@ -5354,7 +5354,7 @@ def main() -> int32:
     i32_zeros = Array[int32].zeros([2])
     i32_full = Array[int32].full([2], 3)
     i32_source: list[int32] = [1, 2]
-    i32_values = Array[int32].from_vec(i32_source, [2])
+    i32_values = Array[int32].from_list(i32_source, [2])
     print(i32_zeros)
     print(i32_full)
     print(i32_values)
@@ -5368,7 +5368,7 @@ def main() -> int32:
     i64_zeros = Array[int64].zeros([2])
     i64_full = Array[int64].full([2], 2)
     i64_source: list[int64] = [5000000000, 6000000000]
-    i64_values = Array[int64].from_vec(i64_source, [2])
+    i64_values = Array[int64].from_list(i64_source, [2])
     print(i64_zeros)
     print(i64_full)
     print(i64_values)
@@ -5386,7 +5386,7 @@ def main() -> int32:
     f32_zeros = Array[float32].zeros([2])
     f32_full = Array[float32].full([2], 0.5)
     f32_source: list[float32] = [1.5, 2.5]
-    f32_values = Array[float32].from_vec(f32_source, [2])
+    f32_values = Array[float32].from_list(f32_source, [2])
     print(f32_zeros)
     print(f32_full)
     print(f32_values)
@@ -5400,7 +5400,7 @@ def main() -> int32:
     f64_zeros = Array[float64].zeros([2])
     f64_full = Array[float64].full([2], 2.0)
     f64_source: list[float64] = [4.0, 8.0]
-    f64_values = Array[float64].from_vec(f64_source, [2])
+    f64_values = Array[float64].from_list(f64_source, [2])
     print(f64_zeros)
     print(f64_full)
     print(f64_values)
@@ -5465,14 +5465,14 @@ def print_array(value: own Option[Array[int32]]):
 
 def main() -> int32:
     source: list[int32] = [3, 4]
-    arrays: list[Array[int32]] = [Array[int32].from_vec(source, [2])]
+    arrays: list[Array[int32]] = [Array[int32].from_list(source, [2])]
     print_array(arrays.get(0))
     arrays_copy = arrays.clone()
     print_array(arrays_copy.get(0))
 
     map_source: list[int32] = [7, 8]
     arrays_by_name: dict[str, Array[int32]] = {
-        "item": Array[int32].from_vec(map_source, [2])
+        "item": Array[int32].from_list(map_source, [2])
     }
     print_array(arrays_by_name.get("item"))
     values = arrays_by_name.values()
@@ -5488,7 +5488,7 @@ def main() -> int32:
 
     holder_source: list[int32] = [11, 12]
     mut holder = ArrayHolder(
-        array=Array[int32].from_vec(holder_source, [2]),
+        array=Array[int32].from_list(holder_source, [2]),
         count=0
     )
     holder.count = 1

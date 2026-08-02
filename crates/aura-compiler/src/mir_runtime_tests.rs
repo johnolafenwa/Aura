@@ -7866,6 +7866,72 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
 }
 
 #[test]
+fn mir_runtime_round_and_divmod_use_shared_checked_numeric_contracts() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "small",
+        Type::named("int8"),
+        Value::Int(IntegerValue::from_typed_signed(-7, IntegerKind::Int8).unwrap()),
+    );
+    env.define_typed("half", Type::named("float32"), Value::Float(2.5));
+
+    assert_eq!(
+        runtime
+            .evaluate_call(
+                &CallTarget::Name("round".to_string()),
+                &[mir_arg(None, Operand::Place("small".to_string()))],
+                &mut env,
+            )
+            .expect("round preserves exact integer values"),
+        Value::Int(IntegerValue::from_typed_signed(-7, IntegerKind::Int8).unwrap()),
+    );
+    assert_eq!(
+        runtime
+            .evaluate_call(
+                &CallTarget::Name("round".to_string()),
+                &[mir_arg(None, Operand::Place("half".to_string()))],
+                &mut env,
+            )
+            .expect("round uses ties-to-even"),
+        Value::Int(IntegerValue::from_i64(2)),
+    );
+
+    let pair = runtime
+        .evaluate_call(
+            &CallTarget::Name("divmod".to_string()),
+            &[
+                mir_arg(None, Operand::Place("small".to_string())),
+                mir_arg(None, Operand::Int(3)),
+            ],
+            &mut env,
+        )
+        .expect("divmod should produce a paired quotient and remainder");
+    assert_eq!(
+        pair,
+        Value::Tuple(TupleValue {
+            element_types: vec![Type::named("int8"), Type::named("int8")],
+            elements: vec![
+                Value::Int(IntegerValue::from_typed_signed(-3, IntegerKind::Int8).unwrap()),
+                Value::Int(IntegerValue::from_typed_signed(2, IntegerKind::Int8).unwrap()),
+            ],
+        })
+    );
+
+    let zero = runtime
+        .evaluate_call(
+            &CallTarget::Name("divmod".to_string()),
+            &[
+                mir_arg(None, Operand::Int(1)),
+                mir_arg(None, Operand::Int(0)),
+            ],
+            &mut env,
+        )
+        .expect_err("zero divmod divisor must trap");
+    assert_eq!(zero.code, "AU4004");
+}
+
+#[test]
 fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
     let mut runtime = test_runtime();
     let mut env = Env::default();

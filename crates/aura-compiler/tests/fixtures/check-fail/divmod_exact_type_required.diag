@@ -1,0 +1,5 @@
+error[AU2002]: `divmod(...)` arguments must have one exact type, found `int64` and `float64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/divmod_exact_type_required.au:2:23
+  |
+2 |     value = divmod(7, 2.0)
+  |                       ^

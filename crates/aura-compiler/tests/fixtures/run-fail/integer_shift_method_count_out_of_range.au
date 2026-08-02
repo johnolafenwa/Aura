@@ -1,0 +1,4 @@
+def main():
+    value: uint8 = 1
+    width: uint8 = 8
+    print(value.wrapping_shl(width))

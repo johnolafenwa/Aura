@@ -603,6 +603,12 @@
       "mode": "illustrative",
       "reason": "Precedence illustration over undeclared operand names."
     },
+    "docs/manual/expressions.md#aura-20": {
+      "sha256": "5cb0c0be52fc6a228c7921da3f599968a012920428214439cd97c7bb687e3e26",
+      "mode": "run",
+      "stdout": "16744448\n255\n128\n0\n81\n2\n-4\n3\n",
+      "stderr": ""
+    },
     "docs/manual/expressions.md#aura-3": {
       "sha256": "d5e33904f0422182735c0dd37ee2aa8215f42aba3e62480e8b247b928fd6806f",
       "mode": "check",
@@ -643,7 +649,7 @@
       "reason": "Call-form catalog: replace and process calls are independent examples with application context omitted."
     },
     "docs/manual/expressions.md#text-1": {
-      "sha256": "ae9c457879d8fd24cbf15dd5bab9b33ca0126d5f1b29839dd1c444d91f2ad011",
+      "sha256": "52e31c0f038488ac41e2d86b3f7527286a779a943174b996a22cad7c13040a12",
       "mode": "illustrative",
       "reason": "Precedence-equivalence notation used to explain grouping, not Aura source."
     },
@@ -959,7 +965,7 @@
       "stderr": ""
     },
     "docs/manual/grammar.md#ebnf-1": {
-      "sha256": "83aaefa8f4ccfb58870aa90bcae6672c0a0dabbaa477b06f98ffff8d8c1ca549",
+      "sha256": "f8246e634ab048fb72d04d976f5d2afe1b4311de0cc99e93b62ec7ab561ab762",
       "mode": "illustrative",
       "reason": "Normative lexical EBNF production fragment interpreted by the grammar prose, not Aura source."
     },
@@ -979,7 +985,7 @@
       "reason": "Normative match-statement-and-pattern EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-13": {
-      "sha256": "7646e6d30347786b9124e96769a6b43c375872e964d9dd126dc48b281908e08c",
+      "sha256": "9a2436e7ee7c641abd08af478f3085689b5529feda1ef96c93bca39cd215a2b2",
       "mode": "illustrative",
       "reason": "Normative EBNF expression grammar, not an executable Aura program."
     },
@@ -999,7 +1005,7 @@
       "reason": "Normative match-expression EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-2": {
-      "sha256": "60a41c14204e2e7d8130c67df44d0ea219020e2908d0fd55f9e24735a7dde4d0",
+      "sha256": "ad1aada604cced01c5bd4de6730e3a907560a26abb7fbbe89df235d6e0e22134",
       "mode": "illustrative",
       "reason": "Normative module-and-import EBNF fragment interpreted by the grammar prose, not Aura source."
     },
@@ -1034,7 +1040,7 @@
       "reason": "Normative trait-and-implementation EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-9": {
-      "sha256": "c31d79602c7a2b62a36684811f3055d2f2047f18b1aea29d3c4a0ee1eee21cb7",
+      "sha256": "44bdd30487d5be8a6ce10962f0db8541737c51a608e3f6b6705edc1b61bc7421",
       "mode": "illustrative",
       "reason": "Normative statement-and-assignment EBNF fragment interpreted by the grammar prose, not Aura source."
     },
@@ -1044,7 +1050,7 @@
       "reason": "Reserved-keyword catalog, not an Aura compilation unit."
     },
     "docs/manual/grammar.md#text-2": {
-      "sha256": "1c45742ae878120a0d4107b39104709ef515452b51dc99b6eb730df119da934a",
+      "sha256": "ec4646480bc146251e723c11048879bae30efc57d274f5274180a5493271511e",
       "mode": "illustrative",
       "reason": "Punctuation-and-operator token catalog, not an Aura compilation unit."
     },
@@ -1117,17 +1123,17 @@
       "reason": "Normative identifier EBNF production interpreted by the lexical prose, not Aura source."
     },
     "docs/manual/lexical-structure.md#ebnf-2": {
-      "sha256": "dc9dbb1ea16dcb90e6d8da704376a4592e84fba8e4bb32fdf2215838d258b733",
+      "sha256": "7b4634efe4f32b6ee2af0e1ac2c141b01c00e1d7929edfaa9555c1c82be9fec1",
       "mode": "illustrative",
       "reason": "Normative integer-literal EBNF production interpreted by the lexical prose, not Aura source."
     },
     "docs/manual/lexical-structure.md#ebnf-3": {
-      "sha256": "da6e40bdd52f41374eef3df808e3184dd57ec759993ad0c509ab804b44b6944a",
+      "sha256": "d48be2a9168987935547ca4d3629534319e1d234dacc46f28367294abf035edf",
       "mode": "illustrative",
       "reason": "Normative float-and-exponent EBNF production interpreted by the lexical prose, not Aura source."
     },
     "docs/manual/lexical-structure.md#ebnf-4": {
-      "sha256": "529a44c840210d36e3fe85a26a63fee932a4f65a72028198224e35471b30186b",
+      "sha256": "dc69eed091e965648c37f684fd827cfba5bb95ffb41abeb5947bc6c966749511",
       "mode": "illustrative",
       "reason": "Normative duration-literal EBNF production interpreted by the lexical prose, not Aura source."
     },
@@ -1137,7 +1143,7 @@
       "reason": "Keyword catalog, not an Aura compilation unit."
     },
     "docs/manual/lexical-structure.md#text-2": {
-      "sha256": "1c45742ae878120a0d4107b39104709ef515452b51dc99b6eb730df119da934a",
+      "sha256": "ec4646480bc146251e723c11048879bae30efc57d274f5274180a5493271511e",
       "mode": "illustrative",
       "reason": "Punctuation-and-operator token catalog, not an Aura compilation unit."
     },
@@ -1147,17 +1153,27 @@
       "reason": "Module-resolution example: it requires the multi-file tools.text module tree described by the surrounding page."
     },
     "docs/manual/names-and-scopes.md#aura-2": {
+      "sha256": "7b370f9ea5ebacafecdae8da75d10e0ea2b7467acc86380599624b6e84b478c8",
+      "mode": "illustrative",
+      "reason": "Module-alias example: it requires the multi-file tools.text module tree described by the surrounding page."
+    },
+    "docs/manual/names-and-scopes.md#aura-3": {
       "sha256": "2a99c8fbf377ad8fe8961a38d7b5cb9041577ecb4c8e7b60b948ff5d791cf358",
       "mode": "illustrative",
       "reason": "Import-form example: it requires the multi-file tools.text module tree described by the surrounding page."
     },
-    "docs/manual/names-and-scopes.md#aura-3": {
+    "docs/manual/names-and-scopes.md#aura-4": {
+      "sha256": "9bcf83aed8f30b9481eab36807d9182c41ea8b1c3d052c7d9bb7b172f76012d3",
+      "mode": "illustrative",
+      "reason": "From-import alias example: it requires the multi-file tools.text module tree described by the surrounding page."
+    },
+    "docs/manual/names-and-scopes.md#aura-5": {
       "sha256": "1713ed781b5bd377b0e4d1df2df52e4b46973f9f9fa043b42717a09bbbe38d83",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/names-and-scopes.md#aura-4": {
+    "docs/manual/names-and-scopes.md#aura-6": {
       "sha256": "53753d6d347a01a32f3bd83ec7f21d897e3e507a4b098f5517b3eb3f0cd5c15a",
       "mode": "illustrative",
       "reason": "Pattern-scope fragment: result is an input supplied by the surrounding example."
@@ -1432,7 +1448,7 @@
       "stderr": ""
     },
     "docs/manual/statements.md#aura-20": {
-      "sha256": "d63a1e020a553e28b35cc2f7b3dd3c4b447ca77ae53cac0b79b3e249b5c95c0a",
+      "sha256": "c3fdabbe2eb8947c4b55a029849087b10a382b07112d680cffac64c77f7c14cc",
       "mode": "illustrative",
       "reason": "Module-import example: it requires the multi-file util.math module tree described by the surrounding page."
     },

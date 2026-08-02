@@ -22,26 +22,29 @@ use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
 use crate::builtin_modules::host_builtin_metadata;
 use crate::diag::{Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span};
 use crate::ffi::{FfiError, FfiSignature, FfiType, FfiValue, OpaqueHandle};
-use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
+use crate::integer::{
+    IntegerKind, IntegerPowerError, IntegerRepresentation, IntegerShiftError, IntegerValue,
+};
 use crate::json_codec;
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
     cancel_current_lightweight_task_boundary, cast_numeric_value, claim_task_result_observations,
     clone_json_codec_source, collect_queue_values, current_lightweight_task_cancellation,
     current_lightweight_task_id, decode_process_restart_policy, decode_process_stdio,
-    embedded_nominal_runtime_type_name, evaluate_bytes_host_builtin_ref, evaluate_host_builtin,
-    fail_current_lightweight_task, float_floor_divmod, io_error, io_read_line,
-    json_array_metadata_is_exact, json_dump_error_to_diagnostic, json_int_metadata_is_exact,
-    json_object_metadata_is_exact, json_parse_owned_to_runtime, nominal_runtime_base_name,
-    option_none, option_some, poll_cancellation, prepare_json_codec_source,
-    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
-    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
-    process_stdio_pipe, process_supervisor_event_failed, process_supervisor_wait_cancelled,
-    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
-    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
-    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
+    divmod_numeric_values, embedded_nominal_runtime_type_name, evaluate_bytes_host_builtin_ref,
+    evaluate_host_builtin, fail_current_lightweight_task, float_floor_divmod, float_power,
+    io_error, io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
+    json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_owned_to_runtime,
+    nominal_runtime_base_name, option_none, option_some, poll_cancellation,
+    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
+    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
+    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    process_supervisor_wait_cancelled, process_supervisor_wait_event,
+    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
+    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
+    queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
-    render_float32, result_err, result_ok, run_blocking_io,
+    render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
     run_lightweight_root_task_with_forced_exit_cleanup, runtime_value_to_json,
     select_runtime_values, send_error_cancelled, send_error_closed, send_error_full,
     send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned, slice_vec_owned,
@@ -53,14 +56,15 @@ use crate::runtime_value::{
     wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
     CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
-    FfiHandleValue, FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, InstanceValue,
-    IntegerArithmeticMode, LightweightTaskFailureSignal, MapValue, ProcessChildValue,
-    ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
-    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RuntimeSchedulerWakeReason,
-    SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus,
-    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
-    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
-    DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
+    FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, HttpListenerValue,
+    HttpResponseValue, InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal,
+    MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
+    ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue,
+    RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue,
+    TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
+    TupleValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
+    WebSocketListenerValue, WebSocketValue, DIRECT_RUNTIME_TYPE_FIELD,
+    DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
 use crate::sema::Type;
 
@@ -3212,6 +3216,15 @@ fn eval_binary_value(
     right: Value,
     op: BinaryOp,
 ) -> std::result::Result<Value, Diagnostic> {
+    eval_binary_value_with_float_width(left, right, op, FloatPowerWidth::Float64)
+}
+
+fn eval_binary_value_with_float_width(
+    left: Value,
+    right: Value,
+    op: BinaryOp,
+    float_width: FloatPowerWidth,
+) -> std::result::Result<Value, Diagnostic> {
     match op {
         BinaryOp::And => match (left, right) {
             (Value::Bool(left), Value::Bool(right)) => Ok(Value::Bool(left && right)),
@@ -3338,6 +3351,69 @@ fn eval_binary_value(
                 value_type_name(&right)
             ))),
         },
+        BinaryOp::Pow => match (left, right) {
+            (Value::Int(left), Value::Int(right)) => left
+                .checked_pow(right)
+                .map(Value::Int)
+                .map_err(native_integer_power_diagnostic),
+            (Value::Float(left), Value::Float(right)) => {
+                float_power(left, right, float_width).map(Value::Float)
+            }
+            (left, right) => Err(unsupported_binary_operands("**", &left, &right)),
+        },
+        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => match (left, right) {
+            (Value::Int(left), Value::Int(right)) => {
+                let result = match op {
+                    BinaryOp::BitAnd => left.checked_bitand(right),
+                    BinaryOp::BitOr => left.checked_bitor(right),
+                    BinaryOp::BitXor => left.checked_bitxor(right),
+                    _ => unreachable!(),
+                };
+                result.map(Value::Int).ok_or_else(|| {
+                    Diagnostic::coded("AU2002", "bitwise integer operand types must match")
+                })
+            }
+            (left, right) => Err(unsupported_binary_operands("bitwise", &left, &right)),
+        },
+        BinaryOp::Shl | BinaryOp::Shr => match (left, right) {
+            (Value::Int(left), Value::Int(right)) => {
+                let result = if op == BinaryOp::Shl {
+                    left.checked_shl(right)
+                } else {
+                    left.checked_shr(right)
+                };
+                result
+                    .map(Value::Int)
+                    .map_err(native_integer_shift_diagnostic)
+            }
+            (left, right) => Err(unsupported_binary_operands("shift", &left, &right)),
+        },
+    }
+}
+
+fn native_integer_power_diagnostic(error: IntegerPowerError) -> Diagnostic {
+    match error {
+        IntegerPowerError::MismatchedKinds => {
+            Diagnostic::coded("AU2002", "integer power operand types must match")
+        }
+        IntegerPowerError::NegativeExponent => Diagnostic::coded(
+            "AU4001",
+            "runtime negative integer exponent; use explicit floating operands for fractional power",
+        ),
+        IntegerPowerError::Overflow => Diagnostic::coded("AU4002", "integer power overflow"),
+    }
+}
+
+fn native_integer_shift_diagnostic(error: IntegerShiftError) -> Diagnostic {
+    match error {
+        IntegerShiftError::MismatchedKinds => {
+            Diagnostic::coded("AU2002", "shift operand types must match")
+        }
+        IntegerShiftError::InvalidCount { count, width } => Diagnostic::coded(
+            "AU4002",
+            format!("integer shift count `{count}` is outside the required range `0..{width}`"),
+        ),
+        IntegerShiftError::Overflow => Diagnostic::coded("AU4002", "integer left shift overflow"),
     }
 }
 
@@ -3359,6 +3435,10 @@ fn eval_unary_value(value: Value, op: UnaryOp) -> std::result::Result<Value, Dia
             None => Err(Diagnostic::new("integer overflow")),
         },
         (UnaryOp::Neg, Value::Float(value)) => Ok(Value::Float(-value)),
+        (UnaryOp::BitNot, Value::Int(value)) => value
+            .bitnot()
+            .map(Value::Int)
+            .ok_or_else(|| Diagnostic::coded("AU4001", "invalid typed integer for unary `~`")),
         (UnaryOp::Not, other) => Err(Diagnostic::new(format!(
             "`not` expects `bool`, found `{}`",
             value_type_name(&other)
@@ -3367,6 +3447,13 @@ fn eval_unary_value(value: Value, op: UnaryOp) -> std::result::Result<Value, Dia
             "unary `-` expects a numeric value, found `{}`",
             value_type_name(&other)
         ))),
+        (UnaryOp::BitNot, other) => Err(Diagnostic::coded(
+            "AU2003",
+            format!(
+                "unary `~` expects an integer value, found `{}`",
+                value_type_name(&other)
+            ),
+        )),
     }
 }
 
@@ -4343,6 +4430,33 @@ pub extern "C-unwind" fn aura_direct_sqrt(value: *mut OpaqueValue) -> *mut Opaqu
                 value_type_name(&other)
             )),
         }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_round(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let value = unsafe { take_value(value) };
+        let rounded =
+            round_numeric_value(&value).unwrap_or_else(|error| runtime_diagnostic_error(error));
+        boxed_value(rounded)
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_divmod(
+    left: *mut OpaqueValue,
+    right: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let explicit_type =
+            unsafe { effective_runtime_type_name(left) }.map(|name| runtime_type_from_name(&name));
+        let left = unsafe { take_value(left) };
+        let right = unsafe { take_value(right) };
+        let operand_type = explicit_type.unwrap_or_else(|| inferred_collection_type(&left));
+        let pair = divmod_numeric_values(&left, &right, &operand_type)
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        boxed_value(pair)
     })
 }
 
@@ -6058,6 +6172,8 @@ pub extern "C-unwind" fn aura_direct_integer_width_binary(
                 0 => Ok("add"),
                 1 => Ok("sub"),
                 2 => Ok("mul"),
+                3 => Ok("shl"),
+                4 => Ok("shr"),
                 other => Err(Diagnostic::coded(
                     "AU4001",
                     format!(
@@ -6098,23 +6214,35 @@ pub extern "C-unwind" fn aura_direct_integer_width_binary(
         };
         let left = direct_array_result(read_integer(left, "left"), line, column);
         let right = direct_array_result(read_integer(right, "right"), line, column);
-        let result = match (arithmetic_mode, operation) {
-            (1, 0) => left.wrapping_add(right),
-            (1, 1) => left.wrapping_sub(right),
-            (1, 2) => left.wrapping_mul(right),
-            (2, 0) => left.saturating_add(right),
-            (2, 1) => left.saturating_sub(right),
-            (2, 2) => left.saturating_mul(right),
-            _ => unreachable!("operation and mode codes were validated"),
-        }
-        .ok_or_else(|| {
+        let mismatch = || {
             Diagnostic::coded(
                 "AU4001",
                 format!(
                     "`{mode_name}_{operation_name}` expects matching fixed-width integer operands"
                 ),
             )
-        });
+        };
+        let result = match (arithmetic_mode, operation) {
+            (1, 0) => left.wrapping_add(right).ok_or_else(mismatch),
+            (1, 1) => left.wrapping_sub(right).ok_or_else(mismatch),
+            (1, 2) => left.wrapping_mul(right).ok_or_else(mismatch),
+            (2, 0) => left.saturating_add(right).ok_or_else(mismatch),
+            (2, 1) => left.saturating_sub(right).ok_or_else(mismatch),
+            (2, 2) => left.saturating_mul(right).ok_or_else(mismatch),
+            (1, 3) => left
+                .wrapping_shl(right)
+                .map_err(native_integer_shift_diagnostic),
+            (1, 4) => left
+                .wrapping_shr(right)
+                .map_err(native_integer_shift_diagnostic),
+            (2, 3) => left
+                .saturating_shl(right)
+                .map_err(native_integer_shift_diagnostic),
+            (2, 4) => left
+                .saturating_shr(right)
+                .map_err(native_integer_shift_diagnostic),
+            _ => unreachable!("operation and mode codes were validated"),
+        };
         boxed_value(Value::Int(direct_array_result(result, line, column)))
     })
 }
@@ -6186,6 +6314,7 @@ pub extern "C-unwind" fn aura_direct_unary_value(
         let op = match op {
             0 => UnaryOp::Neg,
             1 => UnaryOp::Not,
+            2 => UnaryOp::BitNot,
             other => runtime_error(format!("unknown unary opcode `{}`", other)),
         };
         match eval_unary_value(unsafe { take_value(value) }, op) {
@@ -6206,6 +6335,7 @@ pub extern "C-unwind" fn aura_direct_unary_value_at(
         let op = match op {
             0 => UnaryOp::Neg,
             1 => UnaryOp::Not,
+            2 => UnaryOp::BitNot,
             other => runtime_error(format!("unknown unary opcode `{}`", other)),
         };
         match eval_unary_value(unsafe { take_value(value) }, op) {
@@ -6240,6 +6370,12 @@ pub extern "C-unwind" fn aura_direct_binary_value(
             11 => BinaryOp::And,
             12 => BinaryOp::Or,
             13 => BinaryOp::FloorDiv,
+            14 => BinaryOp::Pow,
+            15 => BinaryOp::BitAnd,
+            16 => BinaryOp::BitOr,
+            17 => BinaryOp::BitXor,
+            18 => BinaryOp::Shl,
+            19 => BinaryOp::Shr,
             other => runtime_error(format!("unknown binary opcode `{}`", other)),
         };
         match eval_binary_value(
@@ -6258,6 +6394,7 @@ pub extern "C-unwind" fn aura_direct_binary_value_at(
     op: i32,
     left: *mut OpaqueValue,
     right: *mut OpaqueValue,
+    float_width: i64,
     line: i64,
     column: i64,
 ) -> *mut OpaqueValue {
@@ -6277,12 +6414,24 @@ pub extern "C-unwind" fn aura_direct_binary_value_at(
             11 => BinaryOp::And,
             12 => BinaryOp::Or,
             13 => BinaryOp::FloorDiv,
+            14 => BinaryOp::Pow,
+            15 => BinaryOp::BitAnd,
+            16 => BinaryOp::BitOr,
+            17 => BinaryOp::BitXor,
+            18 => BinaryOp::Shl,
+            19 => BinaryOp::Shr,
             other => runtime_error(format!("unknown binary opcode `{}`", other)),
         };
-        match eval_binary_value(
+        let float_width = match float_width {
+            32 => FloatPowerWidth::Float32,
+            0 | 64 => FloatPowerWidth::Float64,
+            other => runtime_error(format!("unknown direct floating width `{other}`")),
+        };
+        match eval_binary_value_with_float_width(
             unsafe { take_value(left) },
             unsafe { take_value(right) },
             op,
+            float_width,
         ) {
             Ok(value) => boxed_value(value),
             Err(error) => match runtime_span(line, column) {
