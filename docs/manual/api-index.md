@@ -111,6 +111,26 @@ diagnostic, and backend contracts.
 | integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is same-shape Array or same-dtype scalar; fresh Array result. |
 | integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is same-shape Array or same-dtype scalar; fresh Array result. |
 
+## Math
+
+See [Math Module](/manual/math) for the normative IEEE-754, domain,
+evaluation-order, diagnostic, and backend contracts. Every argument is
+exactly `float64`; the module performs no implicit numeric conversion.
+
+| API | Signature | Contract |
+| --- | --- | --- |
+| `math.floor` | `floor(value: float64) -> int64` | Greatest integer less than or equal to `value`, checked for `int64` range. |
+| `math.ceil` | `ceil(value: float64) -> int64` | Least integer greater than or equal to `value`, checked for `int64` range. |
+| `math.trunc` | `trunc(value: float64) -> int64` | Truncates toward zero, checked for `int64` range. |
+| `math.pow` | `pow(base: float64, exponent: float64) -> float64` | Binary64 exponentiation with specified identity, domain, and overflow behavior. |
+| `math.exp` | `exp(value: float64) -> float64` | Base-e exponential. |
+| `math.log` | `log(value: float64) -> float64` | Natural logarithm. |
+| `math.log2` | `log2(value: float64) -> float64` | Base-2 logarithm. |
+| `math.log10` | `log10(value: float64) -> float64` | Base-10 logarithm. |
+| `math.sin` | `sin(value: float64) -> float64` | Sine in radians. |
+| `math.cos` | `cos(value: float64) -> float64` | Cosine in radians. |
+| `math.tan` | `tan(value: float64) -> float64` | Tangent in radians. |
+
 ## Randomness
 
 See [Randomness Module](/manual/randomness) for the normative xoshiro256**

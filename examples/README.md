@@ -852,6 +852,21 @@ single task-result right on the first attempt.
     - `12`
     - `9.0`
     - `9.0`
+- `scalar_math.au`
+  - scalar `float64` rounding, power, exponential, logarithmic, and
+    trigonometric functions from the `math` module
+  - prints:
+    - `-2`
+    - `-1`
+    - `-1`
+    - `0.125`
+    - `1.0`
+    - `0.0`
+    - `3.0`
+    - `3.0`
+    - `0.0`
+    - `1.0`
+    - `0.0`
 - `numeric_arrays.au`
   - global contiguous row-major `Array[T]` over the four maintained dtypes
   - construction, multidimensional indexing, mutable replacement,
@@ -1016,6 +1031,7 @@ cargo run -p aura -- run examples/numbers/bit_packing.au
 cargo run -p aura -- run examples/numbers/float32_values.au
 cargo run -p aura -- run examples/numbers/numeric_casts.au
 cargo run -p aura -- run examples/numbers/numeric_builtins.au
+cargo run -p aura -- run examples/numbers/scalar_math.au
 cargo run -p aura -- run examples/numbers/numeric_arrays.au
 cargo run -p aura -- run examples/numbers/unary_minus.au
 cargo run -p aura -- run examples/strings/string_clone.au

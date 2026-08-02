@@ -2571,6 +2571,84 @@ test("compiler bridge completes to_float for every integer type", async () => {
   }
 });
 
+test("compiler bridge exposes the complete math module function surface", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-math-module-"));
+  const source = [
+    "import math",
+    "",
+    "def main() -> int32:",
+    "    print(math.floor(3.75))",
+    "    print(math.ceil(-3.75))",
+    "    print(math.trunc(-3.75))",
+    "    print(math.pow(2.0, 10.0))",
+    "    print(math.exp(0.0))",
+    "    print(math.log(1.0))",
+    "    print(math.log2(8.0))",
+    "    print(math.log10(1000.0))",
+    "    print(math.sin(0.0))",
+    "    print(math.cos(0.0))",
+    "    print(math.tan(0.0))",
+    "    return 0",
+    ""
+  ].join("\n");
+  const signatures = new Map([
+    ["floor", "floor(value: float64) -> int64"],
+    ["ceil", "ceil(value: float64) -> int64"],
+    ["trunc", "trunc(value: float64) -> int64"],
+    ["pow", "pow(base: float64, exponent: float64) -> float64"],
+    ["exp", "exp(value: float64) -> float64"],
+    ["log", "log(value: float64) -> float64"],
+    ["log2", "log2(value: float64) -> float64"],
+    ["log10", "log10(value: float64) -> float64"],
+    ["sin", "sin(value: float64) -> float64"],
+    ["cos", "cos(value: float64) -> float64"],
+    ["tan", "tan(value: float64) -> float64"]
+  ]);
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.deepEqual(analysis.diagnostics, []);
+    for (const [name, signature] of signatures) {
+      assert.ok(
+        analysis.occurrences.some(
+          (occurrence) =>
+            occurrence.hover.includes(`function ${name}`) &&
+            occurrence.hover.includes(signature)
+        ),
+        `missing math.${name} hover signature: ${signature}`
+      );
+    }
+
+    const completionSource = source.replace(
+      "    return 0\n",
+      "    math.\n    return 0\n"
+    );
+    const line = completionSource
+      .split("\n")
+      .findIndex((sourceLine) => sourceLine.trim() === "math.");
+    const character = completionSource.split("\n")[line].indexOf(".") + 1;
+    const completions = await completeWithCompiler(
+      mainUri,
+      completionSource,
+      line,
+      character,
+      "."
+    );
+
+    assert.ok(completions);
+    const details = new Map(completions.map((item) => [item.name, item.detail]));
+    assert.deepEqual(details, signatures);
+    assert.ok(completions.every((item) => item.kind === "function"));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge exposes the complete Duration surface and operator precedence", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-duration-"));
   const source = [
