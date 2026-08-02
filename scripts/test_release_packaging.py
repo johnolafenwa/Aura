@@ -60,6 +60,39 @@ requests 7
 
 
 class HostedWorkflowHardeningTests(unittest.TestCase):
+    def test_full_ci_skips_documentation_and_passive_repository_metadata(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        trigger = workflow.split("\nenv:\n", 1)[0]
+
+        self.assertIn("  push:\n    branches: [main]\n", trigger)
+        self.assertEqual(trigger.count("    paths-ignore:\n"), 2)
+        for path in (
+            "'**/*.md'",
+            "'docs/**'",
+            "'work/**'",
+            "'LICENSE'",
+            "'.gitignore'",
+            "'.gitattributes'",
+            "'.editorconfig'",
+            "'.github/ISSUE_TEMPLATE/**'",
+            "'.github/PULL_REQUEST_TEMPLATE*'",
+            "'.github/CODEOWNERS'",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(trigger.count(f"      - {path}\n"), 2)
+
+    def test_docs_workflow_checks_all_maintained_documentation_surfaces(self) -> None:
+        workflow = DOCS_WORKFLOW.read_text(encoding="utf-8")
+        trigger = workflow.split("\npermissions:\n", 1)[0]
+
+        self.assertEqual(trigger.count("      - '**/*.md'\n"), 2)
+        self.assertIn("      - 'docs/**'\n", trigger)
+        self.assertIn(
+            "      - name: Check manual reference metadata\n"
+            "        run: python3 scripts/reference_integrity.py --inventory-only\n",
+            workflow,
+        )
+
     def test_cargo_color_is_disabled_at_workflow_scope(self) -> None:
         for workflow_path in (CI_WORKFLOW, RELEASE_WORKFLOW):
             with self.subTest(workflow=workflow_path.name):

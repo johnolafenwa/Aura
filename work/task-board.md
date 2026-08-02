@@ -2,6 +2,27 @@
 
 Last updated: 2026-08-02
 
+## Hosted CI path filtering (complete)
+
+- Authorized target: prevent documentation, README, work-note, and passive
+  repository-metadata changes from launching the complete Linux/macOS gate.
+- The full CI workflow now runs for pull requests with code-bearing paths and
+  for matching pushes to `main`. Feature-branch pushes no longer duplicate the
+  pull-request run.
+- Pure Markdown, `docs/**`, `work/**`, the license, Git metadata, editor
+  metadata, issue/PR templates, and CODEOWNERS are excluded from the full
+  matrix. Compiler, runtime, examples, tutorials with non-Markdown assets,
+  packages, tooling, scripts, dependencies, and workflow changes remain in
+  scope.
+- The Docs workflow covers maintained Markdown and VitePress changes while
+  excluding internal work notes, GitHub templates, and AGENTS.md. It builds the
+  site and validates the Manual inventory, hashes, page roles, and normative
+  structure without compiling the Aura toolchain.
+- Verification: 34 release/workflow regressions, Manual inventory over 38
+  pages and 261 fences, the production VitePress build, and
+  `github-actionlint` are green.
+- Work note: `work/2026-08-02-ci-path-filtering.md`.
+
 ## Landing page, installer, and documentation voice (complete)
 
 - Authorized target: make the landing page explain Aura's benefits around
