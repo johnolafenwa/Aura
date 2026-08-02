@@ -263,8 +263,10 @@ work. Raw evidence is `/tmp/aura-s1-post-s2-v6-face52e.json`, SHA-256
   float64, eliminating backend double-rounding and overflow-classification
   drift.
 - The maintained bit-packing example and executable Manual blocks prove the
-  binary-protocol surface. The semantic compiler/editor interface advances to
-  schema version 4 for this incompatible AST and analysis expansion.
+  binary-protocol surface. The semantic compiler/editor interface is now
+  schema version 5 after the complete S4 AST, analysis, and constant-symbol
+  expansion. Compiler, CLI cache, language-server bridge, extension protocol,
+  Manual, and pinned semantic-interface tests use the same value.
 - The broad run-pass harness initially exposed a stack-guard SIGBUS in an
   existing imported-builtin-default fixture. Nested MIR checked-dispatch frames
   exceeded the 512 KiB lightweight-task stack before a blocking host call; the
@@ -298,8 +300,112 @@ work. Raw evidence is `/tmp/aura-s1-post-s2-v6-face52e.json`, SHA-256
   Focused unit tests, the maintained success fixture, and the domain-failure
   fixture are byte-identical between MIR and direct execution.
 - `math.pi`, `math.e`, `math.inf`, and `math.nan` remain pending until the
-  generic module-constant storage and initialization plan lands. The math
-  documentation and editor surface are proceeding independently.
+  generic module-constant storage and initialization plan lands. That generic
+  foundation is now complete; exposing and pinning the four builtin constants
+  remains a separate final S4 integration step. The math documentation and
+  editor surface are proceeding independently.
+
+### S4 strings and format specifications
+
+- Accepted ADR-0046 is implemented across lexing, parsing, checking, MIR,
+  direct code generation/runtime, analysis, the Manual, tutorial, maintained
+  example, language server, and editor grammar/snippets.
+- Single- and double-quoted raw strings and triple-quoted multiline strings
+  preserve their exact contents under the documented delimiter, escape, and
+  indentation rules. Tabs outside continuation/string contexts retain their
+  lexical rejection and tabs inside triple-quoted content remain data.
+- Static f-string specifications cover fill/alignment, sign, width, grouping,
+  precision, and the accepted `d`/`f`/`e`/`x`/`X`/`b`/`o`/`%`/`s` type codes.
+  Formatting is type-directed, bounded and fallible, preserves exact integer
+  digits without a binary64 round trip, and shares observable behavior across
+  both backends.
+- Focused lexer/parser, semantic, runtime-value, MIR, native, compiler-bridge,
+  extension, fixture, formatter-preservation, Unicode, boundary, IEEE, and
+  allocation-limit regressions are present. The maintained success fixture and
+  focused failures pin accepted output and `AU1101`/`AU2002`/`AU4001`/`AU4005`
+  behavior.
+
+### S4 match guards and or-patterns
+
+- Guards and or-patterns from ADR-0049 are implemented for statement and
+  expression matches. Guards require exact `bool`; alternatives test left to
+  right, bind identical names/types/capabilities, and guarded arms do not
+  contribute to exhaustiveness.
+- `match own` delays non-Copy extraction until a true guard commits its arm.
+  `match mut` writes candidate mutations back before false continuation,
+  propagated failure, runtime trap, and each selected-arm exit path. Later
+  alternatives and later arms observe the reconstructed value.
+- Focused parse/check/run fixtures pin false continuation, first-match order,
+  guarded wildcard fallthrough, guarded enum/bool/tuple/open-domain
+  exhaustiveness, owned-candidate move rejection, or-pattern binding rules,
+  mutable false/trap/`try` writeback, and normal/`return`/`break`/`continue`
+  exits. Compiler analysis and language-server coverage accompany the
+  maintained example and Manual text.
+- Class patterns are not part of Aura 0.3's implemented surface. Their
+  match-exposure and capability design remains a provisional ADR-0049
+  disposition for explicit checkpoint review; positional and named
+  call-shaped forms are rejected by focused fixtures.
+
+### S4 module constants
+
+- Accepted ADR-0050 is implemented generically: inferred, annotated, and
+  `public` module constants may coexist with imports, declarations, executable
+  entry statements, and `main`.
+- The shared initialization plan is dependency-first, first-import ordered,
+  source ordered within each module, eager, once-only across diamonds, guarded
+  against re-entry, and cleaned up in reverse order. MIR and direct execution
+  preserve one defining storage identity; Copy reads copy and non-Copy reads
+  provide shared access without an implicit deep clone.
+- Assignment, mutable access, and moves from non-Copy constant storage are
+  rejected. Analysis and the language server expose visibility, hover,
+  completion, and definitions for local, qualified, and from-imported
+  constants.
+- Focused proof is exact: `cargo test -p aura-compiler module_constant --
+  --nocapture` passed 5 tests; the fixture harness passed all 9 families; the
+  focused package dependency test passed; local, imported, stateful-shared,
+  and indirect-re-entry fixtures produced byte-equivalent MIR/direct output or
+  diagnostics; 2 LSP integration tests passed; the language-server check
+  passed; and reference integrity executed 127 verified blocks across all 27
+  feature pages.
+
+### Testing reference freeze and semantic interface
+
+- ADR-0045's implemented runner and assertion surface is now described by the
+  CLI Manual, conformance map, Tutorial 23, and maintained assertions example.
+  The completion checklist is fully checked except for the checkpoint-wide
+  forced parity matrix and final local/hosted gates.
+- The reference script's long wrapped assertions no longer depend on source
+  line wrapping, and the maintained reference assertions cover the current
+  numeric and testing surface. Production warning-denied Clippy passed for the
+  integrated feature commits; the final repository-wide Clippy replay remains
+  part of the checkpoint gate.
+- Semantic compiler/editor protocol schema 5 is pinned consistently in the
+  compiler, CLI cache metadata, language-server bridge, extension tests, and
+  Manual. There is no schema-4 acceptance path.
+
+## Provisional decisions P1-P6
+
+These are provisional checkpoint answers to ADR-0045's six ratification
+questions. They record the implemented contract and remain provisional until
+the complete forced-backend matrix plus final local and hosted gates pass.
+
+| Decision | Provisional checkpoint answer | Evidence/status |
+| --- | --- | --- |
+| P1 | Keep parameter registration as `list[(str, def() -> None)]`, expanded once in registration order into independently reported cases. | Implemented and covered by valid, empty, duplicate-label, invalid-signature, capture-rejection, trap, ordering, and filtering tests. ADR-0045 remains Provisional. |
+| P2 | Keep literal case-sensitive substring matching for `aura test -k`, applied after parameter expansion; selecting zero cases succeeds. | Implemented and pinned for ordinary/parameterized names, zero matches, and usage errors. ADR-0045 remains Provisional. |
+| P3 | Keep the 4,096-byte UTF-8 bound independently for each rendered assertion operand, with explicit truncation state. | Implemented in human and schema-1 structured diagnostics with Unicode-boundary tests. ADR-0045 remains Provisional. |
+| P4 | Keep the first lifecycle failure primary and report a teardown failure secondarily; teardown runs after a case failure or trap. | Implemented for setup, case, teardown, dual-failure, timeout, and phase-order paths. ADR-0045 remains Provisional. |
+| P5 | Keep setup, case, and teardown as isolated lifecycle phases and require registered case function values to be capture-free. | Implemented with checked-module reuse, external-order evidence, and capture rejection. ADR-0045 remains Provisional. |
+| P6 | Keep JSON result schema 1: one ordered document with summary and test records, optional discovery/stdout/diagnostic/reason fields, and status 0/1 after a completed run. | Implemented and pinned for ordering, durations, output separation, runner/diagnostic failures, and exit status. ADR-0045 remains Provisional. |
+
+ADR-0049 has a separate provisional checkpoint question. Guards and
+or-patterns are accepted and implemented, while class patterns remain
+unimplemented pending a future match-exposure protocol. ADR-0051 accepts
+import aliases and deliberately defers keyword-only parameters because the
+current structural callable type cannot preserve that restriction. No
+provisional decision creates backward compatibility: previous spellings and
+methods have no reserved status, compatibility path, tailored diagnostic, or
+public migration surface.
 
 ## Verification
 
@@ -371,6 +477,32 @@ Current focused version-stamp evidence:
 - Scalar math function closure — five focused compiler tests passed; the
   maintained success and failure programs match across forced MIR/direct
   execution; production warning-denied Clippy passed.
+- String/format closure — focused lexer, parser, semantic, runtime-value, MIR,
+  native, fixture, CLI, compiler-bridge, and extension tests passed; the
+  maintained success and failure fixtures pin exact formatting, diagnostics,
+  Unicode boundaries, exact wide integers, float32/IEEE cases, formatter
+  preservation, and allocation caps.
+- Match closure — focused parser/checker/MIR/analysis tests and the complete
+  guard/or-pattern fixture family passed. Forced MIR/direct runs agree for
+  accepted selection and mutable writeback, owned-candidate behavior, and
+  trap/propagation diagnostics. The final corpus-wide parity matrix remains
+  pending.
+- Module-constant closure — 5 focused compiler tests, all 9 fixture families,
+  the package dependency test, 2 LSP integrations, the language-server check,
+  focused MIR/direct parity, and 127 verified Manual blocks passed.
+- Testing/reference closure — ADR-0045's reference completion matrix is checked
+  through every focused item; only the checkpoint-wide matrix and full gates
+  remain. Semantic interface schema 5 and its cache/editor identities are
+  aligned. Wrapped reference assertions and production warning-denied Clippy
+  passed on their focused commits.
+- Checkpoint-documentation proof — reference inventory passes at 39 pages, 270
+  fenced blocks, 131 verified blocks, and 28 feature pages with no missing
+  normative section or executable example; the focused reference unit suite is
+  10/10; the clean-surface identity suite is 11/11; the production VitePress
+  build and link resolution pass; and `git diff --check` passes. The complete
+  reference wrapper reaches only its deliberate stale-generated-LLM stop:
+  `llms.txt` and `llms-full.txt` will regenerate after the four math constants
+  finalize the source reference.
 
 The opening full-gate attempt stopped at the expected old identity guard that
 classified “Aura 0.3” as future narration. That guard now advances to 0.4 and
@@ -380,9 +512,12 @@ gates, coverage pass, and one-time coverage re-ratchet have not run for S3.
 
 ## Follow-up
 
-Complete S4 Python polish, then finish the design-only papers. At the
-checkpoint, run the complete forced-backend matrix and final local and hosted
-gates, ratify the provisional ADR-0045 registration API if its completion
-matrix is green, report migration counts, zero-cast backend parity, V6 numbers,
-assertion introspection, S4 evidence, provisional decisions, final coverage,
-and three hosted run links, then stop.
+Complete the four `math` builtin constants over the generic ADR-0050
+foundation, regenerate `llms.txt`/`llms-full.txt` from the final reference,
+and then run the complete forced-backend matrix and final local and hosted
+gates. At the checkpoint, decide whether the complete evidence ratifies
+ADR-0045's P1-P6 answers and ADR-0049's class-pattern deferment, perform the
+one-time truncated coverage re-ratchet, report migration counts, zero-cast
+backend parity, V6 numbers, assertion introspection, S4 evidence, final
+coverage, and three hosted run links, then stop. Do not begin loans, the P1
+performance batch, or any 0.4 implementation.

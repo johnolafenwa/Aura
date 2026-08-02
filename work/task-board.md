@@ -44,22 +44,30 @@ Last updated: 2026-08-02
   LSP is 102/102 at 100% coverage, the extension is 21/21, and the 38-page
   executable reference gate is green.
   The checkpoint-wide forced-backend matrix and full local/hosted gates have not
-  run for S3. S4 is in progress. Import aliases and focused keyword-only
-  rejection are complete. Integer base prefixes/separators, power, bitwise
-  operators, checked shifts, every wrapping/saturating shift method, `round`,
-  and `divmod` are implemented across checking, analysis, MIR, direct codegen,
-  fixtures, examples, tutorials, and the Manual. Float power now executes at
-  its destination width through one shared helper, including float32-only
-  overflow detection. The semantic tooling schema is version 4. The public
-  example and fixture path inventory now uses canonical list/dict/set/shared/mut
-  names, with a permanent clean-slate filename gate. ADR-0052 through ADR-0056
+  run for S3. S4 feature implementation is otherwise substantially complete.
+  Import aliases and focused keyword-only rejection, integer bases/separators,
+  power, bitwise and checked/wrapping/saturating shifts, `round`, `divmod`, raw
+  and triple-quoted strings, practical static f-string specifications, match
+  guards, or-patterns, and generic module constants are implemented across the
+  applicable checker, analysis, MIR, direct backend, fixtures, examples,
+  tutorials, Manual, LSP, and editor surfaces. Float power executes at its
+  destination width; exact wide-integer formatting does not round through
+  binary64; mutable match guards write back on false, trap, propagation, and
+  selected-arm exits; non-Copy module constants retain one shared defining
+  storage identity. The semantic tooling/cache schema is version 5. The public
+  example and fixture path inventory uses canonical list/dict/set/shared/mut
+  names with a permanent clean-slate filename gate. ADR-0052 through ADR-0056
   contain implementation-adoption sections with no compatibility or migration
-  surface. The `math` module's eleven exact float64 functions and IEEE/domain/
-  overflow classification are implemented with focused MIR/direct parity;
-  its four constants wait on the generic module-constant foundation. Remaining
-  S4 compiler families are strings/format specs, match guards/or-patterns, and
-  module constants, followed by final math constants and integrated reference,
-  editor, cache, and checkpoint evidence.
+  surface. The `math` module's eleven exact float64 functions are implemented;
+  only `math.pi`, `math.e`, `math.inf`, and `math.nan` remain to be exposed over
+  the completed generic constant foundation. The testing reference freeze,
+  robust wrapped reference assertions, and focused warning-denied Clippy are
+  complete. ADR-0045 remains Provisional until its P1-P6 answers pass the final
+  matrix/gates, and ADR-0049's class-pattern disposition remains provisional;
+  guards and or-patterns themselves are accepted and implemented. Remaining
+  work is the four math constants, final generated `llms.txt`/`llms-full.txt`,
+  combined reference/editor/cache verification, the final local gate, the
+  one-time coverage re-ratchet, and three green hosted runs.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
 - Work note: `work/2026-08-02-batch-s1-python-surface.md`.
