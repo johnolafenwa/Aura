@@ -168,7 +168,7 @@ fn standalone_direct_human_trap_keeps_frames_and_runs_cleanup_once() {
         );
     }
     assert!(
-        stderr.contains("vector index `9` is out of bounds"),
+        stderr.contains("list index `9` is out of bounds"),
         "cleanup must not replace the original body trap: {stderr}"
     );
     let _ = fs::remove_file(binary);
