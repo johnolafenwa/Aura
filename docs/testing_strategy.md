@@ -166,13 +166,15 @@ shared runners scheduling headroom. Ordering tests such as bounded queues use
 explicit host/program handshakes instead of time estimates. Ordinary timeout
 values used only as deadlock guards are unchanged, and the Rust suite remains
 parallel on both hosted systems. The complete cold-run repository gate has a
-90-minute job budget on the standard runners; the budget prevents workflow
+120-minute job budget on the standard runners; the budget prevents workflow
 cancellation during compilation, parity, and coverage and does not relax any
 individual test contract. CI installs every non-system command required by the
 gate, including `ripgrep`; the contract does not depend on incidental contents
-of a particular hosted runner image. Linux test executables that exercise the
-name-based FFI adapter export their test-owned C symbols dynamically, matching
-the lookup contract exercised by generated Aura programs.
+of a particular hosted runner image. CI also fetches `HEAD` and its parent so
+the commit-level whitespace gate compares the new commit rather than treating
+a shallow `HEAD` as the repository root. Linux test executables that exercise
+the name-based FFI adapter export their test-owned C symbols dynamically,
+matching the lookup contract exercised by generated Aura programs.
 
 ## Workflow For A New Feature
 

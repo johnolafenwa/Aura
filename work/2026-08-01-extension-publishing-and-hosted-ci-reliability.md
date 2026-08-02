@@ -309,3 +309,23 @@ its build script. The maintained FFI integration test remains unchanged and a
 cross-platform regression pins the Linux linker contract; all seven
 instrumented FFI tests pass locally. This is test-binary linkage, not a change
 to generated Aura programs or the runtime adapter.
+
+The first exact-SHA proof after those fixes completed every substantive macOS
+gate, including reference integrity, docs, audits, and Clippy, then failed only
+at `check:hygiene`. The hosted checkout had the default one-commit shallow
+history, so `git show --check HEAD` treated `HEAD` as a root commit and scanned
+legacy whitespace across the full tracked tree; the same command locally saw
+the parent and checked only the new commit. CI now fetches depth two. A
+workflow regression pins that parent-history prerequisite, the complete
+25-test packaging suite is green, and `github-actionlint` accepts the workflow.
+No legacy examples or user-owned personal files were reformatted to hide the
+checkout defect.
+
+The same proof's Ubuntu job `91459871235` ran every pre-coverage stage green
+and was still progressing normally through the instrumented compiler library
+when the initial 90-minute allowance canceled it. No test failed. The complete
+cold gate therefore has a 120-minute hosted job budget on the unchanged
+standard runner class. This changes only the workflow wall-clock ceiling;
+Rust remains parallel and every per-test timeout, assertion, coverage floor,
+parity requirement, and reference gate is unchanged. The workflow regression
+now pins 120 minutes.

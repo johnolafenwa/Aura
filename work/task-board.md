@@ -114,6 +114,18 @@ Last updated: 2026-08-01
   compiler build script now applies `-Wl,--export-dynamic` only to Linux test
   targets. A cross-platform regression pins the link contract and all seven
   instrumented FFI tests pass locally; product binaries are unchanged.
+- The first exact-SHA macOS proof jobs completed every substantive gate and
+  then exposed a shallow-checkout hygiene defect: with only `HEAD` available,
+  `git show --check HEAD` treated it as a root commit and scanned legacy
+  whitespace across the entire tracked tree. CI now fetches depth two so the
+  existing commit-level hygiene check sees the parent. A workflow regression,
+  all 25 packaging tests, and `github-actionlint` pin the correction without
+  rewriting historical examples or user-owned personal files.
+- Ubuntu job `91459871235` passed every pre-coverage stage and was progressing
+  through the instrumented compiler library when the initial 90-minute budget
+  canceled it without a test failure. The complete cold gate now has a
+  120-minute job allowance on the same standard runner class; individual test
+  contracts, coverage floors, parity, and reference checks are unchanged.
 - Remaining: prove three consecutive hosted CI runs on Linux and macOS at the
   current standard capacity from the corrected commit, then land the proven
   tree on main. Publishing remains a separate user dispatch after this gate.

@@ -69,7 +69,14 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
         verify_header = workflow.split("jobs:\n  verify:\n", 1)[1].split(
             "\n    steps:\n", 1
         )[0]
-        self.assertIn("\n    timeout-minutes: 90\n", verify_header)
+        self.assertIn("\n    timeout-minutes: 120\n", verify_header)
+
+    def test_ci_checkout_includes_head_parent_for_commit_hygiene(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        checkout_step = workflow.split("      - name: Checkout\n", 1)[1].split(
+            "\n\n      - name:", 1
+        )[0]
+        self.assertIn("        with:\n          fetch-depth: 2", checkout_step)
 
     def test_ci_installs_reference_search_tool_on_every_hosted_os(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
