@@ -226,8 +226,8 @@ grep -Fq '= "int" | "int8"' docs/manual/grammar.md
 grep -Fq 'Integer literals default to `int64`' tutorials/02-bindings-and-types.md
 grep -Fq '`int` is an alias for `int64`' "$proposal_md"
 grep -Fq '<code>int</code> is an alias for <code>int64</code>' "$proposal_html"
-grep -Fq '+ += - -= * *= / /= // //= % %=' docs/manual/lexical-structure.md
-grep -Fq 'assignment-operator = "=" | "+=" | "-=" | "*=" | "/=" | "//=" | "%=" ;' docs/manual/grammar.md
+assert_wrapped_text docs/manual/lexical-structure.md '+ += - -= * *= ** **= / /= // //= % %= & &= | |= ^ ^= ~ << <<= >> >>='
+assert_wrapped_text docs/manual/grammar.md 'assignment-operator = "=" | "+=" | "-=" | "*=" | "**=" | "/=" | "//=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" ;'
 grep -Fq '{ ("*" | "/" | "//" | "%"), prefix-expression } ;' docs/manual/grammar.md
 grep -Fq 'integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division' docs/manual/static-semantics.md
 grep -Fq 'CPython-compatible divmod correction' docs/manual/execution-model.md
@@ -303,7 +303,7 @@ test -s examples/basics/numbers.au
 grep -Fq '`numbers.au`' examples/README.md
 grep -Fq '[examples/basics/numbers.au]' tutorials/07-strings-and-numbers.md
 grep -Fq 'Ordinary string literals use matching single or double quote delimiters' docs/manual/lexical-structure.md
-grep -Fq 'F-strings themselves' docs/manual/lexical-structure.md
+assert_wrapped_text docs/manual/lexical-structure.md 'F-strings support the same escapes as ordinary strings and remain double-quoted.'
 grep -Fq 'Counts Unicode scalar values in O(n)' docs/manual/api-index.md
 grep -Fq 'Returns the UTF-8 byte count in O(1)' docs/manual/api-index.md
 grep -Fq 'normalize a negative position' docs/manual/collections.md
