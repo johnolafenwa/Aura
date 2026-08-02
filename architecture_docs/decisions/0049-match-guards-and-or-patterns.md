@@ -1,6 +1,7 @@
 # ADR-0049: Match guards and or-patterns
 
-- Status: Accepted
+- Status: Accepted for guards and or-patterns; class-pattern disposition
+  provisional pending the Batch S1 checkpoint
 - Date: 2026-08-02
 - Roadmap decision: Batch S1, S4.4
 - Builds on: ADR-0022 and ADR-0026
@@ -127,19 +128,21 @@ The implementation may use direct write-through when storage is stable, but
 its observable order must equal the reconstruction rule. It may not discard a
 mutation merely because the guarded arm body did not run.
 
-### Class-pattern disposition
+### Provisional class-pattern disposition
 
-Class patterns such as `case Point(x=0):` are deliberately deferred. Aura has
-no accepted positional-class-pattern contract, per-class match metadata, or
-rule for whether a named component reads storage directly or invokes a
-property-like operation. Adding call-shaped destructuring now would also need
-answers for private fields, inheritance, generic classes, partial moves,
-mutable write-through, computed properties, and exhaustiveness of an open
-class domain.
+The current implementation does not accept class patterns such as
+`case Point(x=0):`. Aura has no accepted positional-class-pattern contract,
+per-class match metadata, or rule for whether a named component reads storage
+directly or invokes a property-like operation. Adding call-shaped
+destructuring would also need answers for private fields, inheritance, generic
+classes, partial moves, mutable write-through, computed properties, and
+exhaustiveness of an open class domain.
 
 Classes can be matched by explicit enum/tag representations or by a wildcard
 followed by ordinary code. A later class-pattern ADR must define the exposure
-mechanism and capability behavior before syntax is accepted.
+mechanism and capability behavior before syntax is accepted. Whether Batch S1
+ratifies this deferment remains provisional until its named checkpoint, which
+must explicitly confirm deferment or authorize implementation.
 
 ## Diagnostics
 
@@ -186,8 +189,9 @@ determinism. Guarded mutable matching deliberately exposes guard side effects,
 including on a false result, which follows Aura's general rule that evaluating
 an expression does not roll back its mutations.
 
-Deferring class patterns keeps field visibility and capability design open
-until Aura has a deliberate match-exposure protocol.
+Leaving class patterns outside the current implementation keeps field
+visibility and capability design open until Aura has a deliberate
+match-exposure protocol. The checkpoint disposition remains provisional.
 
 ## Completion test matrix
 
@@ -213,9 +217,10 @@ until Aura has a deliberate match-exposure protocol.
   tests, compiler analysis, completion, hover, definition, language-server,
   bundled-editor, maintained example, and executable Manual coverage
 
-## Ratification
+## Implementation and checkpoint status
 
-Batch S1 accepts guards and or-patterns as Aura 0.3's pattern-polish surface
-and records class patterns as a separate future design. Parser, checker,
-decision tree, both backends, diagnostics, reference, examples, and tooling
-land together.
+Guards and or-patterns are accepted and implemented as Aura 0.3's
+pattern-polish surface. Parser, checker, decision tree, both backends,
+diagnostics, reference, examples, and tooling land together. Class patterns
+remain unimplemented, and the implement-or-defer decision is provisional until
+the Batch S1 checkpoint records its explicit disposition.

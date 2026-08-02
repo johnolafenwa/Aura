@@ -26,6 +26,24 @@ here as development advances.
   reporting. Supported comparison and membership assertions now report the
   two typed operand values on failure while preserving once-only left-to-right
   evaluation and lazy assertion messages.
+- Added module aliases with `import ... as ...` and per-name aliases in
+  `from ... import ...` declarations. Aliases preserve the target module,
+  declaration, type, visibility, and constant-storage identity.
+- Added decimal separators, hexadecimal, binary, and octal integer literals;
+  fixed-width bitwise operators; checked shifts; and explicit wrapping and
+  saturating shift methods. Added right-associative power, exact-type
+  `round` and `divmod`, and the scalar `math` functions `floor`, `ceil`,
+  `trunc`, `pow`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, and `tan`.
+- Added exact-content triple-quoted strings, single-line raw strings, and a
+  closed f-string format grammar covering alignment, fill, signs, width,
+  precision, grouping, integer bases, fixed-point, scientific, percentage,
+  and text formatting.
+- Added Boolean match guards and recursive or-patterns with left-to-right
+  probing, one guard evaluation, exhaustive binding checks, delayed owned
+  extraction, and mutable writeback on every guard exit path.
+- Added eager immutable module constants with dependency-first, source-ordered,
+  once-only initialization. Copy values read by value, while non-Copy values
+  provide shared access to their defining module's stored value.
 
 ## 0.2.0 — 2026-07-31 (technical preview)
 
