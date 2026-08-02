@@ -12099,14 +12099,15 @@ fn check_and_direct_backend_preserve_d6_own_parameter_guidance() {
 }
 
 #[test]
-fn check_and_direct_backend_reject_queue_iteration_modifiers() {
+fn check_and_direct_backend_reject_queue_iteration_capability_modifiers() {
     let expected = "Queue iteration receives values; each received item is already owned by the loop binding, and the Queue handle is a copy value, so ownership modifiers have nothing to modify; use the bare form `for item in queue:`";
 
     for (name, modifier) in [("own", "own "), ("mut", "mut ")] {
         let source = format!(
             "def main() -> int32:\n    queue = Queue[int64]()\n    for item in {modifier}queue:\n        print(item)\n    return 0\n"
         );
-        let (temp, source_path) = write_temp_source(&format!("aura-d6-queue-{name}"), &source);
+        let (temp, source_path) =
+            write_temp_source(&format!("aura-queue-capability-{name}"), &source);
 
         let checked = Command::new(aura_bin())
             .arg("check")
@@ -12142,14 +12143,15 @@ fn check_and_direct_backend_reject_queue_iteration_modifiers() {
 }
 
 #[test]
-fn check_and_direct_backend_reject_range_iteration_modifiers() {
-    let expected = "Range iteration yields copy `int32` values, so ownership modifiers have nothing to modify or transfer; use the bare form `for item in range(...):`";
+fn check_and_direct_backend_reject_range_iteration_capability_modifiers() {
+    let expected = "Range iteration yields copy `int64` values, so ownership modifiers have nothing to modify or transfer; use the bare form `for item in range(...):`";
 
     for (name, modifier) in [("own", "own "), ("mut", "mut ")] {
         let source = format!(
             "def main() -> int32:\n    for item in {modifier}range(0, 3):\n        print(item)\n    return 0\n"
         );
-        let (temp, source_path) = write_temp_source(&format!("aura-d6-range-{name}"), &source);
+        let (temp, source_path) =
+            write_temp_source(&format!("aura-range-capability-{name}"), &source);
 
         let checked = Command::new(aura_bin())
             .arg("check")
