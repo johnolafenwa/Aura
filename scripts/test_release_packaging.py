@@ -175,7 +175,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("name: Validate VSIX Marketplace identity", self.workflow)
         self.assertIn("expected_version=\"${RELEASE_TAG#v}\"", self.workflow)
         self.assertIn("expected_version=\"${expected_version%%-*}\"", self.workflow)
-        self.assertIn("JohnOlafenwa.vscode-aura", self.workflow)
+        self.assertIn("JohnOlafenwa.vscode-aura-lang", self.workflow)
         self.assertIn("0.2.0", self.workflow)
 
     def test_extension_only_dispatch_builds_from_an_explicit_source_ref(self) -> None:
@@ -312,11 +312,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         downloads = DOWNLOADS_DOC.read_text(encoding="utf-8")
         release_process = RELEASE_PROCESS_DOC.read_text(encoding="utf-8")
         self.assertIn(
-            "https://marketplace.visualstudio.com/items?itemName=JohnOlafenwa.vscode-aura",
+            "https://marketplace.visualstudio.com/items?itemName=JohnOlafenwa.vscode-aura-lang",
             downloads,
         )
         self.assertIn(
-            "https://open-vsx.org/extension/JohnOlafenwa/vscode-aura",
+            "https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang",
             downloads,
         )
         self.assertIn("aura-language.vsix", downloads)

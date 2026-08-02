@@ -17,8 +17,8 @@ source files:
 ## Install
 
 Install **Aura Programming Language** from the
-[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=JohnOlafenwa.vscode-aura)
-or [Open VSX](https://open-vsx.org/extension/JohnOlafenwa/vscode-aura).
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=JohnOlafenwa.vscode-aura-lang)
+or [Open VSX](https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang).
 The matching `.vsix` is also attached to each
 [Aura release](https://github.com/johnolafenwa/Aura/releases) for manual
 installation through **Extensions: Install from VSIX...**.

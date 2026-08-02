@@ -22,8 +22,8 @@ aura --version
 
 Install **Aura Programming Language** from either public extension registry:
 
-- [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=JohnOlafenwa.vscode-aura)
-- [Open VSX](https://open-vsx.org/extension/JohnOlafenwa/vscode-aura)
+- [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=JohnOlafenwa.vscode-aura-lang)
+- [Open VSX](https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang)
 
 The registry packages are identical and carry the plain extension version
 `0.2.0`. The extension needs the `aura` executable on `PATH` because semantic

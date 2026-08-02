@@ -53,6 +53,28 @@ the skipped GitHub-release dependency, and the documented dispatch command.
 
 Hosted CI and registry publication remain pending for the corrected commit.
 
+## First Registry Attempt And Permanent Name
+
+Release run `30746127573` built the fresh VSIX from `main`, confirmed the
+existing preview release, and passed the `JohnOlafenwa.vscode-aura` version
+and identity guard. Visual Studio Marketplace then rejected the internal name
+`vscode-aura` because it was already occupied and required a different name.
+No Marketplace listing was created, and Open VSX was skipped after the first
+registry command failed.
+
+The user selected `vscode-aura-lang` as the permanent internal extension name.
+The public identity for both registries is therefore
+`JohnOlafenwa.vscode-aura-lang`; the display name remains **Aura Programming
+Language**, and the repository tooling directory remains `tools/vscode-aura`.
+
+The manifest and distribution-link regressions were changed first and failed
+against the occupied name. After the migration, all 20 extension tests, all 26
+release/packaging tests, all five release-metadata tests, and
+`github-actionlint` pass. The docs build, npm audit, and hygiene check are also
+green. `vsce package` produced a 12-file Public Preview VSIX with ID
+`JohnOlafenwa.vscode-aura-lang`, version `0.2.0`, and SHA-256
+`c69a7c8f1821635c751fb8d7f8f01a653c76bf48f954002f0a5e070237d4e47f`.
+
 ## Dispatch
 
 ```bash

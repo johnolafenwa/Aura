@@ -24,7 +24,7 @@ shared-runner scheduling noise part of the product contract.
 
 Configure these GitHub Actions repository secrets:
 
-- `VSCE_PAT` publishes `JohnOlafenwa.vscode-aura` to the Visual Studio
+- `VSCE_PAT` publishes `JohnOlafenwa.vscode-aura-lang` to the Visual Studio
   Marketplace.
 - `OVSX_TOKEN` publishes the same VSIX to the `JohnOlafenwa` Open VSX
   namespace.
@@ -53,7 +53,7 @@ npx @vscode/vsce package --out aura-language.vsix --no-dependencies
 ```
 
 Inspect the resulting VSIX and confirm the identity is
-`JohnOlafenwa.vscode-aura` and the Marketplace version is plain `0.2.0`.
+`JohnOlafenwa.vscode-aura-lang` and the Marketplace version is plain `0.2.0`.
 
 ## Publish An Existing Release Extension
 

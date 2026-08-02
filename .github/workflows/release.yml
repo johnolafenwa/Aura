@@ -337,7 +337,7 @@ jobs:
             })
           );
           const identity = `${manifest.publisher}.${manifest.name}`;
-          if (identity !== "JohnOlafenwa.vscode-aura") {
+          if (identity !== "JohnOlafenwa.vscode-aura-lang") {
             throw new Error(`unexpected VSIX identity: ${identity}`);
           }
           if (!/^\d+\.\d+\.\d+$/.test(manifest.version)) {

@@ -23,6 +23,7 @@ test("extension manifest and listing are ready for both public marketplaces", ()
   );
   const readme = fs.readFileSync(path.join(extensionRoot, "README.md"), "utf8");
 
+  assert.equal(manifest.name, "vscode-aura-lang");
   assert.equal(manifest.publisher, "JohnOlafenwa");
   assert.equal(manifest.displayName, "Aura Programming Language");
   assert.equal(manifest.version, "0.2.0");

@@ -4,7 +4,7 @@ Last updated: 2026-08-01
 
 ## Extension marketplaces and hosted-CI singleton reliability (in progress)
 
-- Authorized target: prepare `JohnOlafenwa.vscode-aura` for the Visual Studio
+- Authorized target: prepare `JohnOlafenwa.vscode-aura-lang` for the Visual Studio
   Marketplace and Open VSX; publish only from the Release workflow with
   visible secretless skips and a tag-based manual dispatch; close the hosted
   Linux diagnostic-channel test race and the macOS timing-margin flaky class;
@@ -131,9 +131,13 @@ Last updated: 2026-08-01
   macOS 15, and main run `30742009895` passed the same tree. The release asset
   preflight then found that the previously uploaded VSIX predates the publisher
   migration. The extension-only workflow path is being corrected to build the
-  `JohnOlafenwa.vscode-aura` VSIX from an explicit `source_ref` before the
-  authorized Marketplace/Open VSX dispatch; the tag and GitHub Release remain
-  unchanged.
+  current VSIX from an explicit `source_ref` before the authorized
+  Marketplace/Open VSX dispatch; the tag and GitHub Release remain unchanged.
+  Run `30746127573` built and validated that fresh package, then Visual Studio
+  Marketplace rejected the globally occupied internal name `vscode-aura`;
+  Open VSX therefore did not run. The user selected `vscode-aura-lang` as the
+  permanent replacement ID. The manifest, registry URLs, workflow guard, and
+  regressions now pin `JohnOlafenwa.vscode-aura-lang` for the retry.
 - Work note: `work/2026-08-01-extension-publishing-and-hosted-ci-reliability.md`.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
