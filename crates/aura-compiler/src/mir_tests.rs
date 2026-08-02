@@ -3632,6 +3632,10 @@ fn variant_pattern(
 }
 
 fn namespace_from_program(name: &str, path: &str, program: &Program) -> ModuleNamespace {
+    let mut functions = program.functions.clone();
+    for function in functions.values_mut() {
+        function.module_name = path.to_string();
+    }
     ModuleNamespace {
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
@@ -3639,14 +3643,14 @@ fn namespace_from_program(name: &str, path: &str, program: &Program) -> ModuleNa
         path: path.to_string(),
         source_path: None,
         modules: BTreeMap::new(),
-        functions: program.functions.clone(),
+        functions: functions.clone(),
         extern_functions: BTreeMap::new(),
         opaque_handles: BTreeMap::new(),
         classes: program.classes.clone(),
         enums: program.enums.clone(),
         traits: program.traits.clone(),
         trait_impls: program.trait_impls.clone(),
-        all_functions: program.functions.clone(),
+        all_functions: functions,
         all_extern_functions: BTreeMap::new(),
         all_opaque_handles: BTreeMap::new(),
         all_classes: program.classes.clone(),

@@ -16155,10 +16155,6 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "non-exhaustive match over `Status`: missing `Done`",
             ),
             (
-                "class Packet:\n    value: int32\n\ndef main() -> int32:\n    packet = Packet(value=1)\n    match packet:\n        case _:\n            return 0\n",
-                "`match` currently requires a tuple, enum, bool, integer, float, or str scrutinee",
-            ),
-            (
                 "enum Status:\n    Ready\n\ndef main() -> int32:\n    match 1:\n        case Status.Ready:\n            return 1\n        case _:\n            return 0\n",
                 "match over `int64` only supports literal patterns and `_`",
             ),
@@ -16335,10 +16331,6 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
 
     for (source, expected) in [
         (
-            "class Packet:\n    value: int32\n\ndef main() -> int32:\n    packet = Packet(value=1)\n    return match packet:\n        case _: 0\n",
-            "`match` currently requires a tuple, enum, bool, integer, float, or str scrutinee",
-        ),
-        (
             "enum Status:\n    Ready\n\ndef main() -> int32:\n    return match 1:\n        case Status.Ready: 1\n        case _: 0\n",
             "match over `int64` only supports literal patterns and `_`",
         ),
@@ -16419,6 +16411,14 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             error.message,
             source
         );
+    }
+
+    for source in [
+        "class Packet:\n    value: int32\n\ndef main() -> int32:\n    packet = Packet(value=1)\n    match packet:\n        case _:\n            return 0\n",
+        "class Packet:\n    value: int32\n\ndef main() -> int32:\n    packet = Packet(value=1)\n    return match packet:\n        case _: 0\n",
+    ] {
+        crate::check_source(source)
+            .expect("a wildcard-only match may cover a class value without destructuring it");
     }
 
     let span = Span::new(1, 1);
