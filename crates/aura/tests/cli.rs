@@ -1396,11 +1396,11 @@ def burn_cpu() -> None:
     while sys.monotonic_time_ms() - started_at < 300:
         value = (value * 1664525 + 1013904223) % 2147483647
 
-def produce(q: Queue[int32], base: int32) -> None:
+def produce(q: Queue[int64], base: int64) -> None:
     for offset in range(250):
         q.put(base + offset)
 
-def consume(q: Queue[int32], totals: Queue[int32]) -> None:
+def consume(q: Queue[int64], totals: Queue[int32]) -> None:
     mut received: int32 = 0
     for value in q:
         if value >= 0:
@@ -1408,7 +1408,7 @@ def consume(q: Queue[int32], totals: Queue[int32]) -> None:
     totals.put(received)
 
 def main() -> int32:
-    q = Queue[int32](capacity=64)
+    q = Queue[int64](capacity=64)
     totals = Queue[int32](capacity=4)
 
     with TaskGroup() as outer:
