@@ -2890,7 +2890,7 @@ test("compiler bridge exposes module constants through symbols hover definitions
     const source = [
       "import settings",
       "from settings import service_name as configured_name",
-      "local_name = configured_name",
+      "local_name = configured_name.clone()",
       "",
       "def main():",
       "    print(settings.service_name)",

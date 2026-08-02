@@ -432,6 +432,9 @@ impl<'a> AnalysisBuilder<'a> {
 
         let scope = self.scope_for_position(line, character);
         let mut completions = self.top_level_completions();
+        completions.retain(|completion| {
+            completion.kind != "constant" || scope.contains_key(&completion.name)
+        });
         let mut names = completions
             .iter()
             .map(|completion| completion.name.clone())
@@ -484,18 +487,51 @@ impl<'a> AnalysisBuilder<'a> {
         self.program
             .constants
             .iter()
-            .map(|(name, info)| {
-                (
-                    name.clone(),
-                    BindingInfo {
-                        ty: info.ty.clone(),
-                        trait_bounds: Vec::new(),
-                        definition: self.constant_definition(info),
-                        hover: format_value_hover("module constant", name, &info.ty),
-                    },
-                )
-            })
+            .map(|(name, info)| (name.clone(), self.constant_binding_info(name, info)))
             .collect()
+    }
+
+    fn constant_scope_before_line(&self, target_line: usize) -> BTreeMap<String, BindingInfo> {
+        let ready_local_constants = self
+            .program
+            .module
+            .constants
+            .iter()
+            .filter(|constant| expression_end_line(&constant.value) < target_line)
+            .map(|constant| constant.name.as_str())
+            .collect::<BTreeSet<_>>();
+
+        self.program
+            .constants
+            .iter()
+            .filter(|(name, info)| {
+                info.module_name != self.program.module_name
+                    || ready_local_constants.contains(name.as_str())
+            })
+            .map(|(name, info)| (name.clone(), self.constant_binding_info(name, info)))
+            .collect()
+    }
+
+    fn top_level_constant_scope(&self, target_line: usize) -> BTreeMap<String, BindingInfo> {
+        let inside_initializer = self.program.module.constants.iter().any(|constant| {
+            constant.span.line <= target_line && target_line <= expression_end_line(&constant.value)
+        });
+        if inside_initializer {
+            self.constant_scope_before_line(target_line)
+        } else {
+            // Executable top-level statements start only after the complete
+            // module initialization phase, so every constant is ready there.
+            self.constant_scope()
+        }
+    }
+
+    fn constant_binding_info(&self, name: &str, info: &crate::sema::ConstantInfo) -> BindingInfo {
+        BindingInfo {
+            ty: info.ty.clone(),
+            trait_bounds: Vec::new(),
+            definition: self.constant_definition(info),
+            hover: format_value_hover("module constant", name, &info.ty),
+        }
     }
 
     fn method_scope(
@@ -547,7 +583,7 @@ impl<'a> AnalysisBuilder<'a> {
             return scope;
         }
 
-        let mut scope = BTreeMap::new();
+        let mut scope = self.top_level_constant_scope(target_line);
         self.accumulate_scope_from_stmts(&self.program.top_level_stmts, target_line, &mut scope);
         scope
     }

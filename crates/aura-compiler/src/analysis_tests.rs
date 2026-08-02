@@ -2055,6 +2055,44 @@ fn module_constants_are_symbols_hover_targets_and_completions() {
 }
 
 #[test]
+fn top_level_completion_scope_respects_constant_initialization_phase() {
+    let source = [
+        "first: int64 = 1",
+        "second: int64 = first + 1",
+        "print(second)",
+        "third: int64 = 3",
+    ]
+    .join("\n");
+    let program = checked_program(&source);
+    let builder = AnalysisBuilder::new(&source, &program, Vec::new());
+
+    let second_initializer = builder.scope_for_line(1);
+    assert!(second_initializer.contains_key("first"));
+    assert!(!second_initializer.contains_key("second"));
+    assert!(!second_initializer.contains_key("third"));
+
+    let initializer_completions =
+        complete_source(&source, 1, 25, None).expect("completion in second initializer");
+    assert!(initializer_completions
+        .iter()
+        .any(|completion| completion.name == "first" && completion.kind == "constant"));
+    assert!(!initializer_completions
+        .iter()
+        .any(|completion| completion.name == "second"));
+    assert!(!initializer_completions
+        .iter()
+        .any(|completion| completion.name == "third"));
+
+    // Executable top-level statements run after the complete module constant
+    // initialization phase, even when statement and declaration text is
+    // interleaved.
+    let executable_scope = builder.scope_for_line(2);
+    assert!(executable_scope.contains_key("first"));
+    assert!(executable_scope.contains_key("second"));
+    assert!(executable_scope.contains_key("third"));
+}
+
+#[test]
 fn compiler_analysis_infers_round_and_divmod_results_and_builtin_hover() {
     let analysis = analyze_source(
         r#"
