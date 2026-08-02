@@ -95,13 +95,13 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/basics/len_and_str.au`
   - execute `int64` member lengths, `len(value) == value.len()`, Unicode-scalar
     str length versus UTF-8 byte length, and `str(value)`
-- `cargo run -p aura -- run examples/collections/vec_basics.au`
+- `cargo run -p aura -- run examples/collections/list_basics.au`
   - execute list literals, `list[T]` methods, and indexed element access
-- `cargo run -p aura -- run examples/collections/vec_polish.au`
+- `cargo run -p aura -- run examples/collections/list_polish.au`
   - execute negative list indexing, cast-free length-driven indexing,
     non-copy cloned reads, mutable list iteration, `insert(...)`,
     `swap(...)`, `reverse()`, `clear()`, richer list methods, and list equality
-- `cargo run -p aura -- run examples/collections/vec_algorithms.au`
+- `cargo run -p aura -- run examples/collections/list_algorithms.au`
   - execute stable natural/key sorting plus eager, source-retaining
     `list.map(...)` and `list.filter(...)`
 - `cargo run -p aura -- run examples/collections/comprehensions.au`
@@ -110,7 +110,7 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/collections/slices.au`
   - execute owned list and Unicode-scalar str slices, omitted and negative
     endpoints, and source/result independence
-- `cargo run -p aura -- run examples/collections/map_basics.au`
+- `cargo run -p aura -- run examples/collections/dict_basics.au`
   - execute `dict[K, V]` literals, tuple-valued `items()`, `update(...)`, and the maintained dictionary method surface
 - `cargo run -p aura -- run examples/collections/set_basics.au`
   - execute `set[T]` literals, shared set iteration, membership, and the maintained set method surface
@@ -175,6 +175,9 @@ Current compiler workflow:
     `split`, `replace`, case conversion, and prefix/suffix stripping
 - `cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au`
   - execute parsing builtins, scalar/boolean `.to_string()`, and `str.join(...)`
+- `cargo run -p aura -- run examples/strings/literal_forms_and_formatting.au`
+  - execute exact multiline/raw strings and statically checked Unicode-aware
+    f-string formatting
 - `cargo run -p aura -- run examples/io/read_text_file.au`
   - execute the maintained builtin file I/O surface through `fs.exists(...)`, `fs.read_to_string(...)`, and `io.write(...)`
 - `cargo run -p aura -- run examples/io/bytes_file_io.au`
@@ -261,7 +264,7 @@ Current compiler workflow:
   - `--line` and `--character` are zero-based
   - member completion expects the cursor positioned just after `.`
   - the CLI tolerates the common incomplete-editor state where the current buffer contains one or more dangling member accesses such as `counter.` or `helpers.math.`, including when they appear at EOF
-  - stdin-backed completion now also resolves local imported modules relative to the supplied file path, including imported trait methods
+  - stdin-backed completion resolves local imported modules relative to the supplied file path, including imported trait methods
 - `cat examples/modules/simple_import.au | cargo run -p aura -- run --stdin "$(pwd)/examples/modules/simple_import.au"`
   - execute an editor-style buffer while still resolving local imports relative to the supplied path
 - `cargo run -p aura -- check examples/packages/local_path_dependencies/app/src/main.au`
@@ -310,24 +313,24 @@ GitHub Actions:
 
 Current `build` status:
 
-- `aura build` now accepts `--backend auto|direct`
+- `aura build` accepts `--backend auto|direct`
 - `aura build` defaults to `auto`
 - `auto` first tries the direct native backend and may fall back to a standalone embedded-MIR launcher when direct emission is unavailable
-- `direct` now performs true low-level native code generation for the full currently implemented Aura language surface
-- the built binary no longer reparses source or compiles a generated Rust runner at build time
-- the built binary no longer depends on the original `.au` source files at runtime
-- built binaries now render runtime failures with file, line, caret, typed
+- `direct` performs true low-level native code generation for the full currently implemented Aura language surface
+- a built binary runs without reparsing source or compiling a generated Rust runner
+- a built binary runs without the original `.au` source files
+- built binaries render runtime failures with file, line, caret, typed
   Aura call-chain, and child-task ancestry context from embedded source
 - release archives include the Aura native runtime and do not require Cargo or a source checkout; `aura build` still requires a host C compiler
-- manifest-aware commands now resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aura.toml`
+- manifest-aware commands resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aura.toml`
 - git dependencies support `git = "..."` with `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
 - the current package-system milestone writes a local `Aura.lock` at the package root or workspace root, pinning resolved git revisions and recording relative paths for local path dependencies
-- both maintained execution paths now cover the builtin `io`, `fs`, `net`, and `process` module surface for scheduler-aware text/binary file I/O, reactor-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, shell-free subprocess execution with captured pipes, and supervised child processes with restart policy support
+- both maintained execution paths cover the builtin `io`, `fs`, `net`, and `process` module surface for scheduler-aware text/binary file I/O, reactor-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, shell-free subprocess execution with captured pipes, and supervised child processes with restart policy support
 
 Current `run` status:
 
 - `aura run` defaults to the MIR runtime for the current implemented Aura surface; `--backend direct` requires native execution and `--backend auto` prefers it with visible fallback
-- queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, the maintained reactor-driven socket networking surface, and the shell-free `process` module now run through the same MIR-backed public execution path
+- queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, the maintained reactor-driven socket networking surface, and the shell-free `process` module run through the same MIR-backed public execution path
 - task bodies use pinned scheduler workers: the default worker count is the
   available parallelism reported by the host, and the provisional
   `AURA_WORKERS=<positive integer>` override selects an explicit count; each
@@ -371,7 +374,7 @@ Current `run` status:
 - every loop backedge includes a compiler-inserted cooperative scheduling
   check; native concurrent code amortizes it with function-local fuel, while
   sequential native code elides checks when no sibling task can exist
-- the maintained execution architecture is now the MIR runtime for `run` plus native direct codegen for `build`
+- the maintained execution architecture uses the MIR runtime for `run` and native direct codegen for `build`
 
 ## VS Code install
 
@@ -772,6 +775,9 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 - [Numeric Arrays](/manual/numeric-arrays): contiguous row-major `Array[T]`,
   four numeric dtypes, first-axis owned slices, reductions, native kernels,
   and explicit checked/wrapping/saturating integer arithmetic.
+- [Math Module](/manual/math): exact binary64 constants plus scalar rounding,
+  power, exponential, logarithmic, and trigonometric functions with explicit
+  domain and overflow behavior.
 - [Bytes, Text Codecs, And SHA-256](/manual/bytes): `list[uint8]`, strict UTF-8 conversion, canonical hex/base64, typed data errors, and raw SHA-256.
 - [JSON Module](/manual/json): recursive JSON values, typed parse errors, exact number classification, deterministic dumping, and resource limits.
 - [Randomness Module](/manual/randomness): deterministic seeded streams, exact sequence compatibility, unbiased ranges, in-place shuffle, and OS-secure integers and bytes.
@@ -810,7 +816,9 @@ When a page says a value is returned "cloned", it means the caller receives a ne
 
 # API Index
 
-This page indexes every maintained public builtin function, method, module type, and builtin enum documented by the manual. It is intentionally dense. Use the linked manual pages for examples and longer discussion.
+This page indexes every maintained public builtin constant, function, method,
+module type, and builtin enum documented by the manual. It is intentionally
+dense. Use the linked manual pages for examples and longer discussion.
 
 `assert condition` and `assert condition, message` are statements rather than
 callable APIs. Their exact typing, lazy-message, `AU4001`, cleanup, and
@@ -920,6 +928,30 @@ diagnostic, and backend contracts.
 | `Array.mean` | `mean() -> float64` | `float64` accumulation/result; empty is `AU4007`. |
 | integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is same-shape Array or same-dtype scalar; fresh Array result. |
 | integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is same-shape Array or same-dtype scalar; fresh Array result. |
+
+## Math
+
+See [Math Module](/manual/math) for the normative IEEE-754, domain,
+evaluation-order, diagnostic, and backend contracts. Every argument is
+exactly `float64`; the module performs no implicit numeric conversion.
+
+| API | Signature | Contract |
+| --- | --- | --- |
+| `math.pi` | `float64` constant | Nearest binary64 pi, bits `0x400921fb54442d18`. |
+| `math.e` | `float64` constant | Nearest binary64 Euler's number, bits `0x4005bf0a8b145769`. |
+| `math.inf` | `float64` constant | Positive infinity, bits `0x7ff0000000000000`. |
+| `math.nan` | `float64` constant | Canonical quiet NaN, bits `0x7ff8000000000000`. |
+| `math.floor` | `floor(value: float64) -> int64` | Greatest integer less than or equal to `value`, checked for `int64` range. |
+| `math.ceil` | `ceil(value: float64) -> int64` | Least integer greater than or equal to `value`, checked for `int64` range. |
+| `math.trunc` | `trunc(value: float64) -> int64` | Truncates toward zero, checked for `int64` range. |
+| `math.pow` | `pow(base: float64, exponent: float64) -> float64` | Binary64 exponentiation with specified identity, domain, and overflow behavior. |
+| `math.exp` | `exp(value: float64) -> float64` | Base-e exponential. |
+| `math.log` | `log(value: float64) -> float64` | Natural logarithm. |
+| `math.log2` | `log2(value: float64) -> float64` | Base-2 logarithm. |
+| `math.log10` | `log10(value: float64) -> float64` | Base-10 logarithm. |
+| `math.sin` | `sin(value: float64) -> float64` | Sine in radians. |
+| `math.cos` | `cos(value: float64) -> float64` | Cosine in radians. |
+| `math.tan` | `tan(value: float64) -> float64` | Tangent in radians. |
 
 ## Randomness
 
@@ -2083,7 +2115,7 @@ aura check app.au
 | `aura deps update [name]` | Refresh all git dependencies or one named dependency. |
 | `aura new path` | Create `Aura.toml` and `src/main.au` without overwriting an existing path. |
 | `aura fmt [--check] [paths...]` | Normalize Aura source whitespace or verify formatting. |
-| `aura test [--timeout-ms N] [paths...]` | Run package-aware `.au` tests, one result per `def test_*()` function or per file when a file declares none; defaults to `tests/` and a 30-second per-test timeout. |
+| `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case; defaults to `tests/` and a 30-second per-case timeout. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
 | `aura version` / `aura --version` | Print the preview channel and 12-hex-digit source commit, such as `aura 0.2.0-preview (0123456789ab)`. |
@@ -2093,7 +2125,7 @@ aura check app.au
 `check` is the fastest way to validate syntax, types, imports, ownership, and package resolution:
 
 ```bash
-cargo run -p aura -- check examples/collections/vec_basics.au
+cargo run -p aura -- check examples/collections/list_basics.au
 ```
 
 Use `check` before `run` when you are editing a package or diagnosing type errors.
@@ -2226,24 +2258,95 @@ Each response is one line containing the same `id` plus either `result` or an `e
 | `run` with `main() -> None` | `0` |
 | `run` with `main() -> int32` | the returned integer requested as the host process status |
 | successful `analyze` containing source diagnostics | `0`; JSON on stdout |
-| `test` with any failed program | `1`; summary on stdout and diagnostics on stderr |
+| completed human `test` run | `0` when every selected case passes; `1` otherwise; case output and summary on stdout, failures on stderr |
+| completed JSON `test` run | `0` when every selected case passes; `1` otherwise; exactly one schema-version-1 document on stdout and no human progress lines |
 
 A broken stdout pipe is intentional clean termination and exits `0`; this lets commands compose with consumers such as `head` without printing a secondary failure.
 
-A test file that declares one or more parameterless `def test_*()` functions
-reports one result per function, labelled `path::function`. Each function runs
-on its own worker under the shared timeout, through the same runtime, scheduler,
-and trap handling an ordinary run uses. A function with parameters or a receiver
-is not a test, and neither is any other declaration in the file.
+## Testing
 
-A file that declares no `def test_*()` function keeps the file-level model: the
-path itself is one test unit, entered at `main` or at its top-level statements.
-Both models coexist, so adding a test function to a file changes only that file.
+With no paths, `aura test` recursively reads `.au` files under `tests/`. Given
+files or directories, it uses those inputs. Files are visited in normalized
+path order. Within a file, module functions are discovered in declaration
+order. A parameterless `test_*` function returning `None` is one case. Its
+canonical name is `path::test_name`. A module `test_*` function with parameters
+is an invalid test declaration. Class, trait, and implementation methods are
+not discovered. If a file declares no module `test_*` function, the file
+remains one case named `path`, entered through `main()` or its top-level
+statements.
 
-Assertions that all pass leave a test successful. A failed assertion prints its
-ordinary `AU4001` source diagnostic against the file, marks that test `FAILED`,
-and contributes to the failed count. Assertions are executed normally;
-`aura test` has no assertion-stripping option.
+`-k substring` performs a literal, case-sensitive substring match over the
+complete canonical case name. Selection happens after parameter registrations
+are expanded, so the substring may select a bracketed case label. `-k` may
+appear once and its value must be non-empty. A valid filter that selects no
+cases succeeds with `0 passed; 0 failed`. Missing, empty, or repeated filter
+values are usage errors and exit with status 2.
+
+### Setup And Teardown
+
+A file may declare ordinary parameterless `setup()` and `teardown()` module
+functions returning `None`. For each selected case, the runner invokes setup,
+then the case only when setup succeeds, then teardown. Teardown runs after an
+attempted setup even when setup traps, and after a case trap or non-zero
+file-level `main()` result. It is not run during discovery. A hook with
+parameters, a non-`None` result, or a collision with a non-function declaration
+is a check-time test failure.
+
+Setup, case, and teardown are isolated entries into one already checked and
+lowered module. The runner does not re-read or re-check the source between
+phases. Aura values and module-runtime state do not pass between phases or
+cases; external effects such as file writes remain observable. The first
+failure is primary. When teardown also fails, human output prints
+`teardown also failed for ...` after the primary failure, while JSON stores the
+teardown failure in the case record's `secondary` object with
+`stage: "teardown"`. If setup succeeds and only teardown fails, the teardown
+failure is primary. The timeout covers the complete lifecycle. A timed-out
+worker cannot be forcibly stopped, so teardown is not promised after timeout.
+
+### Parameterized Registration
+
+A parameterized `test_*` function is parameterless and returns
+`list[(str, def() -> None)]`. The runner invokes it once during discovery and
+expands its list in order. Each tuple contains a non-empty label and a named,
+capture-free, repeatable, parameterless function returning `None`. Labels must
+be unique within that registration. The canonical case name is
+`path::test_name[label]`.
+
+Registration finishes before filtering, and it never executes a returned case.
+The required `def() -> None` element type excludes capturing closures and keeps
+every expanded case independently invocable. A registration trap, timeout,
+invalid returned value, empty label, duplicate label, or invalid case function
+is one discovery failure for that registration; none of its cases run. An
+empty registration contributes no cases. Registration itself never invokes
+setup or teardown.
+
+Registration stdout is captured once. Human mode writes all registration
+stdout before case results. JSON mode records non-empty registration stdout in
+the top-level `discovery` array, whose entries contain `name`, `file`, and
+`stdout` in registration order.
+
+### Test Output Contract
+
+Human mode writes each case's captured stdout, then `ok <canonical-name>` for a
+passing case. A failed case writes `FAILED <canonical-name>` and its ordinary
+source diagnostic, or a runner reason such as a timeout, to stderr. Standard
+output ends with `<passed> passed; <failed> failed`. Test records and the
+summary retain canonical discovery order.
+
+`aura test --format json` writes exactly one JSON document to stdout and no
+human progress lines. The top-level object has integer `schema_version: 1`, a
+`summary` object with integer `selected`, `passed`, and `failed` counts, and an
+ordered `tests` array. Every test record contains `name`, `file`, `outcome`
+(`passed` or `failed`), and a non-negative integer `duration_ms` covering its
+complete lifecycle. Non-empty captured output appears as `stdout`.
+
+A trapped test record contains `diagnostic`, using the existing structured
+diagnostic schema including optional assertion operand records. A runner
+failure contains `reason`; a failed record has exactly one primary failure
+form. A second teardown failure appears as `secondary`, with `stage` plus
+either `diagnostic` or `reason`. Invalid command usage still goes to stderr and
+exits 2. Assertions execute normally in every mode; `aura test` has no
+assertion-stripping option.
 
 ## VS Code And LSP
 
@@ -2345,7 +2448,7 @@ The parser, checker, package resolver, diagnostic model, analysis engine, and MI
 
 `aura run --backend auto` prefers the direct backend and degrades to the MIR runtime only when direct building or launching is unavailable. Once a direct child runs, an Aura trap, signal termination, wait failure, or diagnostic-protocol failure is a final program/execution outcome and never triggers MIR fallback. Human mode prints an actual fallback reason on standard error before the MIR program runs; JSON mode includes it in the final structured report after execution. A forced `direct` run never degrades, so a parity or benchmark caller cannot silently measure the other backend. Every backend observes the same program arguments, standard output, exit code, and complete runtime diagnostic, including typed call frames and task ancestry.
 
-The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `3`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
+The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `5`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
 
 On maintained Unix hosts, cache establishment is coordinated across processes. A short runtime-identity lock protects source-checkout runtime discovery, and a separate writer lock for each content key protects the miss/recheck/build/publish sequence. Therefore, N concurrent cold runs of the same program perform one build; after that publication, the other N-1 processes recheck and consume the verified entry. Existing verified hits take the optimistic read path and do not wait for a writer holding that key. Locks are released before linking output is executed, while atomic publication and invalidation continue to ensure that readers never observe a partial entry and a stale invalidator cannot delete a replacement published for the same key.
 
@@ -2353,7 +2456,7 @@ In human mode, a native `run` flushes the exact line
 `aura: waiting for a concurrent build...` before it blocks on another builder
 and `aura: building native program...` before it starts building a native
 program artifact. A
-source-checkout `aura build` now flushes the same exact wait line before
+source-checkout `aura build` flushes the same exact wait line before
 blocking on another process refreshing the shared runtime. The reporter
 deduplicates each notice within one invocation. JSON `run` mode provisionally
 prioritizes the one-document stderr contract over immediate progress: it
@@ -2368,7 +2471,7 @@ streaming contract is ratified.
 
 `AURA_CACHE_DIR` selects the cache directory; the default is `~/.cache/aura/native`. The directory is a trust boundary. Its colocated SHA-256 detects corruption but does not authenticate bytes written by a hostile account, so the root must be private to the current OS user and every writer with access to it must be trusted. On the maintained Unix hosts, Aura rejects a root that is owned by another user or writable by group/other and creates or tightens accepted cache directories to mode `0700`. Private launch copies are removed after the child exits. Each launch carries an inherited exclusive lease, so later cleanup preserves the directory while either the `aura` parent or native child is still using it. Interrupted cache-publication, memo, and quarantine stages are collected only after their encoded 24-hour grace period and confirmation that their owner process is gone. An installed immutable runtime can still perform a direct build when caching is disabled or unavailable; no cache lock is required merely to build, and the uncached artifact is not retained.
 
-ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `3`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
+ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `5`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
 
 Backend parity is a release gate. A construct accepted by one maintained
 execution backend must have the same observable result or complete diagnostic
@@ -2525,11 +2628,12 @@ outer source afterward reports `AU3001`. Clone before creation when both
 owners are required:
 
 ```aura
-name = "Aura"
-kept = name.clone()
-length: def() -> int64 = lambda: kept.len()
-print(name)
-print(length())
+def main():
+    name = "Aura"
+    kept = name.clone()
+    length: def() -> int64 = lambda: kept.len()
+    print(name)
+    print(length())
 ```
 
 A bare parameter of an enclosing function is shared capability, not owned
@@ -3732,12 +3836,18 @@ Exact diagnostic prose is normative only where a fixture or this Manual explicit
 | FFI v0 package authorization and root dependency reports; bodyless extern/opaque grammar; fixed-width scalar, null-empty and pointer-length view ABI; same-length mutable copy-in/out and post-call writeback; opaque ownership and non-Transfer rules; direct-call-only process-global lookup; Unix MIR/direct parity; LSP/editor support; and reserved callbacks/raw pointers/variadics | focused lexer/parser/package/sema/analysis/MIR/native/runtime tests; `crates/aura-compiler/tests/ffi_frontend.rs`; `crates/aura/tests/ffi_acceptance.rs`; `examples/packages/ffi_getpid`; the executable [FFI v0](/manual/ffi) block; language-server recovery/compiler-bridge tests; extension grammar/snippet tests; and the forced backend parity matrix |
 | Conditional-expression precedence, exact-bool conditions, arm unification/context, lazy condition-first selection, conservative branch moves, analysis, and backend parity | focused conditional parser/sema/MIR/analysis tests; `conditional_expression_*` check/parse fixtures; `conditional_expressions` run fixture and example; compiler-bridge coverage; and the MIR/direct parity matrix |
 | Membership containers and delegation, chained-comparison precedence, at-most-once operand evaluation, short-circuiting, conservative chain checking, and backend parity | `comparison_chains_keep_every_operator_at_one_precedence_level`, `membership_tests_read_supported_containers_and_reject_the_rest`, and `comparison_chains_evaluate_each_operand_once_and_short_circuit`; `membership_*` check-fail and `membership_and_comparison_chains` check-pass fixtures; the `membership_and_comparison_chains` run fixture and example; five Python-shaped acceptance fixtures; and the MIR/direct parity matrix |
-| `enumerate`/`zip` loop-form recognition, operand domain, bare shared default, `int64` positions, shortest-operand `zip` termination, shadowing, function-wide per-loop binding-slot isolation under heterogeneous binding-name reuse, and backend parity | `enumerate_and_zip_iterate_in_lockstep_over_the_bare_loop_default`, `heterogeneous_ordinary_for_bindings_use_distinct_scoped_typed_slots`, `every_ordinary_for_form_uses_a_fresh_scoped_target_slot`, and `ordinary_for_target_scope_starts_after_iterable_evaluation`; `enumerate_requires_indexable_iterable` and `zip_rejects_ownership_modifiers` check-fail fixtures; the reversed heterogeneous `enumerate_and_zip` fixture; `tuple_for_pattern_queue` for recursive target reuse; `vec_borrow_mut_iteration` for fallthrough/`continue`/`break`/explicit-return writeback; the maintained example; and the MIR/direct parity matrix |
+| `enumerate`/`zip` loop-form recognition, operand domain, bare shared default, `int64` positions, shortest-operand `zip` termination, shadowing, function-wide per-loop binding-slot isolation under heterogeneous binding-name reuse, and backend parity | `enumerate_and_zip_iterate_in_lockstep_over_the_bare_loop_default`, `heterogeneous_ordinary_for_bindings_use_distinct_scoped_typed_slots`, `every_ordinary_for_form_uses_a_fresh_scoped_target_slot`, and `ordinary_for_target_scope_starts_after_iterable_evaluation`; `enumerate_requires_indexable_iterable` and `zip_rejects_ownership_modifiers` check-fail fixtures; the reversed heterogeneous `enumerate_and_zip` fixture; `tuple_for_pattern_queue` for recursive target reuse; `list_mut_iteration` for fallthrough/`continue`/`break`/explicit-return writeback; the maintained example; and the MIR/direct parity matrix |
 | `len` delegation domain; shared `int64` type and value across `len(x)` and `x.len()` for str, list, dict, and set; `str.byte_len()` as an `int64` UTF-8-byte count; `str` rendering equality with `print` and f-strings; and the reservation of both names | focused semantic, call-surface, MIR, native-codegen, runtime, analysis, and language-server tests; the `len_requires_a_len_member` check-fail fixture; the `len_and_str` run fixture and example; two Python-shaped acceptance fixtures; and the MIR/direct parity matrix |
+| Accepted ADR-0043 unified `int64` index domain: direct indices, slices, range bounds and yields, enumerate positions, Array coordinates, selection indices, collection lengths/search positions/capacity arguments, scoped lossless widening of fixed-width integer position values, exact `list[int64]` coordinate containers, and target-stable rejection outside that scope | `index_domain_positions_contextually_type_literals_as_int64`, `index_domain_accepts_default_int64_variables`, and focused semantic/MIR/native/runtime/analysis tests; `index_domain_int64_contract`, `index_domain_lossless_widening`, `index_domain_rejects_uint64`, and boundary fixtures; `index_domain_zero_cast_idioms`, which pins `values[values.len() - 1]`, `range(values.len())`, and enumerate-index-back-into-list without casts; `examples/collections/list_polish.au`; and the forced MIR/direct parity matrix |
+| Accepted ADR-0044 canonical `list`/`dict`/`set`/`str` surface: homogeneous literals, exact constructors and method signatures, first-match list search, stable natural/key sorting, typed dictionary absence and eager snapshots, loud/silent set removal, capacity control, exact ownership and evaluation order, `AU4008`/`AU4003`/`AU4005` failures, analysis/editor exposure, and backend parity | focused parser, call-surface, semantic, MIR, native, runtime-value, analysis, language-server, and extension tests; `canonical_collection_surface`, collection capacity, obligation, missing-value, and ownership fixture families; `examples/collections/list_basics.au`, `list_polish.au`, `dict_basics.au`, and `set_basics.au`; executable Types and Collections Manual blocks; the clean-surface identity gate; and the forced MIR/direct parity matrix |
 | names, types, calls, traits, patterns, moves, and borrows | `crates/aura-compiler/src/sema_tests.rs`, `tests/fixtures/check-pass`, `tests/fixtures/check-fail` |
 | integer `/` rejection, floor division/remainder, exact float-context integer literals, `.to_float()`, and shortest-roundtrip float printing | lexer/parser/integer/runtime-value unit tests plus `integer_true_division_*`, `floor_division_and_modulo`, `float_context_integer_literals`, `integer_to_float_rounding`, and `float_shortest_roundtrip_printing` fixtures |
 | Accepted ADR-0047 decimal separators and hexadecimal/binary/octal integer literals; exact-width bitwise operators; checked, wrapping, and saturating shifts; exact count typing/ranges; compound-store ordering; and MIR/direct parity | focused lexer/parser/sema/integer/MIR/native/runtime tests; literal and shift failure fixtures; the `bitwise_power` runtime fixture; `examples/numbers/bit_packing.au`; the executable Expressions Manual block; language-server and extension coverage; and the forced MIR/direct parity matrix |
+| Accepted ADR-0048 scalar math constants and functions: exact immutable `float64` constant bits, generic once-initialized module storage, exact function signatures, checked `int64` rounding conversions, IEEE-754 identity and exceptional-value classification, finite overflow and domain diagnostics, left-to-right once-only evaluation, and MIR/direct parity | `math_namespace_exposes_exact_generic_float64_constants`, `math_namespace_exposes_the_exact_float64_function_contract`, `math_host_builtins_follow_the_ratified_finite_contract`, `math_host_builtins_classify_every_exception_family`, `math_analysis_exposes_qualified_and_aliased_constant_details`, `math_analysis_completes_and_hovers_the_exact_public_surface`, and focused semantic tests; the `math_module_constants`, `math_module_functions`, and `math_log_domain` fixtures; `examples/numbers/scalar_math.au`; the executable [Math Module](/manual/math) block; compiler-bridge coverage; and the forced MIR/direct parity matrix |
 | Accepted ADR-0048 power, `round`, and `divmod`: right-associative precedence, exact numeric types, checked integer results, ties-to-even conversion, paired floor quotient/remainder, runtime classification, one-time evaluation, and MIR/direct parity | focused parser/sema/integer/runtime-value/MIR/native tests; `numeric_round_divmod`, `bitwise_power`, and numeric failure fixtures; `examples/numbers/bit_packing.au`; the executable Expressions Manual block; language-server and extension coverage; and the forced MIR/direct parity matrix |
+| Accepted ADR-0046 exact triple-quoted and raw string forms plus static f-string format specifications: delimiter and escape rules, no whitespace normalization, Unicode-scalar width and string precision, type-directed numeric codes, binary32 identity, left-to-right evaluation, focused diagnostics, formatter preservation, and MIR/direct parity | focused lexer/parser/sema/runtime-value/MIR/native tests; `string_literal_forms_and_format_specs` and `fstring_spec_*` fixtures; `examples/strings/literal_forms_and_formatting.au`; executable lexical and expression reference blocks; compiler-bridge and extension grammar/snippet tests; and the forced MIR/direct parity matrix |
+| Accepted ADR-0049 match guards and or-patterns: exact-`bool` guards, left-to-right alternatives, identical alternative bindings, guarded-arm reachability and exhaustiveness, delayed `match own` extraction, mutable candidate writeback before false continuation/failure/trap and every selected-arm exit, and MIR/direct parity; class patterns remain a provisional unimplemented disposition | focused parser/sema/MIR/analysis tests; the `match_guard*`, `match_own*`, `match_mut_guard*`, `or_pattern*`, guarded-exhaustiveness, and focused class-pattern-rejection fixtures; `examples/enums/match_guards_and_or_patterns.au`; the executable Enums and Match Manual block; compiler-bridge tests; and the forced MIR/direct parity matrix |
+| Accepted ADR-0050 module constants: inferred/annotated/public declarations, declaration-order scope, dependency-first and source-ordered eager once-only initialization, one defining storage identity, Copy versus shared non-Copy reads, move/mutation rejection, guarded re-entry, package visibility, analysis/editor exposure, cleanup, and MIR/direct parity | focused parser/sema/MIR/native/runtime/analysis tests; `module_constant*` check/run fixtures; multi-module and package dependency tests; `examples/modules/constants.au`; executable Names and Scopes, Statements, and Ownership Manual blocks; language-server compiler-bridge tests; and the forced MIR/direct parity matrix |
 | signed-i128-nanosecond Duration literals, exact two-limb direct ABI, constructors, checked arithmetic, `FloorDiv`, comparison, conversion, rendering, and invalid host timers | `duration_literals_scale_to_nonnegative_i128_nanoseconds_at_each_unit_boundary`, parser/MIR/native-codegen/runtime unit tests, `docs/manual/concurrency.md#aura-1`, Duration run/failure fixtures, native-runtime FFI tests, and the MIR/direct parity matrix |
 | persistent descriptor registrations, heap-ordered deadlines, direct Queue/task-completion/blocking-pool wakeups, wait-epoch race containment, one-winner cleanup, and event-or-deadline idle blocking without a periodic tick | `runtime_reactor` unit tests including `timers_fire_at_the_earliest_deadline_and_preserve_equal_deadline_order`, `one_persistent_fd_registration_aggregates_waiters_and_narrows_interest`, and `waker_coalescing_does_not_lose_inbox_entries_and_ready_is_deduplicated`; runtime-value direct-wakeup and cleanup tests; `scheduler_model` lost-wake/stale-epoch/one-winner state-space tests; `scheduler_mixed_wakeups_complete_in_mir_and_direct_backends`; `scripts/stress-scheduler.sh`; the contractual `scripts/bench-scalable-runtime.py` after-reactor run; and the MIR/direct parity matrix |
 | `yield_now` cooperative scheduling, zero-argument typing, explicit ready-set requeue, unit result, and backend parity | focused call-surface, semantic, MIR-runtime, native-codegen, analysis, language-server, and extension tests; the `yield_now` check/run fixtures; `examples/concurrency/yield_now.au`; and the forced MIR/direct parity matrix |
@@ -3750,21 +3860,22 @@ Exact diagnostic prose is normative only where a fixture or this Manual explicit
 | Accepted ADR-0036 typed runtime call frames and task ancestry, once-only pre-cleanup capture, per-frame source paths, human-note synthesis, additive diagnostic-schema-v1/LSP propagation, native private trap transport, normal-status distinction, and exact MIR/direct parity without frame masking | diagnostic, MIR-runtime, native-runtime, native-codegen, CLI cold/warm/concurrent-cache, LSP bridge, run-fail fixture, and complete forced-backend parity tests |
 | deterministic xoshiro256** seeding/output, unbiased half-open integers, 53-bit floats, Fisher-Yates writeback, identity/rendering, direct and transitive no-clone ownership, inferred generic and trait clone-safety contracts, and OS-secure integer/byte boundaries | `src/randomness.rs`; `random_rng_clone_safety_defers_generic_obligations_to_use_sites`, `imported_rng_clone_obligations_and_qualified_wrapper_identity_survive_namespaces`, and focused trait/operator/`From` semantic tests; `random_deterministic_sequences`, `random_projected_shuffle`, `random_identity_and_render`, `random_transitive_clone_rejected`, `random_secure_smoke`, `random_invalid_*`, `random_secure_bytes_request_ceiling`, and `random_secure_bytes_request_ceiling_i64_max` fixtures; verified clone-safety examples in `docs/manual/generics-and-traits.md`; native-runtime FFI and language-server tests; and the MIR/direct parity matrix |
 | `list[uint8]` bytes, strict UTF-8 conversion, lowercase/mixed-case hex, canonical padded base64, typed malformed-input offsets, raw SHA-256, shared inputs, and output-size preflights | `src/bytes_codec.rs` unit tests; `bytes_codecs_and_hashing`, `bytes_typed_errors`, and reserved-encoding fixtures; `examples/bytes/codecs_and_hashing.au`; the executable `docs/manual/bytes.md` fence; language-server tests; allocation-boundary tests; and the MIR/direct parity matrix |
-| Assertions: exact operand types, once-only left-to-right comparison and membership evaluation, bounded typed operand introspection, lazy once-only messages, exact default/custom/empty/whitespace text, `AU4001` keyword span, operand and cleanup precedence, structured JSON, top-level scripts, and no stripping | `assert_*` parse/check/run fixtures and compiler unit tests; assertion CLI tests for forced MIR/direct execution and function-level `aura test`; `examples/basics/assertions.au`; the executable `docs/manual/assertions.md` fence; language-server and extension packaging tests; and the MIR/direct parity matrix |
+| Provisional ADR-0045 assertion introspection: exact operand types, once-only left-to-right comparison and membership evaluation, shared-dispatch eligibility, bounded typed operand captures, lazy once-only messages, exact default/custom/empty/whitespace text, `AU4001` keyword span, operand and cleanup precedence, schema-1 structured fields, top-level scripts, and no stripping | `assert_*` parse/check/run fixtures and compiler unit tests; assertion CLI tests for forced MIR/direct execution and function-level `aura test`; `examples/basics/assertions.au`; the executable `docs/manual/assertions.md` fence; language-server and extension packaging tests; and the MIR/direct parity matrix |
+| Provisional ADR-0045 test runner: source-order function and file-level discovery, canonical names, literal case-sensitive `-k` after expansion, zero-match success, per-case isolated setup/case/teardown ordering, teardown-after-trap and structured secondary failure, one-time ordered parameter registration with capture-free functions, output capture, timeouts, normalized paths, and schema-versioned ordered JSON records | the `aura_test_*` CLI family covering discovery, filters, JSON, hooks, checked-module reuse, FFI, parameter registration, capture rejection, labels, and timeouts; `aura_test_maintained_assertions_example_pins_the_runner_contract`; `examples/basics/assertions.au`; Tutorial 23; the normative CLI and Tooling testing contract; and ADR-0045's completion matrix |
 | Application-level HTTP retry composition: retry only `503`, deterministic seed-42 jitter, exponential `Duration` backoff, final-attempt no-RNG/no-sleep behavior, explicit deadlines, and scoped resource cleanup | `examples/agents/retrying_network_worker.au` and `retrying_network_worker_runs_with_computed_backoff_on_both_backends` in `crates/aura/tests/cli.rs`, which pin the exact seven-request loopback trace on the MIR and forced-direct backends |
-| Callable-powered list algorithms: stable mutable natural/key sorting, once-only left-to-right key evaluation before mutation, trap-before-mutation, eager shared map/filter traversal, owned results, source retention, exact shared callback capabilities, and filter clone safety | `vec_algorithm_callbacks`, `vec_sort_requires_mut_receiver`, `vec_sort_rejects_non_orderable`, `vec_map_callback_requires_shared`, `vec_filter_rng_clone_safety`, and builtin-collision fixtures; focused semantic, MIR, runtime, native, analysis, and LSP tests; `examples/collections/vec_algorithms.au`; the executable Collections Manual block; and the MIR/direct parity matrix |
+| Callable-powered list algorithms: stable mutable natural/key sorting, once-only left-to-right key evaluation before mutation, trap-before-mutation, eager shared map/filter traversal, owned results, source retention, exact shared callback capabilities, and filter clone safety | `list_algorithm_callbacks`, `list_sort_requires_mut_receiver`, `list_sort_rejects_non_orderable`, `list_map_callback_requires_shared`, `list_filter_rng_clone_safety`, and builtin-collision fixtures; focused semantic, MIR, runtime, native, analysis, and LSP tests; `examples/collections/list_algorithms.au`; the executable Collections Manual block; and the MIR/direct parity matrix |
 | `control.retry`: immediate first attempt, every-Err retry policy, exact attempt budget, doubling Duration backoff, zero-delay sleep elision, no post-final sleep/multiply, exact last-error return, worker-trap/overflow/cancellation propagation, and both-backend behavior | `control_retry_surface` parse/check fixtures; `control_retry_basics` run fixture; focused compiler/runtime tests; `crates/aura/tests/control_retry.rs`; `examples/agents/retry_with_backoff.au`; the executable Control-Plane Manual block; and the MIR/direct parity matrix |
 | Accepted ADR-0037 expression closures: contextual bare/`mut`/`own` parameters, expression-only bodies, Copy snapshots, non-Copy move-at-creation, repeatable reads, consuming single-use calls, read-only environments, shared-capability rejection, structural Transfer, cleanup, and MIR/direct parity | lambda parser/check/run/failure fixture families; focused semantic, MIR, runtime, native-codegen, analysis, completion, language-server, and extension tests; `examples/basics/closures.au`; the executable Closures Manual block; and the forced MIR/direct parity matrix |
 | Accepted ADR-0039 eager owned comprehensions: list/set/dictionary forms, exact-Boolean filters, progressive non-leaking target scope, nested outer-major order, left-to-right filters, dictionary key-before-value replacement, every bare iterable including Queue receive ownership, explicit clone/move behavior, ADR-0037 capture interaction, generator/modifier teaching diagnostics, cleanup, and MIR/direct parity | comprehension parser/check/run/failure fixture families; focused semantic, MIR, runtime, analysis, completion, language-server, and extension tests; `examples/collections/comprehensions.au`; the executable Collections Manual block; and the forced MIR/direct parity matrix |
 | Accepted ADR-0040 owned list/str slices under the unified ADR-0043 index domain: all omitted endpoint forms, `int64` endpoints with scoped lossless widening, once-only negative normalization, no clamping, invalid/reversed `AU4003`, Unicode-scalar str O(n) behavior, list clone-safety and task-repeatability, retained evaluate-once order, source/result independence, reserved step/assignment `AU2005`, str integer-index rejection, and MIR/direct parity | slice parser/check/run/failure fixture families; focused semantic, MIR, runtime, analysis, completion, language-server, and extension tests; `examples/collections/slices.au`; the executable Collections Manual block; and the forced MIR/direct parity matrix |
 | Accepted ADR-0041 contiguous numeric Arrays and explicit integer modes: four exact dtypes, rank-at-least-one row-major owned storage, zero dimensions, constructor/count checks, multidimensional indexing, first-axis copy slices, exact-shape/scalar kernels, float-only division, deterministic row-major map/reductions, `float64` mean, checked/wrapping/saturating integer behavior, `AU4002` checked Array overflow and `AU4004` floating Array zero-divisor failures, `AU4003` coordinate/slice bounds, `AU4005` allocation/element-count failures, `AU4007` shape/rank/count/empty-reduction failures, and no array-shape broadcasting/views/promotion/accelerator | numeric-array semantic/MIR/runtime/native/parity fixture families, including synchronized checked-overflow and floating-zero-divisor diagnostics; compiler analysis, language-server, and extension protocol tests; `examples/numbers/numeric_arrays.au`; the executable Numeric Arrays Manual block; the tested `bench-numeric-arrays.py` raw/summary evidence protocol; and the forced MIR/direct parity matrix |
 | recursive JSON parse/dump semantics, exact numeric classification, typed parse errors, deterministic formatting, accessors, ownership, and resource limits | JSON codec/runtime-value unit tests, including exact materialized-node boundaries and deterministic allocation-failure injection; `json_dynamic_values`, JSON ownership and run-fail fixtures; `examples/json/dynamic_values.au`; the executable `docs/manual/json.md` fence; language-server tests; and the MIR/direct parity matrix |
-| dict duplicate-key replacement, key-before-value effects, indexed-read/simple-write ownership, and missing-key traps | `map_literal_duplicate_keys`, `map_index_non_copy_requires_explicit_clone`, `map_index_assignment_consumes_noncopy_key`, and `map_index_missing_key` fixtures plus the MIR/native parity matrix |
+| dict duplicate-key replacement, key-before-value effects, indexed-read/simple-write ownership, and missing-key traps | `dict_literal_duplicate_keys`, `dict_index_non_copy_requires_explicit_clone`, `dict_index_assignment_consumes_noncopy_key`, and `dict_index_missing_key` fixtures plus the MIR/native parity matrix |
 | Supplied/default order and named enum-argument source order with declaration-slot binding | `explicit_and_default_argument_order` plus the MIR/native parity matrix |
 | Copy-value capture, immediate f-string rendering, and receiver-before-argument effects | `left_to_right_value_snapshotting` plus the MIR/native parity matrix |
-| Compound binary dispatch for root/projected targets, copy-target capture, retained non-copy `AU3002`, and copy-only list/dict indexed targets | `operator_traits`, `left_to_right_value_snapshotting`, `compound_noncopy_target_rejects_rhs_mutation`, `vec_compound_assignment_noncopy_element_rejected`, and `map_compound_assignment_noncopy_value_rejected` fixtures plus the MIR/native parity matrix |
-| Dedicated `AU3005`/`AU3006` indexed ownership codes, `AU3003` mutable-receiver classification, and `AU2005` str-constructor guidance | `vector_index_non_copy_requires_explicit_clone`, `map_index_non_copy_requires_explicit_clone`, `vec_compound_assignment_noncopy_element_rejected`, `map_compound_assignment_noncopy_value_rejected`, `immutable_mutating_method`, and `string_constructor_not_supported` fixtures plus the compiler-bridge tests |
-| Clone-safety-aware `AU3005` indexed-read guidance, so the recommended recovery is never rejected in turn by `AU3007` | `random_vec_index_requires_transfer`, `random_transitive_map_index_requires_transfer`, `generic_vec_index_clone_safety_guidance`, and `generic_map_index_clone_safety_guidance` fixtures, the `random_index_remove_transfers_ownership` transfer fixture, and the compiler-bridge propagation test |
+| Compound binary dispatch for root/projected targets, copy-target capture, retained non-copy `AU3002`, and copy-only list/dict indexed targets | `operator_traits`, `left_to_right_value_snapshotting`, `compound_noncopy_target_rejects_rhs_mutation`, `list_compound_assignment_noncopy_element_rejected`, and `dict_compound_assignment_noncopy_value_rejected` fixtures plus the MIR/native parity matrix |
+| Dedicated `AU3005`/`AU3006` indexed ownership codes, `AU3003` mutable-receiver classification, and `AU2005` str-constructor guidance | `list_index_non_copy_requires_explicit_clone`, `dict_index_non_copy_requires_explicit_clone`, `list_compound_assignment_noncopy_element_rejected`, `dict_compound_assignment_noncopy_value_rejected`, `immutable_mutating_method`, and `string_constructor_not_supported` fixtures plus the compiler-bridge tests |
+| Clone-safety-aware `AU3005` indexed-read guidance, so the recommended recovery is never rejected in turn by `AU3007` | `random_list_index_requires_transfer`, `random_transitive_dict_index_requires_transfer`, `generic_list_index_clone_safety_guidance`, and `generic_dict_index_clone_safety_guidance` fixtures, the `random_index_remove_transfers_ownership` transfer fixture, and the compiler-bridge propagation test |
 | Dedicated `AU2007` builtin function redefinition code, distinct from the `AU2006` builtin method collision | `builtin_function_names_cannot_be_redefined` fixture |
 | Access-kind-specific `AU3002` recovery help, naming the read, mutation, or consumption that actually conflicts | `nested_consume_and_borrow_same_call`, `call_own_then_projected_copy_read_rejected`, and `binary_left_borrow_rejects_later_mutation` fixtures |
 | Current class-field-default callable limit | `class_field_default_user_function_not_supported` fixture |
@@ -3773,7 +3884,7 @@ Exact diagnostic prose is normative only where a fixture or this Manual explicit
 | Accepted ADR-0017 one-time list/set own-iteration selection and Queue handle capture without source-binding retargeting | `own_iteration_captures_collection`, `queue_iteration_captures_handle`, and the MIR/native parity matrix |
 | Queue receive-item ownership, accepted bare iteration, rejected `own`/`mut` iteration modifiers, and progress after an earlier producer completes while CPU burners exceed the default worker count | `queue_bare_iteration_ownership`, `queue_own_iteration_rejected`, the maintained `mut` rejection fixtures, `check_and_direct_backend_reject_queue_iteration_modifiers`, and `queue_iteration_consumers_complete_with_more_cpu_burners_than_default_workers` on MIR and direct |
 | Accepted ADR-0034 typed heterogeneous `select`: exact inference, ownership, cancellation-first/lowest-index arbitration, atomic registration, one winner, loser cleanup, cross-worker wakeups, nested generic payload typing, and MIR/direct parity | `typed_select_*` compiler/runtime tests, `select_*` fixtures and CLI tests, the maintained select example, compiler-bridge/editor coverage, and the forced-backend parity matrix |
-| Builtin trait-method no-shadowing across every builtin target, inherited-default containment, and direct builtin precedence | `builtin_queue_trait_method_collision`, `builtin_task_inherited_trait_method_collision`, `builtin_task_group_trait_method_collision`, `builtin_vec_trait_method_collision`, `builtin_string_trait_method_collision`, and `builtin_file_trait_method_collision` fixtures plus `builtin_method_names_cannot_be_shadowed_on_any_builtin_target` and `direct_backend_prefers_builtin_handle_member_if_collision_reaches_mir` |
+| Builtin trait-method no-shadowing across every builtin target, inherited-default containment, and direct builtin precedence | `builtin_queue_trait_method_collision`, `builtin_task_inherited_trait_method_collision`, `builtin_task_group_trait_method_collision`, `builtin_list_trait_method_collision`, `builtin_string_trait_method_collision`, and `builtin_file_trait_method_collision` fixtures plus `builtin_method_names_cannot_be_shadowed_on_any_builtin_target` and `direct_backend_prefers_builtin_handle_member_if_collision_reaches_mir` |
 | Fixed 256 MiB filesystem, 64 MiB stream/TLS-configuration, and 16 MiB incoming HTTP limits | injectable-limit and sparse-file tests in `src/runtime_value_tests.rs` plus MIR/forced-direct filesystem and HTTP tests in `crates/aura/tests/cli.rs` |
 | module and package resolution, module aliases, per-entry from-import aliases, canonical target identity, alias visibility/collisions, and alias-aware analysis | `crates/aura-compiler/tests/modules.rs`, `tests/packages.rs`, `src/package_tests.rs`, the `import_aliases` parity fixture, `examples/modules/import_aliases.au`, and compiler-service/LSP alias tests |
 | MIR semantics and runtime behavior | `src/mir_tests.rs`, `src/mir_runtime_tests.rs`, `tests/fixtures/run-pass`, `tests/fixtures/run-fail` |
@@ -4182,7 +4293,8 @@ This page documents known current limits of the Aura compiler and runtime.
 ## Language
 
 - Identifiers are ASCII; Unicode is supported in string contents, not identifier spelling.
-- A physical tab anywhere on a source line is rejected, including inside a comment or string literal. Use `\t` to encode a tab in a string.
+- A physical tab outside a triple-quoted string is rejected. Inside a
+  triple-quoted string it is exact content. Use `\t` in an ordinary string.
 - Source lists do not accept trailing commas except the required comma in
   singleton tuple values, types, targets, and patterns. Multi-element tuples
   still reject a trailing comma.
@@ -4199,16 +4311,24 @@ This page documents known current limits of the Aura compiler and runtime.
 - Empty list, dictionary, and set literals need an expected collection type.
 - Class field defaults cannot call user-defined functions in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `str(...)` is not a constructor; use string literals and string methods.
-- Ordinary strings may use single or double quotes, but triple-quoted, raw, and byte-string literals are not implemented. F-strings remain double-quoted.
+- Ordinary and triple-quoted strings may use single or double quotes. Raw
+  strings are single-line. Raw triple strings, raw f-strings, and byte-string
+  literals are not implemented. F-strings remain double-quoted and use static
+  format specifications; dynamic width, nested fields, conversion flags,
+  locale formatting, and the `g`, `G`, `n`, `c`, `#`, `0`, and `=` forms are
+  not implemented.
 - `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned
   Unicode-scalar slicing, but no integer indexing, `chars()`, `ord()`, or
   `chr()`.
+- One concatenated or formatted `str` result is limited to 64 MiB. Aura
+  preflights the next append and reports `AU4005` without committing an
+  oversized partial result.
 - `list[uint8]` is the bytes type. UTF-8 conversion is explicit; the reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and HMAC are not implemented.
 - Physical newlines continue a logical line only while `(`, `[`, or `{`
   remains open. Continuation indentation is visual; delimiter kinds must
   match.
-- Backslash continuation is not implemented. Ordinary strings and f-strings
-  remain single-line.
+- Backslash continuation is not implemented. Ordinary, raw, and f-strings
+  remain single-line; triple-quoted ordinary strings may span physical lines.
 - Tuples have fixed structural types, recursive unpack targets and patterns,
   copy-only constant indexing, and non-consuming recursive `==` and `!=` for
   operands of the same static tuple type. There is no empty tuple,
@@ -4756,8 +4876,7 @@ imported module is never mislabeled with the entry module's path.
 
 The arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while continuing to validate
-the fields they use. The compiler-service semantic-interface version remains
-`2`: adding diagnostic metadata does not change checked-source meaning.
+the fields they use. The compiler-service semantic-interface version is `5`.
 
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the
@@ -4830,6 +4949,15 @@ The bare form preserves the iterable's ordinary contract, including owned
 receive items for Queue. Related diagnostics
 cover missing `mut`, consuming calls, integer `/`, typed `self: Type`, tab
 indentation, and single-quoted f-strings.
+
+String literal and format diagnostics use the smallest proving location.
+`AU1001` reports malformed or unterminated ordinary, triple-quoted, and raw
+strings, including a later physical line that contains an invalid escape.
+`AU1101` reports malformed static format grammar, nested fields, unsupported
+codes, and width or precision above `1_000_000`. `AU2002` reports a valid
+specification that is incompatible with the interpolation's static type.
+Constructed string output above the 64 MiB limit reports `AU4005` before the
+oversized append mutates the partial result.
 
 Owned list and str slicing is implemented, but step syntax and slice
 assignment remain reserved. They use `AU2005` with these exact messages:
@@ -5109,7 +5237,9 @@ match ready:
         print("not ready")
 ```
 
-The wildcard binds nothing, may appear only once, and must be the final arm. Duplicate and provably unreachable arms are rejected.
+The wildcard binds nothing. An unguarded wildcard may appear only once and
+must be the final arm. A guarded wildcard may appear earlier because its guard
+can be false. Duplicate and provably unreachable unguarded arms are rejected.
 
 ## Match Expressions
 
@@ -5156,6 +5286,31 @@ multi-element trailing commas, and rest/star patterns are rejected.
 
 Each pattern binding is local to that arm and cannot shadow a name already visible there. `_` never introduces a binding. See [Names And Scopes](/manual/names-and-scopes#pattern-scope).
 
+## Guards And Alternative Patterns
+
+Add `if` after a pattern when structural matching needs one exact Boolean
+condition. Join alternatives with `|` when one arm accepts several shapes:
+
+    match response:
+        case Result.Ok(value) if value > 0:
+            print("positive")
+        case Result.Ok(value) | Result.Err(value):
+            print(value)
+
+Alternatives are probed from left to right. The first structural match
+supplies the guard and body bindings, and the guard runs once. Every
+alternative must bind exactly the same names with identical types and
+capabilities. Duplicate or subsumed alternatives are rejected.
+
+A guard must have exactly type `bool`. A false guard continues with the next
+arm. A guarded arm contributes no exhaustiveness coverage, including
+`case _ if condition`. A trap or propagated failure remains primary.
+
+`match own` probes before extracting a non-copy payload. Candidate bindings
+may be inspected in the guard but cannot move until the guard commits the arm.
+`match mut` publishes guard mutations before false continuation, `try`
+propagation, or trap cleanup, so later arms and cleanup observe the update.
+
 ## Qualified And Short Variant Patterns
 
 The fully qualified style is always valid:
@@ -5186,13 +5341,14 @@ Use the qualified form in public examples and reference material when ambiguity 
 bindings:
 
 ```python
-result: Result[str, str] = Result.Ok("hello")
+def main():
+    result: Result[str, str] = Result.Ok("hello")
 
-match own result:
-    case Result.Ok(message):
-        print(message)
-    case Result.Err(error):
-        print(error)
+    match own result:
+        case Result.Ok(message):
+            print(message)
+        case Result.Err(error):
+            print(error)
 ```
 
 Use bare `match` to retain the scrutinee and expose shared non-copy payload
@@ -5240,7 +5396,10 @@ match code:
 
 The literal must have the scrutinee's exact scalar type after contextual literal checking. Duplicate literals and arms after a covering wildcard are unreachable and rejected.
 
-Boolean matching is exhaustive when both `true` and `false` are covered. Integer, floating-point, and string domains are open-ended and therefore require a final wildcard. Classes, collections, resources, and arbitrary other values are not match scrutinee types in Aura 0.2.
+Boolean matching is exhaustive when both `true` and `false` are covered by
+unguarded arms. Integer, floating-point, and string domains are open-ended and
+therefore require a final unguarded wildcard. Class patterns are deferred;
+use an explicit enum/tag representation or a wildcard and ordinary code.
 
 ## Builtin Enum Shapes
 
@@ -5313,14 +5472,17 @@ proven-disjoint sibling write does not. Aura performs no hidden payload clone.
 
 ## Diagnostics
 
-`AU1101` reports malformed enum, variant, match, arm, or pattern syntax.
+`AU1101` reports malformed enum, variant, match, arm, guard, or or-pattern syntax.
 `AU2001` reports unknown enum types, variants, and payload types. `AU2002`
 covers generic inference or bounds, constructor/payload type mismatch,
-literal-pattern type mismatch, and incompatible match-expression results.
+literal-pattern type mismatch, a non-Boolean guard, alternative binding type
+mismatch, and incompatible match-expression results.
 `AU2004` reports invalid variant-constructor argument binding. `AU2999` covers
 duplicate variants, invalid payload shapes, missing or unreachable arms,
-non-exhaustive matches, unsupported pattern forms, and remaining enum/match
-rejections. `AU3001` reports use after `match own` or a payload move.
+non-exhaustive matches, mismatched alternative bindings, duplicate/subsumed
+alternatives, class patterns, unsupported pattern forms, and remaining enum/match
+rejections. `AU3001` reports use after `match own`, a payload move, or moving
+an owned candidate before its guard commits.
 `AU3002` reports moving through a shared match, overlapping mutable matches, or
 requiring a mutable match place.
 `AU3003` reports mutation or reassignment through an immutable enum/payload
@@ -5335,7 +5497,8 @@ resource or I/O failure.
 
 User and builtin generic enums, structural enum equality, construction and
 inference, statement and expression matches, exhaustiveness, nested patterns,
-short variants, scalar literal patterns, owned/shared/mutable matching, and
+short variants, scalar literal patterns, guards, or-patterns,
+owned/shared/mutable matching, and
 borrowed matching are implemented for MIR execution and direct native
 generation. Both backends receive the same checked arm decision tree and are
 forced to agree on selected arms, payload values, writeback, and primary
@@ -5343,8 +5506,8 @@ diagnostics.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 has no match guards, or-patterns, range/rest patterns, named-payload
-patterns, class/collection destructuring, top-level catch-all binding pattern,
+Aura has no range/rest patterns, named-payload patterns, class/collection
+destructuring, top-level catch-all binding pattern,
 arbitrary predicate pattern, Duration/f-string pattern, or inline suite for
 statement matches. Expression arms contain exactly one expression.
 `TaskResult`, `SelectOutcome`, `WaitAny`, and `WaitAll` remain move outcome
@@ -5360,9 +5523,10 @@ statement and expression matches, exhaustiveness, nested enum patterns, scalar
 literal patterns, wildcards, short variants, and borrowed matching are
 implemented for the post-Phase 1.5 surface. Match expressions, like every
 expression, produce owned results; a non-copy result must come from an owned
-source. Tuple patterns are implemented under Accepted ADR-0026. Guards,
-or-patterns, class/collection destructuring beyond the tuple kernel, and
-arbitrary predicate patterns are unavailable.
+source. Tuple patterns are implemented under Accepted ADR-0026. Guards and
+or-patterns are implemented under Accepted ADR-0049. Class/collection
+destructuring beyond the tuple kernel and arbitrary predicate patterns are
+unavailable.
 
 ## Source: docs/manual/execution-model.md
 
@@ -5426,6 +5590,9 @@ to both the conflicting access and the retained-borrow origin. This applies to
 name roots and projected member places, and no backend may insert a hidden deep
 clone. Each f-string interpolation is converted to its rendered `str` at
 its own position before the next interpolation begins.
+Each append preflights the maintained 64 MiB constructed-string limit. An
+oversized result reports `AU4005`, does not evaluate a later interpolation,
+and releases the partial output through ordinary failure cleanup.
 
 A list or str slice captures its base, then any written start, then any
 written end. A non-Copy base remains retained while the endpoint expressions
@@ -5801,7 +5968,7 @@ tasks, not the general default. The complete compiled Aura HTTP example,
 including its MIR/direct language-execution frames, proved unsafe when
 256 KiB was the global task default and succeeds with the 512 KiB default.
 The separate isolated runtime round trip that forces protocol callers to
-256 KiB proves that service workers now own the deep host protocol frames; it
+256 KiB proves that service workers own the deep host protocol frames; it
 does not measure the full compiled task stack.
 
 `yield_now()` places the current lightweight task back in its worker's ready
@@ -6378,7 +6545,7 @@ type the value must have:
 | --- | --- | --- | --- |
 | `list[T]` | element membership | `contains` | `T` |
 | `set[T]` | element membership | `contains` | `T` |
-| `dict[K, V]` | key membership | `contains_key` | `K` |
+| `dict[K, V]` | key membership | dictionary key lookup | `K` |
 | `str` | substring containment | `contains` | `str` |
 
 Any other container type is rejected with `AU2003`; a value whose type is not
@@ -6728,10 +6895,15 @@ next interpolation begins:
 name = "aura"
 count = 3
 message = f"{name}: {count}"
+report = f"{name:<12s} {count:>8,d}"
 ```
 
-Interpolation contents are ordinary expressions. String spelling, escapes,
-literal braces, and unsupported formatting syntax are defined by
+Interpolation contents are ordinary expressions. A top-level colon introduces
+a statically checked format specification with fill, alignment, sign, width,
+decimal grouping, precision, and a closed set of string and numeric type codes.
+Formatting uses the interpolation value's exact static numeric width, so a
+`float32` is formatted from its binary32 value. String spelling, escapes,
+literal braces, and the complete format grammar are defined by
 [Lexical Structure](/manual/lexical-structure#f-strings).
 
 ## Match Expressions
@@ -8525,9 +8697,10 @@ meaning only in the positions defined below.
 
 ## Strings And F-Strings
 
-`STRING` is a single-line ordinary string delimited by a matching pair of
-single quotes or double quotes. Both forms produce the same token value and
-accept the same escapes:
+`STRING` is an ordinary, triple-quoted, or raw string. Ordinary strings use a
+matching pair of single or double quotes. Triple-quoted strings use three
+matching single or double quotes and may span physical lines. Ordinary and
+triple-quoted strings accept the same escapes:
 
 | Escape | Meaning |
 | --- | --- |
@@ -8541,8 +8714,15 @@ accept the same escapes:
 | `\u{H...}` | Unicode scalar from one or more hexadecimal digits |
 
 An invalid scalar, unknown escape, missing digit, or missing or mismatched
-closing quote is a lexical error. Triple-quoted, raw, and byte-string literals
-are not part of Aura 0.2. There is no separate character-literal token.
+closing quote is a lexical error. Triple-quoted values preserve every scalar
+between their delimiters. Aura does not trim the first or last newline, remove
+indentation, or normalize whitespace.
+
+Raw strings use lowercase `r` immediately followed by one single or double
+quote. Backslashes are content. A backslash may retain the active quote inside
+the value, with both characters preserved. A raw string cannot span a physical
+line or end in an odd run of backslashes. Raw triple strings, raw f-strings,
+and byte strings are not tokens. There is no separate character-literal token.
 
 `FSTRING` begins with `f"` and ends at the matching double quote.
 `{ expression }` interpolates an ordinary Aura expression. Two opening braces insert one
@@ -8550,10 +8730,24 @@ literal opening brace, and two closing braces insert one literal closing brace.
 A lone closing brace outside an interpolation is also literal in Aura 0.2.
 Interpolations may contain nested braces and ordinary single- or double-quoted
 strings; braces inside those strings do not change interpolation depth. Empty
-or invalid interpolations are rejected. Single-quoted f-strings, conversion
-flags, and format-specifier mini-languages are not supported.
+or invalid interpolations are rejected. An interpolation may end with one
+top-level `:` followed by this static format grammar:
 
-Although `\t` creates a tab in a decoded string, a literal physical tab character anywhere in a source line is rejected before tokenization, including inside a comment or string.
+```text
+[[fill]align] [sign] [width] [","] ["." precision] [type]
+```
+
+`align` is `<`, `^`, or `>`; `sign` is `+`, `-`, or a space; and `type` is
+`d`, `f`, `e`, `x`, `X`, `b`, `o`, `%`, or `s`. Width and precision are
+decimal values through `1_000_000`. The parser accepts a complete expression
+before looking for the separator, so colons inside slices, calls, dictionaries,
+and other nested delimiters remain expression syntax. Nested fields and dynamic
+specifications are rejected. Single-quoted f-strings and conversion flags are
+not supported.
+
+Although `\t` creates a tab in a decoded ordinary string, a physical tab is
+rejected outside a triple-quoted string. A physical tab inside a triple-quoted
+string is exact string content.
 
 ## Comments, Physical Lines, And Indentation
 
@@ -8586,9 +8780,10 @@ kind. A delimited expression-form `match` is a layout island: its header and
 arms retain the layout tokens required by the match productions even though an
 outer delimiter remains open.
 
-Backslash continuation is not part of Aura 0.2. Ordinary strings and
-f-strings remain single-line, and existing comma-separated forms do not gain a
-trailing comma.
+Backslash continuation is unavailable. Ordinary, raw, and f-strings remain
+single-line. Triple-quoted ordinary strings may span physical lines without
+creating layout tokens. Existing comma-separated forms do not gain a trailing
+comma.
 
 ## Punctuation And Operators
 
@@ -8607,7 +8802,10 @@ There is no semicolon, assignment expression, unary plus, or lambda arrow.
 ```ebnf
 module = { module-element }, EOF ;
 
-module-element = import-declaration | item | statement ;
+module-element = import-declaration | module-constant | item | statement ;
+
+module-constant
+    = [ "public" ], IDENT, [ ":", type ], "=", expression, NEWLINE ;
 
 import-declaration
     = "import", identifier-path, [ "as", import-alias ], NEWLINE
@@ -8621,7 +8819,13 @@ identifier-path = identifier, { ".", identifier } ;
 identifier      = IDENT | "from" ;
 ```
 
-Imports, items, and executable top-level statements may be interleaved syntactically. The compiled module represents imports, items, and top-level statements as separate categories; programs MUST NOT depend on their original cross-category interleaving as an execution order.
+Imports, module constants, items, and executable top-level statements may be
+interleaved syntactically. Imports resolve before initializer checking. Module
+constants initialize after their dependencies and in declaration source order.
+Executable entry statements run only after constant initialization completes.
+The compiled module represents these as separate categories; programs MUST use
+the defined category ordering and MUST NOT infer another execution order from
+cross-category interleaving.
 
 An `as` clause binds the complete imported module or declaration under the
 written local alias. A from-import may mix direct and aliased names in one
@@ -8954,9 +9158,13 @@ match-statement
       { match-statement-arm }, DEDENT ;
 
 match-statement-arm
-    = "case", pattern, ":", NEWLINE, suite ;
+    = "case", pattern, [ "if", expression ],
+      ":", NEWLINE, suite ;
 
 pattern
+    = closed-pattern, { "|", closed-pattern } ;
+
+closed-pattern
     = "_"
     | BOOLEAN
     | STRING
@@ -8974,7 +9182,8 @@ variant-pattern
       [ "(", [ pattern, { ",", pattern } ], ")" ] ;
 
 tuple-pattern
-    = "(", pattern, ",", ")"
+    = "(", pattern, ")"
+    | "(", pattern, ",", ")"
     | "(", pattern, ",", pattern,
       { ",", pattern }, ")" ;
 ```
@@ -8986,9 +9195,14 @@ Pattern parsing uses these contextual rules:
 - a dotted name, a capitalized name, or any name followed by parentheses is a variant pattern
 - payload patterns are positional even when the variant declaration used named payload fields
 - a parenthesized comma form is a fixed-arity recursive tuple pattern
+- `|` has the lowest pattern precedence and joins alternatives
+- parentheses group one pattern when no comma is present
 
-There are no guards, alternatives, ranges, collection destructuring, rest
-patterns, named-payload patterns, duration patterns, or f-string patterns.
+Every or-pattern alternative must bind the same names with identical exact
+types and capabilities. A guard is an ordinary expression checked as exactly
+`bool`; its pattern bindings are in scope. There are no ranges, collection
+destructuring, rest patterns, named-payload patterns, duration patterns, or
+f-string patterns.
 `match mut` rejects a tuple pattern because mutable tuple
 reconstruction/writeback is not part of the minimal surface. Statement match
 arms always contain suites; `case pattern: statement` is not valid.
@@ -9246,7 +9460,7 @@ match-expression
       { match-expression-arm }, DEDENT ;
 
 match-expression-arm
-    = "case", pattern, ":",
+    = "case", pattern, [ "if", expression ], ":",
       ( expression, match-expression-arm-end
       | NEWLINE, INDENT, expression, statement-end, DEDENT ) ;
 
@@ -9280,16 +9494,14 @@ The grammar intentionally excludes:
 
 - semicolons and multiple statements on one physical line
 - backslash line continuation
-- multiline ordinary strings and f-strings
+- multiline f-strings; multiline ordinary text uses triple quotes
 - local item declarations, decorators, and attributes
 - wildcard/aliased/relative import syntax
 - ordinary trailing commas other than the required singleton-tuple comma
-- match guards, alternative patterns, and collection patterns
+- collection, range, rest, and class patterns
 - call-site capability annotations
 - exception statements, `raise`, and `yield`
 - generator expressions and generator functions
-- detached `spawn`, statement-form `select`, and proposal-only concurrency
-  syntax; the maintained `select(source, ...)` is an ordinary call expression
 
 If a form is absent from this grammar, examples and books must not present it as implemented Aura.
 
@@ -9990,8 +10202,9 @@ also introduces a mutable local binding.
 def replace(from: str, to: str) -> str:
     return from + to
 
-mut from = "left"
-from = replace(from=from, to="right")
+def main():
+    mut from = "left"
+    from = replace(from=from, to="right")
 ```
 
 Several other spellings are lexed as ordinary identifiers and become special only in a defined context:
@@ -10096,7 +10309,7 @@ and a closer placed on its own line. See
 [Expressions](/manual/expressions#match-expressions) and
 [Grammar](/manual/grammar#match-expressions).
 
-Backslash continuation is not implemented. Ordinary strings and f-strings remain single-line;
+Backslash continuation is not implemented. Ordinary, raw, and f-strings remain single-line;
 delimiters inside them do not continue source, and an f-string interpolation
 cannot cross a physical newline.
 
@@ -10221,9 +10434,33 @@ Both delimiters produce a `str` and support the same escapes:
 | `\u{H...}` | Unicode scalar from one or more hexadecimal digits |
 
 Unknown escapes, invalid Unicode scalars, missing hexadecimal digits, and
-missing or mismatched closing quotes are lexical errors. Triple-quoted, raw,
-and byte-string literals are not part of Aura 0.2. A one-character literal
-such as `'x'` is a `str`, not a distinct character type.
+missing or mismatched closing quotes are lexical errors. A one-character
+literal such as `'x'` is a `str`, not a distinct character type.
+
+Three matching quotes create an exact multiline string:
+
+```python
+prompt = """Classify this request.
+Return one label and one reason.
+"""
+```
+
+The value contains every scalar between the delimiters. Aura performs no
+dedent, margin calculation, trimming, leading-newline removal, trailing-newline
+removal, or Unicode normalization. Escapes retain their ordinary meaning.
+Physical tabs inside the delimiters are content.
+
+A lowercase `r` creates a single-line raw string:
+
+```python
+path = r"C:\agents\run"
+pattern = r'\d+\.\d+'
+```
+
+Backslashes are content. A backslash may retain the active quote inside the
+value, and both characters remain. A raw string cannot end in an odd run of
+backslashes or contain a physical newline. Raw triple strings and byte strings
+are unavailable.
 
 A string literal has type `str`. See [Types](/manual/types) for ownership and [Execution Model](/manual/execution-model#evaluation-order) for expression evaluation order.
 
@@ -10247,10 +10484,33 @@ Use two consecutive opening braces for a literal opening brace. Two consecutive 
 print(f"{{name}} = {name}")
 ```
 
-F-strings support the same escapes as ordinary strings. F-strings themselves
-remain double-quoted: `f'...'` is not Aura 0.2 syntax. They do not support
-conversion flags such as `!r` or a format-specifier mini-language.
-Interpolations are evaluated from left to right and the result is an owned
+F-strings support the same escapes as ordinary strings and remain
+double-quoted. An interpolation accepts a static format specification after a
+top-level colon:
+
+```python
+def main():
+    count: int64 = 1234567
+    ratio: float32 = 0.875
+    label = "Aura"
+    print(f"{count:>12,d}")
+    print(f"{ratio:+.2%}")
+    print(f"{label:·^16.8s}")
+```
+
+The grammar is `[[fill]align][sign][width][,][.precision][type]`. Alignment is
+`<`, `^`, or `>` and type is `d`, `f`, `e`, `x`, `X`, `b`, `o`, `%`, or
+`s`. Strings default to left alignment and numbers to right alignment. Width
+counts Unicode scalars and never truncates. `s` precision is the maximum
+scalar count. Numeric precision uses ties-to-even rounding. Decimal grouping
+is available with `d`, `f`, and `%`. Width and precision are limited to
+`1_000_000`.
+
+Aura parses the complete interpolation expression before recognizing the
+top-level separator. Colons inside nested slices, dictionaries, calls, and
+collection literals remain part of the expression. Dynamic specifications,
+nested fields, conversion flags, and single-quoted f-strings are unavailable.
+Interpolations evaluate once from left to right and the result is an owned
 `str`.
 
 ## Complexity Limits
@@ -10316,9 +10576,10 @@ the same lexical language; there is no backend-specific lexer.
 
 ## Limits And Implementation-Defined Behavior
 
-Identifiers are ASCII, source is UTF-8, physical tabs are rejected,
+Identifiers are ASCII, source is UTF-8, physical tabs are rejected outside
+triple-quoted string content,
 continuation requires an unmatched source delimiter, ordinary lists reject
-trailing commas, backslash continuation and multiline ordinary/f-strings are
+trailing commas, backslash continuation and multiline f-strings are
 unavailable, and literal magnitude and parser-complexity caps are fixed by
 this chapter and [Current Limits](/manual/current-limits). Continuation
 indentation is not semantically significant, but delimiter matching, token
@@ -10328,12 +10589,198 @@ implementation choices.
 ## Status
 
 The forms described as accepted above are implemented. Delimiter continuation
-and its layout/diagnostic policy are accepted under ADR-0025. Raw, byte,
-triple-quoted, and single-quoted
-f-strings; alternate integer bases; digit separators; block comments;
-semicolons; ordinary trailing commas other than the required singleton-tuple
-comma; backslash continuation; and multiline string or f-string literals are
-unavailable, not partially implemented.
+and its layout/diagnostic policy are accepted under ADR-0025. Raw triple
+strings, raw f-strings, byte strings, single-quoted f-strings, block comments,
+semicolons, ordinary trailing commas other than the required singleton-tuple
+comma, backslash continuation, and multiline f-string literals are unavailable.
+
+## Source: docs/manual/math.md
+
+# Math Module
+
+The `math` module provides exact binary64 constants plus scalar `float64`
+rounding, exponentiation, exponential, logarithmic, and trigonometric
+functions. Every function input is explicitly `float64`; the module performs
+no implicit numeric conversion.
+
+## Public API
+
+| API | Signature | Contract |
+| --- | --- | --- |
+| `math.pi` | `float64` constant | Nearest binary64 value to pi, bits `0x400921fb54442d18`. |
+| `math.e` | `float64` constant | Nearest binary64 value to Euler's number, bits `0x4005bf0a8b145769`. |
+| `math.inf` | `float64` constant | Positive infinity, bits `0x7ff0000000000000`. |
+| `math.nan` | `float64` constant | Canonical quiet NaN, bits `0x7ff8000000000000`. |
+| `math.floor` | `floor(value: float64) -> int64` | Greatest integer less than or equal to `value`. |
+| `math.ceil` | `ceil(value: float64) -> int64` | Least integer greater than or equal to `value`. |
+| `math.trunc` | `trunc(value: float64) -> int64` | Integer obtained by discarding the fractional part toward zero. |
+| `math.pow` | `pow(base: float64, exponent: float64) -> float64` | Binary64 exponentiation under the exceptional-value policy below. |
+| `math.exp` | `exp(value: float64) -> float64` | Binary64 base-e exponential. |
+| `math.log` | `log(value: float64) -> float64` | Binary64 natural logarithm. |
+| `math.log2` | `log2(value: float64) -> float64` | Binary64 base-2 logarithm. |
+| `math.log10` | `log10(value: float64) -> float64` | Binary64 base-10 logarithm. |
+| `math.sin` | `sin(value: float64) -> float64` | Binary64 sine with the input measured in radians. |
+| `math.cos` | `cos(value: float64) -> float64` | Binary64 cosine with the input measured in radians. |
+| `math.tan` | `tan(value: float64) -> float64` | Binary64 tangent with the input measured in radians. |
+
+## IEEE-754, Domain, And Overflow Policy
+
+This table is normative for every maintained backend.
+
+| Operation or input | Result |
+| --- | --- |
+| `floor`, `ceil`, or `trunc` of finite in-range `x` | Corresponding mathematical integer as `int64`. |
+| `floor`, `ceil`, or `trunc` of NaN, infinity, or an out-of-range finite value | `AU4002`. |
+| `exp(nan)` | NaN. |
+| `exp(+inf)` / `exp(-inf)` | `+inf` / `+0.0`. |
+| `exp` of a finite input with finite representable result | Nearest binary64 result. |
+| `exp` of a finite input whose result overflows | `AU4002`. Underflow produces the correctly signed zero or subnormal value. |
+| `log* (nan)` | NaN. |
+| `log* (+inf)` | `+inf`. |
+| `log* (x)` for finite `x <= 0.0`, including either zero | `AU4001` domain error. |
+| `sin`, `cos`, or `tan` of NaN | NaN. |
+| `sin`, `cos`, or `tan` of either infinity | `AU4001` domain error. |
+| `pow(x, 0.0)` for any `x`, including NaN | `1.0`. |
+| `pow(1.0, y)` for any `y`, including NaN | `1.0`. |
+| `pow(nan, y)` or `pow(x, nan)` outside the two identities above | NaN. |
+| `pow(0.0, y)` for finite `y < 0.0` | `AU4001` domain error. |
+| `pow(x, y)` for finite `x < 0.0` and finite non-integral `y` | `AU4001` domain error. |
+| Finite `pow` inputs with an infinite-magnitude mathematical result | `AU4002`. |
+| Other libm results, including documented infinities from infinite inputs | The corresponding IEEE-754 binary64 value. |
+
+An exponent is integral for the negative-base rule when its binary64 value is
+finite and exactly equal to its truncation. Signed zero follows IEEE-754 sign
+rules. Subnormal inputs and results are preserved. Aura does not enable
+flush-to-zero as a language behavior.
+
+Finite transcendental results use the maintained target's binary64 math
+implementation. Portable programs may depend on the classifications and
+identities in the table. Last-bit finite approximation can vary between
+maintained target and libm pairs.
+
+## Example
+
+```aura
+import math
+
+def main() -> int32:
+    print(math.pi)
+    print(math.e)
+    print(math.inf)
+    print(math.nan)
+    print(math.floor(-1.25))
+    print(math.ceil(-1.25))
+    print(math.trunc(-1.75))
+    print(math.pow(2.0, -3.0))
+    print(math.exp(0.0))
+    print(math.log(1.0))
+    print(math.log2(8.0))
+    print(math.log10(1000.0))
+    print(math.sin(0.0))
+    print(math.cos(0.0))
+    print(math.tan(0.0))
+    return 0
+```
+
+This program prints:
+
+```text
+3.141592653589793
+2.718281828459045
+inf
+NaN
+-2
+-1
+-1
+0.125
+1.0
+0.0
+3.0
+3.0
+0.0
+1.0
+0.0
+```
+
+The maintained program is `examples/numbers/scalar_math.au`.
+
+## Grammar
+
+The module adds no source-language grammar. `import math`, qualified member
+access, calls, named arguments, and negative numeric expressions use the
+ordinary forms defined by this Manual.
+
+## Typing Rules
+
+The four constants have exact type `float64` and the bit patterns shown in the
+Public API table. They support qualified reads and direct imports with ordinary
+import aliases. Every function parameter has type `float64`. `floor`, `ceil`,
+and `trunc` return `int64`; every other function returns `float64`. A value of
+any other numeric type requires an explicit conversion before the call. Normal
+argument-count, argument-name, and exact-type checks apply.
+
+The module namespace contains every constant and function in the Public API
+table.
+
+## Runtime Semantics
+
+Each function applies the IEEE-754, domain, and overflow policy above.
+`floor`, `ceil`, and `trunc` first compute the specified mathematical integer
+and then require it to fit `int64`. `pow` classifies its identities, NaN,
+domain, and finite-overflow cases before returning the maintained binary64
+result. The exponential, logarithmic, and trigonometric functions preserve
+the table's NaN, infinity, signed-zero, and subnormal outcomes.
+
+Each constant has one immutable module storage location initialized once before
+application execution. Every read uses that shared location. Copy-scalar use
+preserves the stored binary64 bits, including the canonical NaN payload.
+
+For one maintained target and math implementation, repeated calls with the
+same binary64 inputs produce the same binary64 result. The functions perform
+no I/O and observe no process-global mutable state.
+
+## Ownership And Evaluation Order
+
+Constant reads are shared and cannot be assigned or used through mutable
+access. Call arguments evaluate left to right and exactly once before the
+function executes. `math.pow` evaluates `base` before `exponent`. Every
+parameter and result is a Copy scalar, so calls do not move or mutate caller
+bindings. A failed call leaves all already completed argument effects
+observable and produces no result value.
+
+## Diagnostics
+
+- `AU2001` reports an unknown module member.
+- `AU2002` reports an argument whose type is not exactly `float64`.
+- `AU2004` reports invalid argument binding, including a wrong argument count
+  or name.
+- `AU4001` reports the domain errors named in the normative table.
+- `AU4002` reports a finite overflow or a rounding result that cannot be
+  represented as `int64`.
+
+## Backend Support
+
+All listed functions are supported by the MIR runtime and direct native
+backend. Both backends use shared exceptional-value classification and must
+agree on result classification, signed zero, and diagnostic code. They use
+the same maintained host math implementation for finite results on one target.
+
+## Limits And Implementation-Defined Behavior
+
+The module is scalar and `float64` only. It provides no complex, decimal,
+arbitrary-precision, vectorized, combinatorial, or random operations. The
+logarithm functions accept one value and do not accept an alternate base.
+
+The final bits of finite transcendental approximations can vary across target
+and libm pairs. The exact host diagnostic rendering around an `AU4001` or
+`AU4002` failure follows the general runtime diagnostic contract.
+
+## Status
+
+The constants, functions, exact bits and signatures, exceptional-value
+classifications, initialization and evaluation order, diagnostics, and
+MIR/direct backend behavior on this page are implemented and maintained in
+Aura 0.3.
 
 ## Source: docs/manual/names-and-scopes.md
 
@@ -10356,12 +10803,46 @@ One `.au` file defines one module scope. Its top-level item namespace contains:
 - functions
 - extern functions and extern opaque handle types
 - traits
+- module constants
 - imported names
 - imported module aliases
 
 These categories share the same top-level item name space. A local item cannot reuse a name already imported or declared as another item kind. Trait implementation blocks do not introduce a top-level name; they attach behavior to an existing trait/type combination.
 
 Imports are module-level regardless of their textual position in the file. They are resolved before static checking of function bodies and top-level statements.
+
+## Module Constants
+
+A bare binding at module level declares an immutable module constant. The
+initializer is required. The annotation is optional, and `public` exposes the
+constant to qualified imports and from-imports.
+
+    max_attempts: int64 = 5
+    service_name = "planner"
+    public default_region = "eu-west"
+
+    def main():
+        print(service_name)
+
+Functions and types are available to every constant initializer regardless of
+their textual item position. Constants become available in declaration order.
+An initializer may read an earlier constant in the same module. Reading itself
+or a later constant is `AU2001` use before initialization.
+
+Aura initializes reachable modules before entry execution. Dependencies run
+before importers, sibling dependencies follow first import order, and constants
+within one module follow declaration order. A module reached through several
+imports initializes once. Initializer failure prevents entry execution.
+
+Copy-typed reads produce ordinary copied values. A non-Copy read provides
+shared access to the one value stored by its defining module. It cannot move
+the value into owned storage, pass it to an `own` parameter, or request mutable
+access. Use an explicit supported `.clone()` or constructor when independent
+owned data is required.
+
+Module storage is immutable. Module-level `mut`, reassignment, compound
+assignment, and mutable access are `AU3003` errors. Stateful application data
+belongs in a local value owned by `main` or another explicit owner.
 
 ## Imports
 
@@ -10439,8 +10920,9 @@ Aura 0.2 does not support local function, class, enum, or trait declarations. It
 An assignment to a previously unseen simple name introduces a binding:
 
 ```python
-name = "Aura"
-mut count: int32 = 0
+def main():
+    name = "Aura"
+    mut count: int32 = 0
 ```
 
 The initializer is checked before the new name becomes available. A binding without `mut` is immutable. A later assignment to an existing name is reassignment, not a new shadowing declaration, and is valid only for a mutable place with the same type.
@@ -10561,9 +11043,13 @@ Builtin enum types such as `Option`, `Result`, `QueueReceive`, and `process.Erro
 
 ## Top-Level Statement Scope
 
-An entry module may contain executable top-level statements instead of a local `main`. Those statements share one top-level local environment and execute in source order after checking.
+An entry module may contain executable top-level statements instead of a local
+`main`. Those statements share one top-level local environment and execute in
+source order after reachable module constants finish initialization.
 
-Imported modules contribute declarations, not executable initialization: their top-level statements are checked as source but are not run as import side effects in Aura 0.2. Reusable modules should therefore keep executable work inside public functions. This boundary may be tightened in a later release, but programs MUST NOT depend on imported top-level side effects today.
+Imported modules contribute items and eagerly initialized constants. Their
+top-level executable statements are checked as source and do not run as import
+side effects. Reusable executable work belongs inside public functions.
 
 ## Grammar
 
@@ -10587,9 +11073,10 @@ rejected rather than selected by source order.
 
 Local and parameter references read their statically selected storage place;
 module, type, function, and associated-member names select compiler metadata
-and do not perform a runtime dictionary lookup. Entry-module top-level bindings
-are created in source order. Imports load declarations during compilation and
-do not execute imported top-level statements as initialization side effects.
+and do not perform a runtime dictionary lookup. Module constants initialize
+once in the dependency and source order defined above. Entry-module executable
+statements then run in source order. Imports do not execute imported top-level
+statements as initialization side effects.
 
 ## Ownership And Evaluation Order
 
@@ -10607,13 +11094,16 @@ scope is discarded with the expression.
 ## Diagnostics
 
 `AU2001` reports unknown, unavailable, or unresolved names, including a
-comprehension target used outside its expression. `AU2002` covers
+module constant read before initialization and a comprehension target used
+outside its expression. `AU2002` covers
 type-name arity and related expected-type failures. `AU2999` covers duplicate,
 reserved, private, ambiguous, or otherwise invalid name/scope declarations not
 assigned a narrower code. Reads of places invalidated after resolution use
-`AU3001` for a moved place, `AU3002` for a borrow conflict, `AU3003` for an
-immutable place, and `AU3004` for an invalid ownership mode, with related
-source spans and repair guidance where applicable.
+`AU3001` for a moved place or attempted move from non-Copy module storage,
+`AU3002` for a borrow conflict, `AU3003` for an immutable place or mutable
+module-storage request, and `AU3004` for an invalid ownership mode, with
+related source spans and repair guidance where applicable. Runtime module
+initialization re-entry is `AU4001`.
 
 ## Backend Support
 
@@ -10634,9 +11124,9 @@ left to implementation-defined name lookup.
 
 ## Status
 
-Static lexical scope, module imports and aliases, visibility, generic/type
-namespaces, member lookup, comprehension scopes, and the documented
-entry-module top-level scope are implemented.
+Static lexical scope, module imports and aliases, module constants, visibility,
+generic/type namespaces, member lookup, comprehension scopes, and the
+documented entry-module top-level scope are implemented.
 Dynamic names, reflection-based lookup, nested items, import side effects,
 wildcard imports, and user-selectable shadowing are unavailable. No future
 name-resolution form is implied by an identifier that happens to lex today.
@@ -11248,10 +11738,11 @@ Move values transfer ownership on by-value use. Current move categories include:
 - file, process, supervisor, pipe, and network resources
 
 ```python
-name = "aura"
-other = name
-print(other)
-# print(name) would be rejected: name was moved
+def main():
+    name = "aura"
+    other = name
+    print(other)
+    # print(name) would be rejected: name was moved
 ```
 
 A generic payload whose declared type is an unconstrained type parameter is not assumed copyable. The canonical category list and builtin generic types are in [Types](/manual/types#copy-and-move-categories).
@@ -11333,8 +11824,9 @@ or take `own T` and return the result.
 def add_name(names: mut list[str], name: own str):
     names.append(name)
 
-mut names = list[str]()
-add_name(names, "Ada")
+def main():
+    mut names = list[str]()
+    add_name(names, "Ada")
 ```
 
 Only a mutable place can satisfy `mut T`. A local becomes mutable with `mut`; a
@@ -11353,8 +11845,9 @@ class Acc:
     def add_from(mut self, source: Acc):
         self.value += source.value
 
-mut acc = Acc(value=1)
-# acc.add_from(acc) is rejected: mutable self overlaps shared source
+def main():
+    mut acc = Acc(value=1)
+    # acc.add_from(acc) is rejected: mutable self overlaps shared source
 ```
 
 Place overlap is prefix-based for tracked name/field paths. `value` overlaps `value.field`, and `value.field` overlaps `value.field.inner`. Distinct roots do not overlap. Sibling fields such as `pair.left` and `pair.right` are distinct when the checker can prove those paths.
@@ -11370,12 +11863,13 @@ class User:
     name: str
     id: int32
 
-mut user = User(name="Ada", id=1)
-name = user.name
-print(user.id)
+def main():
+    mut user = User(name="Ada", id=1)
+    name = user.name
+    print(user.id)
 
-user.name = "Grace"
-print(user.name)
+    user.name = "Grace"
+    print(user.name)
 ```
 
 The complete class value cannot be used while any field remains moved. Assigning the exact moved field reinitializes that path. Assigning a fully moved mutable binding reinitializes the binding and clears its moved-field state.
@@ -11600,8 +12094,8 @@ method consumes the unique observation right even when it reports timeout,
 cancellation, or failure. Multi-task waits consume their entire task list,
 and `wait_any` abandons unchosen rights. These rules are required before the
 pinned-worker runtime can safely run sibling task bodies on different host
-threads. That runtime is now implemented: Queue and Task handle identity may
-cross workers, while every other capture or result remains an owned
+threads. Queue and Task handle identity may cross workers, while every other
+capture or result remains an owned
 `Transfer` value rather than a shared capability.
 
 ## Resources And `with`
@@ -12840,9 +13334,10 @@ The binding's type is its annotation when present, otherwise the initializer typ
 `mut` makes a newly introduced binding assignable and usable as a mutable place:
 
 ```python
-mut count: int32 = 0
-count = 1
-count += 2
+def main():
+    mut count: int32 = 0
+    count = 1
+    count += 2
 ```
 
 Reassignment requires an existing mutable binding and preserves its type. `mut` does not mean dynamically typed, and it does not make values globally mutable through aliases.
@@ -12850,8 +13345,9 @@ Reassignment requires an existing mutable binding and preserves its type. `mut` 
 `from` is a contextual identifier and is legal as a binding and assignment target when the token sequence is not a from-import:
 
 ```python
-mut from = "cache"
-from = "network"
+def main():
+    mut from = "cache"
+    from = "network"
 ```
 
 ### Assignment Targets
@@ -12996,9 +13492,10 @@ Conditions are evaluated in source order until one is `true`. Only the selected 
 A `while` statement evaluates its condition before each iteration:
 
 ```python
-mut attempts = 0
-while attempts < 3:
-    attempts += 1
+def main():
+    mut attempts = 0
+    while attempts < 3:
+        attempts += 1
 ```
 
 The condition must have type `bool`. A false first condition executes the body zero times. Aura 0.2 has no loop `else` clause.
@@ -13203,7 +13700,7 @@ def placeholder():
 
 It must appear on its own logical line. It is used for intentionally empty function, method, class, trait, implementation, or control-flow suites. An enum body still requires at least one variant and does not use `pass` as a variant.
 
-## Module-Level Imports And Execution
+## Module Constants, Imports, And Execution
 
 Imports are module elements rather than executable statements. Aura accepts:
 
@@ -13226,14 +13723,30 @@ relative-dot imports, parenthesized import lists, and trailing import commas
 are not accepted. Import resolution and visibility are defined in
 [Packages](/manual/packages#imports).
 
-An entry module may contain executable top-level statements:
+An immutable binding at module level is a module constant:
 
-```python
+```aura
 message = "hello"
-print(message)
+public retry_limit: int64 = 3
+
+def main():
+    print(message)
 ```
 
-Those statements execute in their stored source order. Alternatively, the entry module may define a local `main`. It cannot combine executable top-level statements with a local `main`. Imported module top-level statements do not execute as import side effects in Aura 0.2.
+The constant initializer is required. `mut` module storage and later
+assignment are rejected. Constants may coexist with a local `main`, and
+reachable dependency constants initialize before entry execution. The full
+scope, order, visibility, and ownership rules are defined in
+[Names And Scopes](/manual/names-and-scopes#module-constants).
+
+An entry module may also contain executable top-level statements:
+
+    print(message)
+
+Those statements execute in their stored source order after reachable module
+constants are ready. An entry module with executable top-level statements
+cannot define a local `main`. Imported module top-level statements do not
+execute as import side effects.
 
 The accepted `main` signatures and process exit behavior are defined in [Functions](/manual/functions#main) and [Execution Model](/manual/execution-model#entry-module-execution).
 
@@ -13251,6 +13764,7 @@ Parsing a statement shape does not make it legal in every context:
 - match arms must satisfy compatibility, reachability, and exhaustiveness rules.
 - `with` requires a supported resource and preserves its cleanup capability.
 - items cannot appear inside suites.
+- module constants are immutable and cannot use `mut` or reassignment.
 - an entry module cannot mix executable top-level statements with local `main`.
 
 The complete checker rules are normative in [Static Semantics](/manual/static-semantics), and ownership effects are normative in [Ownership And Borrowing](/manual/ownership-and-borrowing).
@@ -13392,7 +13906,11 @@ Aura uses local, contextual inference rather than global inference. Public funct
 - A negative integer literal is parsed as unary `-` applied to a non-negative literal. It follows the same exact float-context rule, or must fit the selected signed integer type.
 - A floating literal adopts an expected `float32` or `float64`; otherwise it defaults to `float64`.
 - `true` and `false` have type `bool`.
-- A single-quoted or double-quoted ordinary string and an f-string each have type `str`; quote choice does not create a distinct type.
+- A single-quoted, double-quoted, triple-quoted, raw, or formatted string has
+  type `str`; delimiter and literal form do not create distinct types. Each
+  f-string format specification is checked against the interpolation's static
+  type. String-only, integer-only, numeric-only, sign, precision, and grouping
+  restrictions are compile-time errors under `AU2002`.
 - A duration literal has type `Duration`.
 - Bare `None` has type `None`, except in an expected `Option[T]` position where it denotes `Option.None` of that type. Expected-option context flows through grouping, annotated bindings, return positions, and argument positions. For `==` and `!=`, when either operand has static type `Option[T]`, a bare `None` on the other side is contextually typed as that same option specialization; this rule is symmetric. Unit `None == None` is `true` and unit `None != None` is `false`. A qualified `Option.None` with no expected specialization remains an inference error.
 
@@ -13855,7 +14373,7 @@ closure capture cannot launder shared or mutable capabilities because those
 captures are rejected when the closure is created.
 
 Task-target resolution accepts a concrete function value. Explicit
-`function[Types]` specialization may now produce such a value before the call;
+`function[Types]` specialization may produce such a value before the call;
 the direct associated-method `Type.associated_method[Types]` spelling remains
 limited to the callable-target slot. A bare target whose declared/default
 context already resolves its complete types is also concrete.
@@ -13907,12 +14425,10 @@ The Manual and executable suite are expected to agree. A divergence is a
 project defect, not an alternate language rule. Aura provides the ordinary
 builtin call `select(source, ...)` under Accepted ADR-0034 and no statement
 form.
-That addition reserves both the builtin function name `select` and builtin
-enum name `SelectOutcome`; existing user declarations with either name must
-be renamed.
-Adding `len` and `str` to the maintained builtin functions also reserves both
-names: a program that previously declared its own `def len(...)` or
-`def str(...)` is now rejected, the same way redefining `print` or `abs` is.
+The builtin function name `select` and builtin enum name `SelectOutcome` are
+reserved. User declarations with either name are rejected. `len` and `str`
+are also reserved builtin function names, and redefining either is rejected
+the same way as redefining `print` or `abs`.
 ADR-0030 is Accepted with the B3.0-d length-unification amendment:
 `str.len()`, `str.byte_len()`, `list.len()`, `dict.len()`, and `set.len()`
 now return `int64`. For `str`, `list`, `dict`, and `set`, `len(value)` and
@@ -13935,9 +14451,9 @@ consume it; tuple ordering remains rejected. See
 Phase 6.1 capture-free function values make named functions Copy and Transfer
 values with structural `def(...) -> ...` types. Phase 6.2 uses that surface for
 the maintained eager natural/keyed `list.sort`, `map`, and `filter` algorithms and
-for `control.retry`. These are compatible API additions to the technical
-preview, but `control` now resolves as a builtin module namespace and the four
-List member names are part of the builtin no-shadowing surface. Callback
+for `control.retry`. These are current technical-preview APIs. `control`
+resolves as a builtin module namespace, and the four List member names are
+part of the builtin no-shadowing surface. Callback
 capabilities are exact: code must pass bare/shared element callbacks rather
 than relying on adaptation from `mut` or `own`.
 
@@ -14008,7 +14524,7 @@ responsiveness, and a coherent control-plane surface. APIs may change while
 Aura remains a technical preview.
 
 The post-Phase-1.5 Manual is reference-frozen. Every later semantic change,
-including a compatible extension, requires an ADR and must update the normative
+including any extension, requires an ADR and must update the normative
 reference, compiler fixtures, maintained examples, and tutorials in the same
 commit. A change that cannot keep those surfaces synchronized does not enter
 the maintained language.
@@ -14018,7 +14534,7 @@ Compiler coverage is held at the current non-regression floor rather than being 
 Seeded randomness has an additional observable-data promise: the algorithm,
 seed mapping, integer and floating mappings, and shuffle order documented in
 [Randomness Module](/manual/randomness) remain stable throughout Aura 0.2.x.
-A later compatibility series may change them only with an explicit decision
+A later release may change them only with an explicit decision
 and new conformance vectors. OS-secure outputs are intentionally not stable.
 
 ## Maintained Concurrency Surface
@@ -14068,7 +14584,7 @@ surface.
 `AURA_BLOCKING_WORKERS` selects an exact positive worker count; without it,
 the runtime derives and clamps a `2..=8` default from host parallelism with
 fallback `4`. `AURA_BLOCKING_QUEUE_CAPACITY` optionally bounds accepted
-pending jobs only, while omission preserves the unbounded compatibility mode.
+pending jobs only; when it is omitted, the pending queue is unbounded.
 Full-queue admission is FIFO and scheduler-aware. MIR, direct, and standalone
 execution reject invalid values with `AU4006` before user code. Cancellation
 or timeout before queue insertion prevents submission; accepted work runs once
@@ -14093,7 +14609,7 @@ youngest-first task ancestry. Each public schema-version-1 frame span has its
 own required source `path`; the analysis/LSP editor shape permits an optional
 `file_path` for source-only analysis. The public diagnostic schema remains
 version `1` because the always-present arrays are an additive extension;
-compiler-service/editor transport uses semantic schema version `4`. This
+compiler-service/editor transport uses semantic schema version `5`. This
 version includes structural function values, import aliases, and the expanded
 numeric expression surface, and forwards the same diagnostic records.
 
@@ -14144,9 +14660,10 @@ while `(value,)` is a singleton tuple. `()` is not a tuple value. A
 multi-element tuple has no trailing comma:
 
 ```aura
-pair = ("north", 7)
-singleton = (true,)
-nested = (pair, (2, 3))
+def main():
+    pair = ("north", 7)
+    singleton = (true,)
+    nested = (pair, (2, 3))
 ```
 
 Top-level assignment and `for` binding lists use `left, right`; parentheses
@@ -14831,7 +15348,7 @@ contains a backend surface that cannot preserve the same behavior.
 
 ## Limits And Implementation-Defined Behavior
 
-`str` is an alias for `str`; method-value types, user-defined numeric casts,
+`int` is an alias for `int64`; method-value types, user-defined numeric casts,
 and non-numeric casts are unavailable, and recursive value fields require
 `indirect`. Capture-free named function values use
 `def(T1, mut T2, own T3) -> R`; bare parameters are shared and the written
@@ -15423,8 +15940,7 @@ The runtime registers one composite wait and removes every loser when a source
 wins. A losing Queue remains unchanged. A non-repeatable Task right is
 consumed at entry and abandoned if another source wins.
 
-This is an ordinary builtin call. Aura still has no statement-form
-`select:` syntax.
+Selection uses the ordinary builtin call shown above.
 
 ## Waiting For Several Tasks
 
@@ -15524,9 +16040,9 @@ workload.
 Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a bounded
 protocol-step service with deep native worker stacks. Each step is bounded and
 nonblocking; the child gets ownership of its protocol state back before
-observing cancellation or returning to reactor readiness waiting. This is why
-ordinary application tasks no longer need to reserve enough coroutine stack
-for the deepest maintained third-party protocol frame.
+observing cancellation or returning to reactor readiness waiting. Ordinary
+application tasks use the guarded 512 KiB default stack; protocol workers
+carry the deepest maintained third-party library frames.
 
 The protocol-step pool starts lazily and lives until the Aura process exits;
 there is no 0.2 shutdown or join call. File reads, resolver work, and listener
@@ -15599,7 +16115,7 @@ Reference: [Concurrency](/manual/concurrency).
 
 # Shaping Data
 
-Most programs get easier to read once the data has names. A loose bag of strings and integers becomes a `Job` with an `id`, a `queue`, and an `attempts` counter. A value that was "sometimes a number and sometimes an error" becomes a `Result` with two variants. The behaviour that used to drift between helper functions moves onto the type.
+Most programs get easier to read once the data has names. A loose bag of strings and integers becomes a `Job` with an `id`, a `queue`, and an `attempts` counter. A value that is "sometimes a number and sometimes an error" becomes a `Result` with two variants. Shared behaviour lives on the type.
 
 This chapter introduces Aura's two data shapes — **classes** and **enums** — together with **methods**, **copy classes**, and **generics**. It is deliberately not a feature checklist. The through-line is how to decide which shape fits your domain.
 
@@ -17856,12 +18372,12 @@ match names.get(0):
         pass
 ```
 
-See [examples/collections/vec_basics.au](../examples/collections/vec_basics.au),
-[examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au),
-[examples/collections/vec_polish.au](../examples/collections/vec_polish.au),
+See [examples/collections/list_basics.au](../examples/collections/list_basics.au),
+[examples/collections/list_iteration.au](../examples/collections/list_iteration.au),
+[examples/collections/list_polish.au](../examples/collections/list_polish.au),
 [examples/collections/slices.au](../examples/collections/slices.au),
 and
-[examples/collections/vec_algorithms.au](../examples/collections/vec_algorithms.au).
+[examples/collections/list_algorithms.au](../examples/collections/list_algorithms.au).
 
 For integer types, the runtime enforces the annotated width. A binding like
 `value: int8 = 127` is valid, but exceeding that range at runtime produces an
@@ -17923,7 +18439,7 @@ The method surface includes `len`, `is_empty`, `copy`, `get`, `remove`, `keys`,
 `values`, `items`, `clear`, `update`, `reserve`, and `with_capacity`. Use indexed
 assignment for storage and `in` for membership.
 
-See [examples/collections/map_basics.au](../examples/collections/map_basics.au).
+See [examples/collections/dict_basics.au](../examples/collections/dict_basics.au).
 
 ## `set[T]` And Set Literals
 
@@ -18268,9 +18784,9 @@ Function values are code pointers, so they are copy values and satisfy
 expected type may come from an annotation, argument, field, collection
 element, or function-typed parameter default.
 
-Bound instance methods, associated-method values, and trait-method values
-remain unavailable. The task API keeps its older direct
-associated-method-without-`self` target form.
+Bound instance methods, associated-method values, and trait-method values are
+unavailable. Task targets may be direct associated methods without `self`;
+that task-target form does not create a general associated-method value.
 
 See [examples/basics/function_values.au](../examples/basics/function_values.au).
 
@@ -18535,7 +19051,7 @@ Use bare `for x in collection` for ordinary reads, `for x in own collection`
 when you are done with it, and `for x in mut collection` when you need
 to update list elements.
 
-See [examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au) and [examples/collections/vec_polish.au](../examples/collections/vec_polish.au).
+See [examples/collections/list_iteration.au](../examples/collections/list_iteration.au) and [examples/collections/list_polish.au](../examples/collections/list_polish.au).
 
 Sets support bare shared and `own` iteration:
 
@@ -18689,7 +19205,7 @@ explanation of move semantics, copy types, and common patterns for working with 
 
 ## Default Field Values
 
-The implemented subset already supports field defaults:
+The implemented subset supports field defaults:
 
 ```python
 class ServerConfig:
@@ -18723,7 +19239,7 @@ See [examples/classes/indirect_recursive.au](../examples/classes/indirect_recurs
 
 ## `public` Fields And Methods
 
-Aura now enforces class visibility across module boundaries. Fields and methods are private by default and must be marked `public` to be used from another module:
+Aura enforces class visibility across module boundaries. Fields and methods are private by default and must be marked `public` to be used from another module:
 
 ```python
 class User:
@@ -18836,7 +19352,7 @@ See [examples/classes/methods.au](../examples/classes/methods.au).
 
 ## Mutating Methods
 
-Aura now supports `mut self` methods and member-target assignment.
+Aura supports `mut self` methods and member-target assignment.
 
 ```python
 class Counter:
@@ -18857,7 +19373,7 @@ counter.reset()
 
 See [examples/classes/mutating_methods.au](../examples/classes/mutating_methods.au).
 
-Constructors now support positional field arguments as long as they come before any named fields:
+Constructors support positional field arguments as long as they come before any named fields:
 
 ```python
 class Point:
@@ -20020,8 +20536,27 @@ quotation = 'the compiler said "ready"'
 ```
 
 The supported escapes are `\n`, `\t`, `\"`, `\'`, `\\`, `\0`, `\xHH`, and
-`\u{H...}`. Triple-quoted, raw, and byte-string literals are not implemented,
-and a one-character literal remains a `str`. Aura has no character type.
+`\u{H...}`. A one-character literal remains a `str`. Aura has no character
+type.
+
+Use three matching quotes for exact multiline text. The compiler keeps the
+first newline, last newline, indentation, spaces, and physical tabs:
+
+```python
+prompt = """Summarize the request.
+Return JSON with a label and reason.
+"""
+```
+
+Use lowercase `r` for a single-line value where backslashes are data:
+
+```python
+model_dir = r"C:\models\agent"
+number_pattern = r'\d+\.\d+'
+```
+
+A raw string cannot end in an odd run of backslashes. Raw triple strings and
+byte strings are unavailable.
 
 ## F-Strings
 
@@ -20032,6 +20567,8 @@ Interpolated strings use the double-quoted `f"..."` form and produce an owned
 name: str = "Aura"
 answer: int32 = 42
 print(f"Hello, {name} {answer}")
+print(f"{name:·^16.8s} {answer:>8,d}")
+print(f"success rate: {0.875:+.1%}")
 ```
 
 Interpolations accept any expression, including indexed lookups:
@@ -20039,6 +20576,13 @@ Interpolations accept any expression, including indexed lookups:
 ```python
 print(f"value: {counts['key']}")
 ```
+
+A static format specification follows a top-level colon. It supports a
+one-scalar fill, `<`, `^`, and `>` alignment, numeric signs, minimum width,
+comma grouping, precision, and `d`, `f`, `e`, `x`, `X`, `b`, `o`, `%`, and
+`s` type codes. Width counts Unicode scalars. String precision truncates by
+Unicode scalar count. Numeric precision rounds ties to even. Specifications
+are checked against the interpolation's static type before execution.
 
 See [examples/strings/f_strings.au](../examples/strings/f_strings.au).
 
@@ -20470,6 +21014,32 @@ def describe(value: Outer) -> int32:
 ```
 
 See [examples/enums/rich_match.au](../examples/enums/rich_match.au).
+
+## Guards And Or-Patterns
+
+A guard adds an exact Boolean condition after structural matching. An
+or-pattern lets one arm accept several structural alternatives:
+
+```python
+match code:
+    case 200 | 201 if code == 201:
+        print("created")
+    case 200 | 201:
+        print("success")
+    case _:
+        print("other")
+```
+
+Alternatives are tested left to right and must bind the same names with the
+same types and capabilities. A false guard continues to the next arm. Guarded
+arms do not make a match exhaustive, so keep an unguarded fallback when the
+remaining domain is open.
+
+In `match own`, a guard can inspect a non-copy candidate but cannot move it.
+Extraction happens only after a true guard. In `match mut`, mutations made by
+a guard remain visible when the guard is false or propagates a failure.
+
+See [examples/enums/match_guards_and_or_patterns.au](../examples/enums/match_guards_and_or_patterns.au).
 
 Expression-form `match` is not limited to `return`. It also works in binding and argument positions, and an arm value may itself be a nested block-form expression:
 
@@ -20973,7 +21543,8 @@ with TaskGroup() as group:
     group.start_soon(producer, jobs)
 ```
 
-That is Aura's maintained replacement for fire-and-forget task creation. Background work still belongs to a group, scope exit still waits for it, and unread task failures still surface when the group closes.
+Every started task belongs to its group. Scope exit waits for it, and an unread
+task failure surfaces when the group closes, including for `start_soon(...)`.
 
 See [examples/concurrency/task_group_start.au](../examples/concurrency/task_group_start.au) and [examples/concurrency/task_group_start_soon.au](../examples/concurrency/task_group_start_soon.au).
 
@@ -21198,9 +21769,9 @@ it is spawned. Its coroutine stack never migrates, the runtime does not steal
 work, and `yield_now()` yields only to runnable work on that worker.
 
 The compiler inserts a cooperative scheduling check on every loop backedge,
-including a normal body tail and `continue`, so a tight loop no longer freezes
-ready timers, Queue operations, or socket work assigned to the same worker
-indefinitely. `break` and `return` leave the loop without taking that check.
+including a normal body tail and `continue`, so a tight loop allows ready
+timers, Queue operations, or socket work assigned to the same worker to
+proceed. `break` and `return` leave the loop without taking that check.
 One long loop body or straight-line computation can still delay same-worker
 siblings, and the check does not inspect cancellation. Each ordinary
 lightweight task requests a guarded 512 KiB coroutine stack; the explicit
@@ -21511,7 +22082,7 @@ These built-in type names are reserved and cannot be reused for user-defined cla
 
 ## Packages And Workspaces
 
-Aura now supports a first local package-system milestone:
+Aura supports this local package-system surface:
 
 - `Aura.toml` package manifests with `[package]`
 - package source roots under `src/`
@@ -22165,8 +22736,8 @@ work on the local worker.
 
 Every loop backedge has a compiler-inserted scheduling check, including the
 ordinary body tail and `continue`; `break` and `return` bypass it. Tight loops
-therefore no longer starve ready timers, queues, or sockets assigned to the
-same worker indefinitely, although a single long loop body can still delay
+therefore allow ready timers, queues, or sockets assigned to the same worker
+to proceed, although a single long loop body can still delay
 same-worker siblings. The check does not inspect cancellation. Ordinary tasks
 request a guarded 512 KiB coroutine stack. The two explicit stack-start
 methods accept an exact `int64` byte request from 256 KiB through 64 MiB
@@ -22214,7 +22785,7 @@ Task results share `T`, and a missing category uses `None`. Source expressions
 run once from left to right. Current-task cancellation wins; otherwise the
 lowest original argument index wins among ready sources. Every
 non-repeatable Task right is consumed at entry and a losing right is
-abandoned. The old statement-shaped `select` remains unsupported.
+abandoned. Selection uses the ordinary builtin call.
 
 Deep HTTP, TLS, and maintained Unix WebSocket operations use a distinct bounded
 protocol-step service with deep native worker stacks. In the clean Mac14,9
@@ -22336,9 +22907,9 @@ Current backend/tooling notes:
 
 - `build` accepts `--backend auto|direct`
 - `auto` is the default
-- `direct` now covers the full currently implemented Aura language surface
+- `direct` covers the full currently implemented Aura language surface
 - compiler-backed editor state is invalidated across open documents when imported files change
-- `file://` URI handling now preserves both Windows drive-letter paths and UNC workspaces
+- `file://` URI handling preserves both Windows drive-letter paths and UNC workspaces
 
 The current VS Code tooling is compiler-backed for:
 
@@ -22360,14 +22931,14 @@ The current compiler does not support:
 Current module/import limitations:
 
 - imports resolve local `.au` files relative to the current package root
-- directly checking or analyzing a nested package file now infers the nearest package root that satisfies its imports
+- directly checking or analyzing a nested package file infers the nearest package root that satisfies its imports
 - `import a.b` exposes module namespaces for calls like `a.b.func(...)`, `a.b.Type(...)`, and `a.b.Enum.Variant`
 - type annotations may use namespace-imported types such as `a.b.Type`
 - both maintained execution paths stop with a friendly recursion-depth diagnostic after 256 nested Aura calls
 - MIR and direct-native runtime failures preserve matching typed Aura call
   frames and child-task ancestry; JSON tooling receives them as always-present
   `call_frames` and `task_ancestry` arrays
-- package manifests, local path dependencies, and git dependencies are now implemented
+- package manifests, local path dependencies, and git dependencies are implemented
 
 Current expression/ergonomics limitations:
 
@@ -22939,7 +23510,44 @@ Use `from ... import ...` to bring a name into the local scope:
 from helpers.counter import Counter
 ```
 
-This is the most concise way to use types without repeating module paths. You can import functions, classes, enums, and traits.
+This is the most concise way to use names without repeating module paths. You
+can import public functions, classes, enums, traits, and module constants.
+
+## Module Constants
+
+Declare stable configuration and constructed immutable values beside the
+functions that use them:
+
+```python
+service_name = "planner"
+public max_attempts: int64 = 3
+retry_budget = max_attempts + 2
+
+def main():
+    print(service_name)
+    print(retry_budget)
+```
+
+Constants initialize eagerly before `main`. Imported dependencies initialize
+before the importing module, imports are visited in source order, and each
+module initializes once. Within a module, a constant may use functions and
+earlier constants. It cannot read itself or a later constant.
+
+Module bindings cannot use `mut` and cannot be reassigned. Copy values read as
+ordinary copies. Non-Copy values stay owned by the defining module and each
+read grants shared access. Call `.clone()` when the type supports it and the
+program needs independent owned data.
+
+Export a constant with `public` and import it through either form:
+
+```python
+import settings
+from settings import max_attempts as configured_attempts
+
+def main():
+    print(settings.max_attempts)
+    print(configured_attempts)
+```
 
 ## Import Aliases
 
@@ -23017,6 +23625,7 @@ See [18-packages-and-workspaces.md](18-packages-and-workspaces.md) for the full 
 
 - [examples/modules/simple_import.au](../examples/modules/simple_import.au) with helpers under [examples/modules/helpers](../examples/modules/helpers)
 - [examples/modules/import_aliases.au](../examples/modules/import_aliases.au) demonstrates module and from-import aliases
+- [examples/modules/constants.au](../examples/modules/constants.au) demonstrates inferred, annotated, public, and dependent constants beside `main`
 - [examples/modules/namespace_import_types.au](../examples/modules/namespace_import_types.au) with modules under [examples/modules/pkg](../examples/modules/pkg)
 - [examples/modules/trait_impl_imports.au](../examples/modules/trait_impl_imports.au) with modules under [examples/modules/pkg](../examples/modules/pkg)
 - [examples/packages/local_path_dependencies/app/src/main.au](../examples/packages/local_path_dependencies/app/src/main.au) with a sibling dependency
@@ -23184,7 +23793,7 @@ This is deliberate -- Aura supports real multi-package development before taking
 
 # I/O And Networking
 
-Aura now has a maintained I/O surface through four builtin modules:
+Aura has a maintained I/O surface through four builtin modules:
 
 - `io`
 - `fs`
@@ -24022,10 +24631,9 @@ application code.
 Derived class/enum schemas and generated codecs remain deferred beyond Phase 6.
 Aura also has no streaming JSON API or arbitrary-precision number type.
 
-The older `json.is_valid`, `json.stringify_map`, and
-`json.parse_string_map` helpers remain available for existing flat
-`dict[str, str]` boundaries. They are typed flat-data helpers, not aliases
-for the dynamic API.
+`json.is_valid`, `json.stringify_map`, and `json.parse_string_map` provide
+typed operations for flat `dict[str, str]` data. They are distinct from the
+dynamic `json.Value` API.
 
 ## Full Contract
 
@@ -24292,23 +24900,91 @@ fails, the assertion remains the primary diagnostic.
 
 ## Assertions In Test Files
 
-`aura test` discovers parameterless `test_*` functions and reports each one as
-an independent case. It treats an assertion failure like any other test
-failure:
+`aura test` discovers parameterless module functions named `test_*`. A function
+returning `None` is one independently reported case:
 
-```bash
-aura test tests/check_account.au
+```python
+def test_account_total():
+    charges = [20, 21]
+    assert charges[0] + charges[1] == 41
 ```
 
-A file whose assertions all pass succeeds; a failing assertion is rendered
-with its source span and makes the case fail. `aura test --format json`
-preserves introspected operands as structured fields, and `-k substring`
-selects matching canonical case names.
+The canonical name is `path::test_account_total`. Functions are discovered in
+source order. A file with no `test_*` function remains one file-level case and
+runs through `main()` or top-level statements.
 
-Run the maintained example with:
+Use `-k` to select a literal, case-sensitive substring of the complete case
+name:
+
+```bash
+aura test -k account tests/check_account.au
+```
+
+A valid filter with no matches succeeds with a zero-case summary.
+
+### Per-Case Lifecycle
+
+Optional `setup()` and `teardown()` functions run around every selected case:
+
+```python
+def setup():
+    print("setup")
+
+def teardown():
+    print("teardown")
+
+def test_total():
+    print("case")
+    assert 20 + 21 == 41
+```
+
+The observable order is `setup`, `case`, `teardown`. Teardown still runs when
+setup or the case traps. The earlier failure remains primary, and a teardown
+failure is reported secondarily. Each phase enters the same checked module in
+isolation, so Aura values and module state do not flow between phases. External
+effects such as file writes can be used when a test needs observable lifecycle
+state.
+
+### Parameterized Cases
+
+A registration function returns labeled, named test functions:
+
+```python
+def empty_case():
+    assert "".len() == 0
+
+def unicode_case():
+    assert "A🎉".len() == 2
+
+def test_lengths() -> list[(str, def() -> None)]:
+    return [("empty", empty_case), ("unicode", unicode_case)]
+```
+
+The two case names end in `test_lengths[empty]` and
+`test_lengths[unicode]`. Registration happens once before `-k` filtering.
+Labels must be non-empty and unique. Returned functions are capture-free,
+parameterless, repeatable, and return `None`; captured closures are rejected.
+Setup and teardown run for each selected expanded case, not for registration.
+
+### JSON Results
+
+`aura test --format json` emits one schema-version-1 document. Its summary
+contains selected, passed, and failed counts. Each ordered test record contains
+the canonical name, file, outcome, and lifecycle duration in milliseconds.
+Captured stdout is included when non-empty. A trapped case carries the normal
+structured diagnostic, including assertion operands; a runner failure carries
+a reason. A teardown failure accompanying an earlier failure appears as a
+secondary teardown record.
+
+Human and JSON runs exit 0 when all selected cases pass and 1 when any case or
+discovery step fails. Usage errors exit 2.
+
+The maintained example works both as an ordinary program and as a test module:
 
 ```bash
 cargo run -p aura -- run examples/basics/assertions.au
+cargo run -p aura -- test examples/basics/assertions.au
+cargo run -p aura -- test --format json -k '[unicode]' examples/basics/assertions.au
 ```
 
 ## Source: tutorials/24-multiline-expressions.md

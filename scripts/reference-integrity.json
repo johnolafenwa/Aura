@@ -1174,13 +1174,13 @@
       "reason": "Punctuation-and-operator token catalog, not an Aura compilation unit."
     },
     "docs/manual/math.md#aura-1": {
-      "sha256": "777114b04d2fd25ead01a106af0a60f21adccafe4496ddab397d3dd6e5487251",
+      "sha256": "b46394d5ee3d25e5257baa88b456782882b5de3222c941829c70b0d1a0b25cfd",
       "mode": "run",
-      "stdout": "-2\n-1\n-1\n0.125\n1.0\n0.0\n3.0\n3.0\n0.0\n1.0\n0.0\n",
+      "stdout": "3.141592653589793\n2.718281828459045\ninf\nNaN\n-2\n-1\n-1\n0.125\n1.0\n0.0\n3.0\n3.0\n0.0\n1.0\n0.0\n",
       "stderr": ""
     },
     "docs/manual/math.md#text-1": {
-      "sha256": "7cc3e5367f0891fd3d2d3621864df4a536e28eeb57570f0747f5962ebb9a0745",
+      "sha256": "6ff86c846ca5d16439ab8992cae61661a67d2bf2cef57eafdaac8745c561c2c9",
       "mode": "illustrative",
       "reason": "Pinned standard output from the preceding verified Aura program."
     },

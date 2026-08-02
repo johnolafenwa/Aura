@@ -18,12 +18,10 @@ The Manual and executable suite are expected to agree. A divergence is a
 project defect, not an alternate language rule. Aura provides the ordinary
 builtin call `select(source, ...)` under Accepted ADR-0034 and no statement
 form.
-That addition reserves both the builtin function name `select` and builtin
-enum name `SelectOutcome`; existing user declarations with either name must
-be renamed.
-Adding `len` and `str` to the maintained builtin functions also reserves both
-names: a program that previously declared its own `def len(...)` or
-`def str(...)` is now rejected, the same way redefining `print` or `abs` is.
+The builtin function name `select` and builtin enum name `SelectOutcome` are
+reserved. User declarations with either name are rejected. `len` and `str`
+are also reserved builtin function names, and redefining either is rejected
+the same way as redefining `print` or `abs`.
 ADR-0030 is Accepted with the B3.0-d length-unification amendment:
 `str.len()`, `str.byte_len()`, `list.len()`, `dict.len()`, and `set.len()`
 now return `int64`. For `str`, `list`, `dict`, and `set`, `len(value)` and
@@ -46,9 +44,9 @@ consume it; tuple ordering remains rejected. See
 Phase 6.1 capture-free function values make named functions Copy and Transfer
 values with structural `def(...) -> ...` types. Phase 6.2 uses that surface for
 the maintained eager natural/keyed `list.sort`, `map`, and `filter` algorithms and
-for `control.retry`. These are compatible API additions to the technical
-preview, but `control` now resolves as a builtin module namespace and the four
-List member names are part of the builtin no-shadowing surface. Callback
+for `control.retry`. These are current technical-preview APIs. `control`
+resolves as a builtin module namespace, and the four List member names are
+part of the builtin no-shadowing surface. Callback
 capabilities are exact: code must pass bare/shared element callbacks rather
 than relying on adaptation from `mut` or `own`.
 
@@ -119,7 +117,7 @@ responsiveness, and a coherent control-plane surface. APIs may change while
 Aura remains a technical preview.
 
 The post-Phase-1.5 Manual is reference-frozen. Every later semantic change,
-including a compatible extension, requires an ADR and must update the normative
+including any extension, requires an ADR and must update the normative
 reference, compiler fixtures, maintained examples, and tutorials in the same
 commit. A change that cannot keep those surfaces synchronized does not enter
 the maintained language.
@@ -129,7 +127,7 @@ Compiler coverage is held at the current non-regression floor rather than being 
 Seeded randomness has an additional observable-data promise: the algorithm,
 seed mapping, integer and floating mappings, and shuffle order documented in
 [Randomness Module](/manual/randomness) remain stable throughout Aura 0.2.x.
-A later compatibility series may change them only with an explicit decision
+A later release may change them only with an explicit decision
 and new conformance vectors. OS-secure outputs are intentionally not stable.
 
 ## Maintained Concurrency Surface
@@ -179,7 +177,7 @@ surface.
 `AURA_BLOCKING_WORKERS` selects an exact positive worker count; without it,
 the runtime derives and clamps a `2..=8` default from host parallelism with
 fallback `4`. `AURA_BLOCKING_QUEUE_CAPACITY` optionally bounds accepted
-pending jobs only, while omission preserves the unbounded compatibility mode.
+pending jobs only; when it is omitted, the pending queue is unbounded.
 Full-queue admission is FIFO and scheduler-aware. MIR, direct, and standalone
 execution reject invalid values with `AU4006` before user code. Cancellation
 or timeout before queue insertion prevents submission; accepted work runs once
