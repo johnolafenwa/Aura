@@ -94,3 +94,26 @@ Phase-5.10 pair. It did not reproduce the dirty
 therefore remains the maintained baseline; the cold-boot result and full
 provenance are recorded in
 `work/2026-07-27-phase5-runtime-benchmarks.md`.
+
+## Batch S1 post-S2 replay
+
+The clean, contractual schema-4 replay at
+`face52e3900f775a3284df56a2519622d8381d60` used a fresh locked release build
+at `2026-08-02T20:13:03.022427+00:00` on the same Mac14,9 Apple M2 Pro / 16 GiB
+host. It retained the
+established one warmup, five rotating repetitions, exact-output validation,
+and paired startup subtraction.
+
+| Lane | Whole-process median | Paired loop-estimate median |
+| --- | ---: | ---: |
+| `int32` | 36.222917 ms | 29.305958 ms |
+| `int64` | 14.673875 ms | 7.744333 ms |
+| startup | 6.570375 ms | — |
+
+All five adjusted pairs were valid. The whole-process medians are 1.28% and
+1.10% lower than the post-reboot Batch 6 observations, and the width ratio is
+2.469x versus 2.473x. S2's unified `int64` index domain therefore introduces no
+V6 regression. It does not change the outstanding narrow-arithmetic
+representation work. The raw report is
+`/tmp/aura-s1-post-s2-v6-face52e.json`, SHA-256
+`491d1268398c46b0c55393d7542d63a93804034ba6e8b128be67565f93fcdf64`.

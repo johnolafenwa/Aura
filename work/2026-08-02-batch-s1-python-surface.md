@@ -73,6 +73,58 @@ the Array list constructor, and capability syntax; receiver-sensitive
 `.remove(...)` calls were classified before editing so list index removal became
 `pop(index)` without changing dict or set behavior.
 
+The final one-shot manifest had SHA-256
+`f5e99b455b39109e2b2992231c70135f7935847663428044521eafe94cbe2f6d`.
+Its exact found/rewrite ledger was:
+
+| Inventory rule | Found | Rewritten |
+| --- | ---: | ---: |
+| `Vec` type/constructor to `list` | 305 | 305 |
+| `String` type to `str` | 1,442 | 1,442 |
+| `Map` type/constructor to `dict` | 46 | 46 |
+| `Set` type/constructor to `set` | 41 | 41 |
+| `Set{...}` literal to `{...}` | 3 | 3 |
+| list `push` to `append` | 72 | 72 |
+| list `sort_by` to `sort(key = ...)` | 9 | 9 |
+| collection `clone` to `copy` | 16 | 16 |
+| collection `contains` to membership | 18 | 18 |
+| dict `contains_key` to membership | 4 | 4 |
+| dict `entries` to `items` | 2 | 2 |
+| dict `extend` to `update` | 3 | 3 |
+| set `insert` to `add` | 9 | 9 |
+| dict `set` call to indexed assignment | 7 | 7 |
+| set `remove` with ignored result to `discard` | 1 | 1 |
+| contract-statement rewrites for `insert` | 10 | 10 |
+| contract-statement rewrites for `items` | 2 | 2 |
+| contract-statement rewrites for `pop` | 3 | 3 |
+| contract-statement rewrites for `remove` | 6 | 6 |
+| contract-statement rewrites for `set` | 5 | 5 |
+| contract-statement rewrites for set literals | 1 | 1 |
+| contract-statement rewrites for `swap` | 1 | 1 |
+| Legitimate homonyms and private identities | 212 | 0 |
+| **Total** | **2,218** | **2,006** |
+
+This ledger is internal repository evidence. There is no public migration
+guide, compatibility mode, alias, old-spelling diagnostic, or fix-it. The
+prompt's one-release integer `remove` containment is superseded and is not
+applicable. Immediate value removal for integer lists is pinned by
+`canonical_collection_surface.au`, where `values.remove(1)` removes the value,
+and `list_remove_missing.au`, where an absent integer value traps with `AU4008`
+and membership-precheck guidance. Index removal is independently pinned by the
+same success fixture's `values.pop()` call.
+
+S2 did not produce a per-occurrence migration manifest. The exact pre-flip
+found count by semantic index subfamily therefore cannot be reconstructed from
+an authoritative ledger. The strongest reproducible textual evidence is the
+word diff from pre-batch `8dffd9d` to coordinated S1/S2 commit `2d604f8`,
+excluding work notes and ADRs: it contains 245 direct `int32` to `int64` token
+substitutions in 244 replacement pairs across 51 maintained files, plus 24
+direct internal `i32` to `i64` replacement pairs. This does not count newly
+added implementation or test lines and is not presented as the missing
+pre-flip inventory. Semantic coverage is instead pinned directly for collection
+positions, slice endpoints, range bounds and yields, Array coordinates, and
+concurrent result indices by the fixtures and focused tests listed below.
+
 The repository identity guard now scans maintained Aura files, documentation
 fences, diagnostic oracles, editor rules, and embedded Aura programs inside
 both integration tests and Rust `*_tests.rs` unit-test siblings. It masks host
@@ -107,6 +159,37 @@ source-visible compatibility path.
 - Behavioral fixtures pin the three cast-free idioms, all six widening source
   types, pointer-sized and wider rejection, `i64` boundaries, Array
   coordinates, and non-index conversion rejection.
+
+### Post-S2 V6 measurement
+
+The maintained schema-4 V6 protocol was replayed at clean integrated commit
+`face52e3900f775a3284df56a2519622d8381d60` at
+`2026-08-02T20:13:03.022427+00:00`. The host was a
+Mac14,9 MacBook Pro with an Apple M2 Pro, 10 cores, and 16 GiB memory. A fresh
+locked release build produced `aura 0.3.0-dev (face52e3900f)`, SHA-256
+`1f7e3281e574d2bd07d666735238833349f1854bd1c32d5684a3a8545a8cfb10`.
+
+The focused replay used the established `startup.au`, `int32_loop.au`, and
+`int64_loop.au` direct-native workloads: one excluded warmup each, five
+measured repetitions, rotating startup/int32/int64 order, exact stdout checks,
+and same-repetition whole-process-minus-startup loop estimates. Both quiet
+process checks were empty and the report is contractual.
+
+| V6 lane | Median | MAD | p95 | Best |
+| --- | ---: | ---: | ---: | ---: |
+| startup, whole process | 6.570375 ms | 0.243542 ms | 9.216708 ms | 6.326833 ms |
+| `int32`, whole process | 36.222917 ms | 0.467584 ms | 45.228209 ms | 35.254792 ms |
+| `int64`, whole process | 14.673875 ms | 0.315334 ms | 16.303083 ms | 14.193708 ms |
+| `int32`, paired loop estimate | 29.305958 ms | 0.590126 ms | 36.011501 ms | 28.684417 ms |
+| `int64`, paired loop estimate | 7.744333 ms | 0.657958 ms | 8.418834 ms | 7.085334 ms |
+
+All five startup-adjusted pairs were valid for both widths. Against the
+accepted post-reboot whole-process baseline of 36.691666 ms / 14.837417 ms,
+the post-S2 medians are 1.28% / 1.10% lower. The `int32`/`int64` median ratio is
+2.469x versus the baseline's 2.473x. The index-domain migration therefore shows
+no V6 regression and does not begin the separately authorized P1 optimization
+work. Raw evidence is `/tmp/aura-s1-post-s2-v6-face52e.json`, SHA-256
+`491d1268398c46b0c55393d7542d63a93804034ba6e8b128be67565f93fcdf64`.
 
 ### S1 canonical collection surface
 
