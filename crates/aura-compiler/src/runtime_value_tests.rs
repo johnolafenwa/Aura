@@ -34,6 +34,94 @@ use super::{
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
 use crate::integer::IntegerKind;
 
+fn math_call(name: &str, values: &[f64]) -> super::Result<Value> {
+    super::evaluate_host_builtin(
+        &format!("math::{name}"),
+        values.iter().copied().map(Value::Float).collect(),
+    )
+}
+
+fn expect_math_float(name: &str, values: &[f64]) -> f64 {
+    let Value::Float(value) = math_call(name, values).expect("math call should succeed") else {
+        panic!("math.{name} should return float64");
+    };
+    value
+}
+
+fn expect_math_int(name: &str, value: f64) -> i64 {
+    let Value::Int(value) = math_call(name, &[value]).expect("math call should succeed") else {
+        panic!("math.{name} should return int64");
+    };
+    i64::try_from(value.as_i128().expect("math integer should be signed"))
+        .expect("math integer should fit int64")
+}
+
+#[test]
+fn math_host_builtins_follow_the_ratified_finite_contract() {
+    assert_eq!(expect_math_int("floor", -1.25), -2);
+    assert_eq!(expect_math_int("ceil", -1.25), -1);
+    assert_eq!(expect_math_int("trunc", -1.75), -1);
+    assert_eq!(expect_math_float("pow", &[2.0, -3.0]), 0.125);
+    assert_eq!(expect_math_float("exp", &[0.0]), 1.0);
+    assert_eq!(expect_math_float("log", &[1.0]), 0.0);
+    assert_eq!(expect_math_float("log2", &[8.0]), 3.0);
+    assert_eq!(expect_math_float("log10", &[1000.0]), 3.0);
+    assert_eq!(expect_math_float("sin", &[0.0]), 0.0);
+    assert_eq!(expect_math_float("cos", &[0.0]), 1.0);
+    assert_eq!(expect_math_float("tan", &[0.0]), 0.0);
+}
+
+#[test]
+fn math_host_builtins_classify_every_exception_family() {
+    for name in ["floor", "ceil", "trunc"] {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.0e20] {
+            let error = math_call(name, &[value]).expect_err("conversion must fail");
+            assert_eq!(error.code, "AU4002", "{name}({value})");
+        }
+    }
+
+    assert!(expect_math_float("exp", &[f64::NAN]).is_nan());
+    assert_eq!(expect_math_float("exp", &[f64::INFINITY]), f64::INFINITY);
+    assert_eq!(expect_math_float("exp", &[f64::NEG_INFINITY]), 0.0);
+    assert_eq!(
+        math_call("exp", &[1000.0])
+            .expect_err("finite exponential overflow must trap")
+            .code,
+        "AU4002"
+    );
+
+    for name in ["log", "log2", "log10"] {
+        assert!(expect_math_float(name, &[f64::NAN]).is_nan());
+        assert_eq!(expect_math_float(name, &[f64::INFINITY]), f64::INFINITY);
+        for value in [0.0, -0.0, -1.0] {
+            let error = math_call(name, &[value]).expect_err("log domain must fail");
+            assert_eq!(error.code, "AU4001", "{name}({value})");
+        }
+    }
+
+    for name in ["sin", "cos", "tan"] {
+        assert!(expect_math_float(name, &[f64::NAN]).is_nan());
+        for value in [f64::INFINITY, f64::NEG_INFINITY] {
+            let error = math_call(name, &[value]).expect_err("trig infinity must fail");
+            assert_eq!(error.code, "AU4001", "{name}({value})");
+        }
+    }
+
+    assert_eq!(expect_math_float("pow", &[f64::NAN, 0.0]), 1.0);
+    assert_eq!(expect_math_float("pow", &[1.0, f64::NAN]), 1.0);
+    assert!(expect_math_float("pow", &[f64::NAN, 2.0]).is_nan());
+    for (base, exponent) in [(0.0, -1.0), (-2.0, 0.5)] {
+        let error = math_call("pow", &[base, exponent]).expect_err("pow domain must fail");
+        assert_eq!(error.code, "AU4001");
+    }
+    assert_eq!(
+        math_call("pow", &[f64::MAX, 2.0])
+            .expect_err("finite power overflow must trap")
+            .code,
+        "AU4002"
+    );
+}
+
 #[test]
 fn dense_arrays_validate_shape_storage_and_deep_clone() {
     let array = ArrayValue::new(

@@ -286,6 +286,49 @@ fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() 
 }
 
 #[test]
+fn math_namespace_exposes_the_exact_float64_function_contract() {
+    let namespace =
+        builtin_module_namespace(&["math".to_string()]).expect("math should be a builtin module");
+    let expected = [
+        ("ceil", vec!["value"], Type::named("int64")),
+        ("cos", vec!["value"], Type::named("float64")),
+        ("exp", vec!["value"], Type::named("float64")),
+        ("floor", vec!["value"], Type::named("int64")),
+        ("log", vec!["value"], Type::named("float64")),
+        ("log10", vec!["value"], Type::named("float64")),
+        ("log2", vec!["value"], Type::named("float64")),
+        ("pow", vec!["base", "exponent"], Type::named("float64")),
+        ("sin", vec!["value"], Type::named("float64")),
+        ("tan", vec!["value"], Type::named("float64")),
+        ("trunc", vec!["value"], Type::named("int64")),
+    ];
+
+    assert_eq!(namespace.functions.len(), expected.len());
+    for (name, parameter_names, return_type) in expected {
+        let function = namespace
+            .functions
+            .get(name)
+            .unwrap_or_else(|| panic!("math.{name} should be available"));
+        assert_eq!(
+            function
+                .decl
+                .params
+                .iter()
+                .map(|parameter| parameter.name.as_str())
+                .collect::<Vec<_>>(),
+            parameter_names
+        );
+        assert!(function
+            .signature
+            .params
+            .iter()
+            .all(|parameter| *parameter == Type::named("float64")));
+        assert_eq!(function.signature.return_type, return_type);
+        assert!(host_builtin_metadata(&format!("math::{name}")).is_some());
+    }
+}
+
+#[test]
 fn bytes_namespace_exposes_shared_byte_vector_codecs_and_typed_errors() {
     use crate::sema::Type;
 

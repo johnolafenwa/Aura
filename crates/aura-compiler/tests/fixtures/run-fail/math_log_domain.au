@@ -1,0 +1,4 @@
+import math
+
+def main():
+    print(math.log(0.0))

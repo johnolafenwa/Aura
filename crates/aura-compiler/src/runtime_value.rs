@@ -14830,6 +14830,86 @@ fn evaluate_host_builtin_with_args(
     }
 
     match name {
+        "math::floor" | "math::ceil" | "math::trunc" => {
+            host_expect_arity(name, &args, 1)?;
+            let display_name = name.replace("::", ".");
+            let Value::Float(value) = args[0] else {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!("`{display_name}` expects `float64`"),
+                ));
+            };
+            let rounded = match name {
+                "math::floor" => value.floor(),
+                "math::ceil" => value.ceil(),
+                "math::trunc" => value.trunc(),
+                _ => unreachable!(),
+            };
+            // `i64::MAX as f64` rounds to 2^63, so the upper bound is
+            // intentionally exclusive while -2^63 remains representable.
+            const I64_MIN_F64: f64 = -9_223_372_036_854_775_808.0;
+            const I64_LIMIT_F64: f64 = 9_223_372_036_854_775_808.0;
+            if !rounded.is_finite() || !(I64_MIN_F64..I64_LIMIT_F64).contains(&rounded) {
+                return Err(Diagnostic::coded(
+                    "AU4002",
+                    format!("`{display_name}` result cannot be represented as `int64`"),
+                ));
+            }
+            let integer =
+                IntegerValue::from_typed_signed(rounded as i64 as i128, IntegerKind::Int64)
+                    .expect("validated math conversion must fit int64");
+            Ok(Value::Int(integer))
+        }
+        "math::pow" => {
+            host_expect_arity(name, &args, 2)?;
+            let (Value::Float(base), Value::Float(exponent)) = (&args[0], &args[1]) else {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    "`math.pow` expects two `float64` arguments",
+                ));
+            };
+            float_power(*base, *exponent, FloatPowerWidth::Float64).map(Value::Float)
+        }
+        "math::exp" | "math::log" | "math::log2" | "math::log10" | "math::sin" | "math::cos"
+        | "math::tan" => {
+            host_expect_arity(name, &args, 1)?;
+            let display_name = name.replace("::", ".");
+            let Value::Float(value) = args[0] else {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!("`{display_name}` expects `float64`"),
+                ));
+            };
+            if matches!(name, "math::log" | "math::log2" | "math::log10")
+                && value.is_finite()
+                && value <= 0.0
+            {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!("`{display_name}` domain error for `{value}`"),
+                ));
+            }
+            if matches!(name, "math::sin" | "math::cos" | "math::tan") && value.is_infinite() {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!("`{display_name}` domain error for `{value}`"),
+                ));
+            }
+            let result = match name {
+                "math::exp" => value.exp(),
+                "math::log" => value.ln(),
+                "math::log2" => value.log2(),
+                "math::log10" => value.log10(),
+                "math::sin" => value.sin(),
+                "math::cos" => value.cos(),
+                "math::tan" => value.tan(),
+                _ => unreachable!(),
+            };
+            if name == "math::exp" && value.is_finite() && result.is_infinite() {
+                return Err(Diagnostic::coded("AU4002", "`math.exp` overflow"));
+            }
+            Ok(Value::Float(result))
+        }
         "control::__retry_validate" => {
             host_expect_arity(name, &args, 2)?;
             let max_attempts = match &args[0] {

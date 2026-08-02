@@ -1651,6 +1651,44 @@ fn path_namespace() -> ModuleNamespace {
     )
 }
 
+fn math_namespace() -> ModuleNamespace {
+    let float = || type_ref("float64", Vec::new());
+    let unary_float =
+        |name| function_info("math", name, vec![value_param("value", float())], float());
+    let unary_int = |name| {
+        function_info(
+            "math",
+            name,
+            vec![value_param("value", float())],
+            type_ref("int64", Vec::new()),
+        )
+    };
+    function_only_namespace(
+        "math",
+        vec![
+            unary_int("floor"),
+            unary_int("ceil"),
+            unary_int("trunc"),
+            function_info(
+                "math",
+                "pow",
+                vec![
+                    value_param("base", float()),
+                    value_param("exponent", float()),
+                ],
+                float(),
+            ),
+            unary_float("exp"),
+            unary_float("log"),
+            unary_float("log2"),
+            unary_float("log10"),
+            unary_float("sin"),
+            unary_float("cos"),
+            unary_float("tan"),
+        ],
+    )
+}
+
 fn serialization_namespace(name: &str) -> ModuleNamespace {
     let result_string = || {
         type_ref(
@@ -2091,6 +2129,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "control" => Some(control_namespace()),
         "sys" => Some(sys_namespace()),
         "path" => Some(path_namespace()),
+        "math" => Some(math_namespace()),
         "bytes" => Some(bytes_namespace()),
         "json" => Some(json_namespace()),
         "toml" => Some(serialization_namespace(name)),
@@ -2100,7 +2139,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 }
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
-    "sys", "path", "bytes", "json", "toml", "metrics", "log", "trace", "random",
+    "sys", "path", "math", "bytes", "json", "toml", "metrics", "log", "trace", "random",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
@@ -2198,8 +2237,8 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
-        "io", "fs", "net", "process", "random", "control", "sys", "path", "bytes", "json", "toml",
-        "log", "metrics", "trace",
+        "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "bytes", "json",
+        "toml", "log", "metrics", "trace",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

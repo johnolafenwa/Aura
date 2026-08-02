@@ -496,6 +496,45 @@ def main() -> int32:
 }
 
 #[test]
+fn math_analysis_completes_and_hovers_the_exact_public_surface() {
+    let member_source = "import math\n\ndef main():\n    math.\n";
+    let completions = complete_source(member_source, 3, 9, Some('.'))
+        .expect("math member completion should recover");
+    let names = completions
+        .iter()
+        .filter(|completion| completion.kind == "function")
+        .map(|completion| completion.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        names,
+        std::collections::BTreeSet::from([
+            "ceil", "cos", "exp", "floor", "log", "log10", "log2", "pow", "sin", "tan", "trunc",
+        ])
+    );
+    let pow = completions
+        .iter()
+        .find(|completion| completion.name == "pow")
+        .expect("math.pow completion should exist");
+    assert_eq!(
+        pow.detail,
+        "pow(base: float64, exponent: float64) -> float64"
+    );
+
+    let source = "import math\n\ndef main():\n    print(math.pow(2.0, 3.0))\n";
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 3
+            && occurrence.hover.contains("function pow")
+            && occurrence.hover.contains("float64")
+    }));
+}
+
+#[test]
 fn user_defined_rng_completion_uses_only_its_declared_surface() {
     let source = r#"import random
 

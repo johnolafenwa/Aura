@@ -103,6 +103,39 @@ def main():
     assert_eq!(arity.code, "AU2004");
 }
 
+#[test]
+fn math_module_requires_and_returns_exact_float64_types() {
+    check_ffi_source_for_test(
+        r#"
+import math
+
+def main():
+    floored: int64 = math.floor(1.5)
+    ceiled: int64 = math.ceil(1.5)
+    truncated: int64 = math.trunc(-1.5)
+    powered: float64 = math.pow(2.0, 3.0)
+    exponential: float64 = math.exp(1.0)
+    natural: float64 = math.log(2.0)
+    binary: float64 = math.log2(8.0)
+    decimal: float64 = math.log10(1000.0)
+    sine: float64 = math.sin(0.0)
+    cosine: float64 = math.cos(0.0)
+    tangent: float64 = math.tan(0.0)
+"#,
+    )
+    .expect("the exact math module signatures should type check");
+
+    for source in [
+        "import math\n\ndef main():\n    value = math.sin(1 as float32)\n",
+        "import math\n\ndef main():\n    value = math.pow(2.0, 3 as int64)\n",
+    ] {
+        let error = check_ffi_source_for_test(source)
+            .expect_err("math must not introduce implicit numeric conversions");
+        assert_eq!(error.code, "AU2002");
+        assert!(error.message.contains("float64"));
+    }
+}
+
 fn public_ffi_handle_namespace(module_name: &str) -> ModuleNamespace {
     let remote = check_ffi_source_for_test("public extern \"C\" opaque class Handle\n")
         .expect("public remote opaque handle should check");
