@@ -222,7 +222,7 @@ fn body_trap_captures_active_frames_before_task_group_cleanup() {
     assert!(
         error
             .message
-            .contains("vector index `9` is out of bounds for length `1`"),
+            .contains("list index `9` is out of bounds for length `1`"),
         "unexpected primary diagnostic: {error:?}"
     );
     assert_eq!(
@@ -244,7 +244,7 @@ fn cleanup_primary_trap_captures_cleanup_function_and_active_caller_once() {
     assert!(
         error
             .message
-            .contains("vector index `9` is out of bounds for length `1`"),
+            .contains("list index `9` is out of bounds for length `1`"),
         "unexpected cleanup diagnostic: {error:?}"
     );
     assert_eq!(
