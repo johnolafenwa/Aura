@@ -64,6 +64,8 @@ done
 test -s examples/numbers/scalar_math.au
 grep -Fq '`scalar_math.au`' examples/README.md
 grep -Fq 'math.pow(2.0, -3.0)' examples/numbers/scalar_math.au
+grep -Fq 'math.pi' examples/numbers/scalar_math.au
+grep -Fq '0x7ff8000000000000' docs/manual/math.md
 grep -Fq 'compiler bridge exposes the complete math module function surface' tools/aura-language-server/test/compiler_bridge.test.js
 grep -Fq '| `math.pow` | `pow(base: float64, exponent: float64) -> float64`' docs/manual/api-index.md
 grep -Fq 'the executable [Math Module](/manual/math) block' docs/manual/conformance.md

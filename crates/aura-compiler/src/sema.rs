@@ -2596,8 +2596,29 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         );
     }
 
-    let mut constant_init_plan = constants.values().cloned().collect::<Vec<_>>();
-    constant_init_plan.sort_by_key(|constant| (constant.decl.span.line, constant.decl.span.column));
+    let mut constant_init_plan = Vec::new();
+    let mut planned_constants = BTreeSet::new();
+    for constant in imported_modules
+        .values()
+        .flat_map(|namespace| namespace.all_constants.values())
+        .chain(
+            constants
+                .values()
+                .filter(|constant| constant.module_name != module_name),
+        )
+    {
+        let key = (constant.module_name.clone(), constant.decl.name.clone());
+        if planned_constants.insert(key) {
+            constant_init_plan.push(constant.clone());
+        }
+    }
+    let mut local_constants = constants
+        .values()
+        .filter(|constant| constant.module_name == module_name)
+        .cloned()
+        .collect::<Vec<_>>();
+    local_constants.sort_by_key(|constant| (constant.decl.span.line, constant.decl.span.column));
+    constant_init_plan.extend(local_constants);
     let mut program = Program {
         module: module.clone(),
         module_name,

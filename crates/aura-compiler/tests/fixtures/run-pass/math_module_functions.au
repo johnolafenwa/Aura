@@ -1,6 +1,10 @@
 import math
 
 def main() -> int32:
+    print(math.pi)
+    print(math.e)
+    print(math.inf)
+    print(math.nan)
     print(math.floor(-1.25))
     print(math.ceil(-1.25))
     print(math.trunc(-1.75))

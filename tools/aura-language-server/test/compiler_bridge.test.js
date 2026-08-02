@@ -2585,6 +2585,7 @@ test("compiler bridge exposes the complete math module function surface", async 
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-math-module-"));
   const source = [
     "import math",
+    "from math import pi as circle",
     "",
     "def main() -> int32:",
     "    print(math.floor(3.75))",
@@ -2598,6 +2599,11 @@ test("compiler bridge exposes the complete math module function surface", async 
     "    print(math.sin(0.0))",
     "    print(math.cos(0.0))",
     "    print(math.tan(0.0))",
+    "    print(math.pi)",
+    "    print(math.e)",
+    "    print(math.inf)",
+    "    print(math.nan)",
+    "    print(circle)",
     "    return 0",
     ""
   ].join("\n");
@@ -2613,6 +2619,12 @@ test("compiler bridge exposes the complete math module function surface", async 
     ["sin", "sin(value: float64) -> float64"],
     ["cos", "cos(value: float64) -> float64"],
     ["tan", "tan(value: float64) -> float64"]
+  ]);
+  const constants = new Map([
+    ["pi", "float64"],
+    ["e", "float64"],
+    ["inf", "float64"],
+    ["nan", "float64"]
   ]);
 
   try {
@@ -2633,6 +2645,24 @@ test("compiler bridge exposes the complete math module function surface", async 
         `missing math.${name} hover signature: ${signature}`
       );
     }
+    for (const name of constants.keys()) {
+      assert.ok(
+        analysis.occurrences.some(
+          (occurrence) =>
+            occurrence.hover.includes(`module constant ${name}`) &&
+            occurrence.hover.includes("float64")
+        ),
+        `missing math.${name} constant hover`
+      );
+    }
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover.includes("module constant circle") &&
+          occurrence.hover.includes("float64")
+      ),
+      "missing directly imported math.pi alias hover"
+    );
 
     const completionSource = source.replace(
       "    return 0\n",
@@ -2652,8 +2682,14 @@ test("compiler bridge exposes the complete math module function surface", async 
 
     assert.ok(completions);
     const details = new Map(completions.map((item) => [item.name, item.detail]));
-    assert.deepEqual(details, signatures);
-    assert.ok(completions.every((item) => item.kind === "function"));
+    assert.deepEqual(details, new Map([...signatures, ...constants]));
+    assert.ok(
+      completions.every((item) =>
+        constants.has(item.name)
+          ? item.kind === "constant"
+          : item.kind === "function"
+      )
+    );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

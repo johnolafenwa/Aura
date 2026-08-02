@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use crate::ast::{
-    Argument, ClassDecl, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind,
-    FunctionDecl, Param, ParamMode, ReceiverKind, TypeRef,
+    Argument, ClassDecl, ConstantDecl, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr,
+    ExprKind, FunctionDecl, Param, ParamMode, ReceiverKind, TypeRef,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::sema::{
@@ -158,6 +158,27 @@ fn duration_expr(value: i128) -> Expr {
     Expr {
         kind: ExprKind::DurationNanos(value),
         span: builtin_span(),
+    }
+}
+
+fn float_expr_from_bits(bits: u64) -> Expr {
+    Expr {
+        kind: ExprKind::Float(f64::from_bits(bits)),
+        span: builtin_span(),
+    }
+}
+
+fn builtin_float_constant(module_name: &str, name: &str, bits: u64) -> crate::sema::ConstantInfo {
+    crate::sema::ConstantInfo {
+        module_name: module_name.to_string(),
+        decl: ConstantDecl {
+            public: true,
+            name: name.to_string(),
+            annotation: Some(type_ref("float64", Vec::new())),
+            value: float_expr_from_bits(bits),
+            span: builtin_span(),
+        },
+        ty: Type::named("float64"),
     }
 }
 
@@ -1675,7 +1696,7 @@ fn math_namespace() -> ModuleNamespace {
             type_ref("int64", Vec::new()),
         )
     };
-    function_only_namespace(
+    let mut namespace = function_only_namespace(
         "math",
         vec![
             unary_int("floor"),
@@ -1698,7 +1719,19 @@ fn math_namespace() -> ModuleNamespace {
             unary_float("cos"),
             unary_float("tan"),
         ],
-    )
+    );
+    let constants = [
+        ("pi", 0x4009_21fb_5444_2d18_u64),
+        ("e", 0x4005_bf0a_8b14_5769_u64),
+        ("inf", 0x7ff0_0000_0000_0000_u64),
+        ("nan", 0x7ff8_0000_0000_0000_u64),
+    ]
+    .into_iter()
+    .map(|(name, bits)| (name.to_string(), builtin_float_constant("math", name, bits)))
+    .collect::<BTreeMap<_, _>>();
+    namespace.constants = constants.clone();
+    namespace.all_constants = constants;
+    namespace
 }
 
 fn serialization_namespace(name: &str) -> ModuleNamespace {
@@ -2274,6 +2307,9 @@ pub(crate) fn builtin_imported_binding(
     })?;
     if let Some(function) = namespace.functions.get(name) {
         return Ok(ImportedBinding::Function(function.clone()));
+    }
+    if let Some(constant) = namespace.constants.get(name) {
+        return Ok(ImportedBinding::Constant(constant.clone()));
     }
     if let Some(class_info) = namespace.classes.get(name) {
         return Ok(ImportedBinding::Class(class_info.clone()));

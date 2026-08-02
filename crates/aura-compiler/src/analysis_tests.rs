@@ -537,6 +537,45 @@ fn math_analysis_completes_and_hovers_the_exact_public_surface() {
 }
 
 #[test]
+fn math_analysis_exposes_qualified_and_aliased_constant_details() {
+    let member_source = "import math\n\ndef main():\n    math.\n";
+    let completions = complete_source(member_source, 3, 9, Some('.'))
+        .expect("math member completion should recover");
+    for name in ["pi", "e", "inf", "nan"] {
+        let completion = completions
+            .iter()
+            .find(|completion| completion.name == name)
+            .unwrap_or_else(|| panic!("missing math.{name} completion"));
+        assert_eq!(completion.kind, "constant");
+        assert_eq!(completion.detail, "float64");
+    }
+
+    let source = concat!(
+        "import math\n",
+        "from math import pi as circle\n\n",
+        "def main():\n",
+        "    print(math.e)\n",
+        "    print(circle)\n",
+    );
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 4
+            && occurrence.hover.contains("module constant e")
+            && occurrence.hover.contains("float64")
+    }));
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 5
+            && occurrence.hover.contains("module constant circle")
+            && occurrence.hover.contains("float64")
+    }));
+}
+
+#[test]
 fn user_defined_rng_completion_uses_only_its_declared_surface() {
     let source = r#"import random
 

@@ -1,6 +1,8 @@
 # API Index
 
-This page indexes every maintained public builtin function, method, module type, and builtin enum documented by the manual. It is intentionally dense. Use the linked manual pages for examples and longer discussion.
+This page indexes every maintained public builtin constant, function, method,
+module type, and builtin enum documented by the manual. It is intentionally
+dense. Use the linked manual pages for examples and longer discussion.
 
 `assert condition` and `assert condition, message` are statements rather than
 callable APIs. Their exact typing, lazy-message, `AU4001`, cleanup, and
@@ -119,6 +121,10 @@ exactly `float64`; the module performs no implicit numeric conversion.
 
 | API | Signature | Contract |
 | --- | --- | --- |
+| `math.pi` | `float64` constant | Nearest binary64 pi, bits `0x400921fb54442d18`. |
+| `math.e` | `float64` constant | Nearest binary64 Euler's number, bits `0x4005bf0a8b145769`. |
+| `math.inf` | `float64` constant | Positive infinity, bits `0x7ff0000000000000`. |
+| `math.nan` | `float64` constant | Canonical quiet NaN, bits `0x7ff8000000000000`. |
 | `math.floor` | `floor(value: float64) -> int64` | Greatest integer less than or equal to `value`, checked for `int64` range. |
 | `math.ceil` | `ceil(value: float64) -> int64` | Least integer greater than or equal to `value`, checked for `int64` range. |
 | `math.trunc` | `trunc(value: float64) -> int64` | Truncates toward zero, checked for `int64` range. |

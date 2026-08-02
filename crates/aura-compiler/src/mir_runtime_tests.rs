@@ -98,6 +98,46 @@ fn mir_module_constant_reads_share_one_stored_non_copy_value() {
     );
 }
 
+#[test]
+fn builtin_math_constant_uses_once_initialized_shared_module_storage() {
+    let module = crate::lower_source_to_mir(
+        "import math\n\ndef main():\n    print(math.pi)\n    print(math.pi)\n",
+    )
+    .expect("math constant source should lower");
+    let pi = module
+        .constants
+        .iter()
+        .find(|constant| constant.key == "math::pi")
+        .cloned()
+        .expect("generic MIR constants should include math.pi exactly once");
+    assert_eq!(
+        module
+            .constants
+            .iter()
+            .filter(|constant| constant.key == "math::pi")
+            .count(),
+        1
+    );
+    let mut runtime = MirRuntime::new(
+        module,
+        Arc::new(Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+
+    let first = runtime
+        .read_module_constant(&pi.key, &pi.initializer)
+        .expect("first math.pi read should initialize storage");
+    let second = runtime
+        .read_module_constant(&pi.key, &pi.initializer)
+        .expect("second math.pi read should reuse storage");
+
+    assert!(Arc::ptr_eq(&first, &second));
+    let Value::Float(value) = first.as_ref() else {
+        panic!("math.pi storage should contain float64");
+    };
+    assert_eq!(value.to_bits(), 0x4009_21fb_5444_2d18);
+}
+
 fn lower_ffi_runtime_source(source: &str) -> MirModule {
     let module = crate::parse_source(source).expect("FFI runtime source should parse");
     let program = crate::check_module_with_builtin_imports(module)

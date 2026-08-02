@@ -868,9 +868,13 @@ single task-result right on the first attempt.
     - `9.0`
     - `9.0`
 - `scalar_math.au`
-  - scalar `float64` rounding, power, exponential, logarithmic, and
-    trigonometric functions from the `math` module
+  - exact `float64` constants plus scalar rounding, power, exponential,
+    logarithmic, and trigonometric functions from the `math` module
   - prints:
+    - `3.141592653589793`
+    - `2.718281828459045`
+    - `inf`
+    - `NaN`
     - `-2`
     - `-1`
     - `-1`

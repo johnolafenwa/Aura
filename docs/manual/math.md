@@ -1,13 +1,18 @@
 # Math Module
 
-The `math` module provides scalar `float64` rounding, exponentiation,
-exponential, logarithmic, and trigonometric functions. Every input is
-explicitly `float64`; the module performs no implicit numeric conversion.
+The `math` module provides exact binary64 constants plus scalar `float64`
+rounding, exponentiation, exponential, logarithmic, and trigonometric
+functions. Every function input is explicitly `float64`; the module performs
+no implicit numeric conversion.
 
 ## Public API
 
 | API | Signature | Contract |
 | --- | --- | --- |
+| `math.pi` | `float64` constant | Nearest binary64 value to pi, bits `0x400921fb54442d18`. |
+| `math.e` | `float64` constant | Nearest binary64 value to Euler's number, bits `0x4005bf0a8b145769`. |
+| `math.inf` | `float64` constant | Positive infinity, bits `0x7ff0000000000000`. |
+| `math.nan` | `float64` constant | Canonical quiet NaN, bits `0x7ff8000000000000`. |
 | `math.floor` | `floor(value: float64) -> int64` | Greatest integer less than or equal to `value`. |
 | `math.ceil` | `ceil(value: float64) -> int64` | Least integer greater than or equal to `value`. |
 | `math.trunc` | `trunc(value: float64) -> int64` | Integer obtained by discarding the fractional part toward zero. |
@@ -61,6 +66,10 @@ maintained target and libm pairs.
 import math
 
 def main() -> int32:
+    print(math.pi)
+    print(math.e)
+    print(math.inf)
+    print(math.nan)
     print(math.floor(-1.25))
     print(math.ceil(-1.25))
     print(math.trunc(-1.75))
@@ -78,6 +87,10 @@ def main() -> int32:
 This program prints:
 
 ```text
+3.141592653589793
+2.718281828459045
+inf
+NaN
 -2
 -1
 -1
@@ -101,13 +114,15 @@ ordinary forms defined by this Manual.
 
 ## Typing Rules
 
-The signatures in the Public API table are exact. Every parameter has type
-`float64`. `floor`, `ceil`, and `trunc` return `int64`; every other function
-returns `float64`. A value of any other numeric type requires an explicit
-conversion before the call. Normal argument-count, argument-name, and
-exact-type checks apply.
+The four constants have exact type `float64` and the bit patterns shown in the
+Public API table. They support qualified reads and direct imports with ordinary
+import aliases. Every function parameter has type `float64`. `floor`, `ceil`,
+and `trunc` return `int64`; every other function returns `float64`. A value of
+any other numeric type requires an explicit conversion before the call. Normal
+argument-count, argument-name, and exact-type checks apply.
 
-The module namespace contains the functions in the Public API table.
+The module namespace contains every constant and function in the Public API
+table.
 
 ## Runtime Semantics
 
@@ -118,17 +133,22 @@ domain, and finite-overflow cases before returning the maintained binary64
 result. The exponential, logarithmic, and trigonometric functions preserve
 the table's NaN, infinity, signed-zero, and subnormal outcomes.
 
+Each constant has one immutable module storage location initialized once before
+application execution. Every read uses that shared location. Copy-scalar use
+preserves the stored binary64 bits, including the canonical NaN payload.
+
 For one maintained target and math implementation, repeated calls with the
 same binary64 inputs produce the same binary64 result. The functions perform
 no I/O and observe no process-global mutable state.
 
 ## Ownership And Evaluation Order
 
-Call arguments evaluate left to right and exactly once before the function
-executes. `math.pow` evaluates `base` before `exponent`. Every parameter and
-result is a Copy scalar, so calls do not move or mutate caller bindings. A
-failed call leaves all already completed argument effects observable and
-produces no result value.
+Constant reads are shared and cannot be assigned or used through mutable
+access. Call arguments evaluate left to right and exactly once before the
+function executes. `math.pow` evaluates `base` before `exponent`. Every
+parameter and result is a Copy scalar, so calls do not move or mutate caller
+bindings. A failed call leaves all already completed argument effects
+observable and produces no result value.
 
 ## Diagnostics
 
@@ -159,6 +179,7 @@ and libm pairs. The exact host diagnostic rendering around an `AU4001` or
 
 ## Status
 
-The functions, signatures, exceptional-value classifications, evaluation
-order, diagnostics, and MIR/direct backend behavior on this page are
-implemented and maintained in Aura 0.3.
+The constants, functions, exact bits and signatures, exceptional-value
+classifications, initialization and evaluation order, diagnostics, and
+MIR/direct backend behavior on this page are implemented and maintained in
+Aura 0.3.

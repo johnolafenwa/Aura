@@ -586,11 +586,18 @@ impl ModuleLoader {
                 ))
             })?;
             for import in &loaded.program.module.imports {
-                let module_path = match &import.kind {
-                    ImportKind::From { module_path, .. } => module_path,
-                    ImportKind::Module { path, .. } => path,
+                let (module_path, selected_names) = match &import.kind {
+                    ImportKind::From { module_path, names } => (module_path, Some(names)),
+                    ImportKind::Module { path, .. } => (path, None),
                 };
-                if builtin_modules::builtin_module_namespace(module_path).is_some() {
+                if let Some(namespace) = builtin_modules::builtin_module_namespace(module_path) {
+                    if let Some(names) = selected_names {
+                        plan.extend(names.iter().filter_map(|imported| {
+                            namespace.constants.get(&imported.name).cloned()
+                        }));
+                    } else {
+                        plan.extend(namespace.all_constants.into_values());
+                    }
                     continue;
                 }
                 let dependency = loader.resolve_import_path(&path, module_path)?;
@@ -611,6 +618,10 @@ impl ModuleLoader {
         let mut visited = BTreeSet::new();
         let mut plan = Vec::new();
         visit(self, entry_path, &mut visited, &mut plan)?;
+        let mut seen = BTreeSet::new();
+        plan.retain(|constant| {
+            seen.insert((constant.module_name.clone(), constant.decl.name.clone()))
+        });
         Ok(plan)
     }
 

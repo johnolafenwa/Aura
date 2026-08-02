@@ -329,6 +329,45 @@ fn math_namespace_exposes_the_exact_float64_function_contract() {
 }
 
 #[test]
+fn math_namespace_exposes_exact_generic_float64_constants() {
+    let namespace =
+        builtin_module_namespace(&["math".to_string()]).expect("math should be a builtin module");
+    let expected = [
+        ("e", 0x4005_bf0a_8b14_5769_u64),
+        ("inf", 0x7ff0_0000_0000_0000_u64),
+        ("nan", 0x7ff8_0000_0000_0000_u64),
+        ("pi", 0x4009_21fb_5444_2d18_u64),
+    ];
+
+    assert_eq!(namespace.constants.len(), expected.len());
+    assert_eq!(namespace.all_constants.len(), expected.len());
+    for (name, bits) in expected {
+        let constant = namespace
+            .constants
+            .get(name)
+            .unwrap_or_else(|| panic!("math.{name} should be available"));
+        assert_eq!(constant.module_name, "math");
+        assert!(constant.decl.public);
+        assert_eq!(constant.decl.name, name);
+        assert_eq!(constant.ty, Type::named("float64"));
+        let crate::ast::ExprKind::Float(value) = constant.decl.value.kind else {
+            panic!("math.{name} should use the generic float-literal constant representation");
+        };
+        assert_eq!(value.to_bits(), bits, "math.{name} bits");
+        assert_eq!(
+            namespace.all_constants[name].decl.value.span,
+            constant.decl.value.span
+        );
+    }
+
+    assert!(matches!(
+        builtin_imported_binding(&["math".to_string()], "pi", crate::diag::Span::new(7, 3))
+            .expect("math.pi should be directly importable"),
+        crate::sema::ImportedBinding::Constant(_)
+    ));
+}
+
+#[test]
 fn bytes_namespace_exposes_shared_byte_vector_codecs_and_typed_errors() {
     use crate::sema::Type;
 
