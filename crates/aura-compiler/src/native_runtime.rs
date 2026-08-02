@@ -2981,6 +2981,13 @@ fn runtime_error_at(span: Span, message: impl AsRef<str>) -> ! {
     runtime_diagnostic_error(Diagnostic::at(span, message.as_ref()))
 }
 
+fn runtime_diagnostic_error_at(mut diagnostic: Diagnostic, span: Option<Span>) -> ! {
+    if diagnostic.span.is_none() {
+        diagnostic.span = span;
+    }
+    runtime_diagnostic_error(diagnostic)
+}
+
 fn with_task_runtime_error_capture<T>(f: impl FnOnce() -> T) -> T {
     struct CaptureGuard {
         key: u64,
@@ -6520,7 +6527,7 @@ pub extern "C-unwind" fn aura_direct_binary_value(
             op,
         ) {
             Ok(value) => boxed_value(value),
-            Err(error) => runtime_error(error.message),
+            Err(error) => runtime_diagnostic_error(error),
         }
     })
 }
@@ -6570,10 +6577,7 @@ pub extern "C-unwind" fn aura_direct_binary_value_at(
             float_width,
         ) {
             Ok(value) => boxed_value(value),
-            Err(error) => match runtime_span(line, column) {
-                Some(span) => runtime_error_at(span, error.message),
-                None => runtime_error(error.message),
-            },
+            Err(error) => runtime_diagnostic_error_at(error, runtime_span(line, column)),
         }
     })
 }

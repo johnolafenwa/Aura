@@ -2895,7 +2895,27 @@ fn capture_runtime_error_message(f: impl FnOnce() + panic::UnwindSafe) -> String
     capture_runtime_diagnostic(f).message
 }
 
-fn capture_direct_boundary_error_message(work: impl FnOnce() + Send + 'static) -> String {
+#[test]
+fn direct_binary_shift_preserves_the_structured_code_and_source_span() {
+    let diagnostic = capture_direct_boundary_diagnostic(|| {
+        let int8 = |value| {
+            boxed_value(Value::Int(
+                IntegerValue::from_typed_signed(value, IntegerKind::Int8)
+                    .expect("test value should fit int8"),
+            ))
+        };
+        super::aura_direct_binary_value_at(19, int8(1), int8(-1), 0, 6, 11);
+    });
+
+    assert_eq!(diagnostic.code, "AU4002");
+    assert_eq!(
+        diagnostic.message,
+        "integer shift count `-1` is outside the required range `0..8`"
+    );
+    assert_eq!(diagnostic.span, Some(Span::new(6, 11)));
+}
+
+fn capture_direct_boundary_diagnostic(work: impl FnOnce() + Send + 'static) -> Diagnostic {
     run_lightweight_root_task(move || {
         super::with_direct_task_runtime_scope(|| {
             super::with_task_runtime_error_capture(|| {
@@ -2905,7 +2925,10 @@ fn capture_direct_boundary_error_message(work: impl FnOnce() + Send + 'static) -
         })
     })
     .expect_err("the exported direct-runtime boundary should fail")
-    .message
+}
+
+fn capture_direct_boundary_error_message(work: impl FnOnce() + Send + 'static) -> String {
+    capture_direct_boundary_diagnostic(work).message
 }
 
 fn expect_option_none(ptr: *mut OpaqueValue) {
