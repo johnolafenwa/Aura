@@ -398,6 +398,7 @@ struct NativeCodegen<'a> {
     print_value: FuncId,
     sqrt_f64: FuncId,
     assert_fail: FuncId,
+    assert_fail_detailed: FuncId,
     fail_division_by_zero: FuncId,
     fail_int32_overflow: FuncId,
     fail_integer_overflow: FuncId,
@@ -896,6 +897,7 @@ impl<'a> NativeCodegen<'a> {
             print_value => ("aura_direct_print_value", [types::I64], None),
             sqrt_f64 => ("aura_direct_sqrt_f64", [types::F64], Some(types::F64)),
             assert_fail => ("aura_direct_assert_fail", [types::I64, types::I64, types::I64], None),
+            assert_fail_detailed => ("aura_direct_assert_fail_detailed", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
             fail_division_by_zero => ("aura_direct_fail_division_by_zero", [types::I64, types::I64], None),
             fail_int32_overflow => ("aura_direct_fail_int32_overflow", [types::I64, types::I64, types::I64], None),
             fail_integer_overflow => ("aura_direct_fail_integer_overflow", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
@@ -1328,6 +1330,7 @@ impl<'a> NativeCodegen<'a> {
             print_value,
             sqrt_f64,
             assert_fail,
+            assert_fail_detailed,
             fail_division_by_zero,
             fail_int32_overflow,
             fail_integer_overflow,
@@ -1972,6 +1975,9 @@ impl<'a> NativeCodegen<'a> {
         let assert_fail = self
             .object
             .declare_func_in_func(self.assert_fail, builder.func);
+        let assert_fail_detailed = self
+            .object
+            .declare_func_in_func(self.assert_fail_detailed, builder.func);
         let fail_division_by_zero = self
             .object
             .declare_func_in_func(self.fail_division_by_zero, builder.func);
@@ -2959,6 +2965,7 @@ impl<'a> NativeCodegen<'a> {
             print_value,
             sqrt_f64,
             assert_fail,
+            assert_fail_detailed,
             fail_division_by_zero,
             fail_int32_overflow,
             fail_integer_overflow,
@@ -3789,6 +3796,7 @@ struct FunctionCompiler<'a> {
     print_value: cranelift_codegen::ir::FuncRef,
     sqrt_f64: cranelift_codegen::ir::FuncRef,
     assert_fail: cranelift_codegen::ir::FuncRef,
+    assert_fail_detailed: cranelift_codegen::ir::FuncRef,
     fail_division_by_zero: cranelift_codegen::ir::FuncRef,
     fail_int32_overflow: cranelift_codegen::ir::FuncRef,
     fail_integer_overflow: cranelift_codegen::ir::FuncRef,
@@ -4400,7 +4408,11 @@ impl<'a> FunctionCompiler<'a> {
                 self.compile_for_range(binding, iterable, body_label, exit_label)?;
                 self.release_all_temporary_owned();
             }
-            Terminator::AssertFail { message, span } => {
+            Terminator::AssertFail {
+                message,
+                captures,
+                span,
+            } => {
                 let message = match message {
                     Some(message) => {
                         let message = self.load_operand(message)?;
@@ -4419,9 +4431,41 @@ impl<'a> FunctionCompiler<'a> {
                     None => self.builder.ins().iconst(types::I64, 0),
                 };
                 let (line, column) = self.span_values(Some(*span));
-                self.builder
-                    .ins()
-                    .call(self.assert_fail, &[message, line, column]);
+                match captures.as_slice() {
+                    [] => {
+                        self.builder
+                            .ins()
+                            .call(self.assert_fail, &[message, line, column]);
+                    }
+                    [left, right] => {
+                        let left_label = self.string_value(&left.label)?.values[0];
+                        let left_type = self.string_value(&left.ty.to_string())?.values[0];
+                        let left_value = self.load_assertion_capture_value(&left.value)?;
+                        let right_label = self.string_value(&right.label)?.values[0];
+                        let right_type = self.string_value(&right.ty.to_string())?.values[0];
+                        let right_value = self.load_assertion_capture_value(&right.value)?;
+                        self.builder.ins().call(
+                            self.assert_fail_detailed,
+                            &[
+                                message,
+                                line,
+                                column,
+                                left_label,
+                                left_type,
+                                left_value,
+                                right_label,
+                                right_type,
+                                right_value,
+                            ],
+                        );
+                    }
+                    _ => {
+                        return Err(
+                            "direct backend requires exactly two assertion captures when captures are present"
+                                .to_string(),
+                        )
+                    }
+                }
                 self.builder.ins().trap(TrapCode::unwrap_user(1));
             }
             other => {
@@ -4432,6 +4476,22 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         Ok(())
+    }
+
+    fn load_assertion_capture_value(
+        &mut self,
+        operand: &Operand,
+    ) -> std::result::Result<Value, String> {
+        let value = self.load_operand(operand)?;
+        match &value.ty {
+            DirectType::Opaque(Type::Named(name, args)) if name == "str" && args.is_empty() => {
+                Ok(value.values[0])
+            }
+            other => Err(format!(
+                "direct backend expected a rendered assertion capture to be `str`, found `{}`",
+                render_direct_type(other)
+            )),
+        }
     }
 
     fn emit_return_value(&mut self, value: ValueRef) -> std::result::Result<(), String> {
@@ -13990,9 +14050,20 @@ fn validate_function(
             }
             Terminator::ForRange { iterable, .. } => validate_operand(iterable)?,
             Terminator::Match { scrutinee, .. } => validate_operand(scrutinee)?,
-            Terminator::AssertFail { message, .. } => {
+            Terminator::AssertFail {
+                message, captures, ..
+            } => {
                 if let Some(message) = message {
                     validate_operand(message)?;
+                }
+                if !captures.is_empty() && captures.len() != 2 {
+                    return Err(
+                        "direct backend requires exactly two assertion captures when captures are present"
+                            .to_string(),
+                    );
+                }
+                for capture in captures {
+                    validate_operand(&capture.value)?;
                 }
             }
             other => {

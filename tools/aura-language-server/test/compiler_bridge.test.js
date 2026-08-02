@@ -343,6 +343,44 @@ test("compiler bridge defaults metadata omitted by older compatible records", ()
     call_frames: [],
     task_ancestry: []
   });
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(convert({}).data, "assertion_operands"),
+    false
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      convert({ assertion_operands: [] }).data,
+      "assertion_operands"
+    ),
+    false
+  );
+});
+
+test("compiler bridge preserves populated assertion operand metadata without rewriting it", () => {
+  const assertionOperands = [
+    { label: "left", type: "str", value: "actual", truncated: false },
+    {
+      label: "right",
+      type: "str",
+      value: "expected... (truncated)",
+      truncated: true
+    }
+  ];
+  const [diagnostic] = compilerDiagnosticsToLsp({
+    diagnostics: [
+      {
+        code: "AU4001",
+        severity: 1,
+        line: 3,
+        start_character: 4,
+        end_character: 10,
+        message: "values differ",
+        assertion_operands: assertionOperands
+      }
+    ]
+  });
+
+  assert.deepEqual(diagnostic.data.assertion_operands, assertionOperands);
 });
 
 test("compiler bridge preserves populated runtime frame metadata without rewriting it", () => {

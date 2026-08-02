@@ -37,6 +37,35 @@ This program does not print `building failure message`.
 If evaluating the condition or message fails first, Aura reports that earlier
 failure and never reaches the assertion result.
 
+## Failed Comparisons Show Their Values
+
+For a top-level comparison or positive membership test, Aura reports the two
+values that produced the failure:
+
+```python
+expected = 42
+actual = 41
+assert actual == expected
+```
+
+The diagnostic includes:
+
+```text
+left = 41
+right = 42
+```
+
+`assert item in collection` uses `item` and `collection` labels. Operands still
+evaluate exactly once from left to right. A custom message remains lazy and is
+evaluated after the failed operands have been captured. Each displayed value
+is limited to 4,096 UTF-8 bytes and receives a visible truncation suffix when
+needed.
+
+This focused view applies to `==`, `!=`, `<`, `<=`, `>`, `>=`, and positive
+`in` when the operation reads both operands without consuming them. Comparison
+chains, `not in`, Boolean combinations, and calls returning `bool` retain the
+ordinary assertion failure message.
+
 ## Failure Behavior
 
 `assert false` fails with diagnostic code `AU4001` and the exact message
@@ -53,16 +82,18 @@ fails, the assertion remains the primary diagnostic.
 
 ## Assertions In Test Files
 
-The existing file-level test runner treats an assertion failure like any other
-test-program failure:
+`aura test` discovers parameterless `test_*` functions and reports each one as
+an independent case. It treats an assertion failure like any other test
+failure:
 
 ```bash
 aura test tests/check_account.au
 ```
 
 A file whose assertions all pass succeeds; a failing assertion is rendered
-with its source span and makes the file fail. Function-level `test_*`
-discovery is a separate later compiler milestone.
+with its source span and makes the case fail. `aura test --format json`
+preserves introspected operands as structured fields, and `-k substring`
+selects matching canonical case names.
 
 Run the maintained example with:
 

@@ -12,6 +12,24 @@ fn empty_canonical_type_names() -> &'static BTreeMap<String, String> {
     NAMES.get_or_init(BTreeMap::new)
 }
 
+#[test]
+fn assertion_introspection_dispatch_requires_two_shared_custom_operands() {
+    assert!(assertion_dispatch_is_non_consuming(None));
+    assert!(assertion_dispatch_is_non_consuming(Some((
+        ReceiverKind::Borrow,
+        ReceiverKind::Borrow,
+    ))));
+    for dispatch in [
+        (ReceiverKind::Value, ReceiverKind::Borrow),
+        (ReceiverKind::Borrow, ReceiverKind::Value),
+        (ReceiverKind::Value, ReceiverKind::Value),
+        (ReceiverKind::BorrowMut, ReceiverKind::Borrow),
+        (ReceiverKind::Borrow, ReceiverKind::BorrowMut),
+    ] {
+        assert!(!assertion_dispatch_is_non_consuming(Some(dispatch)));
+    }
+}
+
 fn check_ffi_source_for_test(source: &str) -> Result<Program> {
     let module = crate::parse_source(source)?;
     crate::check_module_with_builtin_imports(module)

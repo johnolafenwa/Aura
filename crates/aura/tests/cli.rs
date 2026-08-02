@@ -4337,6 +4337,55 @@ fn direct_run_json_transports_runtime_traps_on_cold_warm_and_auto_paths() {
 
 #[cfg(unix)]
 #[test]
+fn assertion_introspection_json_matches_mir_and_direct_backends() {
+    let cache = TempDir::new("aura-assertion-json-parity");
+    let (_source, source_path) = write_temp_source(
+        "aura-assertion-json-parity-source",
+        "def main():\n    item = 4\n    values = [1, 2, 3]\n    assert item in values\n",
+    );
+
+    let run = |backend: Option<&str>| {
+        let mut command = Command::new(aura_bin());
+        command
+            .env("AURA_CACHE_DIR", cache.path())
+            .args(["run", "--format", "json"]);
+        if let Some(backend) = backend {
+            command.args(["--backend", backend]);
+        }
+        command
+            .arg(&source_path)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run assertion JSON backend: {error}"))
+    };
+
+    let mir = run(None);
+    let direct = run(Some("direct"));
+    assert_eq!(mir.status.code(), Some(1));
+    assert_eq!(direct.status.code(), Some(1));
+    let mir_report = parse_single_json_stderr(&mir, "MIR assertion JSON");
+    let direct_report = parse_single_json_stderr(&direct, "direct assertion JSON");
+    let expected = serde_json::json!([
+        {"label": "item", "type": "int64", "value": "4", "truncated": false},
+        {
+            "label": "collection",
+            "type": "list[int64]",
+            "value": "[1, 2, 3]",
+            "truncated": false
+        }
+    ]);
+    assert_eq!(mir_report["diagnostics"][0]["assertion_operands"], expected);
+    assert_eq!(
+        direct_report["diagnostics"][0]["assertion_operands"],
+        mir_report["diagnostics"][0]["assertion_operands"]
+    );
+    assert_eq!(
+        direct_report["diagnostics"][0]["primary_span"],
+        mir_report["diagnostics"][0]["primary_span"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn direct_run_json_distinguishes_normal_nonzero_status_from_a_runtime_trap() {
     let cache = TempDir::new("aura-native-json-normal-nonzero");
     let (_source, source_path) = write_temp_source(
@@ -12143,6 +12192,38 @@ fn assertions_preserve_exact_messages_in_run_and_direct_backends() {
 }
 
 #[test]
+fn assertion_introspection_is_once_only_and_byte_identical_across_backends() {
+    let source = r#"def left() -> int64:
+    print("left")
+    return 41
+
+def right() -> int64:
+    print("right")
+    return 42
+
+def message() -> str:
+    print("message")
+    return "numbers differ"
+
+def main():
+    assert left() == right(), message()
+"#;
+
+    let [mir, direct] = run_and_direct_failure_outputs("aura-assert-introspection-parity", source);
+    for output in [&mir, &direct] {
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "left\nright\nmessage\n"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("error[AU4001]: numbers differ"), "{stderr}");
+        assert!(stderr.contains("left = 41"), "{stderr}");
+        assert!(stderr.contains("right = 42"), "{stderr}");
+    }
+    assert_eq!(mir.stderr, direct.stderr);
+}
+
+#[test]
 fn assertions_evaluate_condition_once_and_message_only_on_failure() {
     let passing = r#"def lazy_message() -> str:
     print("unexpected message")
@@ -12446,7 +12527,7 @@ fn aura_test_json_is_one_ordered_schema_versioned_document() {
     let source_path = temp.path().join("json.au");
     fs::write(
         &source_path,
-        "def test_first():\n    print(\"captured program output\")\n\ndef test_second():\n    assert false, \"second failed\"\n",
+        "def test_first():\n    print(\"captured program output\")\n\ndef test_second():\n    assert 1 == 2, \"second failed\"\n",
     )
     .expect("JSON test source should write");
 
@@ -12480,6 +12561,13 @@ fn aura_test_json_is_one_ordered_schema_versioned_document() {
         .ends_with("::test_second"));
     assert_eq!(tests[1]["outcome"], "failed");
     assert_eq!(tests[1]["diagnostic"]["code"], "AU4001");
+    assert_eq!(
+        tests[1]["diagnostic"]["assertion_operands"],
+        serde_json::json!([
+            {"label": "left", "type": "int64", "value": "1", "truncated": false},
+            {"label": "right", "type": "int64", "value": "2", "truncated": false}
+        ])
+    );
     assert!(tests[1].get("reason").is_none());
 }
 

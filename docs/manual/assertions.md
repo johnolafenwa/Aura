@@ -47,6 +47,31 @@ message is preserved exactly, including an empty or whitespace-only str. A
 trap while evaluating the condition or message occurs first and prevents the
 assertion trap.
 
+### Operand Introspection
+
+When the whole condition is one of the following non-consuming operations, a
+failed assertion reports the two values used by that operation:
+
+    assert left == right
+    assert left != right
+    assert left < right
+    assert left <= right
+    assert left > right
+    assert left >= right
+    assert item in collection
+
+Parentheses around the whole condition preserve introspection. Each operand is
+evaluated once from left to right. The comparison or membership operation uses
+those captured values. The values are rendered only on the failure edge with
+the ordinary `str()` contract, before the lazy message is evaluated.
+
+Comparison chains, `not in`, Boolean combinations, calls that return `bool`,
+and consuming custom comparison dispatch keep the ordinary assertion
+diagnostic without operand values. Aura does not clone, move twice, or make a
+second observation of an operand to produce a diagnostic. Membership is the
+builtin operation on `list`, `dict`, `set`, and `str`; Aura has no custom
+membership protocol.
+
 The following verified program demonstrates successful fallthrough and a lazy
 message:
 
@@ -90,28 +115,38 @@ is not `str`. The primary location points at the `assert` keyword.
 and the exact default or custom message described above. A condition or message
 trap keeps its own diagnostic code, message, and span instead.
 
+An introspected comparison appends `left = ...` and `right = ...` notes in
+operand order. Membership appends `item = ...` and `collection = ...`. Each
+rendered value is bounded to 4,096 UTF-8 bytes. Longer values end with
+`... (truncated)` at a valid UTF-8 boundary.
+
+Structured diagnostic schema 1 includes `assertion_operands` only for an
+introspected failure. Its two entries contain `label`, `type`, `value`, and
+`truncated`. Other diagnostics omit the field.
+
 ## Backend Support
 
 The checker and MIR lowering are shared. `aura run`, directly emitted native
 programs, and auto-backend builds preserve the same evaluation order, exact
 messages, `AU4001` keyword span, standard-output ordering, and cleanup
 precedence. File-level `aura test` reports an assertion trap as a failed test
-program with the same diagnostic.
+program with the same diagnostic. Function-level `test_*` cases and JSON test
+records preserve the same structured operand data.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 has no assertion-stripping mode, optimization flag, environment
+Aura has no assertion-stripping mode, optimization flag, environment
 switch, or backend option. Every accepted assertion executes in every build.
-Message contents are not reformatted or augmented, although the surrounding
-human diagnostic renderer adds its normal `error[AU4001]` prefix and source
-context.
+Message contents are preserved exactly. The human diagnostic renderer adds its
+normal `error[AU4001]` prefix, source context, and bounded operand notes when
+the condition qualifies for introspection.
 
 Assertion failure terminates the current Aura execution path; it is not a
 catchable exception. Use `Result` for recoverable validation.
 
 ## Status
 
-Both assertion forms are implemented in Aura 0.2. Their exact sequencing,
-diagnostic, cleanup, top-level, and no-strip behavior is accepted under
-ADR-0024. Exception statements, `raise`, and catchable assertion failures are
-not part of Aura 0.2.
+Both assertion forms and their base sequencing, cleanup, top-level, and
+no-strip behavior are accepted under ADR-0024. Aura 0.3 adds the bounded
+two-operand diagnostic contract under ADR-0045. Exception statements, `raise`,
+and catchable assertion failures are not part of Aura 0.3.

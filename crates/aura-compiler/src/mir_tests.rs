@@ -82,6 +82,198 @@ fn arg(value: Expr) -> Argument {
     }
 }
 
+fn assertion_failures(module: &MirModule) -> Vec<(&MirFunction, &BasicBlock)> {
+    module
+        .functions
+        .iter()
+        .flat_map(|function| {
+            function.blocks.iter().filter_map(move |block| {
+                matches!(block.terminator, Terminator::AssertFail { .. })
+                    .then_some((function, block))
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn assertion_introspection_captures_supported_binary_and_membership_operands() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    values = [1, 2]
+    assert (1 == 2)
+    assert 1 != 2
+    assert 1 < 2
+    assert 1 <= 2
+    assert 1 > 2
+    assert 1 >= 2
+    assert 1 in values
+"#,
+    )
+    .expect("supported assertion forms should lower");
+
+    let failures = assertion_failures(&module);
+    assert_eq!(failures.len(), 7);
+    for (_, block) in &failures[..6] {
+        let Terminator::AssertFail { captures, .. } = &block.terminator else {
+            unreachable!();
+        };
+        assert_eq!(
+            captures
+                .iter()
+                .map(|capture| (capture.label.as_str(), &capture.ty))
+                .collect::<Vec<_>>(),
+            vec![
+                ("left", &Type::named("int64")),
+                ("right", &Type::named("int64")),
+            ]
+        );
+        assert!(captures
+            .iter()
+            .all(|capture| matches!(capture.value, Operand::Place(_))));
+    }
+    let Terminator::AssertFail { captures, .. } = &failures[6].1.terminator else {
+        unreachable!();
+    };
+    assert_eq!(captures[0].label, "item");
+    assert_eq!(captures[0].ty, Type::named("int64"));
+    assert_eq!(captures[1].label, "collection");
+    assert_eq!(
+        captures[1].ty,
+        Type::Named("list".to_string(), vec![Type::named("int64")])
+    );
+}
+
+#[test]
+fn assertion_introspection_excludes_conditions_without_two_operand_semantics() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def truth() -> bool:
+    return true
+
+def main():
+    values = [1, 2]
+    assert 1 < 2 < 3
+    assert 3 not in values
+    assert 1 < 2 and 2 < 3
+    assert truth()
+"#,
+    )
+    .expect("ordinary assertion forms should lower");
+
+    for (_, block) in assertion_failures(&module) {
+        let Terminator::AssertFail { captures, .. } = &block.terminator else {
+            unreachable!();
+        };
+        assert!(captures.is_empty());
+    }
+}
+
+#[test]
+fn assertion_introspection_evaluates_once_left_to_right_and_renders_before_lazy_message() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def left() -> int64:
+    return 41
+
+def right() -> int64:
+    return 42
+
+def explain() -> str:
+    return "different"
+
+def main():
+    assert left() == right(), explain()
+"#,
+    )
+    .expect("introspected assertion should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let ordered_calls = main
+        .blocks
+        .iter()
+        .flat_map(|block| block.instructions.iter())
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        ..
+                    },
+                ..
+            } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ordered_calls, vec!["left", "right", "explain"]);
+
+    let (_, failure) = assertion_failures(&module)
+        .into_iter()
+        .next()
+        .expect("assertion failure block should exist");
+    let render_count = failure
+        .instructions
+        .iter()
+        .filter(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::FormatString { .. },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(render_count, 2);
+    let Terminator::AssertFail {
+        message: Some(message),
+        captures,
+        ..
+    } = &failure.terminator
+    else {
+        panic!("assertion message and captures should be on the failure edge");
+    };
+    assert!(matches!(message, Operand::Place(_)));
+    assert_eq!(captures.len(), 2);
+}
+
+#[test]
+fn assertion_introspection_requires_shared_custom_comparison_dispatch() {
+    fn capture_count(receiver: &str, rhs: &str) -> usize {
+        let source = format!(
+            r#"
+trait Ord[Rhs]:
+    def lt({receiver}, rhs: {rhs} Rhs) -> bool
+
+class Score:
+    value: int64
+
+impl Ord[Score] for Score:
+    def lt({receiver}, rhs: {rhs} Score) -> bool:
+        return self.value < rhs.value
+
+def main():
+    assert Score(value=1) < Score(value=2)
+"#
+        );
+        let module =
+            crate::lower_source_to_mir(&source).expect("custom comparison contract should lower");
+        let failures = assertion_failures(&module);
+        let Terminator::AssertFail { captures, .. } = &failures[0].1.terminator else {
+            unreachable!();
+        };
+        captures.len()
+    }
+
+    assert_eq!(capture_count("self", ""), 2);
+    assert_eq!(capture_count("own self", ""), 0);
+    assert_eq!(capture_count("self", "own"), 0);
+    assert_eq!(capture_count("own self", "own"), 0);
+}
+
 #[test]
 fn array_and_builtin_associated_results_retain_checked_types_in_mir() {
     let module = crate::lower_source_to_mir(
@@ -6068,7 +6260,7 @@ fn assertions_lower_to_lazy_failure_blocks_with_keyword_spans() {
         .blocks
         .iter()
         .filter_map(|block| match &block.terminator {
-            Terminator::AssertFail { message, span } => Some((message, span)),
+            Terminator::AssertFail { message, span, .. } => Some((message, span)),
             _ => None,
         })
         .collect::<Vec<_>>();

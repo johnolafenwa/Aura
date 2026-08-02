@@ -2565,7 +2565,52 @@ impl MirRuntime {
                 }
                 Ok(BlockOutcome::Goto(otherwise.clone()))
             }
-            Terminator::AssertFail { message, span } => {
+            Terminator::AssertFail {
+                message,
+                captures,
+                span,
+            } => {
+                if !matches!(captures.len(), 0 | 2) {
+                    return Err(Diagnostic::coded_at(
+                        "AU4001",
+                        *span,
+                        format!(
+                            "MIR assertion captures must contain zero or two operands, found {}",
+                            captures.len()
+                        ),
+                    ));
+                }
+                if let [left, right] = captures.as_slice() {
+                    let labels = (left.label.as_str(), right.label.as_str());
+                    if !matches!(labels, ("left", "right") | ("item", "collection")) {
+                        return Err(Diagnostic::coded_at(
+                            "AU4001",
+                            *span,
+                            format!(
+                                "MIR assertion captures use invalid labels `{}` and `{}`",
+                                left.label, right.label,
+                            ),
+                        ));
+                    }
+                }
+                let mut rendered_captures = Vec::with_capacity(captures.len());
+                for capture in captures {
+                    let rendered = match self.evaluate_owned_operand(&capture.value, env)? {
+                        Value::String(rendered) => rendered,
+                        other => {
+                            return Err(Diagnostic::coded_at(
+                                "AU4001",
+                                *span,
+                                format!(
+                                    "MIR assertion capture `{}` must evaluate to rendered `str`, found `{}`",
+                                    capture.label,
+                                    other.render()
+                                ),
+                            ))
+                        }
+                    };
+                    rendered_captures.push((capture, rendered));
+                }
                 let message = match message {
                     Some(message) => match self.evaluate_owned_operand(message, env)? {
                         Value::String(message) => message,
@@ -2582,7 +2627,15 @@ impl MirRuntime {
                     },
                     None => "assertion failed".to_string(),
                 };
-                Err(Diagnostic::coded_at("AU4001", *span, message))
+                let mut diagnostic = Diagnostic::coded_at("AU4001", *span, message);
+                for (capture, rendered) in rendered_captures {
+                    diagnostic = diagnostic.with_assertion_operand(
+                        capture.label.clone(),
+                        capture.ty.to_string(),
+                        rendered,
+                    );
+                }
+                Err(diagnostic)
             }
             Terminator::Unreachable => Err(Diagnostic::new("reached unreachable MIR block")),
         }

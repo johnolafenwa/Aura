@@ -312,6 +312,9 @@ function compilerDiagnosticsToLsp(analysis, documentUri) {
       call_frames: diagnostic.call_frames || [],
       task_ancestry: diagnostic.task_ancestry || []
     };
+    if (diagnostic.assertion_operands?.length) {
+      result.data.assertion_operands = diagnostic.assertion_operands;
+    }
     return result;
   });
 }

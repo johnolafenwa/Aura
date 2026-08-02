@@ -16842,7 +16842,9 @@ fn native_runtime_internal_diagnostic_channels_are_hidden_cloexec_and_one_shot()
         }
 
         let mut diagnostic =
-            Diagnostic::coded_at("AU4003", Span::new(4, 11), "structured channel failure");
+            Diagnostic::coded_at("AU4003", Span::new(4, 11), "structured channel failure")
+                .with_assertion_operand("left", "str", "x".repeat(6_000))
+                .with_assertion_operand("right", "str", "expected");
         diagnostic.capture_runtime_frames_once(
             vec![RuntimeCallFrame {
                 function: "child".to_string(),
@@ -16950,6 +16952,10 @@ fn native_runtime_internal_diagnostic_channels_are_hidden_cloexec_and_one_shot()
     let structured: StructuredDiagnostic =
         serde_json::from_slice(&bytes).expect("channel should carry one structured diagnostic");
     assert_eq!(structured.message, "structured channel failure");
+    assert_eq!(structured.assertion_operands.len(), 2);
+    assert!(structured.assertion_operands[0].truncated);
+    assert!(structured.assertion_operands[0].value.len() <= 4_096);
+    assert_eq!(structured.assertion_operands[1].value, "expected");
     assert_eq!(structured.call_frames.len(), 1);
     assert_eq!(structured.call_frames[0].span.path, "/workspace/child.au");
     assert_eq!(structured.task_ancestry.len(), 1);
@@ -18330,6 +18336,124 @@ fn native_assert_failure_preserves_default_custom_empty_whitespace_and_span() {
         assert_eq!(diagnostic.span, Some(Span::new(9, 3)));
         unsafe {
             release_value(message);
+        }
+    }
+}
+
+#[test]
+fn native_detailed_assert_failure_attaches_typed_bounded_operands_without_consuming_inputs() {
+    let message = string_value("values differ");
+    let left_label = string_value("left");
+    let left_type = string_value("int64");
+    let left_value = string_value("41");
+    let right_label = string_value("right");
+    let right_type = string_value("str");
+    let long_right = "é".repeat(3_000);
+    let right_value = string_value(&long_right);
+    let addresses = [
+        message,
+        left_label,
+        left_type,
+        left_value,
+        right_label,
+        right_type,
+        right_value,
+    ]
+    .map(|value| value as usize);
+
+    let diagnostic = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            super::aura_direct_assert_fail_detailed(
+                addresses[0] as i64,
+                14,
+                6,
+                addresses[1] as i64,
+                addresses[2] as i64,
+                addresses[3] as i64,
+                addresses[4] as i64,
+                addresses[5] as i64,
+                addresses[6] as i64,
+            );
+        })
+    })
+    .expect_err("a detailed assertion failure should fail the active task");
+
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(diagnostic.message, "values differ");
+    assert_eq!(diagnostic.span, Some(Span::new(14, 6)));
+    assert_eq!(diagnostic.assertion_operands.len(), 2);
+    assert_eq!(diagnostic.assertion_operands[0].label, "left");
+    assert_eq!(diagnostic.assertion_operands[0].r#type, "int64");
+    assert_eq!(diagnostic.assertion_operands[0].value, "41");
+    assert!(!diagnostic.assertion_operands[0].truncated);
+    assert_eq!(diagnostic.assertion_operands[1].label, "right");
+    assert_eq!(diagnostic.assertion_operands[1].r#type, "str");
+    assert!(diagnostic.assertion_operands[1].truncated);
+    assert!(diagnostic.assertion_operands[1]
+        .value
+        .ends_with("... (truncated)"));
+    assert!(diagnostic.assertion_operands[1].value.len() <= 4_096);
+
+    for address in addresses {
+        let value = address as *mut OpaqueValue;
+        assert_eq!(
+            unsafe { &*value }.ref_count.load(Ordering::Acquire),
+            1,
+            "the detailed assertion helper must borrow every ABI string"
+        );
+        unsafe {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
+fn native_detailed_assert_failure_rejects_malformed_capture_strings() {
+    let left_label = string_value("left");
+    let malformed_type = int_value(17);
+    let left_value = string_value("41");
+    let right_label = string_value("right");
+    let right_type = string_value("int64");
+    let right_value = string_value("42");
+    let addresses = [
+        left_label,
+        malformed_type,
+        left_value,
+        right_label,
+        right_type,
+        right_value,
+    ]
+    .map(|value| value as usize);
+
+    let diagnostic = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            super::aura_direct_assert_fail_detailed(
+                0,
+                4,
+                2,
+                addresses[0] as i64,
+                addresses[1] as i64,
+                addresses[2] as i64,
+                addresses[3] as i64,
+                addresses[4] as i64,
+                addresses[5] as i64,
+            );
+        })
+    })
+    .expect_err("malformed private assertion captures must fail deterministically");
+
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        "direct assertion left type must be `str`, found `integer`"
+    );
+    assert_eq!(diagnostic.span, None);
+
+    for address in addresses {
+        let value = address as *mut OpaqueValue;
+        assert_eq!(unsafe { &*value }.ref_count.load(Ordering::Acquire), 1);
+        unsafe {
+            release_value(value);
         }
     }
 }

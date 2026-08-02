@@ -134,7 +134,7 @@ source-visible compatibility path.
   canonical surface. No alias, shim, transition diagnostic, fix-it, grace
   period, or public migration instruction was added.
 
-### S3 test runner foundation
+### S3 testing framework
 
 - `aura test -k` filtering, schema-versioned JSON output, source-order
   discovery, per-test setup/teardown, teardown-after-trap behavior, structured
@@ -144,9 +144,20 @@ source-visible compatibility path.
   MIR module reused by registration, hooks, and test bodies. Source-rewrite and
   manifest-authorized FFI regressions prove that later phases do not re-read or
   re-check the file.
-- The runner remains on its current execution backend. Backend parity for the
-  pending assertion-introspection work will be proved through forced diagnostic
-  fixtures; no runner backend selector is introduced.
+- Top-level `==`, `!=`, `<`, `<=`, `>`, `>=`, and positive builtin membership
+  assertions capture and report two typed operand values. Whole-condition
+  grouping preserves introspection; chains, `not in`, boolean combinations,
+  calls, and consuming custom dispatch retain ordinary assertion diagnostics.
+- Operand evaluation remains exactly once and left to right. Rendered captures
+  are produced on the failure edge before the lazy message runs, bounded to
+  4,096 UTF-8 bytes each, and carried in optional schema-1
+  `assertion_operands` records. The MIR and direct runtime paths use the same
+  labels, types, values, truncation state, and source span.
+- The runner remains on its current execution backend. Focused forced MIR and
+  direct assertion failures are byte-identical; no runner backend selector is
+  introduced. ADR-0045 implementation is complete and remains Provisional only
+  until its registration API and full completion matrix are ratified at the
+  Batch S1 checkpoint.
 
 ## Verification
 
@@ -170,6 +181,24 @@ Current focused version-stamp evidence:
 - `cargo test -p aura-compiler --test coverage_surface` — 15 passed.
 - `cargo test -p aura-compiler --test ffi_frontend` — 12 passed.
 - S3 runner focused suite — 17 passed; Aura-only Clippy passed.
+- S3 assertion compiler partition — 11/11 passed across semantic eligibility,
+  MIR shape and sequencing, diagnostic rendering, MIR runtime, native runtime,
+  and direct code generation.
+- S3 runtime partitions — MIR runtime 130/130 and native runtime 182/182 passed.
+- S3 CLI evidence — the once-only human diagnostic test is green with
+  byte-identical focused MIR/direct output, and the schema-1 JSON runner test
+  pins the typed `assertion_operands` records. A second JSON integration test
+  proves the same operand records and primary span under MIR and direct
+  execution.
+- S3 run-fail evidence — both comparison and membership fixtures pass the
+  fixture harness and match their `.diag` oracles byte-for-byte under forced
+  MIR and direct execution.
+- S3 compiler library replay — 1,512/1,512 passed after the complete
+  assertion-diagnostic, MIR, runtime, and native-codegen integration.
+- S3 editor integration — 102/102 LSP tests, 100% LSP statement/branch/
+  function/line coverage, and 21/21 extension tests passed. Non-empty
+  `assertion_operands` records survive the compiler-to-editor boundary and are
+  omitted from ordinary diagnostics.
 - Reference inventory — 38 Manual pages, 261 blocks, 203 Aura blocks, 123
   compiler-verified blocks; reference and release-metadata tests passed.
 - Clean-slate identity suite — 11 passed before expanding the embedded-source
@@ -180,23 +209,27 @@ Current focused version-stamp evidence:
 - Canonical semantic/call/analysis partitions — 303/303, 21/21, and 97/97.
 - Complete fixture harness — 9/9 families, including parse, check, run,
   diagnostics, package paths, and Python-shaped accepted forms.
-- LSP and extension — 101/101 and 20/20.
+- S1/S2 checkpoint LSP and extension baseline — 101/101 and 20/20; the S3
+  editor replay advances those suites to 102/102 and 21/21.
 - Reference gate — green across 38 Manual pages, 261 fences, 203 Aura blocks,
   and 123 compiler-verified Aura blocks.
 - Focused integration — 15/15 coverage-surface tests and 12/12 FFI frontend
   tests.
-- Formatting, owned-file diff hygiene, and build-artifact/disk checks are the
-  final pre-commit checkpoint steps.
+- The coordinated S1/S2 family passed formatting and owned-file diff hygiene,
+  was committed, and was merged locally with the landed documentation/CI pull
+  request before S3 began.
 
 The opening full-gate attempt stopped at the expected old identity guard that
 classified “Aura 0.3” as future narration. That guard now advances to 0.4 and
-its focused identity suite is green. Per the user's updated gate policy, the
-full gate will next run when the coordinated S1/S2 migration family is ready.
+its focused identity suite is green. The S3 results above are focused evidence;
+the checkpoint-wide forced-backend parity matrix, full local gate, hosted
+gates, coverage pass, and one-time coverage re-ratchet have not run for S3.
 
 ## Follow-up
 
-Commit the coordinated S1/S2 family and merge the now-merged documentation/CI
-pull request from `origin/main` locally. Then complete S3 assertion
-introspection and S4. At the checkpoint, report migration counts, zero-cast
-backend parity, V6 numbers, assertion introspection, S4 evidence, provisional
-decisions, final coverage, and three hosted run links, then stop.
+Complete S4 Python polish, then finish the design-only papers. At the
+checkpoint, run the complete forced-backend matrix and final local and hosted
+gates, ratify the provisional ADR-0045 registration API if its completion
+matrix is green, report migration counts, zero-cast backend parity, V6 numbers,
+assertion introspection, S4 evidence, provisional decisions, final coverage,
+and three hosted run links, then stop.

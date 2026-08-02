@@ -31,13 +31,20 @@ Last updated: 2026-08-02
 - Current phase: S2's unified `int64` index domain and S1's canonical
   `list`/`dict`/`set`/`str` surface are implemented across the compiler, both
   backends, fixtures, diagnostics, examples, tutorials, Manual, LSP, and editor
-  tooling. The S3 test runner foundation is also implemented and its 17 focused
-  tests pass. The expanded clean-slate identity gate, 1,499-test initial broad
-  replay, complete 9-family fixture harness, 101 LSP tests, 20 extension tests,
-  all 123 compiler-verified Manual blocks, and the final 1,500-test compiler
-  replay are green. Formatting and owned-file diff hygiene are the active
-  checkpoint item before the S1/S2 family is committed and merged locally with
-  the now-landed PR.
+  tooling. The coordinated S1/S2 family is committed and merged locally with
+  the landed documentation/CI pull request. S3 is implemented: the 17-test
+  runner suite covers discovery, filtering, JSON, lifecycle hooks, and
+  parametrized registration; assertion introspection now preserves once-only
+  evaluation and produces typed, bounded operand records with byte-identical
+  focused MIR/direct human output. The focused compiler assertion partition is
+  11/11 green, the MIR-runtime and native-runtime partitions are 130/130 and
+  182/182 green, the complete compiler library suite is 1,512/1,512 green, and
+  the CLI once-only/backend-parity and JSON-runner tests pass. Both new
+  run-fail fixtures are byte-identical across forced MIR/direct execution. The
+  LSP is 102/102 at 100% coverage, the extension is 21/21, and the 38-page
+  executable reference gate is green.
+  The checkpoint-wide forced-backend matrix and full local/hosted gates have not
+  run for S3. S4 Python polish is next.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
 - Work note: `work/2026-08-02-batch-s1-python-surface.md`.

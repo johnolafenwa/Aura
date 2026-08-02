@@ -655,6 +655,19 @@ pub struct MirMatchArm {
     pub label: String,
 }
 
+/// One assertion operand retained by an introspected comparison.
+///
+/// `value` is the already-rendered `str` value produced on the assertion's
+/// failure edge. Keeping rendering out of the terminator lets the optional
+/// source message remain lazy while giving both execution backends one stable
+/// diagnostic payload.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssertionCapture {
+    pub label: String,
+    pub ty: Type,
+    pub value: Operand,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Operand {
     Place(String),
@@ -690,6 +703,7 @@ pub enum Terminator {
     },
     AssertFail {
         message: Option<Operand>,
+        captures: Vec<AssertionCapture>,
         span: crate::diag::Span,
     },
     Unreachable,
@@ -1322,6 +1336,12 @@ struct MirFunctionSpec {
 struct VecTransformOutput<'a> {
     place: &'a str,
     element_type: &'a Type,
+}
+
+struct PendingAssertionCapture {
+    label: &'static str,
+    ty: Type,
+    value: Operand,
 }
 
 struct Lowerer<'a> {
@@ -2298,7 +2318,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_assert(&mut self, assert_stmt: &crate::ast::AssertStmt) {
-        let condition = self.lower_expr(&assert_stmt.condition);
+        let (condition, pending_captures) = self
+            .lower_introspected_assertion_condition(&assert_stmt.condition)
+            .unwrap_or_else(|| (self.lower_expr(&assert_stmt.condition), Vec::new()));
         let failure_block = self.new_block("assert_fail");
         let continuation_block = self.new_block("assert_pass");
         self.terminate(Terminator::Branch {
@@ -2308,16 +2330,242 @@ impl<'a> Lowerer<'a> {
         });
 
         self.switch_to(failure_block);
+        // Render retained operands only on failure, before evaluating the lazy
+        // source message. The comparison itself has already consumed the raw
+        // captures, so formatting cannot alter its result or evaluate either
+        // source expression a second time.
+        let captures = pending_captures
+            .into_iter()
+            .map(|capture| {
+                let rendered = self.new_typed_temp(Type::named("str"));
+                self.emit(Instruction::Assign {
+                    target: rendered.clone(),
+                    value: Rvalue::FormatString {
+                        parts: vec![MirFormatPart::Value(capture.value)],
+                    },
+                });
+                AssertionCapture {
+                    label: capture.label.to_string(),
+                    ty: capture.ty,
+                    value: Operand::Place(rendered),
+                }
+            })
+            .collect();
         let message = assert_stmt
             .message
             .as_ref()
             .map(|message| self.lower_expr(message));
         self.terminate(Terminator::AssertFail {
             message,
+            captures,
             span: assert_stmt.span,
         });
 
         self.switch_to(continuation_block);
+    }
+
+    /// Lowers the deliberately narrow S3 assertion-introspection surface.
+    /// Grouping around the complete condition is transparent; grouping or
+    /// composition inside any other expression does not widen this boundary.
+    fn lower_introspected_assertion_condition(
+        &mut self,
+        condition: &Expr,
+    ) -> Option<(Operand, Vec<PendingAssertionCapture>)> {
+        let mut condition = condition;
+        while let ExprKind::Group(inner) = &condition.kind {
+            condition = inner;
+        }
+        match &condition.kind {
+            ExprKind::Binary { op, left, right }
+                if matches!(
+                    op,
+                    BinaryOp::Eq
+                        | BinaryOp::NotEq
+                        | BinaryOp::Less
+                        | BinaryOp::LessEq
+                        | BinaryOp::Greater
+                        | BinaryOp::GreaterEq
+                ) && self.assertion_binary_dispatch_is_non_consuming(*op, left, right) =>
+            {
+                Some(self.lower_introspected_binary_condition(condition, *op, left, right))
+            }
+            ExprKind::Membership {
+                value,
+                container,
+                negated: false,
+                operator_span,
+            } => {
+                Some(self.lower_introspected_membership_condition(value, container, *operator_span))
+            }
+            _ => None,
+        }
+    }
+
+    fn assertion_binary_dispatch_is_non_consuming(
+        &self,
+        op: BinaryOp,
+        left: &Expr,
+        right: &Expr,
+    ) -> bool {
+        let Some(left_ty) = self.infer_expr_type(left) else {
+            return false;
+        };
+        let Some(right_ty) = self.infer_expr_type(right) else {
+            return false;
+        };
+        let (left_ty, right_ty) = adjusted_binary_operand_types(left, left_ty, right, right_ty);
+        if is_builtin_binary_operator(op, &left_ty, &right_ty) {
+            return crate::sema::assertion_dispatch_is_non_consuming(None);
+        }
+        let Some((trait_name, method_name)) = binary_operator_trait(op) else {
+            return false;
+        };
+        let Some(method) = self
+            .trait_info_in_scope(trait_name)
+            .and_then(|info| info.methods.get(method_name))
+        else {
+            return false;
+        };
+        let receiver = method.decl.receiver.unwrap_or(ReceiverKind::Value);
+        let rhs = method
+            .signature
+            .param_passings
+            .first()
+            .copied()
+            .unwrap_or(ReceiverKind::Value);
+        crate::sema::assertion_dispatch_is_non_consuming(Some((receiver, rhs)))
+    }
+
+    fn lower_introspected_binary_condition(
+        &mut self,
+        condition: &Expr,
+        op: BinaryOp,
+        left: &Expr,
+        right: &Expr,
+    ) -> (Operand, Vec<PendingAssertionCapture>) {
+        let inferred_left_ty = self
+            .infer_expr_type(left)
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let inferred_right_ty = self
+            .infer_expr_type(right)
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let shared_tuple_expected = matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+            .then(|| self.infer_tuple_equality_hint(left, right))
+            .flatten();
+        let left_expected = shared_tuple_expected.as_ref().or_else(|| {
+            if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                || (is_integer_literal_expr(left)
+                    && (is_float_type(&inferred_right_ty)
+                        || crate::sema::integer_type_bounds(&inferred_right_ty).is_some()))
+            {
+                Some(&inferred_right_ty)
+            } else {
+                None
+            }
+        });
+        let right_expected = shared_tuple_expected.as_ref().or_else(|| {
+            if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                || (is_integer_literal_expr(right)
+                    && (is_float_type(&inferred_left_ty)
+                        || crate::sema::integer_type_bounds(&inferred_left_ty).is_some()))
+            {
+                Some(&inferred_left_ty)
+            } else {
+                None
+            }
+        });
+
+        let left_value = self.lower_expr_at_sequence_point(left, left_expected);
+        let right_value = self.lower_expr_at_sequence_point(right, right_expected);
+        let left_ty = left_expected
+            .cloned()
+            .unwrap_or_else(|| inferred_left_ty.clone());
+        let right_ty = right_expected
+            .cloned()
+            .unwrap_or_else(|| inferred_right_ty.clone());
+
+        let result = self.new_typed_temp(Type::named("bool"));
+        if let Some(field) = self.operator_field_for_binary(op, left, right) {
+            self.emit(Instruction::Assign {
+                target: result.clone(),
+                value: Rvalue::Call {
+                    callee: CallTarget::Member {
+                        object: left_value.clone(),
+                        field,
+                        receiver_place: None,
+                    },
+                    args: vec![MirArg {
+                        name: None,
+                        value: right_value.clone(),
+                        writeback_place: None,
+                    }],
+                },
+            });
+        } else {
+            self.emit(Instruction::Assign {
+                target: result.clone(),
+                value: Rvalue::Binary {
+                    op,
+                    left: left_value.clone(),
+                    right: right_value.clone(),
+                    span: condition.span,
+                },
+            });
+        }
+        (
+            Operand::Place(result),
+            vec![
+                PendingAssertionCapture {
+                    label: "left",
+                    ty: left_ty,
+                    value: left_value,
+                },
+                PendingAssertionCapture {
+                    label: "right",
+                    ty: right_ty,
+                    value: right_value,
+                },
+            ],
+        )
+    }
+
+    fn lower_introspected_membership_condition(
+        &mut self,
+        value: &Expr,
+        container: &Expr,
+        operator_span: Span,
+    ) -> (Operand, Vec<PendingAssertionCapture>) {
+        let container_ty = self
+            .infer_expr_type(container)
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let item_ty = crate::sema::membership_needle_type(&container_ty)
+            .or_else(|| self.infer_expr_type(value))
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let item = self.lower_expr_at_sequence_point(value, Some(&item_ty));
+        let collection = self.lower_expr_at_sequence_point(container, None);
+        let condition = self.lower_membership_call(
+            item.clone(),
+            collection.clone(),
+            None,
+            &container_ty,
+            false,
+            operator_span,
+        );
+        (
+            condition,
+            vec![
+                PendingAssertionCapture {
+                    label: "item",
+                    ty: item_ty,
+                    value: item,
+                },
+                PendingAssertionCapture {
+                    label: "collection",
+                    ty: container_ty,
+                    value: collection,
+                },
+            ],
+        )
     }
 
     fn lower_assign(&mut self, assign: &AssignStmt) {

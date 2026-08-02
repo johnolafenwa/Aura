@@ -63,6 +63,11 @@ optional `file_path`; the bridge neither parses human backtrace notes nor
 reconstructs paths or ancestry. Compiler responses always include both arrays.
 Compile-time diagnostics normally carry empty frame arrays today, while the
 populated shape is ready for editor workflows that present runtime diagnostics.
+Failed structured assertions may also carry an optional `assertion_operands`
+array in `Diagnostic.data`. Each operand preserves the compiler-owned `label`,
+`type`, rendered `value`, and `truncated` flag. The field is absent when the
+diagnostic has no captured assertion operands; the bridge does not infer or
+re-render values.
 
 If the compiler process cannot be started, the lexical recovery layer provides only:
 

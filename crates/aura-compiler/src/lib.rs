@@ -30,9 +30,9 @@ pub use analysis::{
     AnalysisCompletion, AnalysisOutput,
 };
 pub use diag::{
-    Diagnostic, Result, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span,
-    StructuredDiagnostic, StructuredEdit, StructuredRuntimeCallFrame, StructuredRuntimeSourceSpan,
-    StructuredRuntimeTaskFrame, StructuredSpan,
+    AssertionOperand, Diagnostic, Result, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame,
+    Span, StructuredDiagnostic, StructuredEdit, StructuredRuntimeCallFrame,
+    StructuredRuntimeSourceSpan, StructuredRuntimeTaskFrame, StructuredSpan,
 };
 pub use mir::{lower as lower_to_mir, MirModule};
 pub use mir_runtime::{

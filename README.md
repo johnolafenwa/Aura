@@ -111,7 +111,7 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/basics/pass_keyword.au`
   - execute the `pass` no-op statement in intentionally empty blocks
 - `cargo run -p aura -- run examples/basics/assertions.au`
-  - execute default/custom assertions with lazy messages and source-located failures
+  - execute introspectable comparisons and membership with lazy messages and source-located failures
 - `cargo run -p aura -- run examples/basics/multiline_expressions.au`
   - continue calls, signatures, grouping, indexes, and collection literals
     across physical lines while a source delimiter remains open

@@ -265,6 +265,21 @@ pub(crate) fn binary_operator_trait(op: BinaryOp) -> Option<(&'static str, &'sta
     }
 }
 
+/// Whether a checked assertion dispatch can retain both operands for failure
+/// reporting without changing its ownership semantics.
+///
+/// `None` denotes compiler-defined comparison or membership dispatch. Custom
+/// operator dispatch supplies its resolved receiver and right-operand
+/// conventions; both must be shared. In particular, mutable or consuming
+/// contracts remain ordinary assertions and are never cloned for diagnostics.
+pub(crate) fn assertion_dispatch_is_non_consuming(
+    custom_passings: Option<(ReceiverKind, ReceiverKind)>,
+) -> bool {
+    custom_passings.is_none_or(|(receiver, rhs)| {
+        receiver == ReceiverKind::Borrow && rhs == ReceiverKind::Borrow
+    })
+}
+
 pub(crate) fn is_duration_type(ty: &Type) -> bool {
     *ty == Type::named("Duration")
 }

@@ -1,0 +1,4 @@
+def main():
+    item = 4
+    values = [1, 2, 3]
+    assert item in values

@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use super::{
-    Diagnostic, DiagnosticSeverity, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span,
-    DIAGNOSTIC_CODE_REGISTRY,
+    AssertionOperand, Diagnostic, DiagnosticSeverity, RuntimeCallFrame, RuntimeSourceSpan,
+    RuntimeTaskFrame, Span, DIAGNOSTIC_CODE_REGISTRY,
 };
 
 #[test]
@@ -72,6 +72,77 @@ fn structured_diagnostics_preserve_codes_labels_help_and_edits() {
     assert!(rendered.contains("note: non-copy values have one owner"));
     assert!(rendered.contains("help: pass shared access or clone the value"));
     assert!(rendered.contains("fix: replace examples/move.au:2:11-2:11 with `.clone()`"));
+}
+
+#[test]
+fn assertion_operands_are_typed_structured_fields_and_human_notes() {
+    let plain = Diagnostic::coded("AU4001", "assertion failed");
+    let plain_json = serde_json::to_value(plain.structured("examples/assert.au"))
+        .expect("plain diagnostic should serialize");
+    assert!(
+        plain_json.get("assertion_operands").is_none(),
+        "diagnostics without captures must not grow an empty wire field"
+    );
+
+    let diagnostic = plain
+        .with_assertion_operand("left", "int64", "41")
+        .with_assertion_operand("right", "int64", "42");
+    assert_eq!(
+        diagnostic.assertion_operands,
+        [
+            AssertionOperand {
+                label: "left".to_string(),
+                r#type: "int64".to_string(),
+                value: "41".to_string(),
+                truncated: false,
+            },
+            AssertionOperand {
+                label: "right".to_string(),
+                r#type: "int64".to_string(),
+                value: "42".to_string(),
+                truncated: false,
+            },
+        ]
+    );
+
+    let json = serde_json::to_value(diagnostic.structured("examples/assert.au"))
+        .expect("captured assertion diagnostic should serialize");
+    assert_eq!(json["assertion_operands"][0]["label"], "left");
+    assert_eq!(json["assertion_operands"][0]["type"], "int64");
+    assert_eq!(json["assertion_operands"][0]["value"], "41");
+    assert_eq!(json["assertion_operands"][0]["truncated"], false);
+
+    let rendered = diagnostic.render_with_source("examples/assert.au", "assert 41 == 42\n");
+    assert!(rendered.contains("note: left = 41"));
+    assert!(rendered.contains("note: right = 42"));
+    assert!(rendered.find("left = 41") < rendered.find("right = 42"));
+
+    let membership = Diagnostic::coded("AU4001", "assertion failed")
+        .with_assertion_operand("item", "str", "needle")
+        .with_assertion_operand("collection", "list[str]", "[haystack]")
+        .render_with_source("examples/assert.au", "assert item in values\n");
+    assert!(membership.contains("note: item = needle"));
+    assert!(membership.contains("note: collection = [haystack]"));
+}
+
+#[test]
+fn assertion_operand_values_are_bounded_to_4096_utf8_bytes() {
+    let exact = AssertionOperand::bounded("left", "str", "a".repeat(4_096));
+    assert_eq!(exact.value.len(), 4_096);
+    assert!(!exact.truncated);
+
+    let long_ascii = AssertionOperand::bounded("right", "str", "b".repeat(4_097));
+    assert_eq!(long_ascii.value.len(), 4_096);
+    assert!(long_ascii.value.ends_with("... (truncated)"));
+    assert!(long_ascii.truncated);
+
+    let long_unicode = AssertionOperand::bounded("collection", "str", "é".repeat(2_049));
+    assert!(long_unicode.value.len() <= 4_096);
+    assert!(long_unicode
+        .value
+        .is_char_boundary(long_unicode.value.len() - "... (truncated)".len()));
+    assert!(long_unicode.value.ends_with("... (truncated)"));
+    assert!(long_unicode.truncated);
 }
 
 #[test]

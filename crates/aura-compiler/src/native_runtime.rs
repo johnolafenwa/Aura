@@ -11525,24 +11525,70 @@ pub extern "C-unwind" fn aura_direct_sqrt_f64(value: f64) -> f64 {
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_assert_fail(message: i64, line: i64, column: i64) -> ! {
     task_runtime_boundary(|| {
-        let message = if message == 0 {
-            "assertion failed".to_string()
-        } else {
-            let message = unsafe {
-                with_value(message as *mut OpaqueValue, |value| match value {
-                    Value::String(message) => Ok(message.clone()),
-                    other => Err(format!(
-                        "direct assertion message must be `str`, found `{}`",
-                        value_type_name(other)
-                    )),
-                })
-            };
-            message.unwrap_or_else(|error| runtime_error(error))
-        };
-        let diagnostic = match runtime_span(line, column) {
-            Some(span) => Diagnostic::coded_at("AU4001", span, message),
-            None => Diagnostic::coded("AU4001", message),
-        };
+        let message = direct_assert_message(message);
+        runtime_diagnostic_error(direct_assert_diagnostic(message, line, column))
+    })
+}
+
+fn direct_assert_message(message: i64) -> String {
+    if message == 0 {
+        "assertion failed".to_string()
+    } else {
+        direct_assert_string(message, "message")
+    }
+}
+
+fn direct_assert_string(value: i64, field: &str) -> String {
+    if value == 0 {
+        runtime_error(format!(
+            "direct assertion {field} must be `str`, found null"
+        ));
+    }
+    let value = unsafe {
+        with_value(value as *mut OpaqueValue, |value| match value {
+            Value::String(value) => Ok(value.clone()),
+            other => Err(format!(
+                "direct assertion {field} must be `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    };
+    value.unwrap_or_else(|error| runtime_error(error))
+}
+
+fn direct_assert_diagnostic(message: String, line: i64, column: i64) -> Diagnostic {
+    match runtime_span(line, column) {
+        Some(span) => Diagnostic::coded_at("AU4001", span, message),
+        None => Diagnostic::coded("AU4001", message),
+    }
+}
+
+/// Private direct-backend assertion ABI for the compiler-proven two-operand
+/// introspection shape. Every pointer is borrowed for the duration of this
+/// call; the diagnostic owns only bounded string snapshots.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_assert_fail_detailed(
+    message: i64,
+    line: i64,
+    column: i64,
+    left_label: i64,
+    left_type: i64,
+    left_value: i64,
+    right_label: i64,
+    right_type: i64,
+    right_value: i64,
+) -> ! {
+    task_runtime_boundary(|| {
+        let message = direct_assert_message(message);
+        let left_label = direct_assert_string(left_label, "left label");
+        let left_type = direct_assert_string(left_type, "left type");
+        let left_value = direct_assert_string(left_value, "left value");
+        let right_label = direct_assert_string(right_label, "right label");
+        let right_type = direct_assert_string(right_type, "right type");
+        let right_value = direct_assert_string(right_value, "right value");
+        let diagnostic = direct_assert_diagnostic(message, line, column)
+            .with_assertion_operand(left_label, left_type, left_value)
+            .with_assertion_operand(right_label, right_type, right_value);
         runtime_diagnostic_error(diagnostic)
     })
 }

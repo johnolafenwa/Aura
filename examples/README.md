@@ -104,6 +104,7 @@ printed-output order unless they explicitly coordinate that order.
   - the `pass` no-op statement in empty classes and functions
   - prints `0`
 - `assertions.au`
+  - demonstrates comparison and membership assertions whose failure diagnostics capture both operands
   - default and custom assertion statements on exact boolean conditions
   - demonstrates the successful path without evaluating a failure
   - prints:

@@ -3,17 +3,18 @@
 - Status: Provisional
 - Date: 2026-08-02
 - Version target: Aura 0.3
-- Implementation: Not started
+- Implementation: Compiler, runner, reference, LSP, and editor integration complete; checkpoint gates pending
 - Roadmap decision: Batch S1, S3
 
 ## Decision boundary
 
-This ADR defines the complete Aura 0.3 testing surface. It becomes Accepted
-only when the completion matrix is green, assertion diagnostics have passed
-the forced MIR/direct parity matrix, and the Batch S1 checkpoint ratifies the
-provisional registration API. Skip markers, expected-failure markers, and
-property-based generation are design topics for a later release and are not
-recognized syntax or runner options in Aura 0.3.
+This ADR defines the complete Aura 0.3 testing surface. The compiler and runner
+implementation is complete. The ADR remains Provisional until the completion
+matrix is green, assertion diagnostics have passed the forced MIR/direct
+parity matrix, and the Batch S1 checkpoint ratifies the registration API. Skip
+markers, expected-failure markers, and property-based generation are design
+topics for a later release and are not recognized syntax or runner options in
+Aura 0.3.
 
 ## Goals
 
@@ -225,33 +226,35 @@ comparison.
 
 ## Completion matrix
 
-- Parser, checker, MIR, and direct tests cover every introspected operator,
+- [x] Parser, checker, MIR, and direct tests cover every introspected operator,
   grouped comparisons, the explicitly non-introspected forms, operand order,
   once-only evaluation, lazy messages, operand traps, Unicode truncation, and
   bounded structured records.
-- Operator-dispatch tests cover builtin and shared custom comparisons and
-  membership as introspected forms, plus custom receiver-consuming,
+- [x] Operator-dispatch tests cover builtin comparisons and membership plus
+  shared custom comparisons as introspected forms, and custom receiver-consuming,
   operand-consuming, and both-consuming operators as ordinary assertions with
   no captures. They prove that the non-introspected path performs no clone,
   pre-render, or second observation of either operand.
-- Human and JSON diagnostics pin labels, types, rendered values, truncation,
+- [x] Human and JSON diagnostics pin labels, types, rendered values, truncation,
   source spans, cleanup precedence, and MIR/direct parity.
-- CLI tests cover `-k` matching, no-match success, every usage error, ordinary
+- [x] CLI tests cover `-k` matching, no-match success, every usage error, ordinary
   and parameterized names, and filtering after expansion.
-- JSON runner tests pin schema 1, ordering, summaries, durations, captured
+- [x] JSON runner tests pin schema 1, ordering, summaries, durations, captured
   case and discovery output, diagnostic failures, runner failures,
   stdout/stderr separation, and exit status.
-- Hook tests cover all presence combinations, isolated phase state, external
+- [x] Hook tests cover all presence combinations, isolated phase state, external
   side-effect ordering, setup failure, case failure, teardown failure, dual
   failures, timeouts, and declaration errors.
-- Registration tests cover order, empty and duplicate labels, capture
+- [x] Registration tests cover order, empty and duplicate labels, capture
   rejection, registration traps, invalid signatures, empty lists, and
   independent case reporting.
-- Manual, CLI reference, conformance map, examples, tutorials, LSP metadata,
+- [x] Manual, CLI reference, conformance map, examples, tutorials, LSP metadata,
   and editor packaging describe and validate the same surface.
-- Assertion diagnostic fixtures pass through the forced MIR/direct parity
-  matrix. The `aura test` runner suite remains on its current backend, and the
-  complete corpus passes the full local and hosted gates.
+- [ ] Assertion diagnostic fixtures pass through the complete forced MIR/direct
+  parity matrix. The `aura test` runner suite remains on its current backend,
+  and the complete corpus passes the full local and hosted gates. Focused
+  MIR/direct runs are byte-identical; the checkpoint-wide matrix and gates
+  remain.
 
 ## Ratification questions
 

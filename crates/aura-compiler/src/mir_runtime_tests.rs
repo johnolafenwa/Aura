@@ -8,9 +8,9 @@ use super::{
 use crate::diag::{Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span};
 use crate::integer::{IntegerKind, IntegerValue};
 use crate::mir::{
-    BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirClosureCapture, MirExternCall,
-    MirExternParam, MirFunction, MirLocalType, MirMatchArm, MirMethod, MirModule, MirParam,
-    MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
+    AssertionCapture, BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirClosureCapture,
+    MirExternCall, MirExternParam, MirFunction, MirLocalType, MirMatchArm, MirMethod, MirModule,
+    MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
 use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
@@ -16524,6 +16524,7 @@ fn mir_assert_fail_preserves_default_custom_empty_and_whitespace_messages() {
             "entry",
             &Terminator::AssertFail {
                 message,
+                captures: Vec::new(),
                 span: Span::new(7, 9),
             },
             &mut env,
@@ -16547,6 +16548,7 @@ fn mir_assert_fail_preserves_default_custom_empty_and_whitespace_messages() {
         "entry",
         &Terminator::AssertFail {
             message: Some(Operand::Int(17)),
+            captures: Vec::new(),
             span: Span::new(11, 13),
         },
         &mut env,
@@ -16565,6 +16567,140 @@ fn mir_assert_fail_preserves_default_custom_empty_and_whitespace_messages() {
 }
 
 #[test]
+fn mir_assert_fail_attaches_typed_bounded_operands_in_source_order() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    env.define_typed(
+        "left_rendered",
+        Type::named("str"),
+        Value::String("41".to_string()),
+    );
+    env.define_typed(
+        "right_rendered",
+        Type::named("str"),
+        Value::String("é".repeat(3_000)),
+    );
+    let mut loop_state = HashMap::new();
+    let mut cleanups = Vec::new();
+    let result = runtime.execute_terminator(
+        "entry",
+        &Terminator::AssertFail {
+            message: Some(Operand::String("values differ".to_string())),
+            captures: vec![
+                AssertionCapture {
+                    label: "left".to_string(),
+                    ty: Type::named("int64"),
+                    value: Operand::MovePlace("left_rendered".to_string()),
+                },
+                AssertionCapture {
+                    label: "right".to_string(),
+                    ty: Type::named("str"),
+                    value: Operand::MovePlace("right_rendered".to_string()),
+                },
+            ],
+            span: Span::new(8, 5),
+        },
+        &mut env,
+        &mut loop_state,
+        &mut cleanups,
+    );
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("a detailed assertion terminator must trap"),
+    };
+
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(error.message, "values differ");
+    assert_eq!(error.span, Some(Span::new(8, 5)));
+    assert_eq!(error.assertion_operands.len(), 2);
+    assert_eq!(error.assertion_operands[0].label, "left");
+    assert_eq!(error.assertion_operands[0].r#type, "int64");
+    assert_eq!(error.assertion_operands[0].value, "41");
+    assert!(!error.assertion_operands[0].truncated);
+    assert_eq!(error.assertion_operands[1].label, "right");
+    assert_eq!(error.assertion_operands[1].r#type, "str");
+    assert!(error.assertion_operands[1].truncated);
+    assert!(error.assertion_operands[1]
+        .value
+        .ends_with("... (truncated)"));
+    assert!(error.assertion_operands[1].value.len() <= 4_096);
+    assert!(env.place_ref("left_rendered").is_err());
+    assert!(env.place_ref("right_rendered").is_err());
+}
+
+#[test]
+fn mir_assert_fail_rejects_malformed_capture_shapes_and_values() {
+    let execute = |captures| {
+        let mut runtime = test_runtime();
+        let mut env = Env::default();
+        let mut loop_state = HashMap::new();
+        let mut cleanups = Vec::new();
+        let result = runtime.execute_terminator(
+            "entry",
+            &Terminator::AssertFail {
+                message: None,
+                captures,
+                span: Span::new(3, 7),
+            },
+            &mut env,
+            &mut loop_state,
+            &mut cleanups,
+        );
+        match result {
+            Err(error) => error,
+            Ok(_) => panic!("malformed assertion captures must be rejected"),
+        }
+    };
+
+    let cardinality = execute(vec![AssertionCapture {
+        label: "left".to_string(),
+        ty: Type::named("int64"),
+        value: Operand::String("1".to_string()),
+    }]);
+    assert_eq!(cardinality.code, "AU4001");
+    assert_eq!(
+        cardinality.message,
+        "MIR assertion captures must contain zero or two operands, found 1"
+    );
+
+    let labels = execute(vec![
+        AssertionCapture {
+            label: "first".to_string(),
+            ty: Type::named("int64"),
+            value: Operand::String("1".to_string()),
+        },
+        AssertionCapture {
+            label: "second".to_string(),
+            ty: Type::named("int64"),
+            value: Operand::String("2".to_string()),
+        },
+    ]);
+    assert_eq!(labels.code, "AU4001");
+    assert_eq!(
+        labels.message,
+        "MIR assertion captures use invalid labels `first` and `second`"
+    );
+
+    let value = execute(vec![
+        AssertionCapture {
+            label: "left".to_string(),
+            ty: Type::named("int64"),
+            value: Operand::Int(41),
+        },
+        AssertionCapture {
+            label: "right".to_string(),
+            ty: Type::named("int64"),
+            value: Operand::String("42".to_string()),
+        },
+    ]);
+    assert_eq!(value.code, "AU4001");
+    assert_eq!(
+        value.message,
+        "MIR assertion capture `left` must evaluate to rendered `str`, found `41`"
+    );
+}
+
+#[test]
 fn mir_assert_fail_moves_an_owned_message_only_on_the_failure_path() {
     let mut runtime = test_runtime();
     let mut env = Env::default();
@@ -16579,6 +16715,7 @@ fn mir_assert_fail_moves_an_owned_message_only_on_the_failure_path() {
         "entry",
         &Terminator::AssertFail {
             message: Some(Operand::MovePlace("message".to_string())),
+            captures: Vec::new(),
             span: Span::new(3, 5),
         },
         &mut env,
@@ -16622,7 +16759,7 @@ def main():
         .blocks
         .iter()
         .filter_map(|block| match &block.terminator {
-            Terminator::AssertFail { message, span } => Some((message, span)),
+            Terminator::AssertFail { message, span, .. } => Some((message, span)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -16652,6 +16789,7 @@ def main():
         "assert_fail",
         &Terminator::AssertFail {
             message: failures[1].0.clone(),
+            captures: Vec::new(),
             span: *failures[1].1,
         },
         &mut env,

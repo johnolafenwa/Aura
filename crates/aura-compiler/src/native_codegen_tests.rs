@@ -26,8 +26,9 @@ use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::Span;
 use crate::mir::MirReceiverKind;
 use crate::mir::{
-    BasicBlock, CallTarget, Instruction, MirArg, MirExternCall, MirExternParam, MirFormatPart,
-    MirFunction, MirLocalType, MirMapEntry, MirMatchArm, MirParam, Operand, Rvalue, Terminator,
+    AssertionCapture, BasicBlock, CallTarget, Instruction, MirArg, MirExternCall, MirExternParam,
+    MirFormatPart, MirFunction, MirLocalType, MirMapEntry, MirMatchArm, MirParam, Operand, Rvalue,
+    Terminator,
 };
 use crate::sema::Type;
 use crate::{lower_path_to_mir, lower_source_to_mir};
@@ -13005,8 +13006,28 @@ fn direct_assertions_reference_the_dedicated_failure_helper() {
 }
 
 #[test]
+fn direct_introspected_assertions_reference_the_detailed_failure_helper() {
+    let source = r#"def main() -> int32:
+    left = 41
+    right = 42
+    assert left == right, "direct assertion"
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("assertion source should lower");
+    let object = emit_host_object_with_metadata(&mir, "/tmp/direct_detailed_assert.au", source)
+        .expect("introspected assertion source should compile directly");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aura_direct_assert_fail_detailed")),
+        "introspected assertion failures must use the detailed runtime helper: {referenced:?}"
+    );
+}
+
+#[test]
 fn direct_validation_accepts_assert_fail_operands_and_rejects_unknown_places() {
-    let make_module = |message| crate::mir::MirModule {
+    let make_module = |message, captures| crate::mir::MirModule {
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<test>".to_string(),
@@ -13022,6 +13043,7 @@ fn direct_validation_accepts_assert_fail_operands_and_rejects_unknown_places() {
                 instructions: Vec::new(),
                 terminator: Terminator::AssertFail {
                     message,
+                    captures,
                     span: Span::new(2, 5),
                 },
             }],
@@ -13031,12 +13053,72 @@ fn direct_validation_accepts_assert_fail_operands_and_rejects_unknown_places() {
         top_level: None,
     };
 
-    emit_host_object(&make_module(Some(Operand::String("known".to_string()))))
-        .expect("literal assertion messages should validate");
-    let error = emit_host_object(&make_module(Some(Operand::Place("missing".to_string()))))
-        .expect_err("unknown assertion message places should be rejected");
+    emit_host_object(&make_module(
+        Some(Operand::String("known".to_string())),
+        Vec::new(),
+    ))
+    .expect("literal assertion messages should validate");
+    let error = emit_host_object(&make_module(
+        Some(Operand::Place("missing".to_string())),
+        Vec::new(),
+    ))
+    .expect_err("unknown assertion message places should be rejected");
     assert!(
         error.contains("does not know local `missing`"),
         "unexpected validation error: {error}"
+    );
+
+    let captures = vec![
+        AssertionCapture {
+            label: "left".to_string(),
+            ty: Type::named("int64"),
+            value: Operand::String("41".to_string()),
+        },
+        AssertionCapture {
+            label: "right".to_string(),
+            ty: Type::named("int64"),
+            value: Operand::Place("missing_capture".to_string()),
+        },
+    ];
+    let error = emit_host_object(&make_module(None, captures))
+        .expect_err("unknown assertion capture places should be rejected");
+    assert!(
+        error.contains("does not know local `missing_capture`"),
+        "unexpected capture validation error: {error}"
+    );
+
+    let error = emit_host_object(&make_module(
+        None,
+        vec![AssertionCapture {
+            label: "only".to_string(),
+            ty: Type::named("int64"),
+            value: Operand::String("1".to_string()),
+        }],
+    ))
+    .expect_err("assertion captures must be absent or form a pair");
+    assert!(
+        error.contains("exactly two assertion captures"),
+        "unexpected capture cardinality error: {error}"
+    );
+
+    let error = emit_host_object(&make_module(
+        None,
+        vec![
+            AssertionCapture {
+                label: "left".to_string(),
+                ty: Type::named("int64"),
+                value: Operand::Int(1),
+            },
+            AssertionCapture {
+                label: "right".to_string(),
+                ty: Type::named("int64"),
+                value: Operand::String("2".to_string()),
+            },
+        ],
+    ))
+    .expect_err("assertion capture values must already be rendered strings");
+    assert!(
+        error.contains("rendered assertion capture to be `str`, found `int64`"),
+        "unexpected capture type error: {error}"
     );
 }

@@ -8,8 +8,8 @@ const path = require("node:path");
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
-function startLanguageServer(serverPath) {
-  const env = { ...process.env, PATH: "" };
+function startLanguageServer(serverPath, environment = {}) {
+  const env = { ...process.env, ...environment, PATH: "" };
   if (process.platform === "win32") {
     env.Path = "";
   }
@@ -160,6 +160,84 @@ function startLanguageServer(serverPath) {
     stderr: () => stderr
   };
 }
+
+test(
+  "bundled language server preserves optional assertion operands in diagnostic data",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const serverPath = process.env.AURA_EXTENSION_SERVER_PATH
+      ? path.resolve(process.env.AURA_EXTENSION_SERVER_PATH)
+      : path.resolve(__dirname, "..", "dist", "server.js");
+    assert.equal(
+      fs.existsSync(serverPath),
+      true,
+      `language server bundle not found: ${serverPath}`
+    );
+
+    const temp = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "aura-lsp-assert-"));
+    t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+    const fakeAura = path.join(temp, "aura");
+    fs.writeFileSync(
+      fakeAura,
+      `#!${process.execPath}\n` +
+        `"use strict";\n` +
+        `const readline = require("node:readline");\n` +
+        `readline.createInterface({ input: process.stdin }).on("line", (line) => {\n` +
+        `  const request = JSON.parse(line);\n` +
+        `  const base = { severity: 1, line: 1, start_character: 4, end_character: 10, secondary_spans: [], notes: [], help: [], edits: [], call_frames: [], task_ancestry: [] };\n` +
+        `  const result = request.method === "analyze" ? { diagnostics: [\n` +
+        `    { ...base, code: "AU4001", message: "values differ", assertion_operands: [\n` +
+        `      { label: "left", type: "str", value: "actual", truncated: false },\n` +
+        `      { label: "right", type: "str", value: "expected... (truncated)", truncated: true }\n` +
+        `    ] },\n` +
+        `    { ...base, code: "AU2001", message: "ordinary diagnostic" }\n` +
+        `  ], symbols: [], occurrences: [] } : [];\n` +
+        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: 3, result }) + "\\n");\n` +
+        `});\n`
+    );
+    fs.chmodSync(fakeAura, 0o755);
+
+    const client = startLanguageServer(serverPath, { AURA_LSP_AURA_PATH: fakeAura });
+    t.after(() => client.dispose());
+    const initialize = await client.request("initialize", {
+      processId: null,
+      rootUri: null,
+      capabilities: {},
+      workspaceFolders: null
+    });
+    assert.equal(initialize.error, undefined, JSON.stringify(initialize.error));
+    client.notify("initialized", {});
+
+    const uri = "file:///assertion-operands.au";
+    const published = client.waitForNotification(
+      "textDocument/publishDiagnostics",
+      (message) => message.params?.uri === uri
+    );
+    client.notify("textDocument/didOpen", {
+      textDocument: {
+        uri,
+        languageId: "aura",
+        version: 1,
+        text: "def main():\n    assert 1 == 2\n"
+      }
+    });
+
+    const diagnostics = (await published).params.diagnostics;
+    assert.deepEqual(diagnostics[0].data.assertion_operands, [
+      { label: "left", type: "str", value: "actual", truncated: false },
+      {
+        label: "right",
+        type: "str",
+        value: "expected... (truncated)",
+        truncated: true
+      }
+    ]);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(diagnostics[1].data, "assertion_operands"),
+      false
+    );
+  }
+);
 
 test("bundled language server completes safely while a function header is incomplete", async (t) => {
   const serverPath = process.env.AURA_EXTENSION_SERVER_PATH

@@ -20,6 +20,12 @@ here as development advances.
 - Standardized owned text and collections as `str`, `list[T]`, `dict[K, V]`,
   and `set[T]`. Collection literals are homogeneous and methods use the
   canonical Python-shaped names with typed ownership and failures.
+- Expanded `aura test` with function-level discovery, literal case-sensitive
+  `-k` filtering, schema-versioned JSON results, per-case setup and teardown,
+  parametrized function-value registration, and deterministic source-order
+  reporting. Supported comparison and membership assertions now report the
+  two typed operand values on failure while preserving once-only left-to-right
+  evaluation and lazy assertion messages.
 
 ## 0.2.0 — 2026-07-31 (technical preview)
 

@@ -1,0 +1,8 @@
+error[AU4001]: numbers differ
+ --> crates/aura-compiler/tests/fixtures/run-fail/assert_comparison_introspection.au:4:5
+  |
+4 |     assert actual == expected, "numbers differ"
+  |     ^
+  = note: left = 41
+  = note: right = 42
+  = note: Aura call chain (innermost first): main at 1:1
