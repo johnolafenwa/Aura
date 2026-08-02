@@ -111,7 +111,7 @@ class AuraIdentityTests(unittest.TestCase):
                 stale.append(relative)
         self.assertEqual(stale, [])
 
-    def test_current_public_docs_do_not_narrate_removed_or_future_features(self) -> None:
+    def test_current_public_docs_do_not_narrate_removed_or_unimplemented_features(self) -> None:
         roots = (
             ROOT / "README.md",
             ROOT / "SECURITY.md",
@@ -130,7 +130,7 @@ class AuraIdentityTests(unittest.TestCase):
             re.compile(r"\bsuperseded\b", re.IGNORECASE),
             re.compile(r"\bhistorical(?:ly)?\b", re.IGNORECASE),
             re.compile(r"\bfuture work\b", re.IGNORECASE),
-            re.compile(r"\bAura\s+0\.3\b", re.IGNORECASE),
+            re.compile(r"\bAura\s+0\.4\b", re.IGNORECASE),
             re.compile(r"\b(?:borrow|return)[- ]source\b", re.IGNORECASE),
             re.compile(r"\breturn[- ]label\b", re.IGNORECASE),
             re.compile(r"\blifetime[- ]label\b", re.IGNORECASE),

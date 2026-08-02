@@ -1,7 +1,7 @@
 {
   "name": "aura-monorepo",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "packageManager": "npm@11.4.2",
   "engines": {
     "node": "22.14.0"

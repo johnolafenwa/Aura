@@ -5,6 +5,14 @@ versioning for release artifacts while it remains a technical preview; a minor
 preview release may still contain source and API incompatibilities called out
 in this file.
 
+## 0.3.0 — development
+
+Aura 0.3.0 is the active development channel. This cycle opens with the
+coordinated Python-surface migration: the workspace and development artifacts
+carry the 0.3 identity before any breaking source change lands. The complete
+old-to-new migration tables and feature evidence will remain current here as
+Batch S1 advances.
+
 ## 0.2.0 — 2026-07-31 (technical preview)
 
 Aura 0.2.0 is the first complete distribution of the implemented

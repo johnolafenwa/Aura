@@ -5911,13 +5911,13 @@ fn version_flags_exit_successfully() {
             String::from_utf8_lossy(&output.stderr)
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let prefix = format!("aura {}-preview (", env!("CARGO_PKG_VERSION"));
+        let prefix = format!("aura {}-dev (", env!("CARGO_PKG_VERSION"));
         let commit = stdout
             .strip_prefix(&prefix)
             .and_then(|value| value.strip_suffix(")\n"))
             .unwrap_or_else(|| {
                 panic!(
-                    "version path {:?} should print the preview channel and commit, stdout was:\n{}",
+                    "version path {:?} should print the development channel and commit, stdout was:\n{}",
                     args, stdout
                 )
             });

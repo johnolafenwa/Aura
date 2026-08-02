@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release-metadata regression tests for the Aura 0.2 preview."""
+"""Release-metadata regression tests for the Aura 0.3 development channel."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 class ReleaseMetadataTests(unittest.TestCase):
-    def test_product_manifests_and_locks_agree_on_0_2_0(self) -> None:
+    def test_product_manifests_and_locks_agree_on_0_3_0(self) -> None:
         cargo_manifest = (ROOT / "Cargo.toml").read_text()
         workspace_version = re.search(
             r"\[workspace\.package\].*?^version\s*=\s*\"([^\"]+)\"",
@@ -72,10 +72,11 @@ class ReleaseMetadataTests(unittest.TestCase):
         # extension entries above are their lock records; package-local lock
         # files would split dependency resolution and are not maintained.
 
-    def test_changelog_is_a_complete_0_2_preview_release_story(self) -> None:
+    def test_changelog_opens_the_0_3_development_story(self) -> None:
         changelog = (ROOT / "CHANGELOG.md").read_text()
+        self.assertIn("## 0.3.0 — development", changelog)
+        self.assertIn("development channel", changelog.lower())
         self.assertIn("## 0.2.0 — 2026-07-31 (technical preview)", changelog)
-        self.assertIn("technical preview", changelog.lower())
         for heading in (
             "Breaking changes and migration",
             "Language",
@@ -101,8 +102,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         component = (ROOT / "docs/.vitepress/theme/ReleaseStamp.vue").read_text()
         theme = (ROOT / "docs/.vitepress/theme/index.ts").read_text()
 
-        self.assertIn("Aura 0.2.0", manual)
-        self.assertIn("technical preview", manual.lower())
+        self.assertIn("Aura 0.3.0", manual)
+        self.assertIn("development channel", manual.lower())
         self.assertIn("implementation baseline commit", manual.lower())
         self.assertIn("AURA_DOCS_COMMIT", metadata)
         self.assertIn("GITHUB_SHA", metadata)
@@ -168,7 +169,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         smoke = (ROOT / "scripts/smoke-cli-archive.sh").read_text()
         self.assertIn("AURA_BUILD_COMMIT", build_script)
         self.assertIn("--short=12", build_script)
-        self.assertIn('"aura {}-preview ({})\\n"', cli)
+        self.assertIn('"aura {}-dev ({})\\n"', cli)
         self.assertIn('expected_version="aura 0.2.0-preview ($expected_commit)"', smoke)
 
 

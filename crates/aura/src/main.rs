@@ -3918,7 +3918,7 @@ fn print_usage_and_exit(exit_code: i32) -> ! {
 
 fn print_version_and_exit() -> ! {
     write_stdout(&format!(
-        "aura {}-preview ({})\n",
+        "aura {}-dev ({})\n",
         env!("CARGO_PKG_VERSION"),
         env!("AURA_BUILD_COMMIT")
     ));

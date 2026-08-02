@@ -2,6 +2,36 @@
 
 Last updated: 2026-08-02
 
+## Batch S1: Aura 0.3 Python-surface program (in progress)
+
+- Authorized target: complete the coordinated 0.3 breaking migration in the
+  ratified order S2 → S1 → S3 → S4 → five design-only ADRs, obtain the required
+  local and hosted evidence, report the checkpoint, and stop before ADR-0038
+  loans, the P1 performance batch, or any 0.4 implementation.
+- Preconditions are verified. Hosted runs `30738666230`, `30738666191`, and
+  `30738666169` each passed Ubuntu 24.04 and macOS 15 at `cd93f221`; extension
+  publication is complete. Batch work is isolated on the local-only
+  `codex/batch-s1-python-surface` branch and will not be pushed without the
+  user's authorization.
+- The workspace, compiler, CLI, language server, VS Code extension, locks,
+  Manual stamp, and CLI version output are moving to Aura 0.3.0 development
+  identity before semantic migration. The published 0.2.0 preview release and
+  its historical packaging checks remain intact.
+- Compiler coverage floors are frozen for the batch at 96.28% lines, 97.20%
+  functions, and 94.62% regions. One downward-truncated re-ratchet is reserved
+  for the final checkpoint.
+- User amendment: Aura has no users and carries no backward-compatibility
+  burden. Old names and meanings receive no aliases, shims, grace periods, or
+  staged activation. `list.remove(x)` activates for integer lists in the same
+  migration as every other element type; maintained old index-removal calls
+  rewrite to `pop(index)`. Focused tests run continuously, while the expensive
+  full local gate is reserved for completed migration families and checkpoint.
+- Current phase: build the S1/S2 pre-flip inventory and migration tooling,
+  complete focused version-stamp validation, then begin S2 test-first.
+- Protected user files remain untouched: `personal/file_ops.au`, the untracked
+  ADR-0022 draft, and `fc2_direct.out`.
+- Work note: `work/2026-08-02-batch-s1-python-surface.md`.
+
 ## Hosted CI path filtering (complete)
 
 - Authorized target: prevent documentation, README, work-note, and passive
