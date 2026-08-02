@@ -165,7 +165,10 @@ ability to distinguish prompt progress from the blocked behavior while giving
 shared runners scheduling headroom. Ordering tests such as bounded queues use
 explicit host/program handshakes instead of time estimates. Ordinary timeout
 values used only as deadlock guards are unchanged, and the Rust suite remains
-parallel on both hosted systems.
+parallel on both hosted systems. The complete cold-run repository gate has a
+90-minute job budget on the standard runners; the budget prevents workflow
+cancellation during compilation, parity, and coverage and does not relax any
+individual test contract.
 
 ## Workflow For A New Feature
 

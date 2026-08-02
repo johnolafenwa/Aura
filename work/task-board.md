@@ -82,9 +82,23 @@ Last updated: 2026-08-01
   100% coverage, 20 extension tests, compiler coverage at 96.29% lines /
   97.21% functions / 94.62% regions, reference integrity, docs, audits,
   warning-denied Clippy, and hygiene.
+- The first `f795eab` three-run streak was invalidated when proof-3 macOS run
+  `30727321064` failed before Rust. The idle benchmark test fixture lived for
+  only 50 ms after `READY`; hosted process-stat collection could consume that
+  whole interval before its 10 ms stability assertion began. The fixture-only
+  lifetime is now one second without weakening the asserted window. Twenty
+  consecutive `GITHUB_ACTIONS=true` focused runs and all 56 harness tests pass.
+- The remaining old-commit jobs exposed two more infrastructure limits. Four
+  healthy jobs reached CI's 45-minute wall-clock cap during the complete cold
+  gate, so the standard-runner job budget is now 90 minutes and is pinned by a
+  workflow regression. Proof-2 Ubuntu run `30727320065` also found that the
+  package tests mutated `XDG_CACHE_HOME`, `HOME`, and `AURA_GIT_TIMEOUT_MS`
+  concurrently; the entire environment-mutating family now shares one lock.
+  All 16 package tests pass 100/100 high-thread repetitions, and the 22-test
+  workflow/packaging suite plus `github-actionlint` are green.
 - Remaining: prove three consecutive hosted CI runs on Linux and macOS at the
-  current standard capacity, then land the proven tree on main. Publishing
-  remains a separate user dispatch after this gate.
+  current standard capacity from the corrected commit, then land the proven
+  tree on main. Publishing remains a separate user dispatch after this gate.
 - Work note: `work/2026-08-01-extension-publishing-and-hosted-ci-reliability.md`.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.

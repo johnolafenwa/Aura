@@ -63,6 +63,13 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
         )
         self.assertIn('var_os("GITHUB_ACTIONS")', compiler)
 
+    def test_ci_timeout_covers_the_complete_standard_runner_gate(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        verify_header = workflow.split("jobs:\n  verify:\n", 1)[1].split(
+            "\n    steps:\n", 1
+        )[0]
+        self.assertIn("\n    timeout-minutes: 90\n", verify_header)
+
     def test_docs_use_node24_deploy_pages_release(self) -> None:
         workflow = DOCS_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(

@@ -247,3 +247,31 @@ extension tests, the 96.29% / 97.21% / 94.62% compiler coverage ratchet,
 reference integrity, docs, audits, warning-denied Clippy, and hygiene passed.
 The repository remained on standard local and hosted capacity throughout this
 proof.
+
+The first three-run streak from `f795eab` was invalidated immediately by proof
+run [30727321064](https://github.com/johnolafenwa/Aura/actions/runs/30727321064).
+Its macOS job failed before Rust in
+`test_idle_waits_for_exact_natural_completion`: the shell fixture advertised
+`READY`, slept only 50 ms, and exited while `run_idle` was still collecting its
+initial process-statistics sample. A contended hosted `ps` call could therefore
+consume the fixture's entire lifetime before the asserted 10 ms stability
+window began. This is a test-fixture margin, not an Aura runtime or benchmark
+failure. The fixture now remains alive for one second while preserving the
+same 10 ms asserted behavior. Twenty consecutive focused runs under
+`GITHUB_ACTIONS=true` and the complete 56-test harness are green locally. The
+other five jobs from the invalidated streak remain useful fresh-eyes evidence
+but cannot count toward the required three-run streak.
+
+Those five jobs exposed two further test-infrastructure constraints. Four
+otherwise-progressing standard-runner jobs reached the workflow's 45-minute
+wall-clock cap during the complete gate, so CI now has a 90-minute job budget;
+a workflow regression pins the budget while Rust tests remain parallel. Proof
+run [30727320065](https://github.com/johnolafenwa/Aura/actions/runs/30727320065)
+also exposed a Linux package-test environment race. Multiple package tests
+mutated process-global `XDG_CACHE_HOME`, `HOME`, or `AURA_GIT_TIMEOUT_MS`
+concurrently, allowing the wrong-name resolver test to inspect a sibling's
+cache and receive the wrong earlier diagnostic. The complete environment-
+mutating package-test family now shares one documented lock. Product package
+resolution is unchanged. All 16 package tests passed together 100 consecutive
+times at 64 test threads under `GITHUB_ACTIONS=true`; the 22-test workflow and
+packaging suite plus `github-actionlint` also pass with the 90-minute budget.

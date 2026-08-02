@@ -1168,7 +1168,11 @@ class ValidationAndExecutionTests(unittest.TestCase):
                 Path(directory),
                 "idle",
                 'printf "READY idle 10 30000\\n"\n'
-                "sleep 0.05\n"
+                # `run_idle` samples process statistics after READY and only
+                # then begins its stability window. Keep the fixture alive
+                # long enough for a contended hosted macOS `ps` call without
+                # weakening the 10 ms behavior being asserted.
+                "sleep 1\n"
                 'printf "DONE idle 10\\n"\n',
             )
             result = bench.run_idle(binary, stable_seconds=0.01)

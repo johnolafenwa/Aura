@@ -1,5 +1,17 @@
 use super::*;
 use std::fs;
+use std::sync::{Mutex, MutexGuard};
+
+// Package cache and timeout configuration is process-global. Keep every test
+// that mutates those variables in one family so Cargo's parallel test runner
+// cannot redirect a sibling resolver into the wrong cache tree.
+static PACKAGE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_package_env() -> MutexGuard<'static, ()> {
+    PACKAGE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 struct TempDir {
     path: PathBuf,
@@ -1359,6 +1371,7 @@ fn package_path_cache_and_validation_helpers_cover_remaining_edges() {
 
 #[test]
 fn package_git_dependency_resolution_uses_cached_revision_selectors() {
+    let _env_lock = lock_package_env();
     let temp = TempDir::new("aura-package-rev-selector-cache");
     fs::create_dir_all(temp.path.join("local_repo")).expect("failed to create local repo dir");
     let source = fs::canonicalize(temp.path.join("local_repo"))
@@ -1400,6 +1413,7 @@ fn package_git_dependency_resolution_uses_cached_revision_selectors() {
 
 #[test]
 fn package_resolver_reports_git_dependency_resolution_and_package_name_errors() {
+    let _env_lock = lock_package_env();
     let temp = TempDir::new("aura-package-git-resolver-errors");
 
     let missing_source_app = write_package(
@@ -1457,6 +1471,7 @@ fn package_resolver_reports_git_dependency_resolution_and_package_name_errors() 
 
 #[test]
 fn package_git_resolution_and_checkout_helpers_cover_live_git_edges() {
+    let _env_lock = lock_package_env();
     let temp = TempDir::new("aura-package-live-git-helper-edges");
     let repo = init_git_package_repo(&temp, "util-repo", "util");
     let source = fs::canonicalize(&repo)
@@ -1886,6 +1901,7 @@ fn package_resolver_reports_cycle_duplicate_and_expected_name_edges() {
 
 #[test]
 fn package_io_helpers_cover_local_error_paths() {
+    let _env_lock = lock_package_env();
     let temp = TempDir::new("aura-package-io-helper-edges");
     let missing_manifest = expect_diag(
         load_raw_manifest(&temp.path.join("missing/Aura.toml")),
