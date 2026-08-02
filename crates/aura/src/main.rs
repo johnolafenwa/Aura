@@ -2694,9 +2694,9 @@ fn native_runtime_identity_material(identity: &NativeRuntimeIdentity) -> Option<
     serde_json::to_vec(&(identity.archive_sha256.as_str(), &identity.native_link_args)).ok()
 }
 
-// Bumped to `v4` by the ADR-0022 capability migration. The compiler-owned
-// semantic schema version is an additional, independent key component, so a
-// semantic migration need not pretend that the cache container format changed.
+// The compiler-owned semantic schema version is an additional, independent
+// key component, so checked-source changes do not require a cache-container
+// format change.
 const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v5";
 
 /// The exact runtime inputs that a warm native-cache lookup may reuse.

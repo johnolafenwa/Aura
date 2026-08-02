@@ -477,7 +477,7 @@ contains a backend surface that cannot preserve the same behavior.
 
 ## Limits And Implementation-Defined Behavior
 
-`str` is an alias for `str`; method-value types, user-defined numeric casts,
+`int` is an alias for `int64`; method-value types, user-defined numeric casts,
 and non-numeric casts are unavailable, and recursive value fields require
 `indirect`. Capture-free named function values use
 `def(T1, mut T2, own T3) -> R`; bare parameters are shared and the written

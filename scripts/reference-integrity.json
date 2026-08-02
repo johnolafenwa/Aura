@@ -303,7 +303,7 @@
       "reason": "Installed-CLI invocation that depends on a caller-supplied app.au file."
     },
     "docs/manual/cli-and-tooling.md#bash-3": {
-      "sha256": "ccbd13c95f79a92dbbfd3c3e51b935c982d89274a7deb70c08bf323c82c06bba",
+      "sha256": "33224146024dc2f697306318514ac57cc7b7f140e303826590de8f9408557df0",
       "mode": "command",
       "stdout": "ok\n",
       "stderr": ""
