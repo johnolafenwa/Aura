@@ -8825,8 +8825,11 @@ fn phase58_select_rechecks_task_deadline_and_cancellation_registration_races() {
     );
 
     let deadline_loser_queue = ChannelValue::new();
-    let deadline_loser_task = TaskValue::from_handle(thread::spawn(|| {
-        thread::sleep(StdDuration::from_millis(20));
+    let (deadline_release_tx, deadline_release_rx) = std::sync::mpsc::channel();
+    let deadline_loser_task = TaskValue::from_handle(thread::spawn(move || {
+        deadline_release_rx
+            .recv()
+            .expect("the deadline winner should release the losing task");
         Ok(Value::Unit)
     }));
     let deadline_cancellation_group = TaskGroupValue::new(&CancellationContext::default());
@@ -8843,6 +8846,9 @@ fn phase58_select_rechecks_task_deadline_and_cancellation_registration_races() {
             ],
             Some(&deadline_cancellation),
         )?;
+        deadline_release_tx
+            .send(())
+            .expect("the selected deadline should release the losing task");
         assert!(lock_mutex(&deadline_loser_queue.inner.recv_reactor_subscribers).is_empty());
         assert!(lock_mutex(&deadline_loser_task.inner.completion_reactor_subscribers).is_empty());
         assert!(deadline_cancellation
@@ -8860,8 +8866,11 @@ fn phase58_select_rechecks_task_deadline_and_cancellation_registration_races() {
     assert_eq!(selected.render(), "SelectOutcome.Deadline(2)");
 
     let cancelled_loser_queue = ChannelValue::new();
-    let cancelled_loser_task = TaskValue::from_handle(thread::spawn(|| {
-        thread::sleep(StdDuration::from_millis(20));
+    let (cancelled_release_tx, cancelled_release_rx) = std::sync::mpsc::channel();
+    let cancelled_loser_task = TaskValue::from_handle(thread::spawn(move || {
+        cancelled_release_rx
+            .recv()
+            .expect("the cancellation winner should release the losing task");
         Ok(Value::Unit)
     }));
     let group = TaskGroupValue::new(&CancellationContext::default());
@@ -8876,6 +8885,9 @@ fn phase58_select_rechecks_task_deadline_and_cancellation_registration_races() {
             ],
             Some(&cancellation),
         )?;
+        cancelled_release_tx
+            .send(())
+            .expect("the selected cancellation should release the losing task");
         assert!(lock_mutex(&cancelled_loser_queue.inner.recv_reactor_subscribers).is_empty());
         assert!(lock_mutex(&cancelled_loser_task.inner.completion_reactor_subscribers).is_empty());
         assert!(cancellation

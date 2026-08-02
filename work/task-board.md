@@ -96,6 +96,24 @@ Last updated: 2026-08-01
   concurrently; the entire environment-mutating family now shares one lock.
   All 16 package tests pass 100/100 high-thread repetitions, and the 22-test
   workflow/packaging suite plus `github-actionlint` are green.
+- The next streak ran all six standard jobs beyond the former 45-minute cap.
+  Proof-2 macOS run `30730386579` then reached reference integrity after its
+  Rust, parity, extension, and coverage gates passed, but the hosted image did
+  not provide the `rg` command required by the checker. CI now installs pinned
+  `ripgrep@14.1.1` on every matrix OS; a workflow regression and
+  `github-actionlint` pin the environment prerequisite.
+- Primary macOS observation job `91449588741` found a separate test-only race
+  under single-threaded coverage: the Phase-5.8 select registration test used
+  a 20 ms sleep to keep a losing task pending, but instrumented setup could
+  consume the sleep before selection began. Deadline and cancellation losers
+  now use explicit release channels. The test passes 100/100 hosted-mode runs
+  and the exact LLVM coverage invocation without weakening its assertions.
+- Proof-3 Ubuntu job `91449593795` completed all instrumented library tests and
+  then found that the `native_runtime_ffi` ELF test executable did not export
+  its no-mangle C helpers for the adapter's real `RTLD_DEFAULT` lookup. The
+  compiler build script now applies `-Wl,--export-dynamic` only to Linux test
+  targets. A cross-platform regression pins the link contract and all seven
+  instrumented FFI tests pass locally; product binaries are unchanged.
 - Remaining: prove three consecutive hosted CI runs on Linux and macOS at the
   current standard capacity from the corrected commit, then land the proven
   tree on main. Publishing remains a separate user dispatch after this gate.

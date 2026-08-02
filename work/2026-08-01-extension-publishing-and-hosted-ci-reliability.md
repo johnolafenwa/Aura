@@ -275,3 +275,37 @@ mutating package-test family now shares one documented lock. Product package
 resolution is unchanged. All 16 package tests passed together 100 consecutive
 times at 64 test threads under `GITHUB_ACTIONS=true`; the 22-test workflow and
 packaging suite plus `github-actionlint` also pass with the 90-minute budget.
+
+The next exact-SHA streak crossed the retired 45-minute limit on all six
+standard-runner jobs. Proof-2 macOS run
+[30730386579](https://github.com/johnolafenwa/Aura/actions/runs/30730386579)
+then reached reference integrity after all Rust, parity, extension, and
+coverage gates had passed and failed with exit 127: the current `macos-15`
+image does not provide `rg`, although the reference checker requires it.
+This is a missing workflow prerequisite, not a capacity or product failure.
+CI now installs pinned `ripgrep@14.1.1` on every matrix OS through the existing
+cross-platform installer. A workflow regression pins the prerequisite and
+`github-actionlint` accepts the corrected workflow.
+
+Primary macOS observation job `91449588741` then exposed one final test-only
+timing assumption under single-threaded LLVM coverage. The Phase-5.8 select
+registration-race test expected a one-millisecond deadline to beat a task that
+slept for 20 milliseconds. Instrumented setup could consume the entire sleep,
+making the task legitimately ready before selection and yielding the
+source-ordered task outcome. The deadline and cancellation cases now hold
+their losing tasks behind explicit release channels until after selection;
+the registration-race assertions are unchanged and no wall-clock ordering is
+involved. The focused test passes 100/100 hosted-mode repetitions and the
+exact instrumented `cargo llvm-cov` invocation.
+
+Proof-3 Ubuntu job `91449593795` completed all 1,501 instrumented library tests
+and then found an ELF-specific integration-test link omission. The
+`native_runtime_ffi` coverage binary defines no-mangle C helpers and exercises
+the product adapter's real name-based `RTLD_DEFAULT` lookup. Keeping a function
+address alive was sufficient on macOS but did not place the helpers in a Linux
+executable's dynamic symbol table, so lookup reported an undefined symbol. The
+compiler crate now passes `-Wl,--export-dynamic` only to Linux test targets via
+its build script. The maintained FFI integration test remains unchanged and a
+cross-platform regression pins the Linux linker contract; all seven
+instrumented FFI tests pass locally. This is test-binary linkage, not a change
+to generated Aura programs or the runtime adapter.

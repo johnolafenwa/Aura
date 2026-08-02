@@ -26,6 +26,7 @@ SMOKE_SCRIPT = REPO_ROOT / "scripts" / "smoke-cli-archive.sh"
 FINAL_REPORT = REPO_ROOT / "work" / "2026-07-31-batch6-final-report.md"
 DOWNLOADS_DOC = REPO_ROOT / "docs" / "downloads.md"
 RELEASE_PROCESS_DOC = REPO_ROOT / "docs" / "release-process.md"
+AURA_COMPILER_BUILD = REPO_ROOT / "crates" / "aura-compiler" / "build.rs"
 
 
 RETRY_STDOUT = """\
@@ -69,6 +70,24 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
             "\n    steps:\n", 1
         )[0]
         self.assertIn("\n    timeout-minutes: 90\n", verify_header)
+
+    def test_ci_installs_reference_search_tool_on_every_hosted_os(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            "      - name: Install ripgrep\n"
+            "        uses: taiki-e/install-action@c7eb1735f09259a5035e8e5d44b1406b1cddc0fb # v2\n"
+            "        with:\n"
+            "          tool: ripgrep@14.1.1\n",
+            workflow,
+        )
+
+    def test_linux_coverage_tests_export_process_ffi_symbols(self) -> None:
+        self.assertTrue(AURA_COMPILER_BUILD.is_file())
+        build_script = AURA_COMPILER_BUILD.read_text(encoding="utf-8")
+        self.assertIn('target_os == "linux"', build_script)
+        self.assertIn(
+            'cargo::rustc-link-arg-tests=-Wl,--export-dynamic', build_script
+        )
 
     def test_docs_use_node24_deploy_pages_release(self) -> None:
         workflow = DOCS_WORKFLOW.read_text(encoding="utf-8")

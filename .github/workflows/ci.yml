@@ -32,6 +32,11 @@ jobs:
           toolchain: 1.95.0
           components: clippy, llvm-tools-preview, rustfmt
 
+      - name: Install ripgrep
+        uses: taiki-e/install-action@c7eb1735f09259a5035e8e5d44b1406b1cddc0fb # v2
+        with:
+          tool: ripgrep@14.1.1
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@c7eb1735f09259a5035e8e5d44b1406b1cddc0fb # v2
         with:
