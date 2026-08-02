@@ -20,7 +20,10 @@ for every type, while an explicit `own` position transfers ownership. This
 rule is visible in the signature.
 
 **Can this call fail?**
-Failure that a caller might sensibly handle lives in the return type. `Result[T, E]`, `Option[T]`, `QueueReceive[T]`, `TaskResult[T]`, and the I/O and process error enums let a program decide what to do with a given failure on a given line rather than catching a broad exception somewhere else.
+Failure that a caller might sensibly handle lives in the return type.
+`Result[T, E]`, `Option[T]`, `QueueReceive[T]`, `TaskResult[T]`, and the I/O and
+process error enums let a program handle each failure at the line where it
+matters.
 
 **What closes this resource?**
 Files, network sockets, subprocess pipes, supervisors, and task groups should normally live inside a `with` block. The block is what runs cleanup — on normal exit and on runtime errors that unwind through it. `with` is how you turn "please remember to close this" into "this closes itself."

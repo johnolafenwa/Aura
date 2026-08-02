@@ -1,135 +1,108 @@
 # Why Aura
 
-Aura 0.2.0 is a technical preview of a statically typed, compiled language
-for agent control planes. Its current wedge is the combination of:
+Aura 0.2.0 is a technical preview of a statically typed, compiled systems
+language for ML infrastructure and reliable agents. Its goal is to make
+systems programming accessible to developers who value Python's readability
+and Rust's safety discipline.
+
+Three language commitments define the current direction:
 
 - **deterministic ownership**: bare access is shared, `mut` is exclusive
-  mutation, `own` transfers a value, and an owning scope has a defined cleanup
-  boundary;
-- **structured concurrency**: a `TaskGroup` owns the child tasks started inside
+  mutation, `own` transfers a value, and the owning scope defines cleanup;
+- **structured concurrency**: a `TaskGroup` owns every child started within
   its scope, and scope exit accounts for those children; and
-- **typed failure**: files, subprocesses, sockets, HTTP operations, retry
-  control, and supervisors expose failure as `Result`, `Option`, or a typed
-  outcome rather than an implicit exception path.
+- **typed failure**: files, subprocesses, sockets, HTTP operations, retries,
+  and supervisors expose recoverable failure through `Result`, `Option`, and
+  focused outcome enums.
 
-“Deterministic ownership” describes value access, transfer, and cleanup. It
-does **not** describe a deterministic scheduler. Aura deliberately leaves
-concurrent task completion, cross-worker scheduling, and output order
-unspecified. See [Ownership And Borrowing](/manual/ownership-and-borrowing),
+Ownership defines access, transfer, and cleanup. Task scheduling remains a
+separate runtime concern. Concurrent completion, cross-worker scheduling, and
+output order are unspecified. The [Ownership](/manual/ownership-and-borrowing),
 [Concurrency](/manual/concurrency), and
-[Control-Plane Modules](/manual/control-plane) for the normative contracts.
+[Control-Plane Modules](/manual/control-plane) chapters define the exact
+contracts.
 
-Aura explores whether familiar
-Python-shaped code can make resource lifetime, child-task lifetime, and
-recoverable control-plane failure visible in one language contract. Its 0.2
-surface is the technical preview documented in the Manual.
+## ML Systems And Agents Are Systems Software
 
-## Measured Snapshot
+Modern ML products extend far beyond model code. They include inference
+gateways, queue workers, evaluation pipelines, tool executors, subprocess
+supervisors, network clients, storage paths, timeouts, and retries. Agent
+runtimes add long-lived task trees and repeated interaction with unreliable
+external systems.
 
-The tables below were collected from exact programs in a clean detached
-checkout at commit `18c45ac` on one post-reboot Mac14,9 with an Apple M2 Pro
-(10 cores) and 16 GiB of memory. The recorded boot was 30 July 2026 at
-23:02:25. The comparison interpreter was Xcode CPython 3.9.6; it was **not** a
-free-threaded Python 3.13+ build.
+Aura gives this work one coherent contract. Static types describe the data.
+Ownership describes resource lifetime. Structured concurrency accounts for
+child tasks. Typed outcomes keep operational failure visible. Native
+compilation produces deployable executables with no garbage collector.
 
-For the four protocol workloads, the harness validates an exact `READY`
-record, starts the clock when it sends `GO`, and stops at the exact `DONE`
-record. Lower is faster. “Aura / CPython” is the ratio of medians.
+The result is a focused language for the reliable control plane around models:
 
-| exact protocol workload | Aura median | CPython median | Aura / CPython |
-| --- | ---: | ---: | ---: |
-| naive recursive `fib(30)` | 93.875250 ms | 158.491666 ms | 0.592304 |
-| create and join 10,000 tasks | 101.743042 ms | 51.950667 ms | 1.958455 |
-| 20-client delayed loopback TCP fan-out | 104.505375 ms | 108.605459 ms | 0.962248 |
-| 16-cycle retrying HTTP worker | 429.291292 ms | 520.447791 ms | 0.824850 |
+- model-serving and inference coordination;
+- agent runtimes and tool execution;
+- concurrent data and evaluation workers;
+- process, queue, and network supervision; and
+- infrastructure where cleanup and failure handling are correctness
+  requirements.
 
-The TCP shape uses 20 pre-bound loopback listeners. Aura 0.2 does not permit
-transferring an accepted `TcpStream` into a handler task (`AU3008`), and using
-one listener would have serialized the handlers instead of measuring fan-out.
-The task measurement includes creating and joining all 10,000 tasks after
-`GO`. The retry measurement executes the same status and delay schedule in
-both programs. Those choices make the pairs reproducible.
+## Familiar Source, Strong Guarantees
 
-The V6 integer loops remain whole-process measurements. Startup-adjusted
-values subtract a same-repetition startup control and are estimates rather
-than directly timed protocol windows.
+Python demonstrated the value of readable, low-friction source code. Rust
+demonstrated that ownership can prevent broad classes of memory and concurrency
+errors before execution. Aura combines those lessons in an indentation-based
+language with a smaller control-plane focus.
 
-| exact 10,000,000-iteration comparison | Aura whole process | CPython whole process | Aura startup-adjusted | CPython startup-adjusted |
-| --- | ---: | ---: | ---: | ---: |
-| Aura `int32` / CPython integer | 36.620333 ms | 321.096625 ms | 31.037083 ms | 295.458959 ms |
-| Aura `int64` / CPython integer | 13.724042 ms | 321.096625 ms | 7.7378125 ms (10/11 valid) | 296.966042 ms (10 aligned pairs) |
-
-Python has one arbitrary-precision integer lane, so the same CPython program is
-shown against Aura's two fixed-width lanes.
-
-Numeric Arrays were measured separately with NumPy 2.0.2 using one million
-`float64` elements and 11 paired single-thread observations on the same host.
-
-| exact Array workload | Aura median | NumPy median | Aura / NumPy |
-| --- | ---: | ---: | ---: |
-| fresh owned elementwise add | 1.142461 ms | 0.251602 ms | 4.540751 |
-| existing-array sum reduction | 1.150392 ms | 0.174065 ms | 6.608975 |
-
-The [Numeric Arrays](/manual/numeric-arrays) chapter records the exact Array
-methodology and Aura's current API limits.
-
-The release-performance raw evidence has SHA-256
-`06cc1223630b1063c8a6806bf590449d6121a3be8d33e8dc1b0ffd17cee93ccb`.
-Its SHA-linked summary has SHA-256
-`4490e0d169d9a031ae57f04ade772d22169189f71a949356234f529d40e56236`.
-The repository benchmark runner records commands, source and binary hashes,
-raw observations, medians, dispersion, host inventories, boot identity, and
-the environment policy needed to reproduce the result.
+The familiar surface lowers the cost of reading and writing systems code. The
+compiler still requires exact types at public boundaries, validates ownership
+and task transfer, checks exhaustive matches, and carries source context into
+runtime diagnostics. Familiar syntax does not weaken the contract.
 
 ## Adjacent Languages
 
-These projects overlap with parts of Aura's motivation. The distinctions
-below describe focus and language contracts, not a ranking. Primary sources
-were checked on 31 July 2026.
+These projects overlap with parts of Aura's motivation. The distinctions below
+describe focus and language contracts. Primary sources were checked on 31 July
+2026.
 
 ### Mojo
 
 Mojo is a close neighbor in Python-shaped systems syntax and compiler-tracked
-ownership. Its current roadmap centers
+ownership. Its roadmap centers
 [high-performance kernels on CPUs, GPUs, and ASICs, with Python interoperability](https://mojolang.org/docs/roadmap/).
 Its ownership documentation gives each value one owner and defines
 [default immutable, `mut`, and `var` argument conventions](https://mojolang.org/docs/manual/values/ownership/).
 
-Aura 0.2 is narrower: GPU programming, heterogeneous hardware support, and
-Python-library interoperability are unavailable. Its present center is the
-application control plane around agents: scoped child tasks, transferable
-messages, typed I/O and process failures, timeouts, retries, and supervision.
+Aura 0.2 centers the application control plane around models and agents:
+scoped child tasks, transferable messages, typed I/O and process failures,
+timeouts, retries, and supervision. GPU programming, heterogeneous hardware,
+and Python-library interoperability remain future surface areas.
 
 ### Nim
 
-Nim is a much broader, established systems language. The Nim project describes
-it as a [statically typed compiled language combining ideas from Python, Ada,
-and Modula](https://nim-lang.org/), with native executables and deterministic,
-customizable memory management. Its current documentation recommends
+Nim is a broad, established systems language. The Nim project describes it as
+a [statically typed compiled language combining ideas from Python, Ada, and
+Modula](https://nim-lang.org/), with native executables and deterministic,
+customizable memory management. Its documentation recommends
 [ORC for newly written code](https://nim-lang.org/2.2.6/mm.html), and its
 [typed-threads documentation](https://nim-lang.org/docs/typedthreads.html)
 covers shared-heap and explicit thread facilities.
 
-Aura is not differentiated merely by deterministic destruction—Nim already
-has a strong story there. Aura fixes one smaller integrated contract around
-call-boundary capabilities, structurally transferable task values,
-`TaskGroup` scope, and typed control-plane APIs. Nim's metaprogramming,
-backend, ecosystem, and portability breadth are outside Aura 0.2's surface.
+Aura's distinction is its smaller integrated contract around call-boundary
+capabilities, structurally transferable task values, `TaskGroup` scope, and
+typed control-plane APIs. Nim provides greater metaprogramming, backend,
+ecosystem, and portability breadth today.
 
 ### Go
 
-Go is the clearest production reference point for simple concurrent service
-software. Its documentation defines lightweight
+Go is a production reference point for simple concurrent service software. Its
+documentation defines lightweight
 [goroutines and channel communication](https://go.dev/doc/effective_go#concurrency),
 treats [errors as values](https://go.dev/blog/errors-are-values), and explains
 that the standard toolchain ships a
 [tracing garbage collector](https://go.dev/doc/gc-guide).
 
-Aura shares Go's preference for visible failure and communication, but
-chooses a different lifetime contract: non-copy task captures and messages
-must satisfy structural `Transfer`, resources have owners, and child tasks are
-normally accounted for by the `TaskGroup` that starts them. Go was not part of
-the Batch 6 benchmark.
+Aura uses a different lifetime contract. Non-copy task captures and messages
+must satisfy structural `Transfer`, resources have owners, and a `TaskGroup`
+accounts for the children it starts. This provides scoped task lifetime and
+deterministic resource cleanup without a garbage collector.
 
 ### Free-threaded Python 3.13+
 
@@ -137,17 +110,21 @@ CPython has supported an optional free-threaded build since Python 3.13. The
 official guide says that this build can run threads in parallel with the GIL
 disabled, while some extension modules may
 [re-enable the GIL](https://docs.python.org/3/howto/free-threading-python.html).
-It remains Python's shared-object, dynamically typed programming model; free
-threading changes execution, not Python into an ownership language.
+The language retains its shared-object, dynamically typed programming model.
 
-Aura instead checks ownership and task-transfer boundaries before execution
-and gives common control-plane failures concrete result types. That trades away
-Python's runtime flexibility and ecosystem compatibility. The benchmark above
-used CPython 3.9.6; no free-threaded Python comparison was run.
+Aura checks ownership and task-transfer boundaries before execution and gives
+common control-plane failures concrete result types. Python offers much greater
+runtime flexibility and ecosystem compatibility. Aura offers a compiled,
+ownership-based contract for teams that want those decisions checked.
 
-## Current Technical Preview Scope
+## Performance And Technical Scope
 
-Aura 0.2 is an executable technical preview. Production stability, a stable
-package ecosystem, general Python compatibility, GPU or accelerator execution,
-borrowed Array views, preemptive scheduling, work stealing, detached tasks,
-and deterministic concurrent output are outside its current surface.
+The [Performance](/manual/performance) chapter records current measurements,
+known gaps, reproduction evidence, and the optimization direction for later
+releases.
+
+Aura 0.2 is an executable technical preview. Its current surface includes the
+language, native compiler, ownership model, structured task runtime, numeric
+arrays, control-plane modules, package tooling, Manual, and editor extension.
+The [Current Limits](/manual/current-limits) chapter lists the precise
+boundaries of that surface.

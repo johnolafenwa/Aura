@@ -83,9 +83,9 @@ with group = TaskGroup():
 
 Use `start_soon_with_stack(bytes, function, ...)` when the child does not
 return a retained handle. The byte count is exact `int64` and must be from
-256 KiB through 64 MiB inclusive. Aura rejects a smaller or larger value
-instead of silently clamping it. Accepted capacities are rounded upward to
-the host page size and guard-protected.
+256 KiB through 64 MiB inclusive. Aura rejects smaller and larger values.
+Accepted capacities are rounded upward to the host page size and
+guard-protected.
 
 Treat 256 KiB as an opt-in minimum only for a measured shallow task. It is not
 the ordinary default: Aura's complete compiled HTTP example faulted when
@@ -128,8 +128,8 @@ Every captured argument and the target result must be structurally `Transfer`
 after generic specialization. Copy data, `String`, structurally transferable
 collections and user data, and Queue/Task handle identities can cross.
 Capability views, `random.Rng`, `TaskGroup`, and live file, process, or network
-resources cannot. `Transfer` is derived by the compiler rather than implemented
-as a user trait. Queue and Task handle state is synchronized for cross-worker
+resources cannot. The compiler derives `Transfer`; user code cannot implement
+it as a trait. Queue and Task handle state is synchronized for cross-worker
 use; all other captures and results remain owned, share-nothing `Transfer`
 values.
 
@@ -288,9 +288,8 @@ The `Error(index, message)` variant reports **which** task failed. That is usual
 With repeatable `T`, the handles and observations remain reusable. With a
 non-repeatable but transferable `T`, either helper consumes the complete task
 vector on its first attempt, including timeout, cancellation, and failure.
-`wait_any` deliberately abandons the observation rights of unchosen tasks.
-Queue receives transfer one owned item rather than observing task-result
-storage.
+`wait_any` deliberately abandons the observation rights of unchosen tasks. A
+Queue receive transfers one owned item; it never observes task-result storage.
 
 ## Cancellation Is Cooperative
 
@@ -331,8 +330,8 @@ guarded 512 KiB coroutine stack, with an explicit per-child override available
 through the two `_with_stack` methods. Scheduler waits are event-driven:
 descriptors stay registered, deadlines are kept in a timer heap, and Queue,
 task-completion, and blocking-pool events notify the responsible worker
-directly. An idle worker blocks until local work, an event, or a deadline
-instead of waking on a periodic tick.
+directly. An idle worker sleeps until local work, an event, or a deadline
+becomes ready. The scheduler uses no periodic tick.
 
 Queue and Task handles are the cross-worker channels. Other captures and
 results remain owned `Transfer` values, so the model stays share-nothing.

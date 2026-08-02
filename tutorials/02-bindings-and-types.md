@@ -116,7 +116,7 @@ Aura provides three owned collection types and several runtime types:
 `Option[T]` and `Result[T, E]` are covered in [10-results-and-options.md](10-results-and-options.md). Queues and tasks are covered in [13-concurrency.md](13-concurrency.md).
 
 `Array[T]` is an owned non-Copy value with a fixed rank-at-least-one shape.
-Construct it explicitly rather than with a literal:
+Construct it explicitly with an Array constructor:
 
 ```python
 source: Vec[float64] = [1.0, 2.0, 3.0, 4.0]
@@ -238,7 +238,7 @@ the exact bare/shared capability shown above, not `mut` or `own`.
 
 `Vec.len()` returns `int64`, while `range(...)` and Vec indexes remain
 `int32`. Narrow explicitly at the consumer; integer casts are checked, so an
-out-of-range length fails instead of wrapping:
+out-of-range length fails and never wraps:
 
 ```python
 for index in range(items.len() as int32):
@@ -259,10 +259,10 @@ UTF-8 encoding bytes. Both counts are `int64`, so `"A🎉".len()` is `2` while
 
 Indexed reads work as ordinary expressions, so chains like `keys[idx].clone()` are supported.
 For clone-safe non-copy element types like `String` or ordinary user-defined
-classes, indexed reads require `get(index)` instead of `items[index]` so the
-cloned read stays explicit. A value containing `random.Rng` must be transferred
-with `remove(index)` instead of cloned, and the rejection names that reason
-directly rather than recommending an unusable `get(index)`:
+classes, use `get(index)` for an explicit cloned read. Direct `items[index]`
+access is rejected. A value containing `random.Rng` must be transferred with
+`remove(index)` because it cannot be cloned, and the rejection names that
+reason directly:
 
 ```python
 names = ["Ada", "Grace"]
@@ -280,7 +280,9 @@ See [examples/collections/vec_basics.au](../examples/collections/vec_basics.au),
 and
 [examples/collections/vec_algorithms.au](../examples/collections/vec_algorithms.au).
 
-For integer types, the runtime enforces the annotated width. A binding like `value: int8 = 127` is valid, but exceeding that range at runtime produces an error instead of silently widening the value.
+For integer types, the runtime enforces the annotated width. A binding like
+`value: int8 = 127` is valid, but exceeding that range at runtime produces an
+error and preserves the declared type.
 
 ## `Map[K, V]` And Map Literals
 
@@ -316,12 +318,11 @@ Map lookups work inside larger expressions including f-strings:
 print(f"value: {counts['aura']}")
 ```
 
-For a non-copy value type, direct `map[key]` is rejected rather than performing
-a hidden clone. When the value type is clone-safe, `get(key)` gives an explicit
+For a non-copy value type, direct `map[key]` is rejected; Aura never performs a
+hidden clone. When the value type is clone-safe, `get(key)` gives an explicit
 cloned optional read and `remove(key)` transfers the stored value out. When the
 value type carries `random.Rng` state, only `remove(key)` works, and the
-rejection says so rather than pointing you at a `get(key)` that would itself be
-rejected.
+rejection explains that `get(key)` would also be rejected.
 
 `items()` and `entries()` both return `Vec[MapEntry[K, V]]`, where each entry exposes `.key` and `.value`:
 
@@ -341,7 +342,8 @@ See [examples/collections/map_basics.au](../examples/collections/map_basics.au).
 
 ## `Set[T]` And Set Literals
 
-Create a set with curly braces when the entries are values rather than `key: value` pairs:
+Create a set with value-only entries inside curly braces. Map literals use
+`key: value` pairs:
 
 ```python
 mut seen = {1, 2, 2, 3}       # duplicates are removed

@@ -6,7 +6,19 @@ Aura 0.2 is a technical preview. This chapter covers both a release archive and 
 
 ## Install A Release Archive
 
-Download the archive for a supported host from the GitHub release, extract it, and keep its directory layout intact:
+The fastest installation path supports Linux x64, macOS x64, and macOS arm64:
+
+```bash
+curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+```
+
+The script verifies the release checksum and installs the compiler plus its
+native runtime under `~/.local`. If `~/.local/bin` is absent from `PATH`, the
+installer prints the exact export command. Set `AURA_INSTALL_PREFIX` before
+running the command to choose another prefix.
+
+For a manual installation, download the archive for a supported host, extract
+it, and keep its directory layout intact:
 
 ```text
 aura-v0.2.0-preview-<target>/
@@ -19,7 +31,9 @@ aura-v0.2.0-preview-<target>/
     └── agents/retrying_network_worker.au
 ```
 
-Add the extracted `bin` directory to `PATH`. Running and checking programs need no Rust installation. Building a native executable needs a host C compiler because `aura` performs the final host link itself.
+Add the extracted `bin` directory to `PATH`. Running and checking programs need
+no Rust installation. Building a native executable needs a host C compiler
+because `aura` performs the final host link itself.
 
 Aura does not publish a Windows archive in 0.2. See the repository's supported-platform matrix before relying on a source build on an unlisted host.
 

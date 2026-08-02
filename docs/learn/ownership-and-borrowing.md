@@ -106,8 +106,8 @@ print(length())
 ```
 
 Copy captures are snapshots and leave the source usable. Shared and mutable
-enclosing parameters are capabilities rather than owned values and cannot be
-captured. Captured environments are read-only in the current phase.
+enclosing parameters are capabilities, so a closure cannot capture them as
+owned values. Captured environments are read-only in the current phase.
 
 ## Shared Borrows
 
@@ -164,8 +164,7 @@ Two rules apply to mutable borrows:
 2. Mutable access is **exclusive**. If one argument to a call takes `mut`, no
    other argument in that call may borrow the same value. This is not a
    stylistic preference; overlapping mutable aliases would make the order of
-   effects unclear, and Aura rejects them at the call boundary rather than
-   relying on the callee to behave well.
+   effects unclear. Aura rejects them at the call boundary.
 
 ## Methods And `self`
 
@@ -321,7 +320,7 @@ When a program starts to feel tangled, run down this list:
   value is clone-safe.
 - Put resources in `with` blocks.
 - Put concurrent child work inside a `TaskGroup`.
-- Let `Result`, `Option`, and the outcome enums carry control flow — don't smuggle failure through strings or magic values.
+- Let `Result`, `Option`, and the outcome enums carry control flow. Do not smuggle failure through strings or magic values.
 
 The goal is not to fight the checker. The goal is to make the program say who is responsible for every value.
 

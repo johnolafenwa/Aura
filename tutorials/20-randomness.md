@@ -23,8 +23,8 @@ differently, so reproducibility depends on both the seed and call order.
 
 `next_int(lo, hi)` uses a half-open interval: `lo` can be returned and `hi`
 cannot. The bounds are `int64`, may be negative, and must satisfy `lo < hi`.
-Aura uses rejection sampling internally, so every integer in the interval is
-equally likely rather than biased by a naive remainder operation.
+Aura uses rejection sampling internally, giving every integer in the interval
+equal probability and avoiding remainder bias.
 
 `next_float()` returns a `float64` in `[0.0, 1.0)`. It can return zero and can
 never return one.

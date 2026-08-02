@@ -18,8 +18,8 @@ import process
 
 The current runtime model uses scheduler-backed lightweight tasks. Queue waits,
 timer waits, and the maintained socket/HTTP surface share the same evented
-runtime scheduler underneath instead of spinning or blocking on per-operation
-sleeps. Hostname resolution and blocking connect syscalls run on the generic
+runtime scheduler. They park until an event is ready. Hostname resolution and
+blocking connect syscalls run on the generic
 blocking-I/O pool, so a slow DNS resolver or connect attempt does not pin the
 lightweight-task scheduler.
 
@@ -116,9 +116,9 @@ def copy_bytes(path: String) -> Result[Vec[uint8], io.Error]:
         return Result.Ok(bytes)
 ```
 
-When an application deliberately crosses between raw data and UTF-8 text, use
-`text.to_bytes()` or `String.from_bytes(payload)` rather than an implicit
-conversion. [22-bytes.md](22-bytes.md) covers those conversions plus strict
+Crossing between raw data and UTF-8 text is explicit. Use `text.to_bytes()` or
+`String.from_bytes(payload)`. [22-bytes.md](22-bytes.md) covers those
+conversions plus strict
 hex/base64 codecs and SHA-256.
 
 See:
@@ -189,7 +189,8 @@ Related process-supervisor enums:
 - `process.SupervisorEvent`
 - `process.SupervisorWait`
 
-Supervisor children default to `group=true` so `stop()` and `close()` shut down full child trees instead of only the leader process.
+Supervisor children default to `group=true`, so `stop()` and `close()` shut
+down the leader process and its full child tree.
 When `restart` is `process.RestartPolicy.OnFailure` or `process.RestartPolicy.Always`, `backoff` must be at least `10ms` to prevent zero-delay restart loops.
 
 `Supervisor.start` retains the configuration it may need for a restart, so all
@@ -473,7 +474,12 @@ See [examples/io/unix_tls_roundtrip.au](../examples/io/unix_tls_roundtrip.au), w
 
 ## Timeouts And Cancellation
 
-Most maintained socket operations accept optional `timeout=...` arguments. Timeouts are expressed with Aura `Duration` values such as `100ms`, `1s`, or `2m`. Computed timeouts may use `Duration.ms(n)` or arithmetic such as `attempt * 1ms`. Explicit values must be non-negative and fit the host deadline; invalid values return `io.Error.InvalidInput` rather than being treated as unlimited.
+Most maintained socket operations accept optional `timeout=...` arguments.
+Timeouts are expressed with Aura `Duration` values such as `100ms`, `1s`, or
+`2m`. Computed timeouts may use `Duration.ms(n)` or arithmetic such as
+`attempt * 1ms`. Explicit values must be non-negative and fit the host
+deadline; invalid values return `io.Error.InvalidInput`. Only an omitted
+timeout is unlimited.
 
 For connect operations, one timeout budget covers blocking-pool admission,
 hostname resolution, every resolved-address attempt, and the remaining
@@ -497,7 +503,9 @@ unrelated blocking-I/O progress while every worker remains stuck.
 internal absence marker; explicit negative Duration values never act as that
 marker.
 
-The socket runtime also threads task-group cancellation into maintained socket waits. If a task group is cancelled while a child is waiting on a maintained network operation, that operation returns `io.Error.Cancelled` instead of waiting forever.
+The socket runtime also threads task-group cancellation into maintained socket
+waits. If a task group is cancelled while a child is waiting on a maintained
+network operation, that operation returns `io.Error.Cancelled` promptly.
 
 ## Current Model
 
@@ -508,9 +516,9 @@ This surface uses one explicit scheduler-backed I/O model:
 - socket-backed networking and HTTP convenience helpers use nonblocking descriptors with timeout and cancellation support
 - hostname resolution, listener binding, UDP destination resolution, and blocking TCP/Unix connect syscalls offload through the configurable generic blocking-I/O pool
 - process waits and captured child stdio pipes use the same scheduler-backed wait path
-- Aura tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
+- Aura tasks are scheduler-backed lightweight coroutines; each task does not require its own OS thread
 - ordinary file operations offload through the pinned-worker scheduler-backed
-  runtime instead of pinning a lightweight task on a blocking host thread
+  runtime, keeping the lightweight task free from a blocking host thread
 
 Current process notes:
 

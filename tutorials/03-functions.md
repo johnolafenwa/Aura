@@ -54,7 +54,10 @@ copy type; use `value: own T` for an identity, storing, or consuming helper.
 
 ## Borrowed Parameters
 
-When a function only needs to read a value, it should borrow rather than take ownership. This lets the caller keep using the value after the call. If you are new to borrowing, see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for the full explanation.
+When a function only needs to read a value, give it shared access. The caller
+keeps ownership and can continue using the value after the call. See
+[06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for the full
+explanation.
 
 Use `T` for read-only access:
 

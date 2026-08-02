@@ -1,37 +1,29 @@
 # Aura
 
-Aura is a statically typed, compiled language for agent control planes. Its
-wedge is Python-shaped source with deterministic ownership, structured
-concurrency, and typed failure across files, processes, networking, retries,
-and supervision.
+Aura is a compiled, statically typed systems language for ML infrastructure and
+reliable agents. It combines Python-like readability with Rust-style safety:
+deterministic ownership, structured concurrency, typed failure, native
+executables, and no garbage collector.
 
-Deterministic ownership means that shared access, exclusive mutation, transfer,
-and scope cleanup follow language rules. It does **not** mean deterministic task
-scheduling: concurrent completion and output order are deliberately unspecified.
+Install the Aura 0.2 technical preview on Linux x64, macOS x64, or macOS arm64:
 
-Aura 0.2.0 is a technical preview, not a production release. Read
-[Why Aura](docs/positioning.md) for the measured positioning against adjacent
-languages. The canonical implemented contract begins with the normative
+```bash
+curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+```
+
+Aura aims to democratize systems programming for teams building model-serving
+infrastructure, agent runtimes, data and evaluation workers, tool executors,
+and the control planes around them. Shared access, exclusive mutation,
+ownership transfer, resource cleanup, and child-task lifetime are checked by
+the language.
+
+Read [Why Aura](docs/positioning.md) for the project direction. The canonical
+implemented contract begins with the normative
 [Language Specification](docs/manual/language-specification.md),
-[complete grammar](docs/manual/grammar.md), and Manual. Supported hosts and pinned tools are
-listed in [SUPPORTED_PLATFORMS.md](SUPPORTED_PLATFORMS.md).
-
-## Measured snapshot
-
-On one post-reboot Mac14,9 (M2 Pro, 10 cores, 16 GiB), the release benchmark
-recorded these protocol-window medians against CPython 3.9.6. Lower is faster;
-the ratio is Aura divided by CPython.
-
-| exact workload | Aura | CPython | Aura / CPython |
-| --- | ---: | ---: | ---: |
-| naive recursive `fib(30)` | 93.875250 ms | 158.491666 ms | 0.592304 |
-| create and join 10,000 tasks | 101.743042 ms | 51.950667 ms | 1.958455 |
-| 20-client delayed loopback TCP fan-out | 104.505375 ms | 108.605459 ms | 0.962248 |
-| 16-cycle retrying HTTP worker | 429.291292 ms | 520.447791 ms | 0.824850 |
-
-The [positioning and methodology](docs/positioning.md#measured-snapshot) records
-the hardware, reboot, commit, evidence hashes, integer-loop measurements,
-numeric-Array comparison, and workload caveats.
+[complete grammar](docs/manual/grammar.md), and Manual. Current measurements
+and the optimization roadmap live in the
+[Performance chapter](docs/manual/performance.md). Supported hosts and pinned
+tools are listed in [SUPPORTED_PLATFORMS.md](SUPPORTED_PLATFORMS.md).
 
 ## Monorepo layout
 
@@ -422,10 +414,9 @@ For an Aura workspace elsewhere, put `aura` on `PATH` or launch VS Code with
 AURA_LSP_AURA_PATH="/absolute/path/to/aura" code /path/to/aura-project
 ```
 
-Compiler diagnostics retain their stable `AU####` code, related spans, notes,
-help, edits, typed call frames, and task ancestry through the LSP bridge
-instead of being reimplemented in JavaScript. If the compiler process is
-unavailable, a small lexical recovery layer provides basic declarations and
-top-level completions.
+The LSP bridge preserves the compiler's stable `AU####` codes, related spans,
+notes, help, edits, typed call frames, and task ancestry. If the compiler
+process is unavailable, a small lexical recovery layer provides basic
+declarations and top-level completions.
 
 Full extension install and packaging steps are documented in [tools/vscode-aura/INSTALL.md](tools/vscode-aura/INSTALL.md).

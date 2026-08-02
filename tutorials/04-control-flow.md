@@ -234,8 +234,9 @@ for host, port in zip(hosts, ports):
     print(f"{host}:{port}")
 ```
 
-Both are `for` loop forms rather than values you can store, so writing
-`pairs = enumerate(hosts)` is rejected with guidance to use the loop spelling.
+Both are compiler-known `for` loop forms. They do not produce values that can
+be stored, so `pairs = enumerate(hosts)` is rejected with guidance to use the
+loop spelling.
 Both read their operands by position, so each one must be a `Vec[T]` or a
 `Set[T]`, and both iterate over the bare-loop shared default: no `own` or
 `mut` modifier, the operands stay borrowed for the whole

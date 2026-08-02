@@ -69,7 +69,8 @@ match values.pop():
         print("empty")
 ```
 
-`set`, `remove`, `insert`, and `swap` treat an out-of-range index as a bug. They raise a runtime error with file, line, and caret rather than returning a sentinel:
+`set`, `remove`, `insert`, and `swap` treat an out-of-range index as a bug. They
+raise a runtime error with file, line, and caret. No sentinel is returned:
 
 ```python
 values.set(0, 5)        # ok: replaces index 0
@@ -90,11 +91,10 @@ length at the `int32` index boundary makes an append explicit:
 values.insert(values.len() as int32, 40)
 ```
 
-The cast is checked, so a length outside the `int32` range fails rather than
-wrapping. Aura deliberately does not copy Python's clamping behavior for an
-extremely negative insertion index. If one normalization still leaves the
-index below zero, Aura reports the error instead of silently inserting at
-the start.
+The cast is checked, so a length outside the `int32` range fails. Aura does not
+copy Python's clamping behavior for an extremely negative insertion index. If
+one normalization still leaves the index below zero, Aura reports the error
+and leaves the vector unchanged.
 
 The same boundary applies to length-driven `range(...)` loops:
 
@@ -129,11 +129,10 @@ once as `len + endpoint`. After that, both bounds must be between zero and the
 length, inclusive, and start must not exceed end.
 
 Aura deliberately does **not** clamp slice bounds like Python. `values[-99:2]`
-and `values[3:1]` report `AU4003` instead of silently selecting a different or
-empty range. If invalid bounds are expected input, validate them before
-slicing.
+and `values[3:1]` report `AU4003`; they never select a different or empty
+range. If invalid bounds are expected input, validate them before slicing.
 
-String endpoints count Unicode scalar values rather than UTF-8 bytes or
+String endpoints count Unicode scalar values. They do not count UTF-8 bytes or
 grapheme clusters. Finding those boundaries scans the text, so String slicing
 is O(n). Integer String indexing remains unavailable: select a one-scalar
 owned String with `text[i:i + 1]` when the endpoint arithmetic is valid.

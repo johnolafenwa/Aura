@@ -71,8 +71,8 @@ print(
 )
 ```
 
-The `case` block is a layout island inside the continued call. This preserves
-the normal match syntax rather than flattening its arms. The containing
+The `case` block is a layout island inside the continued call. Every arm keeps
+the normal match layout. The containing
 delimiter can close after the last inline arm or on its own following line.
 
 ## Delimiters Must Pair

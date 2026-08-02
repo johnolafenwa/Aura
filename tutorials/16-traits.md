@@ -227,9 +227,9 @@ Aura supports operator overloading through traits. When you implement the right 
 
 Builtin numeric floor division and `Duration // int64` take precedence. When
 neither rule applies, `//` and `//=` resolve through
-`FloorDiv.floor_div`. Equal integer operands with `/` are rejected rather than
-sent to `Div`, while `/` on an applicable non-numeric user type still resolves
-through `Div.div`.
+`FloorDiv.floor_div`. Equal integer operands with `/` are rejected before
+trait dispatch, while `/` on an applicable non-numeric user type still
+resolves through `Div.div`.
 
 Example:
 
@@ -298,9 +298,9 @@ impl Describe for String:
 ```
 
 The one restriction is that the method name must not already be a builtin
-member of that target. Naming it `len` instead of `describe` would be rejected
-with `AU2006`, because the builtin `len` always wins at every call site and the
-trait body would silently never run:
+member of that target. A method named `len` would be rejected with `AU2006`,
+because the builtin `len` always wins at every call site and the trait body
+would silently never run:
 
 ```text
 error[AU2006]: trait method `len` collides with builtin method `Vec.len`

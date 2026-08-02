@@ -7,7 +7,7 @@ const proposalStem = 'auro' + 'ra_language_proposal.md'
 
 export default defineConfig({
   title: 'Aura',
-  description: 'The guide and reference manual for the Aura programming language.',
+  description: 'Aura is a compiled, Python-like systems language for ML infrastructure and reliable agents.',
   lang: 'en-US',
   base,
   vite: {
@@ -105,6 +105,7 @@ export default defineConfig({
             { text: 'CLI And Tooling', link: '/manual/cli-and-tooling' },
             { text: 'API Index', link: '/manual/api-index' },
             { text: 'Diagnostics', link: '/manual/diagnostics' },
+            { text: 'Performance', link: '/manual/performance' },
             { text: 'Current Limits', link: '/manual/current-limits' },
             { text: 'Conformance', link: '/manual/conformance' }
           ]

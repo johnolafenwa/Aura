@@ -73,6 +73,8 @@ Start with [Language Specification](/manual/language-specification) for scope, t
 - [CLI And Tooling](/manual/cli-and-tooling): `aura` commands, diagnostics, analysis JSON, completions, and build modes.
 - [API Index](/manual/api-index): every maintained builtin function, method, enum, and module type in one place.
 - [Diagnostics](/manual/diagnostics): compile-time/runtime categories, source rendering, machine-readable positions, and CLI exit status.
+- [Performance](/manual/performance): reproducible measurements, current gaps,
+  evidence provenance, and the optimization direction for later releases.
 - [Current Limits](/manual/current-limits): intentional current boundaries and practical workarounds.
 - [Conformance](/manual/conformance): executable fixture/test mapping and the rules for changing the language safely.
 

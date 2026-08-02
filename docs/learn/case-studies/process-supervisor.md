@@ -27,9 +27,13 @@ with supervisor = process.supervisor():
             print(error)
 ```
 
-`group=true` puts the child in its own process group on supported Unix hosts, which makes cleanup reliable when the child spawns descendants — termination can target the entire group instead of only the leader.
+`group=true` puts the child in its own process group on supported Unix hosts.
+Termination can then reach the leader and every descendant, which makes
+cleanup reliable when a child starts more processes.
 
-Names are unique within a supervisor. Starting another child with the same name returns `Result.Err` instead of silently replacing the existing child. That is not defensive over-engineering; it is a correctness property. A supervisor that cannot keep its names straight cannot keep its promises.
+Names are unique within a supervisor. Starting another child with the same name
+returns `Result.Err` and preserves the existing child. Name integrity is a
+correctness property for every lifecycle operation that follows.
 
 ## Waiting For Events
 
@@ -97,9 +101,13 @@ with supervisor = process.supervisor():
             print("cancelled")
 ```
 
-When execution leaves the `with` block, the supervisor closes and stops every managed child. That is easier to reason about than remembering to call `close()` on every return path — and it is also easier to get right when the block exits because of a runtime error rather than a normal return.
+When execution leaves the `with` block, the supervisor closes and stops every
+managed child. One scoped rule covers normal returns and runtime errors, so no
+return path needs a separate `close()` call.
 
-Explicitly calling `supervisor.stop()` is appropriate when stopping the whole managed set is a meaningful branch inside the program — "the user asked us to shut the pipeline down" — rather than a cleanup step.
+Explicitly call `supervisor.stop()` when stopping the whole managed set is a
+meaningful branch inside the program, such as a user-requested pipeline
+shutdown. Scope exit handles ordinary cleanup.
 
 ## A Template To Copy
 
@@ -126,6 +134,9 @@ def loop_until_event(supervisor: process.Supervisor) -> Result[None, process.Err
             return Result.Ok(None)
 ```
 
-Everything important is in the type: the resource's lifetime is bound to the `with` block; the wait outcome is a structured enum; failures are returned rather than raised; and cleanup runs whether the function returns normally or a runtime error unwinds through it.
+Everything important is in the type: the resource's lifetime is bound to the
+`with` block; the wait outcome is a structured enum; recoverable failures are
+returned; and cleanup runs on normal returns and runtime unwinding.
 
-This is the same shape as the worker pool from the previous case study, applied to subprocesses instead of internal tasks. When it becomes familiar, it becomes the default.
+This applies the worker-pool shape from the previous case study to
+subprocesses. When it becomes familiar, it becomes the default.

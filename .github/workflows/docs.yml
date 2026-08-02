@@ -4,13 +4,21 @@ on:
   push:
     branches: [main]
     paths:
+      - '**/*.md'
       - 'docs/**'
+      - '!work/**'
+      - '!.github/**'
+      - '!AGENTS.md'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
+      - '**/*.md'
       - 'docs/**'
+      - '!work/**'
+      - '!.github/**'
+      - '!AGENTS.md'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/docs.yml'
@@ -45,6 +53,9 @@ jobs:
         env:
           VITEPRESS_BASE: /Aura/
         run: npm run docs:build
+
+      - name: Check manual reference metadata
+        run: python3 scripts/reference_integrity.py --inventory-only
 
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request'
