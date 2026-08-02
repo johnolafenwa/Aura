@@ -1,0 +1,8 @@
+class Point:
+    x: int
+
+def main():
+    point = Point(x=1)
+    match point:
+        case Point(x=0):
+            print("origin")

@@ -1,0 +1,19 @@
+copy class Counter:
+    calls: int32
+
+def record(counter: mut Counter, accepted: bool) -> bool:
+    counter.calls += 1
+    return accepted
+
+def main() -> int32:
+    mut counter = Counter(calls=0)
+    value: int32 = 2
+    match value:
+        case 1 | 2 if record(counter, true):
+            print("selected")
+        case _ if record(counter, true):
+            print("later")
+        case _:
+            print("fallback")
+    print(counter.calls)
+    return 0

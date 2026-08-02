@@ -983,7 +983,7 @@
       "reason": "Normative with-statement EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-12": {
-      "sha256": "fb8fc13d66240818f6b312b23dc8cbc637316989471a226df611f9fd70065c84",
+      "sha256": "d2f492e70f12f59aa101517863715ff9d2c9035a00636291bb24eeb211b62a5b",
       "mode": "illustrative",
       "reason": "Normative match-statement-and-pattern EBNF fragment interpreted by the grammar prose, not Aura source."
     },
@@ -1003,7 +1003,7 @@
       "reason": "Normative generic-specialization EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-16": {
-      "sha256": "034af1ca46340e1c478772cc5a44ba08c5d42a0f775a12ebd1a9eac17b8798ef",
+      "sha256": "616aeaac97979166fe667497eb26b66e7b42938ece747279ecfb37ee02a0efc3",
       "mode": "illustrative",
       "reason": "Normative match-expression EBNF fragment interpreted by the grammar prose, not Aura source."
     },

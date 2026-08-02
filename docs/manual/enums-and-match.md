@@ -124,7 +124,9 @@ match ready:
         print("not ready")
 ```
 
-The wildcard binds nothing, may appear only once, and must be the final arm. Duplicate and provably unreachable arms are rejected.
+The wildcard binds nothing. An unguarded wildcard may appear only once and
+must be the final arm. A guarded wildcard may appear earlier because its guard
+can be false. Duplicate and provably unreachable unguarded arms are rejected.
 
 ## Match Expressions
 
@@ -170,6 +172,31 @@ The tuple arity and recursive shape must match exactly. Empty tuple patterns,
 multi-element trailing commas, and rest/star patterns are rejected.
 
 Each pattern binding is local to that arm and cannot shadow a name already visible there. `_` never introduces a binding. See [Names And Scopes](/manual/names-and-scopes#pattern-scope).
+
+## Guards And Alternative Patterns
+
+Add `if` after a pattern when structural matching needs one exact Boolean
+condition. Join alternatives with `|` when one arm accepts several shapes:
+
+    match response:
+        case Result.Ok(value) if value > 0:
+            print("positive")
+        case Result.Ok(value) | Result.Err(value):
+            print(value)
+
+Alternatives are probed from left to right. The first structural match
+supplies the guard and body bindings, and the guard runs once. Every
+alternative must bind exactly the same names with identical types and
+capabilities. Duplicate or subsumed alternatives are rejected.
+
+A guard must have exactly type `bool`. A false guard continues with the next
+arm. A guarded arm contributes no exhaustiveness coverage, including
+`case _ if condition`. A trap or propagated failure remains primary.
+
+`match own` probes before extracting a non-copy payload. Candidate bindings
+may be inspected in the guard but cannot move until the guard commits the arm.
+`match mut` publishes guard mutations before false continuation, `try`
+propagation, or trap cleanup, so later arms and cleanup observe the update.
 
 ## Qualified And Short Variant Patterns
 
@@ -255,7 +282,10 @@ match code:
 
 The literal must have the scrutinee's exact scalar type after contextual literal checking. Duplicate literals and arms after a covering wildcard are unreachable and rejected.
 
-Boolean matching is exhaustive when both `true` and `false` are covered. Integer, floating-point, and string domains are open-ended and therefore require a final wildcard. Classes, collections, resources, and arbitrary other values are not match scrutinee types in Aura 0.2.
+Boolean matching is exhaustive when both `true` and `false` are covered by
+unguarded arms. Integer, floating-point, and string domains are open-ended and
+therefore require a final unguarded wildcard. Class patterns are deferred;
+use an explicit enum/tag representation or a wildcard and ordinary code.
 
 ## Builtin Enum Shapes
 
@@ -328,14 +358,17 @@ proven-disjoint sibling write does not. Aura performs no hidden payload clone.
 
 ## Diagnostics
 
-`AU1101` reports malformed enum, variant, match, arm, or pattern syntax.
+`AU1101` reports malformed enum, variant, match, arm, guard, or or-pattern syntax.
 `AU2001` reports unknown enum types, variants, and payload types. `AU2002`
 covers generic inference or bounds, constructor/payload type mismatch,
-literal-pattern type mismatch, and incompatible match-expression results.
+literal-pattern type mismatch, a non-Boolean guard, alternative binding type
+mismatch, and incompatible match-expression results.
 `AU2004` reports invalid variant-constructor argument binding. `AU2999` covers
 duplicate variants, invalid payload shapes, missing or unreachable arms,
-non-exhaustive matches, unsupported pattern forms, and remaining enum/match
-rejections. `AU3001` reports use after `match own` or a payload move.
+non-exhaustive matches, mismatched alternative bindings, duplicate/subsumed
+alternatives, class patterns, unsupported pattern forms, and remaining enum/match
+rejections. `AU3001` reports use after `match own`, a payload move, or moving
+an owned candidate before its guard commits.
 `AU3002` reports moving through a shared match, overlapping mutable matches, or
 requiring a mutable match place.
 `AU3003` reports mutation or reassignment through an immutable enum/payload
@@ -350,7 +383,8 @@ resource or I/O failure.
 
 User and builtin generic enums, structural enum equality, construction and
 inference, statement and expression matches, exhaustiveness, nested patterns,
-short variants, scalar literal patterns, owned/shared/mutable matching, and
+short variants, scalar literal patterns, guards, or-patterns,
+owned/shared/mutable matching, and
 borrowed matching are implemented for MIR execution and direct native
 generation. Both backends receive the same checked arm decision tree and are
 forced to agree on selected arms, payload values, writeback, and primary
@@ -358,8 +392,8 @@ diagnostics.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 has no match guards, or-patterns, range/rest patterns, named-payload
-patterns, class/collection destructuring, top-level catch-all binding pattern,
+Aura has no range/rest patterns, named-payload patterns, class/collection
+destructuring, top-level catch-all binding pattern,
 arbitrary predicate pattern, Duration/f-string pattern, or inline suite for
 statement matches. Expression arms contain exactly one expression.
 `TaskResult`, `SelectOutcome`, `WaitAny`, and `WaitAll` remain move outcome
@@ -375,6 +409,7 @@ statement and expression matches, exhaustiveness, nested enum patterns, scalar
 literal patterns, wildcards, short variants, and borrowed matching are
 implemented for the post-Phase 1.5 surface. Match expressions, like every
 expression, produce owned results; a non-copy result must come from an owned
-source. Tuple patterns are implemented under Accepted ADR-0026. Guards,
-or-patterns, class/collection destructuring beyond the tuple kernel, and
-arbitrary predicate patterns are unavailable.
+source. Tuple patterns are implemented under Accepted ADR-0026. Guards and
+or-patterns are implemented under Accepted ADR-0049. Class/collection
+destructuring beyond the tuple kernel and arbitrary predicate patterns are
+unavailable.

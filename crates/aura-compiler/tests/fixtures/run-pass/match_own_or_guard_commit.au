@@ -1,0 +1,13 @@
+enum Packet:
+    Text(str)
+    Bytes(str)
+
+def take(packet: own Packet) -> str:
+    match own packet:
+        case Packet.Text(text) | Packet.Bytes(text) if len(text) > 0:
+            return text
+        case _:
+            return ""
+
+def main():
+    print(take(Packet.Bytes("committed")))

@@ -20,6 +20,17 @@ fn parse_error(span: Span, message: impl Into<String>) -> Diagnostic {
     Diagnostic::coded_at("AU1101", span, message)
 }
 
+fn pattern_span(pattern: &Pattern) -> Span {
+    match pattern {
+        Pattern::Or(pattern) => pattern.span,
+        Pattern::Variant(pattern) => pattern.span,
+        Pattern::Tuple(pattern) => pattern.span,
+        Pattern::Binding(pattern) => pattern.span,
+        Pattern::Literal(pattern) => pattern.span,
+        Pattern::Wildcard(span) => *span,
+    }
+}
+
 pub fn parse(source: &str) -> Result<Module> {
     let tokens = lex(source)?;
     Parser::new(tokens).parse_module()
@@ -1074,11 +1085,17 @@ impl Parser {
     fn parse_match_arm(&mut self) -> Result<MatchArm> {
         let span = self.expect_keyword(TokenKind::KwCase)?.span;
         let pattern = self.parse_pattern()?;
+        let guard = if self.eat_simple(&TokenKind::KwIf).is_some() {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
         let body = self.parse_block()?;
         Ok(MatchArm {
             pattern,
+            guard,
             body,
             span,
         })
@@ -1087,6 +1104,11 @@ impl Parser {
     fn parse_match_expr_arm(&mut self) -> Result<MatchExprArm> {
         let span = self.expect_keyword(TokenKind::KwCase)?.span;
         let pattern = self.parse_pattern()?;
+        let guard = if self.eat_simple(&TokenKind::KwIf).is_some() {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
         self.expect_simple(TokenKind::Colon)?;
         let value = if self.at_simple(&TokenKind::Newline) {
             self.expect_newline()?;
@@ -1102,6 +1124,7 @@ impl Parser {
         };
         Ok(MatchExprArm {
             pattern,
+            guard,
             value,
             span,
         })
@@ -1109,9 +1132,34 @@ impl Parser {
 
     fn parse_pattern(&mut self) -> Result<Pattern> {
         self.enter_recursion("pattern")?;
-        let result = self.parse_pattern_inner();
+        let result = self.parse_or_pattern();
         self.exit_recursion();
         result
+    }
+
+    fn parse_or_pattern(&mut self) -> Result<Pattern> {
+        let first = self.parse_pattern_inner()?;
+        if self.eat_simple(&TokenKind::Pipe).is_none() {
+            return Ok(first);
+        }
+        let span = pattern_span(&first);
+        let mut alternatives = vec![first];
+        loop {
+            if matches!(
+                self.current_kind(),
+                TokenKind::Colon | TokenKind::Comma | TokenKind::RParen | TokenKind::KwIf
+            ) {
+                return Err(parse_error(
+                    self.current_span(),
+                    "or-pattern requires a pattern after `|`",
+                ));
+            }
+            alternatives.push(self.parse_pattern_inner()?);
+            if self.eat_simple(&TokenKind::Pipe).is_none() {
+                break;
+            }
+        }
+        Ok(Pattern::Or(crate::ast::OrPattern { alternatives, span }))
     }
 
     fn parse_pattern_inner(&mut self) -> Result<Pattern> {
@@ -1123,10 +1171,8 @@ impl Parser {
 
             let first = self.parse_pattern()?;
             if self.eat_simple(&TokenKind::Comma).is_none() {
-                return Err(parse_error(
-                    self.current_span(),
-                    "tuple patterns need a comma; write `(pattern,)` for a singleton tuple pattern",
-                ));
+                self.expect_simple(TokenKind::RParen)?;
+                return Ok(first);
             }
 
             let mut elements = vec![first];
@@ -1251,6 +1297,15 @@ impl Parser {
             let mut subpatterns = Vec::new();
             if !self.at_simple(&TokenKind::RParen) {
                 loop {
+                    if matches!(self.current_kind(), TokenKind::Identifier(_))
+                        && matches!(self.peek_kind(1), Some(TokenKind::Equal))
+                    {
+                        return Err(Diagnostic::coded_at(
+                            "AU2999",
+                            self.current_span(),
+                            "class patterns are not supported; destructure the class before matching or match a separate enum tag",
+                        ));
+                    }
                     subpatterns.push(self.parse_pattern()?);
                     if self.eat_simple(&TokenKind::Comma).is_none() {
                         break;

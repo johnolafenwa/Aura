@@ -1,0 +1,5 @@
+error[AU2999]: `match` over `int32` with literal patterns requires a final `case _:` arm
+ --> crates/aura-compiler/tests/fixtures/check-fail/guarded_open_match_is_not_exhaustive.au:3:5
+  |
+3 |     match value:
+  |     ^

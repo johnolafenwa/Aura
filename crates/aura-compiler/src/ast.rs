@@ -313,6 +313,7 @@ pub struct MatchStmt {
 #[derive(Clone, Debug, Serialize)]
 pub struct MatchArm {
     pub pattern: Pattern,
+    pub guard: Option<Expr>,
     pub body: Vec<Stmt>,
     pub span: Span,
 }
@@ -320,17 +321,25 @@ pub struct MatchArm {
 #[derive(Clone, Debug, Serialize)]
 pub struct MatchExprArm {
     pub pattern: Pattern,
+    pub guard: Option<Expr>,
     pub value: Expr,
     pub span: Span,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub enum Pattern {
+    Or(OrPattern),
     Variant(VariantPattern),
     Tuple(TuplePattern),
     Binding(BindingPattern),
     Literal(LiteralPattern),
     Wildcard(Span),
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct OrPattern {
+    pub alternatives: Vec<Pattern>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, Serialize)]

@@ -851,12 +851,13 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
         .message
         .contains("`mut` destructuring is not supported"));
 
+    assert!(matches!(
+        parse_pattern_from("(name)").expect("parentheses group one pattern"),
+        Pattern::Binding(BindingPattern { ref name, .. }) if name == "name"
+    ));
+
     for (source, expected) in [
         ("()", "empty tuple patterns are not supported"),
-        (
-            "(name)",
-            "tuple patterns need a comma; write `(pattern,)` for a singleton tuple pattern",
-        ),
         (
             "(left, right,)",
             "trailing commas are only allowed for singleton tuple patterns",
@@ -2807,6 +2808,37 @@ fn parse_control_flow_patterns_and_helper_errors_cover_more_branches() {
 }
 
 #[test]
+fn match_guards_and_or_patterns_parse_in_statement_and_expression_forms() {
+    let stmt = parse_stmt_from(
+        "match value:\n    case Pair(1 | 2, (3 | 4)) if ready and mask | 1 == 3:\n        pass\n    case _:\n        pass\n",
+    )
+    .expect("guarded nested or-pattern should parse");
+    let Stmt::Match(stmt) = stmt else {
+        panic!("expected match statement");
+    };
+    let Pattern::Variant(variant) = &stmt.arms[0].pattern else {
+        panic!("expected variant pattern");
+    };
+    assert!(matches!(variant.subpatterns[0], Pattern::Or(_)));
+    assert!(matches!(variant.subpatterns[1], Pattern::Or(_)));
+    assert!(stmt.arms[0].guard.is_some());
+    assert!(stmt.arms[1].guard.is_none());
+
+    let expr = parse_expression("match value:\n    case 1 | 2 if ready: 10\n    case _: 20\n")
+        .expect("guarded match expression should parse");
+    let ExprKind::Match { arms, .. } = expr.kind else {
+        panic!("expected match expression");
+    };
+    assert!(matches!(arms[0].pattern, Pattern::Or(_)));
+    assert!(arms[0].guard.is_some());
+
+    let missing = parse_stmt_from("match value:\n    case 1 |:\n        pass\n")
+        .expect_err("missing alternative should be rejected");
+    assert_eq!(missing.code, "AU1101");
+    assert!(missing.message.contains("requires a pattern after"));
+}
+
+#[test]
 fn parser_helper_functions_cover_format_offsets_and_specialization_checks() {
     let tokens = lex("Value[int32](1)\n").expect("tokenization should succeed");
     let mut parser = Parser::new(tokens);
@@ -3327,6 +3359,7 @@ fn parser_additional_payload_return_and_match_expression_edges_are_covered() {
             }),
             capability: ReceiverKind::Borrow,
             arms: vec![MatchExprArm {
+                guard: None,
                 pattern: Pattern::Wildcard(span),
                 value: Expr {
                     kind: ExprKind::Int(1),

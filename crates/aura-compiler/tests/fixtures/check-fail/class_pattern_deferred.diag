@@ -1,0 +1,5 @@
+error[AU2999]: class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code
+ --> crates/aura-compiler/tests/fixtures/check-fail/class_pattern_deferred.au:7:14
+  |
+7 |         case Point(value):
+  |              ^

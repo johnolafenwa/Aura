@@ -13300,6 +13300,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
                 scrutinee: Box::new(expr(ExprKind::Name("flag".to_string()))),
                 capability: ReceiverKind::Borrow,
                 arms: vec![MatchExprArm {
+                    guard: None,
                     pattern: Pattern::Wildcard(span),
                     value: expr(ExprKind::Name("owned".to_string())),
                     span,
@@ -14069,6 +14070,7 @@ fn default_argument_reference_detection_walks_nested_expression_shapes() {
                 scrutinee: Box::new(unrelated.clone()),
                 capability: ReceiverKind::Borrow,
                 arms: vec![MatchExprArm {
+                    guard: None,
                     pattern: Pattern::Wildcard(Span::new(1, 1)),
                     value: name_right.clone(),
                     span: Span::new(1, 1),

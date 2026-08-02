@@ -3052,6 +3052,53 @@ test("compiler bridge records enum variant occurrences in match patterns", async
   }
 });
 
+test("compiler bridge scopes or-pattern bindings through guards and arm bodies", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-match-guards-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const source = [
+      "enum Reading:",
+      "    Exact(int32)",
+      "    Approx(int32)",
+      "",
+      "def inspect(reading: Reading) -> int32:",
+      "    match reading:",
+      "        case Exact(value) | Approx(value) if value > 0:",
+      "            return value",
+      "        case Exact(value) | Approx(value):",
+      "            return value"
+    ].join("\n");
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 0, JSON.stringify(analysis.diagnostics));
+    for (const line of [6, 7, 9]) {
+      assert.ok(
+        analysis.occurrences.some(
+          (occurrence) =>
+            occurrence.line === line &&
+            occurrence.hover.includes("local value: int32") &&
+            occurrence.definition !== null &&
+            occurrence.definition.line === (line === 9 ? 8 : 6)
+        ),
+        `missing guarded or-pattern binding occurrence on line ${line + 1}`
+      );
+    }
+    assert.equal(
+      analysis.occurrences.filter((occurrence) => occurrence.hover.includes("variant Exact")).length,
+      2
+    );
+    assert.equal(
+      analysis.occurrences.filter((occurrence) => occurrence.hover.includes("variant Approx")).length,
+      2
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge preserves complete owned enum payload signatures", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-enum-payloads-"));
   try {

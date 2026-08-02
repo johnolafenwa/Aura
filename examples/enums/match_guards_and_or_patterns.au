@@ -1,0 +1,16 @@
+enum Reading:
+    Exact(int32)
+    Approx(int32)
+    Missing
+
+def describe(reading: Reading) -> str:
+    return match reading:
+        case Exact(value) | Approx(value) if value > 0: "positive"
+        case Exact(value) | Approx(value): "non-positive"
+        case Missing: "missing"
+
+def main() -> int32:
+    print(describe(Reading.Approx(3)))
+    print(describe(Reading.Exact(0)))
+    print(describe(Reading.Missing))
+    return 0

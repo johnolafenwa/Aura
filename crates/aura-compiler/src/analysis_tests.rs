@@ -3931,6 +3931,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
                 scrutinee: Box::new(expr(ExprKind::Name("numbers".to_string()))),
                 capability: ReceiverKind::Borrow,
                 arms: vec![crate::ast::MatchExprArm {
+                    guard: None,
                     pattern: crate::ast::Pattern::Wildcard(Span::new(1, 1)),
                     value: expr(ExprKind::Int(4)),
                     span: Span::new(1, 1),
@@ -5986,6 +5987,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         },
         capability: ReceiverKind::Borrow,
         arms: vec![crate::ast::MatchArm {
+            guard: None,
             pattern: crate::ast::Pattern::Wildcard(Span::new(7, 9)),
             body: vec![crate::ast::Stmt::Pass(PassStmt {
                 span: Span::new(8, 9),
@@ -6158,6 +6160,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
 
     let mut scope = BTreeMap::new();
     let no_payload_arm = crate::ast::MatchArm {
+        guard: None,
         pattern: crate::ast::Pattern::Variant(VariantPattern {
             enum_name: Some("Option".to_string()),
             variant_name: "None".to_string(),
@@ -6177,6 +6180,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
     );
     assert!(scope.is_empty());
     let non_binding_payload_arm = crate::ast::MatchArm {
+        guard: None,
         pattern: crate::ast::Pattern::Variant(VariantPattern {
             enum_name: Some("Option".to_string()),
             variant_name: "Some".to_string(),
@@ -7010,6 +7014,7 @@ fn lambda_scope_navigation_follows_every_expression_container_to_its_structural_
                     scrutinee: Box::new(leaf(4)),
                     capability: ReceiverKind::Borrow,
                     arms: vec![crate::ast::MatchExprArm {
+                        guard: None,
                         pattern: crate::ast::Pattern::Wildcard(wrapper_span),
                         value: lambda.clone(),
                         span: wrapper_span,

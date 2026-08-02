@@ -5803,6 +5803,35 @@ fn run_backends_drop_partial_comprehension_before_propagating_trap() {
 }
 
 #[test]
+fn run_backends_publish_mutable_match_guard_writeback_before_trap_cleanup() {
+    let source = include_str!(
+        "../../aura-compiler/tests/fixtures/run-fail/match_mut_guard_trap_writeback.au"
+    );
+    let (_temp, source_path) = write_temp_source("aura-match-guard-trap-writeback", source);
+
+    for backend in ["mir", "direct"] {
+        let output = Command::new(aura_bin())
+            .args(["run", "--backend", backend])
+            .arg(&source_path)
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("failed to run trapping mutable match guard with {backend}: {error}")
+            });
+        assert!(!output.status.success(), "{backend} guard should trap");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "6\n",
+            "{backend} cleanup must observe the guard mutation"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("division by zero"),
+            "{backend} must retain the guard trap as primary; stderr was:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
 fn compile_commands_accept_membership_and_comparison_chains() {
     let (temp, source_path) = write_temp_source(
         "aura-membership-and-chains",

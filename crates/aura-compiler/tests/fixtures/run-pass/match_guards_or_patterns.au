@@ -1,0 +1,28 @@
+enum Reading:
+    Exact(int32)
+    Approx(int32)
+    Missing
+
+def label(code: int32) -> str:
+    match code:
+        case 200 | 201 if code == 201:
+            return "created"
+        case 200 | 201:
+            return "ok"
+        case _:
+            return "other"
+
+def reading_text(reading: Reading) -> str:
+    return match reading:
+        case Exact(value) | Approx(value) if value > 0: "positive"
+        case Exact(value) | Approx(value): "non-positive"
+        case Missing: "missing"
+
+def main() -> int32:
+    print(label(201))
+    print(label(200))
+    print(label(500))
+    print(reading_text(Reading.Approx(3)))
+    print(reading_text(Reading.Exact(0)))
+    print(reading_text(Reading.Missing))
+    return 0

@@ -2366,6 +2366,46 @@ def unwrap(packet: own Packet) -> str:
 }
 
 #[test]
+fn guarded_consuming_or_pattern_commits_with_destructive_payload_operands() {
+    let module = crate::lower_source_to_mir(
+        r#"
+enum Packet:
+    Text(str)
+    Bytes(str)
+
+def unwrap(packet: own Packet) -> str:
+    match own packet:
+        case Packet.Text(text) | Packet.Bytes(text) if len(text) > 0:
+            return text
+        case _:
+            return ""
+"#,
+    )
+    .expect("guarded consuming or-pattern should lower");
+    let unwrap = module
+        .functions
+        .iter()
+        .find(|function| function.name == "unwrap")
+        .expect("unwrap should lower");
+
+    assert!(unwrap.blocks.iter().any(|block| {
+        block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::VariantPayload {
+                        scrutinee: Operand::MovePlace(_),
+                        index: 0,
+                        ..
+                    },
+                    ..
+                }
+            )
+        })
+    }));
+}
+
+#[test]
 fn own_user_and_trait_receivers_lower_as_explicit_moves() {
     let module = crate::lower_source_to_mir(
         r#"

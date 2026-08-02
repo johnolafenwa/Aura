@@ -1,0 +1,5 @@
+error[AU2002]: match guard expects exactly `bool`, found `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/match_guard_requires_bool.au:4:19
+  |
+4 |         case 1 if 7:
+  |                   ^

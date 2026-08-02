@@ -182,6 +182,32 @@ def describe(value: Outer) -> int32:
 
 See [examples/enums/rich_match.au](../examples/enums/rich_match.au).
 
+## Guards And Or-Patterns
+
+A guard adds an exact Boolean condition after structural matching. An
+or-pattern lets one arm accept several structural alternatives:
+
+```python
+match code:
+    case 200 | 201 if code == 201:
+        print("created")
+    case 200 | 201:
+        print("success")
+    case _:
+        print("other")
+```
+
+Alternatives are tested left to right and must bind the same names with the
+same types and capabilities. A false guard continues to the next arm. Guarded
+arms do not make a match exhaustive, so keep an unguarded fallback when the
+remaining domain is open.
+
+In `match own`, a guard can inspect a non-copy candidate but cannot move it.
+Extraction happens only after a true guard. In `match mut`, mutations made by
+a guard remain visible when the guard is false or propagates a failure.
+
+See [examples/enums/match_guards_and_or_patterns.au](../examples/enums/match_guards_and_or_patterns.au).
+
 Expression-form `match` is not limited to `return`. It also works in binding and argument positions, and an arm value may itself be a nested block-form expression:
 
 ```python

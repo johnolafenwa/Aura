@@ -1,0 +1,8 @@
+def main() -> int32:
+    value: int32 = 1
+    match value:
+        case 1 if 7:
+            pass
+        case _:
+            pass
+    return 0

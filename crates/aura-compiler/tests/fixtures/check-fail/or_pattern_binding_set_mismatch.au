@@ -1,0 +1,10 @@
+enum Pair:
+    Left(int32)
+    Right(int32)
+
+def main() -> int32:
+    value = Pair.Left(1)
+    match value:
+        case Left(item) | Right(_):
+            print(item)
+    return 0

@@ -1,0 +1,17 @@
+enum Text:
+    Value(str)
+    Empty
+
+def consume(value: own str) -> bool:
+    return value == "yes"
+
+def main() -> int32:
+    text = Text.Value("yes")
+    match own text:
+        case Value(value) if consume(value):
+            pass
+        case Value(_):
+            pass
+        case Empty:
+            pass
+    return 0

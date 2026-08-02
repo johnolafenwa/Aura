@@ -1391,6 +1391,11 @@ struct Lowerer<'a> {
 #[derive(Clone, Debug)]
 enum PatternWriteback {
     Use(Operand),
+    Or {
+        ty: Type,
+        selected: Vec<String>,
+        alternatives: Vec<PatternWriteback>,
+    },
     Variant {
         ty: Type,
         enum_name: String,
@@ -3147,6 +3152,7 @@ impl<'a> Lowerer<'a> {
                 self.new_block("match_next")
             };
             self.scoped_names.push(std::collections::HashMap::new());
+            let probes_candidates = arm.guard.is_some() || matches!(arm.pattern, Pattern::Or(_));
             let pattern_writeback = self.lower_pattern(
                 &arm.pattern,
                 scrutinee.clone(),
@@ -3155,17 +3161,10 @@ impl<'a> Lowerer<'a> {
                 next_block,
                 PatternLoweringOptions {
                     collect_writeback: writeback_root.is_some(),
-                    consume_payloads: consumes_scrutinee,
+                    consume_payloads: consumes_scrutinee && !probes_candidates,
                 },
             );
             self.switch_to(arm_block);
-            if consumes_scrutinee {
-                self.lower_consuming_pattern_bindings(
-                    &arm.pattern,
-                    scrutinee.clone(),
-                    scrutinee_ty.as_ref(),
-                );
-            }
             if let Some(writeback_place) = writeback_root.as_ref() {
                 let skip_place = self.new_typed_temp(Type::named("bool"));
                 self.match_writeback_stack.push(MatchWritebackState {
@@ -3177,6 +3176,35 @@ impl<'a> Lowerer<'a> {
                     target: skip_place,
                     value: Rvalue::Use(Operand::Bool(false)),
                 });
+            }
+            if let Some(guard) = &arm.guard {
+                let selected = self.new_block("match_guard_true");
+                let rejected = self.new_block("match_guard_false");
+                let condition = self.lower_expr(guard);
+                self.terminate(Terminator::Branch {
+                    condition,
+                    then_label: self.label(selected),
+                    else_label: self.label(rejected),
+                });
+                self.switch_to(rejected);
+                if let (Some(writeback_place), Some(writeback)) =
+                    (writeback_root.as_ref(), pattern_writeback.as_ref())
+                {
+                    let updated = self.materialize_pattern_writeback(writeback);
+                    self.emit(Instruction::Assign {
+                        target: writeback_place.clone(),
+                        value: Rvalue::Use(updated),
+                    });
+                }
+                self.terminate(Terminator::Goto(self.label(next_block)));
+                self.switch_to(selected);
+            }
+            if consumes_scrutinee {
+                self.lower_consuming_pattern_bindings(
+                    &arm.pattern,
+                    scrutinee.clone(),
+                    scrutinee_ty.as_ref(),
+                );
             }
             self.lower_stmts(&arm.body);
             let writeback_state = writeback_root
@@ -3215,6 +3243,53 @@ impl<'a> Lowerer<'a> {
         options: PatternLoweringOptions,
     ) -> Option<PatternWriteback> {
         match pattern {
+            Pattern::Or(pattern) => {
+                let mut next = self.current_block;
+                let selected = (0..pattern.alternatives.len())
+                    .map(|_| self.new_typed_temp(Type::named("bool")))
+                    .collect::<Vec<_>>();
+                for flag in &selected {
+                    self.emit(Instruction::Assign {
+                        target: flag.clone(),
+                        value: Rvalue::Use(Operand::Bool(false)),
+                    });
+                }
+                let mut alternatives = Vec::new();
+                for (index, alternative) in pattern.alternatives.iter().enumerate() {
+                    self.switch_to(next);
+                    let failure = if index + 1 == pattern.alternatives.len() {
+                        failure_block
+                    } else {
+                        self.new_block("match_or_next")
+                    };
+                    let alternative_success = self.new_block("match_or_selected");
+                    let candidate = self.lower_pattern(
+                        alternative,
+                        scrutinee.clone(),
+                        scrutinee_ty,
+                        alternative_success,
+                        failure,
+                        options,
+                    );
+                    alternatives.push(
+                        candidate.unwrap_or_else(|| PatternWriteback::Use(scrutinee.clone())),
+                    );
+                    self.switch_to(alternative_success);
+                    self.emit(Instruction::Assign {
+                        target: selected[index].clone(),
+                        value: Rvalue::Use(Operand::Bool(true)),
+                    });
+                    self.terminate(Terminator::Goto(self.label(success_block)));
+                    next = failure;
+                }
+                options.collect_writeback.then(|| PatternWriteback::Or {
+                    ty: scrutinee_ty
+                        .cloned()
+                        .unwrap_or_else(|| Type::named("Unknown")),
+                    selected,
+                    alternatives,
+                })
+            }
             Pattern::Wildcard(_) => {
                 self.terminate(Terminator::Goto(self.label(success_block)));
                 options
@@ -3222,15 +3297,22 @@ impl<'a> Lowerer<'a> {
                     .then_some(PatternWriteback::Use(scrutinee))
             }
             Pattern::Binding(binding) => {
-                let target = if let Some(ty) = scrutinee_ty.cloned() {
-                    self.new_typed_temp(ty)
-                } else {
-                    self.new_temp()
-                };
-                self.scoped_names
-                    .last_mut()
-                    .expect("match arm scope should exist")
-                    .insert(binding.name.clone(), target.clone());
+                let target = self
+                    .scoped_names
+                    .last()
+                    .and_then(|scope| scope.get(&binding.name).cloned())
+                    .unwrap_or_else(|| {
+                        let target = if let Some(ty) = scrutinee_ty.cloned() {
+                            self.new_typed_temp(ty)
+                        } else {
+                            self.new_temp()
+                        };
+                        self.scoped_names
+                            .last_mut()
+                            .expect("match arm scope should exist")
+                            .insert(binding.name.clone(), target.clone());
+                        target
+                    });
                 if !options.consume_payloads {
                     self.emit(Instruction::Assign {
                         target: target.clone(),
@@ -3390,12 +3472,23 @@ impl<'a> Lowerer<'a> {
 
     fn register_consuming_pattern_bindings(&mut self, pattern: &Pattern, pattern_ty: &Type) {
         match pattern {
+            Pattern::Or(pattern) => {
+                if let Some(first) = pattern.alternatives.first() {
+                    self.register_consuming_pattern_bindings(first, pattern_ty);
+                }
+            }
             Pattern::Binding(binding) => {
-                let target = self.new_typed_temp(pattern_ty.clone());
-                self.scoped_names
-                    .last_mut()
-                    .expect("match arm scope should exist")
-                    .insert(binding.name.clone(), target);
+                if !self
+                    .scoped_names
+                    .last()
+                    .is_some_and(|scope| scope.contains_key(&binding.name))
+                {
+                    let target = self.new_typed_temp(pattern_ty.clone());
+                    self.scoped_names
+                        .last_mut()
+                        .expect("match arm scope should exist")
+                        .insert(binding.name.clone(), target);
+                }
             }
             Pattern::Tuple(pattern) => {
                 let Type::Tuple(element_types) = pattern_ty else {
@@ -3416,6 +3509,45 @@ impl<'a> Lowerer<'a> {
         scrutinee_ty: Option<&Type>,
     ) {
         match pattern {
+            Pattern::Or(pattern) => {
+                // Selection populated non-consuming candidate slots so a
+                // guard could inspect them. Re-probe the private owner after
+                // the guard succeeds, then destructively extract exactly the
+                // selected alternative into those same shared binding slots.
+                let done = self.new_block("match_or_commit_done");
+                let mut next = self.current_block;
+                for (index, alternative) in pattern.alternatives.iter().enumerate() {
+                    self.switch_to(next);
+                    let selected = self.new_block("match_or_commit_selected");
+                    let rejected = if index + 1 == pattern.alternatives.len() {
+                        done
+                    } else {
+                        self.new_block("match_or_commit_next")
+                    };
+                    self.lower_pattern(
+                        alternative,
+                        scrutinee.clone(),
+                        scrutinee_ty,
+                        selected,
+                        rejected,
+                        PatternLoweringOptions {
+                            collect_writeback: false,
+                            consume_payloads: true,
+                        },
+                    );
+                    self.switch_to(selected);
+                    self.lower_consuming_pattern_bindings(
+                        alternative,
+                        scrutinee.clone(),
+                        scrutinee_ty,
+                    );
+                    if !self.current_terminated() {
+                        self.terminate(Terminator::Goto(self.label(done)));
+                    }
+                    next = rejected;
+                }
+                self.switch_to(done);
+            }
             Pattern::Wildcard(_) | Pattern::Literal(_) => {}
             Pattern::Binding(binding) => {
                 let target = self.render_local_name(&binding.name);
@@ -6547,6 +6679,7 @@ impl<'a> Lowerer<'a> {
                 self.new_block("match_expr_next")
             };
             self.scoped_names.push(std::collections::HashMap::new());
+            let probes_candidates = arm.guard.is_some() || matches!(arm.pattern, Pattern::Or(_));
             let pattern_writeback = self.lower_pattern(
                 &arm.pattern,
                 scrutinee.clone(),
@@ -6555,17 +6688,10 @@ impl<'a> Lowerer<'a> {
                 next_block,
                 PatternLoweringOptions {
                     collect_writeback: writeback_root.is_some(),
-                    consume_payloads: consumes_scrutinee,
+                    consume_payloads: consumes_scrutinee && !probes_candidates,
                 },
             );
             self.switch_to(arm_block);
-            if consumes_scrutinee {
-                self.lower_consuming_pattern_bindings(
-                    &arm.pattern,
-                    scrutinee.clone(),
-                    scrutinee_ty.as_ref(),
-                );
-            }
             if let Some(writeback_place) = writeback_root.as_ref() {
                 let skip_place = self.new_typed_temp(Type::named("bool"));
                 self.match_writeback_stack.push(MatchWritebackState {
@@ -6577,6 +6703,35 @@ impl<'a> Lowerer<'a> {
                     target: skip_place,
                     value: Rvalue::Use(Operand::Bool(false)),
                 });
+            }
+            if let Some(guard) = &arm.guard {
+                let selected = self.new_block("match_expr_guard_true");
+                let rejected = self.new_block("match_expr_guard_false");
+                let condition = self.lower_expr(guard);
+                self.terminate(Terminator::Branch {
+                    condition,
+                    then_label: self.label(selected),
+                    else_label: self.label(rejected),
+                });
+                self.switch_to(rejected);
+                if let (Some(writeback_place), Some(writeback)) =
+                    (writeback_root.as_ref(), pattern_writeback.as_ref())
+                {
+                    let updated = self.materialize_pattern_writeback(writeback);
+                    self.emit(Instruction::Assign {
+                        target: writeback_place.clone(),
+                        value: Rvalue::Use(updated),
+                    });
+                }
+                self.terminate(Terminator::Goto(self.label(next_block)));
+                self.switch_to(selected);
+            }
+            if consumes_scrutinee {
+                self.lower_consuming_pattern_bindings(
+                    &arm.pattern,
+                    scrutinee.clone(),
+                    scrutinee_ty.as_ref(),
+                );
             }
             let arm_type = self.infer_expr_type(&arm.value);
             let value = self.lower_expr_for_owned_value(&arm.value, arm_type.as_ref());
@@ -6614,6 +6769,44 @@ impl<'a> Lowerer<'a> {
     fn materialize_pattern_writeback(&mut self, writeback: &PatternWriteback) -> Operand {
         match writeback {
             PatternWriteback::Use(operand) => operand.clone(),
+            PatternWriteback::Or {
+                ty,
+                selected,
+                alternatives,
+            } => {
+                debug_assert_eq!(selected.len(), alternatives.len());
+                let result = self.new_typed_temp(ty.clone());
+                let done = self.new_block("match_or_writeback_done");
+                let mut dispatch = self.current_block;
+                for (index, (flag, alternative)) in selected.iter().zip(alternatives).enumerate() {
+                    self.switch_to(dispatch);
+                    let apply = self.new_block("match_or_writeback_apply");
+                    let next = if index + 1 == alternatives.len() {
+                        apply
+                    } else {
+                        self.new_block("match_or_writeback_next")
+                    };
+                    if index + 1 == alternatives.len() {
+                        self.terminate(Terminator::Goto(self.label(apply)));
+                    } else {
+                        self.terminate(Terminator::Branch {
+                            condition: Operand::Place(flag.clone()),
+                            then_label: self.label(apply),
+                            else_label: self.label(next),
+                        });
+                    }
+                    self.switch_to(apply);
+                    let value = self.materialize_pattern_writeback(alternative);
+                    self.emit(Instruction::Assign {
+                        target: result.clone(),
+                        value: Rvalue::Use(value),
+                    });
+                    self.terminate(Terminator::Goto(self.label(done)));
+                    dispatch = next;
+                }
+                self.switch_to(done);
+                Operand::Place(result)
+            }
             PatternWriteback::Variant {
                 ty,
                 enum_name,
@@ -6644,6 +6837,13 @@ impl<'a> Lowerer<'a> {
         let short_block = self.new_block("logic_short");
         let join_block = self.new_block("logic_join");
         let left_value = self.lower_expr(left);
+        // A mutable match guard may perform a successful mutation in the
+        // left operand before the right operand traps. Publish that mutation
+        // before control advances so runtime failure cleanup observes the
+        // reconstructed scrutinee.
+        if !self.match_writeback_stack.is_empty() {
+            self.emit_active_match_writebacks();
+        }
 
         let (then_label, else_label) = match op {
             BinaryOp::And => (self.label(rhs_block), self.label(short_block)),
@@ -10793,6 +10993,7 @@ fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
 
 fn pattern_contains_binding(pattern: &Pattern) -> bool {
     match pattern {
+        Pattern::Or(pattern) => pattern.alternatives.iter().any(pattern_contains_binding),
         Pattern::Binding(_) => true,
         Pattern::Variant(pattern) => pattern.subpatterns.iter().any(pattern_contains_binding),
         Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_contains_binding),
@@ -10802,6 +11003,10 @@ fn pattern_contains_binding(pattern: &Pattern) -> bool {
 
 fn pattern_requires_runtime_test(pattern: &Pattern) -> bool {
     match pattern {
+        Pattern::Or(pattern) => pattern
+            .alternatives
+            .iter()
+            .any(pattern_requires_runtime_test),
         Pattern::Literal(_) | Pattern::Variant(_) => true,
         Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_requires_runtime_test),
         Pattern::Binding(_) | Pattern::Wildcard(_) => false,

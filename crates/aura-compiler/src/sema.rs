@@ -5045,6 +5045,18 @@ fn render_literal_pattern_key(key: &LiteralPatternKey) -> String {
     }
 }
 
+fn pattern_contains_variant_shape(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Or(pattern) => pattern
+            .alternatives
+            .iter()
+            .any(pattern_contains_variant_shape),
+        Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_contains_variant_shape),
+        Pattern::Variant(_) => true,
+        Pattern::Binding(_) | Pattern::Literal(_) | Pattern::Wildcard(_) => false,
+    }
+}
+
 fn vec_element_type(ty: &Type) -> Option<&Type> {
     match ty {
         Type::Named(name, args) if name == "list" && args.len() == 1 => Some(&args[0]),
@@ -11104,6 +11116,11 @@ impl<'a> FunctionChecker<'a> {
 
     fn collect_pattern_binding_names(pattern: &Pattern, names: &mut BTreeSet<String>) {
         match pattern {
+            Pattern::Or(pattern) => {
+                for alternative in &pattern.alternatives {
+                    Self::collect_pattern_binding_names(alternative, names);
+                }
+            }
             Pattern::Binding(binding) => {
                 names.insert(binding.name.clone());
             }
@@ -19669,17 +19686,33 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
                     match &arm.pattern {
+                        Pattern::Or(pattern) => {
+                            self.validate_or_pattern_alternatives(pattern, &scrutinee_ty)?;
+                            self.bind_pattern_locals(
+                                &arm.pattern,
+                                &scrutinee_ty,
+                                &mut arm_locals,
+                                match_stmt.capability,
+                                active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                                shared_scrutinee.as_deref(),
+                            )?;
+                        }
                         Pattern::Wildcard(span) => {
-                            if wildcard_span.is_some() {
-                                return Err(Diagnostic::at(*span, "duplicate wildcard match arm"));
+                            if arm.guard.is_none() {
+                                if wildcard_span.is_some() {
+                                    return Err(Diagnostic::at(
+                                        *span,
+                                        "duplicate wildcard match arm",
+                                    ));
+                                }
+                                if index + 1 != match_stmt.arms.len() {
+                                    return Err(Diagnostic::at(
+                                        *span,
+                                        "wildcard match arm must be the final `case`",
+                                    ));
+                                }
+                                wildcard_span = Some(*span);
                             }
-                            if index + 1 != match_stmt.arms.len() {
-                                return Err(Diagnostic::at(
-                                    *span,
-                                    "wildcard match arm must be the final `case`",
-                                ));
-                            }
-                            wildcard_span = Some(*span);
                         }
                         Pattern::Literal(pattern) => {
                             return Err(Diagnostic::at(
@@ -19751,8 +19784,8 @@ impl<'a> FunctionChecker<'a> {
                                 ));
                             };
 
-                            let covers_entire_variant =
-                                self.variant_pattern_covers_payloads(pattern, &variant_payload);
+                            let covers_entire_variant = arm.guard.is_none()
+                                && self.variant_pattern_covers_payloads(pattern, &variant_payload);
                             if covers_entire_variant {
                                 if let Some(previous) =
                                     covered.insert(pattern.variant_name.clone(), pattern.span)
@@ -19766,10 +19799,12 @@ impl<'a> FunctionChecker<'a> {
                                 ));
                                 }
                             }
-                            patterns_by_variant
-                                .entry(pattern.variant_name.clone())
-                                .or_default()
-                                .push(pattern.clone());
+                            if arm.guard.is_none() {
+                                patterns_by_variant
+                                    .entry(pattern.variant_name.clone())
+                                    .or_default()
+                                    .push(pattern.clone());
+                            }
 
                             if pattern.subpatterns.is_empty() && !variant_payload.is_empty() {
                                 return Err(Diagnostic::at(
@@ -19815,6 +19850,7 @@ impl<'a> FunctionChecker<'a> {
 
                     let prior_patterns = match_stmt.arms[..index]
                         .iter()
+                        .filter(|previous_arm| previous_arm.guard.is_none())
                         .map(|previous_arm| &previous_arm.pattern)
                         .collect::<Vec<_>>();
                     if self.patterns_cover_pattern(&prior_patterns, &arm.pattern, &scrutinee_ty) {
@@ -19824,6 +19860,12 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
 
+                    self.check_match_guard(
+                        arm.guard.as_ref(),
+                        &arm.pattern,
+                        match_stmt.capability,
+                        &mut arm_locals,
+                    )?;
                     let arm_flow = self.check_block(
                         &arm.body,
                         &mut arm_locals,
@@ -19860,6 +19902,7 @@ impl<'a> FunctionChecker<'a> {
                 let pattern_refs = match_stmt
                     .arms
                     .iter()
+                    .filter(|arm| arm.guard.is_none())
                     .map(|arm| &arm.pattern)
                     .collect::<Vec<_>>();
                 let missing = self.missing_patterns_for_type(&pattern_refs, &scrutinee_ty);
@@ -19885,12 +19928,34 @@ impl<'a> FunctionChecker<'a> {
                 };
             }
 
+            let class_scrutinee = match &scrutinee_ty {
+                Type::Named(name, _) => self.resolve_class_info(name).is_some(),
+                _ => false,
+            };
+            if class_scrutinee {
+                if let Type::Named(_, _) = &scrutinee_ty {
+                    if let Some(pattern) = match_stmt
+                        .arms
+                        .iter()
+                        .map(|arm| &arm.pattern)
+                        .find(|pattern| pattern_contains_variant_shape(pattern))
+                    {
+                        return Err(Diagnostic::coded_at(
+                            "AU2999",
+                            self.pattern_span(pattern),
+                            "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code",
+                        ));
+                    }
+                }
+            }
+
             if !matches!(scrutinee_ty, Type::Tuple(_) | Type::Named(_, _))
                 || !(matches!(scrutinee_ty, Type::Tuple(_))
                     || is_integer_type(&scrutinee_ty)
                     || is_float_type(&scrutinee_ty)
                     || matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
-                    || is_string_type(&scrutinee_ty))
+                    || is_string_type(&scrutinee_ty)
+                    || class_scrutinee)
             {
                 return Err(Diagnostic::at(
                 match_stmt.span,
@@ -19915,21 +19980,39 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 match &arm.pattern {
+                    Pattern::Or(pattern) => {
+                        self.validate_or_pattern_alternatives(pattern, &scrutinee_ty)?;
+                        self.bind_pattern_locals(
+                            &arm.pattern,
+                            &scrutinee_ty,
+                            &mut arm_locals,
+                            match_stmt.capability,
+                            active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                            shared_scrutinee.as_deref(),
+                        )?;
+                    }
                     Pattern::Wildcard(span) => {
-                        if wildcard_span.is_some() {
-                            return Err(Diagnostic::at(*span, "duplicate wildcard match arm"));
+                        if arm.guard.is_none() {
+                            if wildcard_span.is_some() {
+                                return Err(Diagnostic::at(*span, "duplicate wildcard match arm"));
+                            }
+                            if index + 1 != match_stmt.arms.len() {
+                                return Err(Diagnostic::at(
+                                    *span,
+                                    "wildcard match arm must be the final `case`",
+                                ));
+                            }
+                            wildcard_span = Some(*span);
                         }
-                        if index + 1 != match_stmt.arms.len() {
-                            return Err(Diagnostic::at(
-                                *span,
-                                "wildcard match arm must be the final `case`",
-                            ));
-                        }
-                        wildcard_span = Some(*span);
                     }
                     Pattern::Literal(pattern) => {
                         let key = self.literal_pattern_key(pattern, &scrutinee_ty)?;
-                        if let Some(previous) = covered_literals.insert(key.clone(), pattern.span) {
+                        if let Some(previous) = arm
+                            .guard
+                            .is_none()
+                            .then(|| covered_literals.insert(key.clone(), pattern.span))
+                            .flatten()
+                        {
                             return Err(Diagnostic::at(
                                 pattern.span,
                                 format!(
@@ -19939,8 +20022,10 @@ impl<'a> FunctionChecker<'a> {
                             ),
                             ));
                         }
-                        if let LiteralPatternKey::Bool(value) = key {
-                            covered_bools.insert(value);
+                        if arm.guard.is_none() {
+                            if let LiteralPatternKey::Bool(value) = key {
+                                covered_bools.insert(value);
+                            }
                         }
                     }
                     Pattern::Variant(pattern) => {
@@ -19981,6 +20066,7 @@ impl<'a> FunctionChecker<'a> {
 
                 let prior_patterns = match_stmt.arms[..index]
                     .iter()
+                    .filter(|previous_arm| previous_arm.guard.is_none())
                     .map(|previous_arm| &previous_arm.pattern)
                     .collect::<Vec<_>>();
                 if self.patterns_cover_pattern(&prior_patterns, &arm.pattern, &scrutinee_ty) {
@@ -19990,6 +20076,12 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
 
+                self.check_match_guard(
+                    arm.guard.as_ref(),
+                    &arm.pattern,
+                    match_stmt.capability,
+                    &mut arm_locals,
+                )?;
                 let arm_flow = self.check_block(
                     &arm.body,
                     &mut arm_locals,
@@ -20024,6 +20116,7 @@ impl<'a> FunctionChecker<'a> {
                     let patterns = match_stmt
                         .arms
                         .iter()
+                        .filter(|arm| arm.guard.is_none())
                         .map(|arm| &arm.pattern)
                         .collect::<Vec<_>>();
                     if !self
@@ -20113,6 +20206,47 @@ impl<'a> FunctionChecker<'a> {
         shared_match_scrutinee: Option<&str>,
     ) -> Result<()> {
         match pattern {
+            Pattern::Or(pattern) => {
+                let original = locals.clone();
+                let mut canonical: Option<HashMap<String, LocalBinding>> = None;
+                for alternative in &pattern.alternatives {
+                    let mut alternative_locals = original.clone();
+                    self.bind_pattern_locals(
+                        alternative,
+                        expected_ty,
+                        &mut alternative_locals,
+                        borrow_mode,
+                        match_borrow_place,
+                        shared_match_scrutinee,
+                    )?;
+                    let added = alternative_locals
+                        .iter()
+                        .filter(|(name, _)| !original.contains_key(*name))
+                        .map(|(name, binding)| (name.clone(), binding.clone()))
+                        .collect::<HashMap<_, _>>();
+                    if let Some(expected) = &canonical {
+                        if expected.len() != added.len()
+                            || expected.iter().any(|(name, binding)| {
+                                added.get(name).is_none_or(|actual| {
+                                    actual.ty != binding.ty || actual.passing != binding.passing
+                                })
+                            })
+                        {
+                            return Err(Diagnostic::coded_at(
+                                "AU2999",
+                                pattern.span,
+                                "every alternative in an or-pattern must bind the same names with identical types and capabilities",
+                            ));
+                        }
+                    } else {
+                        canonical = Some(added);
+                    }
+                }
+                if let Some(bindings) = canonical {
+                    locals.extend(bindings);
+                }
+                Ok(())
+            }
             Pattern::Wildcard(_) => Ok(()),
             Pattern::Literal(pattern) => {
                 let _ = self.literal_pattern_key(pattern, expected_ty)?;
@@ -20376,20 +20510,33 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
                     match &arm.pattern {
+                        Pattern::Or(pattern) => {
+                            self.validate_or_pattern_alternatives(pattern, &scrutinee_ty)?;
+                            self.bind_pattern_locals(
+                                &arm.pattern,
+                                &scrutinee_ty,
+                                &mut arm_locals,
+                                borrow_mode,
+                                active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                                shared_scrutinee.as_deref(),
+                            )?;
+                        }
                         Pattern::Wildcard(wildcard_span) => {
-                            if wildcard_seen {
-                                return Err(Diagnostic::at(
-                                    *wildcard_span,
-                                    "duplicate wildcard match arm",
-                                ));
+                            if arm.guard.is_none() {
+                                if wildcard_seen {
+                                    return Err(Diagnostic::at(
+                                        *wildcard_span,
+                                        "duplicate wildcard match arm",
+                                    ));
+                                }
+                                if index + 1 != arms.len() {
+                                    return Err(Diagnostic::at(
+                                        *wildcard_span,
+                                        "wildcard match arm must be the final `case`",
+                                    ));
+                                }
+                                wildcard_seen = true;
                             }
-                            if index + 1 != arms.len() {
-                                return Err(Diagnostic::at(
-                                    *wildcard_span,
-                                    "wildcard match arm must be the final `case`",
-                                ));
-                            }
-                            wildcard_seen = true;
                         }
                         Pattern::Literal(pattern) => {
                             return Err(Diagnostic::at(
@@ -20460,13 +20607,17 @@ impl<'a> FunctionChecker<'a> {
                                     ),
                                 ));
                             };
-                            if self.variant_pattern_covers_payloads(pattern, &variant_payload) {
+                            if arm.guard.is_none()
+                                && self.variant_pattern_covers_payloads(pattern, &variant_payload)
+                            {
                                 covered.insert(pattern.variant_name.clone());
                             }
-                            patterns_by_variant
-                                .entry(pattern.variant_name.clone())
-                                .or_default()
-                                .push(pattern.clone());
+                            if arm.guard.is_none() {
+                                patterns_by_variant
+                                    .entry(pattern.variant_name.clone())
+                                    .or_default()
+                                    .push(pattern.clone());
+                            }
 
                             if pattern.subpatterns.is_empty() && !variant_payload.is_empty() {
                                 return Err(Diagnostic::at(
@@ -20512,6 +20663,7 @@ impl<'a> FunctionChecker<'a> {
 
                     let prior_patterns = arms[..index]
                         .iter()
+                        .filter(|previous_arm| previous_arm.guard.is_none())
                         .map(|previous_arm| &previous_arm.pattern)
                         .collect::<Vec<_>>();
                     if self.patterns_cover_pattern(&prior_patterns, &arm.pattern, &scrutinee_ty) {
@@ -20521,6 +20673,12 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
 
+                    self.check_match_guard(
+                        arm.guard.as_ref(),
+                        &arm.pattern,
+                        borrow_mode,
+                        &mut arm_locals,
+                    )?;
                     let arm_ty = self.type_of_match_arm_value(
                         &arm.value,
                         &mut arm_locals,
@@ -20567,7 +20725,11 @@ impl<'a> FunctionChecker<'a> {
                 let branch_states = arm_states.iter().collect::<Vec<_>>();
                 self.merge_control_flow_moves(locals, &branch_states);
 
-                let pattern_refs = arms.iter().map(|arm| &arm.pattern).collect::<Vec<_>>();
+                let pattern_refs = arms
+                    .iter()
+                    .filter(|arm| arm.guard.is_none())
+                    .map(|arm| &arm.pattern)
+                    .collect::<Vec<_>>();
                 let missing = self.missing_patterns_for_type(&pattern_refs, &scrutinee_ty);
                 if !wildcard_seen && !missing.is_empty() {
                     return Err(Diagnostic::at(
@@ -20587,12 +20749,33 @@ impl<'a> FunctionChecker<'a> {
                 return Ok(result_ty.unwrap_or(Type::Unit));
             }
 
+            let class_scrutinee = match &scrutinee_ty {
+                Type::Named(name, _) => self.resolve_class_info(name).is_some(),
+                _ => false,
+            };
+            if class_scrutinee {
+                if let Type::Named(_, _) = &scrutinee_ty {
+                    if let Some(pattern) = arms
+                        .iter()
+                        .map(|arm| &arm.pattern)
+                        .find(|pattern| pattern_contains_variant_shape(pattern))
+                    {
+                        return Err(Diagnostic::coded_at(
+                            "AU2999",
+                            self.pattern_span(pattern),
+                            "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code",
+                        ));
+                    }
+                }
+            }
+
             if !matches!(scrutinee_ty, Type::Tuple(_) | Type::Named(_, _))
                 || !(matches!(scrutinee_ty, Type::Tuple(_))
                     || is_integer_type(&scrutinee_ty)
                     || is_float_type(&scrutinee_ty)
                     || matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
-                    || is_string_type(&scrutinee_ty))
+                    || is_string_type(&scrutinee_ty)
+                    || class_scrutinee)
             {
                 return Err(Diagnostic::at(
                 span,
@@ -20616,26 +20799,41 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 match &arm.pattern {
+                    Pattern::Or(pattern) => {
+                        self.validate_or_pattern_alternatives(pattern, &scrutinee_ty)?;
+                        self.bind_pattern_locals(
+                            &arm.pattern,
+                            &scrutinee_ty,
+                            &mut arm_locals,
+                            borrow_mode,
+                            active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                            shared_scrutinee.as_deref(),
+                        )?;
+                    }
                     Pattern::Wildcard(wildcard_span) => {
-                        if wildcard_seen {
-                            return Err(Diagnostic::at(
-                                *wildcard_span,
-                                "duplicate wildcard match arm",
-                            ));
+                        if arm.guard.is_none() {
+                            if wildcard_seen {
+                                return Err(Diagnostic::at(
+                                    *wildcard_span,
+                                    "duplicate wildcard match arm",
+                                ));
+                            }
+                            if index + 1 != arms.len() {
+                                return Err(Diagnostic::at(
+                                    *wildcard_span,
+                                    "wildcard match arm must be the final `case`",
+                                ));
+                            }
+                            wildcard_seen = true;
                         }
-                        if index + 1 != arms.len() {
-                            return Err(Diagnostic::at(
-                                *wildcard_span,
-                                "wildcard match arm must be the final `case`",
-                            ));
-                        }
-                        wildcard_seen = true;
                     }
                     Pattern::Literal(pattern) => {
                         let key = self.literal_pattern_key(pattern, &scrutinee_ty)?;
-                        covered_literals.insert(key.clone());
-                        if let LiteralPatternKey::Bool(value) = key {
-                            covered_bools.insert(value);
+                        if arm.guard.is_none() {
+                            covered_literals.insert(key.clone());
+                            if let LiteralPatternKey::Bool(value) = key {
+                                covered_bools.insert(value);
+                            }
                         }
                     }
                     Pattern::Variant(pattern) => {
@@ -20676,6 +20874,7 @@ impl<'a> FunctionChecker<'a> {
 
                 let prior_patterns = arms[..index]
                     .iter()
+                    .filter(|previous_arm| previous_arm.guard.is_none())
                     .map(|previous_arm| &previous_arm.pattern)
                     .collect::<Vec<_>>();
                 if self.patterns_cover_pattern(&prior_patterns, &arm.pattern, &scrutinee_ty) {
@@ -20685,6 +20884,12 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
 
+                self.check_match_guard(
+                    arm.guard.as_ref(),
+                    &arm.pattern,
+                    borrow_mode,
+                    &mut arm_locals,
+                )?;
                 let arm_ty = self.type_of_match_arm_value(
                     &arm.value,
                     &mut arm_locals,
@@ -20743,7 +20948,11 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
             if !wildcard_seen && matches!(scrutinee_ty, Type::Tuple(_)) {
-                let patterns = arms.iter().map(|arm| &arm.pattern).collect::<Vec<_>>();
+                let patterns = arms
+                    .iter()
+                    .filter(|arm| arm.guard.is_none())
+                    .map(|arm| &arm.pattern)
+                    .collect::<Vec<_>>();
                 if !self
                     .missing_patterns_for_type(&patterns, &scrutinee_ty)
                     .is_empty()
@@ -22570,11 +22779,18 @@ impl<'a> FunctionChecker<'a> {
         };
         let mut grouped = BTreeMap::<String, Vec<&VariantPattern>>::new();
         for pattern in patterns {
-            if let Pattern::Variant(variant_pattern) = pattern {
-                grouped
-                    .entry(variant_pattern.variant_name.clone())
-                    .or_default()
-                    .push(variant_pattern);
+            let mut pending = vec![*pattern];
+            while let Some(pattern) = pending.pop() {
+                match pattern {
+                    Pattern::Or(or_pattern) => pending.extend(or_pattern.alternatives.iter()),
+                    Pattern::Variant(variant_pattern) => {
+                        grouped
+                            .entry(variant_pattern.variant_name.clone())
+                            .or_default()
+                            .push(variant_pattern);
+                    }
+                    _ => {}
+                }
             }
         }
         let mut missing = Vec::new();
@@ -22610,12 +22826,85 @@ impl<'a> FunctionChecker<'a> {
 
     fn pattern_span(&self, pattern: &Pattern) -> crate::diag::Span {
         match pattern {
+            Pattern::Or(pattern) => pattern.span,
             Pattern::Wildcard(span) => *span,
             Pattern::Literal(pattern) => pattern.span,
             Pattern::Binding(binding) => binding.span,
             Pattern::Variant(variant) => variant.span,
             Pattern::Tuple(tuple) => tuple.span,
         }
+    }
+
+    fn check_match_guard(
+        &self,
+        guard: Option<&Expr>,
+        pattern: &Pattern,
+        borrow_mode: ReceiverKind,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let Some(guard) = guard else {
+            return Ok(());
+        };
+        let mut candidate_locals;
+        let guard_locals = if borrow_mode == ReceiverKind::Value {
+            candidate_locals = locals.clone();
+            let mut names = BTreeSet::new();
+            Self::collect_pattern_binding_names(pattern, &mut names);
+            for name in names {
+                if let Some(binding) = candidate_locals.get_mut(&name) {
+                    if !self.is_copy_type(&binding.ty) {
+                        binding.passing = ReceiverKind::Borrow;
+                        binding.borrowed_at = Some(guard.span);
+                    }
+                }
+            }
+            &mut candidate_locals
+        } else {
+            locals
+        };
+        let actual = match self.type_of_expr(guard, guard_locals) {
+            Ok(actual) => actual,
+            Err(mut diagnostic)
+                if borrow_mode == ReceiverKind::Value
+                    && diagnostic.code == "AU3002"
+                    && diagnostic.message.starts_with("cannot move borrowed value") =>
+            {
+                diagnostic.code = "AU3001".to_string();
+                diagnostic.message =
+                    "cannot move an owned match candidate before its guard commits the arm"
+                        .to_string();
+                return Err(diagnostic);
+            }
+            Err(diagnostic) => return Err(diagnostic),
+        };
+        let expected = Type::named("bool");
+        if actual != expected {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                guard.span,
+                format!("match guard expects exactly `bool`, found `{actual}`"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_or_pattern_alternatives(
+        &self,
+        pattern: &crate::ast::OrPattern,
+        expected_ty: &Type,
+    ) -> Result<()> {
+        let mut prior = Vec::<&Pattern>::new();
+        for alternative in &pattern.alternatives {
+            if self.patterns_cover_pattern(&prior, alternative, expected_ty) {
+                return Err(Diagnostic::coded_at(
+                    "AU2999",
+                    self.pattern_span(alternative),
+                    "duplicate or subsumed alternative in or-pattern",
+                ));
+            }
+            prior.push(alternative);
+        }
+        Ok(())
     }
 
     fn patterns_cover_pattern(
@@ -22625,6 +22914,10 @@ impl<'a> FunctionChecker<'a> {
         expected_ty: &Type,
     ) -> bool {
         match pattern {
+            Pattern::Or(or_pattern) => or_pattern
+                .alternatives
+                .iter()
+                .all(|alternative| self.patterns_cover_pattern(patterns, alternative, expected_ty)),
             Pattern::Wildcard(_) | Pattern::Binding(_) => {
                 if self.patterns_cover_type_union(patterns, expected_ty) {
                     return true;
@@ -22634,6 +22927,17 @@ impl<'a> FunctionChecker<'a> {
                     let mut covered = BTreeSet::new();
                     for previous in patterns {
                         match previous {
+                            Pattern::Or(or_pattern) => {
+                                for alternative in &or_pattern.alternatives {
+                                    if let Pattern::Literal(literal) = alternative {
+                                        if let Ok(LiteralPatternKey::Bool(value)) =
+                                            self.literal_pattern_key(literal, expected_ty)
+                                        {
+                                            covered.insert(value);
+                                        }
+                                    }
+                                }
+                            }
                             Pattern::Wildcard(_) | Pattern::Binding(_) => return true,
                             Pattern::Literal(literal) => {
                                 if let Ok(LiteralPatternKey::Bool(value)) =
@@ -22730,6 +23034,12 @@ impl<'a> FunctionChecker<'a> {
             return true;
         }
         match (previous, current) {
+            (Pattern::Or(previous), _) => previous.alternatives.iter().any(|alternative| {
+                self.pattern_is_covered_by_pattern(alternative, current, expected_ty)
+            }),
+            (_, Pattern::Or(current)) => current.alternatives.iter().all(|alternative| {
+                self.pattern_is_covered_by_pattern(previous, alternative, expected_ty)
+            }),
             (Pattern::Literal(previous), Pattern::Literal(current)) => {
                 self.literal_pattern_key(previous, expected_ty).ok()
                     == self.literal_pattern_key(current, expected_ty).ok()
@@ -22782,6 +23092,10 @@ impl<'a> FunctionChecker<'a> {
 
     fn pattern_covers_entire_type(&self, pattern: &Pattern, expected_ty: &Type) -> bool {
         match pattern {
+            Pattern::Or(pattern) => {
+                let alternatives = pattern.alternatives.iter().collect::<Vec<_>>();
+                self.patterns_cover_type_union(&alternatives, expected_ty)
+            }
             Pattern::Wildcard(_) | Pattern::Binding(_) => true,
             Pattern::Literal(_) => false,
             Pattern::Tuple(tuple) => {
@@ -22847,11 +23161,18 @@ impl<'a> FunctionChecker<'a> {
         };
         let mut grouped = BTreeMap::<String, Vec<&VariantPattern>>::new();
         for pattern in patterns {
-            if let Pattern::Variant(variant_pattern) = pattern {
-                grouped
-                    .entry(variant_pattern.variant_name.clone())
-                    .or_default()
-                    .push(variant_pattern);
+            let mut pending = vec![*pattern];
+            while let Some(pattern) = pending.pop() {
+                match pattern {
+                    Pattern::Or(or_pattern) => pending.extend(or_pattern.alternatives.iter()),
+                    Pattern::Variant(variant_pattern) => {
+                        grouped
+                            .entry(variant_pattern.variant_name.clone())
+                            .or_default()
+                            .push(variant_pattern);
+                    }
+                    _ => {}
+                }
             }
         }
         variants.into_iter().all(|(variant_name, payloads)| {
@@ -22869,11 +23190,19 @@ impl<'a> FunctionChecker<'a> {
     ) -> bool {
         let rows = patterns
             .iter()
-            .filter_map(|pattern| match pattern {
-                Pattern::Tuple(tuple) if tuple.elements.len() == element_types.len() => {
-                    Some(tuple.elements.clone())
-                }
-                _ => None,
+            .flat_map(|pattern| {
+                let alternatives: Vec<&Pattern> = match pattern {
+                    Pattern::Or(or_pattern) => or_pattern.alternatives.iter().collect(),
+                    pattern => vec![*pattern],
+                };
+                alternatives
+                    .into_iter()
+                    .filter_map(|pattern| match pattern {
+                        Pattern::Tuple(tuple) if tuple.elements.len() == element_types.len() => {
+                            Some(tuple.elements.clone())
+                        }
+                        _ => None,
+                    })
             })
             .collect::<Vec<_>>();
         self.pattern_rows_cover_type_union(&rows, element_types)

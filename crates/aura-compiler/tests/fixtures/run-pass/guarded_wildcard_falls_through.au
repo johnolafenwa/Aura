@@ -1,0 +1,11 @@
+def classify(value: int32) -> str:
+    match value:
+        case _ if value > 0:
+            return "positive"
+        case _:
+            return "other"
+
+def main() -> int32:
+    print(classify(1))
+    print(classify(0))
+    return 0

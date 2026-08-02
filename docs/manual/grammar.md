@@ -534,9 +534,13 @@ match-statement
       { match-statement-arm }, DEDENT ;
 
 match-statement-arm
-    = "case", pattern, ":", NEWLINE, suite ;
+    = "case", pattern, [ "if", expression ],
+      ":", NEWLINE, suite ;
 
 pattern
+    = closed-pattern, { "|", closed-pattern } ;
+
+closed-pattern
     = "_"
     | BOOLEAN
     | STRING
@@ -554,7 +558,8 @@ variant-pattern
       [ "(", [ pattern, { ",", pattern } ], ")" ] ;
 
 tuple-pattern
-    = "(", pattern, ",", ")"
+    = "(", pattern, ")"
+    | "(", pattern, ",", ")"
     | "(", pattern, ",", pattern,
       { ",", pattern }, ")" ;
 ```
@@ -566,9 +571,14 @@ Pattern parsing uses these contextual rules:
 - a dotted name, a capitalized name, or any name followed by parentheses is a variant pattern
 - payload patterns are positional even when the variant declaration used named payload fields
 - a parenthesized comma form is a fixed-arity recursive tuple pattern
+- `|` has the lowest pattern precedence and joins alternatives
+- parentheses group one pattern when no comma is present
 
-There are no guards, alternatives, ranges, collection destructuring, rest
-patterns, named-payload patterns, duration patterns, or f-string patterns.
+Every or-pattern alternative must bind the same names with identical exact
+types and capabilities. A guard is an ordinary expression checked as exactly
+`bool`; its pattern bindings are in scope. There are no ranges, collection
+destructuring, rest patterns, named-payload patterns, duration patterns, or
+f-string patterns.
 `match mut` rejects a tuple pattern because mutable tuple
 reconstruction/writeback is not part of the minimal surface. Statement match
 arms always contain suites; `case pattern: statement` is not valid.
@@ -826,7 +836,7 @@ match-expression
       { match-expression-arm }, DEDENT ;
 
 match-expression-arm
-    = "case", pattern, ":",
+    = "case", pattern, [ "if", expression ], ":",
       ( expression, match-expression-arm-end
       | NEWLINE, INDENT, expression, statement-end, DEDENT ) ;
 
@@ -864,7 +874,7 @@ The grammar intentionally excludes:
 - local item declarations, decorators, and attributes
 - wildcard/aliased/relative import syntax
 - ordinary trailing commas other than the required singleton-tuple comma
-- match guards, alternative patterns, and collection patterns
+- collection, range, rest, and class patterns
 - call-site capability annotations
 - exception statements, `raise`, and `yield`
 - generator expressions and generator functions

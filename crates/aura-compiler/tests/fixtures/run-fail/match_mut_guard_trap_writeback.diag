@@ -1,0 +1,6 @@
+error[AU4004]: division by zero
+ --> crates/aura-compiler/tests/fixtures/run-fail/match_mut_guard_trap_writeback.au:21:12
+   |
+21 |     return 1 // zero == 0
+   |            ^
+  = note: Aura call chain (innermost first): trap at 19:1 -> main at 23:1

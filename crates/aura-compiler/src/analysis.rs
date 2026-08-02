@@ -846,6 +846,9 @@ impl<'a> AnalysisBuilder<'a> {
             } => {
                 self.extend_lambda_scope_from_expr(scrutinee, target_line, character, scope);
                 for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.extend_lambda_scope_from_expr(guard, target_line, character, scope);
+                    }
                     self.extend_lambda_scope_from_expr(&arm.value, target_line, character, scope);
                 }
             }
@@ -1894,6 +1897,9 @@ impl<'a> AnalysisBuilder<'a> {
                     let mut arm_scope = scope.clone();
                     self.visit_match_arm_pattern(arm, scrutinee_type.as_ref());
                     self.bind_match_arm(arm, scrutinee_type.as_ref(), &mut arm_scope);
+                    if let Some(guard) = &arm.guard {
+                        self.visit_expr(guard, &arm_scope);
+                    }
                     self.visit_stmts(&arm.body, &mut arm_scope);
                 }
             }
@@ -2025,6 +2031,14 @@ impl<'a> AnalysisBuilder<'a> {
         bindings: &mut Vec<(String, Type, usize)>,
     ) {
         match pattern {
+            Pattern::Or(pattern) => {
+                // Every alternative has the same checked binding set. Record
+                // the first once so completion/hover expose one logical arm
+                // scope rather than duplicate definitions.
+                if let Some(alternative) = pattern.alternatives.first() {
+                    self.collect_match_pattern_bindings(alternative, expected_type, bindings);
+                }
+            }
             Pattern::Binding(binding) => bindings.push((
                 binding.name.clone(),
                 expected_type.cloned().unwrap_or(Type::Unit),
@@ -2067,6 +2081,11 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn visit_match_pattern_occurrences(&mut self, pattern: &Pattern, expected_type: Option<&Type>) {
         match pattern {
+            Pattern::Or(pattern) => {
+                for alternative in &pattern.alternatives {
+                    self.visit_match_pattern_occurrences(alternative, expected_type);
+                }
+            }
             Pattern::Tuple(tuple) => {
                 let element_types = match expected_type {
                     Some(Type::Tuple(elements)) => Some(elements.as_slice()),
@@ -2340,8 +2359,23 @@ impl<'a> AnalysisBuilder<'a> {
                 scrutinee, arms, ..
             } => {
                 self.visit_expr(scrutinee, scope);
+                let scrutinee_type = self.infer_expr_type(scrutinee, scope);
                 for arm in arms {
-                    self.visit_expr(&arm.value, scope);
+                    let mut arm_scope = scope.clone();
+                    self.visit_match_pattern_occurrences(&arm.pattern, scrutinee_type.as_ref());
+                    let mut bindings = Vec::new();
+                    self.collect_match_pattern_bindings(
+                        &arm.pattern,
+                        scrutinee_type.as_ref(),
+                        &mut bindings,
+                    );
+                    for (name, ty, line) in bindings {
+                        self.bind_named_value(&name, ty, line, "local", &mut arm_scope);
+                    }
+                    if let Some(guard) = &arm.guard {
+                        self.visit_expr(guard, &arm_scope);
+                    }
+                    self.visit_expr(&arm.value, &arm_scope);
                 }
             }
             ExprKind::Int(_)
@@ -4825,7 +4859,13 @@ fn expression_end_line(expr: &Expr) -> usize {
             scrutinee, arms, ..
         } => arms
             .iter()
-            .map(|arm| expression_end_line(&arm.value))
+            .map(|arm| {
+                arm.guard
+                    .as_ref()
+                    .map(expression_end_line)
+                    .unwrap_or(arm.span.line)
+                    .max(expression_end_line(&arm.value))
+            })
             .fold(expression_end_line(scrutinee), usize::max),
         ExprKind::Name(_)
         | ExprKind::Int(_)
