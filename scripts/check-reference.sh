@@ -5,6 +5,22 @@ trap 'echo "reference check failed: $BASH_COMMAND" >&2' ERR
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+assert_wrapped_text() {
+  local path="$1"
+  local expected="$2"
+
+  python3 - "$path" "$expected" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+expected = " ".join(sys.argv[2].split())
+actual = " ".join(path.read_text(encoding="utf-8").split())
+if expected not in actual:
+    raise SystemExit(f"missing reference text in {path}: {expected}")
+PY
+}
+
 python3 scripts/generate_llms.py --check
 
 proposal_stem="auro""ra_language_proposal"
@@ -60,7 +76,7 @@ grep -Fq 'MUST' docs/manual/language-specification.md
 grep -Fq '`AU4006` means invalid runtime configuration; and `AU4007` means a numeric Array shape or reduction violation.' docs/manual/cli-and-tooling.md
 grep -Fq '`int` is an alias for `int64`' docs/manual/types.md
 grep -Fq 'contracts remain `int32`, including `main()` exit statuses' docs/manual/types.md
-grep -Fq 'otherwise the literal defaults to `int64`' docs/manual/lexical-structure.md
+assert_wrapped_text docs/manual/lexical-structure.md 'otherwise the literal defaults to `int64`'
 grep -Fq 'otherwise it defaults to `int64`' docs/manual/static-semantics.md
 grep -Fq 'assert-statement' docs/manual/grammar.md
 grep -Fq 'A failed assertion is `AU4001` at the `assert` keyword location.' docs/manual/diagnostics.md
