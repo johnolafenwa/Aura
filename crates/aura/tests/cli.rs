@@ -12776,6 +12776,30 @@ fn aura_test_non_function_hook_collisions_are_structured_diagnostics() {
 
     fs::write(
         &source_path,
+        "public teardown: int32 = 1\n\ndef test_ok():\n    pass\n",
+    )
+    .expect("constant teardown collision source should write");
+    let constant_teardown = Command::new(aura_bin())
+        .args(["test", "--format", "json"])
+        .arg(&source_path)
+        .output()
+        .expect("constant teardown collision test run should start");
+    assert_eq!(constant_teardown.status.code(), Some(1));
+    assert!(constant_teardown.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&constant_teardown.stdout)
+        .expect("constant teardown collision JSON should parse");
+    assert_eq!(report["tests"][0]["diagnostic"]["code"], "AU2999");
+    assert_eq!(
+        report["tests"][0]["diagnostic"]["message"],
+        "test hook `teardown` must be a module function"
+    );
+    assert_eq!(
+        report["tests"][0]["diagnostic"]["primary_span"]["start"]["line"],
+        1
+    );
+
+    fs::write(
+        &source_path,
         "def setup(value: int32):\n    pass\n\ndef test_ok():\n    pass\n",
     )
     .expect("invalid-hook-signature source should write");

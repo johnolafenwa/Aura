@@ -789,6 +789,15 @@ fn normalized_test_display_path(path: &Path) -> String {
 fn discover_test_hooks(syntax: &aura_compiler::ast::Module) -> Result<TestHooks, Diagnostic> {
     use aura_compiler::ast::{AssignTarget, Item, Stmt};
 
+    for constant in &syntax.constants {
+        if matches!(constant.name.as_str(), "setup" | "teardown") {
+            return Err(Diagnostic::coded_at(
+                "AU2999",
+                constant.span,
+                format!("test hook `{}` must be a module function", constant.name),
+            ));
+        }
+    }
     for item in &syntax.items {
         if !matches!(item, Item::Function(_)) && matches!(item.name(), "setup" | "teardown") {
             return Err(Diagnostic::coded_at(
