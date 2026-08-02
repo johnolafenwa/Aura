@@ -275,12 +275,12 @@ match names.get(0):
         pass
 ```
 
-See [examples/collections/vec_basics.au](../examples/collections/vec_basics.au),
-[examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au),
-[examples/collections/vec_polish.au](../examples/collections/vec_polish.au),
+See [examples/collections/list_basics.au](../examples/collections/list_basics.au),
+[examples/collections/list_iteration.au](../examples/collections/list_iteration.au),
+[examples/collections/list_polish.au](../examples/collections/list_polish.au),
 [examples/collections/slices.au](../examples/collections/slices.au),
 and
-[examples/collections/vec_algorithms.au](../examples/collections/vec_algorithms.au).
+[examples/collections/list_algorithms.au](../examples/collections/list_algorithms.au).
 
 For integer types, the runtime enforces the annotated width. A binding like
 `value: int8 = 127` is valid, but exceeding that range at runtime produces an
@@ -342,7 +342,7 @@ The method surface includes `len`, `is_empty`, `copy`, `get`, `remove`, `keys`,
 `values`, `items`, `clear`, `update`, `reserve`, and `with_capacity`. Use indexed
 assignment for storage and `in` for membership.
 
-See [examples/collections/map_basics.au](../examples/collections/map_basics.au).
+See [examples/collections/dict_basics.au](../examples/collections/dict_basics.au).
 
 ## `set[T]` And Set Literals
 

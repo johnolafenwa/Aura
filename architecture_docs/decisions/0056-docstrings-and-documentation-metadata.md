@@ -278,6 +278,27 @@ Exact whitespace preservation is simple and predictable, but authors are
 responsible for source indentation that reads well in hover. The explicit size
 limits make editor and interface memory bounded.
 
+## Implementation adoption
+
+Docstrings are additive declaration metadata and require no source rewrite.
+When implemented, first-statement plain triple strings in eligible declarations
+receive the one metadata meaning defined here; other triple strings retain the
+ordinary string-expression rules. Parser association, semantic storage,
+checked interfaces, hover, formatting, reference material, examples, and
+tutorials land as one coordinated feature.
+
+Adoption depends on the implemented triple-string lexer, stable declaration
+identities, public/private visibility, checked-interface serialization,
+sanitized Markdown hover, and ADR-0053/ADR-0055 association rules for decorated
+bindings and properties. Runtime backends depend only on a verified guarantee
+that metadata is absent from executable MIR.
+
+The semantic/documentation schema, checked-interface format, language-server
+index, completion cache, and generated-reference identity are bumped together.
+Executable native cache keys remain reusable only when their independently
+versioned semantic contract proves that a metadata-only edit cannot change
+MIR; otherwise they are conservatively invalidated.
+
 ## Completion-test matrix
 
 - lexer/parser: both plain triple delimiters in every eligible declaration,

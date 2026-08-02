@@ -1,5 +1,0 @@
-error[AU3006]: cannot implicitly copy `str` out of a list index for compound assignment; use `get(index)` for an explicit cloned optional read, update it, then write the result back with `set(index, value)`
- --> crates/aura-compiler/tests/fixtures/check-fail/vec_compound_assignment_noncopy_element_rejected.au:3:5
-  |
-3 |     values[0] += "B"
-  |     ^

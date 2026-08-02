@@ -256,6 +256,25 @@ abstraction in the first implementation. They avoid higher-kinded typing,
 receiver descriptor transformations, and callable-state ambiguity while the
 core feature establishes one stable model.
 
+## Implementation adoption
+
+Function decorators are an additive source feature. Existing Aura programs
+need no rewrite. The parser, formatter, semantic model, module initializer,
+MIR, direct backend, language server, reference, examples, and tutorials adopt
+the `@expression` surface in one coordinated family.
+
+Adoption depends on the implemented function-value and closure model, exact
+callable signatures, repeatability and Transfer analysis, deterministic module
+initialization, and checked cross-module bindings. It also supplies the syntax
+dependency used by ADR-0055 properties and the metadata association required
+by ADR-0056 docstrings.
+
+Decorator groups and final decorated bindings become explicit checked-interface
+records. The AST/semantic schema, interface format, module-initialization graph,
+native cache identity, language-server index, and generated-reference identity
+are bumped when implementation lands. Cached analysis, interfaces, and native
+artifacts are invalidated and rebuilt under the new versions.
+
 ## Completion-test matrix
 
 - lexer and parser: one and multiple decorators, comments, multiline grouped

@@ -286,6 +286,26 @@ specialized place operation, while user types can choose an explicit method
 that constructs an owned iterator. The associated type is a real dependency
 that must be implemented and documented with the protocol.
 
+## Implementation adoption
+
+Generators and the iterator protocol are additive. Existing loops,
+comprehensions, builtin collection traversal, and Queue receive iteration keep
+their specified behavior and require no source rewrite. Implementation adds
+one generator declaration/yield surface and one protocol contract.
+
+Adoption depends on the stackful coroutine runtime, worker-affine cleanup,
+callable capability analysis, associated-type support for `IntoIterator.Iter`,
+exhaustive `T | None` handling from ADR-0052, and the current loop and
+comprehension lowering. Fusion remains an optimization over the same protocol
+semantics and cannot precede the unfused correctness path.
+
+Checked interfaces record generator signatures, associated iterator types,
+worker affinity, and ownership properties. The AST/semantic and MIR schemas,
+coroutine-frame layout identity, checked-interface version, native cache key,
+language-server index, and generated-reference identity are bumped together.
+Cached analysis, interfaces, coroutine layouts, and native artifacts are
+invalidated and rebuilt under the new versions.
+
 ## Completion-test matrix
 
 - lexer/parser: generator declarations, yield precedence, multiline yield,

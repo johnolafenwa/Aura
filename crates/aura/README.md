@@ -27,11 +27,11 @@ After the release build completes, run the binary directly:
 ./target/release/aura run examples/control_flow/match_literals.au
 ./target/release/aura run examples/generics/box_and_wrapper.au
 ./target/release/aura run examples/basics/default_arguments.au
-./target/release/aura run examples/collections/vec_basics.au
-./target/release/aura run examples/collections/vec_polish.au
-./target/release/aura run examples/collections/vec_algorithms.au
+./target/release/aura run examples/collections/list_basics.au
+./target/release/aura run examples/collections/list_polish.au
+./target/release/aura run examples/collections/list_algorithms.au
 ./target/release/aura run examples/collections/slices.au
-./target/release/aura run examples/collections/map_basics.au
+./target/release/aura run examples/collections/dict_basics.au
 ./target/release/aura run examples/collections/set_basics.au
 ./target/release/aura run examples/basics/pass_keyword.au
 ./target/release/aura run examples/basics/assertions.au
@@ -77,11 +77,11 @@ You can do the same with the other current examples:
 ```bash
 ./target/release/aura run examples/basics/main_function.au
 ./target/release/aura run examples/basics/top_level_script.au
-./target/release/aura run examples/collections/vec_iteration.au
-./target/release/aura run examples/collections/vec_polish.au
-./target/release/aura run examples/collections/vec_algorithms.au
+./target/release/aura run examples/collections/list_iteration.au
+./target/release/aura run examples/collections/list_polish.au
+./target/release/aura run examples/collections/list_algorithms.au
 ./target/release/aura run examples/collections/slices.au
-./target/release/aura run examples/collections/map_basics.au
+./target/release/aura run examples/collections/dict_basics.au
 ./target/release/aura run examples/collections/set_basics.au
 ./target/release/aura run examples/generics/box_and_wrapper.au
 ./target/release/aura run examples/traits/greeter.au

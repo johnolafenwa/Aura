@@ -268,6 +268,23 @@ remove Copy, clone, Transfer, equality, or hash availability and can make every
 match non-exhaustive. That is an API-significant change, which is appropriate
 for a closed sum.
 
+## Implementation adoption
+
+If ratified, the union system lands as one atomic clean-slate feature family.
+`T | None` is the sole optional type spelling and `None` is its sole absence
+value. Parsing, normalization, type patterns, exhaustive matching,
+checked-interface support, both backends, compiler fixtures, examples,
+tutorials, generated reference material, editor tooling, and package tests all
+adopt that one surface together.
+
+This adoption requires the union normalizer, stable runtime tags, type-pattern
+exhaustiveness, ownership/property derivation, and checked-interface encoding
+to land together. The semantic database, checked-interface format, MIR schema,
+native cache identity, language-server index, and generated-reference identity
+all receive incompatible version bumps. Importers accept only the matching
+interface version, and cached analysis and native artifacts are rebuilt after
+the version change.
+
 ## Completion-test matrix
 
 - lexer and parser: precedence, parentheses, generic nesting, multiline unions,

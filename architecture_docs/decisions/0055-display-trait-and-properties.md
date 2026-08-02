@@ -281,6 +281,26 @@ Properties provide concise computed reads without introducing writable
 descriptors or hidden mutable access. Their dependency on the decorator parser
 is syntactic; their semantics remain a dedicated checked member kind.
 
+## Implementation adoption
+
+Display implementations and read-only properties are additive source features.
+Existing declarations require no rewrite. Implementation adds the single
+`Display` contract and the single compiler-defined `@property` form atomically
+across parsing, checking, both backends, formatting, the language server,
+reference material, examples, and tutorials.
+
+Adoption depends on coherent trait resolution, the callable and closure model,
+ADR-0053 decorator parsing, shared-receiver capability enforcement, stable
+structural rendering, cycle detection, and complete-output staging. ADR-0056
+uses the property descriptor and getter declaration identity when attaching
+documentation.
+
+Checked interfaces record the unique Display implementation and property
+metadata. The semantic schema, interface format, renderer identity, native
+cache key, language-server symbol index, and generated-reference identity are
+bumped together. Cached artifacts are rebuilt so imported rendering and
+property lookup always use matching versioned contracts.
+
 ## Completion-test matrix
 
 - trait surface: exact `display(self) -> str`, receiver/result mismatches,

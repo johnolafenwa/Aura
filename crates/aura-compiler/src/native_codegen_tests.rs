@@ -1688,12 +1688,12 @@ fn direct_backend_emits_object_for_trait_impl_dispatch() {
 fn direct_backend_emits_object_for_extended_feature_examples() {
     let examples = [
         (
-            "collections/vec_polish",
-            include_str!("../../../examples/collections/vec_polish.au"),
+            "collections/list_polish",
+            include_str!("../../../examples/collections/list_polish.au"),
         ),
         (
-            "collections/map_basics",
-            include_str!("../../../examples/collections/map_basics.au"),
+            "collections/dict_basics",
+            include_str!("../../../examples/collections/dict_basics.au"),
         ),
         (
             "collections/set_basics",

@@ -41,7 +41,7 @@ aura check app.au
 `check` is the fastest way to validate syntax, types, imports, ownership, and package resolution:
 
 ```bash
-cargo run -p aura -- check examples/collections/vec_basics.au
+cargo run -p aura -- check examples/collections/list_basics.au
 ```
 
 Use `check` before `run` when you are editing a package or diagnosing type errors.

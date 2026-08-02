@@ -117,15 +117,15 @@ grep -Fq 'trace_text' crates/aura-compiler/tests/fixtures/run-pass/tuple_structu
 
 # B3.0-e: `AU3005` guidance is classified the same way the rejection is, so the
 # recommended recovery is never something `AU3007` rejects in turn.
-test -s crates/aura-compiler/tests/fixtures/check-fail/random_vec_index_requires_transfer.diag
-test -s crates/aura-compiler/tests/fixtures/check-fail/random_transitive_map_index_requires_transfer.diag
-test -s crates/aura-compiler/tests/fixtures/check-fail/generic_vec_index_clone_safety_guidance.diag
-test -s crates/aura-compiler/tests/fixtures/check-fail/generic_map_index_clone_safety_guidance.diag
+test -s crates/aura-compiler/tests/fixtures/check-fail/random_list_index_requires_transfer.diag
+test -s crates/aura-compiler/tests/fixtures/check-fail/random_transitive_dict_index_requires_transfer.diag
+test -s crates/aura-compiler/tests/fixtures/check-fail/generic_list_index_clone_safety_guidance.diag
+test -s crates/aura-compiler/tests/fixtures/check-fail/generic_dict_index_clone_safety_guidance.diag
 test -s crates/aura-compiler/tests/fixtures/run-pass/random_index_remove_transfers_ownership.stdout
-grep -Fq 'cannot clone it because' crates/aura-compiler/tests/fixtures/check-fail/random_vec_index_requires_transfer.diag
-grep -Fq 'cannot clone it because' crates/aura-compiler/tests/fixtures/check-fail/random_transitive_map_index_requires_transfer.diag
-grep -Fq 'requires a clone-safe' crates/aura-compiler/tests/fixtures/check-fail/generic_vec_index_clone_safety_guidance.diag
-grep -Fq 'requires a clone-safe' crates/aura-compiler/tests/fixtures/check-fail/generic_map_index_clone_safety_guidance.diag
+grep -Fq 'cannot clone it because' crates/aura-compiler/tests/fixtures/check-fail/random_list_index_requires_transfer.diag
+grep -Fq 'cannot clone it because' crates/aura-compiler/tests/fixtures/check-fail/random_transitive_dict_index_requires_transfer.diag
+grep -Fq 'requires a clone-safe' crates/aura-compiler/tests/fixtures/check-fail/generic_list_index_clone_safety_guidance.diag
+grep -Fq 'requires a clone-safe' crates/aura-compiler/tests/fixtures/check-fail/generic_dict_index_clone_safety_guidance.diag
 grep -Fq 'clone-safety' docs/manual/diagnostics.md
 grep -Fq 'clone-safety' docs/manual/conformance.md
 grep -Fq 'clone-safety classification' architecture_docs/decisions/0014-map-literals-and-indexing.md
@@ -196,8 +196,8 @@ grep -Fxq 'one=1' crates/aura-compiler/tests/fixtures/run-pass/enumerate_and_zip
 grep -Fxq 'two=2' crates/aura-compiler/tests/fixtures/run-pass/enumerate_and_zip.stdout
 grep -Fq 'fn every_ordinary_for_form_uses_a_fresh_scoped_target_slot()' crates/aura-compiler/src/mir_tests.rs
 grep -Fq 'for label, value in jobs:' crates/aura-compiler/tests/fixtures/run-pass/tuple_for_pattern_queue.au
-grep -Fq 'def update_first(values: mut list[int64]) -> int64:' crates/aura-compiler/tests/fixtures/run-pass/vec_borrow_mut_iteration.au
-test "$(grep -Fxc '24' crates/aura-compiler/tests/fixtures/run-pass/vec_borrow_mut_iteration.stdout)" -eq 3
+grep -Fq 'def update_first(values: mut list[int64]) -> int64:' crates/aura-compiler/tests/fixtures/run-pass/list_mut_iteration.au
+test "$(grep -Fxc '24' crates/aura-compiler/tests/fixtures/run-pass/list_mut_iteration.stdout)" -eq 3
 grep -Fq '= "int" | "int8"' docs/manual/grammar.md
 grep -Fq 'Integer literals default to `int64`' tutorials/02-bindings-and-types.md
 grep -Fq '`int` is an alias for `int64`' "$proposal_md"
@@ -288,7 +288,7 @@ grep -Fq '`insert` applies Python clamping.' docs/manual/collections.md
 grep -Fq "unicode = 'A🎉'" examples/strings/string_methods.au
 grep -Fq 'unicode.len()' examples/strings/string_methods.au
 grep -Fq 'unicode.byte_len()' examples/strings/string_methods.au
-grep -Fq 'values.insert(index=-1, value=2)' examples/collections/vec_polish.au
+grep -Fq 'values.insert(index=-1, value=2)' examples/collections/list_polish.au
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0030-len-and-str-builtins.md
 grep -Fq '## B3.0-d amendment and ratification' architecture_docs/decisions/0030-len-and-str-builtins.md
 grep -Fq '`len(value)` and `value.len()` are the same operation with the same static' architecture_docs/decisions/0030-len-and-str-builtins.md
@@ -334,9 +334,9 @@ done
 grep -Fq 'float64|str|list|dict|set|Duration' tools/vscode-aura/syntaxes/aura.tmLanguage.json
 grep -Fq 'List positions and written slice endpoints use the `int64` index domain.' docs/manual/collections.md
 grep -Fq 'end_index: int64 = items.len()' tutorials/02-bindings-and-types.md
-grep -Fq 'for index in range(values.len()):' examples/collections/vec_polish.au
-test -s crates/aura-compiler/tests/fixtures/run-pass/vec_len_range.au
-grep -Fq 'for index in range(values.len()):' crates/aura-compiler/tests/fixtures/run-pass/vec_len_range.au
+grep -Fq 'for index in range(values.len()):' examples/collections/list_polish.au
+test -s crates/aura-compiler/tests/fixtures/run-pass/list_len_range.au
+grep -Fq 'for index in range(values.len()):' crates/aura-compiler/tests/fixtures/run-pass/list_len_range.au
 grep -Fq 'fn direct_member_length_explicit_int32_cast_keeps_checked_narrowing()' crates/aura-compiler/src/native_codegen_tests.rs
 grep -Fq 'execute `int64` member lengths, `len(value) == value.len()`' README.md
 grep -Fq 'cast-free length-driven indexing' README.md
@@ -907,8 +907,8 @@ grep -Fq 'One-colon slices return fresh owned lists.' docs/manual/collections.md
 grep -Fq 'Accepted ADR-0040 owned list/str slices' docs/manual/conformance.md
 test -s crates/aura-compiler/tests/fixtures/parse-pass/owned_slices.au
 test -s crates/aura-compiler/tests/fixtures/check-pass/slice_static_semantics.au
-test -s crates/aura-compiler/tests/fixtures/run-pass/owned_vec_string_slices.au
-test -s crates/aura-compiler/tests/fixtures/run-pass/owned_vec_string_slices.stdout
+test -s crates/aura-compiler/tests/fixtures/run-pass/owned_list_string_slices.au
+test -s crates/aura-compiler/tests/fixtures/run-pass/owned_list_string_slices.stdout
 for fixture in \
   slice_step_explicit \
   slice_step_fully_omitted \
@@ -928,9 +928,9 @@ for fixture in \
     "crates/aura-compiler/tests/fixtures/parse-fail/${fixture}.diag"
 done
 for fixture in \
-  vec_slice_start_out_of_bounds \
-  vec_slice_end_out_of_bounds \
-  vec_slice_reversed_bounds \
+  list_slice_start_out_of_bounds \
+  list_slice_end_out_of_bounds \
+  list_slice_reversed_bounds \
   string_slice_start_out_of_bounds \
   string_slice_end_out_of_bounds \
   string_slice_reversed_bounds; do

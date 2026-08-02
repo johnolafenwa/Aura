@@ -5147,9 +5147,9 @@ fn run_backends_lower_comprehensions_in_function_and_field_defaults() {
 #[test]
 fn owned_slice_matrix_matches_forced_mir_and_direct_backends() {
     let root = repo_root();
-    let fixture = "crates/aura-compiler/tests/fixtures/run-pass/owned_vec_string_slices.au";
+    let fixture = "crates/aura-compiler/tests/fixtures/run-pass/owned_list_string_slices.au";
     let expected =
-        include_str!("../../aura-compiler/tests/fixtures/run-pass/owned_vec_string_slices.stdout");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/owned_list_string_slices.stdout");
 
     let mir = Command::new(aura_bin())
         .current_dir(&root)
@@ -5199,9 +5199,9 @@ fn owned_slice_au4003_traps_match_forced_mir_and_direct_backends() {
     let cases = [
         (
             "list reversed bounds",
-            "crates/aura-compiler/tests/fixtures/run-fail/vec_slice_reversed_bounds.au",
+            "crates/aura-compiler/tests/fixtures/run-fail/list_slice_reversed_bounds.au",
             include_str!(
-                "../../aura-compiler/tests/fixtures/run-fail/vec_slice_reversed_bounds.diag"
+                "../../aura-compiler/tests/fixtures/run-fail/list_slice_reversed_bounds.diag"
             ),
         ),
         (
@@ -7282,11 +7282,11 @@ fn build_with_direct_backend_supports_numeric_builtins_example() {
 }
 
 #[test]
-fn build_with_direct_backend_supports_map_basics_example() {
+fn build_with_direct_backend_supports_dict_basics_example() {
     assert_direct_backend_example_runs(
-        "examples/collections/map_basics.au",
+        "examples/collections/dict_basics.au",
         "map-basics-direct",
-        "3\ntrue\n1\n1\n5\naura\n3\n3\n3\n3\ntrue\n",
+        "3\ntrue\n1\n1\n5\n(aura, 5)\n(repo, 3)\n3\n3\n3\ntrue\n",
     );
 }
 
@@ -7351,9 +7351,9 @@ fn run_and_direct_backends_preserve_the_dynamic_json_surface() {
 
 #[test]
 fn run_and_direct_backends_preserve_vec_algorithm_order_stability_and_ownership() {
-    let source = include_str!("../../aura-compiler/tests/fixtures/run-pass/vec_algorithms.au");
+    let source = include_str!("../../aura-compiler/tests/fixtures/run-pass/list_algorithms.au");
     let expected =
-        include_str!("../../aura-compiler/tests/fixtures/run-pass/vec_algorithms.stdout");
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/list_algorithms.stdout");
 
     assert_run_and_direct_source_stdout("aura-vec-algorithms-parity", source, expected);
 }
@@ -8296,27 +8296,27 @@ fn build_with_direct_backend_supports_literal_match_example() {
 }
 
 #[test]
-fn build_with_direct_backend_supports_vec_basics_example() {
+fn build_with_direct_backend_supports_list_basics_example() {
     assert_direct_backend_example_runs(
-        "examples/collections/vec_basics.au",
+        "examples/collections/list_basics.au",
         "vec-basics-direct",
         "3\n1\n2\n2\n20\n1\n99\nfalse\n",
     );
 }
 
 #[test]
-fn build_with_direct_backend_supports_vec_polish_example() {
+fn build_with_direct_backend_supports_list_polish_example() {
     assert_direct_backend_example_runs(
-        "examples/collections/vec_polish.au",
+        "examples/collections/list_polish.au",
         "vec-polish-direct",
         "Ada\nGrace\ntrue\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n",
     );
 }
 
 #[test]
-fn build_with_direct_backend_supports_vec_iteration_example() {
+fn build_with_direct_backend_supports_list_iteration_example() {
     assert_direct_backend_example_runs(
-        "examples/collections/vec_iteration.au",
+        "examples/collections/list_iteration.au",
         "vec-iteration-direct",
         "Ada\nGrace\n2\n9\n",
     );
@@ -8347,7 +8347,7 @@ fn build_with_direct_backend_supports_bare_none_unit_values() {
 }
 
 #[test]
-fn build_with_direct_backend_supports_vec_literals_and_iteration() {
+fn build_with_direct_backend_supports_list_literals_and_iteration() {
     let temp = TempDir::new("aura-build-direct-vec");
     let source_path = temp.path().join("main.au");
     fs::write(
@@ -8563,29 +8563,29 @@ fn default_build_supports_literal_match_example() {
 }
 
 #[test]
-fn default_build_supports_vec_basics_example() {
+fn default_build_supports_list_basics_example() {
     assert_default_backend_example_runs(
-        "examples/collections/vec_basics.au",
+        "examples/collections/list_basics.au",
         "vec-basics-auto",
         "3\n1\n2\n2\n20\n1\n99\nfalse\n",
     );
 }
 
 #[test]
-fn default_build_supports_vec_polish_example() {
+fn default_build_supports_list_polish_example() {
     assert_default_backend_example_runs(
-        "examples/collections/vec_polish.au",
+        "examples/collections/list_polish.au",
         "vec-polish-auto",
         "Ada\nGrace\ntrue\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n",
     );
 }
 
 #[test]
-fn default_build_supports_map_basics_example() {
+fn default_build_supports_dict_basics_example() {
     assert_default_backend_example_runs(
-        "examples/collections/map_basics.au",
+        "examples/collections/dict_basics.au",
         "map-basics-auto",
-        "3\ntrue\n1\n1\n5\naura\n3\n3\n3\n3\ntrue\n",
+        "3\ntrue\n1\n1\n5\n(aura, 5)\n(repo, 3)\n3\n3\n3\ntrue\n",
     );
 }
 
@@ -8626,9 +8626,9 @@ fn default_build_supports_set_basics_example() {
 }
 
 #[test]
-fn default_build_supports_vec_iteration_example() {
+fn default_build_supports_list_iteration_example() {
     assert_default_backend_example_runs(
-        "examples/collections/vec_iteration.au",
+        "examples/collections/list_iteration.au",
         "vec-iteration-auto",
         "Ada\nGrace\n2\n9\n",
     );
@@ -9316,8 +9316,8 @@ fn run_executes_literal_match_example() {
 }
 
 #[test]
-fn run_executes_vec_basics_example() {
-    let fixture = repo_root().join("examples/collections/vec_basics.au");
+fn run_executes_list_basics_example() {
+    let fixture = repo_root().join("examples/collections/list_basics.au");
     let output = Command::new(aura_bin())
         .arg("run")
         .arg(&fixture)
@@ -9336,8 +9336,8 @@ fn run_executes_vec_basics_example() {
 }
 
 #[test]
-fn run_executes_vec_polish_example() {
-    let fixture = repo_root().join("examples/collections/vec_polish.au");
+fn run_executes_list_polish_example() {
+    let fixture = repo_root().join("examples/collections/list_polish.au");
     let output = Command::new(aura_bin())
         .arg("run")
         .arg(&fixture)
@@ -9356,8 +9356,8 @@ fn run_executes_vec_polish_example() {
 }
 
 #[test]
-fn run_executes_vec_iteration_example() {
-    let fixture = repo_root().join("examples/collections/vec_iteration.au");
+fn run_executes_list_iteration_example() {
+    let fixture = repo_root().join("examples/collections/list_iteration.au");
     let output = Command::new(aura_bin())
         .arg("run")
         .arg(&fixture)
@@ -9376,7 +9376,7 @@ fn run_executes_vec_iteration_example() {
 }
 
 #[test]
-fn run_executes_vec_literals_and_iteration() {
+fn run_executes_list_literals_and_iteration() {
     let temp = TempDir::new("aura-run-vec");
     let source_path = temp.path().join("main.au");
     fs::write(
@@ -9427,8 +9427,8 @@ fn run_executes_vec_methods_and_constructor() {
 }
 
 #[test]
-fn run_executes_map_basics_example() {
-    let fixture = repo_root().join("examples/collections/map_basics.au");
+fn run_executes_dict_basics_example() {
+    let fixture = repo_root().join("examples/collections/dict_basics.au");
     let output = Command::new(aura_bin())
         .arg("run")
         .arg(&fixture)
@@ -9442,7 +9442,7 @@ fn run_executes_map_basics_example() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "3\ntrue\n1\n1\n5\naura\n3\n3\n3\n3\ntrue\n"
+        "3\ntrue\n1\n1\n5\n(aura, 5)\n(repo, 3)\n3\n3\n3\ntrue\n"
     );
 }
 

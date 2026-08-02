@@ -1,5 +1,0 @@
-error[AU2002]: `Array.zeros` expects `list[int64]` for `shape`, found `list[int32]`
- --> crates/aura-compiler/tests/fixtures/check-fail/array_shape_requires_vec_int64.au:3:33
-  |
-3 |     values = Array[int32].zeros(shape=shape)
-  |                                 ^

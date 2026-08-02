@@ -166,7 +166,7 @@ printed-output order unless they explicitly coordinate that order.
     - `🎉Z`
     - `A🎉Z`
     - `A🎉Z`
-- `vec_basics.au`
+- `list_basics.au`
   - list literals, indexed reads, `list[T]` methods, and indexed mutation through `set(...)`
   - prints:
     - `3`
@@ -177,7 +177,7 @@ printed-output order unless they explicitly coordinate that order.
     - `1`
     - `99`
     - `false`
-- `vec_iteration.au`
+- `list_iteration.au`
   - empty-list construction with `list[T]()`, `extend(...)`, explicit `list[T]`
     annotations, bare shared iteration, and consuming `own` iteration
   - prints:
@@ -185,7 +185,7 @@ printed-output order unless they explicitly coordinate that order.
     - `Grace`
     - `2`
     - `9`
-- `vec_polish.au`
+- `list_polish.au`
   - negative direct/method indexes, non-copy cloned reads, `mut`
     iteration, cast-free `list.len()` use with `range(...)`, `insert(...)`,
     `swap(...)`, `reverse()`, `extend(...)`,
@@ -205,7 +205,7 @@ printed-output order unless they explicitly coordinate that order.
     - `100`
     - `true`
     - `true`
-- `vec_algorithms.au`
+- `list_algorithms.au`
   - eager shared `map`/`filter`, stable natural sorting, stable once-per-element
     key sorting, and source retention
   - prints:
@@ -217,7 +217,7 @@ printed-output order unless they explicitly coordinate that order.
     - `first`
     - `third`
     - `[3, 1, 2, 4]`
-- `map_basics.au`
+- `dict_basics.au`
   - `dict[K, V]` literals, `update(...)`, tuple-valued `items()`, indexed writes, indexed reads, and typed optional lookup and removal
   - prints:
     - `3`
@@ -954,11 +954,11 @@ cargo run -p aura -- run examples/basics/function_values.au
 cargo run -p aura -- run examples/basics/borrow_parameters.au
 cargo run -p aura -- run examples/basics/numbers.au
 cargo run -p aura -- run examples/basics/pass_keyword.au
-cargo run -p aura -- run examples/collections/vec_basics.au
-cargo run -p aura -- run examples/collections/vec_iteration.au
-cargo run -p aura -- run examples/collections/vec_polish.au
+cargo run -p aura -- run examples/collections/list_basics.au
+cargo run -p aura -- run examples/collections/list_iteration.au
+cargo run -p aura -- run examples/collections/list_polish.au
 cargo run -p aura -- run examples/collections/slices.au
-cargo run -p aura -- run examples/collections/map_basics.au
+cargo run -p aura -- run examples/collections/dict_basics.au
 cargo run -p aura -- run examples/collections/set_basics.au
 cargo run -p aura -- run examples/classes/point_distance.au
 cargo run -p aura -- run examples/classes/methods.au

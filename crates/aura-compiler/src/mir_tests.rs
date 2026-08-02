@@ -6745,7 +6745,7 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
 }
 
 #[test]
-fn vec_algorithms_lower_callbacks_to_ordinary_indirect_calls_before_mutation() {
+fn list_algorithms_lower_callbacks_to_ordinary_indirect_calls_before_mutation() {
     let module = crate::lower_source_to_mir(
         r#"
 def key(value: int32) -> int32:
@@ -6873,7 +6873,7 @@ def main():
 }
 
 #[test]
-fn vec_algorithms_execute_stably_in_order_and_preserve_their_shared_source() {
+fn list_algorithms_execute_stably_in_order_and_preserve_their_shared_source() {
     let module = crate::lower_source_to_mir(
         r#"
 class Box:

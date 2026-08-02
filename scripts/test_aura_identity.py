@@ -602,6 +602,26 @@ def _is_public_document(relative: str) -> bool:
 
 def _dedicated_noncanonical_surface_path(relative: str) -> bool:
     lowered = relative.lower()
+    path = Path(lowered)
+    stem = path.stem
+    if relative.startswith("examples/collections/") and re.search(
+        r"(?:^|_)(?:vec|map)(?:_|$)", stem
+    ):
+        return True
+    if relative.startswith("crates/aura-compiler/tests/fixtures/"):
+        if re.search(r"(?:^|_)(?:vec|vector)(?:_|$)", stem):
+            return True
+        if re.search(r"(?:^|_)map(?:_|$)", stem) and stem not in {
+            "array_map_callback_trap",
+            "array_map_output_dtype",
+            "array_map_requires_repeatable_callback",
+            "array_map_requires_shared_callback",
+            "list_map_callback_requires_shared",
+            "list_map_set_utilities",
+        }:
+            return True
+        if stem == "prefix_" + "borrow_mut_param_not_supported":
+            return True
     history_words = r"(?:retired|legacy|deprecated|old[-_]?syntax|old[-_]?spelling)"
     surface_words = "|".join(
         re.escape(word.lower())

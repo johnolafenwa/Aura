@@ -1,0 +1,5 @@
+error[AU3005]: cannot implicitly copy `Holder` out of a dict index; `get(key)` cannot clone it because `Holder` contains non-cloneable `random.Rng` state, so use `remove(key)` to transfer ownership instead
+ --> crates/aura-compiler/tests/fixtures/check-fail/random_transitive_dict_index_requires_transfer.au:9:14
+  |
+9 |     chosen = holders["a"]
+  |              ^

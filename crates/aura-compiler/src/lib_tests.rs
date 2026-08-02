@@ -422,8 +422,8 @@ const EXAMPLE_CASES: &[(&str, &str)] = &[
         include_str!("../../../examples/numbers/numeric_builtins.au"),
     ),
     (
-        "examples/collections/map_basics.au",
-        include_str!("../../../examples/collections/map_basics.au"),
+        "examples/collections/dict_basics.au",
+        include_str!("../../../examples/collections/dict_basics.au"),
     ),
     (
         "examples/collections/set_basics.au",
@@ -525,18 +525,18 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "6\n1\n",
     ),
     (
-        "examples/collections/vec_basics.au",
-        include_str!("../../../examples/collections/vec_basics.au"),
+        "examples/collections/list_basics.au",
+        include_str!("../../../examples/collections/list_basics.au"),
         "3\n1\n2\n2\n20\n1\n99\nfalse\n",
     ),
     (
-        "examples/collections/vec_iteration.au",
-        include_str!("../../../examples/collections/vec_iteration.au"),
+        "examples/collections/list_iteration.au",
+        include_str!("../../../examples/collections/list_iteration.au"),
         "Ada\nGrace\n2\n9\n",
     ),
     (
-        "examples/collections/vec_polish.au",
-        include_str!("../../../examples/collections/vec_polish.au"),
+        "examples/collections/list_polish.au",
+        include_str!("../../../examples/collections/list_polish.au"),
         "Ada\nGrace\ntrue\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n",
     ),
     (
@@ -2792,7 +2792,7 @@ fn categorized_examples_run_with_expected_output() {
                 "7\n3.5\n2\n12\n9.0\n9.0\n",
             ),
             (
-                "examples/collections/map_basics.au",
+                "examples/collections/dict_basics.au",
                 EXAMPLE_CASES[38].1,
                 "3\ntrue\n1\n1\n5\n(aura, 5)\n(repo, 3)\n3\n3\n3\ntrue\n",
             ),

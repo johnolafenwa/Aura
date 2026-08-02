@@ -1,6 +1,0 @@
-error[AU3009]: cannot use `dict.items` because duplicating `(str, Task[str])` would create a second observation right for non-repeatable task result `str`
- --> crates/aura-compiler/tests/fixtures/check-fail/task_result_map_items_duplicate_observation.au:7:24
-  |
-7 |         _items = tasks.items()
-  |                        ^
-  = help: transfer the unique Task handle instead; only copy-result tasks and synchronized Queue or repeatable Task results may have multiple observers

@@ -204,7 +204,7 @@ Use bare `for x in collection` for ordinary reads, `for x in own collection`
 when you are done with it, and `for x in mut collection` when you need
 to update list elements.
 
-See [examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au) and [examples/collections/vec_polish.au](../examples/collections/vec_polish.au).
+See [examples/collections/list_iteration.au](../examples/collections/list_iteration.au) and [examples/collections/list_polish.au](../examples/collections/list_polish.au).
 
 Sets support bare shared and `own` iteration:
 

@@ -89,13 +89,13 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/basics/len_and_str.au`
   - execute `int64` member lengths, `len(value) == value.len()`, Unicode-scalar
     str length versus UTF-8 byte length, and `str(value)`
-- `cargo run -p aura -- run examples/collections/vec_basics.au`
+- `cargo run -p aura -- run examples/collections/list_basics.au`
   - execute list literals, `list[T]` methods, and indexed element access
-- `cargo run -p aura -- run examples/collections/vec_polish.au`
+- `cargo run -p aura -- run examples/collections/list_polish.au`
   - execute negative list indexing, cast-free length-driven indexing,
     non-copy cloned reads, mutable list iteration, `insert(...)`,
     `swap(...)`, `reverse()`, `clear()`, richer list methods, and list equality
-- `cargo run -p aura -- run examples/collections/vec_algorithms.au`
+- `cargo run -p aura -- run examples/collections/list_algorithms.au`
   - execute stable natural/key sorting plus eager, source-retaining
     `list.map(...)` and `list.filter(...)`
 - `cargo run -p aura -- run examples/collections/comprehensions.au`
@@ -104,7 +104,7 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/collections/slices.au`
   - execute owned list and Unicode-scalar str slices, omitted and negative
     endpoints, and source/result independence
-- `cargo run -p aura -- run examples/collections/map_basics.au`
+- `cargo run -p aura -- run examples/collections/dict_basics.au`
   - execute `dict[K, V]` literals, tuple-valued `items()`, `update(...)`, and the maintained dictionary method surface
 - `cargo run -p aura -- run examples/collections/set_basics.au`
   - execute `set[T]` literals, shared set iteration, membership, and the maintained set method surface

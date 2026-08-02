@@ -1,0 +1,7 @@
+error[AU3002]: cannot mutate `values` while `values` is borrowed for iteration
+ --> crates/aura-compiler/tests/fixtures/check-fail/shared_list_iteration_rejects_mutation.au:4:16
+  |
+4 |         values.clear()
+  |                ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/shared_list_iteration_rejects_mutation.au:3:18: `values` is borrowed for this loop here
+  = help: perform owner mutation after the loop; use `for item in mut values:` when mutating elements through the loop binding
