@@ -4468,7 +4468,7 @@ def run() -> Result[int32, process.Error]:
     child_environment = environment.stdout()
     if child_environment.contains("AURA_INTERNAL_DIAGNOSTIC_FD") or child_environment.contains("AURA_INTERNAL_DIAGNOSTIC_SIGNAL_FD"):
         return Result.Ok(12)
-    try process.run(["/bin/sh", "-c", "sleep 10 &"], stdout=process.null(), stderr=process.null(), timeout=2s)
+    try process.run(["/bin/sh", "-c", "sleep 30 &"], stdout=process.null(), stderr=process.null(), timeout=2s)
     values: list[int32] = [1, 2]
     return Result.Ok(values[9])
 
@@ -4500,9 +4500,11 @@ def main() -> int32:
         .env("AURA_CACHE_DIR", cache.path())
         .args(["run", "--format", "json", "--backend", "direct"])
         .arg(&source_path);
+    // Keep the harness deadline well below the inherited-grandchild lifetime,
+    // while leaving enough headroom for a heavily loaded local or hosted VM.
     let output = command_output_with_timeout(
         command,
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(15),
         "direct JSON grandchild fd-isolation run",
     );
     assert_eq!(
