@@ -268,9 +268,9 @@ Function values are code pointers, so they are copy values and satisfy
 expected type may come from an annotation, argument, field, collection
 element, or function-typed parameter default.
 
-Bound instance methods, associated-method values, and trait-method values
-remain unavailable. The task API keeps its older direct
-associated-method-without-`self` target form.
+Bound instance methods, associated-method values, and trait-method values are
+unavailable. Task targets may be direct associated methods without `self`;
+that task-target form does not create a general associated-method value.
 
 See [examples/basics/function_values.au](../examples/basics/function_values.au).
 

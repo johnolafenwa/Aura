@@ -1,6 +1,6 @@
 # Shaping Data
 
-Most programs get easier to read once the data has names. A loose bag of strings and integers becomes a `Job` with an `id`, a `queue`, and an `attempts` counter. A value that was "sometimes a number and sometimes an error" becomes a `Result` with two variants. The behaviour that used to drift between helper functions moves onto the type.
+Most programs get easier to read once the data has names. A loose bag of strings and integers becomes a `Job` with an `id`, a `queue`, and an `attempts` counter. A value that is "sometimes a number and sometimes an error" becomes a `Result` with two variants. Shared behaviour lives on the type.
 
 This chapter introduces Aura's two data shapes — **classes** and **enums** — together with **methods**, **copy classes**, and **generics**. It is deliberately not a feature checklist. The through-line is how to decide which shape fits your domain.
 

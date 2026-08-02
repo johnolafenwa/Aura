@@ -887,7 +887,5 @@ The grammar intentionally excludes:
 - call-site capability annotations
 - exception statements, `raise`, and `yield`
 - generator expressions and generator functions
-- detached `spawn`, statement-form `select`, and proposal-only concurrency
-  syntax; the maintained `select(source, ...)` is an ordinary call expression
 
 If a form is absent from this grammar, examples and books must not present it as implemented Aura.

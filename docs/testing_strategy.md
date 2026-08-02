@@ -145,7 +145,7 @@ Current enforced floor:
 
 These are non-regression gates, not a roadmap to 100% compiler coverage. During the 0.1 hardening cycle the compiler floor is frozen at this level; new behavior still requires focused tests, but distribution, safety validation, and editor responsiveness take priority over marginal coverage gains.
 
-Compiler coverage now runs the full Rust workspace test surface while reporting only compiler production code. It ignores sibling `crates/aura-compiler/src/*_tests.rs` files that exist only to hold extracted unit-test scaffolding, and it excludes `crates/aura/**` from the reported files so CLI product tests can exercise compiler behavior without counting CLI source in the compiler floor.
+Compiler coverage runs the full Rust workspace test surface while reporting only compiler production code. It ignores sibling `crates/aura-compiler/src/*_tests.rs` files that exist only to hold extracted unit-test scaffolding, and it excludes `crates/aura/**` from the reported files so CLI product tests can exercise compiler behavior without counting CLI source in the compiler floor.
 
 The GitHub Actions surface mirrors the local gate: CI runs on Linux and macOS, the docs workflow builds and deploys the VitePress book to GitHub Pages, and the release workflow builds platform CLI archives plus the VS Code extension and static docs archive for GitHub Releases.
 

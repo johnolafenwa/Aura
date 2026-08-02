@@ -258,7 +258,7 @@ Current compiler workflow:
   - `--line` and `--character` are zero-based
   - member completion expects the cursor positioned just after `.`
   - the CLI tolerates the common incomplete-editor state where the current buffer contains one or more dangling member accesses such as `counter.` or `helpers.math.`, including when they appear at EOF
-  - stdin-backed completion now also resolves local imported modules relative to the supplied file path, including imported trait methods
+  - stdin-backed completion resolves local imported modules relative to the supplied file path, including imported trait methods
 - `cat examples/modules/simple_import.au | cargo run -p aura -- run --stdin "$(pwd)/examples/modules/simple_import.au"`
   - execute an editor-style buffer while still resolving local imports relative to the supplied path
 - `cargo run -p aura -- check examples/packages/local_path_dependencies/app/src/main.au`
@@ -307,24 +307,24 @@ GitHub Actions:
 
 Current `build` status:
 
-- `aura build` now accepts `--backend auto|direct`
+- `aura build` accepts `--backend auto|direct`
 - `aura build` defaults to `auto`
 - `auto` first tries the direct native backend and may fall back to a standalone embedded-MIR launcher when direct emission is unavailable
-- `direct` now performs true low-level native code generation for the full currently implemented Aura language surface
-- the built binary no longer reparses source or compiles a generated Rust runner at build time
-- the built binary no longer depends on the original `.au` source files at runtime
-- built binaries now render runtime failures with file, line, caret, typed
+- `direct` performs true low-level native code generation for the full currently implemented Aura language surface
+- a built binary runs without reparsing source or compiling a generated Rust runner
+- a built binary runs without the original `.au` source files
+- built binaries render runtime failures with file, line, caret, typed
   Aura call-chain, and child-task ancestry context from embedded source
 - release archives include the Aura native runtime and do not require Cargo or a source checkout; `aura build` still requires a host C compiler
-- manifest-aware commands now resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aura.toml`
+- manifest-aware commands resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aura.toml`
 - git dependencies support `git = "..."` with `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
 - the current package-system milestone writes a local `Aura.lock` at the package root or workspace root, pinning resolved git revisions and recording relative paths for local path dependencies
-- both maintained execution paths now cover the builtin `io`, `fs`, `net`, and `process` module surface for scheduler-aware text/binary file I/O, reactor-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, shell-free subprocess execution with captured pipes, and supervised child processes with restart policy support
+- both maintained execution paths cover the builtin `io`, `fs`, `net`, and `process` module surface for scheduler-aware text/binary file I/O, reactor-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, shell-free subprocess execution with captured pipes, and supervised child processes with restart policy support
 
 Current `run` status:
 
 - `aura run` defaults to the MIR runtime for the current implemented Aura surface; `--backend direct` requires native execution and `--backend auto` prefers it with visible fallback
-- queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, the maintained reactor-driven socket networking surface, and the shell-free `process` module now run through the same MIR-backed public execution path
+- queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, the maintained reactor-driven socket networking surface, and the shell-free `process` module run through the same MIR-backed public execution path
 - task bodies use pinned scheduler workers: the default worker count is the
   available parallelism reported by the host, and the provisional
   `AURA_WORKERS=<positive integer>` override selects an explicit count; each
@@ -368,7 +368,7 @@ Current `run` status:
 - every loop backedge includes a compiler-inserted cooperative scheduling
   check; native concurrent code amortizes it with function-local fuel, while
   sequential native code elides checks when no sibling task can exist
-- the maintained execution architecture is now the MIR runtime for `run` plus native direct codegen for `build`
+- the maintained execution architecture uses the MIR runtime for `run` and native direct codegen for `build`
 
 ## VS Code install
 

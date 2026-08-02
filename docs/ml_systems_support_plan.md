@@ -62,7 +62,7 @@ Those may become future integrations, but they are not the first milestone.
 
 ## Problem Statement
 
-Aura now has a usable first control-plane boundary, but it is still missing the data-plane and exporter depth a production ML systems language needs:
+Aura has a usable first control-plane boundary, but it is missing the data-plane and exporter depth a production ML systems language needs:
 
 - no maintained host-side dense-array surface for local numeric work
 - no maintained shared-memory or copy-avoiding borrowed-buffer transport surface
@@ -482,7 +482,7 @@ Deliverables:
 Success criteria:
 
 - Aura can coordinate local Python workers using shared memory plus control sockets
-- large payloads no longer require repeated string or byte copying through ad hoc layers
+- large payload paths avoid repeated string or byte copying through ad hoc layers
 
 ## Phase 4: Tensor And Device Handle Core
 

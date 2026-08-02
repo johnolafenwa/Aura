@@ -436,7 +436,7 @@ tasks, not the general default. The complete compiled Aura HTTP example,
 including its MIR/direct language-execution frames, proved unsafe when
 256 KiB was the global task default and succeeds with the 512 KiB default.
 The separate isolated runtime round trip that forces protocol callers to
-256 KiB proves that service workers now own the deep host protocol frames; it
+256 KiB proves that service workers own the deep host protocol frames; it
 does not measure the full compiled task stack.
 
 `yield_now()` places the current lightweight task back in its worker's ready

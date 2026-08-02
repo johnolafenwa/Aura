@@ -50,7 +50,7 @@ explanation of move semantics, copy types, and common patterns for working with 
 
 ## Default Field Values
 
-The implemented subset already supports field defaults:
+The implemented subset supports field defaults:
 
 ```python
 class ServerConfig:
@@ -84,7 +84,7 @@ See [examples/classes/indirect_recursive.au](../examples/classes/indirect_recurs
 
 ## `public` Fields And Methods
 
-Aura now enforces class visibility across module boundaries. Fields and methods are private by default and must be marked `public` to be used from another module:
+Aura enforces class visibility across module boundaries. Fields and methods are private by default and must be marked `public` to be used from another module:
 
 ```python
 class User:
@@ -197,7 +197,7 @@ See [examples/classes/methods.au](../examples/classes/methods.au).
 
 ## Mutating Methods
 
-Aura now supports `mut self` methods and member-target assignment.
+Aura supports `mut self` methods and member-target assignment.
 
 ```python
 class Counter:
@@ -218,7 +218,7 @@ counter.reset()
 
 See [examples/classes/mutating_methods.au](../examples/classes/mutating_methods.au).
 
-Constructors now support positional field arguments as long as they come before any named fields:
+Constructors support positional field arguments as long as they come before any named fields:
 
 ```python
 class Point:

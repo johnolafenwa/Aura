@@ -116,7 +116,7 @@ These built-in type names are reserved and cannot be reused for user-defined cla
 
 ## Packages And Workspaces
 
-Aura now supports a first local package-system milestone:
+Aura supports this local package-system surface:
 
 - `Aura.toml` package manifests with `[package]`
 - package source roots under `src/`
@@ -770,8 +770,8 @@ work on the local worker.
 
 Every loop backedge has a compiler-inserted scheduling check, including the
 ordinary body tail and `continue`; `break` and `return` bypass it. Tight loops
-therefore no longer starve ready timers, queues, or sockets assigned to the
-same worker indefinitely, although a single long loop body can still delay
+therefore allow ready timers, queues, or sockets assigned to the same worker
+to proceed, although a single long loop body can still delay
 same-worker siblings. The check does not inspect cancellation. Ordinary tasks
 request a guarded 512 KiB coroutine stack. The two explicit stack-start
 methods accept an exact `int64` byte request from 256 KiB through 64 MiB
@@ -819,7 +819,7 @@ Task results share `T`, and a missing category uses `None`. Source expressions
 run once from left to right. Current-task cancellation wins; otherwise the
 lowest original argument index wins among ready sources. Every
 non-repeatable Task right is consumed at entry and a losing right is
-abandoned. The old statement-shaped `select` remains unsupported.
+abandoned. Selection uses the ordinary builtin call.
 
 Deep HTTP, TLS, and maintained Unix WebSocket operations use a distinct bounded
 protocol-step service with deep native worker stacks. In the clean Mac14,9
@@ -941,9 +941,9 @@ Current backend/tooling notes:
 
 - `build` accepts `--backend auto|direct`
 - `auto` is the default
-- `direct` now covers the full currently implemented Aura language surface
+- `direct` covers the full currently implemented Aura language surface
 - compiler-backed editor state is invalidated across open documents when imported files change
-- `file://` URI handling now preserves both Windows drive-letter paths and UNC workspaces
+- `file://` URI handling preserves both Windows drive-letter paths and UNC workspaces
 
 The current VS Code tooling is compiler-backed for:
 
@@ -965,14 +965,14 @@ The current compiler does not support:
 Current module/import limitations:
 
 - imports resolve local `.au` files relative to the current package root
-- directly checking or analyzing a nested package file now infers the nearest package root that satisfies its imports
+- directly checking or analyzing a nested package file infers the nearest package root that satisfies its imports
 - `import a.b` exposes module namespaces for calls like `a.b.func(...)`, `a.b.Type(...)`, and `a.b.Enum.Variant`
 - type annotations may use namespace-imported types such as `a.b.Type`
 - both maintained execution paths stop with a friendly recursion-depth diagnostic after 256 nested Aura calls
 - MIR and direct-native runtime failures preserve matching typed Aura call
   frames and child-task ancestry; JSON tooling receives them as always-present
   `call_frames` and `task_ancestry` arrays
-- package manifests, local path dependencies, and git dependencies are now implemented
+- package manifests, local path dependencies, and git dependencies are implemented
 
 Current expression/ergonomics limitations:
 

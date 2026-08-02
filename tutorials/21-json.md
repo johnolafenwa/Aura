@@ -165,10 +165,9 @@ application code.
 Derived class/enum schemas and generated codecs remain deferred beyond Phase 6.
 Aura also has no streaming JSON API or arbitrary-precision number type.
 
-The older `json.is_valid`, `json.stringify_map`, and
-`json.parse_string_map` helpers remain available for existing flat
-`dict[str, str]` boundaries. They are typed flat-data helpers, not aliases
-for the dynamic API.
+`json.is_valid`, `json.stringify_map`, and `json.parse_string_map` provide
+typed operations for flat `dict[str, str]` data. They are distinct from the
+dynamic `json.Value` API.
 
 ## Full Contract
 

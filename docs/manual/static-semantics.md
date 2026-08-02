@@ -501,7 +501,7 @@ closure capture cannot launder shared or mutable capabilities because those
 captures are rejected when the closure is created.
 
 Task-target resolution accepts a concrete function value. Explicit
-`function[Types]` specialization may now produce such a value before the call;
+`function[Types]` specialization may produce such a value before the call;
 the direct associated-method `Type.associated_method[Types]` spelling remains
 limited to the callable-target slot. A bare target whose declared/default
 context already resolves its complete types is also concrete.

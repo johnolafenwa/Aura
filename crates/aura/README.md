@@ -134,18 +134,18 @@ aura deps update util
 - `aura check <file.au>`
   - parse and type check a program
   - add `--format json` for the schema-versioned structured diagnostic document; human diagnostics remain the default
-  - nested package modules can now be checked directly, with the CLI inferring the nearest package root that satisfies their imports
-  - package entrypoints under `src/` now also resolve `Aura.toml`, local path dependencies, git dependencies, workspaces, and `Aura.lock`
+  - nested package modules can be checked directly, with the CLI inferring the nearest package root that satisfies their imports
+  - package entrypoints under `src/` resolve `Aura.toml`, local path dependencies, git dependencies, workspaces, and `Aura.lock`
 - `aura deps update [package]`
   - refresh git dependencies for the current package or workspace and rewrite `Aura.lock`
   - with no package name, all branch/tag/default-main git dependencies are refreshed
   - with a package name such as `util`, only that dependency is refreshed
 - `aura run <file.au>`
   - run a program through the MIR runtime
-  - this now includes the maintained `pass` and `assert` statements plus the `sleep(duration)` and `yield_now()` builtins
-  - the maintained user-facing surface now also includes explicit numeric and Duration floor division, signed computed Duration values, integer `.to_float()`, the expanded `str` utility and parsing surface, numeric helper builtins, `list[T]` with stable sorting and eager callable-powered map/filter, `dict[K, V]`, `set[T]`, `control.retry`, deterministic and OS-secure randomness through `random`, bounded `Queue[T]`, structural `Transfer` checks on task/Queue boundaries, single-consumer non-repeatable task results, scheduler-aware text/binary file I/O plus the maintained socket/networking and shell-free process/supervisor surface through `io`, `fs`, `net`, and `process`, specialized generic trait bounds, and the current operator-trait subset
-  - local file imports and `public` module boundaries now work for file-backed programs
-  - manifest-rooted packages now also resolve sibling path dependencies, git dependencies, and workspace members when the entry file lives under a package `src/`
+  - this includes the maintained `pass` and `assert` statements plus the `sleep(duration)` and `yield_now()` builtins
+  - the maintained user-facing surface includes explicit numeric and Duration floor division, signed computed Duration values, integer `.to_float()`, the expanded `str` utility and parsing surface, numeric helper builtins, `list[T]` with stable sorting and eager callable-powered map/filter, `dict[K, V]`, `set[T]`, `control.retry`, deterministic and OS-secure randomness through `random`, bounded `Queue[T]`, structural `Transfer` checks on task/Queue boundaries, single-consumer non-repeatable task results, scheduler-aware text/binary file I/O plus the maintained socket/networking and shell-free process/supervisor surface through `io`, `fs`, `net`, and `process`, specialized generic trait bounds, and the current operator-trait subset
+  - local file imports and `public` module boundaries work for file-backed programs
+  - manifest-rooted packages resolve sibling path dependencies, git dependencies, and workspace members when the entry file lives under a package `src/`
   - append `-- <program-args>...` to expose arguments through `sys.args()`
   - add `--format json` to select structured output when checking or execution fails
 - `aura new <project-path>`
@@ -178,10 +178,10 @@ aura deps update util
     `aura: waiting for a concurrent build...` before blocking on another
     process that is refreshing the shared native runtime
   - `auto` is the default; it first tries the direct native backend and may fall back to a standalone embedded-MIR launcher when direct emission is unavailable
-  - `direct` forces the new low-level native backend for the full currently implemented Aura language surface
+  - `direct` forces the low-level native backend for the full currently implemented Aura language surface
   - source-checkout builds can refresh the runtime through Cargo; packaged release builds use the bundled runtime and require only a host C compiler
-  - file-backed and stdin-backed programs with local module imports and package dependencies now build correctly through this path
-  - the maintained direct build path now also covers builtin scheduler-aware text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, and the shell-free `process` surface including supervised child processes with restart policies
+  - file-backed and stdin-backed programs with local module imports and package dependencies build correctly through this path
+  - the maintained direct build path covers builtin scheduler-aware text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, and the shell-free `process` surface including supervised child processes with restart policies
 - `aura ast <file.au>`
   - print the parsed syntax tree
 - `aura ast-json <file.au>`
@@ -190,16 +190,16 @@ aura deps update util
   - print the lowered MIR for the checked program
 - `aura analyze <file.au>`
   - print machine-readable compiler analysis as JSON
-  - file-backed and stdin-backed analysis now resolve local imports relative to the supplied path
-  - nested package modules can now be analyzed directly without false import diagnostics
-  - compiler-backed definitions now point across files for imported symbols instead of stopping at the importing file
+  - file-backed and stdin-backed analysis resolve local imports relative to the supplied path
+  - nested package modules can be analyzed directly without false import diagnostics
+  - compiler-backed definitions point across files for imported symbols
 - `aura complete --line <n> --character <n> [--trigger .] <file.au>`
   - print machine-readable completion items as JSON
   - `--line` and `--character` are zero-based
   - member completion expects the cursor to be positioned just after `.`
-  - the CLI now tolerates the common incomplete-editor state where the buffer currently contains one or more dangling member accesses such as `counter.` or `helpers.math.`, including at EOF
-  - local imported modules now participate in compiler-backed completions for both file-backed and stdin-backed buffers, including imported trait methods
-- built binaries now preserve file, line, and caret context for arithmetic runtime failures such as division by zero
+  - the CLI tolerates the common incomplete-editor state where the buffer contains one or more dangling member accesses such as `counter.` or `helpers.math.`, including at EOF
+  - local imported modules participate in compiler-backed completions for both file-backed and stdin-backed buffers, including imported trait methods
+- built binaries preserve file, line, and caret context for arithmetic runtime failures such as division by zero
 - MIR and directly generated native failures preserve the same typed Aura
   call frames and child-task ancestry. Human output renders those records as
   call-chain/task notes; JSON output exposes `call_frames` and
@@ -207,7 +207,7 @@ aura deps update util
 
 ## Stdin Mode
 
-Compiler-facing JSON commands still use stdin for editor integration, and the ordinary `check`, `run`, and `build` commands now honor the supplied stdin path when resolving local module imports.
+Compiler-facing JSON commands use stdin for editor integration, and the ordinary `check`, `run`, and `build` commands honor the supplied stdin path when resolving local module imports.
 
 Examples:
 
@@ -264,11 +264,11 @@ The current `aura build` matrix is:
 
 1. `--backend auto` is the default
 2. `--backend direct` uses the true direct native backend for the full currently implemented Aura language surface
-3. built binaries no longer depend on the original `.au` source files at runtime
+3. built binaries run without the original `.au` source files
 4. both backend paths need a host C compiler; installed archives load the bundled runtime and link manifest without Cargo or the source checkout
 
-The maintained execution architecture is now:
+The maintained execution architecture is:
 
 1. `aura run` executes through the MIR runtime
 2. `aura build --backend direct` requires direct native emission; `--backend auto` may instead package MIR with the native runtime when direct emission is unavailable
-3. both execution paths now cover the maintained Aura language surface, including builtin text/binary file I/O, shell-free subprocess helpers, plus TCP, UDP, HTTP, WebSocket, Unix-socket, and TLS networking
+3. both execution paths cover the maintained Aura language surface, including builtin text/binary file I/O, shell-free subprocess helpers, plus TCP, UDP, HTTP, WebSocket, Unix-socket, and TLS networking

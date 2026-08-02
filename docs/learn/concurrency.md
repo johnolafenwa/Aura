@@ -243,8 +243,7 @@ The runtime registers one composite wait and removes every loser when a source
 wins. A losing Queue remains unchanged. A non-repeatable Task right is
 consumed at entry and abandoned if another source wins.
 
-This is an ordinary builtin call. Aura still has no statement-form
-`select:` syntax.
+Selection uses the ordinary builtin call shown above.
 
 ## Waiting For Several Tasks
 
@@ -344,9 +343,9 @@ workload.
 Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a bounded
 protocol-step service with deep native worker stacks. Each step is bounded and
 nonblocking; the child gets ownership of its protocol state back before
-observing cancellation or returning to reactor readiness waiting. This is why
-ordinary application tasks no longer need to reserve enough coroutine stack
-for the deepest maintained third-party protocol frame.
+observing cancellation or returning to reactor readiness waiting. Ordinary
+application tasks use the guarded 512 KiB default stack; protocol workers
+carry the deepest maintained third-party library frames.
 
 The protocol-step pool starts lazily and lives until the Aura process exits;
 there is no 0.2 shutdown or join call. File reads, resolver work, and listener

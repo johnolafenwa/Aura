@@ -405,8 +405,8 @@ method consumes the unique observation right even when it reports timeout,
 cancellation, or failure. Multi-task waits consume their entire task list,
 and `wait_any` abandons unchosen rights. These rules are required before the
 pinned-worker runtime can safely run sibling task bodies on different host
-threads. That runtime is now implemented: Queue and Task handle identity may
-cross workers, while every other capture or result remains an owned
+threads. Queue and Task handle identity may cross workers, while every other
+capture or result remains an owned
 `Transfer` value rather than a shared capability.
 
 ## Resources And `with`

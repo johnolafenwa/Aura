@@ -344,6 +344,7 @@ def scan_clean_slate_narrative(text: str) -> list[tuple[int, str]]:
             r"(?i)`borrow(?: mut)?`[^\n.]{0,100}"
             r"\b(?:reserved|unsupported|supported|invalid|replace|write)\b"
         ),
+        re.compile(r"(?i)\bold[_ -]+statement[_ -]+shaped\b"),
     )
     findings: list[tuple[int, str]] = []
     for pattern in patterns:
@@ -1138,6 +1139,7 @@ const template = `def check(values: Vec[int64]):
         narratives = (
             "The " + "ret" + "ired spelling remains supported by a fix-it.",
             "The " + "old" + " syntax is no longer " + "accepted.",
+            "The " + "old" + " statement-shaped select remains unsupported.",
             "`bor" + "row` is reserved; write the canonical form.",
         )
         for sample in narratives:

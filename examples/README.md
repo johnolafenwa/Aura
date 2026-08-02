@@ -1075,20 +1075,20 @@ cargo run -p aura -- build --backend direct -o ./target/aura-direct examples/bas
 ./target/aura-direct
 ```
 
-`aura build` now supports:
+`aura build` supports:
 
 - `--backend auto`
   - default
   - uses the direct native backend for the maintained Aura surface
 - `--backend direct`
   - forces the current direct native backend
-  - now covers the full currently implemented Aura language surface
+  - covers the full currently implemented Aura language surface
 
 The built binary does not depend on the original `.au` source file at runtime, but the build step still needs Cargo/Rust and a host C compiler.
 
 ## Run Programs
 
-The maintained public execution path is now `run`, which executes through the MIR runtime:
+The maintained public execution path is `run`, which executes through the MIR runtime:
 
 ```bash
 cargo run -p aura -- run examples/classes/point_distance.au

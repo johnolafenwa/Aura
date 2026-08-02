@@ -153,7 +153,8 @@ with TaskGroup() as group:
     group.start_soon(producer, jobs)
 ```
 
-That is Aura's maintained replacement for fire-and-forget task creation. Background work still belongs to a group, scope exit still waits for it, and unread task failures still surface when the group closes.
+Every started task belongs to its group. Scope exit waits for it, and an unread
+task failure surfaces when the group closes, including for `start_soon(...)`.
 
 See [examples/concurrency/task_group_start.au](../examples/concurrency/task_group_start.au) and [examples/concurrency/task_group_start_soon.au](../examples/concurrency/task_group_start_soon.au).
 
@@ -378,9 +379,9 @@ it is spawned. Its coroutine stack never migrates, the runtime does not steal
 work, and `yield_now()` yields only to runnable work on that worker.
 
 The compiler inserts a cooperative scheduling check on every loop backedge,
-including a normal body tail and `continue`, so a tight loop no longer freezes
-ready timers, Queue operations, or socket work assigned to the same worker
-indefinitely. `break` and `return` leave the loop without taking that check.
+including a normal body tail and `continue`, so a tight loop allows ready
+timers, Queue operations, or socket work assigned to the same worker to
+proceed. `break` and `return` leave the loop without taking that check.
 One long loop body or straight-line computation can still delay same-worker
 siblings, and the check does not inspect cancellation. Each ordinary
 lightweight task requests a guarded 512 KiB coroutine stack; the explicit

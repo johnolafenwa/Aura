@@ -1,6 +1,6 @@
 # I/O And Networking
 
-Aura now has a maintained I/O surface through four builtin modules:
+Aura has a maintained I/O surface through four builtin modules:
 
 - `io`
 - `fs`
