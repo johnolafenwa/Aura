@@ -5967,6 +5967,13 @@ fn help_flags_exit_successfully() {
             "every advertised build form must include required `-o <output>`, stdout was:\n{}",
             stdout
         );
+        assert!(
+            stdout.contains(
+                "aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]"
+            ),
+            "help must advertise every maintained test-runner option, stdout was:\n{}",
+            stdout
+        );
     }
 }
 
@@ -12430,6 +12437,44 @@ fn aura_test_discovers_test_functions_and_keeps_main_files_working() {
 
     assert!(stdout.contains("3 passed; 1 failed"), "{stdout}");
     assert!(!run.status.success(), "a failing test must fail the run");
+}
+
+#[test]
+fn aura_test_maintained_assertions_example_pins_the_runner_contract() {
+    let example = repo_root().join("examples/basics/assertions.au");
+    let run = Command::new(aura_bin())
+        .args(["test", "--format", "json", "-k", "[unicode]"])
+        .arg(&example)
+        .output()
+        .expect("maintained assertions example should run as a test module");
+
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(run.stderr.is_empty());
+    let report: serde_json::Value =
+        serde_json::from_slice(&run.stdout).expect("example JSON report should parse");
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["summary"]["selected"], 1);
+    assert_eq!(report["summary"]["passed"], 1);
+    assert_eq!(report["summary"]["failed"], 0);
+    assert!(report["discovery"][0]["name"]
+        .as_str()
+        .unwrap()
+        .ends_with("::test_registered"));
+    assert_eq!(report["discovery"][0]["stdout"], "registering cases\n");
+    assert!(report["tests"][0]["name"]
+        .as_str()
+        .unwrap()
+        .ends_with("::test_registered[unicode]"));
+    assert_eq!(report["tests"][0]["outcome"], "passed");
+    assert_eq!(
+        report["tests"][0]["stdout"],
+        "setup\nunicode case\nteardown\n"
+    );
 }
 
 #[test]

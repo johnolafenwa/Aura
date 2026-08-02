@@ -31,7 +31,7 @@ aura check app.au
 | `aura deps update [name]` | Refresh all git dependencies or one named dependency. |
 | `aura new path` | Create `Aura.toml` and `src/main.au` without overwriting an existing path. |
 | `aura fmt [--check] [paths...]` | Normalize Aura source whitespace or verify formatting. |
-| `aura test [--timeout-ms N] [paths...]` | Run package-aware `.au` tests, one result per `def test_*()` function or per file when a file declares none; defaults to `tests/` and a 30-second per-test timeout. |
+| `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case; defaults to `tests/` and a 30-second per-case timeout. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
 | `aura version` / `aura --version` | Print the preview channel and 12-hex-digit source commit, such as `aura 0.2.0-preview (0123456789ab)`. |
@@ -174,24 +174,95 @@ Each response is one line containing the same `id` plus either `result` or an `e
 | `run` with `main() -> None` | `0` |
 | `run` with `main() -> int32` | the returned integer requested as the host process status |
 | successful `analyze` containing source diagnostics | `0`; JSON on stdout |
-| `test` with any failed program | `1`; summary on stdout and diagnostics on stderr |
+| completed human `test` run | `0` when every selected case passes; `1` otherwise; case output and summary on stdout, failures on stderr |
+| completed JSON `test` run | `0` when every selected case passes; `1` otherwise; exactly one schema-version-1 document on stdout and no human progress lines |
 
 A broken stdout pipe is intentional clean termination and exits `0`; this lets commands compose with consumers such as `head` without printing a secondary failure.
 
-A test file that declares one or more parameterless `def test_*()` functions
-reports one result per function, labelled `path::function`. Each function runs
-on its own worker under the shared timeout, through the same runtime, scheduler,
-and trap handling an ordinary run uses. A function with parameters or a receiver
-is not a test, and neither is any other declaration in the file.
+## Testing
 
-A file that declares no `def test_*()` function keeps the file-level model: the
-path itself is one test unit, entered at `main` or at its top-level statements.
-Both models coexist, so adding a test function to a file changes only that file.
+With no paths, `aura test` recursively reads `.au` files under `tests/`. Given
+files or directories, it uses those inputs. Files are visited in normalized
+path order. Within a file, module functions are discovered in declaration
+order. A parameterless `test_*` function returning `None` is one case. Its
+canonical name is `path::test_name`. A module `test_*` function with parameters
+is an invalid test declaration. Class, trait, and implementation methods are
+not discovered. If a file declares no module `test_*` function, the file
+remains one case named `path`, entered through `main()` or its top-level
+statements.
 
-Assertions that all pass leave a test successful. A failed assertion prints its
-ordinary `AU4001` source diagnostic against the file, marks that test `FAILED`,
-and contributes to the failed count. Assertions are executed normally;
-`aura test` has no assertion-stripping option.
+`-k substring` performs a literal, case-sensitive substring match over the
+complete canonical case name. Selection happens after parameter registrations
+are expanded, so the substring may select a bracketed case label. `-k` may
+appear once and its value must be non-empty. A valid filter that selects no
+cases succeeds with `0 passed; 0 failed`. Missing, empty, or repeated filter
+values are usage errors and exit with status 2.
+
+### Setup And Teardown
+
+A file may declare ordinary parameterless `setup()` and `teardown()` module
+functions returning `None`. For each selected case, the runner invokes setup,
+then the case only when setup succeeds, then teardown. Teardown runs after an
+attempted setup even when setup traps, and after a case trap or non-zero
+file-level `main()` result. It is not run during discovery. A hook with
+parameters, a non-`None` result, or a collision with a non-function declaration
+is a check-time test failure.
+
+Setup, case, and teardown are isolated entries into one already checked and
+lowered module. The runner does not re-read or re-check the source between
+phases. Aura values and module-runtime state do not pass between phases or
+cases; external effects such as file writes remain observable. The first
+failure is primary. When teardown also fails, human output prints
+`teardown also failed for ...` after the primary failure, while JSON stores the
+teardown failure in the case record's `secondary` object with
+`stage: "teardown"`. If setup succeeds and only teardown fails, the teardown
+failure is primary. The timeout covers the complete lifecycle. A timed-out
+worker cannot be forcibly stopped, so teardown is not promised after timeout.
+
+### Parameterized Registration
+
+A parameterized `test_*` function is parameterless and returns
+`list[(str, def() -> None)]`. The runner invokes it once during discovery and
+expands its list in order. Each tuple contains a non-empty label and a named,
+capture-free, repeatable, parameterless function returning `None`. Labels must
+be unique within that registration. The canonical case name is
+`path::test_name[label]`.
+
+Registration finishes before filtering, and it never executes a returned case.
+The required `def() -> None` element type excludes capturing closures and keeps
+every expanded case independently invocable. A registration trap, timeout,
+invalid returned value, empty label, duplicate label, or invalid case function
+is one discovery failure for that registration; none of its cases run. An
+empty registration contributes no cases. Registration itself never invokes
+setup or teardown.
+
+Registration stdout is captured once. Human mode writes all registration
+stdout before case results. JSON mode records non-empty registration stdout in
+the top-level `discovery` array, whose entries contain `name`, `file`, and
+`stdout` in registration order.
+
+### Test Output Contract
+
+Human mode writes each case's captured stdout, then `ok <canonical-name>` for a
+passing case. A failed case writes `FAILED <canonical-name>` and its ordinary
+source diagnostic, or a runner reason such as a timeout, to stderr. Standard
+output ends with `<passed> passed; <failed> failed`. Test records and the
+summary retain canonical discovery order.
+
+`aura test --format json` writes exactly one JSON document to stdout and no
+human progress lines. The top-level object has integer `schema_version: 1`, a
+`summary` object with integer `selected`, `passed`, and `failed` counts, and an
+ordered `tests` array. Every test record contains `name`, `file`, `outcome`
+(`passed` or `failed`), and a non-negative integer `duration_ms` covering its
+complete lifecycle. Non-empty captured output appears as `stdout`.
+
+A trapped test record contains `diagnostic`, using the existing structured
+diagnostic schema including optional assertion operand records. A runner
+failure contains `reason`; a failed record has exactly one primary failure
+form. A second teardown failure appears as `secondary`, with `stage` plus
+either `diagnostic` or `reason`. Invalid command usage still goes to stderr and
+exits 2. Assertions execute normally in every mode; `aura test` has no
+assertion-stripping option.
 
 ## VS Code And LSP
 

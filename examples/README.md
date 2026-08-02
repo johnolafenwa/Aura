@@ -107,6 +107,10 @@ printed-output order unless they explicitly coordinate that order.
   - demonstrates comparison and membership assertions whose failure diagnostics capture both operands
   - default and custom assertion statements on exact boolean conditions
   - demonstrates the successful path without evaluating a failure
+  - doubles as an `aura test` module with one ordinary case, two registered
+    labeled cases, and per-case setup/teardown output
+  - `aura test --format json -k '[unicode]' examples/basics/assertions.au`
+    demonstrates schema-versioned output and filtering after registration
   - prints:
     - `checking`
     - `all assertions passed`

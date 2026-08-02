@@ -1,6 +1,28 @@
 def validate(value: bool, message: str):
     assert value, message
 
+def setup():
+    print("setup")
+
+def teardown():
+    print("teardown")
+
+def zero_case():
+    print("zero case")
+    assert 0 == 0
+
+def unicode_case():
+    print("unicode case")
+    assert "A🎉".len() == 2
+
+def test_arithmetic():
+    print("ordinary case")
+    assert 2 + 2 == 4
+
+def test_registered() -> list[(str, def() -> None)]:
+    print("registering cases")
+    return [("zero", zero_case), ("unicode", unicode_case)]
+
 def main():
     print("checking")
     actual = 2 + 2

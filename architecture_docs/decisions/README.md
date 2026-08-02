@@ -65,4 +65,3 @@ test locations that must prove completion.
 54. [ADR-0054: Generators and the iterator protocol](0054-generators-and-iterator-protocol.md) — Proposed design
 55. [ADR-0055: Display trait and read-only properties](0055-display-trait-and-properties.md) — Proposed design
 56. [ADR-0056: Docstrings and documentation metadata](0056-docstrings-and-documentation-metadata.md) — Proposed design
-43. [ADR-0043: Unified `int64` index domain](0043-int64-index-domain.md) — Accepted for the Aura 0.3 Python surface

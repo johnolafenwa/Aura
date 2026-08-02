@@ -4542,7 +4542,7 @@ fn usage_text() -> &'static str {
        or: aura lsp\n\
        or: aura new <project-path>\n\
        or: aura fmt [--check] [path ...]\n\
-       or: aura test [--timeout-ms <n>] [path ...]\n\
+       or: aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]\n\
        or: aura deps update [package]\n\
        or: aura help\n\
        or: aura version"
