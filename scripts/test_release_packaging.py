@@ -178,6 +178,28 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("JohnOlafenwa.vscode-aura", self.workflow)
         self.assertIn("0.2.0", self.workflow)
 
+    def test_extension_only_dispatch_builds_from_an_explicit_source_ref(self) -> None:
+        tools_header = self.workflow.split("\n  tools:\n", 1)[1].split(
+            "\n    steps:\n", 1
+        )[0]
+        self.assertIn("inputs.source_ref != ''", tools_header)
+
+        publish_extension_job = self.workflow.split(
+            "\n  publish-extension:\n", 1
+        )[1]
+        self.assertIn("needs.tools.result == 'success'", publish_extension_job)
+        self.assertIn("needs.publish.result == 'skipped'", publish_extension_job)
+        self.assertRegex(
+            publish_extension_job,
+            r"github\.event_name == 'workflow_dispatch'\s*&&\s*"
+            r"inputs\.publish_extension\s*&&\s*"
+            r"needs\.publish\.result == 'skipped'",
+        )
+
+        release_process = RELEASE_PROCESS_DOC.read_text(encoding="utf-8")
+        self.assertIn("-f source_ref=main", release_process)
+        self.assertRegex(release_process, r"builds a fresh VSIX from\s*`main`")
+
     def test_manual_source_and_release_identity_are_separate(self) -> None:
         checkout_ref = (
             "ref: ${{ github.event_name == 'workflow_dispatch' "

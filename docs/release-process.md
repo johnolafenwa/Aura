@@ -64,15 +64,19 @@ without moving or recreating its tag:
 gh auth login
 gh auth status
 gh workflow run release.yml --ref main \
+  -f source_ref=main \
   -f release_tag=v0.2.0-preview \
   -f publish=false \
   -f publish_extension=true
 ```
 
-The workflow resolves the immutable release identity from the tag, confirms
-that the GitHub Release already exists, downloads its VSIX, verifies the
-packaged publisher and plain version, and then publishes only to registries
-whose secrets are configured.
+The workflow resolves the immutable implementation source from `source_ref`,
+confirms that the GitHub Release already exists, builds a fresh VSIX from
+`main`, verifies the packaged publisher and plain version, and then publishes
+only to registries whose secrets are configured. The release tag remains the
+version identity and is neither moved nor recreated. Omit `source_ref` only
+when the VSIX already attached to the GitHub Release is the exact artifact to
+publish.
 
 For a new tag, the normal Release workflow publishes the GitHub Release first
 and then runs the same extension-publishing job.

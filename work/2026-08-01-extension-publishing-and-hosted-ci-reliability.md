@@ -48,9 +48,10 @@ and close the two environment-conditional hosted CI failure classes at
 - The Release workflow validates the same identity and plain `x.y.z` version,
   publishes through `VSCE_PAT` and `OVSX_TOKEN`, and emits a visible successful
   skip for each absent secret.
-- A dispatch with `release_tag` and `publish_extension=true` downloads the VSIX
-  from the existing GitHub Release. It skips CLI/docs rebuilds, does not move
-  the tag, and does not republish the GitHub Release.
+- An extension-only dispatch may reuse the VSIX attached to an existing GitHub
+  Release, or provide `source_ref` to build a fresh VSIX from an immutable
+  source commit. Both paths keep the release tag fixed and do not republish the
+  GitHub Release.
 - `docs/downloads.md` links both registries and the GitHub VSIX fallback.
   `docs/release-process.md` records local verification, CI-only publishing,
   token renewal, the exact dispatch command, and the hosted-green precondition

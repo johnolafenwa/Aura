@@ -126,9 +126,14 @@ Last updated: 2026-08-01
   canceled it without a test failure. The complete cold gate now has a
   120-minute job allowance on the same standard runner class; individual test
   contracts, coverage floors, parity, and reference checks are unchanged.
-- Remaining: prove three consecutive hosted CI runs on Linux and macOS at the
-  current standard capacity from the corrected commit, then land the proven
-  tree on main. Publishing remains a separate user dispatch after this gate.
+- Standard-capacity sign-off is complete at `cd93f221`: exact-SHA runs
+  `30738666230`, `30738666191`, and `30738666169` each passed Ubuntu 24.04 and
+  macOS 15, and main run `30742009895` passed the same tree. The release asset
+  preflight then found that the previously uploaded VSIX predates the publisher
+  migration. The extension-only workflow path is being corrected to build the
+  `JohnOlafenwa.vscode-aura` VSIX from an explicit `source_ref` before the
+  authorized Marketplace/Open VSX dispatch; the tag and GitHub Release remain
+  unchanged.
 - Work note: `work/2026-08-01-extension-publishing-and-hosted-ci-reliability.md`.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
