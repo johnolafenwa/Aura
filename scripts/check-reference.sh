@@ -5,6 +5,8 @@ trap 'echo "reference check failed: $BASH_COMMAND" >&2' ERR
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+python3 scripts/generate_llms.py --check
+
 proposal_stem="auro""ra_language_proposal"
 proposal_md="docs/${proposal_stem}.md"
 proposal_html="docs/${proposal_stem}.html"
