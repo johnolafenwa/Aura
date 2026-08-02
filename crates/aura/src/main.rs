@@ -139,7 +139,7 @@ fn main() {
                     NativeRunOutcome::StructuredDiagnostic(mut error) => {
                         debug_assert_eq!(diagnostic_format, DiagnosticFormat::Json);
                         error.notes.extend(native_progress);
-                        emit_structured_diagnostic(error);
+                        emit_structured_diagnostic(*error);
                         process::exit(1);
                     }
                     NativeRunOutcome::FellBack(reason) => {
@@ -1586,7 +1586,7 @@ enum NativeRunOutcome {
     Diagnostic(Diagnostic),
     /// The native runtime reported an Aura trap over the private structured
     /// channel used by JSON-mode `aura run`.
-    StructuredDiagnostic(StructuredDiagnostic),
+    StructuredDiagnostic(Box<StructuredDiagnostic>),
     /// The requested backend could not produce a binary.
     Failed(String),
     /// `auto` could not use the direct backend and the MIR runtime should run.
@@ -1936,7 +1936,7 @@ fn native_execution_outcome(outcome: NativeExecutionOutcome) -> NativeRunOutcome
     match outcome {
         NativeExecutionOutcome::Exited(code) => NativeRunOutcome::Ran(code),
         NativeExecutionOutcome::Trapped(diagnostic) => {
-            NativeRunOutcome::StructuredDiagnostic(*diagnostic)
+            NativeRunOutcome::StructuredDiagnostic(diagnostic)
         }
     }
 }
