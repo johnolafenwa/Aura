@@ -5249,7 +5249,7 @@ impl<'a> Lowerer<'a> {
     /// Lowers the higher-order Vec surface to the ordinary MIR operations both
     /// execution backends already share. In particular, callbacks remain
     /// `CallTarget::Value` calls instead of acquiring a second host callback
-    /// ABI. `sort_by` materializes every key before entering the mutation
+    /// ABI. `sort(key=...)` materializes every key before entering the mutation
     /// phase, so a trapping key function cannot leave the source half-sorted.
     fn lower_vec_algorithm_call(
         &mut self,
@@ -5271,10 +5271,7 @@ impl<'a> Lowerer<'a> {
         };
         if !matches!(
             member,
-            BuiltinMember::VecSort
-                | BuiltinMember::VecSortBy
-                | BuiltinMember::VecMap
-                | BuiltinMember::VecFilter
+            BuiltinMember::VecSort | BuiltinMember::VecMap | BuiltinMember::VecFilter
         ) {
             return false;
         }
@@ -5353,60 +5350,6 @@ impl<'a> Lowerer<'a> {
                         result,
                     );
                 }
-            }
-            BuiltinMember::VecSortBy => {
-                let receiver_place = self
-                    .render_place_expr_option(object)
-                    .expect("checked Vec.sort_by receiver should be a mutable place");
-                let ordered = member
-                    .bind_args(args, expr.span)
-                    .expect("checked Vec.sort_by arguments should bind during MIR lowering");
-                let callback_arg =
-                    ordered[0].expect("checked Vec.sort_by call should provide a key function");
-                let callback_ty = self
-                    .infer_expr_type(&callback_arg.value)
-                    .expect("checked Vec.sort_by key should have a function type");
-                let callback =
-                    self.lower_expr_at_sequence_point(&callback_arg.value, Some(&callback_ty));
-                let (Type::Function {
-                    return_type: key_ty,
-                    ..
-                }
-                | Type::Closure {
-                    return_type: key_ty,
-                    ..
-                }) = callback_ty
-                else {
-                    unreachable!("checked Vec.sort_by key should have a function type");
-                };
-                let key_ty = *key_ty;
-                let keys =
-                    self.new_typed_temp(Type::Named("list".to_string(), vec![key_ty.clone()]));
-                self.emit(Instruction::Assign {
-                    target: keys.clone(),
-                    value: Rvalue::VecLiteral {
-                        elements: Vec::new(),
-                        element_type: key_ty.clone(),
-                    },
-                });
-                let source = Operand::Place(receiver_place.clone());
-                self.lower_vec_key_collection_loop(
-                    source.clone(),
-                    &element_ty,
-                    callback,
-                    &keys,
-                    &key_ty,
-                    expr.span,
-                );
-                self.lower_stable_vec_sort(
-                    source,
-                    &receiver_place,
-                    &key_ty,
-                    Some((&keys, &key_ty)),
-                    Operand::Bool(false),
-                    expr.span,
-                    result,
-                );
             }
             BuiltinMember::VecMap | BuiltinMember::VecFilter => {
                 let source = self.lower_shared_vec_source(object);
@@ -10513,17 +10456,14 @@ impl<'a> Lowerer<'a> {
             )),
             ("dict", "items") => Some(Type::Named(
                 "list".to_string(),
-                vec![Type::Named(
-                    "MapEntry".to_string(),
-                    vec![
-                        args.first()
-                            .cloned()
-                            .unwrap_or_else(|| Type::named("Unknown")),
-                        args.get(1)
-                            .cloned()
-                            .unwrap_or_else(|| Type::named("Unknown")),
-                    ],
-                )],
+                vec![Type::Tuple(vec![
+                    args.first()
+                        .cloned()
+                        .unwrap_or_else(|| Type::named("Unknown")),
+                    args.get(1)
+                        .cloned()
+                        .unwrap_or_else(|| Type::named("Unknown")),
+                ])],
             )),
             ("dict", "clear") | ("dict", "update") | ("dict", "reserve") => Some(Type::Unit),
             ("dict", "get") | ("dict", "set") | ("dict", "remove") => Some(Type::Named(

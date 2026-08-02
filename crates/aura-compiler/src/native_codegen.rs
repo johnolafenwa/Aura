@@ -503,7 +503,6 @@ struct NativeCodegen<'a> {
     map_keys: FuncId,
     map_values: FuncId,
     map_items: FuncId,
-    map_entries: FuncId,
     map_clear_in_place: FuncId,
     map_extend_in_place: FuncId,
     map_index: FuncId,
@@ -1006,7 +1005,6 @@ impl<'a> NativeCodegen<'a> {
             map_keys => ("aura_direct_map_keys", [types::I64], Some(types::I64)),
             map_values => ("aura_direct_map_values", [types::I64], Some(types::I64)),
             map_items => ("aura_direct_map_items", [types::I64], Some(types::I64)),
-            map_entries => ("aura_direct_map_entries", [types::I64], Some(types::I64)),
             map_clear_in_place => ("aura_direct_map_clear_in_place", [types::I64], Some(types::I64)),
             map_extend_in_place => ("aura_direct_map_extend_in_place", [types::I64, types::I64], Some(types::I64)),
             map_index => ("aura_direct_map_index", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1443,7 +1441,6 @@ impl<'a> NativeCodegen<'a> {
             map_keys,
             map_values,
             map_items,
-            map_entries,
             map_clear_in_place,
             map_extend_in_place,
             map_index,
@@ -2281,9 +2278,6 @@ impl<'a> NativeCodegen<'a> {
         let map_items = self
             .object
             .declare_func_in_func(self.map_items, builder.func);
-        let map_entries = self
-            .object
-            .declare_func_in_func(self.map_entries, builder.func);
         let map_clear_in_place = self
             .object
             .declare_func_in_func(self.map_clear_in_place, builder.func);
@@ -3093,7 +3087,6 @@ impl<'a> NativeCodegen<'a> {
             map_keys,
             map_values,
             map_items,
-            map_entries,
             map_clear_in_place,
             map_extend_in_place,
             map_index,
@@ -3960,8 +3953,6 @@ struct FunctionCompiler<'a> {
     map_keys: cranelift_codegen::ir::FuncRef,
     map_values: cranelift_codegen::ir::FuncRef,
     map_items: cranelift_codegen::ir::FuncRef,
-    #[allow(dead_code)]
-    map_entries: cranelift_codegen::ir::FuncRef,
     map_clear_in_place: cranelift_codegen::ir::FuncRef,
     map_extend_in_place: cranelift_codegen::ir::FuncRef,
     map_index: cranelift_codegen::ir::FuncRef,
@@ -16167,13 +16158,6 @@ fn direct_field_type(
     let DirectType::Opaque(Type::Named(class_name, args)) = ty else {
         return None;
     };
-    if class_name == "MapEntry" {
-        return match (field, args.as_slice()) {
-            ("key", [key, _value]) => direct_type(key, classes),
-            ("value", [_key, value]) => direct_type(value, classes),
-            _ => None,
-        };
-    }
     let class = classes.get(class_name)?;
     if args.len() != class.type_params.len() {
         return None;

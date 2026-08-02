@@ -2804,38 +2804,6 @@ impl<'a> AnalysisBuilder<'a> {
             });
         }
 
-        if base_name == "MapEntry" {
-            return match field {
-                "key" => Some(ResolvedMember {
-                    hover: format_value_hover(
-                        "field",
-                        "key",
-                        &receiver_type
-                            .type_arguments()
-                            .first()
-                            .cloned()
-                            .unwrap_or(Type::named("Unknown")),
-                    ),
-                    definition: None,
-                    ty: receiver_type.type_arguments().first().cloned(),
-                }),
-                "value" => Some(ResolvedMember {
-                    hover: format_value_hover(
-                        "field",
-                        "value",
-                        &receiver_type
-                            .type_arguments()
-                            .get(1)
-                            .cloned()
-                            .unwrap_or(Type::named("Unknown")),
-                    ),
-                    definition: None,
-                    ty: receiver_type.type_arguments().get(1).cloned(),
-                }),
-                _ => None,
-            };
-        }
-
         if let Some(enum_info) = self.resolve_named_enum_info(base_name) {
             if let Some(variant_info) = enum_info.variants.get(field) {
                 let enum_name = self.canonical_enum_identity(base_name, enum_info);
@@ -2929,7 +2897,6 @@ impl<'a> AnalysisBuilder<'a> {
                     | BuiltinMember::VecClear
                     | BuiltinMember::VecReverse
                     | BuiltinMember::VecSort
-                    | BuiltinMember::VecSortBy
                     | BuiltinMember::VecInsert
                     | BuiltinMember::VecSwap
                     | BuiltinMember::VecExtend
@@ -2952,7 +2919,7 @@ impl<'a> AnalysisBuilder<'a> {
                         .get(1)
                         .cloned()
                         .map(|value| Type::Named("list".to_string(), vec![value])),
-                    BuiltinMember::MapItems | BuiltinMember::MapEntries => Some(Type::Named(
+                    BuiltinMember::MapItems => Some(Type::Named(
                         "list".to_string(),
                         vec![Type::Tuple(vec![
                             receiver_type
@@ -5621,20 +5588,6 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 },
             ]);
         }
-        "MapEntry" => {
-            completions.extend([
-                AnalysisCompletion {
-                    name: "key".to_string(),
-                    kind: "field".to_string(),
-                    detail: "key: K".to_string(),
-                },
-                AnalysisCompletion {
-                    name: "value".to_string(),
-                    kind: "field".to_string(),
-                    detail: "value: V".to_string(),
-                },
-            ]);
-        }
         _ => {}
     }
 
@@ -5783,7 +5736,6 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::VecClear,
         BuiltinMember::VecReverse,
         BuiltinMember::VecSort,
-        BuiltinMember::VecSortBy,
         BuiltinMember::VecMap,
         BuiltinMember::VecFilter,
         BuiltinMember::MapLen,
@@ -5796,7 +5748,6 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::MapKeys,
         BuiltinMember::MapValues,
         BuiltinMember::MapItems,
-        BuiltinMember::MapEntries,
         BuiltinMember::MapClear,
         BuiltinMember::MapExtend,
         BuiltinMember::MapReserve,

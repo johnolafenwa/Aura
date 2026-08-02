@@ -692,6 +692,80 @@ def readable_text(path: Path) -> str | None:
 
 
 class AuraIdentityTests(unittest.TestCase):
+    def test_compiler_contains_no_removed_collection_contracts(self) -> None:
+        """Dead source contracts must disappear, not merely become unreachable."""
+
+        removed_contracts = (
+            "Vec" + "SortBy",
+            "Map" + "Entries",
+            "aura_direct_map_" + "entries",
+        )
+        stale: list[str] = []
+        source_root = ROOT / "crates/aura-compiler/src"
+        for path in source_root.glob("*.rs"):
+            text = path.read_text(encoding="utf-8")
+            for contract in removed_contracts:
+                pattern = re.compile(rf"\b{re.escape(contract)}\b")
+                for match in pattern.finditer(text):
+                    stale.append(
+                        f"{path.relative_to(ROOT)}:"
+                        f"{_line_number(text, match.start())}: {contract}"
+                    )
+            if not path.name.endswith("_tests.rs"):
+                former_helper = "Map" + "Entry"
+                pattern = re.compile(rf"\b{re.escape(former_helper)}\b")
+                for match in pattern.finditer(text):
+                    stale.append(
+                        f"{path.relative_to(ROOT)}:"
+                        f"{_line_number(text, match.start())}: {former_helper}"
+                    )
+            former_sort = "sort" + "_by"
+            for match in re.finditer(
+                rf"(?:[\"'`]|\bVec\.){re.escape(former_sort)}\b", text
+            ):
+                stale.append(
+                    f"{path.relative_to(ROOT)}:"
+                    f"{_line_number(text, match.start())}: {former_sort}"
+                )
+        self.assertEqual(
+            stale,
+            [],
+            "removed collection contracts remain in compiler source:\n"
+            + "\n".join(stale),
+        )
+
+    def test_maintained_source_docs_do_not_teach_private_collection_operations(self) -> None:
+        roots = (
+            ROOT / "README.md",
+            ROOT / "docs/manual",
+            ROOT / "docs/learn",
+            ROOT / "tutorials",
+            ROOT / "examples",
+            ROOT / "tools/aura-language-server/README.md",
+            ROOT / "tools/vscode-aura/README.md",
+        )
+        private_or_removed = (
+            "sort" + "_by",
+            "contains" + "_key",
+            "from" + "_vec",
+        )
+        stale: list[str] = []
+        files: set[Path] = set()
+        for root in roots:
+            if root.is_file():
+                files.add(root)
+            elif root.exists():
+                files.update(root.rglob("*.md"))
+        for path in sorted(files):
+            text = path.read_text(encoding="utf-8")
+            for spelling in private_or_removed:
+                for match in re.finditer(rf"`{re.escape(spelling)}(?:\(\))?`", text):
+                    stale.append(
+                        f"{path.relative_to(ROOT)}:"
+                        f"{_line_number(text, match.start())}: {spelling}"
+                    )
+        self.assertEqual(stale, [], "private collection operations in docs:\n" + "\n".join(stale))
+
     def test_maintained_tree_uses_one_product_identity(self) -> None:
         stale: list[str] = []
         for path in tracked_paths():

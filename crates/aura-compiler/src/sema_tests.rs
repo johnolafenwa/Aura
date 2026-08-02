@@ -14127,6 +14127,15 @@ fn reserved_type_names_are_rejected() {
         let error = crate::check_source(source).expect_err("reserved built-in names should fail");
         assert!(error.message.contains("reserved built-in type name"));
     }
+
+    crate::check_source(
+        "class MapEntry:\n    key: int64\n\ndef main():\n    value = MapEntry(key=1)\n    print(value.key)\n",
+    )
+    .expect("a former helper name must be available as an ordinary user type");
+
+    let unknown = crate::check_source("def inspect(value: MapEntry[int64, str]):\n    pass\n")
+        .expect_err("a former helper type must receive the ordinary unknown-type diagnostic");
+    assert!(unknown.message.contains("unknown type `MapEntry`"));
 }
 
 #[test]
@@ -16619,11 +16628,6 @@ fn checker_module_member_type_edges_cover_private_and_uncalled_members() {
             "variant `Some` of enum `Option` requires a payload",
         ),
         (
-            Type::named("MapEntry"),
-            "other",
-            "type `MapEntry` has no field `other`",
-        ),
-        (
             Type::named("Widget"),
             "secret",
             "field `secret` is private on `Widget`",
@@ -18566,31 +18570,6 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
         .message
         .contains("requires a mutable receiver"));
 
-    assert_eq!(
-        checker
-            .resolve_member_type(
-                &Type::Named(
-                    "MapEntry".to_string(),
-                    vec![Type::named("str"), Type::named("int32")]
-                ),
-                "key",
-                span,
-            )
-            .expect("MapEntry.key should resolve"),
-        Type::named("str")
-    );
-    let map_entry_error = checker
-        .resolve_member_type(
-            &Type::Named(
-                "MapEntry".to_string(),
-                vec![Type::named("str"), Type::named("int32")],
-            ),
-            "missing",
-            span,
-        )
-        .expect_err("unknown MapEntry fields should fail");
-    assert!(map_entry_error.message.contains("has no field `missing`"));
-
     checker
         .require_with_resource(&Type::named("TaskGroup"), span)
         .expect("TaskGroup should be allowed in with");
@@ -19500,7 +19479,7 @@ fn lower_type_and_imported_context_helpers_cover_builtin_and_context_paths() {
         ),
         (
             nested_type_ref("MapEntry", vec![type_ref("str")]),
-            "`MapEntry` expects exactly two type arguments",
+            "unknown type `MapEntry`",
         ),
         (
             nested_type_ref("TaskGroup", vec![type_ref("int32")]),
@@ -21658,7 +21637,7 @@ def launch(stream: own net.TcpStream):
 }
 
 #[test]
-fn map_entry_clone_observers_preserve_single_task_result_rights() {
+fn dict_items_clone_observers_preserve_single_task_result_rights() {
     let rejected = crate::check_source(
         "def duplicate(values: dict[str, Task[str]]):\n    print(values.items())\n",
     )
@@ -21874,7 +21853,7 @@ def observe(tasks: list[Task[int32]]):
 }
 
 #[test]
-fn transfer_diagnostics_preserve_map_entry_result_and_generic_witnesses() {
+fn transfer_diagnostics_preserve_dict_result_and_generic_witnesses() {
     let map_key = crate::check_source(
         r#"
 import random
@@ -21900,48 +21879,6 @@ def launch(values: own dict[random.Rng, str]):
         .help
         .iter()
         .any(|help| help.contains("keep capabilities and host resources on their owning worker")));
-
-    let entry_value = crate::check_source(
-        r#"
-import fs
-
-def consume(entry: own MapEntry[str, fs.File]):
-    pass
-
-def launch(entry: own MapEntry[str, fs.File]):
-    with group = TaskGroup():
-        group.start(consume, entry)
-"#,
-    )
-    .expect_err("a non-Transfer MapEntry value must name its stored field");
-    assert_eq!(entry_value.code, "AU3008");
-    assert!(
-        entry_value
-            .message
-            .contains("field `value` of `MapEntry[str, fs.File]` -> `fs.File`"),
-        "{entry_value:?}"
-    );
-
-    let entry_key = crate::check_source(
-        r#"
-import random
-
-def consume(entry: own MapEntry[random.Rng, str]):
-    pass
-
-def launch(entry: own MapEntry[random.Rng, str]):
-    with group = TaskGroup():
-        group.start(consume, entry)
-"#,
-    )
-    .expect_err("a non-Transfer MapEntry key must name its stored field");
-    assert_eq!(entry_key.code, "AU3008");
-    assert!(
-        entry_key
-            .message
-            .contains("field `key` of `MapEntry[random.Rng, str]` -> `random.Rng`"),
-        "{entry_key:?}"
-    );
 
     let result_error = crate::check_source(
         r#"

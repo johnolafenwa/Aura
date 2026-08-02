@@ -3549,29 +3549,6 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     assert!(string_member_names.contains(&"trim".to_string()));
     assert!(string_member_names.contains(&"strip_prefix".to_string()));
 
-    let map_entry_member_names = builder
-        .member_completions(&Type::Named(
-            "MapEntry".to_string(),
-            vec![Type::named("str"), Type::named("int32")],
-        ))
-        .into_iter()
-        .map(|completion| completion.name)
-        .collect::<Vec<_>>();
-    assert!(map_entry_member_names.contains(&"key".to_string()));
-    assert!(map_entry_member_names.contains(&"value".to_string()));
-    assert!(
-        builder
-            .resolve_member_type(
-                &Type::Named(
-                    "MapEntry".to_string(),
-                    vec![Type::named("str"), Type::named("int32")],
-                ),
-                "missing",
-            )
-            .is_none(),
-        "unknown MapEntry fields should not resolve"
-    );
-
     let task_group_member_names = builder
         .member_completions(&Type::named("TaskGroup"))
         .into_iter()
@@ -5916,15 +5893,6 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
             .unwrap_or_else(|| panic!("list.{name} completion should exist"));
         assert_eq!(completion.detail, detail);
     }
-
-    let map_entry_completions = builtin_member_completions(&Type::Named(
-        "MapEntry".to_string(),
-        vec![Type::named("str"), Type::named("int32")],
-    ));
-    assert!(map_entry_completions.iter().any(|item| item.name == "key"));
-    assert!(map_entry_completions
-        .iter()
-        .any(|item| item.name == "value"));
 
     let queue_completions = builtin_member_completions(&Type::Named(
         "Queue".to_string(),

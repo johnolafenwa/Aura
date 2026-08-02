@@ -5031,10 +5031,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ),
         Some(Type::Named(
             "list".to_string(),
-            vec![Type::Named(
-                "MapEntry".to_string(),
-                vec![Type::named("str"), Type::named("int32")]
-            )]
+            vec![Type::Tuple(vec![Type::named("str"), Type::named("int32")])]
         ))
     );
     assert_eq!(
@@ -5125,10 +5122,10 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         lowerer.builtin_runtime_member_return_type(&Type::named("dict"), "items"),
         Some(Type::Named(
             "list".to_string(),
-            vec![Type::Named(
-                "MapEntry".to_string(),
-                vec![Type::named("Unknown"), Type::named("Unknown")]
-            )]
+            vec![Type::Tuple(vec![
+                Type::named("Unknown"),
+                Type::named("Unknown")
+            ])]
         ))
     );
     assert_eq!(
@@ -6814,7 +6811,7 @@ def main():
     print(filtered)
 "#,
     )
-    .expect("Vec algorithms should lower");
+    .expect("list algorithms should lower");
     let main = module
         .functions
         .iter()
@@ -6843,7 +6840,7 @@ def main():
         .count();
     assert_eq!(
         callback_calls, 3,
-        "sort_by, map, and filter should each have one ordinary dynamic call site"
+        "sort, map, and filter should each have one ordinary dynamic call site"
     );
     assert!(
         instructions.iter().all(|instruction| {
@@ -6855,10 +6852,10 @@ def main():
                         ..
                     },
                     ..
-                } if matches!(field.as_str(), "sort_by" | "map" | "filter")
+                } if matches!(field.as_str(), "sort" | "map" | "filter")
             )
         }),
-        "Vec algorithms should not introduce a second host-only callback ABI"
+        "list algorithms should not introduce a second host-only callback ABI"
     );
 
     let callback_blocks = main
@@ -6911,12 +6908,12 @@ def main():
                 })
                 .then_some(index)
         })
-        .expect("sort_by should mutate its source only in the sorting phase");
+        .expect("sort should mutate its source only in the sorting phase");
     assert!(
         callback_blocks
             .first()
             .is_some_and(|callback| *callback < first_source_swap),
-        "sort_by key extraction must precede the first source mutation"
+        "sort key extraction must precede the first source mutation"
     );
 }
 
@@ -7609,7 +7606,7 @@ def main() -> int32:
     return 0
 "#,
     )
-    .expect("capturing Vec callbacks and a capturing task target should lower");
+    .expect("capturing list callbacks and a capturing task target should lower");
     let main = module
         .functions
         .iter()
@@ -7650,7 +7647,7 @@ def main() -> int32:
             ))
             .count()
             >= 2,
-        "Vec.sort_by and Vec.map callbacks must use ordinary indirect callable dispatch"
+        "list.sort and list.map callbacks must use ordinary indirect callable dispatch"
     );
 
     let (task_function, task_args, returns_handle) = instructions

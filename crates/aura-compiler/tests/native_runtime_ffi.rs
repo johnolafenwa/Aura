@@ -768,7 +768,6 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         release(aura_direct_map_keys(map));
         release(aura_direct_map_values(map));
         release(aura_direct_map_items(map));
-        release(aura_direct_map_entries(map));
         release(aura_direct_map_remove_in_place(
             map,
             string_value("missing"),

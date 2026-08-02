@@ -6022,11 +6022,6 @@ pub extern "C-unwind" fn aura_direct_map_items(map: *mut OpaqueValue) -> *mut Op
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_map_entries(map: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| aura_direct_map_items(map))
-}
-
-#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_map_index(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,

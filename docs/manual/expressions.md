@@ -354,7 +354,7 @@ type the value must have:
 | --- | --- | --- | --- |
 | `list[T]` | element membership | `contains` | `T` |
 | `set[T]` | element membership | `contains` | `T` |
-| `dict[K, V]` | key membership | `contains_key` | `K` |
+| `dict[K, V]` | key membership | dictionary key lookup | `K` |
 | `str` | substring containment | `contains` | `str` |
 
 Any other container type is rejected with `AU2003`; a value whose type is not

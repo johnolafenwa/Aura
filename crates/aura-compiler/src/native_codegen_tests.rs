@@ -1637,16 +1637,6 @@ fn direct_backend_emits_contextual_none_and_unit_equality() {
 }
 
 #[test]
-fn direct_field_type_rejects_malformed_builtin_map_entry_shapes_without_panicking() {
-    let malformed = DirectType::Opaque(Type::Named(
-        "MapEntry".to_string(),
-        vec![Type::named("str")],
-    ));
-    assert!(direct_field_type(&malformed, "key", &HashMap::new()).is_none());
-    assert!(direct_field_type(&malformed, "value", &HashMap::new()).is_none());
-}
-
-#[test]
 fn direct_backend_emits_retain_and_release_hooks_for_opaque_call_and_local_flow() {
     let source = r#"
 def echo(value: str):
@@ -10947,28 +10937,6 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
         ),
     ]);
 
-    assert_eq!(
-        direct_field_type(
-            &DirectType::Opaque(Type::Named(
-                "MapEntry".to_string(),
-                vec![Type::named("str"), Type::named("int32")],
-            )),
-            "key",
-            &classes,
-        ),
-        Some(DirectType::Opaque(Type::named("str")))
-    );
-    assert_eq!(
-        direct_field_type(
-            &DirectType::Opaque(Type::Named(
-                "MapEntry".to_string(),
-                vec![Type::named("str"), Type::named("int32")],
-            )),
-            "value",
-            &classes,
-        ),
-        Some(DirectType::Scalar(ScalarKind::Int32))
-    );
     assert_eq!(
         direct_field_type(
             &DirectType::Opaque(Type::Named("Entry".to_string(), vec![])),

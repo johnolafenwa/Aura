@@ -353,7 +353,6 @@ fn call_metadata_helpers_cover_argument_count_and_doc_surface() {
         BuiltinMember::StringToBytes.receiver_passing(),
         ReceiverKind::Borrow
     );
-    assert!(BuiltinMember::MapEntries.docs().contains("MapEntry"));
     assert_eq!(
         BuiltinMember::QueueTryPut.detail(),
         "try_put(value: own T) -> Result[None, SendError[T]] [T must be Transfer]"
@@ -900,14 +899,11 @@ fn builtin_member_call_shapes_declare_receiver_argument_and_variadic_passing() {
         BuiltinMember::VecLen.receiver_passing(),
         ReceiverKind::Borrow
     );
-    for member in [BuiltinMember::VecSort, BuiltinMember::VecSortBy] {
-        assert_eq!(
-            member.receiver_passing(),
-            ReceiverKind::BorrowMut,
-            "{} must mutate its list receiver",
-            member.name()
-        );
-    }
+    assert_eq!(
+        BuiltinMember::VecSort.receiver_passing(),
+        ReceiverKind::BorrowMut,
+        "sort must mutate its list receiver"
+    );
     for member in [BuiltinMember::VecMap, BuiltinMember::VecFilter] {
         assert_eq!(
             member.receiver_passing(),
@@ -923,10 +919,10 @@ fn builtin_member_call_shapes_declare_receiver_argument_and_variadic_passing() {
         );
     }
     assert_eq!(
-        BuiltinMember::VecSortBy.argument_passing(0),
+        BuiltinMember::VecSort.argument_passing(0),
         Some(ReceiverKind::Borrow)
     );
-    assert_eq!(BuiltinMember::VecSortBy.argument_name(0), Some("key"));
+    assert_eq!(BuiltinMember::VecSort.argument_name(0), Some("key"));
     assert_eq!(BuiltinMember::VecMap.argument_name(0), Some("f"));
     assert_eq!(BuiltinMember::VecFilter.argument_name(0), Some("f"));
     assert_eq!(
@@ -1089,10 +1085,6 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         "sort(key: def(T) -> K = ..., reverse: bool = false) -> None"
     );
     assert_eq!(
-        BuiltinMember::VecSortBy.detail(),
-        "sort_by(key: def(T) -> K) -> None"
-    );
-    assert_eq!(
         BuiltinMember::VecMap.detail(),
         "map(f: def(T) -> U) -> list[U]"
     );
@@ -1163,7 +1155,6 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         BuiltinMember::MapKeys,
         BuiltinMember::MapValues,
         BuiltinMember::MapItems,
-        BuiltinMember::MapEntries,
         BuiltinMember::MapClear,
         BuiltinMember::SetLen,
         BuiltinMember::SetIsEmpty,

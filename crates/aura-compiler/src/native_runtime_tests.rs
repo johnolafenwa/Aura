@@ -7999,10 +7999,6 @@ fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
         }
         other => panic!("expected vec of map entries, found {:?}", other),
     }
-    assert!(matches!(
-        unsafe { take_value(super::aura_direct_map_entries(map)) },
-        Value::Vec(values) if values.elements.len() == 1
-    ));
     assert_eq!(
         expect_int(super::aura_direct_map_index(
             map,
@@ -11969,8 +11965,8 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "map-values-type" => {
                 super::aura_direct_map_values(int_value(1));
             }
-            "map-entries-type" => {
-                super::aura_direct_map_entries(int_value(1));
+            "map-items-type" => {
+                super::aura_direct_map_items(int_value(1));
             }
             "map-extend-target-type" => {
                 super::aura_direct_map_extend_in_place(
@@ -13077,7 +13073,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("map-clear-type", "expected `dict`, found `integer`"),
         ("map-keys-type", "expected `dict`, found `integer`"),
         ("map-values-type", "expected `dict`, found `integer`"),
-        ("map-entries-type", "expected `dict`, found `integer`"),
+        ("map-items-type", "expected `dict`, found `integer`"),
         ("map-extend-target-type", "expected `dict`, found `integer`"),
         ("set-len-type", "expected `set`, found `integer`"),
         ("set-is-empty-type", "expected `set`, found `integer`"),
@@ -18006,7 +18002,7 @@ fn native_runtime_collection_helpers_cover_remaining_success_paths() {
         expect_vec_ints(super::aura_direct_map_values(map)),
         vec![1, 2]
     );
-    let entries = unsafe { take_value(super::aura_direct_map_entries(map)) };
+    let entries = unsafe { take_value(super::aura_direct_map_items(map)) };
     match entries {
         Value::Vec(entries) => {
             assert_eq!(entries.elements.len(), 2);

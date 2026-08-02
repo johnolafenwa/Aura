@@ -24,7 +24,8 @@ def main():
     print(table.get("missing"))
     print(table.keys())
     print(table.values())
-    print(table.items())
+    items: list[(str, int64)] = table.items()
+    print(items)
     mut incoming = {"two": 20, "three": 3}
     table.update(incoming)
     table.reserve(4)

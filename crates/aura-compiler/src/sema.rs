@@ -3434,16 +3434,6 @@ fn lower_type_with_self(
         return Ok(Type::Named(type_name.to_string(), args));
     }
 
-    if type_name == "MapEntry" {
-        if args.len() != 2 {
-            return Err(Diagnostic::at(
-                type_ref.span,
-                "`MapEntry` expects exactly two type arguments",
-            ));
-        }
-        return Ok(Type::Named(type_name.to_string(), args));
-    }
-
     if type_name == "TaskGroup" || type_name == "Duration" {
         if !args.is_empty() {
             return Err(Diagnostic::at(
@@ -5075,7 +5065,6 @@ fn is_builtin_type(name: &str) -> bool {
             | "list"
             | "set"
             | "dict"
-            | "MapEntry"
             | "Range"
             | "Queue"
             | "Task"
@@ -6043,22 +6032,6 @@ impl<'a> FunctionChecker<'a> {
                 }
                 result
             }
-            Type::Named(name, args) if name == "MapEntry" && args.len() == 2 => {
-                let mut result = Self::prefix_transfer_summary(
-                    self.transfer_shape(&args[0], formals, summaries),
-                    &format!("field `key` of `{ty}`"),
-                );
-                if result.failure.is_none() {
-                    Self::merge_transfer_summary(
-                        &mut result,
-                        Self::prefix_transfer_summary(
-                            self.transfer_shape(&args[1], formals, summaries),
-                            &format!("field `value` of `{ty}`"),
-                        ),
-                    );
-                }
-                result
-            }
             Type::Named(name, args)
                 if matches!(
                     name.as_str(),
@@ -6545,7 +6518,6 @@ impl<'a> FunctionChecker<'a> {
                     "list"
                         | "set"
                         | "dict"
-                        | "MapEntry"
                         | "Option"
                         | "Result"
                         | "SendError"
@@ -16658,34 +16630,6 @@ impl<'a> FunctionChecker<'a> {
                                     }
                                     Ok(Type::Unit)
                                 }
-                                BuiltinMember::VecSortBy => {
-                                    self.require_mutable_receiver(object, field, span, locals)?;
-                                    let key_arg = self.bound_argument(
-                                        &ordered_args,
-                                        0,
-                                        span,
-                                        "`sort_by` requires a `key` argument",
-                                    )?;
-                                    let key_ty = self.vec_callback_return_type(
-                                        "sort_by",
-                                        key_arg,
-                                        &receiver_args[0],
-                                        locals,
-                                    )?;
-                                    self.require_vec_orderable(
-                                        "sort_by",
-                                        "key type",
-                                        &key_ty,
-                                        key_arg.span,
-                                    )?;
-                                    self.apply_builtin_argument_passing(
-                                        builtin_member,
-                                        0,
-                                        key_arg,
-                                        locals,
-                                    )?;
-                                    Ok(Type::Unit)
-                                }
                                 BuiltinMember::VecMap => {
                                     let callback = self.bound_argument(
                                         &ordered_args,
@@ -17113,7 +17057,7 @@ impl<'a> FunctionChecker<'a> {
                                         vec![receiver_args[1].clone()],
                                     ))
                                 }
-                                BuiltinMember::MapItems | BuiltinMember::MapEntries => {
+                                BuiltinMember::MapItems => {
                                     let entry_type = Type::Tuple(vec![
                                         receiver_args[0].clone(),
                                         receiver_args[1].clone(),
@@ -21384,17 +21328,6 @@ impl<'a> FunctionChecker<'a> {
                     field, object_ty
                 ),
             ));
-        }
-
-        if name == "MapEntry" && args.len() == 2 {
-            return match field {
-                "key" => Ok(args[0].clone()),
-                "value" => Ok(args[1].clone()),
-                _ => Err(Diagnostic::at(
-                    span,
-                    format!("type `{}` has no field `{}`", name, field),
-                )),
-            };
         }
 
         let Some(class_info) = self.resolve_class_info(name) else {
