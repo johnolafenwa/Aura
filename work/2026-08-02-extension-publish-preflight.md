@@ -75,6 +75,22 @@ green. `vsce package` produced a 12-file Public Preview VSIX with ID
 `JohnOlafenwa.vscode-aura-lang`, version `0.2.0`, and SHA-256
 `c69a7c8f1821635c751fb8d7f8f01a653c76bf48f954002f0a5e070237d4e47f`.
 
+## Publication Result
+
+Release workflow run `30746408847` resolved immutable commit
+`d13acd7b65e13f791b1bd8f22599120dcad5a6ca`, rebuilt and validated the VSIX,
+left the existing GitHub Release untouched, and published version `0.2.0` to
+both registries:
+
+- Visual Studio Marketplace:
+  `https://marketplace.visualstudio.com/items?itemName=JohnOlafenwa.vscode-aura-lang`
+- Open VSX:
+  `https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang`
+
+The Marketplace catalog API and public page both resolve the new listing. The
+Open VSX metadata API and public page resolve version `0.2.0`, and the package
+is marked downloadable. Publishing is complete.
+
 ## Dispatch
 
 ```bash

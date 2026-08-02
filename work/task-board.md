@@ -1,8 +1,8 @@
 # Task Board
 
-Last updated: 2026-08-01
+Last updated: 2026-08-02
 
-## Extension marketplaces and hosted-CI singleton reliability (in progress)
+## Extension marketplaces and hosted-CI singleton reliability (complete)
 
 - Authorized target: prepare `JohnOlafenwa.vscode-aura-lang` for the Visual Studio
   Marketplace and Open VSX; publish only from the Release workflow with
@@ -138,6 +138,11 @@ Last updated: 2026-08-01
   Open VSX therefore did not run. The user selected `vscode-aura-lang` as the
   permanent replacement ID. The manifest, registry URLs, workflow guard, and
   regressions now pin `JohnOlafenwa.vscode-aura-lang` for the retry.
+- Publication is complete. Release workflow run `30746408847` built the VSIX
+  from immutable commit `d13acd7`, preserved the existing GitHub Release, and
+  published version `0.2.0` successfully to both Visual Studio Marketplace and
+  Open VSX. Both public listing pages and registry metadata endpoints resolve
+  `JohnOlafenwa.vscode-aura-lang`.
 - Work note: `work/2026-08-01-extension-publishing-and-hosted-ci-reliability.md`.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
