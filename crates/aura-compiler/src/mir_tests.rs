@@ -6974,6 +6974,443 @@ def main():
 }
 
 #[test]
+fn canonical_list_calls_preserve_value_types_and_widen_only_index_arguments() {
+    let module = crate::lower_source_to_mir(
+        r#"
+limit: int64 = 4
+
+def constant_key[T](value: T) -> int64:
+    return 0
+
+def main() -> int32:
+    mut values: list[int8] = list[int8].with_capacity(limit)
+    values.append(3)
+    values.append(1)
+    values.append(2)
+    needle: int8 = 1
+    values.remove(needle)
+    index: uint32 = 0
+    first: int8 = values.pop(index)
+    values.append(first)
+    values.reserve(limit)
+    values.sort(key=constant_key[int8], reverse=true)
+    position: int64 = values.index(2)
+    copies: int64 = values.count(2)
+    print(f"{first}|{position}|{copies}|{values}")
+    return 0
+"#,
+    )
+    .expect("canonical list calls should lower from valid Aura source");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+
+    let member_call = |field: &str| {
+        instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee:
+                                CallTarget::Member {
+                                    field: actual,
+                                    receiver_place,
+                                    ..
+                                },
+                            args,
+                        },
+                    ..
+                } if actual == field => Some((receiver_place.as_deref(), args.as_slice())),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("expected `{field}` member call in MIR"))
+    };
+    let local_type = |place: &str| {
+        main.local_types
+            .iter()
+            .find(|local| local.name == place)
+            .map(|local| &local.ty)
+            .unwrap_or_else(|| panic!("expected local type for `{place}`"))
+    };
+
+    let (remove_receiver, remove_args) = member_call("remove");
+    assert_eq!(remove_receiver, Some("values"));
+    assert_eq!(remove_args.len(), 1);
+    let Operand::Place(remove_value) = &remove_args[0].value else {
+        panic!("list.remove should receive one typed place operand");
+    };
+    assert_eq!(local_type(remove_value), &Type::named("int8"));
+
+    let (pop_receiver, pop_args) = member_call("pop");
+    assert_eq!(pop_receiver, Some("values"));
+    assert_eq!(pop_args.len(), 1);
+    let Operand::Place(pop_index) = &pop_args[0].value else {
+        panic!("list.pop should receive one widened index place");
+    };
+    assert_eq!(local_type(pop_index), &Type::named("int64"));
+    assert!(instructions.iter().any(|instruction| matches!(
+        instruction,
+        Instruction::Assign {
+            target,
+            value: Rvalue::Cast {
+                ty,
+                ..
+            },
+        } if target == pop_index && *ty == Type::named("int64")
+    )));
+
+    assert!(instructions.iter().any(|instruction| matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Call {
+                callee: CallTarget::Name(name),
+                args,
+            },
+            ..
+        } if name == "list.with_capacity" && args.len() == 1
+    )));
+    for field in ["append", "reserve", "index", "count"] {
+        assert_eq!(member_call(field).0, Some("values"), "{field}");
+    }
+    assert!(instructions.iter().all(|instruction| !matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Call {
+                callee: CallTarget::Member { field, .. },
+                ..
+            },
+            ..
+        } if field == "sort"
+    )));
+    assert!(instructions.iter().any(|instruction| matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Call {
+                callee: CallTarget::Value(Operand::Function { name, .. }),
+                args,
+            },
+            ..
+        } if name == "constant_key" && args.len() == 1
+    )));
+    assert!(main.blocks.iter().any(|block| {
+        block.label.contains("vec_sort_inner_compare")
+            && matches!(block.terminator, Terminator::Branch { .. })
+    }));
+
+    let output = crate::run_mir(&module).expect("canonical list MIR should execute");
+    assert_eq!(output.stdout, "3|0|1|[2, 3]\n");
+}
+
+#[test]
+fn canonical_numeric_constants_formats_and_patterns_preserve_exact_mir_types() {
+    let module = crate::lower_source_to_mir(
+        r#"
+base: int8 = 12
+
+def classify(value: int8) -> str:
+    match value:
+        case 0 | 15 if value > (10 as int8):
+            return f"{value:04x}"
+        case _:
+            return "other"
+
+def main() -> int32:
+    right: int8 = 3
+    quotient: int8 = base // right
+    remainder: int8 = base % right
+    powered: int8 = (2 as int8) ** right
+    masked: int8 = base & right
+    combined: int8 = base | right
+    toggled: int8 = base ^ right
+    left: int8 = base << right
+    shifted: int8 = base >> right
+    pair: (int8, int8) = divmod(base, right)
+    rounded: int64 = round(2.5 as float32)
+    assert base > right
+    ratio: float32 = 1.25
+    print(f"{quotient}|{remainder}|{powered}|{masked}|{combined}|{toggled}|{left}|{shifted}|{pair}|{rounded}|{base:04x}|{ratio:.2f}|{classify(15 as int8)}")
+    return 0
+"#,
+    )
+    .expect("canonical numeric and pattern source should lower");
+
+    assert_eq!(module.constants.len(), 1);
+    assert_eq!(module.constants[0].key, "<main>::base");
+    assert_eq!(
+        module.constants[0].initializer,
+        "__aura_const_init::<main>::base"
+    );
+    assert_eq!(module.constants[0].ty, Type::named("int8"));
+    let initializer = module
+        .functions
+        .iter()
+        .find(|function| function.name == "__aura_const_init::<main>::base")
+        .expect("module constant initializer should lower as an ordinary MIR function");
+    assert_eq!(initializer.return_type, Type::named("int8"));
+    assert!(matches!(
+        initializer.blocks[0].instructions.as_slice(),
+        [Instruction::Assign {
+            target,
+            value: Rvalue::Use(Operand::Int(12)),
+        }] if target == "%t0"
+    ));
+    assert!(matches!(
+        initializer.blocks[0].terminator,
+        Terminator::Return(Operand::Place(ref place)) if place == "%t0"
+    ));
+
+    let classify = module
+        .functions
+        .iter()
+        .find(|function| function.name == "classify")
+        .expect("classify should lower");
+    for label in [
+        "match_or_next",
+        "match_or_selected",
+        "match_guard_true",
+        "match_guard_false",
+    ] {
+        assert!(
+            classify
+                .blocks
+                .iter()
+                .any(|block| block.label.contains(label)),
+            "guarded or-pattern should expose `{label}` control flow"
+        );
+    }
+    assert!(classify.blocks.iter().any(|block| matches!(
+        block.terminator,
+        Terminator::Branch {
+            ref then_label,
+            ref else_label,
+            ..
+        } if then_label.contains("match_guard_true")
+            && else_label.contains("match_guard_false")
+    )));
+
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+    for op in [
+        BinaryOp::FloorDiv,
+        BinaryOp::Mod,
+        BinaryOp::Pow,
+        BinaryOp::BitAnd,
+        BinaryOp::BitOr,
+        BinaryOp::BitXor,
+        BinaryOp::Shl,
+        BinaryOp::Shr,
+    ] {
+        assert!(
+            instructions.iter().any(|instruction| matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Binary { op: actual, .. },
+                    ..
+                } if *actual == op
+            )),
+            "expected `{op:?}` MIR operation"
+        );
+    }
+    for name in [
+        "quotient",
+        "remainder",
+        "powered",
+        "masked",
+        "combined",
+        "toggled",
+        "left",
+        "shifted",
+    ] {
+        assert!(
+            main.local_types
+                .iter()
+                .any(|local| { local.name == name && local.ty == Type::named("int8") }),
+            "`{name}` should retain its narrow MIR type"
+        );
+    }
+    assert!(main.local_types.iter().any(|local| {
+        local.name == "pair"
+            && local.ty == Type::Tuple(vec![Type::named("int8"), Type::named("int8")])
+    }));
+    assert!(main
+        .local_types
+        .iter()
+        .any(|local| { local.name == "rounded" && local.ty == Type::named("int64") }));
+    assert!(instructions.iter().any(|instruction| matches!(
+        instruction,
+        Instruction::Assign {
+            target,
+            value: Rvalue::Call {
+                callee: CallTarget::Name(name),
+                args,
+            },
+        } if name == "divmod"
+            && main.local_types.iter().any(|local| {
+                local.name == *target
+                    && local.ty
+                        == Type::Tuple(vec![Type::named("int8"), Type::named("int8")])
+            })
+            && args.len() == 2
+    )));
+    assert!(instructions.iter().any(|instruction| matches!(
+        instruction,
+        Instruction::Assign {
+            target,
+            value: Rvalue::Call {
+                callee: CallTarget::Name(name),
+                args,
+            },
+        } if name == "round"
+            && main.local_types.iter().any(|local| {
+                local.name == *target && local.ty == Type::named("int64")
+            })
+            && args.len() == 1
+    )));
+
+    let formatted = module
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .flat_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::FormatString { parts },
+                ..
+            } => parts.as_slice(),
+            _ => &[],
+        })
+        .filter_map(|part| match part {
+            MirFormatPart::Formatted {
+                spec, value_type, ..
+            } => Some((spec.as_str(), value_type)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        formatted,
+        vec![
+            ("04x", &Type::named("int8")),
+            ("04x", &Type::named("int8")),
+            (".2f", &Type::named("float32")),
+        ]
+    );
+
+    let failures = assertion_failures(&module);
+    assert_eq!(failures.len(), 1);
+    let Terminator::AssertFail { captures, .. } = &failures[0].1.terminator else {
+        unreachable!();
+    };
+    assert_eq!(
+        captures
+            .iter()
+            .map(|capture| (capture.label.as_str(), &capture.ty))
+            .collect::<Vec<_>>(),
+        vec![
+            ("left", &Type::named("int8")),
+            ("right", &Type::named("int8"))
+        ]
+    );
+    assert!(instructions.iter().any(|instruction| matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::ModuleConstant { key, initializer },
+            ..
+        } if key == "<main>::base" && initializer == "__aura_const_init::<main>::base"
+    )));
+
+    let output = crate::run_mir(&module).expect("canonical numeric MIR should execute");
+    assert_eq!(
+        output.stdout,
+        "4|0|8|0|15|15|96|1|(4, 0)|2|   c|1.25|   f\n"
+    );
+}
+
+#[test]
+fn mutable_guarded_or_match_expression_writes_back_before_the_next_arm() {
+    let module = crate::lower_source_to_mir(
+        r#"
+enum Reading:
+    Exact(int32)
+    Approx(int32)
+
+def mutate_and_reject(value: mut int32) -> bool:
+    value += 5
+    return false
+
+def main() -> int32:
+    mut reading = Reading.Approx(1)
+    result: int32 = match mut reading:
+        case Exact(value) | Approx(value) if mutate_and_reject(value): 0
+        case Approx(value): value
+        case Exact(value): -value
+    print(result)
+    return 0
+"#,
+    )
+    .expect("mutable guarded or-pattern expression should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let guard_rejection = main
+        .blocks
+        .iter()
+        .find(|block| block.label.contains("match_expr_guard_false"))
+        .expect("the guard rejection edge should be explicit");
+    assert!(matches!(
+        guard_rejection.terminator,
+        Terminator::Branch {
+            ref then_label,
+            ref else_label,
+            ..
+        } if then_label.contains("match_or_writeback_apply")
+            && else_label.contains("match_or_writeback_next")
+    ));
+    let writeback_done = main
+        .blocks
+        .iter()
+        .find(|block| block.label.contains("match_or_writeback_done"))
+        .expect("the rejected guarded alternative should reassemble its enum");
+    assert!(matches!(
+        writeback_done.instructions.as_slice(),
+        [
+            Instruction::Assign {
+                target,
+                value: Rvalue::Use(Operand::Place(_)),
+            },
+            Instruction::Assign {
+                value: Rvalue::Use(Operand::Bool(true)),
+                ..
+            }
+        ] if target == "reading"
+    ));
+    assert!(matches!(
+        writeback_done.terminator,
+        Terminator::Goto(ref label) if label.contains("match_expr_next")
+    ));
+
+    let output = crate::run_mir(&module).expect("match expression MIR should execute");
+    assert_eq!(output.stdout, "6\n");
+}
+
+#[test]
 fn control_retry_lowers_to_shared_indirect_calls_and_runtime_policy_adapters() {
     let module = crate::lower_source_to_mir(
         r#"

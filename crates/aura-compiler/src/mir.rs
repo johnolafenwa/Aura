@@ -8667,7 +8667,7 @@ impl<'a> Lowerer<'a> {
                             (builtin_member, index),
                             (BuiltinMember::VecGet, 0)
                                 | (BuiltinMember::VecSet, 0)
-                                | (BuiltinMember::VecRemove, 0)
+                                | (BuiltinMember::VecPop, 0)
                                 | (BuiltinMember::VecSwap, 0 | 1)
                                 | (BuiltinMember::VecInsert, 0)
                         );
