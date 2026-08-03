@@ -17,9 +17,10 @@ Last updated: 2026-08-02
   Manual stamp, and CLI version output are moving to Aura 0.3.0 development
   identity before semantic migration. The published 0.2.0 preview release and
   its historical packaging checks remain intact.
-- Compiler coverage floors are frozen for the batch at 96.28% lines, 97.20%
-  functions, and 94.62% regions. One downward-truncated re-ratchet is reserved
-  for the final checkpoint.
+- Compiler coverage floors stayed frozen during implementation at 96.28%
+  lines, 97.20% functions, and 94.62% regions. The one-time checkpoint
+  re-ratchet is complete at 96.30% lines, 97.21% functions, and 94.71%
+  regions.
 - User amendment: Aura has no users and carries no backward-compatibility
   burden. The prior surface is treated as though it never existed: no aliases,
   shims, reserved spellings, specialized retirement diagnostics, fix-its,
@@ -58,16 +59,19 @@ Last updated: 2026-08-02
   example and fixture path inventory uses canonical list/dict/set/shared/mut
   names with a permanent clean-slate filename gate. ADR-0052 through ADR-0056
   contain implementation-adoption sections with no compatibility or migration
-  surface. The `math` module's eleven exact float64 functions are implemented;
-  only `math.pi`, `math.e`, `math.inf`, and `math.nan` remain to be exposed over
-  the completed generic constant foundation. The testing reference freeze,
-  robust wrapped reference assertions, and focused warning-denied Clippy are
-  complete. ADR-0045 remains Provisional until its P1-P6 answers pass the final
-  matrix/gates, and ADR-0049's class-pattern disposition remains provisional;
-  guards and or-patterns themselves are accepted and implemented. Remaining
-  work is the four math constants, final generated `llms.txt`/`llms-full.txt`,
-  combined reference/editor/cache verification, the final local gate, the
-  one-time coverage re-ratchet, and three green hosted runs.
+  surface. The `math` module's eleven exact float64 functions and four exact
+  constants are implemented over the generic constant foundation. The testing
+  reference freeze, robust wrapped reference assertions, and focused
+  warning-denied Clippy are complete. ADR-0045 remains Provisional until its
+  P1-P6 answers pass the final matrix/gates, and ADR-0049's class-pattern
+  disposition remains provisional;
+  guards and or-patterns themselves are accepted and implemented. Generated
+  `llms.txt`/`llms-full.txt`, combined reference/editor/cache verification, and
+  the pre-closure forced-parity/documentation gates are green. The exact
+  closure-tree coverage gate passes 361 CLI and 1,659 compiler tests at
+  96.306604722043% lines, 97.216796875% functions, and 94.719226741389%
+  regions with no synthetic tests. Remaining work is the final exact-tree
+  local gate and three green hosted runs.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
 - Work note: `work/2026-08-02-batch-s1-python-surface.md`.

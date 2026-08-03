@@ -32,7 +32,8 @@ Nothing from this batch is pushed without explicit user authorization.
   completed logical migration family and the final checkpoint; do not replay
   the multi-hour gate after every small commit.
 - Freeze compiler coverage floors at 96.28% lines, 97.20% functions, and
-  94.62% regions. Re-ratchet once, downward-truncated, at checkpoint.
+  94.62% regions during implementation. The single checkpoint re-ratchet is
+  now complete at 96.30% lines, 97.21% functions, and 94.71% regions.
 - Use inventory → migrator → atomic flip → identity gate for every rename.
 - Use provisional decisions only for genuine gaps and record P1–P6 evidence.
 
@@ -299,11 +300,10 @@ work. Raw evidence is `/tmp/aura-s1-post-s2-v6-face52e.json`, SHA-256
 - Compiler analysis supplies module completion, exact signatures, and hover.
   Focused unit tests, the maintained success fixture, and the domain-failure
   fixture are byte-identical between MIR and direct execution.
-- `math.pi`, `math.e`, `math.inf`, and `math.nan` remain pending until the
-  generic module-constant storage and initialization plan lands. That generic
-  foundation is now complete; exposing and pinning the four builtin constants
-  remains a separate final S4 integration step. The math documentation and
-  editor surface are proceeding independently.
+- `math.pi`, `math.e`, `math.inf`, and `math.nan` are exposed as exact
+  `float64` module constants over the generic constant foundation. Fixtures,
+  the maintained scalar-math example, the Manual, the API index, analysis,
+  and both runtime backends pin their exact IEEE identities and behavior.
 
 ### S4 strings and format specifications
 
@@ -407,6 +407,51 @@ provisional decision creates backward compatibility: previous spellings and
 methods have no reserved status, compatibility path, tailored diagnostic, or
 public migration surface.
 
+## Coverage closure and checkpoint ratchet
+
+The first exact combined coverage replay passed all 361 CLI tests, 1,654
+compiler-library tests, and every instrumented integration suite. Its only
+red gate was the frozen ratchet at 90,966/94,569 lines (96.19%),
+5,968/6,149 functions (97.06%), and 133,808/141,427 regions (94.61%). Under
+the standing rule, the floors stayed fixed and the gap was closed with
+observable behavior tests and removal or consolidation of formally
+unreachable defensive wrappers.
+
+The closure found and fixed three product defects:
+
+- compiler analysis inferred `range` loop bindings as `int32` after S2; they
+  now use the canonical `int64` index domain;
+- native list traps could occur while a collection write lock was held,
+  poisoning the collection for later tasks; diagnostics now occur after the
+  guard is released; and
+- MIR argument lowering widened `list.remove(value)` as though it were an
+  index while failing to widen narrow `list.pop(index)` arguments. Only
+  `pop` now uses the lossless index-domain widening rule.
+
+Behavioral closure covers the canonical collection ABI, semantic and editor
+diagnostics, match guards and or-patterns, scalar numeric boundaries, module
+constants, formatting, package locks, direct runtime ABI contracts, Array
+allocation failure, process/supervisor behavior, HTTP/HTTPS/TCP/UDP/WebSocket
+boundaries, public compiler facades, and exact MIR/direct parity paths.
+Unreachable-branch work is recorded in
+`work/2026-08-03-s1-mir-runtime-coverage-classification.md` and
+`work/2026-08-03-s1-mir-runtime-public-coverage.md`; it includes duplicated
+string-byte dispatch, impossible task-index conversion failures, infallible
+Duration construction overflow wrappers, redundant private call-target
+fallbacks, and generic-only builtin lowering closures whose public registry
+cannot construct the old path.
+
+The final exact coverage replay passed all 361 CLI tests, 1,659
+compiler-library tests, and every instrumented integration suite at:
+
+- 91,003/94,493 lines (96.306604722043%);
+- 5,973/6,144 functions (97.216796875%); and
+- 133,861/141,324 regions (94.719226741389%).
+
+The one-time downward-truncated checkpoint ratchet is therefore
+96.30%/97.21%/94.71%. No synthetic coverage test, coverage exclusion, or
+malformed internal compiler-state test was added.
+
 ## Verification
 
 Current focused version-stamp evidence:
@@ -504,20 +549,16 @@ Current focused version-stamp evidence:
   `llms.txt` and `llms-full.txt` will regenerate after the four math constants
   finalize the source reference.
 
-The opening full-gate attempt stopped at the expected old identity guard that
-classified “Aura 0.3” as future narration. That guard now advances to 0.4 and
-its focused identity suite is green. The S3 results above are focused evidence;
-the checkpoint-wide forced-backend parity matrix, full local gate, hosted
-gates, coverage pass, and one-time coverage re-ratchet have not run for S3.
+The checkpoint-wide forced-backend parity matrix, LSP and extension suites,
+reference integrity, documentation build, audits, and hygiene passed on the
+pre-closure combined tree. The exact final compiler coverage replay and the
+one-time checkpoint re-ratchet are green on the closure tree. The final
+exact-tree local gate and three hosted runs remain before checkpoint sign-off.
 
 ## Follow-up
 
-Complete the four `math` builtin constants over the generic ADR-0050
-foundation, regenerate `llms.txt`/`llms-full.txt` from the final reference,
-and then run the complete forced-backend matrix and final local and hosted
-gates. At the checkpoint, decide whether the complete evidence ratifies
-ADR-0045's P1-P6 answers and ADR-0049's class-pattern deferment, perform the
-one-time truncated coverage re-ratchet, report migration counts, zero-cast
-backend parity, V6 numbers, assertion introspection, S4 evidence, final
-coverage, and three hosted run links, then stop. Do not begin loans, the P1
-performance batch, or any 0.4 implementation.
+Run the final exact-tree local gate, then obtain explicit user authorization
+before pushing this branch. After three consecutive hosted runs pass on both
+operating systems, ratify ADR-0045's P1-P6 answers and ADR-0049's class-pattern
+deferment, publish the checkpoint report, and stop. Do not begin loans, the P1
+performance batch, publishing, or any 0.4 implementation.
