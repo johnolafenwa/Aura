@@ -10,7 +10,7 @@ use super::{
     run_mir, run_path, run_path_entry_with_stdout_sink_and_program_args, run_path_with_source,
     run_path_with_source_and_stdout_sink, run_path_with_source_and_stdout_sink_and_program_args,
     run_path_with_stdout_sink, run_path_with_stdout_sink_and_program_args, run_serialized_mir,
-    run_source, run_source_with_stdout_sink, ModuleLoader, StdoutSink, Value,
+    run_source, run_source_with_stdout_sink, sha256_hex, ModuleLoader, StdoutSink, Value,
 };
 use crate::ast::TypeRef;
 use crate::diag::Span;
@@ -31,6 +31,19 @@ const BASIC_ADDITION_SOURCE: &str = include_str!("../../../examples/basic_additi
 const TOP_LEVEL_ADDITION_SOURCE: &str = include_str!("../../../examples/top_level_addition.au");
 const CONTROL_FLOW_SOURCE: &str = include_str!("../../../examples/control_flow.au");
 static IO_EXAMPLE_LOCK: Mutex<()> = Mutex::new(());
+
+#[test]
+fn public_sha256_hex_is_lowercase_and_preserves_leading_zeroes() {
+    assert_eq!(
+        sha256_hex(b""),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    assert_eq!(
+        sha256_hex(b"Aura"),
+        "224ea01e4a299102cf8da1698a931bad291415dcefea7493576c17cf1fa960b9"
+    );
+    assert_eq!(sha256_hex(&[0]).len(), 64);
+}
 
 fn lock_io_example() -> std::sync::MutexGuard<'static, ()> {
     IO_EXAMPLE_LOCK

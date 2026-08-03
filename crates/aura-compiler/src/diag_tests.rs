@@ -340,6 +340,34 @@ fn runtime_frames_capture_once_clone_and_render_without_polluting_notes() {
 }
 
 #[test]
+fn structured_runtime_frames_use_the_report_path_when_source_paths_are_absent() {
+    let mut diagnostic = Diagnostic::coded("AU4001", "runtime trap");
+    diagnostic.capture_runtime_frames_once(
+        vec![RuntimeCallFrame {
+            function: "worker".to_string(),
+            span: RuntimeSourceSpan::point(None, Span::new(4, 9)),
+        }],
+        vec![RuntimeTaskFrame {
+            task_function: "worker".to_string(),
+            task_entry_span: RuntimeSourceSpan::point(None, Span::new(4, 1)),
+            parent_function: "main".to_string(),
+            spawn_span: RuntimeSourceSpan::point(None, Span::new(8, 17)),
+        }],
+    );
+
+    let structured = diagnostic.structured("/workspace/main.au");
+    assert_eq!(structured.call_frames[0].span.path, "/workspace/main.au");
+    assert_eq!(
+        structured.task_ancestry[0].task_entry_span.path,
+        "/workspace/main.au"
+    );
+    assert_eq!(
+        structured.task_ancestry[0].spawn_span.path,
+        "/workspace/main.au"
+    );
+}
+
+#[test]
 fn an_empty_runtime_frame_snapshot_is_still_complete() {
     let uncaptured = Diagnostic::coded("AU4006", "runtime configuration failed");
     let mut diagnostic = uncaptured.clone();

@@ -176,6 +176,27 @@ fn builtin_imported_binding_resolves_exports_and_reports_missing_names() {
         .expect("builtin function exports should resolve");
     assert!(matches!(exists, ImportedBinding::Function(_)));
 
+    let bytes_path = ["bytes".to_string()];
+    let error = builtin_imported_binding(&bytes_path, "Error", Span::new(1, 8))
+        .expect("builtin enum exports should resolve");
+    let ImportedBinding::Enum(error) = error else {
+        panic!("bytes.Error should resolve as an enum export");
+    };
+    assert_eq!(error.decl.name, "Error");
+    assert_eq!(
+        error
+            .variants
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec![
+            "InvalidBase64",
+            "InvalidHexDigit",
+            "InvalidHexLength",
+            "InvalidUtf8"
+        ]
+    );
+
     let missing = builtin_imported_binding(&fs_path, "missing", Span::new(2, 4))
         .expect_err("missing builtin exports should fail");
     assert_eq!(missing.span, Some(Span::new(2, 4)));

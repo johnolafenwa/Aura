@@ -822,6 +822,20 @@ mod tests {
     }
 
     #[test]
+    fn deadlines_for_inactive_epochs_are_ignored_without_polluting_timer_state() {
+        let mut reactor = RuntimeReactor::new().unwrap();
+        let inactive = WaitKey(7, 3);
+
+        reactor
+            .add_deadline(inactive, Instant::now())
+            .expect("an inactive deadline should be an accepted no-op");
+
+        assert!(!reactor.is_waiting(inactive));
+        assert_eq!(reactor.next_deadline(), None);
+        assert!(reactor.poll_local_nonblocking().unwrap().is_empty());
+    }
+
+    #[test]
     fn cancelled_long_deadlines_are_compacted_without_disturbing_live_order() {
         let mut reactor = RuntimeReactor::new().unwrap();
         let now = Instant::now();
