@@ -966,7 +966,7 @@ single task-result right on the first attempt.
   - prints `Hello, Aura 42`
 - `literal_forms_and_formatting.au`
   - exact triple-quoted prompts, raw backslash-heavy paths, and statically
-    checked width, grouping, and percentage formatting
+    checked width, sign-aware zero padding, grouping, and percentage formatting
   - demonstrates Unicode-aware formatting through the maintained f-string
     grammar
 

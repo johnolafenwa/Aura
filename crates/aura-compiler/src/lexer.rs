@@ -903,6 +903,37 @@ fn tokenize_line(
                     index += 1;
                 }
             }
+            'r' if matches!(chars.get(index + 1), Some((_, 'f')))
+                && matches!(chars.get(index + 2), Some((_, '"' | '\''))) =>
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU1002",
+                    Span::new(line_no, column),
+                    "raw f-strings are not supported; use `f\"...\"` and escape backslashes explicitly",
+                ));
+            }
+            'f' if matches!(chars.get(index + 1), Some((_, 'r')))
+                && matches!(chars.get(index + 2), Some((_, '"' | '\''))) =>
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU1002",
+                    Span::new(line_no, column),
+                    "raw f-strings are not supported; use `f\"...\"` and escape backslashes explicitly",
+                ));
+            }
+            'f' if (matches!(chars.get(index + 1), Some((_, '"')))
+                && matches!(chars.get(index + 2), Some((_, '"')))
+                && matches!(chars.get(index + 3), Some((_, '"'))))
+                || (matches!(chars.get(index + 1), Some((_, '\'')))
+                    && matches!(chars.get(index + 2), Some((_, '\'')))
+                    && matches!(chars.get(index + 3), Some((_, '\'')))) =>
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU1002",
+                    Span::new(line_no, column),
+                    "triple-quoted f-strings are not supported; use single-line `f\"...\"` or an ordinary triple-quoted string",
+                ));
+            }
             'f' if matches!(chars.get(index + 1), Some((_, '\''))) => {
                 return Err(Diagnostic::coded_at(
                     "AU1002",

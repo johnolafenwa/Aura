@@ -94,6 +94,10 @@ Last updated: 2026-08-03
   and the forced MIR/direct diagnostic-parity test are green; the complete
   semantic checker partition is 331/331 green. The stale Rng identity run-pass
   fixture is replaced by a rendering fixture and a direct AU2008 rejection.
+- S1.1-b implements Python-compatible sign-aware numeric zero padding. Focused
+  runtime tests and the MIR/direct fixture are green. Raw `rf`/`fr` and
+  triple-quoted f-string prefixes now receive precise AU1002 diagnostics, and
+  the reference records the explicit-type requirement for comma grouping.
 - Push and pull-request authorization is explicit. Merge waits for checkpoint
   sign-off after three consecutive green hosted CI runs on both operating
   systems.

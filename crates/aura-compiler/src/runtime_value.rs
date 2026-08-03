@@ -6873,6 +6873,7 @@ pub(crate) struct ParsedFormatSpec {
     pub(crate) alignment: Option<FormatAlignment>,
     pub(crate) sign: Option<FormatSign>,
     pub(crate) width: Option<usize>,
+    pub(crate) zero_pad: bool,
     pub(crate) grouping: bool,
     pub(crate) precision: Option<usize>,
     pub(crate) ty: Option<char>,
@@ -6958,6 +6959,7 @@ pub(crate) fn parse_format_spec(
     } else {
         None
     };
+    let zero_pad = index > width_start && chars[width_start] == '0';
 
     let grouping = chars.get(index) == Some(&',');
     if grouping {
@@ -7009,6 +7011,7 @@ pub(crate) fn parse_format_spec(
         alignment,
         sign,
         width,
+        zero_pad,
         grouping,
         precision,
         ty,
@@ -7058,6 +7061,11 @@ pub(crate) fn validate_format_spec_for_type(
     if spec.sign.is_some() && !is_numeric {
         return Err(format_type_error(
             "a format sign is valid only for numeric values",
+        ));
+    }
+    if spec.zero_pad && !is_numeric {
+        return Err(format_type_error(
+            "zero-padding shorthand is valid only for numeric values",
         ));
     }
     if spec.grouping && !matches!(spec.ty, Some('d' | 'f' | '%')) {
@@ -7153,6 +7161,32 @@ fn apply_format_width(rendered: String, spec: &ParsedFormatSpec, numeric: bool) 
         return Ok(rendered);
     }
     let padding = width - length;
+    if spec.zero_pad && spec.alignment.is_none() && numeric {
+        let padding_bytes = padding
+            .checked_add(rendered.len())
+            .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
+        if padding_bytes > MAX_STRING_BYTES {
+            return Err(Diagnostic::coded(
+                "AU4005",
+                format!(
+                    "string output exceeds the maintained {MAX_STRING_BYTES}-byte allocation limit"
+                ),
+            ));
+        }
+        let mut output = String::new();
+        output
+            .try_reserve_exact(padding_bytes)
+            .map_err(|_| Diagnostic::coded("AU4005", "string allocation failed"))?;
+        let sign_bytes = rendered
+            .chars()
+            .next()
+            .filter(|prefix| matches!(prefix, '+' | '-' | ' '))
+            .map_or(0, char::len_utf8);
+        output.push_str(&rendered[..sign_bytes]);
+        output.extend(std::iter::repeat_n('0', padding));
+        output.push_str(&rendered[sign_bytes..]);
+        return Ok(output);
+    }
     let alignment = spec.alignment.unwrap_or(if numeric {
         FormatAlignment::Right
     } else {
@@ -7163,8 +7197,9 @@ fn apply_format_width(rendered: String, spec: &ParsedFormatSpec, numeric: bool) 
         FormatAlignment::Right => (padding, 0),
         FormatAlignment::Center => (padding / 2, padding - padding / 2),
     };
+    let fill = if spec.zero_pad { '0' } else { spec.fill };
     let padding_bytes = padding
-        .checked_mul(spec.fill.len_utf8())
+        .checked_mul(fill.len_utf8())
         .and_then(|bytes| bytes.checked_add(rendered.len()))
         .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
     if padding_bytes > MAX_STRING_BYTES {
@@ -7179,9 +7214,9 @@ fn apply_format_width(rendered: String, spec: &ParsedFormatSpec, numeric: bool) 
     output
         .try_reserve_exact(padding_bytes)
         .map_err(|_| Diagnostic::coded("AU4005", "string allocation failed"))?;
-    output.extend(std::iter::repeat_n(spec.fill, left));
+    output.extend(std::iter::repeat_n(fill, left));
     output.push_str(&rendered);
-    output.extend(std::iter::repeat_n(spec.fill, right));
+    output.extend(std::iter::repeat_n(fill, right));
     Ok(output)
 }
 

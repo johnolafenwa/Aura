@@ -1,0 +1,6 @@
+def main():
+    negative: float64 = -1.25
+    positive: float64 = 1.25
+    print(f"{negative:09.3f}")
+    print(f"{positive:09.3f}")
+    print(f"{positive:+09.3f}")

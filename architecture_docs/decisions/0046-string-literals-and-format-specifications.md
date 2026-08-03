@@ -106,7 +106,10 @@ The optional comma follows the optional width and is also valid when width is
 omitted. It may appear at most once. `fill` is exactly one Unicode scalar value
 immediately followed by an alignment character. Without explicit alignment,
 strings align left and numbers align right. The default fill is ASCII space.
-Width is a minimum Unicode-scalar count, never a truncation request.
+Width is a minimum Unicode-scalar count, never a truncation request. A numeric
+width beginning with `0` is Python's zero-padding shorthand. Without explicit
+alignment, padding is inserted after `-`, `+`, or the requested leading space;
+with explicit alignment, `0` is the fill character for that alignment.
 
 Both width and precision are decimal integers in `0..=1_000_000`. A larger
 value is rejected at compile time. Formatting also remains subject to the
@@ -159,7 +162,8 @@ interpolation value merely to display it.
 - `AU1001` reports an unterminated or malformed ordinary, triple-quoted, or raw
   literal, including an odd terminal backslash run in a raw string.
 - `AU1002` reports malformed f-string delimiters, braces, and interpolation
-  boundaries.
+  boundaries. Raw and triple-quoted f-string prefixes receive focused guidance
+  to the supported single-line `f"..."` form.
 - `AU1101` reports malformed format-spec grammar, nested replacement fields,
   duplicate flags, or a width/precision above `1_000_000`.
 - `AU2002` reports a format type, sign, precision, or separator that is
@@ -175,7 +179,7 @@ payloads.
 
 F-strings are single-line and double-quoted. Dynamic specifications, nested
 replacement fields, conversion flags, locale-aware formatting, `g`, `G`,
-`n`, `c`, alternate form `#`, zero-padding as a distinct flag, and `=`
+`n`, `c`, alternate form `#`, and explicit `=`
 alignment are not part of this contract. Triple strings are ordinary strings,
 not syntax-level documentation objects by themselves.
 

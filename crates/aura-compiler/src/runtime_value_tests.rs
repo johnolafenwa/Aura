@@ -304,6 +304,22 @@ fn floating_formatting_preserves_binary32_identity_and_ieee_signs() {
 }
 
 #[test]
+fn python_zero_pad_shorthand_places_padding_after_the_numeric_sign() {
+    for (value, spec, expected) in [
+        (-1.25, "09.3f", "-0001.250"),
+        (1.25, "09.3f", "00001.250"),
+        (1.25, "+09.3f", "+0001.250"),
+        (1.25, " 09.3f", " 0001.250"),
+    ] {
+        assert_eq!(
+            format_runtime_value(&Value::Float(value), &Type::named("float64"), spec).unwrap(),
+            expected,
+            "format {spec}"
+        );
+    }
+}
+
+#[test]
 fn format_width_and_precision_enforce_the_ratified_boundaries() {
     assert_eq!(
         parse_format_spec("1000000.1000000s").unwrap().width,
@@ -399,7 +415,7 @@ fn format_matrix_pins_alignment_sign_radix_scientific_and_default_rendering() {
         (&positive, "X", "2A"),
         (&positive, "b", "101010"),
         (&positive, "o", "52"),
-        (&positive, "08d", "      42"),
+        (&positive, "08d", "00000042"),
         (&positive, ".0e", "4e+01"),
     ] {
         assert_eq!(
@@ -485,6 +501,11 @@ fn format_matrix_pins_each_public_syntax_and_type_error_class() {
             ",x",
             "int64",
             "thousands separator is valid only with d, f, and %",
+        ),
+        (
+            "05s",
+            "str",
+            "zero-padding shorthand is valid only for numeric values",
         ),
         (".2d", "int64", "precision requires s, f, e, or %"),
     ] {

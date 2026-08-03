@@ -213,6 +213,26 @@ fn s1_frontend_fstrings_preserve_escaped_braces_and_decode_ordinary_escapes() {
 }
 
 #[test]
+fn fstring_prefix_diagnostics_teach_the_supported_single_line_form() {
+    for source in ["value = rf\"{name}\\n\"\n", "value = fr\"{name}\\n\"\n"] {
+        let raw = lex(source).expect_err("raw f-strings are outside the language surface");
+        assert_eq!(raw.code, "AU1002");
+        assert_eq!(
+            raw.message,
+            "raw f-strings are not supported; use `f\"...\"` and escape backslashes explicitly"
+        );
+    }
+
+    let triple = lex("value = f\"\"\"hello {name}\"\"\"\n")
+        .expect_err("triple-quoted f-strings are outside the language surface");
+    assert_eq!(triple.code, "AU1002");
+    assert_eq!(
+        triple.message,
+        "triple-quoted f-strings are not supported; use single-line `f\"...\"` or an ordinary triple-quoted string"
+    );
+}
+
+#[test]
 fn s1_frontend_numeric_literal_failures_name_overflow_and_duration_separator_rules() {
     let integer = lex("value = 0xfffffffffffffffffffffffffffffffff\n")
         .expect_err("an integer larger than u128 must fail during lexical conversion");

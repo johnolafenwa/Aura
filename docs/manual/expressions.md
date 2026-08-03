@@ -710,6 +710,8 @@ report = f"{name:<12s} {count:>8,d}"
 Interpolation contents are ordinary expressions. A top-level colon introduces
 a statically checked format specification with fill, alignment, sign, width,
 decimal grouping, precision, and a closed set of string and numeric type codes.
+For numeric values, a width beginning with `0` pads after the sign, matching
+Python's `09.3f` shorthand.
 Formatting uses the interpolation value's exact static numeric width, so a
 `float32` is formatted from its binary32 value. String spelling, escapes,
 literal braces, and the complete format grammar are defined by

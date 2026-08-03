@@ -357,14 +357,17 @@ The grammar is `[[fill]align][sign][width][,][.precision][type]`. Alignment is
 counts Unicode scalars and never truncates. `s` precision is the maximum
 scalar count. Numeric precision uses ties-to-even rounding. Decimal grouping
 is available with `d`, `f`, and `%`. Width and precision are limited to
-`1_000_000`.
+`1_000_000`. A numeric width beginning with `0` selects zero padding. With no
+explicit alignment, zeros follow the sign, so `f"{-1.25:09.3f}"` produces
+`-0001.250`.
 
 Aura parses the complete interpolation expression before recognizing the
 top-level separator. Colons inside nested slices, dictionaries, calls, and
 collection literals remain part of the expression. Dynamic specifications,
 nested fields, conversion flags, and single-quoted f-strings are unavailable.
-Interpolations evaluate once from left to right and the result is an owned
-`str`.
+`rf"..."`, `fr"..."`, and `f"""..."""` receive `AU1002` guidance to the
+supported single-line `f"..."` spelling. Interpolations evaluate once from
+left to right and the result is an owned `str`.
 
 ## Complexity Limits
 

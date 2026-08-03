@@ -370,6 +370,7 @@ answer: int32 = 42
 print(f"Hello, {name} {answer}")
 print(f"{name:·^16.8s} {answer:>8,d}")
 print(f"success rate: {0.875:+.1%}")
+print(f"delta: {-1.25:09.3f}")
 ```
 
 Interpolations accept any expression, including indexed lookups:
@@ -383,7 +384,9 @@ one-scalar fill, `<`, `^`, and `>` alignment, numeric signs, minimum width,
 comma grouping, precision, and `d`, `f`, `e`, `x`, `X`, `b`, `o`, `%`, and
 `s` type codes. Width counts Unicode scalars. String precision truncates by
 Unicode scalar count. Numeric precision rounds ties to even. Specifications
-are checked against the interpolation's static type before execution.
+are checked against the interpolation's static type before execution. A
+numeric width beginning with `0` pads after the sign. Decimal grouping always
+uses an explicit `d`, `f`, or `%` code.
 
 See [examples/strings/f_strings.au](../examples/strings/f_strings.au).
 

@@ -3852,7 +3852,7 @@ Exact diagnostic prose is normative only where a fixture or this Manual explicit
 | Accepted ADR-0047 decimal separators and hexadecimal/binary/octal integer literals; exact-width bitwise operators; checked, wrapping, and saturating shifts; exact count typing/ranges; compound-store ordering; and MIR/direct parity | focused lexer/parser/sema/integer/MIR/native/runtime tests; literal and shift failure fixtures; the `bitwise_power` runtime fixture; `examples/numbers/bit_packing.au`; the executable Expressions Manual block; language-server and extension coverage; and the forced MIR/direct parity matrix |
 | Accepted ADR-0048 scalar math constants and functions: exact immutable `float64` constant bits, generic once-initialized module storage, exact function signatures, checked `int64` rounding conversions, IEEE-754 identity and exceptional-value classification, finite overflow and domain diagnostics, left-to-right once-only evaluation, and MIR/direct parity | `math_namespace_exposes_exact_generic_float64_constants`, `math_namespace_exposes_the_exact_float64_function_contract`, `math_host_builtins_follow_the_ratified_finite_contract`, `math_host_builtins_classify_every_exception_family`, `math_analysis_exposes_qualified_and_aliased_constant_details`, `math_analysis_completes_and_hovers_the_exact_public_surface`, and focused semantic tests; the `math_module_constants`, `math_module_functions`, and `math_log_domain` fixtures; `examples/numbers/scalar_math.au`; the executable [Math Module](/manual/math) block; compiler-bridge coverage; and the forced MIR/direct parity matrix |
 | Accepted ADR-0048 power, `round`, and `divmod`: right-associative precedence, exact numeric types, checked integer results, ties-to-even conversion, paired floor quotient/remainder, runtime classification, one-time evaluation, and MIR/direct parity | focused parser/sema/integer/runtime-value/MIR/native tests; `numeric_round_divmod`, `bitwise_power`, and numeric failure fixtures; `examples/numbers/bit_packing.au`; the executable Expressions Manual block; language-server and extension coverage; and the forced MIR/direct parity matrix |
-| Accepted ADR-0046 exact triple-quoted and raw string forms plus static f-string format specifications: delimiter and escape rules, no whitespace normalization, Unicode-scalar width and string precision, type-directed numeric codes, binary32 identity, left-to-right evaluation, focused diagnostics, formatter preservation, and MIR/direct parity | focused lexer/parser/sema/runtime-value/MIR/native tests; `string_literal_forms_and_format_specs` and `fstring_spec_*` fixtures; `examples/strings/literal_forms_and_formatting.au`; executable lexical and expression reference blocks; compiler-bridge and extension grammar/snippet tests; and the forced MIR/direct parity matrix |
+| Accepted ADR-0046 exact triple-quoted and raw string forms plus static f-string format specifications: delimiter and escape rules, no whitespace normalization, Unicode-scalar width and string precision, sign-aware numeric zero padding, type-directed numeric codes, binary32 identity, left-to-right evaluation, focused raw/triple-f diagnostics, formatter preservation, and MIR/direct parity | focused lexer/parser/sema/runtime-value/MIR/native tests; `string_literal_forms_and_format_specs`, `fstring_zero_padding`, and `fstring_*` rejection fixtures; `examples/strings/literal_forms_and_formatting.au`; executable lexical and expression reference blocks; compiler-bridge and extension grammar/snippet tests; and the forced MIR/direct parity matrix |
 | Accepted ADR-0049 match guards and or-patterns: exact-`bool` guards, left-to-right alternatives, identical alternative bindings, guarded-arm reachability and exhaustiveness, delayed `match own` extraction, mutable candidate writeback before false continuation/failure/trap and every selected-arm exit, and MIR/direct parity; class patterns remain a provisional unimplemented disposition | focused parser/sema/MIR/analysis tests; the `match_guard*`, `match_own*`, `match_mut_guard*`, `or_pattern*`, guarded-exhaustiveness, and focused class-pattern-rejection fixtures; `examples/enums/match_guards_and_or_patterns.au`; the executable Enums and Match Manual block; compiler-bridge tests; and the forced MIR/direct parity matrix |
 | Accepted ADR-0050 module constants: inferred/annotated/public declarations, declaration-order scope, dependency-first and source-ordered eager once-only initialization, one defining storage identity, Copy versus shared non-Copy reads, move/mutation rejection, guarded re-entry, package visibility, analysis/editor exposure, cleanup, and MIR/direct parity | focused parser/sema/MIR/native/runtime/analysis tests; `module_constant*` check/run fixtures; multi-module and package dependency tests; `examples/modules/constants.au`; executable Names and Scopes, Statements, and Ownership Manual blocks; language-server compiler-bridge tests; and the forced MIR/direct parity matrix |
 | signed-i128-nanosecond Duration literals, exact two-limb direct ABI, constructors, checked arithmetic, `FloorDiv`, comparison, conversion, rendering, and invalid host timers | `duration_literals_scale_to_nonnegative_i128_nanoseconds_at_each_unit_boundary`, parser/MIR/native-codegen/runtime unit tests, `docs/manual/concurrency.md#aura-1`, Duration run/failure fixtures, native-runtime FFI tests, and the MIR/direct parity matrix |
@@ -4962,11 +4962,18 @@ indentation, and single-quoted f-strings.
 String literal and format diagnostics use the smallest proving location.
 `AU1001` reports malformed or unterminated ordinary, triple-quoted, and raw
 strings, including a later physical line that contains an invalid escape.
+`AU1002` gives focused supported-form guidance for raw and triple-quoted
+f-string prefixes.
 `AU1101` reports malformed static format grammar, nested fields, unsupported
 codes, and width or precision above `1_000_000`. `AU2002` reports a valid
 specification that is incompatible with the interpolation's static type.
 Constructed string output above the 64 MiB limit reports `AU4005` before the
 oversized append mutates the partial result.
+
+Python permits decimal grouping without an explicit type code, as in
+`f"{n:,}"`. Aura requires the numeric code: use `f"{n:,d}"`, `f"{n:,f}"`, or
+`f"{n:,%}"`. This keeps grouping validation tied to a statically selected
+numeric rendering contract.
 
 Owned list and str slicing is implemented, but step syntax and slice
 assignment remain reserved. They use `AU2005` with these exact messages:
@@ -6910,6 +6917,8 @@ report = f"{name:<12s} {count:>8,d}"
 Interpolation contents are ordinary expressions. A top-level colon introduces
 a statically checked format specification with fill, alignment, sign, width,
 decimal grouping, precision, and a closed set of string and numeric type codes.
+For numeric values, a width beginning with `0` pads after the sign, matching
+Python's `09.3f` shorthand.
 Formatting uses the interpolation value's exact static numeric width, so a
 `float32` is formatted from its binary32 value. String spelling, escapes,
 literal braces, and the complete format grammar are defined by
@@ -10513,14 +10522,17 @@ The grammar is `[[fill]align][sign][width][,][.precision][type]`. Alignment is
 counts Unicode scalars and never truncates. `s` precision is the maximum
 scalar count. Numeric precision uses ties-to-even rounding. Decimal grouping
 is available with `d`, `f`, and `%`. Width and precision are limited to
-`1_000_000`.
+`1_000_000`. A numeric width beginning with `0` selects zero padding. With no
+explicit alignment, zeros follow the sign, so `f"{-1.25:09.3f}"` produces
+`-0001.250`.
 
 Aura parses the complete interpolation expression before recognizing the
 top-level separator. Colons inside nested slices, dictionaries, calls, and
 collection literals remain part of the expression. Dynamic specifications,
 nested fields, conversion flags, and single-quoted f-strings are unavailable.
-Interpolations evaluate once from left to right and the result is an owned
-`str`.
+`rf"..."`, `fr"..."`, and `f"""..."""` receive `AU1002` guidance to the
+supported single-line `f"..."` spelling. Interpolations evaluate once from
+left to right and the result is an owned `str`.
 
 ## Complexity Limits
 
@@ -20579,6 +20591,7 @@ answer: int32 = 42
 print(f"Hello, {name} {answer}")
 print(f"{name:·^16.8s} {answer:>8,d}")
 print(f"success rate: {0.875:+.1%}")
+print(f"delta: {-1.25:09.3f}")
 ```
 
 Interpolations accept any expression, including indexed lookups:
@@ -20592,7 +20605,9 @@ one-scalar fill, `<`, `^`, and `>` alignment, numeric signs, minimum width,
 comma grouping, precision, and `d`, `f`, `e`, `x`, `X`, `b`, `o`, `%`, and
 `s` type codes. Width counts Unicode scalars. String precision truncates by
 Unicode scalar count. Numeric precision rounds ties to even. Specifications
-are checked against the interpolation's static type before execution.
+are checked against the interpolation's static type before execution. A
+numeric width beginning with `0` pads after the sign. Decimal grouping always
+uses an explicit `d`, `f`, or `%` code.
 
 See [examples/strings/f_strings.au](../examples/strings/f_strings.au).
 

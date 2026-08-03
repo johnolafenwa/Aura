@@ -7337,7 +7337,7 @@ def main() -> int32:
     let output = crate::run_mir(&module).expect("canonical numeric MIR should execute");
     assert_eq!(
         output.stdout,
-        "4|0|8|0|15|15|96|1|(4, 0)|2|   c|1.25|   f\n"
+        "4|0|8|0|15|15|96|1|(4, 0)|2|000c|1.25|000f\n"
     );
 }
 
