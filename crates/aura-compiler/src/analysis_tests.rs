@@ -1899,6 +1899,83 @@ fn analysis_and_completion_report_public_length_members_as_int64() {
 }
 
 #[test]
+fn analysis_reports_collection_search_and_projection_result_types() {
+    let program = checked_program("def main():\n    pass\n");
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    let values = Type::Named("list".to_string(), vec![Type::named("int64")]);
+    let mapping = Type::Named(
+        "dict".to_string(),
+        vec![Type::named("str"), Type::named("int64")],
+    );
+
+    for member_name in ["index", "count"] {
+        let member = builder
+            .resolve_member_type(&values, member_name)
+            .unwrap_or_else(|| panic!("list.{member_name} should resolve for editor analysis"));
+        assert_eq!(member.ty, Some(Type::named("int64")), "list.{member_name}");
+    }
+    assert_eq!(
+        builder
+            .resolve_member_type(&mapping, "keys")
+            .expect("dict.keys should resolve for editor analysis")
+            .ty,
+        Some(Type::Named("list".to_string(), vec![Type::named("str")]))
+    );
+    assert_eq!(
+        builder
+            .resolve_member_type(&mapping, "values")
+            .expect("dict.values should resolve for editor analysis")
+            .ty,
+        Some(Type::Named("list".to_string(), vec![Type::named("int64")]))
+    );
+    assert_eq!(
+        builder
+            .resolve_member_type(&mapping, "items")
+            .expect("dict.items should resolve for editor analysis")
+            .ty,
+        Some(Type::Named(
+            "list".to_string(),
+            vec![Type::Tuple(vec![Type::named("str"), Type::named("int64")])]
+        ))
+    );
+}
+
+#[test]
+fn analysis_infers_enumerate_and_zip_loop_binding_types() {
+    let source = concat!(
+        "def main():\n",
+        "    names = [\"Aura\"]\n",
+        "    values = [7]\n",
+        "    for index, name in enumerate(names):\n",
+        "        print(index)\n",
+        "        print(name)\n",
+        "    for name, value in zip(names, values):\n",
+        "        print(name)\n",
+        "        print(value)\n",
+    );
+    let analysis = analyze_source(source);
+
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "valid lockstep loops should analyze without diagnostics: {:?}",
+        analysis.diagnostics
+    );
+    for expected_hover in [
+        "local index: int64",
+        "local name: str",
+        "local value: int64",
+    ] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected_hover)),
+            "analysis should expose `{expected_hover}`"
+        );
+    }
+}
+
+#[test]
 fn compiler_string_byte_tooling_separates_static_decode_from_instance_encode() {
     let static_source = "def main() -> int32:\n    str.\n    return 0\n";
     let static_names = completion_names_after_marker(static_source, "str.");

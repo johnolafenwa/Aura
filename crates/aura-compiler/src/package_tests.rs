@@ -1412,6 +1412,46 @@ fn package_git_dependency_resolution_uses_cached_revision_selectors() {
 }
 
 #[test]
+fn package_git_dependency_resolution_reuses_the_locked_branch_revision() {
+    let _env_lock = lock_package_env();
+    let temp = TempDir::new("aura-package-locked-branch-cache");
+    fs::create_dir_all(temp.path.join("local_repo")).expect("failed to create local repo dir");
+    let source = fs::canonicalize(temp.path.join("local_repo"))
+        .expect("local repo path should canonicalize")
+        .to_string_lossy()
+        .to_string();
+    let selector = GitSelector::Branch("main".to_string());
+    let locked = LockedPackage {
+        source: LockedPackageSource::Git {
+            source: source.clone(),
+            rev: "abcdef0".to_string(),
+            selector: selector.clone(),
+        },
+    };
+
+    let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache"));
+    let checkout = git_cache_root()
+        .join(hash_source_key(&source))
+        .join("abcdef0");
+    fs::create_dir_all(&checkout).expect("failed to create cached checkout");
+    fs::write(
+        checkout.join(MANIFEST_NAME),
+        "[package]\nname = \"util\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    )
+    .expect("failed to write cached manifest");
+    write_cached_git_revision(&checkout, "abcdef0").expect("failed to write cached rev");
+
+    let resolved =
+        resolve_git_dependency(&temp.path, "util", source.clone(), &selector, Some(&locked))
+            .expect("a matching lock entry should resolve without refreshing its branch");
+
+    assert_eq!(resolved.checkout_dir, checkout);
+    assert_eq!(resolved.normalized_source, source);
+    assert_eq!(resolved.resolved_rev, "abcdef0");
+    assert_eq!(resolved.selector, selector);
+}
+
+#[test]
 fn package_resolver_reports_git_dependency_resolution_and_package_name_errors() {
     let _env_lock = lock_package_env();
     let temp = TempDir::new("aura-package-git-resolver-errors");

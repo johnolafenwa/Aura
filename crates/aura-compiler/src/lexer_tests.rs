@@ -560,6 +560,43 @@ fn delimited_match_layout_island_emits_only_the_match_suite_layout() {
 }
 
 #[test]
+fn nested_delimiters_inside_a_delimited_match_arm_remain_continuations() {
+    let tokens = lex([
+        "consume(",
+        "    match value:",
+        "        case 1: (",
+        "            \"one\"",
+        "        )",
+        "        case _: \"other\"",
+        ")",
+    ]
+    .join("\n")
+    .as_str())
+    .expect("nested arm delimiters should not create another layout suite");
+    let token_kinds = tokens
+        .iter()
+        .map(|token| token.kind.clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        token_kinds
+            .iter()
+            .filter(|kind| **kind == TokenKind::Indent)
+            .count(),
+        1
+    );
+    assert_eq!(
+        token_kinds
+            .iter()
+            .filter(|kind| **kind == TokenKind::Dedent)
+            .count(),
+        1
+    );
+    assert!(token_kinds.contains(&TokenKind::StringLiteral("one".to_string())));
+    assert!(token_kinds.contains(&TokenKind::StringLiteral("other".to_string())));
+}
+
+#[test]
 fn delimited_match_closer_indentation_is_continuation_formatting() {
     for closer_indent in [10, 16] {
         let source = format!(

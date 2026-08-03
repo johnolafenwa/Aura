@@ -2907,6 +2907,35 @@ fn s1_frontend_every_pattern_form_can_anchor_an_or_pattern_at_its_own_source_spa
 }
 
 #[test]
+fn or_patterns_preserve_every_alternative_in_source_order() {
+    let pattern = parse_pattern_from("1 | 2 | 3").expect("three-way or-pattern should parse");
+    let Pattern::Or(pattern) = pattern else {
+        panic!("expected an or-pattern");
+    };
+
+    assert_eq!(pattern.span, Span::new(1, 1));
+    let values = pattern
+        .alternatives
+        .iter()
+        .map(|alternative| match alternative {
+            Pattern::Literal(LiteralPattern {
+                kind: LiteralPatternKind::Int(value),
+                ..
+            }) => *value,
+            other => panic!("expected integer alternative, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        values,
+        vec![
+            crate::integer::IntegerValue::from_literal(1),
+            crate::integer::IntegerValue::from_literal(2),
+            crate::integer::IntegerValue::from_literal(3),
+        ]
+    );
+}
+
+#[test]
 fn s1_frontend_fstring_parser_treats_braces_inside_triple_quoted_arguments_as_string_content() {
     let expression = parse_expression("f\"{echo('''left } right''')}\"")
         .expect("triple-quoted argument content must not close interpolation");
