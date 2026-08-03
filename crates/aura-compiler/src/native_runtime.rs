@@ -4836,14 +4836,15 @@ fn with_vector<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&VecValue) -> T) -> T
 }
 
 fn with_vector_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut VecValue) -> T) -> T {
-    unsafe {
+    let result = unsafe {
         value_mut(ptr, |value| match value {
-            Value::Vec(vector) => write(vector),
-            other => runtime_error(format!(
-                "expected `list`, found `{}`",
-                value_type_name(other)
-            )),
+            Value::Vec(vector) => Ok(write(vector)),
+            other => Err(value_type_name(other)),
         })
+    };
+    match result {
+        Ok(value) => value,
+        Err(found) => runtime_error(format!("expected `list`, found `{found}`")),
     }
 }
 
@@ -4860,14 +4861,15 @@ fn with_map<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&MapValue) -> T) -> T {
 }
 
 fn with_map_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut MapValue) -> T) -> T {
-    unsafe {
+    let result = unsafe {
         value_mut(ptr, |value| match value {
-            Value::Map(map) => write(map),
-            other => runtime_error(format!(
-                "expected `dict`, found `{}`",
-                value_type_name(other)
-            )),
+            Value::Map(map) => Ok(write(map)),
+            other => Err(value_type_name(other)),
         })
+    };
+    match result {
+        Ok(value) => value,
+        Err(found) => runtime_error(format!("expected `dict`, found `{found}`")),
     }
 }
 
@@ -4884,14 +4886,15 @@ fn with_set<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&SetValue) -> T) -> T {
 }
 
 fn with_set_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut SetValue) -> T) -> T {
-    unsafe {
+    let result = unsafe {
         value_mut(ptr, |value| match value {
-            Value::Set(set) => write(set),
-            other => runtime_error(format!(
-                "expected `set`, found `{}`",
-                value_type_name(other)
-            )),
+            Value::Set(set) => Ok(write(set)),
+            other => Err(value_type_name(other)),
         })
+    };
+    match result {
+        Ok(value) => value,
+        Err(found) => runtime_error(format!("expected `set`, found `{found}`")),
     }
 }
 
@@ -5018,13 +5021,14 @@ pub extern "C-unwind" fn aura_direct_vec_set_in_place(
             let Some(normalized) = normalize_vec_index(index, vector.elements.len())
                 .filter(|normalized| *normalized < vector.elements.len())
             else {
-                runtime_error(format!(
-                    "list set index `{}` is out of bounds for length `{}`",
-                    index,
-                    vector.elements.len()
-                ));
+                return Err((vector.elements.len(), value));
             };
-            std::mem::replace(&mut vector.elements[normalized], value)
+            Ok(std::mem::replace(&mut vector.elements[normalized], value))
+        });
+        let previous = previous.unwrap_or_else(|(len, _value)| {
+            runtime_error(format!(
+                "list set index `{index}` is out of bounds for length `{len}`"
+            ))
         });
         boxed_value(previous)
     })
@@ -5040,13 +5044,14 @@ pub extern "C-unwind" fn aura_direct_vec_remove_in_place(
             let Some(normalized) = normalize_vec_index(index, vector.elements.len())
                 .filter(|normalized| *normalized < vector.elements.len())
             else {
-                runtime_error(format!(
-                    "list remove index `{}` is out of bounds for length `{}`",
-                    index,
-                    vector.elements.len()
-                ));
+                return Err(vector.elements.len());
             };
-            vector.elements.remove(normalized)
+            Ok(vector.elements.remove(normalized))
+        });
+        let previous = previous.unwrap_or_else(|len| {
+            runtime_error(format!(
+                "list remove index `{index}` is out of bounds for length `{len}`"
+            ))
         });
         boxed_value(option_some(previous))
     })
@@ -5059,21 +5064,22 @@ pub extern "C-unwind" fn aura_direct_vec_swap_in_place(
     second: i64,
 ) -> i64 {
     task_runtime_boundary(|| {
-        with_vector_mut(vec, |vector| {
+        let result = with_vector_mut(vec, |vector| {
             let normalized_first = normalize_vec_index(first, vector.elements.len());
             let normalized_second = normalize_vec_index(second, vector.elements.len());
             let (Some(normalized_first), Some(normalized_second)) = (
                 normalized_first.filter(|index| *index < vector.elements.len()),
                 normalized_second.filter(|index| *index < vector.elements.len()),
             ) else {
-                runtime_error(format!(
-                    "list swap indices `{}` and `{}` are out of bounds for length `{}`",
-                    first,
-                    second,
-                    vector.elements.len()
-                ));
+                return Err(vector.elements.len());
             };
             vector.elements.swap(normalized_first, normalized_second);
+            Ok(())
+        });
+        result.unwrap_or_else(|len| {
+            runtime_error(format!(
+                "list swap indices `{first}` and `{second}` are out of bounds for length `{len}`"
+            ))
         });
         1
     })
@@ -5146,15 +5152,15 @@ pub extern "C-unwind" fn aura_direct_collection_operation(
                 let Some(index) = normalize_vec_index(scalar, vector.elements.len())
                     .filter(|index| *index < vector.elements.len())
                 else {
-                    runtime_diagnostic_error(Diagnostic::coded(
-                        "AU4003",
-                        format!(
-                            "list pop index `{scalar}` is out of bounds for length `{}`",
-                            vector.elements.len()
-                        ),
-                    ));
+                    return Err(vector.elements.len());
                 };
-                vector.elements.remove(index)
+                Ok(vector.elements.remove(index))
+            });
+            let value = value.unwrap_or_else(|len| {
+                runtime_diagnostic_error(Diagnostic::coded(
+                    "AU4003",
+                    format!("list pop index `{scalar}` is out of bounds for length `{len}`"),
+                ))
             });
             boxed_value(value)
         }
@@ -5197,26 +5203,44 @@ pub extern "C-unwind" fn aura_direct_collection_operation(
             }
         }
         4 => {
+            enum ReserveFailure {
+                NotCollection,
+                Allocation,
+            }
+
             let additional = usize::try_from(scalar).unwrap_or_else(|_| {
                 runtime_diagnostic_error(Diagnostic::coded(
                     "AU4003",
                     "collection capacity cannot be negative",
                 ))
             });
-            unsafe {
+            let result = unsafe {
                 value_mut(collection, |value| match value {
-                    Value::Vec(vector) => vector.elements.try_reserve(additional),
-                    Value::Map(map) => map.entries.try_reserve(additional),
-                    Value::Set(set) => set.elements.try_reserve(additional),
-                    _ => runtime_error("reserve requires a collection"),
+                    Value::Vec(vector) => vector
+                        .elements
+                        .try_reserve(additional)
+                        .map_err(|_| ReserveFailure::Allocation),
+                    Value::Map(map) => map
+                        .entries
+                        .try_reserve(additional)
+                        .map_err(|_| ReserveFailure::Allocation),
+                    Value::Set(set) => set
+                        .elements
+                        .try_reserve(additional)
+                        .map_err(|_| ReserveFailure::Allocation),
+                    _ => Err(ReserveFailure::NotCollection),
                 })
-            }
-            .unwrap_or_else(|_| {
-                runtime_diagnostic_error(Diagnostic::coded(
+            };
+            match result {
+                Ok(()) => {}
+                Err(ReserveFailure::NotCollection) => {
+                    runtime_error("reserve requires a collection")
+                }
+                Err(ReserveFailure::Allocation) => runtime_diagnostic_error(Diagnostic::coded(
                     "AU4005",
                     "collection capacity allocation failed",
-                ))
-            });
+                )),
+            }
             boxed_value(Value::Unit)
         }
         5 | 6 => {

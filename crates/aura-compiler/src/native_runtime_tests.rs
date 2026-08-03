@@ -19209,6 +19209,188 @@ fn canonical_collection_abi_preserves_absence_bounds_and_capacity_diagnostics() 
 }
 
 #[test]
+fn canonical_list_pop_trap_releases_the_write_lock_for_later_tasks() {
+    let values = int_vec(&[1, 2]);
+    let values_address = values as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_collection_operation(
+            values_address as *mut OpaqueValue,
+            std::ptr::null_mut(),
+            9,
+            0,
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4003");
+    assert_eq!(
+        diagnostic.message,
+        "list pop index `9` is out of bounds for length `2`"
+    );
+
+    let values_address = values as usize;
+    let later_use = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                assert_eq!(
+                    super::aura_direct_vec_len(values_address as *mut OpaqueValue),
+                    2,
+                    "the failed task must leave the shared list readable"
+                );
+                let popped = super::aura_direct_collection_operation(
+                    values_address as *mut OpaqueValue,
+                    std::ptr::null_mut(),
+                    -1,
+                    0,
+                );
+                Ok(unsafe { super::consume_value(popped) })
+            })
+        })
+    });
+    assert_eq!(
+        later_use.expect("the list must remain usable after another task traps"),
+        Value::Int(
+            IntegerValue::from_typed_unsigned(2, IntegerKind::Uint8)
+                .expect("the popped value fits uint8")
+        )
+    );
+    assert_eq!(super::aura_direct_vec_len(values), 1);
+    unsafe { release_value(values) };
+}
+
+#[test]
+fn direct_list_index_mutator_traps_release_the_write_lock_for_later_tasks() {
+    let later_len = |values: *mut OpaqueValue| {
+        let values_address = values as usize;
+        run_lightweight_root_task(move || {
+            super::with_direct_task_runtime_scope(|| {
+                super::with_task_runtime_error_capture(|| {
+                    Ok(Value::Int(IntegerValue::from_i64(
+                        super::aura_direct_vec_len(values_address as *mut OpaqueValue),
+                    )))
+                })
+            })
+        })
+        .expect("a rejected list mutation must not poison the list")
+    };
+
+    let set_values = int_vec(&[1, 2]);
+    let set_values_address = set_values as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_vec_set_in_place(
+            set_values_address as *mut OpaqueValue,
+            7,
+            int_value(9),
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4003");
+    assert_eq!(
+        diagnostic.message,
+        "list set index `7` is out of bounds for length `2`"
+    );
+    assert_eq!(later_len(set_values), Value::Int(IntegerValue::from_i64(2)));
+
+    let remove_values = int_vec(&[1, 2]);
+    let remove_values_address = remove_values as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_vec_remove_in_place(remove_values_address as *mut OpaqueValue, -3);
+    });
+    assert_eq!(diagnostic.code, "AU4003");
+    assert_eq!(
+        diagnostic.message,
+        "list remove index `-3` is out of bounds for length `2`"
+    );
+    assert_eq!(
+        later_len(remove_values),
+        Value::Int(IntegerValue::from_i64(2))
+    );
+
+    let swap_values = int_vec(&[1, 2]);
+    let swap_values_address = swap_values as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_vec_swap_in_place(swap_values_address as *mut OpaqueValue, 0, 8);
+    });
+    assert_eq!(diagnostic.code, "AU4003");
+    assert_eq!(
+        diagnostic.message,
+        "list swap indices `0` and `8` are out of bounds for length `2`"
+    );
+    assert_eq!(
+        later_len(swap_values),
+        Value::Int(IntegerValue::from_i64(2))
+    );
+
+    for values in [set_values, remove_values, swap_values] {
+        unsafe { release_value(values) };
+    }
+}
+
+#[test]
+fn direct_collection_receiver_traps_release_value_locks_for_later_tasks() {
+    let later_integer = |value: *mut OpaqueValue| {
+        let value_address = value as usize;
+        run_lightweight_root_task(move || {
+            super::with_direct_task_runtime_scope(|| {
+                super::with_task_runtime_error_capture(|| {
+                    Ok(Value::Int(IntegerValue::from_i64(
+                        super::aura_direct_unbox_i64(value_address as *mut OpaqueValue),
+                    )))
+                })
+            })
+        })
+        .expect("a rejected collection receiver must remain readable")
+    };
+
+    let not_a_map = int_value(11);
+    let not_a_map_address = not_a_map as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_map_clear_in_place(not_a_map_address as *mut OpaqueValue);
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(diagnostic.message, "expected `dict`, found `integer`");
+    assert_eq!(
+        later_integer(not_a_map),
+        Value::Int(IntegerValue::from_i64(11))
+    );
+
+    let not_a_set = int_value(13);
+    let not_a_set_address = not_a_set as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_collection_operation(
+            not_a_set_address as *mut OpaqueValue,
+            std::ptr::null_mut(),
+            0,
+            7,
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(diagnostic.message, "expected `set`, found `integer`");
+    assert_eq!(
+        later_integer(not_a_set),
+        Value::Int(IntegerValue::from_i64(13))
+    );
+
+    let not_a_collection = int_value(17);
+    let not_a_collection_address = not_a_collection as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_collection_operation(
+            not_a_collection_address as *mut OpaqueValue,
+            std::ptr::null_mut(),
+            1,
+            4,
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(diagnostic.message, "reserve requires a collection");
+    assert_eq!(
+        later_integer(not_a_collection),
+        Value::Int(IntegerValue::from_i64(17))
+    );
+
+    for value in [not_a_map, not_a_set, not_a_collection] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
 fn direct_fixed_width_and_general_operator_abis_cover_every_new_numeric_opcode() {
     let int8 = |value: i128| {
         boxed_value(Value::Int(
