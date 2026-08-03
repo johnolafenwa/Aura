@@ -278,6 +278,89 @@ fn canonical_list_index_absence_is_au4008_with_actionable_help() {
     );
 }
 
+#[test]
+fn guarded_or_pattern_expressions_preserve_owned_commit_and_mutable_writeback() {
+    let output = crate::run_source(
+        r#"
+enum Payload:
+    Text(str)
+    Bytes(str)
+
+enum Reading:
+    Exact(int32)
+    Approx(int32)
+
+enum Code:
+    Value(int32)
+
+def take(value: own Payload) -> str:
+    return match own value:
+        case Payload.Text(text) | Payload.Bytes(text) if len(text) > 0: text
+        case Payload.Text(text) | Payload.Bytes(text): text
+
+def mutate_and_reject(value: mut int32) -> bool:
+    value += 5
+    return false
+
+def choose(reading: mut Reading) -> int32:
+    return match mut reading:
+        case Reading.Exact(value) | Reading.Approx(value) if mutate_and_reject(value): 0
+        case Reading.Approx(value): value
+        case Reading.Exact(value): 0 - value
+
+def take_pair(value: own (int32, str)) -> str:
+    return match own value:
+        case (1 | 2, text): text
+        case (_, text): text
+
+def code_label(code: own Code) -> str:
+    return match own code:
+        case Code.Value(1 | 2): "small"
+        case Code.Value(_): "other"
+
+def main():
+    print(take(Payload.Bytes("owned")))
+    print(f"<{take(Payload.Text(""))}>")
+    print(take_pair((2, "pair")))
+    print(code_label(Code.Value(1)))
+    print(code_label(Code.Value(7)))
+
+    mut reading = Reading.Approx(1)
+    print(choose(reading))
+    match reading:
+        case Reading.Approx(value):
+            print(value)
+        case Reading.Exact(value):
+            print(0 - value)
+"#,
+    )
+    .expect("guarded or-pattern expressions should execute through MIR");
+
+    assert_eq!(output.stdout, "owned\n<>\npair\nsmall\nother\n6\n6\n");
+}
+
+#[test]
+fn mir_public_numeric_parse_failure_and_bare_function_value_are_exact() {
+    let output = crate::run_source(
+        r#"
+def double(value: int64) -> int64:
+    return value * 2
+
+def main():
+    callback = double
+    print(callback(21))
+    match parse_int64("not-an-integer"):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(message):
+            print(message)
+"#,
+    )
+    .expect("public function values and parse failure results should execute through MIR");
+
+    assert_eq!(output.stdout, "42\ninvalid digit found in string\n");
+}
+
 fn lower_ffi_runtime_source(source: &str) -> MirModule {
     let module = crate::parse_source(source).expect("FFI runtime source should parse");
     let program = crate::check_module_with_builtin_imports(module)
