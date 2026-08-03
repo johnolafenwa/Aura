@@ -383,6 +383,64 @@ def main():
     );
 }
 
+#[test]
+fn mir_math_edges_preserve_values_signed_zero_and_au_classes() {
+    let output = crate::run_source(
+        r#"
+import math
+
+def main():
+    print(math.floor(-1.25))
+    print(math.ceil(-1.25))
+    print(math.trunc(-1.75))
+    print(math.pow(math.nan, 0.0))
+    print(math.pow(1.0, math.nan))
+    print(math.pow(-0.0, 3.0))
+    print(math.exp(0.0 - math.inf))
+    print(math.log(math.inf))
+    print(math.log2(math.inf))
+    print(math.log10(math.inf))
+    print(math.sin(-0.0))
+    print(math.cos(-0.0))
+    print(math.tan(-0.0))
+    print(math.exp(math.nan))
+    print(math.log(math.nan))
+    print(math.sin(math.nan))
+    print(round(-9223372036854775808.0))
+    print(divmod(0.0, -3.0))
+"#,
+    )
+    .expect("accepted math edge values should execute through MIR");
+
+    assert_eq!(
+        output.stdout,
+        "-2\n-1\n-1\n1.0\n1.0\n-0.0\n0.0\ninf\ninf\ninf\n-0.0\n1.0\n-0.0\nNaN\nNaN\nNaN\n-9223372036854775808\n(-0.0, -0.0)\n"
+    );
+
+    let failures = [
+        ("math.floor(math.inf)", "AU4002"),
+        ("math.ceil(math.nan)", "AU4002"),
+        ("math.trunc(0.0 - math.inf)", "AU4002"),
+        ("math.pow(0.0, -1.0)", "AU4001"),
+        ("math.pow(-2.0, 0.5)", "AU4001"),
+        ("math.pow(1.7976931348623157e308, 2.0)", "AU4002"),
+        ("math.exp(1000.0)", "AU4002"),
+        ("math.log(0.0)", "AU4001"),
+        ("math.log2(-1.0)", "AU4001"),
+        ("math.log10(-1.0)", "AU4001"),
+        ("math.sin(math.inf)", "AU4001"),
+        ("math.cos(0.0 - math.inf)", "AU4001"),
+        ("math.tan(math.inf)", "AU4001"),
+        ("round(9223372036854775808.0)", "AU4002"),
+        ("divmod(1, 0)", "AU4004"),
+    ];
+    for (expression, code) in failures {
+        let source = format!("import math\n\ndef main():\n    print({expression})\n");
+        let error = crate::run_source(&source).expect_err(expression);
+        assert_eq!(error.code, code, "{expression}");
+    }
+}
+
 fn lower_ffi_runtime_source(source: &str) -> MirModule {
     let module = crate::parse_source(source).expect("FFI runtime source should parse");
     let program = crate::check_module_with_builtin_imports(module)
