@@ -147,6 +147,125 @@ fn practical_format_specifications_are_unicode_aware_and_width_exact() {
 }
 
 #[test]
+fn format_spec_variants_preserve_exact_output_and_teaching_diagnostics() {
+    let positive = Value::Int(crate::integer::IntegerValue::from_i64(12_345));
+    assert_eq!(
+        format_runtime_value(&positive, &Type::named("int64"), "-d").unwrap(),
+        "12345"
+    );
+    assert_eq!(
+        format_runtime_value(&positive, &Type::named("int64"), ",.2f").unwrap(),
+        "12,345.00"
+    );
+    assert_eq!(
+        format_runtime_value(
+            &Value::Int(crate::integer::IntegerValue::from_i64(999)),
+            &Type::named("int64"),
+            ".1e",
+        )
+        .unwrap(),
+        "1.0e+03"
+    );
+    assert_eq!(
+        format_runtime_value(
+            &Value::Int(crate::integer::IntegerValue::from_i64(0)),
+            &Type::named("int64"),
+            ".0e",
+        )
+        .unwrap(),
+        "0e+00"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(12_345.5), &Type::named("float64"), ",.2f",).unwrap(),
+        "12,345.50"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(0.0012), &Type::named("float64"), ".2e",).unwrap(),
+        "1.20e-03"
+    );
+    assert_eq!(
+        format_runtime_value(
+            &Value::String("Aura".to_string()),
+            &Type::named("str"),
+            "<8s",
+        )
+        .unwrap(),
+        "Aura    "
+    );
+
+    let tuple = Value::Tuple(TupleValue {
+        element_types: vec![Type::named("int64"), Type::named("str")],
+        elements: vec![
+            Value::Int(crate::integer::IntegerValue::from_i64(1)),
+            Value::String("one".to_string()),
+        ],
+    });
+    assert_eq!(
+        format_runtime_value(
+            &tuple,
+            &Type::Tuple(vec![Type::named("int64"), Type::named("str")]),
+            "",
+        )
+        .unwrap(),
+        "(1, one)"
+    );
+
+    let malformed = [
+        (".s", "format precision requires decimal digits after `.`"),
+        ("dd", "malformed format specification `dd`"),
+    ];
+    for (source, expected) in malformed {
+        let error = parse_format_spec(source).expect_err("the specification must be rejected");
+        assert_eq!(error.message, expected);
+    }
+
+    let incompatible = [
+        (
+            &positive,
+            Type::named("int64"),
+            "s",
+            "format code `s` requires `str`, found integer",
+        ),
+        (
+            &Value::Float(1.0),
+            Type::named("float64"),
+            "d",
+            "integer format code requires an integer value, found float",
+        ),
+        (
+            &tuple,
+            Type::Tuple(vec![Type::named("int64"), Type::named("str")]),
+            "f",
+            "numeric format code requires an integer or floating value, found value",
+        ),
+        (
+            &Value::String("Aura".to_string()),
+            Type::named("str"),
+            "+s",
+            "a format sign is valid only for numeric values",
+        ),
+        (
+            &positive,
+            Type::named("int64"),
+            ",x",
+            "the thousands separator is valid only with d, f, and %",
+        ),
+        (
+            &positive,
+            Type::named("int64"),
+            ".2d",
+            "precision requires s, f, e, or %; integer precision is available only through f, e, and %",
+        ),
+    ];
+    for (value, value_type, source, expected) in incompatible {
+        let error = format_runtime_value(value, &value_type, source)
+            .expect_err("the type-incompatible specification must be rejected");
+        assert_eq!(error.code, "AU2002");
+        assert_eq!(error.message, expected);
+    }
+}
+
+#[test]
 fn floating_formatting_preserves_binary32_identity_and_ieee_signs() {
     let stored = Value::Float(1.234_567_890_123);
     assert_eq!(

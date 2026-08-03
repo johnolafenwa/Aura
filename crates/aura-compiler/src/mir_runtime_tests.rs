@@ -361,6 +361,28 @@ def main():
     assert_eq!(output.stdout, "42\ninvalid digit found in string\n");
 }
 
+#[test]
+fn mir_f_string_format_variants_match_the_runtime_contract() {
+    let output = crate::run_source(
+        r#"
+def main():
+    positive: int64 = 12345
+    value32: float32 = 1.5
+    pair = (1, "one")
+    print(f"|{'Aura':<8s}|")
+    print(f"{positive:-d} {positive:,.2f} {0:.0e} {999:.1e}")
+    print(f"{12345.5:,.2f} {0.0012:.2e}")
+    print(f"{value32} {pair}")
+"#,
+    )
+    .expect("accepted format variants should execute through MIR");
+
+    assert_eq!(
+        output.stdout,
+        "|Aura    |\n12345 12,345.00 0e+00 1.0e+03\n12,345.50 1.20e-03\n1.5 (1, one)\n"
+    );
+}
+
 fn lower_ffi_runtime_source(source: &str) -> MirModule {
     let module = crate::parse_source(source).expect("FFI runtime source should parse");
     let program = crate::check_module_with_builtin_imports(module)
