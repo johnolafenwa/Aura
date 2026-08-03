@@ -17,20 +17,21 @@ use super::{
     slice_vec_owned, spawn_lightweight_task, spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
     spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
-    task_result_error, task_result_ready, task_result_timed_out, validate_read_line_capacity,
-    validate_requested_read_size, validate_retry_runtime_policy, wait_all_cancelled,
-    wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
-    wait_any_ready, wait_any_timed_out, wait_condvar, wait_for_runtime_scheduler,
+    task_result_error, task_result_ready, task_result_timed_out, validate_format_spec_for_type,
+    validate_read_line_capacity, validate_requested_read_size, validate_retry_runtime_policy,
+    wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled,
+    wait_any_error, wait_any_ready, wait_any_timed_out, wait_condvar, wait_for_runtime_scheduler,
     wait_timeout_condvar, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayStorage, ArrayValue,
     BlockingIoPool, CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment,
-    EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, HttpListenerValue,
-    HttpResponseValue, InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal,
-    MapValue, ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus,
-    ProcessCompletedValue, ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue,
-    ProcessSupervisorWaitStatus, RangeValue, ReactorSubscription, RecvValueResult, RngValue,
-    SetValue, TaskCancelledSignal, TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus,
-    TcpListenerValue, TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue,
-    Value, VecValue, WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
+    EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FormatSpecErrorKind,
+    FunctionValue, HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode,
+    LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
+    ProcessChildWaitStatus, ProcessCompletedValue, ProcessRestartPolicy, ProcessStdioConfig,
+    ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, ReactorSubscription,
+    RecvValueResult, RngValue, SetValue, TaskCancelledSignal, TaskExecutionResult, TaskGroupValue,
+    TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TryRecvResult, TupleValue,
+    UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
+    MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
 use crate::integer::IntegerKind;
@@ -250,6 +251,182 @@ fn impossible_runtime_format_contract_mismatches_are_diagnostics() {
     .unwrap_err();
     assert_eq!(error.code, "AU4001");
     assert!(error.message.contains("internal format contract mismatch"));
+}
+
+#[test]
+fn format_matrix_pins_alignment_sign_radix_scientific_and_default_rendering() {
+    let string = Value::String("Aura".to_string());
+    for (spec, expected) in [
+        ("8s", "Aura    "),
+        (">8s", "    Aura"),
+        ("·^9s", "··Aura···"),
+        (".<7.3s", "Aur...."),
+    ] {
+        assert_eq!(
+            format_runtime_value(&string, &Type::named("str"), spec).unwrap(),
+            expected,
+            "string format {spec}"
+        );
+    }
+
+    let positive = Value::Int(crate::integer::IntegerValue::from_i64(42));
+    let negative = Value::Int(crate::integer::IntegerValue::from_i64(-42));
+    for (value, spec, expected) in [
+        (&positive, "+d", "+42"),
+        (&positive, " d", " 42"),
+        (&positive, "-d", "42"),
+        (&negative, "d", "-42"),
+        (&positive, "x", "2a"),
+        (&positive, "X", "2A"),
+        (&positive, "b", "101010"),
+        (&positive, "o", "52"),
+        (&positive, "08d", "      42"),
+        (&positive, ".0e", "4e+01"),
+    ] {
+        assert_eq!(
+            format_runtime_value(value, &Type::named("int64"), spec).unwrap(),
+            expected,
+            "integer format {spec}"
+        );
+    }
+
+    let zero = Value::Int(crate::integer::IntegerValue::from_i64(0));
+    assert_eq!(
+        format_runtime_value(&zero, &Type::named("int64"), ".0e").unwrap(),
+        "0e+00"
+    );
+    let carries = Value::Int(crate::integer::IntegerValue::from_i64(999));
+    assert_eq!(
+        format_runtime_value(&carries, &Type::named("int64"), ".1e").unwrap(),
+        "1.0e+03"
+    );
+    let grouped = Value::Int(crate::integer::IntegerValue::from_i64(12_345));
+    assert_eq!(
+        format_runtime_value(&grouped, &Type::named("int64"), ",.2f").unwrap(),
+        "12,345.00"
+    );
+
+    assert_eq!(
+        format_runtime_value(&Value::Float(12_345.25), &Type::named("float64"), ",.2f").unwrap(),
+        "12,345.25"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(12.5), &Type::named("float64"), ".2e").unwrap(),
+        "1.25e+01"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(-0.0), &Type::named("float64"), "").unwrap(),
+        "-0.0"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(1.25), &Type::named("float32"), "").unwrap(),
+        "1.25"
+    );
+    assert_eq!(
+        format_runtime_value(&positive, &Type::named("int64"), "").unwrap(),
+        "42"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Bool(true), &Type::named("bool"), "").unwrap(),
+        "true"
+    );
+}
+
+#[test]
+fn format_matrix_pins_each_public_syntax_and_type_error_class() {
+    for (spec, message) in [
+        (".f", "format precision requires decimal digits after `.`"),
+        ("dd", "malformed format specification `dd`"),
+        ("q", "unsupported format type `q`"),
+        ("{width}d", "cannot contain nested replacement fields"),
+    ] {
+        let error = parse_format_spec(spec).expect_err("invalid format syntax must fail");
+        assert_eq!(error.kind, FormatSpecErrorKind::Syntax, "format {spec}");
+        assert!(error.message.contains(message), "{}", error.message);
+    }
+
+    for (spec, ty, message) in [
+        ("s", "int64", "format code `s` requires `str`"),
+        (
+            "d",
+            "float64",
+            "integer format code requires an integer value",
+        ),
+        (
+            "f",
+            "str",
+            "numeric format code requires an integer or floating value",
+        ),
+        (
+            "+s",
+            "str",
+            "a format sign is valid only for numeric values",
+        ),
+        (
+            ",x",
+            "int64",
+            "thousands separator is valid only with d, f, and %",
+        ),
+        (".2d", "int64", "precision requires s, f, e, or %"),
+    ] {
+        let parsed = parse_format_spec(spec).expect("the spelling is syntactically valid");
+        let error = validate_format_spec_for_type(&parsed, &Type::named(ty))
+            .expect_err("the format must be rejected for this static type");
+        assert_eq!(error.kind, FormatSpecErrorKind::Type, "format {spec}");
+        assert!(error.message.contains(message), "{}", error.message);
+    }
+
+    let syntax = format_runtime_value(
+        &Value::Int(crate::integer::IntegerValue::from_i64(1)),
+        &Type::named("int64"),
+        "{width}d",
+    )
+    .expect_err("runtime formatting must preserve syntax diagnostics");
+    assert_eq!(syntax.code, "AU1101");
+
+    let wrong_type = format_runtime_value(
+        &Value::Int(crate::integer::IntegerValue::from_i64(1)),
+        &Type::named("int64"),
+        "s",
+    )
+    .expect_err("runtime formatting must preserve static type diagnostics");
+    assert_eq!(wrong_type.code, "AU2002");
+}
+
+#[test]
+fn math_host_dispatch_rejects_wrong_runtime_types_and_arities_exactly() {
+    for name in ["floor", "ceil", "trunc"] {
+        let error = super::evaluate_host_builtin(
+            &format!("math::{name}"),
+            vec![Value::Int(crate::integer::IntegerValue::from_i64(1))],
+        )
+        .expect_err("integer arguments must not masquerade as float64");
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(error.message, format!("`math.{name}` expects `float64`"));
+    }
+
+    let power_type = super::evaluate_host_builtin(
+        "math::pow",
+        vec![Value::Float(2.0), Value::String("3".to_string())],
+    )
+    .expect_err("math.pow requires two float64 arguments");
+    assert_eq!(power_type.code, "AU4001");
+    assert_eq!(
+        power_type.message,
+        "`math.pow` expects two `float64` arguments"
+    );
+
+    let power_arity = super::evaluate_host_builtin("math::pow", vec![Value::Float(2.0)])
+        .expect_err("math.pow requires two arguments");
+    assert_eq!(power_arity.code, "AU2004");
+    assert!(power_arity.message.contains("expects 2 argument"));
+
+    for name in ["exp", "log", "log2", "log10", "sin", "cos", "tan"] {
+        let error = super::evaluate_host_builtin(&format!("math::{name}"), vec![Value::Bool(true)])
+            .expect_err("non-float arguments must be diagnosed");
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(error.message, format!("`math.{name}` expects `float64`"));
+    }
 }
 
 #[test]

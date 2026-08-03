@@ -19032,3 +19032,390 @@ fn direct_tuple_abi_constructs_projects_matches_and_compares_opaque_values() {
         release_value(captured_repeat);
     }
 }
+
+#[test]
+fn canonical_collection_abi_pins_mutation_search_capacity_and_set_discard() {
+    let byte = |value: u8| {
+        boxed_value(Value::Int(
+            IntegerValue::from_typed_unsigned(value as u128, IntegerKind::Uint8)
+                .expect("every test byte fits uint8"),
+        ))
+    };
+
+    let values = int_vec(&[1, 2, 1]);
+    assert_eq!(
+        expect_int(super::aura_direct_collection_operation(
+            values,
+            std::ptr::null_mut(),
+            -1,
+            0,
+        )),
+        1,
+        "pop(-1) removes and returns the last list value"
+    );
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_clone_value(values)),
+        vec![1, 2]
+    );
+
+    let one = byte(1);
+    assert_eq!(
+        expect_int(super::aura_direct_collection_operation(values, one, 0, 2)),
+        0,
+        "index returns the first matching position"
+    );
+    assert_eq!(
+        expect_int(super::aura_direct_collection_operation(values, one, 0, 3)),
+        1,
+        "count reports the number of equal values"
+    );
+    expect_unit(super::aura_direct_collection_operation(values, one, 0, 1));
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_clone_value(values)),
+        vec![2],
+        "remove deletes the first equal value"
+    );
+    expect_unit(super::aura_direct_collection_operation(
+        values,
+        std::ptr::null_mut(),
+        16,
+        4,
+    ));
+
+    let map = super::aura_direct_map_empty();
+    expect_unit(super::aura_direct_collection_operation(
+        map,
+        std::ptr::null_mut(),
+        8,
+        4,
+    ));
+
+    let set = super::aura_direct_set_empty();
+    assert_eq!(super::aura_direct_set_insert_in_place(set, byte(3)), 1);
+    assert_eq!(super::aura_direct_set_insert_in_place(set, byte(4)), 1);
+    expect_unit(super::aura_direct_collection_operation(set, one, 0, 6));
+    assert_eq!(
+        super::aura_direct_set_len(set),
+        2,
+        "discard of an absent value is a no-op"
+    );
+    let three = byte(3);
+    expect_unit(super::aura_direct_collection_operation(set, three, 0, 5));
+    assert_eq!(super::aura_direct_set_len(set), 1);
+    expect_unit(super::aura_direct_collection_operation(
+        set,
+        std::ptr::null_mut(),
+        0,
+        7,
+    ));
+    assert_eq!(
+        super::aura_direct_set_len(set),
+        0,
+        "clear removes every set value"
+    );
+    expect_unit(super::aura_direct_collection_operation(
+        set,
+        std::ptr::null_mut(),
+        4,
+        4,
+    ));
+
+    for value in [values, one, map, set, three] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn canonical_collection_abi_preserves_absence_bounds_and_capacity_diagnostics() {
+    let capture =
+        |collection: *mut OpaqueValue, argument: *mut OpaqueValue, scalar: i64, opcode: i64| {
+            let collection = collection as usize;
+            let argument = argument as usize;
+            capture_direct_boundary_diagnostic(move || {
+                super::aura_direct_collection_operation(
+                    collection as *mut OpaqueValue,
+                    argument as *mut OpaqueValue,
+                    scalar,
+                    opcode,
+                );
+            })
+        };
+
+    let byte_nine = || {
+        boxed_value(Value::Int(
+            IntegerValue::from_typed_unsigned(9, IntegerKind::Uint8).unwrap(),
+        ))
+    };
+
+    let pop_values = int_vec(&[1, 2]);
+    let out_of_bounds = capture(pop_values, std::ptr::null_mut(), 4, 0);
+    assert_eq!(out_of_bounds.code, "AU4003");
+    assert_eq!(
+        out_of_bounds.message,
+        "list pop index `4` is out of bounds for length `2`"
+    );
+
+    let remove_values = int_vec(&[1, 2]);
+    let remove_needle = byte_nine();
+    let remove_missing = capture(remove_values, remove_needle, 0, 1);
+    assert_eq!(remove_missing.code, "AU4008");
+    assert_eq!(remove_missing.message, "collection value was not found");
+    assert_eq!(
+        remove_missing.help,
+        vec!["check `value in values` before removing when absence is expected".to_string()]
+    );
+
+    let index_values = int_vec(&[1, 2]);
+    let index_needle = byte_nine();
+    let index_missing = capture(index_values, index_needle, 0, 2);
+    assert_eq!(index_missing.code, "AU4008");
+    assert_eq!(
+        index_missing.help,
+        vec!["check `value in values` before searching when absence is expected".to_string()]
+    );
+
+    let negative_values = int_vec(&[1, 2]);
+    let negative_capacity = capture(negative_values, std::ptr::null_mut(), -1, 4);
+    assert_eq!(negative_capacity.code, "AU4003");
+    assert_eq!(
+        negative_capacity.message,
+        "collection capacity cannot be negative"
+    );
+
+    let allocation_values = int_vec(&[1, 2]);
+    let allocation = capture(allocation_values, std::ptr::null_mut(), i64::MAX, 4);
+    assert_eq!(allocation.code, "AU4005");
+    assert_eq!(allocation.message, "collection capacity allocation failed");
+
+    let set = super::aura_direct_set_empty();
+    let set_needle = byte_nine();
+    let set_missing = capture(set, set_needle, 0, 5);
+    assert_eq!(set_missing.code, "AU4008");
+    assert_eq!(set_missing.message, "collection value was not found");
+
+    for value in [
+        pop_values,
+        remove_values,
+        remove_needle,
+        index_values,
+        index_needle,
+        negative_values,
+        allocation_values,
+        set,
+        set_needle,
+    ] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn direct_fixed_width_and_general_operator_abis_cover_every_new_numeric_opcode() {
+    let int8 = |value: i128| {
+        boxed_value(Value::Int(
+            IntegerValue::from_typed_signed(value, IntegerKind::Int8)
+                .expect("test value fits int8"),
+        ))
+    };
+    let width_case = |left: i128, right: i128, operation, mode, expected: i128| {
+        let left = int8(left);
+        let right = int8(right);
+        let result = super::aura_direct_integer_width_binary(left, right, operation, mode, 5, 7);
+        assert_eq!(
+            unsafe { take_value(result) },
+            Value::Int(
+                IntegerValue::from_typed_signed(expected, IntegerKind::Int8)
+                    .expect("expected value fits int8")
+            ),
+            "mode {mode}, operation {operation}"
+        );
+        unsafe {
+            release_value(left);
+            release_value(right);
+        }
+    };
+
+    for (left, right, operation, expected) in [
+        (127, 1, 0, -128),
+        (-128, 1, 1, 127),
+        (64, 2, 2, -128),
+        (65, 1, 3, -126),
+        (-128, 1, 4, -64),
+    ] {
+        width_case(left, right, operation, 1, expected);
+    }
+    for (left, right, operation, expected) in [
+        (127, 1, 0, 127),
+        (-128, 1, 1, -128),
+        (64, 2, 2, 127),
+        (65, 1, 3, 127),
+        (-128, 1, 4, -64),
+    ] {
+        width_case(left, right, operation, 2, expected);
+    }
+
+    for (opcode, left, right, expected) in [
+        (13, -7, 3, -3),
+        (14, 3, 4, 81),
+        (15, 6, 3, 2),
+        (16, 6, 3, 7),
+        (17, 6, 3, 5),
+        (18, 6, 1, 12),
+        (19, 6, 1, 3),
+    ] {
+        assert_eq!(
+            expect_int(super::aura_direct_binary_value(
+                opcode,
+                int_value(left),
+                int_value(right),
+            )),
+            expected,
+            "general numeric opcode {opcode}"
+        );
+        assert_eq!(
+            expect_int(super::aura_direct_binary_value_at(
+                opcode,
+                int_value(left),
+                int_value(right),
+                0,
+                11,
+                13,
+            )),
+            expected,
+            "spanned general numeric opcode {opcode}"
+        );
+    }
+    assert_eq!(
+        expect_int(super::aura_direct_unary_value(2, int_value(5))),
+        !5_i64 as i128
+    );
+    assert_eq!(
+        expect_int(super::aura_direct_unary_value_at(2, int_value(5), 17, 19)),
+        !5_i64 as i128
+    );
+}
+
+#[test]
+fn direct_format_abi_returns_exact_text_and_preserves_type_diagnostic_codes() {
+    let spec = "+6d";
+    let value_type = "int64";
+    let value = int_value(42);
+    assert_eq!(
+        expect_string(super::aura_direct_format_value(
+            value,
+            spec.as_ptr(),
+            spec.len(),
+            value_type.as_ptr(),
+            value_type.len(),
+        )),
+        "   +42"
+    );
+    unsafe { release_value(value) };
+
+    let invalid_spec = "s";
+    let invalid_value = int_value(42);
+    let invalid_value_address = invalid_value as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_format_value(
+            invalid_value_address as *mut OpaqueValue,
+            invalid_spec.as_ptr(),
+            invalid_spec.len(),
+            value_type.as_ptr(),
+            value_type.len(),
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        "format code `s` requires `str`, found integer"
+    );
+    unsafe { release_value(invalid_value) };
+}
+
+static DIRECT_CONSTANT_INITIALIZER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+unsafe extern "C-unwind" fn counted_direct_constant_initializer(
+    args: *const i64,
+    len: usize,
+) -> *mut OpaqueValue {
+    assert!(args.is_null());
+    assert_eq!(len, 0);
+    DIRECT_CONSTANT_INITIALIZER_CALLS.fetch_add(1, Ordering::SeqCst);
+    int_value(42)
+}
+
+#[test]
+fn direct_module_constant_abi_initializes_once_caches_and_reinitializes_after_reset() {
+    const HELPER: &str = "direct-module-constant-cache";
+    if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() != Ok(HELPER) {
+        let output = Command::new(std::env::current_exe().expect("test binary should exist"))
+            .arg("--exact")
+            .arg("native_runtime::tests::direct_module_constant_abi_initializes_once_caches_and_reinitializes_after_reset")
+            .arg("--nocapture")
+            .env("AURA_DIRECT_RUNTIME_HELPER", HELPER)
+            .output()
+            .expect("isolated module constant test should run");
+        assert!(
+            output.status.success(),
+            "isolated module constant cache test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    super::clear_direct_module_constants();
+    DIRECT_CONSTANT_INITIALIZER_CALLS.store(0, Ordering::SeqCst);
+    let key = "tests::answer";
+    let thunk = counted_direct_constant_initializer as *const () as usize as i64;
+
+    let first = super::aura_direct_module_constant(key.as_ptr(), key.len(), thunk);
+    let second = super::aura_direct_module_constant(key.as_ptr(), key.len(), thunk);
+    assert_eq!(expect_int(first), 42);
+    assert_eq!(expect_int(second), 42);
+    assert_eq!(
+        DIRECT_CONSTANT_INITIALIZER_CALLS.load(Ordering::SeqCst),
+        1,
+        "the cached value must be reused without calling its initializer twice"
+    );
+
+    super::clear_direct_module_constants();
+    let after_reset = super::aura_direct_module_constant(key.as_ptr(), key.len(), thunk);
+    assert_eq!(expect_int(after_reset), 42);
+    assert_eq!(
+        DIRECT_CONSTANT_INITIALIZER_CALLS.load(Ordering::SeqCst),
+        2,
+        "runtime reset drops cached constants so the next program initializes anew"
+    );
+    super::clear_direct_module_constants();
+}
+
+#[test]
+fn direct_module_constant_abi_rejects_a_null_initializer_exactly() {
+    const HELPER: &str = "direct-module-constant-null-initializer";
+    if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() != Ok(HELPER) {
+        let output = Command::new(std::env::current_exe().expect("test binary should exist"))
+            .arg("--exact")
+            .arg("native_runtime::tests::direct_module_constant_abi_rejects_a_null_initializer_exactly")
+            .arg("--nocapture")
+            .env("AURA_DIRECT_RUNTIME_HELPER", HELPER)
+            .output()
+            .expect("isolated module constant test should run");
+        assert!(
+            output.status.success(),
+            "isolated null initializer test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    super::clear_direct_module_constants();
+    let key = "tests::missing_initializer";
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_module_constant(key.as_ptr(), key.len(), 0);
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        "module constant `tests::missing_initializer` has a null initializer thunk"
+    );
+    super::clear_direct_module_constants();
+}
