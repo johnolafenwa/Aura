@@ -175,6 +175,37 @@ def main() -> int32:
 }
 
 #[test]
+fn negative_tcp_read_exact_count_reports_runtime_contract_through_public_api() {
+    let temp = TempDir::new("aura-tcp-negative-read-exact");
+    let entry = temp.path().join("main.au");
+    let source = r#"import io
+import net
+
+def probe() -> Result[None, io.Error]:
+    with listener = try net.listen("127.0.0.1:0"):
+        address = try listener.local_addr()
+        with stream = try net.connect(address):
+            try stream.read_exact(-1)
+    return Result.Ok(None)
+
+def main() -> int32:
+    match own probe():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
+"#;
+
+    let error = run_path_with_source(&entry, source)
+        .expect_err("negative TCP read_exact count should fail before socket IO");
+    assert_eq!(
+        error.message,
+        "`read_exact(...)` requires a non-negative count"
+    );
+}
+
+#[test]
 fn advanced_io_and_network_surface_type_checks_from_path_context() {
     let temp = TempDir::new("aura-io-advanced-check");
     let entry = temp.path().join("main.au");

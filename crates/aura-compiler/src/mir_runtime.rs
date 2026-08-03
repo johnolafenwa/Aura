@@ -3562,10 +3562,9 @@ impl MirRuntime {
                             debug_assert_eq!(member_name, "minutes");
                             NANOS_PER_MINUTE
                         };
-                        return value
-                            .checked_mul(scale)
-                            .map(Value::Duration)
-                            .ok_or_else(|| Diagnostic::new("duration overflow"));
+                        // `value` is int64 and the largest scale is 60e9, so the
+                        // product is strictly inside the i128 Duration range.
+                        return Ok(Value::Duration(value * scale));
                     }
                 }
 
@@ -4414,66 +4413,13 @@ impl MirRuntime {
                         )?;
                         Ok(outcome.value)
                     }
-                    other => {
-                        let resolved_receiver_ty = receiver_static_ty
-                            .clone()
-                            .or_else(|| self.infer_runtime_value_type(other));
-                        if let Some(resolved_receiver_ty) = resolved_receiver_ty {
-                            if let Some(method) = self
-                                .find_trait_impl_method(&resolved_receiver_ty, field)
-                                .cloned()
-                            {
-                                let Some(function) =
-                                    self.functions.get(&method.function_name).cloned()
-                                else {
-                                    return Err(Diagnostic::new(format!(
-                                        "unknown MIR method body `{}`",
-                                        method.function_name
-                                    )));
-                                };
-                                let evaluated_args = evaluate_named_args(args, env)?;
-                                let writeback_places = evaluated_args
-                                    .iter()
-                                    .map(|argument| argument.writeback_place.clone())
-                                    .collect::<Vec<_>>();
-                                let outcome = self.call_function_with_receiver_type(
-                                    &function,
-                                    Some(if method.receiver == Some(MirReceiverKind::Value) {
-                                        std::mem::replace(&mut receiver, Value::Unit)
-                                    } else {
-                                        try_clone_mir_value(&receiver)?
-                                    }),
-                                    evaluated_args,
-                                    expected_return_type,
-                                    None,
-                                    Some(&resolved_receiver_ty),
-                                )?;
-                                if method.receiver == Some(MirReceiverKind::BorrowMut) {
-                                    let Some(updated) = outcome.updated_receiver else {
-                                        return Err(Diagnostic::new(format!(
-                                            "mutable MIR method `{}` did not return an updated receiver",
-                                            field
-                                        )));
-                                    };
-                                    if let Some(place) = receiver_place {
-                                        env.write_place(place, updated)?;
-                                    }
-                                }
-                                self.apply_borrowed_param_writebacks(
-                                    &function.params,
-                                    &writeback_places,
-                                    outcome.updated_params,
-                                    env,
-                                )?;
-                                return Ok(outcome.value);
-                            }
-                        }
-                        Err(Diagnostic::new(format!(
-                            "unsupported MIR member call `{}` on `{}`",
-                            field,
-                            receiver.render()
-                        )))
-                    }
+                    // Checked non-instance trait calls return through the trait-dispatch
+                    // block above before reaching this exhaustive runtime-value match.
+                    other => Err(Diagnostic::new(format!(
+                        "unsupported MIR member call `{}` on `{}`",
+                        field,
+                        other.render()
+                    ))),
                 }
             }
         }
@@ -8154,9 +8100,9 @@ impl MirRuntime {
         loop {
             for (index, task) in tasks.iter().enumerate() {
                 if let Some(result) = task.completed_result_observed() {
-                    let index = i64::try_from(index).map_err(|_| {
-                        Diagnostic::new("wait_any result index exceeds int64 range")
-                    })?;
+                    // Rust allocations cannot contain more than isize::MAX elements, so
+                    // every real list index is representable as Aura's int64.
+                    let index = i64::try_from(index).expect("task-list index must fit int64");
                     return match result {
                         crate::runtime_value::TaskExecutionResult::Ready(result) => match result {
                             Ok(value) => Ok(wait_any_ready(index, value)),
@@ -8201,9 +8147,9 @@ impl MirRuntime {
                 TaskWaitStatus::Ready(result) => match result {
                     Ok(value) => results.push(value),
                     Err(error) => {
-                        let index = i64::try_from(index).map_err(|_| {
-                            Diagnostic::new("wait_all result index exceeds int64 range")
-                        })?;
+                        // Rust allocations cannot contain more than isize::MAX elements, so
+                        // every real list index is representable as Aura's int64.
+                        let index = i64::try_from(index).expect("task-list index must fit int64");
                         return Ok(wait_all_error(index, error.message));
                     }
                 },

@@ -15,6 +15,8 @@ def main() -> int32:
     print(compound)
     print(Duration.seconds(2))
     print(Duration.minutes(1))
+    print(Duration.minutes(9223372036854775807))
+    print(Duration.minutes(-9223372036854775808))
     print(Duration.ms(1500).to_ms())
     print(Duration.ms(1500).to_seconds())
     print(Duration.ms(1) < Duration.ms(2))
