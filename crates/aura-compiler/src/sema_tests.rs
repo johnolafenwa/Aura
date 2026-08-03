@@ -97,6 +97,271 @@ fn s1_frontend_match_guard_and_sort_reverse_errors_keep_specific_diagnostics() {
         "`sort` expects `bool` for `reverse`, found `int64`"
     );
 }
+
+#[test]
+fn s1_sema_collection_algorithms_pin_types_equality_and_lambda_key_orderability() {
+    crate::check_source(
+        "def main():\n    values: list[int64] = list[int64].with_capacity(4)\n    names: set[str] = set[str].with_capacity(2)\n    counts: dict[str, int64] = dict[str, int64].with_capacity(8)\n",
+    )
+    .expect("capacity constructors must retain their specialized collection types");
+
+    let equality = crate::check_source(
+        "def main():\n    left = [Array[int32].zeros(shape=[1])]\n    right = [Array[int32].zeros(shape=[1])]\n    print(left == right)\n",
+    )
+    .expect_err("collection equality must reject a recursively contained Array");
+    assert_eq!(equality.code, "AU2003");
+    assert_eq!(
+        equality.message,
+        "cannot compare `list[Array[int32]]` because it contains `Array[int32]`, whose equality is unavailable"
+    );
+
+    let orderability = crate::check_source(
+        "def main():\n    mut values = [2, 1]\n    values.sort(key=lambda value: [value])\n",
+    )
+    .expect_err("a list-valued lambda key is not naturally ordered");
+    assert_eq!(orderability.code, "AU2002");
+    assert_eq!(
+        orderability.message,
+        "`list.sort` cannot order key type `list[int64]`"
+    );
+
+    for source in [
+        "def main():\n    values = list[int64].with_capacity(missing)\n",
+        "def main():\n    mut values = [2, 1]\n    values.sort(reverse=missing)\n",
+    ] {
+        let propagated = crate::check_source(source)
+            .expect_err("collection argument inference must preserve its source diagnostic");
+        assert_eq!(propagated.code, "AU2001", "{source}");
+        assert_eq!(propagated.message, "unknown name `missing`", "{source}");
+    }
+}
+
+#[test]
+fn s1_sema_typed_power_and_shift_diagnostics_preserve_exact_operand_contracts() {
+    let negative = crate::check_source("def main():\n    value = 2 ** -1\n")
+        .expect_err("integer power must reject a negative exponent");
+    assert_eq!(negative.code, "AU2003");
+    assert_eq!(
+        negative.message,
+        "integer power does not accept a negative exponent"
+    );
+
+    let non_numeric = crate::check_source(
+        "def main():\n    left: str = \"a\"\n    right: str = \"b\"\n    value = left ** right\n",
+    )
+    .expect_err("power requires numeric operands");
+    assert_eq!(non_numeric.code, "AU2003");
+    assert_eq!(
+        non_numeric.message,
+        "power requires numeric operands, found `str` and `str`"
+    );
+
+    for operator in ["**", "<<", ">>", "&", "|", "^"] {
+        let source = format!(
+            "def main():\n    left: int8 = 2\n    right: int16 = 1\n    value = left {operator} right\n"
+        );
+        let mismatch = crate::check_source(&source)
+            .expect_err("typed integer operators require an exact shared width");
+        assert_eq!(mismatch.code, "AU2002", "{operator}");
+        assert_eq!(
+            mismatch.message,
+            "binary operator operands must match exactly, found `int8` and `int16`",
+            "{operator}"
+        );
+    }
+
+    crate::check_source(
+        "def main():\n    left: int8 = 2\n    right: int8 = 1\n    power: int8 = left ** right\n    shifted: int8 = left << right\n",
+    )
+    .expect("same-width typed integer power and shifts must retain that width");
+}
+
+#[test]
+fn s1_sema_module_constants_reject_self_reentry_rebinding_mutation_and_moves() {
+    let reentry = crate::check_source("VALUE: int64 = VALUE\n\ndef main():\n    pass\n")
+        .expect_err("a module constant cannot re-enter its own initializer");
+    assert_eq!(reentry.code, "AU2001");
+    assert_eq!(
+        reentry.message,
+        "module constant `VALUE` is used before initialization"
+    );
+
+    let rebound = crate::check_source(
+        "NAMES: list[str] = [\"Aura\"]\n\ndef main():\n    NAMES = [\"changed\"]\n",
+    )
+    .expect_err("module constants cannot be rebound");
+    assert_eq!(rebound.code, "AU3003");
+    assert_eq!(rebound.message, "module constant `NAMES` is immutable");
+
+    let mutated = crate::check_source(
+        "NAMES: list[str] = [\"Aura\"]\n\ndef main():\n    NAMES.append(\"changed\")\n",
+    )
+    .expect_err("module constants cannot provide mutable receivers");
+    assert_eq!(mutated.code, "AU3003");
+    assert_eq!(
+        mutated.message,
+        "module constant `NAMES` cannot provide a mutable receiver for method `append`"
+    );
+
+    let moved = crate::check_source(
+        "import random\n\nSTATE: random.Rng = random.Rng(seed=7)\n\ndef consume(value: own random.Rng):\n    pass\n\ndef main():\n    consume(STATE)\n",
+    )
+    .expect_err("a non-cloneable module constant cannot move out of immutable storage");
+    assert_eq!(moved.code, "AU3001");
+    assert_eq!(
+        moved.message,
+        "cannot move `STATE` out of immutable module storage"
+    );
+    assert_eq!(
+        moved.help,
+        ["keep shared access or construct an independent owned value"]
+    );
+
+    let remote = crate::check_source("STATE: list[str] = [\"ready\"]\n\ndef main():\n    pass\n")
+        .expect("the imported constant fixture must be a valid checked module");
+    let state = remote.constants["STATE"].clone();
+    let mut settings = namespace("settings");
+    settings
+        .constants
+        .insert("STATE".to_string(), state.clone());
+    settings.all_constants.insert("STATE".to_string(), state);
+    let importing = crate::parser::parse(
+        "def consume(value: own list[str]):\n    pass\n\ndef main():\n    consume(settings.STATE)\n",
+    )
+    .expect("qualified constant consumption source must parse");
+    let qualified = check_with_context(
+        importing,
+        ModuleContext {
+            module_name: "<main>".to_string(),
+            imported_bindings: BTreeMap::from([(
+                "settings".to_string(),
+                ImportedBinding::Module(settings.clone()),
+            )]),
+            module_registry: BTreeMap::from([("settings".to_string(), settings)]),
+            is_entry_module: true,
+        },
+    )
+    .expect_err("qualified imported constants cannot move from module storage");
+    assert_eq!(qualified.code, "AU3001");
+    assert_eq!(
+        qualified.message,
+        "cannot move `settings.STATE` out of immutable module storage"
+    );
+    assert_eq!(
+        qualified.help,
+        ["keep shared access or construct an independent owned value"]
+    );
+}
+
+#[test]
+fn s1_sema_match_guards_and_or_patterns_pin_commit_binding_and_coverage_errors() {
+    for (source, code, expected) in [
+        (
+            "def main():\n    value: int32 = 1\n    match value:\n        case 1 if 7:\n            pass\n        case _:\n            pass\n",
+            "AU2002",
+            "match guard expects exactly `bool`, found `int64`",
+        ),
+        (
+            "enum Pair:\n    Left(int32)\n    Right(int32)\n\ndef main():\n    value = Pair.Left(1)\n    match value:\n        case Left(item) | Right(_):\n            print(item)\n",
+            "AU2999",
+            "every alternative in an or-pattern must bind the same names with identical types and capabilities",
+        ),
+        (
+            "def main():\n    value: int32 = 1\n    match value:\n        case 1 | 1:\n            pass\n        case _:\n            pass\n",
+            "AU2999",
+            "duplicate or subsumed alternative in or-pattern",
+        ),
+        (
+            "def main():\n    value: (bool, bool) = (true, false)\n    match value:\n        case (true, _) | (true, false):\n            pass\n        case _:\n            pass\n",
+            "AU2999",
+            "duplicate or subsumed alternative in or-pattern",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err("invalid guarded match must fail");
+        assert_eq!(error.code, code, "{source}");
+        assert_eq!(error.message, expected, "{source}");
+    }
+
+    let candidate_move = crate::check_source(
+        "enum Text:\n    Value(str)\n    Empty\n\ndef consume(value: own str) -> bool:\n    return value == \"yes\"\n\ndef main():\n    text = Text.Value(\"yes\")\n    match own text:\n        case Value(value) if consume(value):\n            pass\n        case Value(_):\n            pass\n        case Empty:\n            pass\n",
+    )
+    .expect_err("an own-match guard cannot consume a candidate before commit");
+    assert_eq!(candidate_move.code, "AU3001");
+    assert_eq!(
+        candidate_move.message,
+        "cannot move an owned match candidate before its guard commits the arm"
+    );
+
+    let nested = crate::check_source(
+        "enum Flag:\n    On\n    Off\n\nenum Wrap:\n    Value(Flag)\n    Empty\n\ndef main():\n    value = Wrap.Value(Flag.On)\n    match value:\n        case Value(On):\n            pass\n        case Empty:\n            pass\n",
+    )
+    .expect_err("nested enum matches must report the uncovered payload shape");
+    assert_eq!(nested.code, "AU2999");
+    assert_eq!(
+        nested.message,
+        "non-exhaustive match over `Wrap`: missing `Value(Off)`"
+    );
+
+    let primitive = crate::check_source(
+        "def main():\n    value: int64 = 1\n    match value:\n        case 1:\n            pass\n",
+    )
+    .expect_err("an open primitive match needs a fallback");
+    assert_eq!(primitive.code, "AU2999");
+    assert_eq!(
+        primitive.message,
+        "`match` over `int64` with literal patterns requires a final `case _:` arm"
+    );
+
+    let primitive_payload = crate::check_source(
+        "enum Number:\n    Value(int64)\n    Empty\n\ndef main():\n    value = Number.Value(1)\n    match value:\n        case Value(1):\n            pass\n        case Empty:\n            pass\n",
+    )
+    .expect_err("an enum payload with an open primitive domain needs a fallback shape");
+    assert_eq!(primitive_payload.code, "AU2999");
+    assert_eq!(
+        primitive_payload.message,
+        "non-exhaustive match over `Number`: missing `Value(_)`"
+    );
+
+    let pair_payload = crate::check_source(
+        "enum PairNumber:\n    Value(int64, int64)\n    Empty\n\ndef main():\n    value = PairNumber.Value(1, 1)\n    match value:\n        case Value(1, 1):\n            pass\n        case Empty:\n            pass\n",
+    )
+    .expect_err("an incompletely covered multi-payload variant needs its full fallback shape");
+    assert_eq!(pair_payload.code, "AU2999");
+    assert_eq!(
+        pair_payload.message,
+        "non-exhaustive match over `PairNumber`: missing `Value(_, _)`"
+    );
+
+    let bool_union = crate::check_source(
+        "def main():\n    value: bool = true\n    match value:\n        case true | false:\n            pass\n        case _:\n            pass\n",
+    )
+    .expect_err("a complete bool or-pattern must subsume a later wildcard");
+    assert_eq!(bool_union.code, "AU2999");
+    assert_eq!(bool_union.message, "unreachable match arm");
+}
+
+#[test]
+fn s1_sema_fstring_specs_report_syntax_and_interpolated_type_failures() {
+    let syntax = crate::check_source("def main():\n    print(f\"{1:q}\")\n")
+        .expect_err("unsupported format codes must fail during checking");
+    assert_eq!(syntax.code, "AU1101");
+    assert_eq!(
+        syntax.message,
+        "unsupported format type `q`; supported codes are d, f, e, x, X, b, o, %, and s"
+    );
+
+    let typed = crate::check_source("def main():\n    print(f\"{true:d}\")\n")
+        .expect_err("integer format codes require an integer interpolation");
+    assert_eq!(typed.code, "AU2002");
+    assert_eq!(
+        typed.message,
+        "integer format code requires an integer value, found value"
+    );
+    assert_eq!(
+        typed.help,
+        ["supported codes are d, f, e, x, X, b, o, %, and s; omit the code for ordinary rendering"]
+    );
+}
 use std::sync::OnceLock;
 
 fn empty_canonical_type_names() -> &'static BTreeMap<String, String> {

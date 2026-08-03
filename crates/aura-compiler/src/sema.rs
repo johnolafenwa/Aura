@@ -19,7 +19,7 @@ use crate::diag::{Diagnostic, Result};
 use crate::integer::{
     integer_type_bounds as integer_type_bounds_impl, IntegerBounds, IntegerValue,
 };
-use crate::runtime_value::{parse_format_spec, validate_format_spec_for_type, FormatSpecErrorKind};
+use crate::runtime_value::{parse_format_spec, validate_format_spec_for_type};
 
 #[derive(Clone, Debug)]
 pub struct Program {
@@ -11954,14 +11954,7 @@ impl<'a> FunctionChecker<'a> {
                         } => {
                             let value_type = self.type_of_expr(expr, locals)?;
                             let parsed = parse_format_spec(spec).map_err(|error| {
-                                Diagnostic::coded_at(
-                                    match error.kind {
-                                        FormatSpecErrorKind::Syntax => "AU1101",
-                                        FormatSpecErrorKind::Type => "AU2002",
-                                    },
-                                    *spec_span,
-                                    error.message,
-                                )
+                                Diagnostic::coded_at("AU1101", *spec_span, error.message)
                             })?;
                             validate_format_spec_for_type(&parsed, &value_type).map_err(|error| {
                                 Diagnostic::coded_at("AU2002", *spec_span, error.message).with_help(
@@ -15540,12 +15533,8 @@ impl<'a> FunctionChecker<'a> {
                                     },
                                 )?;
                             let ordered_args = constructor.bind_args(args, span)?;
-                            let minimum = required_ordered_arg(
-                                &ordered_args,
-                                0,
-                                span,
-                                "internal error: with_capacity should bind one minimum argument",
-                            )?;
+                            let minimum = ordered_args[0]
+                                .expect("with_capacity binding should retain its required minimum");
                             let actual = self.type_of_expr_hint(
                                 &minimum.value,
                                 locals,
