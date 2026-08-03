@@ -897,6 +897,45 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
 }
 
 #[test]
+fn array_slices_report_storage_allocation_failure_for_every_dtype_without_mutation() {
+    let arrays = [
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Int32(vec![1, 2].into_boxed_slice()),
+        )
+        .unwrap(),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Int64(vec![1, 2].into_boxed_slice()),
+        )
+        .unwrap(),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Float32(vec![1.0, 2.0].into_boxed_slice()),
+        )
+        .unwrap(),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Float64(vec![1.0, 2.0].into_boxed_slice()),
+        )
+        .unwrap(),
+    ];
+
+    for array in arrays {
+        let before = array.clone();
+        let error =
+            super::with_array_allocation_budget(1, || array.slice_first_axis(Some(0), Some(1)))
+                .expect_err("the storage copy after the shape copy must remain fallible");
+        assert_eq!(error.code, "AU4005");
+        assert_eq!(
+            error.message,
+            "array slice could not allocate storage for 1 array elements"
+        );
+        assert_eq!(array, before, "a failed slice must not mutate its source");
+    }
+}
+
+#[test]
 fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
     let malformed_source = VecValue {
         element_type: Type::named("int32"),
@@ -16006,6 +16045,62 @@ fn websocket_error_mapping_preserves_io_error_kinds() {
 
     let other = super::websocket_error_to_io(tungstenite::Error::ConnectionClosed);
     assert_eq!(other.kind(), io::ErrorKind::Other);
+}
+
+#[cfg(unix)]
+#[test]
+fn websocket_handshake_rejections_are_observable_on_both_transport_roles() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind websocket test");
+    let address = listener.local_addr().expect("websocket test address");
+    let accepting = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept malformed client");
+        let error = match super::accept_websocket_stream(
+            stream,
+            Some(Instant::now() + StdDuration::from_secs(2)),
+            None,
+        ) {
+            Ok(_) => panic!("a malformed client handshake must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+    });
+    let mut malformed_client =
+        std::net::TcpStream::connect(address).expect("connect malformed client");
+    thread::sleep(StdDuration::from_millis(20));
+    malformed_client
+        .write_all(b"not an HTTP websocket request\r\n\r\n")
+        .expect("write malformed handshake");
+    malformed_client
+        .shutdown(std::net::Shutdown::Both)
+        .expect("close malformed client");
+    accepting.join().expect("malformed accept worker");
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind rejecting server");
+    let address = listener.local_addr().expect("rejecting server address");
+    let rejecting = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept websocket client");
+        stream
+            .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            .expect("write handshake rejection");
+        stream.flush().expect("flush handshake rejection");
+    });
+    let error = super::WebSocketValue::connect(
+        &format!("ws://{address}/denied"),
+        Some(StdDuration::from_secs(2)),
+    )
+    .expect_err("an HTTP rejection must fail the websocket connect operation");
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    rejecting.join().expect("rejecting server worker");
+}
+
+#[cfg(unix)]
+#[test]
+fn websocket_ipv6_host_header_retains_brackets_and_explicit_port() {
+    let parsed = url::Url::parse("ws://[::1]:8042/events").expect("valid IPv6 websocket URL");
+    assert_eq!(
+        super::websocket_host_header(&parsed).expect("IPv6 host header"),
+        "[::1]:8042"
+    );
 }
 
 #[cfg(unix)]
