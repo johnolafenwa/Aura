@@ -11001,6 +11001,184 @@ fn process_child_helpers_cover_empty_command_and_cancellation_edges() {
 
 #[cfg(unix)]
 #[test]
+fn process_completed_values_preserve_output_status_and_check_semantics() {
+    let success = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .status()
+        .expect("successful status should be observable");
+    let completed = ProcessCompletedValue::new(
+        super::process_exit_status(success),
+        b"standard output".to_vec(),
+        b"standard error".to_vec(),
+    );
+    assert!(completed.success());
+    completed
+        .check()
+        .expect("zero exit status should satisfy check");
+    assert_eq!(
+        completed.stdout().expect("stdout should decode"),
+        "standard output"
+    );
+    assert_eq!(
+        completed.stderr().expect("stderr should decode"),
+        "standard error"
+    );
+    assert_eq!(completed.stdout_bytes(), b"standard output");
+    assert_eq!(completed.stderr_bytes(), b"standard error");
+
+    let failure = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 7"])
+        .status()
+        .expect("failing status should be observable");
+    let failed =
+        ProcessCompletedValue::new(super::process_exit_status(failure), vec![0xff], vec![0xfe]);
+    assert!(!failed.success());
+    assert_eq!(
+        failed
+            .stdout()
+            .expect_err("invalid stdout UTF-8 must fail")
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert_eq!(
+        failed
+            .stderr()
+            .expect_err("invalid stderr UTF-8 must fail")
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert_eq!(failed.stdout_bytes(), [0xff]);
+    assert_eq!(failed.stderr_bytes(), [0xfe]);
+    assert!(failed
+        .check()
+        .expect_err("non-zero exit status must fail check")
+        .render()
+        .contains("process exited with ExitStatus.Exited(7)"));
+}
+
+#[cfg(unix)]
+#[test]
+fn process_stdout_supports_line_then_byte_reads() {
+    let child = ProcessChildValue::spawn(
+        vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "printf 'outline\\nrest'".to_string(),
+        ],
+        None,
+        Vec::new(),
+        ProcessStdioConfig::Null,
+        ProcessStdioConfig::Pipe,
+        ProcessStdioConfig::Null,
+        false,
+    )
+    .expect("stdout-producing child should spawn");
+    let stdout = child.stdout().expect("stdout pipe should be captured");
+    assert_eq!(
+        stdout
+            .read_line(
+                Some(StdDuration::from_secs(2)),
+                Some(&CancellationContext::default())
+            )
+            .expect("stdout line should read")
+            .as_deref(),
+        Some("outline")
+    );
+    assert_eq!(
+        stdout
+            .read_bytes(
+                4,
+                Some(StdDuration::from_secs(2)),
+                Some(&CancellationContext::default())
+            )
+            .expect("stdout bytes should read")
+            .as_deref(),
+        Some(&b"rest"[..])
+    );
+    assert!(matches!(
+        child.wait(Some(StdDuration::from_secs(2)), None),
+        ProcessChildWaitStatus::Exited(status) if status.success()
+    ));
+    child.close();
+}
+
+#[cfg(unix)]
+#[test]
+fn process_supervisor_wait_or_none_and_stop_cover_public_outcomes() {
+    let empty = ProcessSupervisorValue::new();
+    assert!(empty
+        .wait_or_none(Some(StdDuration::ZERO), None)
+        .expect("empty supervisor wait should not fail")
+        .is_none());
+
+    let completed = ProcessSupervisorValue::new();
+    completed
+        .start(
+            "quick".to_string(),
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "exit 0".to_string(),
+            ],
+            None,
+            Vec::new(),
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessRestartPolicy::Never,
+            StdDuration::ZERO,
+            None,
+            false,
+        )
+        .expect("quick supervised process should start");
+    let event = completed
+        .wait_or_none(Some(StdDuration::from_secs(2)), None)
+        .expect("completed supervisor wait should not fail")
+        .expect("completed supervisor wait should produce an event");
+    let Value::EnumVariant(event) = event else {
+        panic!("supervisor event should be a typed enum variant");
+    };
+    assert_eq!(event.enum_name, "SupervisorEvent");
+    assert_eq!(event.variant_name, "Exited");
+    assert_eq!(event.payloads[0], Value::String("quick".to_string()));
+    assert!(completed.is_empty());
+
+    let running = ProcessSupervisorValue::new();
+    running
+        .start(
+            "slow".to_string(),
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "sleep 10".to_string(),
+            ],
+            None,
+            Vec::new(),
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessRestartPolicy::Never,
+            StdDuration::ZERO,
+            None,
+            false,
+        )
+        .expect("slow supervised process should start");
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = group.child_cancellation();
+    group.cancel();
+    let cancelled = running
+        .wait_or_none(Some(StdDuration::from_secs(2)), Some(&cancellation))
+        .expect_err("cancelled supervisor wait should return a process error");
+    assert_eq!(cancelled.render(), "Error.Cancelled");
+    running
+        .stop()
+        .expect("supervisor stop should close children");
+    assert!(running.is_empty());
+    running.close();
+}
+
+#[cfg(unix)]
+#[test]
 fn process_pipe_helpers_cover_stderr_reads_and_closed_edges() {
     let child = ProcessChildValue::spawn(
         vec![
