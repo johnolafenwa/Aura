@@ -2352,7 +2352,7 @@ impl MirRuntime {
                 let receiver_ty = receiver_type
                     .cloned()
                     .or_else(|| self.infer_runtime_value_type(&receiver))
-                    .unwrap_or_else(|| Type::named("Unknown"));
+                    .unwrap_or(Type::named("Unknown"));
                 env.define_typed("self", receiver_ty, receiver);
             }
 
@@ -2956,7 +2956,7 @@ impl MirRuntime {
                         source_path: metadata.and_then(|function| function.source_path.clone()),
                         entry_span: metadata
                             .map(|function| function.span)
-                            .unwrap_or_else(|| Span::new(0, 0)),
+                            .unwrap_or(Span::new(0, 0)),
                         direct_thunk: None,
                         direct_default_binder: None,
                         closure_environment: Some(Arc::new(ClosureEnvironment::new(
@@ -3004,14 +3004,12 @@ impl MirRuntime {
                     (UnaryOp::Neg, Value::Int(value)) => Value::Int(
                         value
                             .checked_neg()
-                            .ok_or_else(|| Diagnostic::new("integer overflow"))?,
+                            .ok_or(Diagnostic::new("integer overflow"))?,
                     ),
                     (UnaryOp::Neg, Value::Float(value)) => Value::Float(-value),
-                    (UnaryOp::BitNot, Value::Int(value)) => {
-                        Value::Int(value.bitnot().ok_or_else(|| {
-                            Diagnostic::coded("AU4001", "invalid typed integer for unary `~`")
-                        })?)
-                    }
+                    (UnaryOp::BitNot, Value::Int(value)) => Value::Int(value.bitnot().ok_or(
+                        Diagnostic::coded("AU4001", "invalid typed integer for unary `~`"),
+                    )?),
                     (UnaryOp::Not, other) => {
                         return Err(Diagnostic::new(format!(
                             "`not` expects `bool`, found `{}`",
@@ -3082,7 +3080,7 @@ impl MirRuntime {
                     "Err" => {
                         let source_ty = source_error_ty
                             .or_else(|| self.infer_runtime_value_type(&payload))
-                            .unwrap_or_else(|| Type::named("Unknown"));
+                            .unwrap_or(Type::named("Unknown"));
                         let payload = self.convert_try_error_via_from(payload, &source_ty)?;
                         Ok(RvalueOutcome::Return(Value::EnumVariant(
                             EnumVariantValue {
@@ -3684,11 +3682,9 @@ impl MirRuntime {
                                         "`abs(...)` overflowed the signed integer range",
                                     ));
                                 }
-                                value.checked_neg().map(Value::Int).ok_or_else(|| {
-                                    Diagnostic::new(
-                                        "`abs(...)` overflowed the signed integer range",
-                                    )
-                                })
+                                value.checked_neg().map(Value::Int).ok_or(Diagnostic::new(
+                                    "`abs(...)` overflowed the signed integer range",
+                                ))
                             }
                             IntegerRepresentation::Signed(_)
                             | IntegerRepresentation::Unsigned(_) => Ok(Value::Int(value)),
@@ -4144,13 +4140,17 @@ impl MirRuntime {
                     {
                         let values = evaluate_named_args(args, env)?;
                         let bound = bind_builtin_args(&["rhs"], values)?;
-                        let mismatch = || {
-                            Diagnostic::coded(
-                                "AU4001",
-                                format!("`{field}` expects matching fixed-width integer operands"),
-                            )
-                        };
-                        let receiver_kind = receiver_static_ty
+                        macro_rules! mismatch {
+                            () => {
+                                Diagnostic::coded(
+                                    "AU4001",
+                                    format!(
+                                        "`{field}` expects matching fixed-width integer operands"
+                                    ),
+                                )
+                            };
+                        }
+                        let Some(receiver_kind) = receiver_static_ty
                             .as_ref()
                             .and_then(|ty| match ty {
                                 Type::Named(name, args) if args.is_empty() => {
@@ -4159,18 +4159,24 @@ impl MirRuntime {
                                 _ => None,
                             })
                             .or_else(|| value.runtime_kind())
-                            .ok_or_else(mismatch)?;
+                        else {
+                            return Err(mismatch!());
+                        };
                         // Call checking has already made `rhs` exactly the receiver type, but a
                         // contextual integer literal can still arrive through a materialized MIR
                         // place carrying its default `int64` runtime tag. Direct emission loads
                         // that operand as the checked receiver type; mirror that coercion here.
                         let with_receiver_kind =
                             |operand: IntegerValue| operand.with_runtime_kind(receiver_kind);
-                        let left = with_receiver_kind(*value).ok_or_else(mismatch)?;
-                        let Value::Int(rhs) = &bound[0].value else {
-                            return Err(mismatch());
+                        let Some(left) = with_receiver_kind(*value) else {
+                            return Err(mismatch!());
                         };
-                        let rhs = with_receiver_kind(*rhs).ok_or_else(mismatch)?;
+                        let Value::Int(rhs) = &bound[0].value else {
+                            return Err(mismatch!());
+                        };
+                        let Some(rhs) = with_receiver_kind(*rhs) else {
+                            return Err(mismatch!());
+                        };
                         let result = match field.as_str() {
                             "wrapping_add" => left.wrapping_add(rhs),
                             "wrapping_sub" => left.wrapping_sub(rhs),
@@ -4182,7 +4188,10 @@ impl MirRuntime {
                                 left.saturating_mul(rhs)
                             }
                         };
-                        result.map(Value::Int).ok_or_else(mismatch)
+                        let Some(result) = result else {
+                            return Err(mismatch!());
+                        };
+                        Ok(Value::Int(result))
                     }
                     Value::Int(value)
                         if matches!(
@@ -4192,13 +4201,17 @@ impl MirRuntime {
                     {
                         let values = evaluate_named_args(args, env)?;
                         let bound = bind_builtin_args(&["count"], values)?;
-                        let mismatch = || {
-                            Diagnostic::coded(
-                                "AU4001",
-                                format!("`{field}` expects matching fixed-width integer operands"),
-                            )
-                        };
-                        let receiver_kind = receiver_static_ty
+                        macro_rules! mismatch {
+                            () => {
+                                Diagnostic::coded(
+                                    "AU4001",
+                                    format!(
+                                        "`{field}` expects matching fixed-width integer operands"
+                                    ),
+                                )
+                            };
+                        }
+                        let Some(receiver_kind) = receiver_static_ty
                             .as_ref()
                             .and_then(|ty| match ty {
                                 Type::Named(name, args) if args.is_empty() => {
@@ -4207,14 +4220,20 @@ impl MirRuntime {
                                 _ => None,
                             })
                             .or_else(|| value.runtime_kind())
-                            .ok_or_else(mismatch)?;
+                        else {
+                            return Err(mismatch!());
+                        };
                         let with_receiver_kind =
                             |operand: IntegerValue| operand.with_runtime_kind(receiver_kind);
-                        let left = with_receiver_kind(*value).ok_or_else(mismatch)?;
-                        let Value::Int(count) = &bound[0].value else {
-                            return Err(mismatch());
+                        let Some(left) = with_receiver_kind(*value) else {
+                            return Err(mismatch!());
                         };
-                        let count = with_receiver_kind(*count).ok_or_else(mismatch)?;
+                        let Value::Int(count) = &bound[0].value else {
+                            return Err(mismatch!());
+                        };
+                        let Some(count) = with_receiver_kind(*count) else {
+                            return Err(mismatch!());
+                        };
                         let result = match field.as_str() {
                             "wrapping_shl" => left.wrapping_shl(count),
                             "wrapping_shr" => left.wrapping_shr(count),
@@ -4317,7 +4336,7 @@ impl MirRuntime {
                     Value::Instance(instance) => {
                         let resolved_receiver_ty = receiver_static_ty
                             .clone()
-                            .unwrap_or_else(|| Type::named(&instance.class_name));
+                            .unwrap_or(Type::named(&instance.class_name));
                         let class =
                             self.classes
                                 .get(&instance.class_name)
@@ -4404,16 +4423,14 @@ impl MirRuntime {
                                 .find_trait_impl_method(&resolved_receiver_ty, field)
                                 .cloned()
                             {
-                                let function = self
-                                    .functions
-                                    .get(&method.function_name)
-                                    .cloned()
-                                    .ok_or_else(|| {
-                                    Diagnostic::new(format!(
+                                let Some(function) =
+                                    self.functions.get(&method.function_name).cloned()
+                                else {
+                                    return Err(Diagnostic::new(format!(
                                         "unknown MIR method body `{}`",
                                         method.function_name
-                                    ))
-                                })?;
+                                    )));
+                                };
                                 let evaluated_args = evaluate_named_args(args, env)?;
                                 let writeback_places = evaluated_args
                                     .iter()
@@ -4432,12 +4449,12 @@ impl MirRuntime {
                                     Some(&resolved_receiver_ty),
                                 )?;
                                 if method.receiver == Some(MirReceiverKind::BorrowMut) {
-                                    let updated = outcome.updated_receiver.ok_or_else(|| {
-                                        Diagnostic::new(format!(
+                                    let Some(updated) = outcome.updated_receiver else {
+                                        return Err(Diagnostic::new(format!(
                                             "mutable MIR method `{}` did not return an updated receiver",
                                             field
-                                        ))
-                                    })?;
+                                        )));
+                                    };
                                     if let Some(place) = receiver_place {
                                         env.write_place(place, updated)?;
                                     }
@@ -6208,9 +6225,11 @@ impl MirRuntime {
         let Value::Int(value) = value else {
             return Err(Diagnostic::new("list indices must be integers"));
         };
-        let index = value
-            .as_i128()
-            .ok_or_else(|| Diagnostic::new("list index is outside the supported signed range"))?;
+        let Some(index) = value.as_i128() else {
+            return Err(Diagnostic::new(
+                "list index is outside the supported signed range",
+            ));
+        };
         if index < 0 {
             return Err(Diagnostic::new(format!(
                 "list index `{}` cannot be negative",
@@ -6225,9 +6244,11 @@ impl MirRuntime {
         let Value::Int(value) = value else {
             return Err(Diagnostic::new("list indices must be integers"));
         };
-        let supplied = value
-            .as_i128()
-            .ok_or_else(|| Diagnostic::new("list index is outside the supported signed range"))?;
+        let Some(supplied) = value.as_i128() else {
+            return Err(Diagnostic::new(
+                "list index is outside the supported signed range",
+            ));
+        };
         // Rust's supported pointer widths fit losslessly in i128, so this conversion
         // has no runtime failure case to defend or cover.
         let len = len as i128;
@@ -8367,9 +8388,11 @@ impl MirRuntime {
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left * right)),
                 (Value::Duration(duration), Value::Int(multiplier))
                 | (Value::Int(multiplier), Value::Duration(duration)) => {
-                    let multiplier = duration_int64_scalar(multiplier).ok_or_else(|| {
-                        arithmetic_error("Duration multiplication requires an int64 scalar")
-                    })?;
+                    let Some(multiplier) = duration_int64_scalar(multiplier) else {
+                        return Err(arithmetic_error(
+                            "Duration multiplication requires an int64 scalar",
+                        ));
+                    };
                     duration
                         .checked_mul(multiplier)
                         .map(Value::Duration)
@@ -8417,9 +8440,11 @@ impl MirRuntime {
                     Err(arithmetic_error("division by zero"))
                 }
                 (Value::Duration(duration), Value::Int(divisor)) => {
-                    let divisor = duration_int64_scalar(divisor).ok_or_else(|| {
-                        arithmetic_error("Duration floor division requires an int64 divisor")
-                    })?;
+                    let Some(divisor) = duration_int64_scalar(divisor) else {
+                        return Err(arithmetic_error(
+                            "Duration floor division requires an int64 divisor",
+                        ));
+                    };
                     checked_duration_floor_div(duration, divisor)
                         .map(Value::Duration)
                         .ok_or_else(|| arithmetic_error("duration overflow"))
@@ -8452,9 +8477,10 @@ impl MirRuntime {
                     .map(Value::Int)
                     .map_err(|error| integer_power_diagnostic(error, span)),
                 (Value::Float(left), Value::Float(right)) => {
-                    float_power(left, right, FloatPowerWidth::Float64)
-                        .map(Value::Float)
-                        .map_err(|error| with_optional_diagnostic_span(error, span))
+                    match float_power(left, right, FloatPowerWidth::Float64) {
+                        Ok(value) => Ok(Value::Float(value)),
+                        Err(error) => Err(with_optional_diagnostic_span(error, span)),
+                    }
                 }
                 _ => Err(Diagnostic::coded(
                     "AU2003",
@@ -8469,9 +8495,13 @@ impl MirRuntime {
                         BinaryOp::BitXor => left.checked_bitxor(right),
                         _ => unreachable!(),
                     };
-                    result.map(Value::Int).ok_or_else(|| {
-                        Diagnostic::coded("AU2002", "bitwise integer operand types must match")
-                    })
+                    let Some(result) = result else {
+                        return Err(Diagnostic::coded(
+                            "AU2002",
+                            "bitwise integer operand types must match",
+                        ));
+                    };
+                    Ok(Value::Int(result))
                 }
                 _ => Err(Diagnostic::coded(
                     "AU2003",
@@ -8917,14 +8947,14 @@ fn evaluate_round_builtin(args: &[MirArg], env: &mut Env) -> Result<Value> {
 fn evaluate_divmod_builtin(args: &[MirArg], env: &mut Env) -> Result<Value> {
     let values = evaluate_named_args(args, env)?;
     let bound = bind_builtin_args(&["left", "right"], values)?;
-    let operand_type = bound[0]
-        .ty
-        .clone()
-        .unwrap_or_else(|| match &bound[0].value {
+    let operand_type = match bound[0].ty.clone() {
+        Some(ty) => ty,
+        None => match &bound[0].value {
             Value::Int(value) => Type::named(value.runtime_type_name().unwrap_or("int64")),
             Value::Float(_) => Type::named("float64"),
             _ => Type::named("Unknown"),
-        });
+        },
+    };
     divmod_numeric_values(&bound[0].value, &bound[1].value, &operand_type)
 }
 

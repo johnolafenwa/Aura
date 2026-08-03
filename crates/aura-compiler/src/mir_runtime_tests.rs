@@ -441,6 +441,99 @@ def main():
     }
 }
 
+#[test]
+fn mir_numeric_overflow_closures_preserve_public_diagnostics_and_spans() {
+    let cases = [
+        (
+            "integer unary negation",
+            r#"
+def main():
+    minimum: int64 = -9223372036854775808
+    print(-minimum)
+"#,
+            "AU4002",
+            "integer value `9223372036854775808` does not fit in `int64`",
+            true,
+        ),
+        (
+            "integer abs",
+            r#"
+def main():
+    minimum: int64 = -9223372036854775808
+    print(abs(minimum))
+"#,
+            "AU4002",
+            "integer value `9223372036854775808` does not fit in `int64`",
+            false,
+        ),
+        (
+            "floating power",
+            r#"
+def main():
+    base: float64 = 1.7976931348623157e308
+    exponent: float64 = 2.0
+    print(base ** exponent)
+"#,
+            "AU4002",
+            "floating power overflow",
+            true,
+        ),
+        (
+            "integer power",
+            r#"
+def main():
+    base: int8 = 2
+    exponent: int8 = 7
+    print(base ** exponent)
+"#,
+            "AU4002",
+            "integer power overflow",
+            true,
+        ),
+        (
+            "integer shift",
+            r#"
+def main():
+    value: int8 = 1
+    count: int8 = 8
+    print(value << count)
+"#,
+            "AU4002",
+            "integer shift count `8` is outside the required range `0..8`",
+            true,
+        ),
+        (
+            "integer shift method",
+            r#"
+def main():
+    value: uint8 = 1
+    count: uint8 = 8
+    print(value.wrapping_shl(count))
+"#,
+            "AU4002",
+            "integer shift count `8` is outside the required range `0..8`",
+            false,
+        ),
+    ];
+
+    for (label, source, code, message, has_span) in cases {
+        let error = crate::run_source(source).expect_err(label);
+        assert_eq!(error.code, code, "{label}");
+        assert_eq!(error.message, message, "{label}");
+        assert_eq!(error.span.is_some(), has_span, "{label} source span");
+    }
+}
+
+#[test]
+fn mir_trait_method_arguments_preserve_mutable_writeback_through_dispatch() {
+    let output = crate::run_source(include_str!(
+        "../tests/fixtures/run-pass/trait_impl_queue_borrow_mut_writeback.au"
+    ))
+    .expect("trait method arguments should execute through MIR");
+
+    assert_eq!(output.stdout, "7\n7\n");
+}
+
 fn lower_ffi_runtime_source(source: &str) -> MirModule {
     let module = crate::parse_source(source).expect("FFI runtime source should parse");
     let program = crate::check_module_with_builtin_imports(module)
