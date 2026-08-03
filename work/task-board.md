@@ -74,8 +74,10 @@ Last updated: 2026-08-03
   backend parity, editor tooling, reference integrity, docs, audits, Clippy,
   hygiene, and coverage at 96.304488163144% lines, 97.216796875% functions,
   and 94.717811553593% regions. No synthetic tests were added. Remaining work
-  is the S1.1 checkpoint-findings closure and three green hosted runs. The user
-  authorized pushes and pull requests on 2026-08-03.
+  is the S1.1 checkpoint-findings closure and one complete green hosted run on
+  both operating systems. The user authorized pushes and pull requests on
+  2026-08-03, and later made one complete hosted run the standing completion
+  policy in place of repeated consecutive reruns.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
 - Work note: `work/2026-08-02-batch-s1-python-surface.md`.
@@ -136,11 +138,19 @@ Last updated: 2026-08-03
   fenced blocks, the documentation build, both dependency audits,
   warnings-denied Clippy, and hygiene. Exact compiler coverage is
   96.303181376484% lines (91,176/94,676), 97.23532281671817% functions
-  (5,979/6,149), and 94.722310489708% regions (134,141/141,615). No synthetic
-  coverage test or justified exclusion was added.
-- Push and pull-request authorization is explicit. Merge waits for checkpoint
-  sign-off after three consecutive green hosted CI runs on both operating
-  systems.
+  (5,979/6,149), and 94.722310489708% regions (134,141/141,615). Hosted CI
+  attempt 2 of run `30823914449` then found macOS's variable runtime profile
+  two lines below the 96.30% floor after every behavioral test passed. Two
+  observable runtime-value regressions now pin exact Duration-to-binary64 carry
+  normalization and the `Array` numeric-cast diagnostic source type. The exact
+  corrected coverage gate is green at 96.306350078161302% lines
+  (91,179/94,676), 97.235322816718167% functions (5,979/6,149), and
+  94.723722769480631% regions (134,143/141,615). No synthetic coverage test or
+  justified exclusion was added; the frozen floors did not change.
+- Push and pull-request authorization is explicit. The user's standing policy
+  now requires one complete green hosted CI run on both operating systems;
+  repeated consecutive reruns are not required. Merge waits for checkpoint
+  sign-off after that run.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
 - Work note: `work/2026-08-03-s1.1-checkpoint-findings-closure.md`.

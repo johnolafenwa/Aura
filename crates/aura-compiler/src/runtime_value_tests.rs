@@ -4940,6 +4940,11 @@ fn duration_helpers_preserve_nanoseconds_rendering_conversions_and_host_limits()
             "Duration.to_seconds must resolve exact binary64 midpoints toward an even significand",
         );
     }
+    assert_eq!(
+        super::duration_to_seconds(33_554_431_999_999_999).to_bits(),
+        0x4180_0000_0000_0000,
+        "Duration.to_seconds must carry a rounded significand into the next binary64 exponent",
+    );
 
     let timer = super::duration_to_host_timer(1_500_001, "test timeout")
         .expect("a small positive duration should fit the host timer");
@@ -5678,6 +5683,13 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
             entries: vec![],
         }),
         "dict",
+    );
+    assert_source_type(
+        Value::Array(
+            ArrayValue::zeros(ArrayDType::Int32, vec![1].into_boxed_slice())
+                .expect("a cast diagnostic test array should be constructible"),
+        ),
+        "Array",
     );
     assert_source_type(Value::Duration(5), "Duration");
     assert_source_type(Value::Range(RangeValue { start: 1, end: 3 }), "Range");
