@@ -206,7 +206,7 @@ unsafe fn float_array(
             ));
         }
     }
-    let vector_type = format!("Vec[{runtime_type}]");
+    let vector_type = format!("list[{runtime_type}]");
     aura_direct_tag_value_type(vector, vector_type.as_ptr(), vector_type.len());
     let shape = unsafe { int64_vec(shape) };
     let array = aura_direct_array_from_vec(dtype, vector, shape, 1, 1);
@@ -587,10 +587,10 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         let floor = aura_direct_binary_value(13, int_value(-7), int_value(3));
         assert_eq!(expect_i64(floor), -3);
 
-        let ordered = aura_direct_binary_value_at(7, int_value(2), int_value(3), 1, 1);
+        let ordered = aura_direct_binary_value_at(7, int_value(2), int_value(3), 0, 1, 1);
         assert!(expect_bool(ordered));
 
-        let floor_at = aura_direct_binary_value_at(13, int_value(7), int_value(-3), 1, 1);
+        let floor_at = aura_direct_binary_value_at(13, int_value(7), int_value(-3), 0, 1, 1);
         assert_eq!(expect_i64(floor_at), -3);
 
         let duration = aura_direct_duration_from_i64(1_500, 1_000_000);
@@ -947,7 +947,7 @@ fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_libra
         release(shape);
 
         let vector = int32_array(&[5, 6, 7], &[3]);
-        let scalar_coordinate = int32_value(-1);
+        let scalar_coordinate = int_value(-1);
         assert_eq!(
             expect_i64(aura_direct_array_index(vector, scalar_coordinate, 3, 4,)),
             7
@@ -955,7 +955,7 @@ fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_libra
         release(scalar_coordinate);
         release(vector);
 
-        let coordinates = int32_vec(&[0, 1]);
+        let coordinates = int64_vec(&[0, 1]);
         assert_eq!(
             expect_i64(expect_option_some_payload(aura_direct_array_get(
                 source,
@@ -968,7 +968,7 @@ fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_libra
         release(coordinates);
 
         let working = int32_array(&[1, 2, 3, 4], &[2, 2]);
-        let coordinates = int32_vec(&[0, 1]);
+        let coordinates = int64_vec(&[0, 1]);
         let nine = int32_value(9);
         assert_eq!(
             expect_i64(expect_option_some_payload(aura_direct_array_set_in_place(
@@ -982,13 +982,13 @@ fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_libra
         );
         release(coordinates);
         release(nine);
-        let negative_coordinates = int32_vec(&[-1, -1]);
+        let negative_coordinates = int64_vec(&[-1, -1]);
         assert_eq!(
             expect_i64(aura_direct_array_index(working, negative_coordinates, 5, 6,)),
             4
         );
         release(negative_coordinates);
-        let coordinates = int32_vec(&[1, 0]);
+        let coordinates = int64_vec(&[1, 0]);
         let eleven = int32_value(11);
         release(aura_direct_array_set_index_in_place(
             working,
