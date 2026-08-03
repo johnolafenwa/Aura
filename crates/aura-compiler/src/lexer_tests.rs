@@ -927,6 +927,35 @@ fn lexer_decodes_extended_string_escape_sequences() {
 }
 
 #[test]
+fn lexer_reports_exact_truncated_escape_and_numeric_boundary_diagnostics() {
+    let truncated_hex =
+        lex("value = \"\\x").expect_err("a hexadecimal escape must include two digits");
+    assert_eq!(truncated_hex.code, "AU1001");
+    assert_eq!(truncated_hex.span, Some(Span::new(1, 9)));
+    assert_eq!(truncated_hex.message, "unsupported escape sequence `\\x`");
+
+    let invalid_high =
+        lex("value = \"\\xg0\"\n").expect_err("the first hexadecimal digit must be valid");
+    assert_eq!(invalid_high.code, "AU1001");
+    assert_eq!(invalid_high.span, Some(Span::new(1, 9)));
+    assert_eq!(invalid_high.message, "invalid hexadecimal escape sequence");
+
+    let unterminated_unicode =
+        lex("value = \"\\u{41").expect_err("a unicode escape must include its closing brace");
+    assert_eq!(unterminated_unicode.code, "AU1001");
+    assert_eq!(unterminated_unicode.span, Some(Span::new(1, 9)));
+    assert_eq!(unterminated_unicode.message, "unterminated string literal");
+
+    let adjacent_identifier =
+        lex("value = 12abc\n").expect_err("an integer and identifier require a separator");
+    assert_eq!(adjacent_identifier.code, "AU1001");
+    assert_eq!(adjacent_identifier.span, Some(Span::new(1, 11)));
+    assert_eq!(adjacent_identifier.message, "invalid integer literal");
+
+    assert!(kinds("shifted = left >> right\n").contains(&TokenKind::ShiftRight));
+}
+
+#[test]
 fn lexer_covers_extended_escape_brace_float_and_identifier_edges() {
     let tokens = kinds(concat!(
         "text = \"\\xAf\\u{ab}\\u{DE}\"\n",

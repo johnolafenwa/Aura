@@ -3113,6 +3113,63 @@ fn offset_helpers_cover_fstring_expression_parts() {
 }
 
 #[test]
+fn fstring_interpolation_preserves_nested_operator_source_spans() {
+    let expression = parse_expression(
+        "f\"{left if ready else right}|{needle in haystack}|{low < value <= high}\"",
+    )
+    .expect("supported operators should parse inside f-string interpolations");
+
+    let ExprKind::FString(parts) = expression.kind else {
+        panic!("expected an f-string expression");
+    };
+    let [FormatPart::Expr(conditional), FormatPart::Literal(first_separator), FormatPart::Expr(membership), FormatPart::Literal(second_separator), FormatPart::Expr(comparison)] =
+        parts.as_slice()
+    else {
+        panic!("expected three interpolations separated by literal pipes");
+    };
+    assert_eq!(first_separator, "|");
+    assert_eq!(second_separator, "|");
+
+    let ExprKind::Conditional {
+        then_expr,
+        condition,
+        else_expr,
+    } = &conditional.kind
+    else {
+        panic!("expected a conditional interpolation");
+    };
+    assert_eq!(conditional.span, Span::new(1, 4));
+    assert_eq!(then_expr.span, Span::new(1, 4));
+    assert_eq!(condition.span, Span::new(1, 12));
+    assert_eq!(else_expr.span, Span::new(1, 23));
+
+    let ExprKind::Membership {
+        value,
+        container,
+        operator_span,
+        ..
+    } = &membership.kind
+    else {
+        panic!("expected a membership interpolation");
+    };
+    assert_eq!(membership.span, Span::new(1, 31));
+    assert_eq!(value.span, Span::new(1, 31));
+    assert_eq!(*operator_span, Span::new(1, 38));
+    assert_eq!(container.span, Span::new(1, 41));
+
+    let ExprKind::CompareChain { first, links } = &comparison.kind else {
+        panic!("expected a comparison-chain interpolation");
+    };
+    assert_eq!(comparison.span, Span::new(1, 52));
+    assert_eq!(first.span, Span::new(1, 52));
+    assert_eq!(links.len(), 2);
+    assert_eq!(links[0].op_span, Span::new(1, 56));
+    assert_eq!(links[0].operand.span, Span::new(1, 58));
+    assert_eq!(links[1].op_span, Span::new(1, 64));
+    assert_eq!(links[1].operand.span, Span::new(1, 67));
+}
+
+#[test]
 fn fstring_map_comprehension_preserves_exact_nested_source_spans() {
     let expression = parse_expression(
         "f\"mapped={ {Box[def(mut list[int32], own (str, bool)) -> bool](lambda own item, mut sink: item): right for (left, (right,)) in pairs if ready} }\"",
