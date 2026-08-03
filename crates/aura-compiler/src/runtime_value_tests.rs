@@ -11742,6 +11742,168 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
     ws_thread.join().expect("websocket thread should join");
 }
 
+#[cfg(unix)]
+#[test]
+fn udp_datagrams_preserve_bytes_and_socket_waits_report_timeout_cancellation_and_close() {
+    let timeout = StdDuration::from_secs(2);
+    let receiver = UdpSocketValue::bind("127.0.0.1:0").expect("UDP receiver should bind");
+    let receiver_address = receiver
+        .local_addr()
+        .expect("UDP receiver address should be available");
+
+    assert_eq!(
+        receiver
+            .recv(16, Some(StdDuration::ZERO), None)
+            .expect("an expired connected receive should be a timeout"),
+        None
+    );
+    assert!(receiver
+        .recv_from(16, Some(StdDuration::ZERO), None)
+        .expect("an expired addressed receive should be a timeout")
+        .is_none());
+
+    let cancellation_group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = cancellation_group.child_cancellation();
+    cancellation_group.cancel();
+    assert_eq!(
+        receiver
+            .recv(16, Some(timeout), Some(&cancellation))
+            .expect_err("a cancelled connected receive should stop waiting")
+            .kind(),
+        io::ErrorKind::Interrupted
+    );
+    assert_eq!(
+        receiver
+            .recv_from(16, Some(timeout), Some(&cancellation))
+            .expect_err("a cancelled addressed receive should stop waiting")
+            .kind(),
+        io::ErrorKind::Interrupted
+    );
+
+    let sender = UdpSocketValue::bind("127.0.0.1:0").expect("UDP sender should bind");
+    sender
+        .send_to_bytes(&receiver_address, &[0xff], Some(timeout), None)
+        .expect("UDP bytes should send");
+    let datagram = receiver
+        .recv_from(16, Some(timeout), None)
+        .expect("UDP bytes should be received")
+        .expect("the UDP datagram should be present");
+    assert_eq!(datagram.bytes(), vec![0xff]);
+    assert!(datagram.address().starts_with("127.0.0.1:"));
+    assert_eq!(
+        datagram
+            .text()
+            .expect_err("invalid UTF-8 remains available as bytes")
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+
+    receiver.close();
+    assert_eq!(
+        receiver
+            .send_to_text("127.0.0.1:9", "closed", Some(timeout), None)
+            .expect_err("a closed UDP socket cannot send")
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+    assert_eq!(
+        receiver
+            .local_addr()
+            .expect_err("a closed UDP socket has no local address")
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+    assert_eq!(
+        receiver
+            .peer_addr()
+            .expect_err("a closed UDP socket has no peer address")
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn websocket_cross_type_messages_and_close_state_are_observable() {
+    let timeout = StdDuration::from_secs(2);
+    let listener =
+        WebSocketListenerValue::bind("127.0.0.1:0").expect("websocket listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("websocket listener address should be available");
+    let close_barrier = Arc::new(Barrier::new(2));
+    let server_close_barrier = close_barrier.clone();
+    let server = listener.clone();
+    let server_thread = thread::spawn(move || {
+        let socket = server
+            .accept(Some(timeout))
+            .expect("websocket server should accept");
+        assert_eq!(
+            socket
+                .recv_text(Some(timeout))
+                .expect("binary UTF-8 should be readable as text")
+                .as_deref(),
+            Some("binary text")
+        );
+        socket
+            .send_text("text bytes", Some(timeout))
+            .expect("websocket text should send");
+        socket
+            .send_bytes(&[0xff], Some(timeout))
+            .expect("websocket binary data should send");
+        server_close_barrier.wait();
+        assert_eq!(
+            socket
+                .recv_bytes(Some(timeout))
+                .expect("a peer close should end receive without an error"),
+            None
+        );
+    });
+
+    let client = super::WebSocketValue::connect(&format!("ws://{address}"), Some(timeout))
+        .expect("websocket client should connect");
+    client
+        .send_bytes(b"binary text", Some(timeout))
+        .expect("websocket binary data should send");
+    assert_eq!(
+        client
+            .recv_bytes(Some(timeout))
+            .expect("text should be readable as bytes"),
+        Some(b"text bytes".to_vec())
+    );
+    assert_eq!(
+        client
+            .recv_text(Some(timeout))
+            .expect_err("invalid UTF-8 binary data should not become text")
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    client.close().expect("websocket client should close");
+    close_barrier.wait();
+    assert_eq!(
+        client
+            .send_text("after close", Some(timeout))
+            .expect_err("a closed websocket cannot send")
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+    assert_eq!(
+        client
+            .recv_text(Some(timeout))
+            .expect_err("a closed websocket cannot receive")
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+    assert_eq!(
+        client
+            .close()
+            .expect_err("a websocket cannot be closed twice")
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+    server_thread.join().expect("websocket server should join");
+}
+
 #[test]
 fn tcp_stream_accessors_reads_half_shutdowns_and_closed_errors_are_consistent() {
     let timeout = StdDuration::from_secs(2);
@@ -15122,6 +15284,12 @@ fn http_stream_helpers_cover_response_without_content_length_and_custom_headers(
     )
     .expect("response without content-length should read until close");
     assert_eq!(response.status(), 202);
+    assert_eq!(response.reason(), "Accepted");
+    assert_eq!(
+        response.headers(),
+        vec![("Connection".to_string(), "close".to_string())]
+    );
+    assert_eq!(response.bytes(), b"body");
     assert_eq!(
         response.text().expect("response body should decode"),
         "body".to_string()
