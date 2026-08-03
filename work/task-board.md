@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-08-02
+Last updated: 2026-08-03
 
 ## Batch S1: Aura 0.3 Python-surface program (in progress)
 
@@ -28,7 +28,8 @@ Last updated: 2026-08-02
   integer lists in the same migration as every other element type; the
   internal repository rewrite changes old index-removal calls to `pop(index)`.
   Focused tests run continuously, while the expensive full local gate is
-  reserved for completed migration families and checkpoint.
+  reserved for completed migration families and checkpoint. The user confirmed
+  this as the standing policy on 2026-08-03; Accepted ADR-0057 is binding.
 - Current phase: S2's unified `int64` index domain and S1's canonical
   `list`/`dict`/`set`/`str` surface are implemented across the compiler, both
   backends, fixtures, diagnostics, examples, tutorials, Manual, LSP, and editor
@@ -73,10 +74,25 @@ Last updated: 2026-08-02
   backend parity, editor tooling, reference integrity, docs, audits, Clippy,
   hygiene, and coverage at 96.304488163144% lines, 97.216796875% functions,
   and 94.717811553593% regions. No synthetic tests were added. Remaining work
-  is explicit push authorization and three green hosted runs.
+  is the S1.1 checkpoint-findings closure and three green hosted runs. The user
+  authorized pushes and pull requests on 2026-08-03.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
 - Work note: `work/2026-08-02-batch-s1-python-surface.md`.
+
+## Batch S1.1: checkpoint findings closure (in progress)
+
+- Authorized target: close equality gating, format zero-padding and literal
+  diagnostics, root match binding patterns, the 0.3 reference restamp,
+  ADR-0045's example, bounded-blocking-pool classification, and the Aug 3
+  Safety workflow failures before the S1 merge.
+- Standing clean-slate policy is confirmed and recorded in Accepted ADR-0057.
+- Push and pull-request authorization is explicit. Merge waits for checkpoint
+  sign-off after three consecutive green hosted CI runs on both operating
+  systems.
+- Protected user files remain untouched: `personal/file_ops.au`, the untracked
+  ADR-0022 draft, and `fc2_direct.out`.
+- Work note: `work/2026-08-03-s1.1-checkpoint-findings-closure.md`.
 
 ## Hosted CI path filtering (complete)
 

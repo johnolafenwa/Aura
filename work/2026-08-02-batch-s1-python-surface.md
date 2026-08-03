@@ -51,6 +51,10 @@ as though they never existed:
 - Internal migration tooling exists only to flip this repository atomically.
   It is not part of the language, CLI, release, or documentation surface.
 
+The user confirmed this amendment as the standing policy on 2026-08-03.
+Accepted ADR-0057 records the binding clean-slate rule and supersedes any
+earlier compatibility-window proposal for a pre-adoption surface.
+
 ## Progress
 
 ### 0.3 development identity
