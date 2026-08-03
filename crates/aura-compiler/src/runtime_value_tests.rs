@@ -11565,6 +11565,141 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
 }
 
 #[test]
+fn tcp_stream_accessors_reads_half_shutdowns_and_closed_errors_are_consistent() {
+    let timeout = StdDuration::from_secs(2);
+    let cancellation = CancellationContext::default();
+    let listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp bind should succeed");
+    let listener_address = listener
+        .local_addr()
+        .expect("listener local address should succeed");
+    let server = listener.clone();
+    let server_listener_address = listener_address.clone();
+    let shutdown_barrier = Arc::new(Barrier::new(2));
+    let server_shutdown_barrier = shutdown_barrier.clone();
+    let server_thread = thread::spawn(move || {
+        let stream = server
+            .accept(Some(timeout), Some(&CancellationContext::default()))
+            .expect("tcp accept should succeed");
+        assert_eq!(
+            stream.local_addr().expect("accepted local address"),
+            server_listener_address
+        );
+        assert!(stream
+            .peer_addr()
+            .expect("accepted peer address")
+            .starts_with("127.0.0.1:"));
+        stream
+            .write_all(
+                "hello",
+                Some(timeout),
+                Some(&CancellationContext::default()),
+            )
+            .expect("tcp text write should succeed");
+        stream.flush().expect("tcp flush should succeed");
+        stream
+            .shutdown_write()
+            .expect("the server write half should close");
+        server_shutdown_barrier.wait();
+    });
+
+    let client = TcpStreamValue::connect(&listener_address, Some(timeout), Some(&cancellation))
+        .expect("tcp connect should succeed");
+    assert!(client
+        .local_addr()
+        .expect("client local address")
+        .starts_with("127.0.0.1:"));
+    assert_eq!(
+        client.peer_addr().expect("client peer address"),
+        listener_address
+    );
+    client
+        .shutdown_write()
+        .expect("the client write half should close while reads remain available");
+    assert_eq!(
+        client
+            .read_bytes(2, Some(timeout), Some(&cancellation))
+            .expect("partial byte read should succeed"),
+        Some(b"he".to_vec())
+    );
+    assert_eq!(
+        client
+            .read_all(Some(timeout), Some(&cancellation))
+            .expect("remaining text should read through EOF"),
+        "llo"
+    );
+    shutdown_barrier.wait();
+    server_thread.join().expect("tcp server thread should join");
+
+    let half_shutdown_barrier = Arc::new(Barrier::new(2));
+    let half_server_barrier = half_shutdown_barrier.clone();
+    let half_server = listener.clone();
+    let half_server_thread = thread::spawn(move || {
+        let stream = half_server
+            .accept(Some(timeout), Some(&CancellationContext::default()))
+            .expect("half-shutdown server should accept");
+        half_server_barrier.wait();
+        stream.close();
+    });
+    let half_client =
+        TcpStreamValue::connect(&listener_address, Some(timeout), Some(&cancellation))
+            .expect("half-shutdown client should connect");
+    half_client
+        .shutdown_read()
+        .expect("the live client read half should close");
+    half_client
+        .shutdown_write()
+        .expect("the live client write half should close");
+    half_shutdown_barrier.wait();
+    half_server_thread
+        .join()
+        .expect("half-shutdown server thread should join");
+    half_client.close();
+
+    client.close();
+    let closed_errors = [
+        client
+            .read_all(Some(timeout), Some(&cancellation))
+            .expect_err("closed text reads must fail"),
+        client
+            .read_bytes_all(Some(timeout), Some(&cancellation))
+            .expect_err("closed byte reads must fail"),
+        client
+            .read_line(Some(timeout), Some(&cancellation))
+            .expect_err("closed line reads must fail"),
+        client
+            .read_bytes(1, Some(timeout), Some(&cancellation))
+            .expect_err("closed partial reads must fail"),
+        client
+            .read_exact(1, Some(timeout), Some(&cancellation))
+            .expect_err("closed exact reads must fail"),
+        client
+            .write_bytes(b"x", Some(timeout), Some(&cancellation))
+            .expect_err("closed writes must fail"),
+        client.flush().expect_err("closed flushes must fail"),
+        client
+            .local_addr()
+            .expect_err("closed local-address access must fail"),
+        client
+            .peer_addr()
+            .expect_err("closed peer-address access must fail"),
+        client
+            .shutdown_read()
+            .expect_err("closed read shutdowns must fail"),
+        client
+            .shutdown_write()
+            .expect_err("closed write shutdowns must fail"),
+        client
+            .shutdown_both()
+            .expect_err("closed two-way shutdowns must fail"),
+    ];
+    for error in closed_errors {
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(error.to_string(), "resource is closed");
+    }
+    listener.close();
+}
+
+#[test]
 fn tcp_and_http_helpers_handle_large_payloads() {
     let timeout = StdDuration::from_secs(5);
     let cancellation = CancellationContext::default();
@@ -14934,6 +15069,17 @@ fn http_streams_report_truncated_chunked_messages_and_incremental_limit_overflow
         "stream closed before the chunked HTTP response body was fully received"
     );
 
+    let mut malformed_response = ScriptedHttpReader {
+        chunks: std::collections::VecDeque::from([
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nnope\r\n".to_vec(),
+        ]),
+    };
+    let error =
+        super::read_http_response_from_stream_with_limit(&mut malformed_response, None, None, 128)
+            .expect_err("a malformed response chunk size must be rejected at the stream boundary");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("invalid HTTP chunk size `nope`"));
+
     let mut incremental_overflow = ScriptedHttpReader {
         chunks: std::collections::VecDeque::from([
             b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec(),
@@ -14974,6 +15120,63 @@ fn http_streams_report_truncated_chunked_messages_and_incremental_limit_overflow
         "stream closed before the chunked HTTP request body was fully received"
     );
     client.join().expect("client thread should join");
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("server should bind");
+    let address = listener.local_addr().expect("server address should exist");
+    let client = thread::spawn(move || {
+        let mut stream = std::net::TcpStream::connect(address).expect("client should connect");
+        stream
+            .write_all(
+                b"POST /upload HTTP/1.1\r\nHost: local\r\nTransfer-Encoding: chunked\r\n\r\nnope\r\n",
+            )
+            .expect("malformed request should write");
+        stream
+            .shutdown(std::net::Shutdown::Write)
+            .expect("the client write side should close");
+    });
+    let (mut stream, _) = listener.accept().expect("server should accept");
+    let error = super::read_http_request_from_stream_with_limit(
+        &mut stream,
+        Some(Instant::now() + StdDuration::from_secs(2)),
+        Some(&CancellationContext::default()),
+        128,
+    )
+    .expect_err("a malformed request chunk size must be rejected at the stream boundary");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("invalid HTTP chunk size `nope`"));
+    client.join().expect("client thread should join");
+}
+
+#[test]
+fn http_response_writer_rejects_header_injection_before_writing() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("server should bind");
+    let address = listener.local_addr().expect("server address should exist");
+    let client = std::net::TcpStream::connect(address).expect("client should connect");
+    let (mut server, _) = listener.accept().expect("server should accept");
+
+    let error = super::write_http_response_to_stream(
+        &mut server,
+        200,
+        vec![("X-Test".to_string(), "safe\r\nX-Injected: true".to_string())],
+        b"body",
+        Some(Instant::now() + StdDuration::from_secs(2)),
+        Some(&CancellationContext::default()),
+    )
+    .expect_err("response header injection must be rejected before bytes are written");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        "HTTP header values may not contain control characters"
+    );
+
+    client
+        .set_nonblocking(true)
+        .expect("client test socket should become nonblocking");
+    let mut byte = [0u8; 1];
+    let read_error = (&client)
+        .read(&mut byte)
+        .expect_err("the rejected response must not write any bytes");
+    assert_eq!(read_error.kind(), io::ErrorKind::WouldBlock);
 }
 
 #[test]
