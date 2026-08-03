@@ -9522,6 +9522,158 @@ fn d2_numeric_member_and_floor_division_inference_preserve_backend_result_types(
 }
 
 #[test]
+fn s1_direct_inference_pins_numeric_collection_and_constant_abis() {
+    let variable_types = HashMap::from([
+        (
+            "narrow".to_string(),
+            DirectType::Opaque(Type::named("int8")),
+        ),
+        (
+            "small_float".to_string(),
+            DirectType::Scalar(ScalarKind::Float32),
+        ),
+        ("shifted".to_string(), DirectType::Scalar(ScalarKind::Int64)),
+    ]);
+    let returns = HashMap::new();
+    let classes = HashMap::new();
+    let argument = |place: &str| MirArg {
+        name: None,
+        value: Operand::Place(place.to_string()),
+        writeback_place: None,
+    };
+
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::ModuleConstant {
+                key: "settings::limit".to_string(),
+                initializer: "settings::__constant_limit".to_string(),
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        None,
+        "module-constant reads use their declared destination ABI instead of guessing from the key",
+    );
+
+    for (place, expected) in [
+        ("small_float", DirectType::Scalar(ScalarKind::Int64)),
+        ("narrow", DirectType::Opaque(Type::named("int8"))),
+    ] {
+        assert_eq!(
+            infer_rvalue_type(
+                &Rvalue::Call {
+                    callee: CallTarget::Name("round".to_string()),
+                    args: vec![argument(place)],
+                },
+                &variable_types,
+                &returns,
+                &classes,
+            ),
+            Some(expected),
+            "round must preserve integer width and return int64 for float input",
+        );
+    }
+
+    for (place, element_type) in [
+        ("small_float", Type::named("float32")),
+        ("narrow", Type::named("int8")),
+    ] {
+        assert_eq!(
+            infer_rvalue_type(
+                &Rvalue::Call {
+                    callee: CallTarget::Name("divmod".to_string()),
+                    args: vec![argument(place), argument(place)],
+                },
+                &variable_types,
+                &returns,
+                &classes,
+            ),
+            Some(DirectType::Opaque(Type::Tuple(vec![
+                element_type.clone(),
+                element_type,
+            ]))),
+            "divmod must preserve its exact numeric operand type in both tuple fields",
+        );
+    }
+
+    for field in [
+        "wrapping_shl",
+        "wrapping_shr",
+        "saturating_shl",
+        "saturating_shr",
+    ] {
+        assert_eq!(
+            infer_rvalue_type(
+                &Rvalue::Call {
+                    callee: CallTarget::Member {
+                        object: Operand::Place("shifted".to_string()),
+                        field: field.to_string(),
+                        receiver_place: None,
+                    },
+                    args: vec![argument("shifted")],
+                },
+                &variable_types,
+                &returns,
+                &classes,
+            ),
+            Some(DirectType::Scalar(ScalarKind::Int64)),
+            "{field} must preserve the receiver's direct scalar lane",
+        );
+    }
+
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Call {
+                callee: CallTarget::Name("random::secure_bytes".to_string()),
+                args: vec![MirArg {
+                    name: Some("length".to_string()),
+                    value: Operand::Int(4),
+                    writeback_place: None,
+                }],
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        Some(DirectType::Opaque(Type::Named(
+            "list".to_string(),
+            vec![Type::named("uint8")],
+        ))),
+        "secure bytes must use the canonical list[uint8] direct ABI",
+    );
+
+    for (object_type, field, expected) in [
+        (
+            Type::Named("Array".to_string(), vec![Type::named("float32")]),
+            "shape",
+            DirectType::Opaque(Type::Named("list".to_string(), vec![Type::named("int64")])),
+        ),
+        (
+            Type::Named("list".to_string(), vec![Type::named("str")]),
+            "__slice",
+            DirectType::Opaque(Type::Named("list".to_string(), vec![Type::named("str")])),
+        ),
+        (
+            Type::Named("list".to_string(), vec![Type::named("str")]),
+            "index",
+            DirectType::Scalar(ScalarKind::Int64),
+        ),
+        (
+            Type::Named("list".to_string(), vec![Type::named("str")]),
+            "count",
+            DirectType::Scalar(ScalarKind::Int64),
+        ),
+    ] {
+        assert_eq!(
+            builtin_opaque_member_return_type(&object_type, field, &classes),
+            Some(expected),
+            "{object_type}.{field} must retain its canonical direct return ABI",
+        );
+    }
+}
+
+#[test]
 fn infer_operand_and_rvalue_types_track_plain_classes() {
     let mut variable_types = HashMap::new();
     variable_types.insert("flag".to_string(), DirectType::Scalar(ScalarKind::Bool));
@@ -11149,6 +11301,15 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
             "SelectOutcome",
             "Deadline",
             Some(vec![direct_index.clone()]),
+        ),
+        (
+            opaque_named(
+                "SelectOutcome",
+                vec![Type::named("str"), Type::named("int32")],
+            ),
+            "SelectOutcome",
+            "Cancelled",
+            Some(Vec::new()),
         ),
         (
             opaque_named("Result", vec![Type::named("str"), named("io.Error")]),
