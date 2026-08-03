@@ -177,6 +177,157 @@ fn s1_sema_typed_power_and_shift_diagnostics_preserve_exact_operand_contracts() 
 }
 
 #[test]
+fn s1_sema_fourth_collection_methods_pin_element_key_collection_and_capacity_types() {
+    for (source, code, expected) in [
+        (
+            "def main():\n    mut values = [1]\n    values.append(\"bad\")\n",
+            "AU2999",
+            "`append` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    mut values = [1]\n    values.set(0, \"bad\")\n",
+            "AU2999",
+            "`set` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    mut values = [1]\n    values.remove(\"bad\")\n",
+            "AU2002",
+            "`remove` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    values = [1]\n    print(values.contains(\"bad\"))\n",
+            "AU2999",
+            "`contains` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    mut values = [1]\n    other = [\"bad\"]\n    values.extend(other)\n",
+            "AU2999",
+            "`extend` expects `list[int64]`, found `list[str]`",
+        ),
+        (
+            "def main():\n    mut values = [1]\n    values.insert(0, \"bad\")\n",
+            "AU2999",
+            "`insert` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    mut values = [1]\n    values.reserve(\"bad\")\n",
+            "AU2002",
+            "`reserve` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    values = {\"one\": 1}\n    print(values.get(1))\n",
+            "AU2999",
+            "`get` expects `str`, found `int64`",
+        ),
+        (
+            "def main():\n    mut values = {\"one\": 1}\n    values.remove(1)\n",
+            "AU2999",
+            "`remove` expects `str`, found `int64`",
+        ),
+        (
+            "def main():\n    mut values = {\"one\": 1}\n    other = {1: 2}\n    values.update(other)\n",
+            "AU2999",
+            "`update` expects `dict[str, int64]`, found `dict[int64, int64]`",
+        ),
+        (
+            "def main():\n    mut values = {\"one\": 1}\n    values.reserve(\"bad\")\n",
+            "AU2002",
+            "`reserve` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    mut values = {1}\n    values.add(\"bad\")\n",
+            "AU2999",
+            "`add` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    mut values = {1}\n    values.reserve(\"bad\")\n",
+            "AU2002",
+            "`reserve` expects `int64`, found `str`",
+        ),
+    ] {
+        let error = crate::check_source(source)
+            .expect_err("a collection method must reject the wrong static argument type");
+        assert_eq!(error.code, code, "{source}: {error:?}");
+        assert_eq!(error.message, expected, "{source}");
+    }
+}
+
+#[test]
+fn s1_sema_fourth_duplicate_ffi_items_report_the_prior_declaration_kind() {
+    for (source, expected) in [
+        (
+            "extern \"C\" opaque class Handle\nextern \"C\" opaque class Handle\n",
+            "duplicate item `Handle` (previously declared as opaque class at 1:1)",
+        ),
+        (
+            "extern \"C\" def read(value: int32) -> int32\nextern \"C\" def read(value: int32) -> int32\n",
+            "duplicate item `read` (previously declared as extern function at 1:1)",
+        ),
+    ] {
+        let error = check_ffi_source_for_test(source)
+            .expect_err("duplicate extern declarations must be rejected");
+        assert_eq!(error.code, "AU2999", "{source}: {error:?}");
+        assert_eq!(error.message, expected, "{source}");
+        assert_eq!(error.secondary_spans.len(), 0, "{source}");
+    }
+}
+
+#[test]
+fn s1_sema_fourth_expected_builtin_enum_arity_and_len_receiver_stay_specific() {
+    let arity = crate::check_source(
+        "def make() -> Option[int32]:\n    return Option.Some()\n\ndef main():\n    pass\n",
+    )
+    .expect_err("the expected Option type must not hide a missing Some payload");
+    assert_eq!(arity.code, "AU2004");
+    assert_eq!(
+        arity.message,
+        "variant `Some` of enum `Option` expects 1 payload argument, found 0"
+    );
+
+    let len = crate::check_source("def main():\n    print(len(1))\n")
+        .expect_err("len must reject scalar values through its public builtin contract");
+    assert_eq!(len.code, "AU2002");
+    assert_eq!(
+        len.message,
+        "`len(...)` expects a value with a `len()` member, found `int64`"
+    );
+
+    let field_default = crate::check_source(
+        "def initial() -> int32:\n    return 1\n\nclass Box:\n    value: int32 = initial()\n\ndef main():\n    pass\n",
+    )
+    .expect_err("class field defaults cannot call module functions");
+    assert_eq!(field_default.code, "AU2999");
+    assert_eq!(field_default.message, "unsupported call target");
+}
+
+#[test]
+fn s1_sema_fourth_match_statements_and_expressions_pin_shape_diagnostics() {
+    for (source, expected) in [
+        (
+            "enum Pair:\n    Both(int32, int32)\n\ndef main():\n    value = Pair.Both(1, 2)\n    match value:\n        case Pair.Both(left):\n            print(left)\n        case _:\n            pass\n",
+            "variant `Pair.Both` expects 2 pattern payloads, found 1",
+        ),
+        (
+            "enum Pair:\n    Both(int32, int32)\n\ndef main() -> int32:\n    value = Pair.Both(1, 2)\n    return match value:\n        case Pair.Both(left): left\n        case _: 0\n",
+            "variant `Pair.Both` expects 2 pattern payloads, found 1",
+        ),
+        (
+            "def main():\n    match [1]:\n        case _:\n            pass\n",
+            "`match` currently requires a tuple, enum, bool, integer, float, or str scrutinee, found `list[int64]`",
+        ),
+        (
+            "def main() -> int32:\n    return match [1]:\n        case _: 0\n",
+            "`match` currently requires a tuple, enum, bool, integer, float, or str scrutinee, found `list[int64]`",
+        ),
+    ] {
+        let error = crate::check_source(source)
+            .expect_err("unsupported match shapes must report a source-level diagnostic");
+        assert_eq!(error.code, "AU2999", "{source}: {error:?}");
+        assert_eq!(error.message, expected, "{source}");
+    }
+}
+
+#[test]
 fn s1_sema_module_constants_reject_self_reentry_rebinding_mutation_and_moves() {
     let reentry = crate::check_source("VALUE: int64 = VALUE\n\ndef main():\n    pass\n")
         .expect_err("a module constant cannot re-enter its own initializer");
