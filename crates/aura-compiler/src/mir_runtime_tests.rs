@@ -138,6 +138,146 @@ fn builtin_math_constant_uses_once_initialized_shared_module_storage() {
     assert_eq!(value.to_bits(), 0x4009_21fb_5444_2d18);
 }
 
+#[test]
+fn failed_module_constant_reads_replay_the_original_diagnostic() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def initialize() -> int64:
+    print("initializing")
+    return 1 // 0
+
+value = initialize()
+
+def main():
+    print("unreachable")
+"#,
+    )
+    .expect("failing module constant source should lower");
+    let constant = module
+        .constants
+        .first()
+        .cloned()
+        .expect("lowering should record the failing constant initializer");
+    let stdout = Arc::new(Mutex::new(String::new()));
+    let mut runtime = MirRuntime::new(module, stdout.clone(), CancellationContext::default());
+
+    let first = runtime
+        .read_module_constant(&constant.key, &constant.initializer)
+        .expect_err("the constant initializer must fail");
+    let second = runtime
+        .read_module_constant(&constant.key, &constant.initializer)
+        .expect_err("later reads must replay the initializer failure");
+
+    assert_eq!(first.code, "AU4004");
+    assert_eq!(second, first);
+    assert_eq!(
+        *stdout
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        "initializing\n",
+        "a failed initializer must run once even when the constant is read again"
+    );
+}
+
+#[test]
+fn canonical_collection_capacity_failures_have_stable_runtime_diagnostics() {
+    let cases = [
+        (
+            "list constructor negative capacity",
+            "def main():\n    values = list[int64].with_capacity(-1)\n    print(values)\n",
+            "AU4003",
+            "collection capacity cannot be negative",
+        ),
+        (
+            "dict constructor negative capacity",
+            "def main():\n    values = dict[str, int64].with_capacity(-1)\n    print(values)\n",
+            "AU4003",
+            "collection capacity cannot be negative",
+        ),
+        (
+            "set constructor negative capacity",
+            "def main():\n    values = set[str].with_capacity(-1)\n    print(values)\n",
+            "AU4003",
+            "collection capacity cannot be negative",
+        ),
+        (
+            "list constructor allocation failure",
+            "def main():\n    values = list[int64].with_capacity(9223372036854775807)\n    print(values)\n",
+            "AU4005",
+            "list capacity allocation failed",
+        ),
+        (
+            "dict constructor allocation failure",
+            "def main():\n    values = dict[str, int64].with_capacity(9223372036854775807)\n    print(values)\n",
+            "AU4005",
+            "dictionary capacity allocation failed",
+        ),
+        (
+            "set constructor allocation failure",
+            "def main():\n    values = set[str].with_capacity(9223372036854775807)\n    print(values)\n",
+            "AU4005",
+            "set capacity allocation failed",
+        ),
+        (
+            "list reserve negative capacity",
+            "def main():\n    mut values: list[int64] = []\n    values.reserve(-1)\n",
+            "AU4003",
+            "collection capacity cannot be negative",
+        ),
+        (
+            "dict reserve negative capacity",
+            "def main():\n    mut values: dict[str, int64] = {}\n    values.reserve(-1)\n",
+            "AU4003",
+            "collection capacity cannot be negative",
+        ),
+        (
+            "set reserve negative capacity",
+            "def main():\n    mut values: set[str] = set[str]()\n    values.reserve(-1)\n",
+            "AU4003",
+            "collection capacity cannot be negative",
+        ),
+        (
+            "list reserve allocation failure",
+            "def main():\n    mut values: list[int64] = []\n    values.reserve(9223372036854775807)\n",
+            "AU4005",
+            "list capacity allocation failed",
+        ),
+        (
+            "dict reserve allocation failure",
+            "def main():\n    mut values: dict[str, int64] = {}\n    values.reserve(9223372036854775807)\n",
+            "AU4005",
+            "dictionary capacity allocation failed",
+        ),
+        (
+            "set reserve allocation failure",
+            "def main():\n    mut values: set[str] = set[str]()\n    values.reserve(9223372036854775807)\n",
+            "AU4005",
+            "set capacity allocation failed",
+        ),
+    ];
+
+    for (label, source, code, message) in cases {
+        let error = crate::run_source(source).expect_err(label);
+        assert_eq!(error.code, code, "{label}");
+        assert_eq!(error.message, message, "{label}");
+    }
+}
+
+#[test]
+fn canonical_list_index_absence_is_au4008_with_actionable_help() {
+    let error = crate::run_source(
+        "def main():\n    values: list[int64] = [10, 20]\n    print(values.index(30))\n",
+    )
+    .expect_err("list.index must reject an absent value");
+
+    assert_eq!(error.code, "AU4008");
+    assert_eq!(error.message, "collection value was not found");
+    assert_eq!(
+        error.help,
+        ["check `value in values` before searching when absence is expected"]
+    );
+}
+
 fn lower_ffi_runtime_source(source: &str) -> MirModule {
     let module = crate::parse_source(source).expect("FFI runtime source should parse");
     let program = crate::check_module_with_builtin_imports(module)
