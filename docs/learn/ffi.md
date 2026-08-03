@@ -41,8 +41,8 @@ Use fixed-width scalars (`int32`, `uint64`, `float32`, and their supported
 peers) for ordinary C values. `int` is accepted as the exact `int64` alias,
 but an explicit width makes an ABI declaration easier to review.
 
-A bare `String` parameter passes temporary UTF-8 bytes and a byte length. A
-bare `Vec[uint8]` passes read-only bytes and a length. `mut Vec[uint8]` uses a
+A bare `str` parameter passes temporary UTF-8 bytes and a byte length. A
+bare `list[uint8]` passes read-only bytes and a length. `mut list[uint8]` uses a
 same-length scratch buffer for fixed-length copy-in/out. Empty views use a
 null pointer with length zero. The C function must not retain those pointers,
 and the string view is not promised to end in a NUL byte.

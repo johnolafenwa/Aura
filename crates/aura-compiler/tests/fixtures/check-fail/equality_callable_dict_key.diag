@@ -1,0 +1,7 @@
+error[AU2008]: cannot use dict indexing with `def(int64) -> int64` because `def(int64) -> int64` does not define equality
+ --> crates/aura-compiler/tests/fixtures/check-fail/equality_callable_dict_key.au:2:12
+  |
+2 |     values[key] = 1
+  |            ^
+  = note: Aura has no identity-equality fallback; equality-dependent operations require a defined value relation
+  = help: compare explicit results or a stable discriminant; callable identity is not value equality

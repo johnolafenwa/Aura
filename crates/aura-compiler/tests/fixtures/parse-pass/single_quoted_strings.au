@@ -1,4 +1,4 @@
-def echo(value: own String) -> String:
+def echo(value: own str) -> str:
     return value
 
 def main() -> int32:

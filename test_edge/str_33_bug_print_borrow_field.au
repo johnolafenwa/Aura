@@ -1,9 +1,9 @@
-# BUG: Cannot print String field on borrow param in free function
+# BUG: Cannot print str field on borrow param in free function
 # Expected: print(h.text) should work (print should borrow)
 # Actual: "cannot move non-copy field out of borrowed value"
 
 class Holder:
-    text: String
+    text: str
 
 def show(h: Holder):
     print(h.text)

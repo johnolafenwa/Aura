@@ -13,7 +13,7 @@ The pool needs four things:
 - one or more **consumers** that read jobs and produce results
 - a **parent** that owns the task group and decides when the pool has finished
 
-`TaskGroup` is where the parent lives. `Queue[Job]` and `Queue[String]` are the two channels. `QueueReceive[T]` describes what a receive produces. Cancellation is the tool the parent uses when it stops waiting.
+`TaskGroup` is where the parent lives. `Queue[Job]` and `Queue[str]` are the two channels. `QueueReceive[T]` describes what a receive produces. Cancellation is the tool the parent uses when it stops waiting.
 
 ## Step 1: The Work Itself
 
@@ -22,9 +22,9 @@ A job is a small record, and the worker function explicitly takes ownership:
 ```python
 class Job:
     id: int32
-    payload: String
+    payload: str
 
-def handle(job: own Job) -> String:
+def handle(job: own Job) -> str:
     return "done " + job.id.to_string() + " " + job.payload
 ```
 
@@ -49,7 +49,7 @@ Closing is part of the protocol. A consumer that sees the queue close knows its 
 A consumer reads jobs until the queue closes, the surrounding task group is cancelled, or all producers finish:
 
 ```python
-def consume(name: String, jobs: Queue[Job], results: Queue[String]):
+def consume(name: str, jobs: Queue[Job], results: Queue[str]):
     for job in jobs:
         result = f"{name}: {handle(job)}"
         results.put(result)
@@ -66,7 +66,7 @@ The parent owns the task group, the queues, and the decision about when the pool
 
 ```python
 jobs = Queue[Job](capacity=8)
-results = Queue[String]()
+results = Queue[str]()
 
 with group = TaskGroup():
     group.start_soon(produce, jobs)

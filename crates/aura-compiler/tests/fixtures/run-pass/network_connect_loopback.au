@@ -2,7 +2,7 @@ import fs
 import io
 import net
 
-def serve_tcp(addresses: Queue[String]) -> Result[None, io.Error]:
+def serve_tcp(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.listen("127.0.0.1:0"):
         addresses.put(try server_listener.local_addr())
         stream = try server_listener.accept(timeout=2s)
@@ -14,7 +14,7 @@ def serve_tcp(addresses: Queue[String]) -> Result[None, io.Error]:
                     pass
     return Result.Ok(None)
 
-def serve_unix(path: String, ready: Queue[bool]) -> Result[None, io.Error]:
+def serve_unix(path: str, ready: Queue[bool]) -> Result[None, io.Error]:
     with server_listener = try net.unix_listen(path):
         ready.put(true)
         stream = try server_listener.accept(timeout=2s)
@@ -35,7 +35,7 @@ def run() -> Result[None, io.Error]:
             pass
 
     with TaskGroup() as group:
-        tcp_addresses = Queue[String](capacity=1)
+        tcp_addresses = Queue[str](capacity=1)
         tcp_server = group.start(serve_tcp, tcp_addresses)
         match tcp_addresses.get(timeout=2s):
             case QueueReceive.Item(tcp_address):

@@ -1,0 +1,8 @@
+error[AU3001]: cannot move an owned match candidate before its guard commits the arm
+ --> crates/aura-compiler/tests/fixtures/check-fail/match_own_guard_cannot_move_candidate.au:11:38
+   |
+11 |         case Value(value) if consume(value):
+   |                                      ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/match_own_guard_cannot_move_candidate.au:11:30: value is borrowed here
+  = help: take `value` as `own str` when ownership is required, or call `.clone()` to consume an independent copy
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/match_own_guard_cannot_move_candidate.au:11:43-11:43 with `.clone()`

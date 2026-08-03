@@ -7,14 +7,14 @@ enum Vehicle:
     Cat
     Dog
 
-def animal_name(a: Animal) -> String:
+def animal_name(a: Animal) -> str:
     match own a:
         case Animal.Cat:
             return "animal cat"
         case Animal.Dog:
             return "animal dog"
 
-def vehicle_name(v: Vehicle) -> String:
+def vehicle_name(v: Vehicle) -> str:
     match own v:
         case Vehicle.Cat:
             return "vehicle cat"

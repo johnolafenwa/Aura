@@ -1,0 +1,32 @@
+enum Boxed:
+    Filled(int32)
+    Empty
+
+def mutate_then_fail(value: mut int32) -> Result[bool, str]:
+    value += 5
+    return Result.Err("stop")
+
+def inspect(boxed: mut Boxed) -> Result[None, str]:
+    match mut boxed:
+        case Filled(value) if try mutate_then_fail(value):
+            pass
+        case Filled(_):
+            pass
+        case Empty:
+            pass
+    return Result.Ok(None)
+
+def main() -> int32:
+    mut boxed = Boxed.Filled(1)
+    result = inspect(boxed)
+    match boxed:
+        case Filled(value):
+            print(value)
+        case Empty:
+            print(-1)
+    match result:
+        case Result.Ok(_):
+            print("ok")
+        case Result.Err(message):
+            print(message)
+    return 0

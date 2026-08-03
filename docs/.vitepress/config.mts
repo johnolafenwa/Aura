@@ -92,6 +92,7 @@ export default defineConfig({
             { text: 'Execution Model', link: '/manual/execution-model' },
             { text: 'Collections', link: '/manual/collections' },
             { text: 'Numeric Arrays', link: '/manual/numeric-arrays' },
+            { text: 'Math Module', link: '/manual/math' },
             { text: 'Bytes, Codecs, And SHA-256', link: '/manual/bytes' },
             { text: 'JSON Module', link: '/manual/json' },
             { text: 'Randomness Module', link: '/manual/randomness' },

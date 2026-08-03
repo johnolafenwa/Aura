@@ -1,7 +1,7 @@
 class Holder:
-    text: String
+    text: str
 
-def replace_and_return(holder: mut Holder) -> String:
+def replace_and_return(holder: mut Holder) -> str:
     holder.text = "B"
     return "C"
 

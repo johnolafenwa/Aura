@@ -1,15 +1,15 @@
 class Address:
-    street: String
-    city: String
+    street: str
+    city: str
 
-    def full(self) -> String:
+    def full(self) -> str:
         return self.street + ", " + self.city
 
 class Contact:
-    name: String
+    name: str
     address: Address
 
-    def summary(self) -> String:
+    def summary(self) -> str:
         return self.name + " at " + self.address.full()
 
 def main() -> int32:

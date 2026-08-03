@@ -6,7 +6,7 @@ def second_filter(value: int64) -> bool:
     print(f"second {value}")
     return value == 3
 
-def select_inner(value: int64) -> Vec[int64]:
+def select_inner(value: int64) -> list[int64]:
     print(f"inner {value}")
     return [value, value + 10]
 
@@ -16,48 +16,48 @@ def mutate_key(key: mut int64) -> int64:
     return key
 
 def main():
-    ranged: Vec[int32] = [
+    ranged: list[int64] = [
         value * 3
         for value in range(1, 4)
     ]
     print(ranged)
 
-    tags: Set[String] = Set{"set-owned"}
-    copied_tags: Vec[String] = [
+    tags: set[str] = {"set-owned"}
+    copied_tags: list[str] = [
         tag.clone()
         for tag in tags
     ]
     print(copied_tags)
 
-    pairs = Queue[(String, String)]()
+    pairs = Queue[(str, str)]()
     pairs.put(("queue", "-tuple"))
     pairs.close()
-    joined: Vec[String] = [
+    joined: list[str] = [
         left + right
         for left, right in pairs
     ]
     print(joined)
 
-    indexed: Vec[int64] = [
+    indexed: list[int64] = [
         index * 10 + value
         for index, value in enumerate([4, 5])
     ]
     print(indexed)
 
-    zipped: Vec[int64] = [
+    zipped: list[int64] = [
         left + right
         for left, right in zip([1, 2, 3], [10, 20])
     ]
     print(zipped)
 
     offset: int64 = 10
-    build: def() -> Vec[int64] = lambda: [
+    build: def() -> list[int64] = lambda: [
         value + offset
         for value in [1, 2]
     ]
     print(build())
 
-    filtered: Vec[int64] = [
+    filtered: list[int64] = [
         value
         for value in [1, 2, 3]
         if first_filter(value)
@@ -65,7 +65,7 @@ def main():
     ]
     print(filtered)
 
-    selected: Vec[int64] = [
+    selected: list[int64] = [
         outer + inner
         for outer in [1, 2, 3]
         if outer != 2
@@ -74,33 +74,33 @@ def main():
     print(selected)
 
     mut key_place: int64 = 5
-    ordered: Map[int64, int64] = {
+    ordered: dict[int64, int64] = {
         key_place: mutate_key(key_place)
         for _once in [0]
     }
     print(key_place)
     print(ordered[5])
 
-    messages = Queue[String]()
+    messages = Queue[str]()
     messages.put("received")
     messages.close()
-    received: Vec[String] = [message for message in messages]
+    received: list[str] = [message for message in messages]
     print(received)
 
-    rows: Vec[(int64, (int64, int64))] = [
+    rows: list[(int64, (int64, int64))] = [
         (1, (2, 3)),
         (4, (5, 6))
     ]
-    recursive: Vec[int64] = [
+    recursive: list[int64] = [
         left + middle + right
         for left, (middle, right) in rows
     ]
     print(recursive)
 
-    closures = Queue[String]()
+    closures = Queue[str]()
     closures.put("captured")
     closures.close()
-    invoked: Vec[String] = [
+    invoked: list[str] = [
         (lambda: message)()
         for message in closures
     ]

@@ -1,0 +1,26 @@
+def print_bool(value: bool):
+    match own value:
+        case true:
+            print("true")
+        case false:
+            print("false")
+
+def main() -> int32:
+    literal_numbers: list[int32] = [1, 2, 3]
+    mut pushed_numbers: list[int32] = []
+    pushed_numbers.append(1)
+    pushed_numbers.append(2)
+    pushed_numbers.append(3)
+
+    print_bool(literal_numbers == pushed_numbers)
+    print_bool(pushed_numbers == literal_numbers)
+    print_bool(literal_numbers != pushed_numbers)
+
+    literal_names = ["Ada", "Grace"]
+    mut pushed_names: list[str] = []
+    pushed_names.append("Ada")
+    pushed_names.append("Grace")
+
+    print_bool(literal_names == pushed_names)
+    print_bool(pushed_names == literal_names)
+    return 0

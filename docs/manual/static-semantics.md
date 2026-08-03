@@ -6,7 +6,7 @@ This chapter states the cross-cutting rules. The declaration-specific chapters p
 
 ## Types And Type Equality
 
-Aura 0.2 primarily uses nominal types with invariant generic arguments. Two
+Aura 0.3 primarily uses nominal types with invariant generic arguments. Two
 nominal types match when their canonical names and recursively all type
 arguments are equal. Tuple types are structural: two tuple types match exactly
 when their arity and every corresponding element type match recursively. There
@@ -16,11 +16,11 @@ Examples:
 
 - `int` and `int64` are the same canonical type.
 - `int32` and `int64` are different types.
-- `Vec[int32]` and `Vec[int64]` are different types.
+- `list[int32]` and `list[int64]` are different types.
 - two user classes with identical fields are still different types.
 - an imported type retains its defining module identity even when imported under an unqualified binding.
 
-`T?` is syntactic sugar for `Option[T]`. `int` canonicalizes to `int64`, and `str` currently canonicalizes to `String`; neither alias introduces a distinct runtime type.
+`T?` is syntactic sugar for `Option[T]`. `int` canonicalizes to `int64`, and `str` currently canonicalizes to `str`; neither alias introduces a distinct runtime type.
 
 Every generic type use must supply its declared number of type arguments. Non-generic types reject type arguments. `Self` is available only in supported trait and implementation type positions.
 
@@ -34,24 +34,30 @@ Aura uses local, contextual inference rather than global inference. Public funct
 - A negative integer literal is parsed as unary `-` applied to a non-negative literal. It follows the same exact float-context rule, or must fit the selected signed integer type.
 - A floating literal adopts an expected `float32` or `float64`; otherwise it defaults to `float64`.
 - `true` and `false` have type `bool`.
-- A single-quoted or double-quoted ordinary string and an f-string each have type `String`; quote choice does not create a distinct type.
+- A single-quoted, double-quoted, triple-quoted, raw, or formatted string has
+  type `str`; delimiter and literal form do not create distinct types. Each
+  f-string format specification is checked against the interpolation's static
+  type. String-only, integer-only, numeric-only, sign, precision, and grouping
+  restrictions are compile-time errors under `AU2002`.
 - A duration literal has type `Duration`.
 - Bare `None` has type `None`, except in an expected `Option[T]` position where it denotes `Option.None` of that type. Expected-option context flows through grouping, annotated bindings, return positions, and argument positions. For `==` and `!=`, when either operand has static type `Option[T]`, a bare `None` on the other side is contextually typed as that same option specialization; this rule is symmetric. Unit `None == None` is `true` and unit `None != None` is `false`. A qualified `Option.None` with no expected specialization remains an inference error.
 
 ### Collections
 
-A non-empty list, set, or map infers its element/key/value type from the first
+A non-empty list, set, or dictionary infers its element/key/value type from the first
 value unless an expected collection type is available. All remaining values
-must have the same inferred type. Equal keys in one map literal are permitted;
+must have the same inferred type. Equal keys in one dictionary literal are permitted;
 the later value replaces the earlier value at runtime without changing the
 key's first insertion position.
 
-An empty collection literal has no self-contained element type and therefore requires an expected `Vec[T]`, `Set[T]`, or `Map[K, V]` type. `{}` is grammatically a map literal but may be interpreted as an empty `Set[T]` when its expected type is `Set[T]`.
+An empty list or dictionary literal requires an expected `list[T]` or
+`dict[K, V]` type. `{}` is a dictionary literal. An empty set uses
+`set[T]()`.
 
 ### Comprehensions
 
-A list comprehension has type `Vec[T]`, a set comprehension has type `Set[T]`,
-and a map comprehension has type `Map[K, V]`. An expected collection
+A list comprehension has type `list[T]`, a set comprehension has type `set[T]`,
+and a dictionary comprehension has type `dict[K, V]`. An expected collection
 specialization flows into the element, key, and value expressions before
 inference. Otherwise those output expressions determine `T`, `K`, and `V`
 under the ordinary exact-type and contextual-literal rules. A filter must have
@@ -63,8 +69,8 @@ provenance as an ordinary bare `for` target, then becomes visible to that
 clause's filters, later clauses, and the output. Targets cannot shadow visible
 names or earlier targets and do not escape the expression.
 
-Every clause reuses the statement bare-loop iterable classification. Vec and
-Set provide shared elements, Range provides copy `int32`, the compiler-known
+Every clause reuses the statement bare-loop iterable classification. Lists and
+sets provide shared elements, Range provides copy `int64`, the compiler-known
 `enumerate` and `zip` forms retain their contracts, and Queue receives owned
 items through its existing carve-out. `mut` and `own` clause modifiers are not
 part of the syntax.
@@ -133,15 +139,20 @@ The first simple-name assignment introduces a binding. Its type is the annotatio
 
 `mut` makes the new binding assignable and a mutable place. Reassignment requires an existing mutable place and preserves the original type. Reassignment reinitializes a fully moved binding or field when the assigned value has the correct type.
 
-Compound assignments `+=`, `-=`, `*=`, `/=`, `%=`, and `//=` read the current target, apply the corresponding binary operation, and write the result. The target must already exist, be mutable, not be moved, and have the operation's result type. Integer `/=` is rejected by the same rule and teaching diagnostic as integer `/`; floating `/=` remains valid.
+Compound assignments `+=`, `-=`, `*=`, `**=`, `/=`, `%=`, `//=`, `&=`,
+`|=`, `^=`, `<<=`, and `>>=` read the current target, apply the corresponding
+binary operation, and write the result only after success. The target must
+already exist, be mutable, not be moved, and have the operation's result type.
+Integer `/=` is rejected by the same rule and teaching diagnostic as integer
+`/`; floating `/=` remains valid.
 
 Field assignment requires a mutable base place and a declared field. Index
-assignment supports `Vec[T]` with exactly an `int32` index and `Map[K, V]`
-with a key of exactly `K`. Simple Map index assignment accepts any `V` and
+assignment supports `list[T]` with the `int64` index domain and `dict[K, V]`
+with a key of exactly `K`. Simple dict index assignment accepts any `V` and
 replaces an equal existing key or inserts a new entry. Its key and value are
 owned storage positions: each is consumed when non-copy. The key is fully
 evaluated and captured before the assigned value is evaluated, so value-side
-effects do not retarget the write. Compound Map indexed assignment is permitted
+effects do not retarget the write. Compound dict indexed assignment is permitted
 only for copy `V`; non-copy `V` is rejected rather than implicitly cloned or
 destructively removed before the operator completes. An annotation and `mut`
 are not permitted on member or index assignment.
@@ -152,6 +163,7 @@ are not permitted on member or index assignment.
 
 - `not value` accepts `bool` and returns `bool`, or resolves a matching `Not.not` trait operation.
 - `-value` accepts an integer or float and returns the same type, or resolves a matching `Neg.neg` operation.
+- `~value` accepts an integer and returns the same exact integer type.
 - `try value` requires `value: Result[T, E1]` and an enclosing return type `Result[U, E2]`; it has type `T` when `E1 == E2` or an applicable `impl From[E1] for E2` exists.
 
 ### Binary Operators
@@ -161,12 +173,15 @@ Built-in operator typing is:
 | Operators | Operand rule | Result |
 | --- | --- | --- |
 | `and`, `or` | both `bool` | `bool` |
-| `+` | equal integer types, equal float types, two `String` values, or two Duration values | operand type |
+| `+` | equal integer types, equal float types, two `str` values, or two Duration values | operand type |
 | `-` | equal integer types, equal float types, or two Duration values | operand type |
 | `*` | equal integer types, equal float types, `Duration` and `int64` in either order | numeric operand type, or `Duration` |
+| `**` | equal integer types or equal float types | operand type |
 | `//` | equal integer types, equal float types, or `Duration // int64` | numeric operand type, or `Duration` |
 | `%` | equal integer or equal float types | operand type |
 | `/` | equal float types | operand type |
+| `&`, `|`, `^` | equal concrete integer types | operand type |
+| `<<`, `>>` | equal concrete integer types | left operand type |
 | `==`, `!=` | equal operand types | `bool` |
 | `<`, `<=`, `>`, `>=` | equal integer types, equal float types, or two Duration values | `bool` |
 
@@ -180,7 +195,7 @@ Arithmetic and ordering operators may otherwise resolve through the
 corresponding `Add`, `Sub`, `Mul`, `Div`, `FloorDiv`, `Mod`, or `Ord` trait
 method. Builtin numeric and Duration rules take precedence over operator-trait
 dispatch. Builtin equality does not dispatch through an operator trait in
-Aura 0.2.
+Aura 0.3.
 
 Tuple `==` and `!=` require operands with the same static tuple type. They
 apply builtin equality recursively to corresponding element types and produce
@@ -197,6 +212,11 @@ contextual typing before enforcing exact operand-type equality.
 
 Operator operands are not implicitly widened. An integer literal may be contextually typed to match an integer operand, or a `float32`/`float64` operand when the literal is exactly representable in that floating type. A floating literal may adopt the other operand's floating type. Non-literal values require an explicit numeric cast or integer `.to_float()` conversion.
 
+Integer power requires a non-negative exponent. A negative exponent visible in
+source is `AU2003`; a negative value discovered only during execution is a
+runtime failure. Bitwise operations, shifts, and power are builtin numeric
+operations and do not dispatch through operator traits.
+
 ### Conditions
 
 `if` and `while` conditions, including the condition in
@@ -208,7 +228,7 @@ user types.
 ### Assertions
 
 An `assert` condition must have exactly type `bool`. Its optional message must
-have exactly type `String`. Both mismatches use `AU2002` at the retained
+have exactly type `str`. Both mismatches use `AU2002` at the retained
 `assert` keyword span.
 
 The checker evaluates the condition's ownership effects first. It checks an
@@ -219,45 +239,45 @@ no lasting type or value refinement.
 
 ### Indexing, Slicing, And Members
 
-Direct indexing supports `Vec[T]` with exactly an `int32` index, `Map[K, V]`
-with exactly `K`, and `Array[T]` with one exact `int32` coordinate per runtime
-axis. For a vector, a negative index `i` is normalized once as
+Direct indexing supports `list[T]` with the `int64` index domain, `dict[K, V]`
+with exactly `K`, and `Array[T]` with one `int64` coordinate per runtime
+axis. For a list, a negative index `i` is normalized once as
 `len + i` before the existing bounds check; this applies equally to direct
-reads and writes and to `get`, `set`, `remove`, both `swap` indexes, and
-`insert`. An index that remains invalid is not clamped. Direct access and
-mutating methods fail at runtime, while `get` returns `None`; `insert` accepts
-the post-normalization range `0..=len`. An already-bound `int64` index is not
-implicitly narrowed.
+reads and writes and to `get`, `set`, `pop`, and both `swap` indexes.
+Fixed-width `int8`, `int16`, `int32`, `uint8`, `uint16`, and `uint32` values
+widen losslessly only at these positions. Direct access, `set`, `pop`, and
+`swap` fail at runtime when the normalized position is invalid, while `get`
+returns `None`. `insert` clamps its position to `0..=len`.
 
 A direct read produces `T` or `V` only when that element/value type is
-copyable. For a non-copy vector element, use `get(index)` for an explicit
+copyable. For a non-copy list element, use `get(index)` for an explicit
 cloned optional read only when the element type is clone-safe. For a non-copy
-map value, use `get(key)` only when the value type is clone-safe, or
+dictionary value, use `get(key)` only when the value type is clone-safe, or
 `remove(key)` to transfer ownership. These non-copy
 direct-read rejections use `AU3005`; a non-copy indexed compound assignment
-uses `AU3006` because its initial read has the same ownership problem. A missing map key
+uses `AU3006` because its initial read has the same ownership problem. A missing dictionary key
 in a direct read is runtime diagnostic `AU4003`. Integer indexing is not
-defined for `String`.
+defined for `str`.
 
-A slice suffix is defined on `Vec[T]`, `String`, and `Array[T]`. It returns a
-fresh owned value of the same source type. Each written endpoint has exactly type
-`int32`, with ordinary contextual integer-literal typing and no implicit
-narrowing of an already-bound `int64`. An omitted endpoint contributes no
+A slice suffix is defined on `list[T]`, `str`, and `Array[T]`. It returns a
+fresh owned value of the same source type. Each written endpoint uses the
+`int64` position domain, including lossless widening from the supported narrow
+fixed-width types. An omitted endpoint contributes no
 expression. After one `len + i` normalization for each negative written
 endpoint, both effective endpoints must lie in `0..=len` and start must not
 exceed end. Invalid or reversed bounds are runtime `AU4003`.
 
-Vec slicing establishes a clone-producing obligation for `T`: Copy elements
+List slicing establishes a clone-producing obligation for `T`: Copy elements
 are copied and non-Copy elements must be clone-safe. A concrete or transitive
 `random.Rng` element is rejected with `AU3007`; a non-repeatable Task
 observation right is rejected with `AU3009`; unresolved generic `T` carries
 the inferred obligation to specialization. String slicing counts Unicode
-scalar values and returns `String`. A slice is not a place and cannot be the
+scalar values and returns `str`. A slice is not a place and cannot be the
 target of assignment or mutable access. Step syntax and slice assignment are
-reserved `AU2005` migration diagnostics rather than accepted static forms.
+reported as unsupported forms with `AU2005`.
 
 `Array[T]` is specialized only by `int32`, `int64`, `float32`, or `float64`.
-Its constructors require exact `Vec[int64]` shape metadata. Array slicing
+Its constructors require exact `list[int64]` shape metadata. Array slicing
 uses the same one-colon grammar and endpoint rules but copies only a first-axis
 range, retaining the remaining runtime dimensions. Array/Array arithmetic
 requires identical `T`; runtime shape equality is checked with `AU4007`.
@@ -328,19 +348,19 @@ require those modes, parameter types, and the return type to match.
 
 Extern calls use ordinary positional/named argument binding and left-to-right
 evaluation, then apply the declared FFI capabilities. Scalars require bare
-parameters; `String` is a bare const UTF-8 view; `Vec[uint8]` is a bare const
+parameters; `str` is a bare const UTF-8 view; `list[uint8]` is a bare const
 byte view or `mut` fixed-length byte view; opaque handles permit bare sharing
 or `own` consumption. A `mut` view requires a mutable place. Extern defaults,
 generics, callbacks, variadics, returned views, and raw pointers are rejected.
 
-Callable-powered Vec methods use exact structural callback types. `map`
+Callable-powered list methods use exact structural callback types. `map`
 requires `f: def(T) -> U`; `filter` requires
-`f: def(T) -> bool`; and `sort_by` requires
+`f: def(T) -> bool`; and keyed `sort` requires
 `key: def(T) -> K`. Bare callback parameters are shared capabilities. A
 callback with `mut T` or `own T` is not substitutable. `filter` is
 clone-producing and adds the ordinary clone-safety obligation for `T`.
 `sort` requires `T` to support the existing natural `<` ordering, while
-`sort_by` requires that ordering for `K`. Both require a mutable Vec place.
+keyed `sort` requires that ordering for `K`. Both require a mutable list place.
 `map` and `filter` retain a shared receiver.
 
 `control.retry` requires
@@ -394,7 +414,7 @@ For a concrete receiver, the checker chooses the unique applicable implementatio
 
 For a type parameter, available methods and operators come from its declared bounds. If multiple bounds expose an indistinguishable method, the access is ambiguous unless the language can resolve one unique contract.
 
-Trait and implementation methods cannot declare default ordinary parameters in Aura 0.2. Trait default method bodies are permitted; a signature-only trait method has no body after its terminating newline.
+Trait and implementation methods cannot declare default ordinary parameters in Aura 0.3. Trait default method bodies are permitted; a signature-only trait method has no body after its terminating newline.
 
 A clone-producing operation over unresolved generic types infers clone-safety
 obligations on the contributing declared parameters. Calls propagate those
@@ -454,7 +474,7 @@ these four start methods and the specialized target return type must be
 `Transfer`. This is a compiler-derived structural obligation, not a builtin
 user trait. A same-named ordinary user trait cannot confer the property.
 It follows collection, tuple, class, and enum storage to the first
-non-transferable leaf. All copy types and `String` qualify; aggregates qualify
+non-transferable leaf. All copy types and `str` qualify; aggregates qualify
 when every stored component does; `Queue[T]` and `Task[T]` handles qualify
 without traversing `T`. Capability views, `random.Rng`, `TaskGroup`, and live
 host resources do not qualify unless a later compiler-owned whitelist names a
@@ -481,7 +501,7 @@ closure capture cannot launder shared or mutable capabilities because those
 captures are rejected when the closure is created.
 
 Task-target resolution accepts a concrete function value. Explicit
-`function[Types]` specialization may now produce such a value before the call;
+`function[Types]` specialization may produce such a value before the call;
 the direct associated-method `Type.associated_method[Types]` spelling remains
 limited to the callable-target slot. A bare target whose declared/default
 context already resolves its complete types is also concrete.
@@ -491,9 +511,9 @@ ADR-0008 also distinguishes repeatable and single-consumer task results.
 is a recursively repeatable `Task[...]`. For any other transferable `T`,
 `result`, `result_or_none`, and `result_or` consume the unique observation
 right on every outcome. `wait_any` and `wait_all` consume the complete task
-vector; `wait_any` abandons the unchosen rights. `select(...)` consumes every
+list; `wait_any` abandons the unchosen rights. `select(...)` consumes every
 non-repeatable Task source at call entry and abandons each losing right. This
-prevents handle aliases, including nested `Task[Task[String]]`, from producing
+prevents handle aliases, including nested `Task[Task[str]]`, from producing
 a second value.
 Attempts to clone, read through a clone-producing collection method, or copy
 an aggregate containing such a right use `AU3009`. Reusing the task binding

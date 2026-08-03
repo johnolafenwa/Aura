@@ -1,4 +1,4 @@
-def choose(from: String) -> String:
+def choose(from: str) -> str:
     return from
 
 def main() -> int32:

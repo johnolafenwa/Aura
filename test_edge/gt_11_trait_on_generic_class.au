@@ -2,16 +2,16 @@
 ## Expects: "boxed: hello"
 
 trait Showable:
-    def show(self) -> String
+    def show(self) -> str
 
 class Box[T]:
     value: T
 
-impl Showable for Box[String]:
-    def show(self) -> String:
+impl Showable for Box[str]:
+    def show(self) -> str:
         return "boxed: " + self.value
 
 def main() -> int32:
-    b: Box[String] = Box(value="hello")
+    b: Box[str] = Box(value="hello")
     print(b.show())
     return 0

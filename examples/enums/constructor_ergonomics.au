@@ -4,7 +4,7 @@ enum Status:
 
 def main() -> int32:
     status = Status.Count(value=4)
-    ok: Result[int32, String] = Ok(7)
+    ok: Result[int32, str] = Ok(7)
     some: Option[int32] = Some(9)
 
     print(status)

@@ -1,7 +1,7 @@
 # Edge test: Option shorthand syntax T? and its interactions
 
 class Config:
-    name: String
+    name: str
     port: int32?
 
 def get_port(c: Config) -> int32:

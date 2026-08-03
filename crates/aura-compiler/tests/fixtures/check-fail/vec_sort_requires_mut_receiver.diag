@@ -1,6 +1,0 @@
-error[AU3003]: method `sort` requires a mutable receiver
- --> crates/aura-compiler/tests/fixtures/check-fail/vec_sort_requires_mut_receiver.au:3:12
-  |
-3 |     values.sort()
-  |            ^
-  = help: declare the receiver place with `mut` before calling a mutating method

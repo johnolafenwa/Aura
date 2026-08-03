@@ -1,13 +1,13 @@
 # Test: chaining trait method calls
 
 trait Describable:
-    def describe(self) -> String
+    def describe(self) -> str
 
 class Item:
-    name: String
+    name: str
 
 impl Describable for Item:
-    def describe(self) -> String:
+    def describe(self) -> str:
         return self.name
 
 class Container:

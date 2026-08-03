@@ -6,7 +6,7 @@ enum AppError:
     Wide(int64)
 
 class Resource:
-    label: String
+    label: str
 
     def close(mut self) -> None:
         print("closed " + self.label)

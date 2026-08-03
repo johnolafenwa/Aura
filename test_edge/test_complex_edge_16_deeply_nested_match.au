@@ -6,7 +6,7 @@ enum Wrapper[T]:
 def main() -> int32:
     # Result containing Option containing int
     inner: Option[int32] = Option.Some(42)
-    outer: Result[Option[int32], String] = Result.Ok(inner)
+    outer: Result[Option[int32], str] = Result.Ok(inner)
 
     match own outer:
         case Result.Ok(opt):
@@ -19,8 +19,8 @@ def main() -> int32:
             print(e)
 
     # Option containing Result
-    r: Result[int32, String] = Result.Ok(99)
-    opt_r: Option[Result[int32, String]] = Option.Some(r)
+    r: Result[int32, str] = Result.Ok(99)
+    opt_r: Option[Result[int32, str]] = Option.Some(r)
 
     match own opt_r:
         case Option.Some(res):

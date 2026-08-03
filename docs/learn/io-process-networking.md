@@ -31,7 +31,7 @@ fails at the cap. Larger files need a host helper or pre-splitting because Aura
 import fs
 import io
 
-def copy_text(source: String, dest: String) -> Result[None, io.Error]:
+def copy_text(source: str, dest: str) -> Result[None, io.Error]:
     with input = try fs.open(source):
         text = try input.read_all()
 
@@ -63,11 +63,11 @@ match io.read_line():
         print(error)
 ```
 
-`io.read_line()` returns `Result[Option[String], io.Error]`. The `Option` is `None` at end of input; the `Result` captures I/O failures. Both are in the type, and a caller that wants to treat them differently can.
+`io.read_line()` returns `Result[Option[str], io.Error]`. The `Option` is `None` at end of input; the `Result` captures I/O failures. Both are in the type, and a caller that wants to treat them differently can.
 
 ## Processes: No Shell By Default
 
-`process.run` executes a subprocess from an argv vector — there is no shell interpretation, so the arguments are not re-split and there are no quoting hazards. The return value is a `process.Completed` record.
+`process.run` executes a subprocess from an argument list. There is no shell interpretation, so the arguments are not re-split and there are no quoting hazards. The return value is a `process.Completed` record.
 
 ```python
 import process
@@ -207,11 +207,11 @@ def handle(stream: own net.TcpStream) -> Result[None, io.Error]:
 ```
 
 When a server itself should run as a child task, let that child create the
-listener. A copy `Queue[String]` handle can cross the boundary so the child can
+listener. A copy `Queue[str]` handle can cross the boundary so the child can
 publish its bound address to the parent; the live listener never leaves its
 owning task.
 
-The `read_line` returns `Result[Option[String], io.Error]` for the same reason `io.read_line` does: the client might close cleanly, and the program might have to decide what that means.
+The `read_line` returns `Result[Option[str], io.Error]` for the same reason `io.read_line` does: the client might close cleanly, and the program might have to decide what that means.
 
 ## HTTP And WebSockets
 
@@ -220,7 +220,7 @@ HTTP client helpers return `net.HttpResponse`:
 ```python
 import net
 
-headers: Map[String, String] = {}
+headers: dict[str, str] = {}
 response = try net.http_request_text_timeout(method="GET", url="http://127.0.0.1:8080/", body="", headers=headers, timeout=2s)
 
 print(response.status())
@@ -238,7 +238,7 @@ Most system-facing Aura code has the same outline:
 import fs
 import io
 
-def load(path: String) -> Result[String, io.Error]:
+def load(path: str) -> Result[str, io.Error]:
     with file = try fs.open(path):
         text = try file.read_all()
         return Result.Ok(text)

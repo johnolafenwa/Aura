@@ -2,13 +2,13 @@
 # Tests: method chaining, borrow mut self, default values, class construction
 
 class ServerConfig:
-    host: String = "localhost"
+    host: str = "localhost"
     port: int32 = 8080
     max_connections: int32 = 100
     timeout_ms: int32 = 5000
     debug: bool = false
 
-    def set_host(mut self, h: own String):
+    def set_host(mut self, h: own str):
         self.host = h
 
     def set_port(mut self, p: int32):
@@ -23,7 +23,7 @@ class ServerConfig:
     def set_debug(mut self, d: bool):
         self.debug = d
 
-    def describe(self) -> String:
+    def describe(self) -> str:
         return f"{self.host}:{self.port} max={self.max_connections} timeout={self.timeout_ms}"
 
 def main() -> int32:

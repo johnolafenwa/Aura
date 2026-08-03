@@ -10,6 +10,6 @@ class Box[T]:
 def main() -> int32:
     int_box: Box[int32] = Box(value=99)
     print(int_box.get())
-    str_box: Box[String] = Box(value="aura")
+    str_box: Box[str] = Box(value="aura")
     print(str_box.get())
     return 0

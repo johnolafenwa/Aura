@@ -1,6 +1,6 @@
 # Edge: constructing with wrong field types
 class Record:
-    name: String
+    name: str
     age: int32
 
 def main() -> int32:

@@ -3,7 +3,8 @@ def produce(
     producer: int32,
     item_count: int32
 ) -> int32:
-    for sequence in range(item_count):
+    for sequence_index in range(item_count):
+        sequence: int32 = sequence_index as int32
         jobs.put(producer * 1000 + sequence)
     return item_count
 
@@ -91,7 +92,7 @@ def main() -> int32:
         if consumed != total_items:
             return 12
 
-    mut ordered: Map[int32, int32] = {}
+    mut ordered: dict[int32, int32] = {}
     for _ in range(total_items):
         match receipts.get(timeout=5s):
             case QueueReceive.Item(receipt):
@@ -99,7 +100,7 @@ def main() -> int32:
                 encoded: int32 = receipt % 10000
                 if ticket < 0 or ticket >= total_items:
                     return 13
-                if ordered.contains_key(ticket):
+                if (ticket in ordered):
                     return 14
                 ordered[ticket] = encoded
             case QueueReceive.Closed:
@@ -109,9 +110,10 @@ def main() -> int32:
             case QueueReceive.Cancelled:
                 return 17
 
-    mut expected: Vec[int32] = [0, 0, 0, 0]
-    for ticket in range(total_items):
-        if not ordered.contains_key(ticket):
+    mut expected: list[int32] = [0, 0, 0, 0]
+    for ticket_index in range(total_items):
+        ticket: int32 = ticket_index as int32
+        if not (ticket in ordered):
             return 18
         encoded: int32 = ordered[ticket]
         producer: int32 = encoded // 1000

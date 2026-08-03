@@ -1,5 +1,5 @@
-error[AU2999]: `String.from_bytes` expects `Vec[uint8]`, found `String`
- --> crates/aura-compiler/tests/fixtures/check-fail/string_from_bytes_wrong_type.au:2:23
+error[AU2999]: `str.from_bytes` expects `list[uint8]`, found `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/string_from_bytes_wrong_type.au:2:20
   |
-2 |     String.from_bytes("not bytes")
-  |                       ^
+2 |     str.from_bytes("not bytes")
+  |                    ^

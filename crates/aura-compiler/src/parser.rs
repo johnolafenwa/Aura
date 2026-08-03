@@ -1,12 +1,13 @@
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BindingTarget,
     BreakStmt, ClassDecl, CompareLink, CompareOp, ComprehensionClause, ComprehensionOutput,
-    ContinueStmt, DestructureStmt, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind,
-    ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl, FieldDecl, ForStmt, FormatPart,
-    FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, Item,
-    LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm,
-    MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, ReturnStmt, Stmt, TraitDecl,
-    TuplePattern, TypeRef, TypeRefKind, UnaryOp, VariantPattern, WhileStmt, WithStmt,
+    ConstantDecl, ContinueStmt, DestructureStmt, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl,
+    Expr, ExprKind, ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl, FieldDecl, ForStmt,
+    FormatPart, FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl,
+    ImportKind, ImportName, Item, LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr,
+    MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, ReturnStmt,
+    Stmt, TraitDecl, TuplePattern, TypeRef, TypeRefKind, UnaryOp, VariantPattern, WhileStmt,
+    WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -18,6 +19,17 @@ type ParsedTypeParams = (Vec<String>, TypeParamBounds);
 
 fn parse_error(span: Span, message: impl Into<String>) -> Diagnostic {
     Diagnostic::coded_at("AU1101", span, message)
+}
+
+fn pattern_span(pattern: &Pattern) -> Span {
+    match pattern {
+        Pattern::Or(pattern) => pattern.span,
+        Pattern::Variant(pattern) => pattern.span,
+        Pattern::Tuple(pattern) => pattern.span,
+        Pattern::Binding(pattern) => pattern.span,
+        Pattern::Literal(pattern) => pattern.span,
+        Pattern::Wildcard(span) => *span,
+    }
 }
 
 pub fn parse(source: &str) -> Result<Module> {
@@ -88,6 +100,7 @@ impl Parser {
 
     fn parse_module(&mut self) -> Result<Module> {
         let mut imports = Vec::new();
+        let mut constants = Vec::new();
         let mut items = Vec::new();
         let mut top_level_stmts = Vec::new();
         self.skip_newlines();
@@ -95,6 +108,8 @@ impl Parser {
         while !self.at_eof() {
             if self.at_keyword_import() || self.at_from_import_start() {
                 imports.push(self.parse_import()?);
+            } else if self.at_module_constant_start() {
+                constants.push(self.parse_module_constant()?);
             } else if self.at_simple(&TokenKind::KwPublic)
                 || self.at_copy_class_start()
                 || self.at_keyword_class()
@@ -113,8 +128,39 @@ impl Parser {
 
         Ok(Module {
             imports,
+            constants,
             items,
             top_level_stmts,
+        })
+    }
+
+    fn at_module_constant_start(&self) -> bool {
+        match self.current_kind() {
+            TokenKind::Identifier(_) => {
+                matches!(self.peek_kind(1), Some(TokenKind::Equal | TokenKind::Colon))
+            }
+            TokenKind::KwPublic => matches!(self.peek_kind(1), Some(TokenKind::Identifier(_))),
+            _ => false,
+        }
+    }
+
+    fn parse_module_constant(&mut self) -> Result<ConstantDecl> {
+        let public = self.eat_simple(&TokenKind::KwPublic).is_some();
+        let (name, span) = self.expect_identifier_with_span()?;
+        let annotation = if self.eat_simple(&TokenKind::Colon).is_some() {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        self.expect_simple(TokenKind::Equal)?;
+        let value = self.parse_expr()?;
+        self.expect_statement_terminator()?;
+        Ok(ConstantDecl {
+            public,
+            name,
+            annotation,
+            value,
+            span,
         })
     }
 
@@ -261,9 +307,14 @@ impl Parser {
         if self.at_keyword_import() {
             let span = self.expect_keyword(TokenKind::KwImport)?.span;
             let path = self.parse_identifier_path()?;
+            let alias = if self.eat_simple(&TokenKind::KwAs).is_some() {
+                Some(self.parse_import_alias()?)
+            } else {
+                None
+            };
             self.expect_newline()?;
             return Ok(ImportDecl {
-                kind: ImportKind::Module { path },
+                kind: ImportKind::Module { path, alias },
                 span,
             });
         }
@@ -272,8 +323,35 @@ impl Parser {
         let module_path = self.parse_identifier_path()?;
         self.expect_keyword(TokenKind::KwImport)?;
         let mut names = Vec::new();
+        let mut targets = std::collections::BTreeSet::new();
+        let mut local_names = std::collections::BTreeSet::new();
         loop {
-            names.push(self.expect_identifier()?);
+            let (name, name_span) = self.expect_identifier_with_span()?;
+            if !targets.insert(name.clone()) {
+                return Err(Diagnostic::coded_at(
+                    "AU2999",
+                    name_span,
+                    format!("import target `{name}` appears more than once in this declaration"),
+                ));
+            }
+            let alias = if self.eat_simple(&TokenKind::KwAs).is_some() {
+                Some(self.parse_import_alias()?)
+            } else {
+                None
+            };
+            let local_name = alias.as_deref().unwrap_or(&name);
+            if !local_names.insert(local_name.to_string()) {
+                return Err(Diagnostic::coded_at(
+                    "AU2999",
+                    name_span,
+                    format!("duplicate import binding `{local_name}`"),
+                ));
+            }
+            names.push(ImportName {
+                name,
+                alias,
+                span: name_span,
+            });
             if self.eat_simple(&TokenKind::Comma).is_none() {
                 break;
             }
@@ -283,6 +361,26 @@ impl Parser {
             kind: ImportKind::From { module_path, names },
             span,
         })
+    }
+
+    fn parse_import_alias(&mut self) -> Result<String> {
+        let token = self.bump();
+        match token.kind {
+            TokenKind::Identifier(name) if name == "_" => Err(Diagnostic::coded_at(
+                "AU2999",
+                token.span,
+                "`_` cannot be used as an import alias",
+            )),
+            TokenKind::Identifier(name) => Ok(name),
+            TokenKind::Newline | TokenKind::Eof => {
+                Err(parse_error(token.span, "expected identifier after `as`"))
+            }
+            _ => Err(Diagnostic::coded_at(
+                "AU2999",
+                token.span,
+                "reserved words cannot be used as import aliases",
+            )),
+        }
     }
 
     fn parse_class(&mut self, public: bool) -> Result<ClassDecl> {
@@ -592,15 +690,6 @@ impl Parser {
             return Ok(TypeRef::named("None", Vec::new(), false, span));
         }
 
-        // ADR-0022 supersedes ADR-0009's borrowed-return syntax: labels are
-        // gone and every return is an ordinary owned return.
-        if self.at_simple(&TokenKind::KwBorrow) {
-            return Err(parse_error(
-                self.current_span(),
-                "borrowed returns were removed; return an owned value instead",
-            ));
-        }
-
         self.parse_type()
     }
 
@@ -644,6 +733,13 @@ impl Parser {
         }
 
         loop {
+            if self.at_simple(&TokenKind::Star) {
+                return Err(Diagnostic::coded_at(
+                    "AU1101",
+                    self.current_span(),
+                    "keyword-only parameters are not part of Aura 0.3's structural callable model",
+                ));
+            }
             if allow_receiver && receiver.is_none() {
                 if self.at_typed_receiver_start() {
                     return Err(Diagnostic::coded_at(
@@ -651,17 +747,6 @@ impl Parser {
                         self.current_span(),
                         "`self: Type` is not a method receiver; use `self` for shared access, `own self` to consume, or `mut self` to mutate",
                     ));
-                }
-
-                if self.at_borrow_receiver_start() {
-                    let span = self.current_span();
-                    self.bump();
-                    let message = if self.at_simple(&TokenKind::KwMut) {
-                        "`borrow mut self` was removed; write `mut self`"
-                    } else {
-                        "`borrow self` was removed; write `self` for a shared receiver"
-                    };
-                    return Err(parse_error(span, message));
                 }
 
                 if self.at_mut_receiver_start() {
@@ -713,12 +798,6 @@ impl Parser {
             }
 
             let span = self.current_span();
-            if self.at_simple(&TokenKind::KwBorrow) {
-                return Err(parse_error(
-                    self.current_span(),
-                    "ordinary parameters are written as `name: Type`, `name: mut Type`, or `name: own Type`",
-                ));
-            }
             if self.at_simple(&TokenKind::KwOwn) {
                 return Err(parse_error(
                     self.current_span(),
@@ -730,15 +809,6 @@ impl Parser {
             self.expect_simple(TokenKind::Colon)?;
             if self.eat_simple(&TokenKind::KwOwn).is_some() {
                 mode = ParamMode::Own;
-            } else if self.at_simple(&TokenKind::KwBorrow) {
-                let span = self.current_span();
-                self.bump();
-                let message = if self.at_simple(&TokenKind::KwMut) {
-                    "`borrow mut T` was removed; write `mut T`"
-                } else {
-                    "`borrow T` was removed; write `T` for shared access"
-                };
-                return Err(parse_error(span, message));
             } else if self.eat_simple(&TokenKind::KwMut).is_some() {
                 mode = ParamMode::BorrowMut;
             }
@@ -762,21 +832,6 @@ impl Parser {
         }
 
         Ok((receiver, params))
-    }
-
-    fn at_borrow_receiver_start(&self) -> bool {
-        if !self.at_simple(&TokenKind::KwBorrow) {
-            return false;
-        }
-
-        let mut index = self.index + 1;
-        if matches!(self.peek_kind_at(index), Some(TokenKind::KwMut)) {
-            index += 1;
-        }
-        matches!(
-            (self.peek_kind_at(index), self.peek_kind_at(index + 1)),
-            (Some(TokenKind::Identifier(name)), next) if name == "self" && !matches!(next, Some(TokenKind::Colon))
-        )
     }
 
     fn at_mut_receiver_start(&self) -> bool {
@@ -1065,11 +1120,17 @@ impl Parser {
     fn parse_match_arm(&mut self) -> Result<MatchArm> {
         let span = self.expect_keyword(TokenKind::KwCase)?.span;
         let pattern = self.parse_pattern()?;
+        let guard = if self.eat_simple(&TokenKind::KwIf).is_some() {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
         let body = self.parse_block()?;
         Ok(MatchArm {
             pattern,
+            guard,
             body,
             span,
         })
@@ -1078,6 +1139,11 @@ impl Parser {
     fn parse_match_expr_arm(&mut self) -> Result<MatchExprArm> {
         let span = self.expect_keyword(TokenKind::KwCase)?.span;
         let pattern = self.parse_pattern()?;
+        let guard = if self.eat_simple(&TokenKind::KwIf).is_some() {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
         self.expect_simple(TokenKind::Colon)?;
         let value = if self.at_simple(&TokenKind::Newline) {
             self.expect_newline()?;
@@ -1093,6 +1159,7 @@ impl Parser {
         };
         Ok(MatchExprArm {
             pattern,
+            guard,
             value,
             span,
         })
@@ -1100,9 +1167,34 @@ impl Parser {
 
     fn parse_pattern(&mut self) -> Result<Pattern> {
         self.enter_recursion("pattern")?;
-        let result = self.parse_pattern_inner();
+        let result = self.parse_or_pattern();
         self.exit_recursion();
         result
+    }
+
+    fn parse_or_pattern(&mut self) -> Result<Pattern> {
+        let first = self.parse_pattern_inner()?;
+        if self.eat_simple(&TokenKind::Pipe).is_none() {
+            return Ok(first);
+        }
+        let span = pattern_span(&first);
+        let mut alternatives = vec![first];
+        loop {
+            if matches!(
+                self.current_kind(),
+                TokenKind::Colon | TokenKind::Comma | TokenKind::RParen | TokenKind::KwIf
+            ) {
+                return Err(parse_error(
+                    self.current_span(),
+                    "or-pattern requires a pattern after `|`",
+                ));
+            }
+            alternatives.push(self.parse_pattern_inner()?);
+            if self.eat_simple(&TokenKind::Pipe).is_none() {
+                break;
+            }
+        }
+        Ok(Pattern::Or(crate::ast::OrPattern { alternatives, span }))
     }
 
     fn parse_pattern_inner(&mut self) -> Result<Pattern> {
@@ -1114,10 +1206,8 @@ impl Parser {
 
             let first = self.parse_pattern()?;
             if self.eat_simple(&TokenKind::Comma).is_none() {
-                return Err(parse_error(
-                    self.current_span(),
-                    "tuple patterns need a comma; write `(pattern,)` for a singleton tuple pattern",
-                ));
+                self.expect_simple(TokenKind::RParen)?;
+                return Ok(first);
             }
 
             let mut elements = vec![first];
@@ -1242,6 +1332,15 @@ impl Parser {
             let mut subpatterns = Vec::new();
             if !self.at_simple(&TokenKind::RParen) {
                 loop {
+                    if matches!(self.current_kind(), TokenKind::Identifier(_))
+                        && matches!(self.peek_kind(1), Some(TokenKind::Equal))
+                    {
+                        return Err(Diagnostic::coded_at(
+                            "AU2999",
+                            self.current_span(),
+                            "class patterns are not supported; destructure the class before matching or match a separate enum tag",
+                        ));
+                    }
                     subpatterns.push(self.parse_pattern()?);
                     if self.eat_simple(&TokenKind::Comma).is_none() {
                         break;
@@ -1355,23 +1454,10 @@ impl Parser {
                         ParamMode::BorrowMut
                     } else if self.eat_simple(&TokenKind::KwOwn).is_some() {
                         ParamMode::Own
-                    } else if self.at_simple(&TokenKind::KwBorrow) {
-                        let replacement = if matches!(self.peek_kind(1), Some(TokenKind::KwMut)) {
-                            "write `mut T` for mutable access"
-                        } else {
-                            "omit `borrow` for shared access"
-                        };
-                        return Err(parse_error(
-                            param_span,
-                            format!("`borrow` was removed from function types; {replacement}"),
-                        ));
                     } else {
                         ParamMode::Default
                     };
-                    if matches!(
-                        self.current_kind(),
-                        TokenKind::KwMut | TokenKind::KwOwn | TokenKind::KwBorrow
-                    ) {
+                    if matches!(self.current_kind(), TokenKind::KwMut | TokenKind::KwOwn) {
                         return Err(parse_error(
                             self.current_span(),
                             "function type parameters accept only one capability modifier",
@@ -1518,12 +1604,6 @@ impl Parser {
         let mut params: Vec<LambdaParam> = Vec::new();
         if !self.at_simple(&TokenKind::Colon) {
             loop {
-                if self.at_simple(&TokenKind::KwBorrow) {
-                    return Err(parse_error(
-                        self.current_span(),
-                        "`borrow` lambda parameters were removed; use a bare parameter for shared access or `mut name` for mutable access",
-                    ));
-                }
                 let mode = if self.eat_simple(&TokenKind::KwOwn).is_some() {
                     ParamMode::Own
                 } else if self.eat_simple(&TokenKind::KwMut).is_some() {
@@ -1702,7 +1782,7 @@ impl Parser {
     /// membership share one precedence and chain left to right, so
     /// `a < b <= c` is one chain rather than a comparison of a comparison.
     fn parse_comparison_chain(&mut self) -> Result<Expr> {
-        let first = self.parse_additive()?;
+        let first = self.parse_binary_precedence(0)?;
         let mut links: Vec<CompareLink> = Vec::new();
 
         loop {
@@ -1717,7 +1797,7 @@ impl Parser {
                 break;
             };
             self.check_expression_chain_limit(links.len().saturating_add(1))?;
-            let operand = self.parse_additive()?;
+            let operand = self.parse_binary_precedence(0)?;
             links.push(CompareLink {
                 op,
                 op_span,
@@ -1760,6 +1840,51 @@ impl Parser {
         })
     }
 
+    /// Parses the complete left-associative arithmetic and bitwise ladder in
+    /// one precedence-climbing frame. Keeping the ladder iterative avoids
+    /// multiplying parser stack use by every precedence level inside nested
+    /// grouping expressions.
+    fn parse_binary_precedence(&mut self, minimum_precedence: u8) -> Result<Expr> {
+        let mut expr = self.parse_prefix()?;
+        let mut chain_len = 0usize;
+        while let Some((op, precedence)) = self.current_binary_precedence() {
+            if precedence < minimum_precedence {
+                break;
+            }
+            self.bump();
+            chain_len += 1;
+            self.check_expression_chain_limit(chain_len)?;
+            let right = self.parse_binary_precedence(precedence.saturating_add(1))?;
+            let span = expr.span;
+            expr = Expr {
+                kind: ExprKind::Binary {
+                    op,
+                    left: Box::new(expr),
+                    right: Box::new(right),
+                },
+                span,
+            };
+        }
+        Ok(expr)
+    }
+
+    fn current_binary_precedence(&self) -> Option<(BinaryOp, u8)> {
+        Some(match self.current_kind() {
+            TokenKind::Pipe => (BinaryOp::BitOr, 0),
+            TokenKind::Caret => (BinaryOp::BitXor, 1),
+            TokenKind::Ampersand => (BinaryOp::BitAnd, 2),
+            TokenKind::ShiftLeft => (BinaryOp::Shl, 3),
+            TokenKind::ShiftRight => (BinaryOp::Shr, 3),
+            TokenKind::Plus => (BinaryOp::Add, 4),
+            TokenKind::Minus => (BinaryOp::Sub, 4),
+            TokenKind::Star => (BinaryOp::Mul, 5),
+            TokenKind::Slash => (BinaryOp::Div, 5),
+            TokenKind::DoubleSlash => (BinaryOp::FloorDiv, 5),
+            TokenKind::Percent => (BinaryOp::Mod, 5),
+            _ => return None,
+        })
+    }
+
     /// Consumes one comparison operator, including the two-token `not in`.
     fn eat_comparison_operator(&mut self) -> Option<(CompareOp, Span)> {
         if self.at_simple(&TokenKind::KwNot) && matches!(self.peek_kind(1), Some(TokenKind::KwIn)) {
@@ -1782,72 +1907,6 @@ impl Parser {
             }
         }
         None
-    }
-
-    fn parse_additive(&mut self) -> Result<Expr> {
-        let mut expr = self.parse_multiplicative()?;
-        let mut chain_len = 0usize;
-
-        loop {
-            let op = if self.eat_simple(&TokenKind::Plus).is_some() {
-                Some(BinaryOp::Add)
-            } else if self.eat_simple(&TokenKind::Minus).is_some() {
-                Some(BinaryOp::Sub)
-            } else {
-                None
-            };
-
-            let Some(op) = op else { break };
-            chain_len += 1;
-            self.check_expression_chain_limit(chain_len)?;
-            let right = self.parse_multiplicative()?;
-            let span = expr.span;
-            expr = Expr {
-                kind: ExprKind::Binary {
-                    op,
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                },
-                span,
-            };
-        }
-
-        Ok(expr)
-    }
-
-    fn parse_multiplicative(&mut self) -> Result<Expr> {
-        let mut expr = self.parse_prefix()?;
-        let mut chain_len = 0usize;
-
-        loop {
-            let op = if self.eat_simple(&TokenKind::Star).is_some() {
-                Some(BinaryOp::Mul)
-            } else if self.eat_simple(&TokenKind::Slash).is_some() {
-                Some(BinaryOp::Div)
-            } else if self.eat_simple(&TokenKind::DoubleSlash).is_some() {
-                Some(BinaryOp::FloorDiv)
-            } else if self.eat_simple(&TokenKind::Percent).is_some() {
-                Some(BinaryOp::Mod)
-            } else {
-                None
-            };
-
-            let Some(op) = op else { break };
-            chain_len += 1;
-            self.check_expression_chain_limit(chain_len)?;
-            let right = self.parse_prefix()?;
-            let span = expr.span;
-            expr = Expr {
-                kind: ExprKind::Binary {
-                    op,
-                    left: Box::new(expr),
-                    right: Box::new(right),
-                },
-                span,
-            };
-        }
-
-        Ok(expr)
     }
 
     fn parse_prefix(&mut self) -> Result<Expr> {
@@ -1905,7 +1964,35 @@ impl Parser {
             });
         }
 
-        self.parse_postfix()
+        if let Some(token) = self.eat_simple(&TokenKind::Tilde) {
+            let value = self.parse_prefix()?;
+            return Ok(Expr {
+                kind: ExprKind::Unary {
+                    op: UnaryOp::BitNot,
+                    expr: Box::new(value),
+                },
+                span: token.span,
+            });
+        }
+
+        self.parse_power()
+    }
+
+    fn parse_power(&mut self) -> Result<Expr> {
+        let left = self.parse_postfix()?;
+        if self.eat_simple(&TokenKind::DoubleStar).is_none() {
+            return Ok(left);
+        }
+        let right = self.parse_prefix()?;
+        let span = left.span;
+        Ok(Expr {
+            kind: ExprKind::Binary {
+                op: BinaryOp::Pow,
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+            span,
+        })
     }
 
     fn parse_postfix(&mut self) -> Result<Expr> {
@@ -2100,29 +2187,10 @@ impl Parser {
         let token = self.bump();
 
         match token.kind {
-            TokenKind::Identifier(name) => {
-                if name == "Set" && self.eat_simple(&TokenKind::LBrace).is_some() {
-                    let mut elements = Vec::new();
-                    if !self.at_simple(&TokenKind::RBrace) {
-                        loop {
-                            elements.push(self.parse_expr()?);
-                            if self.eat_simple(&TokenKind::Comma).is_none() {
-                                break;
-                            }
-                        }
-                    }
-                    self.expect_simple(TokenKind::RBrace)?;
-                    Ok(Expr {
-                        kind: ExprKind::Set(elements),
-                        span: token.span,
-                    })
-                } else {
-                    Ok(Expr {
-                        kind: ExprKind::Name(name),
-                        span: token.span,
-                    })
-                }
-            }
+            TokenKind::Identifier(name) => Ok(Expr {
+                kind: ExprKind::Name(name),
+                span: token.span,
+            }),
             TokenKind::KwFrom => Ok(Expr {
                 kind: ExprKind::Name("from".to_string()),
                 span: token.span,
@@ -2301,10 +2369,6 @@ impl Parser {
                     span: token.span,
                 })
             }
-            TokenKind::KwBorrow => Err(parse_error(
-                token.span,
-                "call arguments cannot start with `borrow`; pass the value directly",
-            )),
             TokenKind::KwMut => Err(parse_error(
                 token.span,
                 "`mut` cannot prefix a call argument or other expression; pass the value directly because the callee parameter declares shared, mutable, or owned access. Capability modifiers belong only on parameters and receivers or on supported `for` and `match` selectors (`mut` also declares mutable local bindings)",
@@ -2765,9 +2829,15 @@ impl Parser {
             TokenKind::PlusEqual => Ok(Some(BinaryOp::Add)),
             TokenKind::MinusEqual => Ok(Some(BinaryOp::Sub)),
             TokenKind::StarEqual => Ok(Some(BinaryOp::Mul)),
+            TokenKind::DoubleStarEqual => Ok(Some(BinaryOp::Pow)),
             TokenKind::SlashEqual => Ok(Some(BinaryOp::Div)),
             TokenKind::DoubleSlashEqual => Ok(Some(BinaryOp::FloorDiv)),
             TokenKind::PercentEqual => Ok(Some(BinaryOp::Mod)),
+            TokenKind::AmpersandEqual => Ok(Some(BinaryOp::BitAnd)),
+            TokenKind::PipeEqual => Ok(Some(BinaryOp::BitOr)),
+            TokenKind::CaretEqual => Ok(Some(BinaryOp::BitXor)),
+            TokenKind::ShiftLeftEqual => Ok(Some(BinaryOp::Shl)),
+            TokenKind::ShiftRightEqual => Ok(Some(BinaryOp::Shr)),
             other => Err(parse_error(
                 token.span,
                 format!("expected assignment operator, found {:?}", other),
@@ -2783,9 +2853,15 @@ impl Parser {
                     | TokenKind::PlusEqual
                     | TokenKind::MinusEqual
                     | TokenKind::StarEqual
+                    | TokenKind::DoubleStarEqual
                     | TokenKind::SlashEqual
                     | TokenKind::DoubleSlashEqual
                     | TokenKind::PercentEqual
+                    | TokenKind::AmpersandEqual
+                    | TokenKind::PipeEqual
+                    | TokenKind::CaretEqual
+                    | TokenKind::ShiftLeftEqual
+                    | TokenKind::ShiftRightEqual
             )
         )
     }
@@ -2793,7 +2869,7 @@ impl Parser {
     fn skip_type_tokens(&self, mut idx: usize) -> usize {
         while matches!(
             self.peek_kind_at(idx),
-            Some(TokenKind::KwMut | TokenKind::KwOwn | TokenKind::KwBorrow)
+            Some(TokenKind::KwMut | TokenKind::KwOwn)
         ) {
             idx += 1;
         }
@@ -2921,9 +2997,6 @@ impl Parser {
     }
 
     fn parse_optional_for_mode(&mut self) -> Result<Option<ReceiverKind>> {
-        if self.at_simple(&TokenKind::KwBorrow) {
-            return Err(self.retired_borrow_error("in", "in", "shared iteration"));
-        }
         if self.eat_simple(&TokenKind::KwOwn).is_some() {
             return Ok(Some(ReceiverKind::Value));
         }
@@ -2934,9 +3007,6 @@ impl Parser {
     }
 
     fn parse_match_capability(&mut self) -> Result<ReceiverKind> {
-        if self.at_simple(&TokenKind::KwBorrow) {
-            return Err(self.retired_borrow_error("match", "match", "shared access"));
-        }
         if self.eat_simple(&TokenKind::KwOwn).is_some() {
             return Ok(ReceiverKind::Value);
         }
@@ -2944,28 +3014,6 @@ impl Parser {
             return Ok(ReceiverKind::BorrowMut);
         }
         Ok(ReceiverKind::Borrow)
-    }
-
-    /// Builds the exact replacement diagnostic for a retired `borrow`
-    /// spelling in statement position.
-    ///
-    /// `borrow` stays reserved for one announced compatibility window and is
-    /// parsed only far enough to say what to write instead, so `prefix` is
-    /// consumed context (`match`, `in`) and `bare` is what the shared form
-    /// spells today.
-    fn retired_borrow_error(&mut self, prefix: &str, bare: &str, shared: &str) -> Diagnostic {
-        let span = self.current_span();
-        self.bump();
-        if self.eat_simple(&TokenKind::KwMut).is_some() {
-            return parse_error(
-                span,
-                format!("`{prefix} borrow mut` was removed; write `{bare} mut`"),
-            );
-        }
-        parse_error(
-            span,
-            format!("`{prefix} borrow` was removed; write `{bare}` for {shared}"),
-        )
     }
 
     fn starts_specialization_suffix(&self, expr: &Expr) -> bool {
@@ -3059,9 +3107,22 @@ impl Parser {
             let mut expr_end = None;
             let mut brace_depth = 0usize;
             let mut string_quote = None;
+            let mut triple_quote = None;
             let mut escaped = false;
             while index < chars.len() {
                 let (candidate_offset, candidate) = chars[index];
+                if let Some(quote) = triple_quote {
+                    if candidate == quote
+                        && matches!(chars.get(index + 1), Some((_, next)) if *next == quote)
+                        && matches!(chars.get(index + 2), Some((_, next)) if *next == quote)
+                    {
+                        triple_quote = None;
+                        index += 3;
+                    } else {
+                        index += 1;
+                    }
+                    continue;
+                }
                 if let Some(quote) = string_quote {
                     if escaped {
                         escaped = false;
@@ -3074,6 +3135,14 @@ impl Parser {
                     continue;
                 }
                 match candidate {
+                    '"' | '\''
+                        if matches!(chars.get(index + 1), Some((_, next)) if *next == candidate)
+                            && matches!(chars.get(index + 2), Some((_, next)) if *next == candidate) =>
+                    {
+                        triple_quote = Some(candidate);
+                        index += 3;
+                        continue;
+                    }
                     '"' | '\'' => string_quote = Some(candidate),
                     '{' => brace_depth += 1,
                     '}' if brace_depth == 0 => {
@@ -3095,19 +3164,55 @@ impl Parser {
             if expr_text.is_empty() {
                 return Err(parse_error(span, "f-string interpolation cannot be empty"));
             }
-            let mut expr =
-                match parse_expression_with_recursion_depth(expr_text, self.recursion_depth) {
-                    Ok(expr) => expr,
-                    Err(error) => {
+            let complete_parse =
+                parse_expression_with_recursion_depth(expr_text, self.recursion_depth);
+            let (mut expr, format_spec) = match complete_parse {
+                Ok(expr) => (expr, None),
+                Err(complete_error) => {
+                    let mut parsed = None;
+                    for colon in top_level_format_colons(expr_text).into_iter().rev() {
+                        let expression_source = expr_text[..colon].trim_end();
+                        if expression_source.is_empty() {
+                            continue;
+                        }
+                        if let Ok(expr) = parse_expression_with_recursion_depth(
+                            expression_source,
+                            self.recursion_depth,
+                        ) {
+                            let spec = &expr_text[colon + 1..];
+                            if spec.contains(['{', '}']) {
+                                return Err(parse_error(
+                                    Span::new(span.line, span.column + expr_start + colon + 2),
+                                    "f-string format specifications cannot contain nested replacement fields",
+                                ));
+                            }
+                            parsed = Some((expr, colon, spec.to_string()));
+                            break;
+                        }
+                    }
+                    let Some((expr, colon, spec)) = parsed else {
                         return Err(parse_error(
                             span,
-                            format!("invalid f-string interpolation `{}`: {}", expr_text, error),
-                        ))
-                    }
-                };
+                            format!(
+                                "invalid f-string interpolation `{}`: {}",
+                                expr_text, complete_error
+                            ),
+                        ));
+                    };
+                    (expr, Some((colon, spec)))
+                }
+            };
             let column_offset = span.column + expr_start + leading_ws + 1;
             offset_expr_span(&mut expr, span.line, column_offset);
-            parts.push(FormatPart::Expr(expr));
+            if let Some((colon, spec)) = format_spec {
+                parts.push(FormatPart::Formatted {
+                    expr,
+                    spec,
+                    spec_span: Span::new(span.line, span.column + expr_start + colon + 2),
+                });
+            } else {
+                parts.push(FormatPart::Expr(expr));
+            }
             index += 1;
         }
 
@@ -3310,6 +3415,38 @@ impl Parser {
     }
 }
 
+/// Finds colons that are outside every nested expression delimiter. Parsing
+/// the complete interpolation is attempted first, so slice and dictionary
+/// colons remain expression syntax whenever the complete text is valid Aura.
+fn top_level_format_colons(source: &str) -> Vec<usize> {
+    let mut colons = Vec::new();
+    let mut delimiters = Vec::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, ch) in source.char_indices() {
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '(' | '[' | '{' => delimiters.push(ch),
+            ')' | ']' | '}' => {
+                delimiters.pop();
+            }
+            ':' if delimiters.is_empty() => colons.push(offset),
+            _ => {}
+        }
+    }
+    colons
+}
+
 fn specialization_target_name(expr: &Expr) -> Option<&str> {
     match &expr.kind {
         ExprKind::Name(name) => Some(name.as_str()),
@@ -3319,10 +3456,12 @@ fn specialization_target_name(expr: &Expr) -> Option<&str> {
 }
 
 fn is_static_specialization_target_name(name: &str) -> bool {
-    name.chars()
-        .next()
-        .map(|ch| ch.is_ascii_uppercase())
-        .unwrap_or(false)
+    matches!(name, "list" | "dict" | "set")
+        || name
+            .chars()
+            .next()
+            .map(|ch| ch.is_ascii_uppercase())
+            .unwrap_or(false)
 }
 
 fn assign_target_to_expr(target: AssignTarget, span: Span) -> Expr {
@@ -3483,8 +3622,11 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
         | ExprKind::String(_) => {}
         ExprKind::FString(parts) => {
             for part in parts {
-                if let FormatPart::Expr(inner) = part {
-                    offset_expr_span(inner, line, column_offset);
+                match part {
+                    FormatPart::Expr(inner) | FormatPart::Formatted { expr: inner, .. } => {
+                        offset_expr_span(inner, line, column_offset);
+                    }
+                    FormatPart::Literal(_) => {}
                 }
             }
         }

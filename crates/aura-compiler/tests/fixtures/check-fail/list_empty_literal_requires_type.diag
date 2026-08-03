@@ -1,0 +1,5 @@
+error[AU2002]: empty list literals require an expected `list[T]` type annotation in the bootstrap compiler
+ --> crates/aura-compiler/tests/fixtures/check-fail/list_empty_literal_requires_type.au:2:14
+  |
+2 |     values = []
+  |              ^

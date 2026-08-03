@@ -1,0 +1,14 @@
+def main() -> int32:
+    mut names: list[str] = ["Ada", "Grace"]
+    for name in names:
+        print(name)
+    print(names.len())
+
+    mut values = list[int32]()
+    values.extend([4, 5])
+
+    mut total: int32 = 0
+    for value in own values:
+        total += value
+    print(total)
+    return 0

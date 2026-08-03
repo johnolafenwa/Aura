@@ -1,7 +1,7 @@
 import process
 
 def main() -> int32:
-    command: Vec[String] = []
+    command: list[str] = []
     match process.run(command):
         case Result.Ok(_):
             print("unexpected")

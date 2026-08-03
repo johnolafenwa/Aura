@@ -1,0 +1,4 @@
+def main():
+    value: int8 = 1
+    count: int8 = 8
+    print(value << count)

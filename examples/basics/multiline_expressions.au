@@ -1,6 +1,6 @@
 def weighted_total(
-    values: Vec[int64],
-    weights: Vec[int64]
+    values: list[int64],
+    weights: list[int64]
 ) -> int64:
     return (
         values[0] * weights[0]

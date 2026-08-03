@@ -116,7 +116,7 @@ copy bits directly without changing that source contract. Explicit `own` and
 the resolved capability, while hover and diagnostics retain enough source
 information to teach the spelling that created it.
 
-Loop ownership is resolved independently. Bare iteration over `Vec` and `Set`
+Loop ownership is resolved independently. Bare iteration over `list` and `set`
 is shared, `own` consumes the collection, and `mut` supplies mutable
 places only for collections that support writeback. Bare Queue iteration is a
 receive operation: each received item is already owned by the loop binding and
@@ -151,7 +151,7 @@ enum storage and retain a path to the first non-transferable leaf so a
 diagnostic can explain why a captured argument or result cannot cross a task
 boundary.
 
-All copy types and `String` are transferable. Collections and user aggregates
+All copy types and `str` are transferable. Collections and user aggregates
 are transferable when every stored component is; `Queue[T]` and `Task[T]`
 handles are transferable because only handle identity, not stored payload,
 crosses. Phase 5.7 synchronizes the runtime state behind those handles for

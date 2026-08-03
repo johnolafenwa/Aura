@@ -1,0 +1,7 @@
+error[AU2008]: cannot use `set.add` with `random.Rng` because `random.Rng` does not define equality
+ --> crates/aura-compiler/tests/fixtures/check-fail/equality_rng_set_add.au:4:12
+  |
+4 |     values.add(value)
+  |            ^
+  = note: Aura has no identity-equality fallback; equality-dependent operations require a defined value relation
+  = help: compare generated scalar values or an explicit stable discriminant; generator identity is not value equality

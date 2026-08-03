@@ -1,0 +1,5 @@
+error[AU2999]: every alternative in an or-pattern must bind the same names with identical types and capabilities
+ --> crates/aura-compiler/tests/fixtures/check-fail/or_pattern_binding_set_mismatch.au:8:14
+  |
+8 |         case Left(item) | Right(_):
+  |              ^

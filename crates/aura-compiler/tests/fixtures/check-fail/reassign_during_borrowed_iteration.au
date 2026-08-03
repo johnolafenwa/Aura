@@ -1,5 +1,5 @@
 def main() -> None:
-    mut values: Vec[String] = ["aaaa", "bbbb", "cccc"]
+    mut values: list[str] = ["aaaa", "bbbb", "cccc"]
     mut step = 0
     for value in values:
         if step == 1:

@@ -6,11 +6,12 @@ use std::process::{self, Command};
 
 use aura_compiler::{
     analyze_path_source, check_path, check_path_with_source, complete_path_source,
-    emit_host_native_object_with_metadata, lower_path_to_mir, lower_path_with_source_to_mir,
-    parse_source, run_path, run_path_entry_with_stdout_sink_and_program_args,
+    emit_host_native_object_with_metadata, lower_path_to_checked_mir, lower_path_to_mir,
+    lower_path_with_source_to_mir, parse_source,
+    run_checked_mir_entry_with_stdout_sink_and_program_args,
     run_path_with_source_and_stdout_sink_and_program_args,
-    run_path_with_stdout_sink_and_program_args, update_git_dependencies_in_working_dir, Diagnostic,
-    MirModule, StructuredDiagnostic, Value,
+    run_path_with_stdout_sink_and_program_args, update_git_dependencies_in_working_dir,
+    CheckedMirModule, Diagnostic, MirModule, StructuredDiagnostic, Value,
 };
 use serde_json::Value as JsonValue;
 
@@ -138,7 +139,7 @@ fn main() {
                     NativeRunOutcome::StructuredDiagnostic(mut error) => {
                         debug_assert_eq!(diagnostic_format, DiagnosticFormat::Json);
                         error.notes.extend(native_progress);
-                        emit_structured_diagnostic(error);
+                        emit_structured_diagnostic(*error);
                         process::exit(1);
                     }
                     NativeRunOutcome::FellBack(reason) => {
@@ -476,6 +477,16 @@ fn handle_fmt_command(args: Vec<String>) {
 }
 
 fn format_aura_source(source: &str) -> String {
+    // Triple-quoted string contents are exact source data, including trailing
+    // spaces and tabs on physical lines. Until the formatter has a token-aware
+    // whitespace pass, preserve the entire file whenever one is present.
+    if source.contains("\"\"\"") || source.contains("'''") {
+        let mut formatted = source.trim_end_matches('\r').to_string();
+        if !formatted.is_empty() && !formatted.ends_with('\n') {
+            formatted.push('\n');
+        }
+        return formatted;
+    }
     let mut formatted = source
         .lines()
         .map(|line| line.trim_end_matches([' ', '\t', '\r']))
@@ -533,6 +544,8 @@ fn collect_aura_source_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String>
 
 fn handle_test_command(args: Vec<String>) {
     let mut timeout_ms = 30_000u64;
+    let mut filter = None;
+    let mut format = TestReportFormat::Human;
     let mut inputs = Vec::new();
     let mut args = args.into_iter();
     while let Some(argument) = args.next() {
@@ -545,6 +558,30 @@ fn handle_test_command(args: Vec<String>) {
                     eprintln!("aura test --timeout-ms requires a positive integer");
                     process::exit(2);
                 });
+        } else if argument == "-k" {
+            if filter.is_some() {
+                eprintln!("aura test -k may appear only once");
+                process::exit(2);
+            }
+            let value = args.next().unwrap_or_else(|| {
+                eprintln!("aura test -k requires a non-empty substring");
+                process::exit(2);
+            });
+            if value.is_empty() {
+                eprintln!("aura test -k requires a non-empty substring");
+                process::exit(2);
+            }
+            filter = Some(value);
+        } else if argument == "--format" {
+            let value = args.next().unwrap_or_else(|| {
+                eprintln!("aura test --format requires `json`");
+                process::exit(2);
+            });
+            if value != "json" || format == TestReportFormat::Json {
+                eprintln!("aura test --format accepts `json` exactly once");
+                process::exit(2);
+            }
+            format = TestReportFormat::Json;
         } else if argument.starts_with('-') {
             eprintln!("unknown aura test option `{argument}`");
             process::exit(2);
@@ -566,167 +603,780 @@ fn handle_test_command(args: Vec<String>) {
         process::exit(1);
     }
 
-    let mut passed = 0usize;
-    let mut failed = 0usize;
+    let mut records = Vec::new();
+    let mut discovery_outputs = Vec::new();
     for path in paths {
         let source = fs::read_to_string(&path).unwrap_or_else(|error| {
             eprintln!("failed to read `{}`: {error}", path.display());
             process::exit(1);
         });
+        let rendered = normalized_test_display_path(&path);
 
-        // A file declaring `def test_*()` reports one result per function; a
-        // file without any keeps reporting one result for the file itself, so
-        // existing main-style tests are unaffected.
-        let module = match lower_path_to_mir(&path) {
-            Ok(module) => Some(module),
+        let checked = match lower_path_to_checked_mir(&path) {
+            Ok(module) => module,
             Err(error) => {
-                failed += 1;
-                eprintln!(
-                    "FAILED {}\n{}",
-                    path.display(),
-                    error.render_with_source(&path.display().to_string(), &source)
-                );
+                records.push(TestRecord::failed_diagnostic(
+                    rendered.clone(),
+                    rendered,
+                    0,
+                    error,
+                    source,
+                ));
                 continue;
             }
         };
-        let cases = module
-            .as_ref()
-            .map(discovered_test_functions)
-            .unwrap_or_default();
+        let syntax = parse_source(&source)
+            .expect("a source module that lowered successfully must still parse successfully");
+        let checked = std::sync::Arc::new(checked);
 
-        if cases.is_empty() {
-            let rendered = path.display().to_string();
-            let outcome = run_test_case(&path, module.clone(), None, timeout_ms);
-            record_test_outcome(
-                &rendered,
-                &rendered,
-                &source,
-                outcome,
-                &mut passed,
-                &mut failed,
-            );
-            continue;
-        }
-
-        let rendered = path.display().to_string();
+        let hooks = match discover_test_hooks(&syntax) {
+            Ok(hooks) => hooks,
+            Err(error) => {
+                records.push(TestRecord::failed_diagnostic(
+                    rendered.clone(),
+                    rendered,
+                    0,
+                    error,
+                    source,
+                ));
+                continue;
+            }
+        };
+        let discovery = match discover_test_cases(&path, checked.clone(), &syntax, timeout_ms) {
+            Ok(discovery) => discovery,
+            Err(failure) => {
+                let registration_name = failure.name.clone();
+                records.push(TestRecord::from_execution(
+                    registration_name,
+                    rendered,
+                    source,
+                    failure.execution,
+                ));
+                continue;
+            }
+        };
+        let declared_tests = discovery.declared_tests;
+        let cases = discovery.cases;
+        discovery_outputs.extend(discovery.outputs);
+        let cases = if !declared_tests {
+            vec![DiscoveredTestCase {
+                name: rendered.clone(),
+                entry: None,
+            }]
+        } else {
+            cases
+        };
         for case in cases {
-            let outcome = run_test_case(&path, module.clone(), Some(case.clone()), timeout_ms);
-            let label = format!("{rendered}::{case}");
-            record_test_outcome(
-                &label,
-                &rendered,
-                &source,
-                outcome,
-                &mut passed,
-                &mut failed,
+            if !test_name_matches_filter(&case.name, filter.as_deref()) {
+                continue;
+            }
+            let execution = run_test_case(
+                &path,
+                checked.clone(),
+                case.entry,
+                hooks.clone(),
+                timeout_ms,
             );
+            records.push(TestRecord::from_execution(
+                case.name,
+                rendered.clone(),
+                source.clone(),
+                execution,
+            ));
         }
     }
-    write_stdout(&format!("{passed} passed; {failed} failed\n"));
+
+    let passed = records
+        .iter()
+        .filter(|record| record.failure.is_none())
+        .count();
+    let failed = records.len() - passed;
+    match format {
+        TestReportFormat::Human => {
+            for output in &discovery_outputs {
+                write_stdout(&output.stdout);
+            }
+            for record in &records {
+                record.write_human();
+            }
+            write_stdout(&format!("{passed} passed; {failed} failed\n"));
+        }
+        TestReportFormat::Json => {
+            let tests = records.iter().map(TestRecord::json).collect::<Vec<_>>();
+            let mut report = serde_json::json!({
+                "schema_version": 1,
+                "summary": {
+                    "selected": records.len(),
+                    "passed": passed,
+                    "failed": failed,
+                },
+                "tests": tests,
+            });
+            if !discovery_outputs.is_empty() {
+                report["discovery"] = JsonValue::Array(
+                    discovery_outputs
+                        .iter()
+                        .map(TestDiscoveryOutput::json)
+                        .collect(),
+                );
+            }
+            write_stdout(&format!("{report}\n"));
+        }
+    }
     if failed > 0 {
         process::exit(1);
     }
 }
 
-/// The parameterless `def test_*()` functions declared by a lowered module, in
-/// declaration order.
-fn discovered_test_functions(module: &MirModule) -> Vec<String> {
-    module
-        .functions
-        .iter()
-        .filter(|function| {
-            function.name.starts_with("test_")
-                && function.params.is_empty()
-                && function.receiver.is_none()
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum TestReportFormat {
+    Human,
+    Json,
+}
+
+#[derive(Clone, Default)]
+struct TestHooks {
+    setup: Option<String>,
+    teardown: Option<String>,
+}
+
+struct DiscoveredTestCase {
+    name: String,
+    entry: Option<String>,
+}
+
+struct DiscoveryFailure {
+    name: String,
+    execution: TestExecution,
+}
+
+struct TestDiscovery {
+    declared_tests: bool,
+    cases: Vec<DiscoveredTestCase>,
+    outputs: Vec<TestDiscoveryOutput>,
+}
+
+struct TestDiscoveryOutput {
+    name: String,
+    file: String,
+    stdout: String,
+}
+
+impl TestDiscoveryOutput {
+    fn json(&self) -> JsonValue {
+        serde_json::json!({
+            "name": self.name,
+            "file": self.file,
+            "stdout": self.stdout,
         })
-        .map(|function| function.name.clone())
-        .collect()
+    }
 }
 
-enum TestOutcome {
-    Passed,
-    Failed(String),
-    Trapped(Diagnostic),
+fn test_name_matches_filter(name: &str, filter: Option<&str>) -> bool {
+    filter.is_none_or(|filter| name.contains(filter))
 }
 
-/// Runs one test case on its own thread with the shared timeout, so a hanging
-/// test is reported rather than stalling the run.
+fn normalized_test_display_path(path: &Path) -> String {
+    let absolute = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let display = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| fs::canonicalize(cwd).ok())
+        .and_then(|cwd| absolute.strip_prefix(cwd).ok().map(Path::to_path_buf))
+        .unwrap_or(absolute);
+    display.to_string_lossy().replace('\\', "/")
+}
+
+fn discover_test_hooks(syntax: &aura_compiler::ast::Module) -> Result<TestHooks, Diagnostic> {
+    use aura_compiler::ast::{AssignTarget, Item, Stmt};
+
+    for constant in &syntax.constants {
+        if matches!(constant.name.as_str(), "setup" | "teardown") {
+            return Err(Diagnostic::coded_at(
+                "AU2999",
+                constant.span,
+                format!("test hook `{}` must be a module function", constant.name),
+            ));
+        }
+    }
+    for item in &syntax.items {
+        if !matches!(item, Item::Function(_)) && matches!(item.name(), "setup" | "teardown") {
+            return Err(Diagnostic::coded_at(
+                "AU2999",
+                match item {
+                    Item::Class(decl) => decl.span,
+                    Item::Enum(decl) => decl.span,
+                    Item::ExternFunction(decl) => decl.name_span,
+                    Item::ExternOpaqueClass(decl) => decl.name_span,
+                    Item::Trait(decl) => decl.span,
+                    Item::Impl(decl) => decl.span,
+                    Item::Function(_) => unreachable!("function items were excluded"),
+                },
+                format!("test hook `{}` must be a module function", item.name()),
+            ));
+        }
+    }
+    for statement in &syntax.top_level_stmts {
+        let (name, span) = match statement {
+            Stmt::Assign(assign) => match &assign.target {
+                AssignTarget::Name(name) => (name.as_str(), assign.span),
+                _ => continue,
+            },
+            Stmt::Destructure(destructure) => match destructure.target.name() {
+                Some(name) => (name, destructure.span),
+                None => continue,
+            },
+            _ => continue,
+        };
+        if matches!(name, "setup" | "teardown") {
+            return Err(Diagnostic::coded_at(
+                "AU2999",
+                span,
+                format!("test hook `{name}` must be a module function"),
+            ));
+        }
+    }
+
+    let mut hooks = TestHooks::default();
+    for function in syntax.items.iter().filter_map(|item| match item {
+        Item::Function(function) => Some(function),
+        _ => None,
+    }) {
+        let slot = match function.name.as_str() {
+            "setup" => &mut hooks.setup,
+            "teardown" => &mut hooks.teardown,
+            _ => continue,
+        };
+        if function.receiver.is_some()
+            || !function.params.is_empty()
+            || !is_none_type_ref(&function.return_type)
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2999",
+                function.span,
+                format!(
+                    "test hook `{}` must be parameterless and return `None`",
+                    function.name
+                ),
+            ));
+        }
+        *slot = Some(function.name.clone());
+    }
+    Ok(hooks)
+}
+
+fn discover_test_cases(
+    path: &Path,
+    checked: std::sync::Arc<CheckedMirModule>,
+    syntax: &aura_compiler::ast::Module,
+    timeout_ms: u64,
+) -> Result<TestDiscovery, Box<DiscoveryFailure>> {
+    use aura_compiler::ast::Item;
+
+    let rendered = normalized_test_display_path(path);
+    let mut cases = Vec::new();
+    let mut outputs = Vec::new();
+    let test_functions = syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) if function.name.starts_with("test_") => Some(function),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let declared_tests = !test_functions.is_empty();
+    for function in test_functions {
+        let base_name = format!("{rendered}::{}", function.name);
+        if !function.params.is_empty() {
+            return Err(discovery_reason(
+                base_name,
+                format!("test function `{}` must be parameterless", function.name),
+            ));
+        }
+        if is_none_type_ref(&function.return_type) {
+            cases.push(DiscoveredTestCase {
+                name: base_name,
+                entry: Some(function.name.clone()),
+            });
+            continue;
+        }
+        if !is_test_registration_type_ref(&function.return_type) {
+            return Err(discovery_reason(
+                base_name,
+                format!(
+                    "test function `{}` must return `None` or `list[(str, def() -> None)]`",
+                    function.name
+                ),
+            ));
+        }
+
+        let registration = run_test_entry_with_timeout(
+            path,
+            checked.clone(),
+            Some(function.name.clone()),
+            timeout_ms,
+        );
+        let registration_stdout = registration.stdout.clone();
+        let output = match registration.failure {
+            None => registration.value.expect("a successful entry has a value"),
+            Some(failure) => {
+                return Err(Box::new(DiscoveryFailure {
+                    name: base_name,
+                    execution: TestExecution {
+                        failure: Some(failure),
+                        secondary_failure: None,
+                        stdout: registration.stdout,
+                        duration_ms: registration.duration_ms,
+                    },
+                }));
+            }
+        };
+        if !registration_stdout.is_empty() {
+            outputs.push(TestDiscoveryOutput {
+                name: base_name.clone(),
+                file: rendered.clone(),
+                stdout: registration_stdout,
+            });
+        }
+        let Value::Vec(entries) = output else {
+            return Err(discovery_reason(
+                base_name,
+                "test registration did not return a list".to_string(),
+            ));
+        };
+        let mut labels = std::collections::BTreeSet::new();
+        for entry in entries.elements {
+            let Value::Tuple(mut tuple) = entry else {
+                return Err(discovery_reason(
+                    base_name,
+                    "test registration entries must be `(str, def() -> None)` tuples".to_string(),
+                ));
+            };
+            if tuple.elements.len() != 2 {
+                return Err(discovery_reason(
+                    base_name,
+                    "test registration entries must contain exactly a label and case".to_string(),
+                ));
+            }
+            let case_value = tuple.elements.pop().expect("tuple length checked");
+            let label_value = tuple.elements.pop().expect("tuple length checked");
+            let Value::String(label) = label_value else {
+                return Err(discovery_reason(
+                    base_name,
+                    "test registration labels must be strings".to_string(),
+                ));
+            };
+            if label.is_empty() {
+                return Err(discovery_reason(
+                    base_name,
+                    "test registration labels must be non-empty".to_string(),
+                ));
+            }
+            if !labels.insert(label.clone()) {
+                return Err(discovery_reason(
+                    base_name,
+                    format!("duplicate test registration label `{label}`"),
+                ));
+            }
+            let Value::Function(case) = case_value else {
+                return Err(discovery_reason(
+                    base_name,
+                    "test registration cases must be function values".to_string(),
+                ));
+            };
+            if !is_parameterless_none_callable(&case.signature) {
+                return Err(discovery_reason(
+                    base_name,
+                    format!("registered case `{label}` must be parameterless and return `None`"),
+                ));
+            }
+            cases.push(DiscoveredTestCase {
+                name: format!("{base_name}[{label}]"),
+                entry: Some(case.name),
+            });
+        }
+    }
+    Ok(TestDiscovery {
+        declared_tests,
+        cases,
+        outputs,
+    })
+}
+
+fn is_none_type_ref(ty: &aura_compiler::ast::TypeRef) -> bool {
+    matches!(
+        &ty.kind,
+        aura_compiler::ast::TypeRefKind::Named { name, args }
+            if name == "None" && args.is_empty()
+    )
+}
+
+fn is_test_registration_type_ref(ty: &aura_compiler::ast::TypeRef) -> bool {
+    use aura_compiler::ast::TypeRefKind;
+    let TypeRefKind::Named { name, args } = &ty.kind else {
+        return false;
+    };
+    if name != "list" || args.len() != 1 {
+        return false;
+    }
+    let TypeRefKind::Tuple(elements) = &args[0].kind else {
+        return false;
+    };
+    if elements.len() != 2 {
+        return false;
+    }
+    let label_is_str = matches!(
+        &elements[0].kind,
+        TypeRefKind::Named { name, args } if name == "str" && args.is_empty()
+    );
+    let case_is_function = matches!(
+        &elements[1].kind,
+        TypeRefKind::Function { params, return_type }
+            if params.is_empty() && is_none_type_ref(return_type)
+    );
+    label_is_str && case_is_function
+}
+
+fn is_parameterless_none_callable(ty: &aura_compiler::sema::Type) -> bool {
+    use aura_compiler::sema::Type;
+    match ty {
+        Type::Function {
+            params,
+            return_type,
+        } => params.is_empty() && **return_type == Type::Unit,
+        _ => false,
+    }
+}
+
+fn discovery_reason(name: String, reason: String) -> Box<DiscoveryFailure> {
+    Box::new(DiscoveryFailure {
+        name,
+        execution: TestExecution::failed(TestFailure::Reason(reason), 0, String::new()),
+    })
+}
+
+enum TestFailure {
+    Reason(String),
+    Diagnostic(Diagnostic),
+}
+
+struct TestEntryExecution {
+    value: Option<Value>,
+    failure: Option<TestFailure>,
+    stdout: String,
+    duration_ms: u64,
+}
+
+struct TestExecution {
+    failure: Option<TestFailure>,
+    secondary_failure: Option<TestFailure>,
+    stdout: String,
+    duration_ms: u64,
+}
+
+impl TestExecution {
+    fn failed(failure: TestFailure, duration_ms: u64, stdout: String) -> Self {
+        Self {
+            failure: Some(failure),
+            secondary_failure: None,
+            stdout,
+            duration_ms,
+        }
+    }
+}
+
 fn run_test_case(
     path: &Path,
-    module: Option<MirModule>,
+    checked: std::sync::Arc<CheckedMirModule>,
     entry: Option<String>,
+    hooks: TestHooks,
     timeout_ms: u64,
-) -> TestOutcome {
+) -> TestExecution {
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    let test_path = path.to_path_buf();
+    let captured_stdout = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let worker_stdout = captured_stdout.clone();
+    let started_at = std::time::Instant::now();
     let started = std::thread::Builder::new()
         .name(format!("aura-test-{}", path.display()))
         .stack_size(64 * 1024 * 1024)
         .spawn(move || {
-            let result = match (module, entry) {
-                (Some(_), Some(entry)) => run_path_entry_with_stdout_sink_and_program_args(
-                    &test_path,
-                    Some(&entry),
-                    None,
-                    Vec::new(),
-                ),
-                _ => run_path(&test_path),
-            };
-            let _ = sender.send(result);
+            let mut primary = None;
+            let mut secondary = None;
+            if let Some(setup) = hooks.setup.as_deref() {
+                let stage = run_test_entry(
+                    &checked,
+                    Some(setup),
+                    Some(test_stdout_sink(worker_stdout.clone())),
+                );
+                primary = stage.failure;
+            }
+            if primary.is_none() {
+                let stage = run_test_entry(
+                    &checked,
+                    entry.as_deref(),
+                    Some(test_stdout_sink(worker_stdout.clone())),
+                );
+                primary = stage.failure;
+            }
+            if let Some(teardown) = hooks.teardown.as_deref() {
+                let stage = run_test_entry(
+                    &checked,
+                    Some(teardown),
+                    Some(test_stdout_sink(worker_stdout)),
+                );
+                if let Some(teardown_failure) = stage.failure {
+                    if primary.is_some() {
+                        secondary = Some(teardown_failure);
+                    } else {
+                        primary = Some(teardown_failure);
+                    }
+                }
+            }
+            let _ = sender.send((primary, secondary));
         });
     if let Err(error) = started {
-        return TestOutcome::Failed(format!("failed to start test: {error}"));
+        return TestExecution::failed(
+            TestFailure::Reason(format!("failed to start test: {error}")),
+            0,
+            String::new(),
+        );
     }
 
     match receiver.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            TestOutcome::Failed(format!("timed out after {timeout_ms}ms"))
-        }
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            TestOutcome::Failed("test worker disconnected".to_string())
-        }
-        Ok(Ok(output)) => {
-            let success = match output.value {
-                Value::Int(code) => code.as_i128() == Some(0),
-                _ => true,
-            };
-            if success {
-                TestOutcome::Passed
-            } else {
-                TestOutcome::Failed("non-zero main return".to_string())
-            }
-        }
-        Ok(Err(error)) => TestOutcome::Trapped(error),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => TestExecution::failed(
+            TestFailure::Reason(format!("timed out after {timeout_ms}ms")),
+            elapsed_millis(started_at),
+            snapshot_test_stdout(&captured_stdout),
+        ),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => TestExecution::failed(
+            TestFailure::Reason("test worker disconnected".to_string()),
+            elapsed_millis(started_at),
+            snapshot_test_stdout(&captured_stdout),
+        ),
+        Ok((failure, secondary_failure)) => TestExecution {
+            failure,
+            secondary_failure,
+            stdout: snapshot_test_stdout(&captured_stdout),
+            duration_ms: elapsed_millis(started_at),
+        },
     }
 }
 
-/// Reports one test result and updates the running totals. A trapped test
-/// renders its diagnostic against the source, so a failed `assert` shows its
-/// message and span rather than only a failure count.
-fn record_test_outcome(
-    label: &str,
-    render_path: &str,
-    source: &str,
-    outcome: TestOutcome,
-    passed: &mut usize,
-    failed: &mut usize,
-) {
-    match outcome {
-        TestOutcome::Passed => {
-            *passed += 1;
-            write_stdout(&format!("ok {label}\n"));
+fn test_stdout_sink(stdout: std::sync::Arc<std::sync::Mutex<String>>) -> aura_compiler::StdoutSink {
+    std::sync::Arc::new(move |chunk: &str| {
+        stdout
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_str(chunk);
+    })
+}
+
+fn snapshot_test_stdout(stdout: &std::sync::Arc<std::sync::Mutex<String>>) -> String {
+    stdout
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+fn run_test_entry(
+    checked: &CheckedMirModule,
+    entry: Option<&str>,
+    stdout_sink: Option<aura_compiler::StdoutSink>,
+) -> TestEntryExecution {
+    let result = run_checked_mir_entry_with_stdout_sink_and_program_args(
+        checked,
+        entry,
+        stdout_sink,
+        Vec::new(),
+    );
+    match result {
+        Ok(output) => {
+            let failure = match &output.value {
+                Value::Int(code) if code.as_i128() != Some(0) => {
+                    Some(TestFailure::Reason("non-zero main return".to_string()))
+                }
+                _ => None,
+            };
+            TestEntryExecution {
+                value: Some(output.value),
+                failure,
+                stdout: String::new(),
+                duration_ms: 0,
+            }
         }
-        TestOutcome::Failed(reason) => {
-            *failed += 1;
-            eprintln!("FAILED {label} ({reason})");
+        Err(error) => TestEntryExecution {
+            value: None,
+            failure: Some(TestFailure::Diagnostic(error)),
+            stdout: String::new(),
+            duration_ms: 0,
+        },
+    }
+}
+
+fn run_test_entry_with_timeout(
+    path: &Path,
+    checked: std::sync::Arc<CheckedMirModule>,
+    entry: Option<String>,
+    timeout_ms: u64,
+) -> TestEntryExecution {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let path = path.to_path_buf();
+    let captured_stdout = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let worker_stdout = captured_stdout.clone();
+    let started_at = std::time::Instant::now();
+    let started = std::thread::Builder::new()
+        .name(format!("aura-test-registration-{}", path.display()))
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            let _ = sender.send(run_test_entry(
+                &checked,
+                entry.as_deref(),
+                Some(test_stdout_sink(worker_stdout)),
+            ));
+        });
+    if let Err(error) = started {
+        return TestEntryExecution {
+            value: None,
+            failure: Some(TestFailure::Reason(format!(
+                "failed to start test registration: {error}"
+            ))),
+            stdout: snapshot_test_stdout(&captured_stdout),
+            duration_ms: 0,
+        };
+    }
+    match receiver.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
+        Ok(mut execution) => {
+            execution.stdout = snapshot_test_stdout(&captured_stdout);
+            execution.duration_ms = elapsed_millis(started_at);
+            execution
         }
-        TestOutcome::Trapped(error) => {
-            *failed += 1;
-            eprintln!(
-                "FAILED {label}\n{}",
-                error.render_with_source(render_path, source)
-            );
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => TestEntryExecution {
+            value: None,
+            failure: Some(TestFailure::Reason(format!(
+                "test registration timed out after {timeout_ms}ms"
+            ))),
+            stdout: snapshot_test_stdout(&captured_stdout),
+            duration_ms: elapsed_millis(started_at),
+        },
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => TestEntryExecution {
+            value: None,
+            failure: Some(TestFailure::Reason(
+                "test registration worker disconnected".to_string(),
+            )),
+            stdout: snapshot_test_stdout(&captured_stdout),
+            duration_ms: elapsed_millis(started_at),
+        },
+    }
+}
+
+fn elapsed_millis(started_at: std::time::Instant) -> u64 {
+    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+struct TestRecord {
+    name: String,
+    file: String,
+    source: String,
+    duration_ms: u64,
+    stdout: String,
+    failure: Option<TestFailure>,
+    secondary_failure: Option<TestFailure>,
+}
+
+impl TestRecord {
+    fn from_execution(
+        name: String,
+        file: String,
+        source: String,
+        execution: TestExecution,
+    ) -> Self {
+        Self {
+            name,
+            file,
+            source,
+            duration_ms: execution.duration_ms,
+            stdout: execution.stdout,
+            failure: execution.failure,
+            secondary_failure: execution.secondary_failure,
         }
+    }
+
+    fn failed_diagnostic(
+        name: String,
+        file: String,
+        duration_ms: u64,
+        diagnostic: Diagnostic,
+        source: String,
+    ) -> Self {
+        Self {
+            name,
+            file,
+            source,
+            duration_ms,
+            stdout: String::new(),
+            failure: Some(TestFailure::Diagnostic(diagnostic)),
+            secondary_failure: None,
+        }
+    }
+
+    fn write_human(&self) {
+        if !self.stdout.is_empty() {
+            write_stdout(&self.stdout);
+        }
+        match &self.failure {
+            None => write_stdout(&format!("ok {}\n", self.name)),
+            Some(TestFailure::Reason(reason)) => eprintln!("FAILED {} ({reason})", self.name),
+            Some(TestFailure::Diagnostic(error)) => eprintln!(
+                "FAILED {}\n{}",
+                self.name,
+                error.render_with_source(&self.file, &self.source)
+            ),
+        }
+        if let Some(secondary) = &self.secondary_failure {
+            match secondary {
+                TestFailure::Reason(reason) => {
+                    eprintln!("teardown also failed for {} ({reason})", self.name)
+                }
+                TestFailure::Diagnostic(error) => eprintln!(
+                    "teardown also failed for {}\n{}",
+                    self.name,
+                    error.render_with_source(&self.file, &self.source)
+                ),
+            }
+        }
+    }
+
+    fn json(&self) -> JsonValue {
+        let mut record = serde_json::json!({
+            "name": self.name,
+            "file": self.file,
+            "outcome": if self.failure.is_some() { "failed" } else { "passed" },
+            "duration_ms": self.duration_ms,
+        });
+        match &self.failure {
+            None => {}
+            Some(TestFailure::Reason(reason)) => record["reason"] = JsonValue::from(reason.clone()),
+            Some(TestFailure::Diagnostic(error)) => {
+                record["diagnostic"] = serde_json::to_value(error.structured(&self.file))
+                    .expect("structured diagnostics are JSON serializable");
+            }
+        }
+        if !self.stdout.is_empty() {
+            record["stdout"] = JsonValue::from(self.stdout.clone());
+        }
+        if let Some(secondary) = &self.secondary_failure {
+            let mut rendered = serde_json::json!({"stage": "teardown"});
+            match secondary {
+                TestFailure::Reason(reason) => {
+                    rendered["reason"] = JsonValue::from(reason.clone());
+                }
+                TestFailure::Diagnostic(error) => {
+                    rendered["diagnostic"] = serde_json::to_value(error.structured(&self.file))
+                        .expect("structured diagnostics are JSON serializable");
+                }
+            }
+            record["secondary"] = rendered;
+        }
+        record
     }
 }
 
@@ -945,7 +1595,7 @@ enum NativeRunOutcome {
     Diagnostic(Diagnostic),
     /// The native runtime reported an Aura trap over the private structured
     /// channel used by JSON-mode `aura run`.
-    StructuredDiagnostic(StructuredDiagnostic),
+    StructuredDiagnostic(Box<StructuredDiagnostic>),
     /// The requested backend could not produce a binary.
     Failed(String),
     /// `auto` could not use the direct backend and the MIR runtime should run.
@@ -1295,7 +1945,7 @@ fn native_execution_outcome(outcome: NativeExecutionOutcome) -> NativeRunOutcome
     match outcome {
         NativeExecutionOutcome::Exited(code) => NativeRunOutcome::Ran(code),
         NativeExecutionOutcome::Trapped(diagnostic) => {
-            NativeRunOutcome::StructuredDiagnostic(*diagnostic)
+            NativeRunOutcome::StructuredDiagnostic(diagnostic)
         }
     }
 }
@@ -2063,9 +2713,9 @@ fn native_runtime_identity_material(identity: &NativeRuntimeIdentity) -> Option<
     serde_json::to_vec(&(identity.archive_sha256.as_str(), &identity.native_link_args)).ok()
 }
 
-// Bumped to `v4` by the ADR-0022 capability migration. The compiler-owned
-// semantic schema version is an additional, independent key component, so a
-// semantic migration need not pretend that the cache container format changed.
+// The compiler-owned semantic schema version is an additional, independent
+// key component, so checked-source changes do not require a cache-container
+// format change.
 const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v5";
 
 /// The exact runtime inputs that a warm native-cache lookup may reuse.
@@ -3901,7 +4551,7 @@ fn usage_text() -> &'static str {
        or: aura lsp\n\
        or: aura new <project-path>\n\
        or: aura fmt [--check] [path ...]\n\
-       or: aura test [--timeout-ms <n>] [path ...]\n\
+       or: aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]\n\
        or: aura deps update [package]\n\
        or: aura help\n\
        or: aura version"
@@ -3918,7 +4568,7 @@ fn print_usage_and_exit(exit_code: i32) -> ! {
 
 fn print_version_and_exit() -> ! {
     write_stdout(&format!(
-        "aura {}-preview ({})\n",
+        "aura {}-dev ({})\n",
         env!("CARGO_PKG_VERSION"),
         env!("AURA_BUILD_COMMIT")
     ));

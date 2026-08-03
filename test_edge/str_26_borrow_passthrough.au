@@ -1,9 +1,9 @@
 # Test: passing a borrow str through to another function
 
-def inner(s: str) -> String:
+def inner(s: str) -> str:
     return f"inner({s})"
 
-def outer(s: str) -> String:
+def outer(s: str) -> str:
     return inner(s)
 
 def main() -> int32:

@@ -1,6 +1,6 @@
 enum ParseResult:
     Success(int32)
-    Failure(String)
+    Failure(str)
 
 def value_or_zero(result: own ParseResult) -> int32:
     match own result:

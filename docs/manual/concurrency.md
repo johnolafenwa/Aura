@@ -145,7 +145,7 @@ duplicate one result right.
 | Variant | Meaning |
 | --- | --- |
 | `Ready(value: own T)` | The task returned normally. |
-| `Error(message: own String)` | The task failed with a runtime error. |
+| `Error(message: own str)` | The task failed with a runtime error. |
 | `TimedOut` | The wait timed out. |
 | `Cancelled` | The wait was interrupted by cancellation. |
 
@@ -157,7 +157,7 @@ or `T` is a recursively repeatable `Task[...]`. For every
 other transferable result, `result`, `result_or_none`, and `result_or` consume
 the unique observation right on any outcome. The consumption is conservative:
 timeout, cancellation, failure, and a collapsed `None` do not restore it.
-`wait_any` and `wait_all` consume the whole task vector for such a `T`;
+`wait_any` and `wait_all` consume the whole task list for such a `T`;
 `wait_any` abandons the unchosen observation rights.
 
 ## Queue[T]
@@ -165,8 +165,8 @@ timeout, cancellation, failure, and a collapsed `None` do not restore it.
 `Queue[T]` moves values between tasks. Queue handles are copy values.
 
 ```python
-jobs = Queue[String]()
-bounded = Queue[String](capacity=8)
+jobs = Queue[str]()
+bounded = Queue[str](capacity=8)
 ```
 
 | API | Signature | Contract |
@@ -225,8 +225,8 @@ explicitly is still the clearest program shape.
 | `yield_now` | `yield_now() -> None` | Voluntarily yields the current lightweight task so other runnable work can proceed. |
 | `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task for at least `duration`, unless cancellation wakes it first. |
 | `select` | `select(source, ...) -> SelectOutcome[Q, T]` | Waits on one or more positional `Queue[Q]`, `Task[T]`, or relative-`Duration` sources; cancellation wins, otherwise the lowest ready source index wins. |
-| `wait_any` | `wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome or timeout. For non-repeatable `T`, consumes the vector and abandons unchosen observation rights. `wait_any([])` returns `TimedOut` immediately. |
-| `wait_all` | `wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits until every task is ready, one task errors, timeout expires, or cancellation interrupts the wait. For non-repeatable `T`, consumes the vector. |
+| `wait_any` | `wait_any(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome or timeout. For non-repeatable `T`, consumes the list and abandons unchosen observation rights. `wait_any([])` returns `TimedOut` immediately. |
+| `wait_all` | `wait_all(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits until every task is ready, one task errors, timeout expires, or cancellation interrupts the wait. For non-repeatable `T`, consumes the list. |
 
 ### Explicit Cooperative Yielding
 
@@ -247,8 +247,8 @@ task must also respond to cancellation.
 
 | Variant | Meaning |
 | --- | --- |
-| `Ready(index: own int32, value: own T)` | Task at `index` returned normally. |
-| `Error(index: own int32, message: own String)` | Task at `index` failed. |
+| `Ready(index: own int64, value: own T)` | Task at `index` returned normally. |
+| `Error(index: own int64, message: own str)` | Task at `index` failed. |
 | `TimedOut` | No task completed before the timeout. |
 | `Cancelled` | Cancellation interrupted the wait. |
 
@@ -259,17 +259,17 @@ task must also respond to cancellation.
 required and named arguments are rejected. All Queue sources in one call use
 one payload type `Q`, and all Task sources use one result type `T`; the two
 categories are independent. An absent category is represented by `None`, so
-selecting a `Queue[String]` with a deadline returns
-`SelectOutcome[String, None]`, while selecting a `Task[int32]` with a deadline
+selecting a `Queue[str]` with a deadline returns
+`SelectOutcome[str, None]`, while selecting a `Task[int32]` with a deadline
 returns `SelectOutcome[None, int32]`.
 
 `SelectOutcome[Q, T]` variants:
 
 | Variant | Meaning |
 | --- | --- |
-| `Queue(index: own int32, outcome: own QueueReceive[Q])` | The Queue at the original zero-based source index produced an item or closed outcome. |
-| `Task(index: own int32, outcome: own TaskResult[T])` | The Task at the original zero-based source index produced a ready, error, or child-cancelled outcome. |
-| `Deadline(index: own int32)` | The relative Duration at the original zero-based source index expired. |
+| `Queue(index: own int64, outcome: own QueueReceive[Q])` | The Queue at the original zero-based source index produced an item or closed outcome. |
+| `Task(index: own int64, outcome: own TaskResult[T])` | The Task at the original zero-based source index produced a ready, error, or child-cancelled outcome. |
+| `Deadline(index: own int64)` | The relative Duration at the original zero-based source index expired. |
 | `Cancelled` | Cancellation of the selecting task interrupted the wait. |
 
 Queue sources have no individual timeout, so `select` never produces
@@ -304,7 +304,7 @@ when round-robin service is required.
 
 ```python
 def main() -> int32:
-    messages = Queue[String]()
+    messages = Queue[str]()
     messages.put("ready")
     print(select(messages, 0ms))
     return 0
@@ -314,8 +314,8 @@ def main() -> int32:
 
 | Variant | Meaning |
 | --- | --- |
-| `Ready(values: own Vec[T])` | Every task returned normally. Values are in the same order as the input tasks. |
-| `Error(index: own int32, message: own String)` | Task at `index` failed before all tasks completed. |
+| `Ready(values: own list[T])` | Every task returned normally. Values are in the same order as the input tasks. |
+| `Error(index: own int64, message: own str)` | Task at `index` failed before all tasks completed. |
 | `TimedOut` | Not every task completed before the timeout. |
 | `Cancelled` | Cancellation interrupted the wait. |
 
@@ -348,7 +348,7 @@ once, may still perform its side effect, and has any late result discarded.
 A configured queue bound limits accepted pending work, but cannot guarantee
 unrelated blocking-I/O progress while all blocking workers remain stuck.
 
-Aura 0.2 task scheduling is cooperative across pinned workers. The compiler
+Aura 0.3 task scheduling is cooperative across pinned workers. The compiler
 inserts a scheduling check on every loop backedge, including the ordinary body
 tail and `continue`, so a tight loop eventually lets ready timers, Queue
 operations, and socket work on the same worker proceed. `break` and `return`
@@ -414,7 +414,7 @@ rather than becoming a deferred Transfer contract. The obligation applies to
 the owned capture even when the target declares a bare shared parameter and
 borrows that child-owned storage during its call. Queue construction, `put`,
 and `try_put` likewise require `T: Transfer`; handle copies, receive/fallback
-methods, and `close` do not recheck the payload. Copy types, `String`, recursively
+methods, and `close` do not recheck the payload. Copy types, `str`, recursively
 transferable collections/tuples/classes/enums, and `Queue`/`Task` handles pass;
 capability views, `random.Rng`, `TaskGroup`, and live host resources do not.
 `Transfer` is compiler-derived rather than a user trait.
@@ -512,7 +512,7 @@ abandons any such right that loses.
 `AU1101` reports malformed concurrency syntax, including unavailable spawn
 forms. `AU2001` reports unknown concurrency types, functions, or members.
 `AU2002` covers generic, duration, capacity,
-task-vector, stack-byte, argument, and outcome type mismatch. `AU2004` reports invalid
+task-list, stack-byte, argument, and outcome type mismatch. `AU2004` reports invalid
 constructor or method argument binding. `AU2006` reports an explicit or
 inherited trait method that collides with a builtin `Queue[T]`, `Task[T]`, or
 `TaskGroup` member. `AU2999` covers unsupported targets,
@@ -639,12 +639,12 @@ Protocol state is owned by one bounded, nonblocking service step at a time and
 is returned before the coroutine observes cancellation or resumes reactor
 waiting. The process-global pool is initialized lazily, shared by all
 lightweight schedulers, remains alive until process exit, and intentionally
-has no 0.2 runtime shutdown/join API. Non-Unix WebSocket fallback retains its
+has no 0.3 runtime shutdown/join API. Non-Unix WebSocket fallback retains its
 compatibility path. Plain socket/reactor operations remain scheduler-side;
 resolver, listener-bind, and file-read work uses the generic blocking-I/O pool.
 TLS asset bytes are read there, while PEM parsing and rustls construction run
 on protocol workers. Phase 5.4 also adds the bounded dynamic-`json.parse`
-service and scheduler-aware admission described above; the JSON string-map
+service and scheduler-aware admission described above; the JSON flat-dictionary
 operations stay caller-side. The host-timer policy recorded by ADR-0019
 is Accepted. Phase 5.5 gives the scheduler driver unique mutable ownership,
 routes nested starts through an owned internal broker, makes preparation

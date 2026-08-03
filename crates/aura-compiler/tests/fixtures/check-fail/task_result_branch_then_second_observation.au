@@ -1,4 +1,4 @@
-def make_text() -> String:
+def make_text() -> str:
     return "once"
 
 def observe(flag: bool) -> int32:

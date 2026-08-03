@@ -1,5 +1,0 @@
-def main() -> int32:
-    values = [4, 5, 6]
-    for index in range(values.len() as int32):
-        print(values[index])
-    return 0

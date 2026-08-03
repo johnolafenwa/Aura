@@ -1,4 +1,4 @@
-def describe_number(value: int32) -> String:
+def describe_number(value: int32) -> str:
     match own value:
         case -1:
             return "negative"
@@ -9,14 +9,14 @@ def describe_number(value: int32) -> String:
         case _:
             return "many"
 
-def describe_flag(flag: bool) -> String:
+def describe_flag(flag: bool) -> str:
     match own flag:
         case true:
             return "yes"
         case false:
             return "no"
 
-def describe_name(name: String) -> String:
+def describe_name(name: str) -> str:
     match name:
         case "aura":
             return "repo"

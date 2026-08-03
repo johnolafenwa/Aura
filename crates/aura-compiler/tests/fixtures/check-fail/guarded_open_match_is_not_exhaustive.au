@@ -1,0 +1,6 @@
+def main() -> int32:
+    value: int32 = 1
+    match value:
+        case _ if value > 0:
+            pass
+    return 0

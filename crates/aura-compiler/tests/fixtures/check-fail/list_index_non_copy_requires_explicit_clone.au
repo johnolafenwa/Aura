@@ -1,0 +1,5 @@
+def main() -> int32:
+    items: list[str] = ["left", "right"]
+    first: str = items[0]
+    print(first)
+    return 0

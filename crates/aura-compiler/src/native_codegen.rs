@@ -398,6 +398,7 @@ struct NativeCodegen<'a> {
     print_value: FuncId,
     sqrt_f64: FuncId,
     assert_fail: FuncId,
+    assert_fail_detailed: FuncId,
     fail_division_by_zero: FuncId,
     fail_int32_overflow: FuncId,
     fail_integer_overflow: FuncId,
@@ -413,6 +414,7 @@ struct NativeCodegen<'a> {
     box_f64: FuncId,
     box_bool: FuncId,
     function_value: FuncId,
+    module_constant: FuncId,
     closure_value: FuncId,
     function_call: FuncId,
     function_bind_defaults: FuncId,
@@ -433,10 +435,13 @@ struct NativeCodegen<'a> {
     string_trim: FuncId,
     string_join: FuncId,
     stringify_value: FuncId,
+    format_value: FuncId,
     abs_value: FuncId,
     min_value: FuncId,
     max_value: FuncId,
     sqrt_value: FuncId,
+    round_value: FuncId,
+    divmod_value: FuncId,
     parse_int32: FuncId,
     parse_int64: FuncId,
     parse_float64: FuncId,
@@ -467,6 +472,7 @@ struct NativeCodegen<'a> {
     vec_insert_in_place: FuncId,
     vec_clear_in_place: FuncId,
     vec_reverse_in_place: FuncId,
+    collection_operation: FuncId,
     vec_index: FuncId,
     vec_slice: FuncId,
     vec_index_option: FuncId,
@@ -497,7 +503,6 @@ struct NativeCodegen<'a> {
     map_keys: FuncId,
     map_values: FuncId,
     map_items: FuncId,
-    map_entries: FuncId,
     map_clear_in_place: FuncId,
     map_extend_in_place: FuncId,
     map_index: FuncId,
@@ -895,6 +900,7 @@ impl<'a> NativeCodegen<'a> {
             print_value => ("aura_direct_print_value", [types::I64], None),
             sqrt_f64 => ("aura_direct_sqrt_f64", [types::F64], Some(types::F64)),
             assert_fail => ("aura_direct_assert_fail", [types::I64, types::I64, types::I64], None),
+            assert_fail_detailed => ("aura_direct_assert_fail_detailed", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
             fail_division_by_zero => ("aura_direct_fail_division_by_zero", [types::I64, types::I64], None),
             fail_int32_overflow => ("aura_direct_fail_int32_overflow", [types::I64, types::I64, types::I64], None),
             fail_integer_overflow => ("aura_direct_fail_integer_overflow", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
@@ -910,6 +916,7 @@ impl<'a> NativeCodegen<'a> {
             box_f64 => ("aura_direct_box_f64", [types::F64], Some(types::I64)),
             box_bool => ("aura_direct_box_bool", [types::I64], Some(types::I64)),
             function_value => ("aura_direct_function_value", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            module_constant => ("aura_direct_module_constant", [types::I64, types::I64, types::I64], Some(types::I64)),
             closure_value => ("aura_direct_closure_value", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             function_call => ("aura_direct_function_call", [types::I64, types::I64, types::I64], Some(types::I64)),
             function_bind_defaults => ("aura_direct_function_bind_defaults", [types::I64, types::I64, types::I64, types::I64], None),
@@ -930,10 +937,13 @@ impl<'a> NativeCodegen<'a> {
             string_trim => ("aura_direct_string_trim", [types::I64], Some(types::I64)),
             string_join => ("aura_direct_string_join", [types::I64, types::I64], Some(types::I64)),
             stringify_value => ("aura_direct_stringify_value", [types::I64], Some(types::I64)),
+            format_value => ("aura_direct_format_value", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             abs_value => ("aura_direct_abs", [types::I64], Some(types::I64)),
             min_value => ("aura_direct_min", [types::I64, types::I64], Some(types::I64)),
             max_value => ("aura_direct_max", [types::I64, types::I64], Some(types::I64)),
             sqrt_value => ("aura_direct_sqrt", [types::I64], Some(types::I64)),
+            round_value => ("aura_direct_round", [types::I64], Some(types::I64)),
+            divmod_value => ("aura_direct_divmod", [types::I64, types::I64], Some(types::I64)),
             parse_int32 => ("aura_direct_parse_int32", [types::I64], Some(types::I64)),
             parse_int64 => ("aura_direct_parse_int64", [types::I64], Some(types::I64)),
             parse_float64 => ("aura_direct_parse_float64", [types::I64], Some(types::I64)),
@@ -964,6 +974,7 @@ impl<'a> NativeCodegen<'a> {
             vec_insert_in_place => ("aura_direct_vec_insert_in_place", [types::I64, types::I64, types::I64], Some(types::I64)),
             vec_clear_in_place => ("aura_direct_vec_clear_in_place", [types::I64], Some(types::I64)),
             vec_reverse_in_place => ("aura_direct_vec_reverse_in_place", [types::I64], Some(types::I64)),
+            collection_operation => ("aura_direct_collection_operation", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_index => ("aura_direct_vec_index", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_slice => ("aura_direct_vec_slice", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_index_option => ("aura_direct_vec_index_option", [types::I64, types::I64], Some(types::I64)),
@@ -994,7 +1005,6 @@ impl<'a> NativeCodegen<'a> {
             map_keys => ("aura_direct_map_keys", [types::I64], Some(types::I64)),
             map_values => ("aura_direct_map_values", [types::I64], Some(types::I64)),
             map_items => ("aura_direct_map_items", [types::I64], Some(types::I64)),
-            map_entries => ("aura_direct_map_entries", [types::I64], Some(types::I64)),
             map_clear_in_place => ("aura_direct_map_clear_in_place", [types::I64], Some(types::I64)),
             map_extend_in_place => ("aura_direct_map_extend_in_place", [types::I64, types::I64], Some(types::I64)),
             map_index => ("aura_direct_map_index", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1019,7 +1029,7 @@ impl<'a> NativeCodegen<'a> {
             unbox_bool => ("aura_direct_unbox_bool", [types::I64], Some(types::I64)),
             value_as_condition => ("aura_direct_value_as_condition", [types::I64], Some(types::I64)),
             unary_value => ("aura_direct_unary_value_at", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            binary_value => ("aura_direct_binary_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            binary_value => ("aura_direct_binary_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             cast_value => ("aura_direct_cast_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             cast_integer_to_integer => ("aura_direct_cast_integer_to_integer", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             cast_integer_to_float => ("aura_direct_cast_integer_to_float", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::F64)),
@@ -1326,6 +1336,7 @@ impl<'a> NativeCodegen<'a> {
             print_value,
             sqrt_f64,
             assert_fail,
+            assert_fail_detailed,
             fail_division_by_zero,
             fail_int32_overflow,
             fail_integer_overflow,
@@ -1341,6 +1352,7 @@ impl<'a> NativeCodegen<'a> {
             box_f64,
             box_bool,
             function_value,
+            module_constant,
             closure_value,
             function_call,
             function_bind_defaults,
@@ -1361,10 +1373,13 @@ impl<'a> NativeCodegen<'a> {
             string_trim,
             string_join,
             stringify_value,
+            format_value,
             abs_value,
             min_value,
             max_value,
             sqrt_value,
+            round_value,
+            divmod_value,
             parse_int32,
             parse_int64,
             parse_float64,
@@ -1395,6 +1410,7 @@ impl<'a> NativeCodegen<'a> {
             vec_insert_in_place,
             vec_clear_in_place,
             vec_reverse_in_place,
+            collection_operation,
             vec_index,
             vec_slice,
             vec_index_option,
@@ -1425,7 +1441,6 @@ impl<'a> NativeCodegen<'a> {
             map_keys,
             map_values,
             map_items,
-            map_entries,
             map_clear_in_place,
             map_extend_in_place,
             map_index,
@@ -1969,6 +1984,9 @@ impl<'a> NativeCodegen<'a> {
         let assert_fail = self
             .object
             .declare_func_in_func(self.assert_fail, builder.func);
+        let assert_fail_detailed = self
+            .object
+            .declare_func_in_func(self.assert_fail_detailed, builder.func);
         let fail_division_by_zero = self
             .object
             .declare_func_in_func(self.fail_division_by_zero, builder.func);
@@ -2003,6 +2021,9 @@ impl<'a> NativeCodegen<'a> {
         let function_value = self
             .object
             .declare_func_in_func(self.function_value, builder.func);
+        let module_constant = self
+            .object
+            .declare_func_in_func(self.module_constant, builder.func);
         let closure_value = self
             .object
             .declare_func_in_func(self.closure_value, builder.func);
@@ -2063,6 +2084,9 @@ impl<'a> NativeCodegen<'a> {
         let stringify_value = self
             .object
             .declare_func_in_func(self.stringify_value, builder.func);
+        let format_value = self
+            .object
+            .declare_func_in_func(self.format_value, builder.func);
         let abs_value = self
             .object
             .declare_func_in_func(self.abs_value, builder.func);
@@ -2075,6 +2099,12 @@ impl<'a> NativeCodegen<'a> {
         let sqrt_value = self
             .object
             .declare_func_in_func(self.sqrt_value, builder.func);
+        let round_value = self
+            .object
+            .declare_func_in_func(self.round_value, builder.func);
+        let divmod_value = self
+            .object
+            .declare_func_in_func(self.divmod_value, builder.func);
         let parse_int32 = self
             .object
             .declare_func_in_func(self.parse_int32, builder.func);
@@ -2159,6 +2189,9 @@ impl<'a> NativeCodegen<'a> {
         let vec_reverse_in_place = self
             .object
             .declare_func_in_func(self.vec_reverse_in_place, builder.func);
+        let collection_operation = self
+            .object
+            .declare_func_in_func(self.collection_operation, builder.func);
         let vec_index = self
             .object
             .declare_func_in_func(self.vec_index, builder.func);
@@ -2245,9 +2278,6 @@ impl<'a> NativeCodegen<'a> {
         let map_items = self
             .object
             .declare_func_in_func(self.map_items, builder.func);
-        let map_entries = self
-            .object
-            .declare_func_in_func(self.map_entries, builder.func);
         let map_clear_in_place = self
             .object
             .declare_func_in_func(self.map_clear_in_place, builder.func);
@@ -2953,6 +2983,7 @@ impl<'a> NativeCodegen<'a> {
             print_value,
             sqrt_f64,
             assert_fail,
+            assert_fail_detailed,
             fail_division_by_zero,
             fail_int32_overflow,
             fail_integer_overflow,
@@ -2967,6 +2998,7 @@ impl<'a> NativeCodegen<'a> {
             box_f64,
             box_bool,
             function_value,
+            module_constant,
             closure_value,
             function_call,
             function_bind_defaults,
@@ -2987,10 +3019,13 @@ impl<'a> NativeCodegen<'a> {
             string_trim,
             string_join,
             stringify_value,
+            format_value,
             abs_value,
             min_value,
             max_value,
             sqrt_value,
+            round_value,
+            divmod_value,
             parse_int32,
             parse_int64,
             parse_float64,
@@ -3021,6 +3056,7 @@ impl<'a> NativeCodegen<'a> {
             vec_insert_in_place,
             vec_clear_in_place,
             vec_reverse_in_place,
+            collection_operation,
             vec_index,
             vec_slice,
             vec_index_option,
@@ -3051,7 +3087,6 @@ impl<'a> NativeCodegen<'a> {
             map_keys,
             map_values,
             map_items,
-            map_entries,
             map_clear_in_place,
             map_extend_in_place,
             map_index,
@@ -3337,6 +3372,36 @@ impl<'a> NativeCodegen<'a> {
         let release_value = self
             .object
             .declare_func_in_func(self.release_value, builder.func);
+
+        if matches!(function.name.as_str(), "main" | "__script") {
+            let module_constant = self
+                .object
+                .declare_func_in_func(self.module_constant, builder.func);
+            for constant in &self.module.constants {
+                let initializer =
+                    self.function_thunks
+                        .get(&constant.initializer)
+                        .ok_or_else(|| {
+                            format!(
+                                "direct backend cannot find module constant initializer `{}`",
+                                constant.initializer
+                            )
+                        })?;
+                let initializer = self.object.declare_func_in_func(*initializer, builder.func);
+                let initializer = builder.ins().func_addr(types::I64, initializer);
+                let (key_ptr, key_len) = declare_string_constant(
+                    &mut self.object,
+                    &mut self.string_data,
+                    &mut builder,
+                    constant.key.as_bytes(),
+                )?;
+                let call = builder
+                    .ins()
+                    .call(module_constant, &[key_ptr, key_len, initializer]);
+                let value = builder.inst_results(call)[0];
+                builder.ins().call(release_value, &[value]);
+            }
+        }
 
         let mut lowered_args = Vec::new();
         let param_types = self.function_param_types[&function.name].clone();
@@ -3782,6 +3847,7 @@ struct FunctionCompiler<'a> {
     print_value: cranelift_codegen::ir::FuncRef,
     sqrt_f64: cranelift_codegen::ir::FuncRef,
     assert_fail: cranelift_codegen::ir::FuncRef,
+    assert_fail_detailed: cranelift_codegen::ir::FuncRef,
     fail_division_by_zero: cranelift_codegen::ir::FuncRef,
     fail_int32_overflow: cranelift_codegen::ir::FuncRef,
     fail_integer_overflow: cranelift_codegen::ir::FuncRef,
@@ -3796,6 +3862,7 @@ struct FunctionCompiler<'a> {
     box_f64: cranelift_codegen::ir::FuncRef,
     box_bool: cranelift_codegen::ir::FuncRef,
     function_value: cranelift_codegen::ir::FuncRef,
+    module_constant: cranelift_codegen::ir::FuncRef,
     closure_value: cranelift_codegen::ir::FuncRef,
     function_call: cranelift_codegen::ir::FuncRef,
     function_bind_defaults: cranelift_codegen::ir::FuncRef,
@@ -3816,10 +3883,13 @@ struct FunctionCompiler<'a> {
     string_trim: cranelift_codegen::ir::FuncRef,
     string_join: cranelift_codegen::ir::FuncRef,
     stringify_value: cranelift_codegen::ir::FuncRef,
+    format_value: cranelift_codegen::ir::FuncRef,
     abs_value: cranelift_codegen::ir::FuncRef,
     min_value: cranelift_codegen::ir::FuncRef,
     max_value: cranelift_codegen::ir::FuncRef,
     sqrt_value: cranelift_codegen::ir::FuncRef,
+    round_value: cranelift_codegen::ir::FuncRef,
+    divmod_value: cranelift_codegen::ir::FuncRef,
     parse_int32: cranelift_codegen::ir::FuncRef,
     parse_int64: cranelift_codegen::ir::FuncRef,
     parse_float64: cranelift_codegen::ir::FuncRef,
@@ -3840,9 +3910,11 @@ struct FunctionCompiler<'a> {
     vec_len: cranelift_codegen::ir::FuncRef,
     vec_is_empty: cranelift_codegen::ir::FuncRef,
     vec_push_in_place: cranelift_codegen::ir::FuncRef,
+    #[allow(dead_code)]
     vec_pop_in_place: cranelift_codegen::ir::FuncRef,
     vec_get: cranelift_codegen::ir::FuncRef,
     vec_set_in_place: cranelift_codegen::ir::FuncRef,
+    #[allow(dead_code)]
     vec_remove_in_place: cranelift_codegen::ir::FuncRef,
     vec_swap_in_place: cranelift_codegen::ir::FuncRef,
     vec_contains: cranelift_codegen::ir::FuncRef,
@@ -3850,6 +3922,7 @@ struct FunctionCompiler<'a> {
     vec_insert_in_place: cranelift_codegen::ir::FuncRef,
     vec_clear_in_place: cranelift_codegen::ir::FuncRef,
     vec_reverse_in_place: cranelift_codegen::ir::FuncRef,
+    collection_operation: cranelift_codegen::ir::FuncRef,
     vec_index: cranelift_codegen::ir::FuncRef,
     vec_slice: cranelift_codegen::ir::FuncRef,
     vec_index_option: cranelift_codegen::ir::FuncRef,
@@ -3880,7 +3953,6 @@ struct FunctionCompiler<'a> {
     map_keys: cranelift_codegen::ir::FuncRef,
     map_values: cranelift_codegen::ir::FuncRef,
     map_items: cranelift_codegen::ir::FuncRef,
-    map_entries: cranelift_codegen::ir::FuncRef,
     map_clear_in_place: cranelift_codegen::ir::FuncRef,
     map_extend_in_place: cranelift_codegen::ir::FuncRef,
     map_index: cranelift_codegen::ir::FuncRef,
@@ -3890,6 +3962,7 @@ struct FunctionCompiler<'a> {
     set_is_empty: cranelift_codegen::ir::FuncRef,
     set_contains: cranelift_codegen::ir::FuncRef,
     set_insert_in_place: cranelift_codegen::ir::FuncRef,
+    #[allow(dead_code)]
     set_remove_in_place: cranelift_codegen::ir::FuncRef,
     set_index_option: cranelift_codegen::ir::FuncRef,
     set_take_index_in_place: cranelift_codegen::ir::FuncRef,
@@ -4388,16 +4461,20 @@ impl<'a> FunctionCompiler<'a> {
                 self.compile_for_range(binding, iterable, body_label, exit_label)?;
                 self.release_all_temporary_owned();
             }
-            Terminator::AssertFail { message, span } => {
+            Terminator::AssertFail {
+                message,
+                captures,
+                span,
+            } => {
                 let message = match message {
                     Some(message) => {
                         let message = self.load_operand(message)?;
                         match &message.ty {
                             DirectType::Opaque(Type::Named(name, args))
-                                if name == "String" && args.is_empty() => {}
+                                if name == "str" && args.is_empty() => {}
                             other => {
                                 return Err(format!(
-                                    "direct backend expected an assertion message to be `String`, found `{}`",
+                                    "direct backend expected an assertion message to be `str`, found `{}`",
                                     render_direct_type(other)
                                 ))
                             }
@@ -4407,9 +4484,41 @@ impl<'a> FunctionCompiler<'a> {
                     None => self.builder.ins().iconst(types::I64, 0),
                 };
                 let (line, column) = self.span_values(Some(*span));
-                self.builder
-                    .ins()
-                    .call(self.assert_fail, &[message, line, column]);
+                match captures.as_slice() {
+                    [] => {
+                        self.builder
+                            .ins()
+                            .call(self.assert_fail, &[message, line, column]);
+                    }
+                    [left, right] => {
+                        let left_label = self.string_value(&left.label)?.values[0];
+                        let left_type = self.string_value(&left.ty.to_string())?.values[0];
+                        let left_value = self.load_assertion_capture_value(&left.value)?;
+                        let right_label = self.string_value(&right.label)?.values[0];
+                        let right_type = self.string_value(&right.ty.to_string())?.values[0];
+                        let right_value = self.load_assertion_capture_value(&right.value)?;
+                        self.builder.ins().call(
+                            self.assert_fail_detailed,
+                            &[
+                                message,
+                                line,
+                                column,
+                                left_label,
+                                left_type,
+                                left_value,
+                                right_label,
+                                right_type,
+                                right_value,
+                            ],
+                        );
+                    }
+                    _ => {
+                        return Err(
+                            "direct backend requires exactly two assertion captures when captures are present"
+                                .to_string(),
+                        )
+                    }
+                }
                 self.builder.ins().trap(TrapCode::unwrap_user(1));
             }
             other => {
@@ -4420,6 +4529,22 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         Ok(())
+    }
+
+    fn load_assertion_capture_value(
+        &mut self,
+        operand: &Operand,
+    ) -> std::result::Result<Value, String> {
+        let value = self.load_operand(operand)?;
+        match &value.ty {
+            DirectType::Opaque(Type::Named(name, args)) if name == "str" && args.is_empty() => {
+                Ok(value.values[0])
+            }
+            other => Err(format!(
+                "direct backend expected a rendered assertion capture to be `str`, found `{}`",
+                render_direct_type(other)
+            )),
+        }
     }
 
     fn emit_return_value(&mut self, value: ValueRef) -> std::result::Result<(), String> {
@@ -4442,6 +4567,24 @@ impl<'a> FunctionCompiler<'a> {
             Rvalue::Use(operand) => {
                 let integer_hint = target.scalar_kind().filter(|kind| kind.is_integer());
                 self.load_operand_with_integer_hint(operand, integer_hint)
+            }
+            Rvalue::ModuleConstant { key, initializer } => {
+                let thunk = *self.function_thunk_refs.get(initializer).ok_or_else(|| {
+                    format!(
+                        "direct backend cannot find module constant initializer `{initializer}`"
+                    )
+                })?;
+                let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk);
+                let (key_ptr, key_len) = self.string_constant(key.as_bytes())?;
+                let call = self
+                    .builder
+                    .ins()
+                    .call(self.module_constant, &[key_ptr, key_len, thunk_ptr]);
+                let value = self.owned_opaque_result(
+                    self.builder.inst_results(call).to_vec(),
+                    Type::named("Unknown"),
+                );
+                self.coerce_value(value, target)
             }
             Rvalue::Closure {
                 function,
@@ -4494,7 +4637,7 @@ impl<'a> FunctionCompiler<'a> {
                 let right = self.load_operand_with_integer_hint(right, right_integer_hint)?;
                 self.compile_binary(*op, left, right, Some(*span))
             }
-            Rvalue::Call { callee, args } => self.compile_call(callee, args, Some(target)),
+            Rvalue::Call { callee, args } => self.compile_call(callee, args, target),
             Rvalue::VecLiteral {
                 elements,
                 element_type,
@@ -4634,7 +4777,7 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let resolved_element_type = match target {
             Some(DirectType::Opaque(Type::Named(name, args)))
-                if name == "Vec" && args.len() == 1 =>
+                if name == "list" && args.len() == 1 =>
             {
                 args[0].clone()
             }
@@ -4645,7 +4788,7 @@ impl<'a> FunctionCompiler<'a> {
         let init = self.builder.ins().call(self.vec_empty, &[]);
         let vector = self.owned_opaque_result(
             self.builder.inst_results(init).to_vec(),
-            Type::Named("Vec".to_string(), vec![resolved_element_type]),
+            Type::Named("list".to_string(), vec![resolved_element_type]),
         );
         for element in elements {
             let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
@@ -4668,19 +4811,19 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let (resolved_key_type, resolved_value_type) = match target {
             Some(DirectType::Opaque(Type::Named(name, args)))
-                if name == "Map" && args.len() == 2 =>
+                if name == "dict" && args.len() == 2 =>
             {
                 (args[0].clone(), args[1].clone())
             }
             _ => (key_type.clone(), value_type.clone()),
         };
-        let key_direct_ty = ensure_direct_type(&resolved_key_type, &self.classes, "Map key")?;
+        let key_direct_ty = ensure_direct_type(&resolved_key_type, &self.classes, "dict key")?;
         let value_direct_ty = ensure_direct_type(&resolved_value_type, &self.classes, "Map value")?;
         let init = self.builder.ins().call(self.map_empty, &[]);
         let map = self.owned_opaque_result(
             self.builder.inst_results(init).to_vec(),
             Type::Named(
-                "Map".to_string(),
+                "dict".to_string(),
                 vec![resolved_key_type, resolved_value_type],
             ),
         );
@@ -4706,18 +4849,18 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let resolved_element_type = match target {
             Some(DirectType::Opaque(Type::Named(name, args)))
-                if name == "Set" && args.len() == 1 =>
+                if name == "set" && args.len() == 1 =>
             {
                 args[0].clone()
             }
             _ => element_type.clone(),
         };
         let element_direct_ty =
-            ensure_direct_type(&resolved_element_type, &self.classes, "Set element")?;
+            ensure_direct_type(&resolved_element_type, &self.classes, "set element")?;
         let init = self.builder.ins().call(self.set_empty, &[]);
         let set = self.owned_opaque_result(
             self.builder.inst_results(init).to_vec(),
-            Type::Named("Set".to_string(), vec![resolved_element_type]),
+            Type::Named("set".to_string(), vec![resolved_element_type]),
         );
         for element in elements {
             let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
@@ -4736,10 +4879,13 @@ impl<'a> FunctionCompiler<'a> {
         value: ValueRef,
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
-        if matches!(value.ty, DirectType::Opaque(_)) {
+        if matches!(value.ty, DirectType::Opaque(_)) || op == UnaryOp::BitNot {
+            let target_ty = value.ty.clone();
+            let value = self.ensure_opaque(value)?;
             let opcode = match op {
                 UnaryOp::Neg => 0,
                 UnaryOp::Not => 1,
+                UnaryOp::BitNot => 2,
             };
             let opcode = self.builder.ins().iconst(types::I64, opcode);
             let (line, column) = self.span_values(span);
@@ -4747,10 +4893,15 @@ impl<'a> FunctionCompiler<'a> {
                 .builder
                 .ins()
                 .call(self.unary_value, &[opcode, value.values[0], line, column]);
-            return Ok(self.owned_opaque_result(
+            let result = self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
                 Type::named("Unknown"),
-            ));
+            );
+            return if matches!(target_ty, DirectType::Opaque(_)) {
+                Ok(result)
+            } else {
+                self.coerce_value(result, &target_ty)
+            };
         }
         match (op, value.ty.scalar_kind()) {
             (UnaryOp::Neg, Some(ScalarKind::Int32)) => Ok(ValueRef {
@@ -4936,6 +5087,48 @@ impl<'a> FunctionCompiler<'a> {
         right: ValueRef,
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
+        if matches!(
+            op,
+            BinaryOp::Pow
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+        ) {
+            let target_ty = left.ty.clone();
+            let float_width = match &target_ty {
+                DirectType::Scalar(ScalarKind::Float32) => 32,
+                DirectType::Scalar(ScalarKind::Float64) => 64,
+                _ => 0,
+            };
+            let left = self.ensure_opaque(left)?;
+            let right = self.ensure_opaque(right)?;
+            let opcode_value = Self::binary_opcode(op);
+            let opcode = self.builder.ins().iconst(types::I64, opcode_value);
+            let float_width = self.builder.ins().iconst(types::I64, float_width);
+            let (line, column) = self.span_values(span);
+            let inst = self.builder.ins().call(
+                self.binary_value,
+                &[
+                    opcode,
+                    left.values[0],
+                    right.values[0],
+                    float_width,
+                    line,
+                    column,
+                ],
+            );
+            let result = self.owned_opaque_result(
+                self.builder.inst_results(inst).to_vec(),
+                Type::named("Unknown"),
+            );
+            return if matches!(target_ty, DirectType::Opaque(_)) {
+                Ok(result)
+            } else {
+                self.coerce_value(result, &target_ty)
+            };
+        }
         let left_array_element = direct_array_element_type(&left.ty).cloned();
         let right_array_element = direct_array_element_type(&right.ty).cloned();
         if left_array_element.is_some() || right_array_element.is_some() {
@@ -4987,12 +5180,20 @@ impl<'a> FunctionCompiler<'a> {
         if matches!(left.ty, DirectType::Opaque(_)) || matches!(right.ty, DirectType::Opaque(_)) {
             let left = self.ensure_opaque(left)?;
             let right = self.ensure_opaque(right)?;
-            let binary_opcode = self.binary_opcode(op);
+            let binary_opcode = Self::binary_opcode(op);
             let opcode = self.builder.ins().iconst(types::I64, binary_opcode);
+            let float_width = self.builder.ins().iconst(types::I64, 0);
             let (line, column) = self.span_values(span);
             let inst = self.builder.ins().call(
                 self.binary_value,
-                &[opcode, left.values[0], right.values[0], line, column],
+                &[
+                    opcode,
+                    left.values[0],
+                    right.values[0],
+                    float_width,
+                    line,
+                    column,
+                ],
             );
             return Ok(self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
@@ -5309,16 +5510,17 @@ impl<'a> FunctionCompiler<'a> {
                 })
             }
             BinaryOp::FloorDiv | BinaryOp::Mod => {
-                let opcode_value = self.binary_opcode(op);
+                let opcode_value = Self::binary_opcode(op);
                 let left_box = self.builder.ins().call(self.box_f64, &[left]);
                 let right_box = self.builder.ins().call(self.box_f64, &[right]);
                 let left_boxed = self.builder.inst_results(left_box)[0];
                 let right_boxed = self.builder.inst_results(right_box)[0];
                 let opcode = self.builder.ins().iconst(types::I64, opcode_value);
+                let float_width = self.builder.ins().iconst(types::I64, 0);
                 let (line, column) = self.span_values(span);
                 let result = self.builder.ins().call(
                     self.binary_value,
-                    &[opcode, left_boxed, right_boxed, line, column],
+                    &[opcode, left_boxed, right_boxed, float_width, line, column],
                 );
                 let result_boxed = self.builder.inst_results(result)[0];
                 self.release_opaque_handle(left_boxed);
@@ -5463,7 +5665,7 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         callee: &CallTarget,
         args: &[MirArg],
-        target: Option<&DirectType>,
+        target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         match callee {
             CallTarget::Name(name) if name == "print" => self.compile_print(args),
@@ -5482,7 +5684,7 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         call: &MirExternCall,
         args: &[MirArg],
-        target: Option<&DirectType>,
+        target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         if call.abi != "C" {
             return Err(format!(
@@ -5587,17 +5789,14 @@ impl<'a> FunctionCompiler<'a> {
             &format!("extern return from `{}`", call.symbol),
         )?;
         let result = self.coerce_value(boxed_result, &return_direct)?;
-        match target {
-            Some(target) => self.coerce_value(result, target),
-            None => Ok(result),
-        }
+        self.coerce_value(result, target)
     }
 
     fn compile_function_value_call(
         &mut self,
         function: &Operand,
         args: &[MirArg],
-        target: Option<&DirectType>,
+        target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         let function_type = infer_operand_type(function, &self.variable_types, &self.classes)
             .ok_or("direct backend could not infer the indirect callee type".to_string())?;
@@ -5725,10 +5924,7 @@ impl<'a> FunctionCompiler<'a> {
         let boxed_result =
             self.owned_opaque_result(vec![raw_result], direct_type_to_type(&return_direct));
         let result = self.coerce_value(boxed_result, &return_direct)?;
-        match target {
-            Some(target) => self.coerce_value(result, target),
-            None => Ok(result),
-        }
+        self.coerce_value(result, target)
     }
 
     fn compile_print(&mut self, args: &[MirArg]) -> std::result::Result<ValueRef, String> {
@@ -5762,7 +5958,12 @@ impl<'a> FunctionCompiler<'a> {
                     .ins()
                     .call(self.print_bool, &[argument.values[0]]);
             }
-            Some(ScalarKind::Unit) => {}
+            Some(ScalarKind::Unit) => {
+                let argument = self.ensure_opaque(argument)?;
+                self.builder
+                    .ins()
+                    .call(self.print_value, &[argument.values[0]]);
+            }
             None => {
                 let argument = self.ensure_opaque(argument)?;
                 self.builder
@@ -5790,7 +5991,26 @@ impl<'a> FunctionCompiler<'a> {
                         .call(self.stringify_value, &[value.values[0]]);
                     self.owned_opaque_result(
                         self.builder.inst_results(call).to_vec(),
-                        Type::named("String"),
+                        Type::named("str"),
+                    )
+                }
+                MirFormatPart::Formatted {
+                    value,
+                    spec,
+                    value_type,
+                } => {
+                    let value = self.load_operand(value)?;
+                    let value = self.ensure_opaque(value)?;
+                    let (spec_ptr, spec_len) = self.string_constant(spec.as_bytes())?;
+                    let type_name = value_type.to_string();
+                    let (type_ptr, type_len) = self.string_constant(type_name.as_bytes())?;
+                    let call = self.builder.ins().call(
+                        self.format_value,
+                        &[value.values[0], spec_ptr, spec_len, type_ptr, type_len],
+                    );
+                    self.owned_opaque_result(
+                        self.builder.inst_results(call).to_vec(),
+                        Type::named("str"),
                     )
                 }
             };
@@ -5802,17 +6022,14 @@ impl<'a> FunctionCompiler<'a> {
     fn string_value(&mut self, text: &str) -> std::result::Result<ValueRef, String> {
         let (ptr, len) = self.string_constant(text.as_bytes())?;
         let call = self.builder.ins().call(self.string_literal, &[ptr, len]);
-        Ok(self.owned_opaque_result(
-            self.builder.inst_results(call).to_vec(),
-            Type::named("String"),
-        ))
+        Ok(self.owned_opaque_result(self.builder.inst_results(call).to_vec(), Type::named("str")))
     }
 
     fn compile_named_call(
         &mut self,
         name: &str,
         args: &[MirArg],
-        target: Option<&DirectType>,
+        target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         if name == "random::Rng" {
             let ordered = ordered_named_args(&["seed"], args)?;
@@ -5855,7 +6072,7 @@ impl<'a> FunctionCompiler<'a> {
                 .call(self.random_secure_bytes, &[count.values[0]]);
             return Ok(self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
-                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                Type::Named("list".to_string(), vec![Type::named("uint8")]),
             ));
         }
         if let Some(associated) = name
@@ -5863,19 +6080,15 @@ impl<'a> FunctionCompiler<'a> {
             .and_then(|field| BuiltinAssociatedFunction::resolve("Array", field))
         {
             let (array_ty, element_type) = match target {
-                Some(DirectType::Opaque(ty @ Type::Named(owner, arguments)))
+                DirectType::Opaque(ty @ Type::Named(owner, arguments))
                     if owner == "Array" && arguments.len() == 1 =>
                 {
                     (ty.clone(), arguments[0].clone())
                 }
                 other => {
-                    let rendered = match other {
-                        Some(ty) => render_direct_type(ty),
-                        None => "no target type".to_string(),
-                    };
                     return Err(format!(
                         "direct backend requires an Array result type for `{name}`, found {}",
-                        rendered
+                        render_direct_type(other)
                     ));
                 }
             };
@@ -5885,7 +6098,7 @@ impl<'a> FunctionCompiler<'a> {
                 .iconst(types::I64, direct_array_dtype_code(&element_type)?);
             let zero = self.builder.ins().iconst(types::I64, 0);
             let shape_ty =
-                DirectType::Opaque(Type::Named("Vec".to_string(), vec![Type::named("int64")]));
+                DirectType::Opaque(Type::Named("list".to_string(), vec![Type::named("int64")]));
             let inst = if associated == BuiltinAssociatedFunction::ArrayZeros {
                 let ordered = ordered_named_args(&["shape"], args)?;
                 let shape = self.load_operand_for_target(&ordered[0].value, &shape_ty)?;
@@ -5909,7 +6122,7 @@ impl<'a> FunctionCompiler<'a> {
                 debug_assert_eq!(associated, BuiltinAssociatedFunction::ArrayFromVec);
                 let ordered = ordered_named_args(&["values", "shape"], args)?;
                 let values_ty =
-                    DirectType::Opaque(Type::Named("Vec".to_string(), vec![element_type]));
+                    DirectType::Opaque(Type::Named("list".to_string(), vec![element_type]));
                 let values = self.load_operand_for_target(&ordered[0].value, &values_ty)?;
                 let values = self.ensure_opaque(values)?;
                 let shape = self.load_operand_for_target(&ordered[1].value, &shape_ty)?;
@@ -6118,7 +6331,7 @@ impl<'a> FunctionCompiler<'a> {
                 ],
             );
             let result_type = match target {
-                Some(DirectType::Opaque(Type::Named(name, type_args)))
+                DirectType::Opaque(Type::Named(name, type_args))
                     if name == "SelectOutcome" && type_args.len() == 2 =>
                 {
                     Type::Named(name.clone(), type_args.clone())
@@ -6166,7 +6379,7 @@ impl<'a> FunctionCompiler<'a> {
             let task_payload_ty =
                 infer_operand_type(&tasks_arg.value, &self.variable_types, &self.classes)
                     .map(|direct| match direct {
-                        DirectType::Opaque(Type::Named(vec_name, args)) if vec_name == "Vec" => {
+                        DirectType::Opaque(Type::Named(vec_name, args)) if vec_name == "list" => {
                             match args.as_slice() {
                                 [Type::Named(task_name, task_args)] if task_name == "Task" => {
                                     task_args.first().cloned().unwrap_or(Type::Unit)
@@ -6287,15 +6500,15 @@ impl<'a> FunctionCompiler<'a> {
             let return_ty = match name {
                 "parse_int32" => Type::Named(
                     "Result".to_string(),
-                    vec![Type::named("int32"), Type::named("String")],
+                    vec![Type::named("int32"), Type::named("str")],
                 ),
                 "parse_int64" => Type::Named(
                     "Result".to_string(),
-                    vec![Type::named("int64"), Type::named("String")],
+                    vec![Type::named("int64"), Type::named("str")],
                 ),
                 "parse_float64" => Type::Named(
                     "Result".to_string(),
-                    vec![Type::named("float64"), Type::named("String")],
+                    vec![Type::named("float64"), Type::named("str")],
                 ),
                 _ => unreachable!(),
             };
@@ -6344,7 +6557,70 @@ impl<'a> FunctionCompiler<'a> {
             );
             return self.coerce_value(result, &return_ty);
         }
-        if matches!(name, "Vec" | "Set" | "Map") {
+        if name == "round" {
+            let ordered = ordered_named_args(&["value"], args)?;
+            let loaded = self.load_operand(&ordered[0].value)?;
+            let input_ty = loaded.ty.clone();
+            let return_ty = match input_ty.scalar_kind() {
+                Some(ScalarKind::Float32 | ScalarKind::Float64) => {
+                    DirectType::Scalar(ScalarKind::Int64)
+                }
+                _ => input_ty.clone(),
+            };
+            let value = self.ensure_opaque(loaded)?;
+            let inst = self
+                .builder
+                .ins()
+                .call(self.round_value, &[value.values[0]]);
+            let result = self.owned_opaque_result(
+                self.builder.inst_results(inst).to_vec(),
+                Type::named("Unknown"),
+            );
+            return self.coerce_value(result, &return_ty);
+        }
+        if name == "divmod" {
+            let ordered = ordered_named_args(&["left", "right"], args)?;
+            let left = self.load_operand(&ordered[0].value)?;
+            let operand_ty = direct_type_to_type(&left.ty);
+            let left = self.ensure_opaque(left)?;
+            self.tag_opaque_runtime_type(&left, &operand_ty)?;
+            let right = self.load_operand(&ordered[1].value)?;
+            let right = self.ensure_opaque(right)?;
+            let inst = self
+                .builder
+                .ins()
+                .call(self.divmod_value, &[left.values[0], right.values[0]]);
+            let result_ty = Type::Tuple(vec![operand_ty.clone(), operand_ty]);
+            return Ok(
+                self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), result_ty)
+            );
+        }
+        if let Some(type_name) = name.strip_suffix(".with_capacity") {
+            if matches!(type_name, "list" | "set" | "dict") {
+                let ordered = ordered_named_args(&["minimum"], args)?;
+                let minimum = self
+                    .load_operand_with_integer_hint(&ordered[0].value, Some(ScalarKind::Int64))?;
+                let minimum = self.coerce_value(minimum, &DirectType::Scalar(ScalarKind::Int64))?;
+                let empty = match type_name {
+                    "list" => self.vec_empty,
+                    "set" => self.set_empty,
+                    "dict" => self.map_empty,
+                    _ => unreachable!(),
+                };
+                let empty_call = self.builder.ins().call(empty, &[]);
+                let collection = self.builder.inst_results(empty_call)[0];
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let opcode = self.builder.ins().iconst(types::I64, 4);
+                let reserve = self.builder.ins().call(
+                    self.collection_operation,
+                    &[collection, zero, minimum.values[0], opcode],
+                );
+                self.release_opaque_handle(self.builder.inst_results(reserve)[0]);
+                let result_ty = direct_type_to_type(target);
+                return Ok(self.owned_opaque_result(vec![collection], result_ty));
+            }
+        }
+        if matches!(name, "list" | "set" | "dict") {
             if !args.is_empty() {
                 return Err(format!(
                     "direct backend expected `{}`() to take no arguments",
@@ -6352,16 +6628,16 @@ impl<'a> FunctionCompiler<'a> {
                 ));
             }
             let func = match name {
-                "Vec" => self.vec_empty,
-                "Set" => self.set_empty,
-                "Map" => self.map_empty,
+                "list" => self.vec_empty,
+                "set" => self.set_empty,
+                "dict" => self.map_empty,
                 _ => unreachable!(),
             };
             let inst = self.builder.ins().call(func, &[]);
             let ty = match name {
-                "Vec" | "Set" => Type::Named(name.to_string(), vec![Type::named("Unknown")]),
-                "Map" => Type::Named(
-                    "Map".to_string(),
+                "list" | "set" => Type::Named(name.to_string(), vec![Type::named("Unknown")]),
+                "dict" => Type::Named(
+                    "dict".to_string(),
                     vec![Type::named("Unknown"), Type::named("Unknown")],
                 ),
                 _ => unreachable!(),
@@ -6379,7 +6655,7 @@ impl<'a> FunctionCompiler<'a> {
             .cloned()
             .unwrap_or_default();
         let mut substitutions = HashMap::new();
-        if let (Some(target), Some(return_type)) = (target, self.function_return_types.get(name)) {
+        if let Some(return_type) = self.function_return_types.get(name) {
             collect_direct_runtime_type_substitutions(
                 &direct_type_to_type(return_type),
                 &direct_type_to_type(target),
@@ -6530,7 +6806,7 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_range(&mut self, args: &[MirArg]) -> std::result::Result<ValueRef, String> {
-        let int_ty = DirectType::Scalar(ScalarKind::Int32);
+        let int_ty = DirectType::Scalar(ScalarKind::Int64);
         let (start_arg, stop_arg) = if args.iter().all(|arg| arg.name.is_none()) {
             match args {
                 [stop] => (None, Some(stop)),
@@ -6724,7 +7000,7 @@ impl<'a> FunctionCompiler<'a> {
         let inst = self.builder.ins().call(func, &lowered_args);
         let results = self.builder.inst_results(inst).to_vec();
         let io_error_ty = Type::Named("io.Error".to_string(), Vec::new());
-        let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+        let bytes_ty = Type::Named("list".to_string(), vec![Type::named("uint8")]);
         match name {
             "fs::exists" => {
                 let result = self.owned_opaque_result(results, Type::named("bool"));
@@ -6742,7 +7018,7 @@ impl<'a> FunctionCompiler<'a> {
                 Type::Named(
                     "Result".to_string(),
                     vec![
-                        Type::Named("Option".to_string(), vec![Type::named("String")]),
+                        Type::Named("Option".to_string(), vec![Type::named("str")]),
                         Type::Named("io.Error".to_string(), Vec::new()),
                     ],
                 ),
@@ -6752,7 +7028,7 @@ impl<'a> FunctionCompiler<'a> {
                 Type::Named(
                     "Result".to_string(),
                     vec![
-                        Type::named("String"),
+                        Type::named("str"),
                         Type::Named("io.Error".to_string(), Vec::new()),
                     ],
                 ),
@@ -6774,7 +7050,7 @@ impl<'a> FunctionCompiler<'a> {
                 Type::Named(
                     "Result".to_string(),
                     vec![
-                        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+                        Type::Named("list".to_string(), vec![Type::named("str")]),
                         io_error_ty.clone(),
                     ],
                 ),
@@ -6971,7 +7247,7 @@ impl<'a> FunctionCompiler<'a> {
             binding,
             ValueRef {
                 values: vec![current],
-                ty: DirectType::Scalar(ScalarKind::Int32),
+                ty: DirectType::Scalar(ScalarKind::Int64),
             },
         )?;
         let advanced_inst = self
@@ -7001,7 +7277,7 @@ impl<'a> FunctionCompiler<'a> {
         if let DirectType::Opaque(Type::Named(name, _)) = &object.ty {
             if let Some(
                 member @ (BuiltinMember::DurationToMilliseconds | BuiltinMember::DurationToSeconds),
-            ) = BuiltinMember::resolve(name, field)
+            ) = BuiltinMember::resolve_runtime(name, field)
             {
                 if !args.is_empty() {
                     return Err(format!(
@@ -7115,9 +7391,18 @@ impl<'a> FunctionCompiler<'a> {
                             | "saturating_add"
                             | "saturating_sub"
                             | "saturating_mul"
+                            | "wrapping_shl"
+                            | "wrapping_shr"
+                            | "saturating_shl"
+                            | "saturating_shr"
                     )
                 {
-                    let ordered = ordered_named_args(&["rhs"], args)?;
+                    let argument_name = if field.ends_with("shl") || field.ends_with("shr") {
+                        "count"
+                    } else {
+                        "rhs"
+                    };
+                    let ordered = ordered_named_args(&[argument_name], args)?;
                     let argument = ordered[0];
                     let target = object.ty.clone();
                     let left = self.ensure_opaque(object)?;
@@ -7125,6 +7410,8 @@ impl<'a> FunctionCompiler<'a> {
                     let operation = match field {
                         "wrapping_add" | "saturating_add" => 0,
                         "wrapping_sub" | "saturating_sub" => 1,
+                        "wrapping_shl" | "saturating_shl" => 3,
+                        "wrapping_shr" | "saturating_shr" => 4,
                         _ => {
                             debug_assert!(matches!(field, "wrapping_mul" | "saturating_mul"));
                             2
@@ -7183,7 +7470,7 @@ impl<'a> FunctionCompiler<'a> {
                         .call(self.stringify_value, &[object.values[0]]);
                     return Ok(self.owned_opaque_result(
                         self.builder.inst_results(inst).to_vec(),
-                        Type::named("String"),
+                        Type::named("str"),
                     ));
                 }
                 let receiver_ty = direct_type_to_type(&object.ty);
@@ -7354,7 +7641,7 @@ impl<'a> FunctionCompiler<'a> {
                 let inst = self.builder.ins().call(self.string_literal, &[ptr, len]);
                 Ok(self.owned_opaque_result(
                     self.builder.inst_results(inst).to_vec(),
-                    Type::named("String"),
+                    Type::named("str"),
                 ))
             }
             Operand::Duration(value) => {
@@ -8061,7 +8348,7 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn binary_opcode(&self, op: BinaryOp) -> i64 {
+    fn binary_opcode(op: BinaryOp) -> i64 {
         match op {
             BinaryOp::Add => 0,
             BinaryOp::Sub => 1,
@@ -8077,6 +8364,12 @@ impl<'a> FunctionCompiler<'a> {
             BinaryOp::And => 11,
             BinaryOp::Or => 12,
             BinaryOp::FloorDiv => 13,
+            BinaryOp::Pow => 14,
+            BinaryOp::BitAnd => 15,
+            BinaryOp::BitOr => 16,
+            BinaryOp::BitXor => 17,
+            BinaryOp::Shl => 18,
+            BinaryOp::Shr => 19,
         }
     }
 
@@ -8925,9 +9218,18 @@ impl<'a> FunctionCompiler<'a> {
                     | "saturating_add"
                     | "saturating_sub"
                     | "saturating_mul"
+                    | "wrapping_shl"
+                    | "wrapping_shr"
+                    | "saturating_shl"
+                    | "saturating_shr"
             )
         {
-            let ordered = ordered_named_args(&["rhs"], args)?;
+            let argument_name = if field.ends_with("shl") || field.ends_with("shr") {
+                "count"
+            } else {
+                "rhs"
+            };
+            let ordered = ordered_named_args(&[argument_name], args)?;
             let argument = ordered[0];
             let target = ensure_direct_type(object_ty, &self.classes, "integer receiver")?;
             let left = self.ensure_opaque(object)?;
@@ -8935,6 +9237,8 @@ impl<'a> FunctionCompiler<'a> {
             let operation = match field {
                 "wrapping_add" | "saturating_add" => 0,
                 "wrapping_sub" | "saturating_sub" => 1,
+                "wrapping_shl" | "saturating_shl" => 3,
+                "wrapping_shr" | "saturating_shr" => 4,
                 _ => {
                     debug_assert!(matches!(field, "wrapping_mul" | "saturating_mul"));
                     2
@@ -8986,12 +9290,20 @@ impl<'a> FunctionCompiler<'a> {
                 .call(self.stringify_value, &[object.values[0]]);
             return Ok(self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
-                Type::named("String"),
+                Type::named("str"),
             ));
         }
-        if field == "clone" {
+        if field == "clone"
+            || (field == "copy"
+                && matches!(
+                    object_ty,
+                    Type::Named(name, _) if matches!(name.as_str(), "list" | "dict" | "set")
+                ))
+        {
             if !args.is_empty() {
-                return Err("direct backend expected `clone()` to take no arguments".to_string());
+                return Err(format!(
+                    "direct backend expected `{field}()` to take no arguments"
+                ));
             }
             let object = self.ensure_opaque(object)?;
             if matches!(object_ty, Type::Named(name, arguments) if name == "Array" && arguments.len() == 1)
@@ -9014,7 +9326,7 @@ impl<'a> FunctionCompiler<'a> {
                 .owned_opaque_result(self.builder.inst_results(inst).to_vec(), object_ty.clone()));
         }
         if let Type::Named(name, class_args) = object_ty {
-            if name == "String" {
+            if name == "str" {
                 let object = self.ensure_opaque(object)?;
                 return match field {
                     "__slice" => {
@@ -9028,18 +9340,18 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let start = self.load_operand_with_integer_hint(
                             &start_arg.value,
-                            Some(ScalarKind::Int32),
+                            Some(ScalarKind::Int64),
                         )?;
                         let start =
-                            self.coerce_value(start, &DirectType::Scalar(ScalarKind::Int32))?;
+                            self.coerce_value(start, &DirectType::Scalar(ScalarKind::Int64))?;
                         let has_start = self.load_operand(&has_start_arg.value)?;
                         let has_start =
                             self.coerce_value(has_start, &DirectType::Scalar(ScalarKind::Bool))?;
                         let end = self.load_operand_with_integer_hint(
                             &end_arg.value,
-                            Some(ScalarKind::Int32),
+                            Some(ScalarKind::Int64),
                         )?;
-                        let end = self.coerce_value(end, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let end = self.coerce_value(end, &DirectType::Scalar(ScalarKind::Int64))?;
                         let has_end = self.load_operand(&has_end_arg.value)?;
                         let has_end =
                             self.coerce_value(has_end, &DirectType::Scalar(ScalarKind::Bool))?;
@@ -9069,7 +9381,7 @@ impl<'a> FunctionCompiler<'a> {
                         );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::named("String"),
+                            Type::named("str"),
                         ))
                     }
                     "len" | "byte_len" => {
@@ -9129,7 +9441,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.string_split, &[object.values[0], value.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Vec".to_string(), vec![Type::named("String")]),
+                            Type::Named("list".to_string(), vec![Type::named("str")]),
                         ))
                     }
                     "replace" => {
@@ -9149,7 +9461,7 @@ impl<'a> FunctionCompiler<'a> {
                         );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::named("String"),
+                            Type::named("str"),
                         ))
                     }
                     "add" => {
@@ -9161,16 +9473,16 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_value = self.load_operand(&argument.value)?;
                         let value = self.ensure_opaque(loaded_value)?;
-                        let binary_opcode = self.binary_opcode(BinaryOp::Add);
+                        let binary_opcode = Self::binary_opcode(BinaryOp::Add);
                         let opcode = self.builder.ins().iconst(types::I64, binary_opcode);
                         let zero = self.builder.ins().iconst(types::I64, 0);
                         let inst = self.builder.ins().call(
                             self.binary_value,
-                            &[opcode, object.values[0], value.values[0], zero, zero],
+                            &[opcode, object.values[0], value.values[0], zero, zero, zero],
                         );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::named("String"),
+                            Type::named("str"),
                         ))
                     }
                     "to_lower" => {
@@ -9186,7 +9498,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.string_to_lower, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::named("String"),
+                            Type::named("str"),
                         ))
                     }
                     "to_upper" => {
@@ -9202,13 +9514,13 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.string_to_upper, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::named("String"),
+                            Type::named("str"),
                         ))
                     }
                     "join" => {
                         let [argument] = args else {
                             return Err(
-                                "direct backend expected `join()` to receive one vector argument"
+                                "direct backend expected `join()` to receive one list argument"
                                     .to_string(),
                             );
                         };
@@ -9220,7 +9532,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.string_join, &[object.values[0], value.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::named("String"),
+                            Type::named("str"),
                         ))
                     }
                     "strip_prefix" | "strip_suffix" => {
@@ -9243,7 +9555,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(func, &[object.values[0], value.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Option".to_string(), vec![Type::named("String")]),
+                            Type::Named("Option".to_string(), vec![Type::named("str")]),
                         ))
                     }
                     "trim" => {
@@ -9258,17 +9570,8 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.string_trim, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::named("String"),
+                            Type::named("str"),
                         ))
-                    }
-                    "to_bytes" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `to_bytes()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        self.compile_host_builtin_loaded_call("String.to_bytes", &[object])
                     }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
@@ -9352,26 +9655,30 @@ impl<'a> FunctionCompiler<'a> {
                         let [start_arg, has_start_arg, end_arg, has_end_arg, line_arg, column_arg] =
                             <&[MirArg; 6]>::try_from(args)
                                 .expect("MIR lowering emits six arguments for Array slicing");
-                        let integer_hint = Some(ScalarKind::Int32);
+                        let integer_hint = Some(ScalarKind::Int64);
                         let start =
                             self.load_operand_with_integer_hint(&start_arg.value, integer_hint)?;
                         let start =
-                            self.coerce_value(start, &DirectType::Scalar(ScalarKind::Int32))?;
+                            self.coerce_value(start, &DirectType::Scalar(ScalarKind::Int64))?;
                         let has_start = self.load_operand(&has_start_arg.value)?;
                         let has_start =
                             self.coerce_value(has_start, &DirectType::Scalar(ScalarKind::Bool))?;
                         let end =
                             self.load_operand_with_integer_hint(&end_arg.value, integer_hint)?;
-                        let end = self.coerce_value(end, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let end = self.coerce_value(end, &DirectType::Scalar(ScalarKind::Int64))?;
                         let has_end = self.load_operand(&has_end_arg.value)?;
                         let has_end =
                             self.coerce_value(has_end, &DirectType::Scalar(ScalarKind::Bool))?;
-                        let line =
-                            self.load_operand_with_integer_hint(&line_arg.value, integer_hint)?;
+                        let line = self.load_operand_with_integer_hint(
+                            &line_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
                         let line =
                             self.coerce_value(line, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let column =
-                            self.load_operand_with_integer_hint(&column_arg.value, integer_hint)?;
+                        let column = self.load_operand_with_integer_hint(
+                            &column_arg.value,
+                            Some(ScalarKind::Int32),
+                        )?;
                         let column =
                             self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
                         let inst = self.builder.ins().call(
@@ -9399,7 +9706,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.array_shape, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+                            Type::Named("list".to_string(), vec![Type::named("int64")]),
                         ))
                     }
                     "len" => {
@@ -9628,7 +9935,7 @@ impl<'a> FunctionCompiler<'a> {
                     )),
                 };
             }
-            if name == "Vec" {
+            if name == "list" {
                 let object = self.ensure_opaque(object)?;
                 let element_ty = class_args
                     .first()
@@ -9648,18 +9955,18 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let start = self.load_operand_with_integer_hint(
                             &start_arg.value,
-                            Some(ScalarKind::Int32),
+                            Some(ScalarKind::Int64),
                         )?;
                         let start =
-                            self.coerce_value(start, &DirectType::Scalar(ScalarKind::Int32))?;
+                            self.coerce_value(start, &DirectType::Scalar(ScalarKind::Int64))?;
                         let has_start = self.load_operand(&has_start_arg.value)?;
                         let has_start =
                             self.coerce_value(has_start, &DirectType::Scalar(ScalarKind::Bool))?;
                         let end = self.load_operand_with_integer_hint(
                             &end_arg.value,
-                            Some(ScalarKind::Int32),
+                            Some(ScalarKind::Int64),
                         )?;
-                        let end = self.coerce_value(end, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let end = self.coerce_value(end, &DirectType::Scalar(ScalarKind::Int64))?;
                         let has_end = self.load_operand(&has_end_arg.value)?;
                         let has_end =
                             self.coerce_value(has_end, &DirectType::Scalar(ScalarKind::Bool))?;
@@ -9689,7 +9996,7 @@ impl<'a> FunctionCompiler<'a> {
                         );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Vec".to_string(), vec![element_ty]),
+                            Type::Named("list".to_string(), vec![element_ty]),
                         ))
                     }
                     "len" => {
@@ -9721,10 +10028,12 @@ impl<'a> FunctionCompiler<'a> {
                             ty: DirectType::Scalar(ScalarKind::Bool),
                         })
                     }
-                    "push" => {
+                    "append" => {
                         let [argument] = args else {
-                            return Err("direct backend expected `push()` to receive one argument"
-                                .to_string());
+                            return Err(
+                                "direct backend expected `append()` to receive one argument"
+                                    .to_string(),
+                            );
                         };
                         let value = self
                             .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
@@ -9740,21 +10049,35 @@ impl<'a> FunctionCompiler<'a> {
                         Ok(unit_value(&mut self.builder))
                     }
                     "pop" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `pop()` to take no arguments".to_string()
-                            );
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.vec_pop_in_place, &[object.values[0]]);
+                        let index = match args {
+                            [] => self.builder.ins().iconst(types::I64, -1),
+                            [argument] => {
+                                let loaded = self.load_operand_with_integer_hint(
+                                    &argument.value,
+                                    Some(ScalarKind::Int64),
+                                )?;
+                                self.coerce_value(loaded, &DirectType::Scalar(ScalarKind::Int64))?
+                                    .values[0]
+                            }
+                            _ => {
+                                return Err(
+                                    "direct backend expected `pop()` to receive at most one index"
+                                        .to_string(),
+                                )
+                            }
+                        };
+                        let zero = self.builder.ins().iconst(types::I64, 0);
+                        let opcode = self.builder.ins().iconst(types::I64, 0);
+                        let inst = self.builder.ins().call(
+                            self.collection_operation,
+                            &[object.values[0], zero, index, opcode],
+                        );
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Option".to_string(), vec![element_ty]),
+                            element_ty,
                         ))
                     }
                     "get" => {
@@ -9766,20 +10089,17 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_index = self.load_operand(&argument.value)?;
                         let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
                         let inst = self
                             .builder
                             .ins()
                             .call(self.vec_get, &[object.values[0], index.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Option".to_string(),
-                                vec![class_args
-                                    .first()
-                                    .cloned()
-                                    .unwrap_or(Type::named("Unknown"))],
-                            ),
+                            class_args
+                                .first()
+                                .cloned()
+                                .unwrap_or(Type::named("Unknown")),
                         ))
                     }
                     "__index_option" => {
@@ -9791,20 +10111,14 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_index = self.load_operand(&argument.value)?;
                         let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
                         let inst = self
                             .builder
                             .ins()
                             .call(self.vec_index_option, &[object.values[0], index.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Option".to_string(),
-                                vec![class_args
-                                    .first()
-                                    .cloned()
-                                    .unwrap_or(Type::named("Unknown"))],
-                            ),
+                            element_ty.clone(),
                         ))
                     }
                     "__take_index_option" => {
@@ -9822,7 +10136,7 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_index = self.load_operand(&argument.value)?;
                         let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
                         let inst = self.builder.ins().call(
                             self.vec_take_index_in_place,
                             &[object.values[0], index.values[0]],
@@ -9842,7 +10156,7 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_index = self.load_operand(&argument.value)?;
                         let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
                         let loaded_line = self.load_operand(&line_arg.value)?;
                         let line =
                             self.coerce_value(loaded_line, &DirectType::Scalar(ScalarKind::Int32))?;
@@ -9879,7 +10193,7 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_index = self.load_operand(&index_arg.value)?;
                         let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
                         let value = self
                             .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
                         let value = self.transfer_owned_opaque_value(&value);
@@ -9910,7 +10224,7 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_index = self.load_operand(&index_arg.value)?;
                         let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
                         let value = self
                             .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
                         let loaded_line = self.load_operand(&line_arg.value)?;
@@ -9945,30 +10259,46 @@ impl<'a> FunctionCompiler<'a> {
                     "remove" => {
                         let [argument] = args else {
                             return Err(
-                                "direct backend expected `remove()` to receive one index argument"
+                                "direct backend expected `remove()` to receive one value argument"
                                     .to_string(),
                             );
                         };
-                        let loaded_index = self.load_operand(&argument.value)?;
-                        let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let value = self
+                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
+                        let opcode = self.builder.ins().iconst(types::I64, 1);
+                        let zero = self.builder.ins().iconst(types::I64, 0);
                         let inst = self.builder.ins().call(
-                            self.vec_remove_in_place,
-                            &[object.values[0], index.values[0]],
+                            self.collection_operation,
+                            &[object.values[0], value.values[0], zero, opcode],
                         );
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
-                        Ok(self.owned_opaque_result(
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
+                    }
+                    "index" | "count" => {
+                        let [argument] = args else {
+                            return Err(format!(
+                                "direct backend expected `{field}()` to receive one value argument"
+                            ));
+                        };
+                        let value = self
+                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
+                        let opcode = self
+                            .builder
+                            .ins()
+                            .iconst(types::I64, if field == "index" { 2 } else { 3 });
+                        let zero = self.builder.ins().iconst(types::I64, 0);
+                        let inst = self.builder.ins().call(
+                            self.collection_operation,
+                            &[object.values[0], value.values[0], zero, opcode],
+                        );
+                        let boxed = self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Option".to_string(),
-                                vec![class_args
-                                    .first()
-                                    .cloned()
-                                    .unwrap_or(Type::named("Unknown"))],
-                            ),
-                        ))
+                            Type::named("int64"),
+                        );
+                        self.coerce_value(boxed, &DirectType::Scalar(ScalarKind::Int64))
                     }
                     "swap" => {
                         let [first_arg, second_arg] = args else {
@@ -9979,10 +10309,10 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_first = self.load_operand(&first_arg.value)?;
                         let first = self
-                            .coerce_value(loaded_first, &DirectType::Scalar(ScalarKind::Int32))?;
+                            .coerce_value(loaded_first, &DirectType::Scalar(ScalarKind::Int64))?;
                         let loaded_second = self.load_operand(&second_arg.value)?;
                         let second = self
-                            .coerce_value(loaded_second, &DirectType::Scalar(ScalarKind::Int32))?;
+                            .coerce_value(loaded_second, &DirectType::Scalar(ScalarKind::Int64))?;
                         let inst = self.builder.ins().call(
                             self.vec_swap_in_place,
                             &[object.values[0], first.values[0], second.values[0]],
@@ -9990,10 +10320,8 @@ impl<'a> FunctionCompiler<'a> {
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Bool),
-                        })
+                        let _ = inst;
+                        Ok(unit_value(&mut self.builder))
                     }
                     "contains" => {
                         let [argument] = args else {
@@ -10022,7 +10350,7 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_index = self.load_operand(&index_arg.value)?;
                         let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
                         let value = self
                             .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
                         let value = self.transfer_owned_opaque_value(&value);
@@ -10033,10 +10361,8 @@ impl<'a> FunctionCompiler<'a> {
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Bool),
-                        })
+                        let _ = inst;
+                        Ok(unit_value(&mut self.builder))
                     }
                     "clear" => {
                         if !args.is_empty() {
@@ -10071,7 +10397,7 @@ impl<'a> FunctionCompiler<'a> {
                     "extend" => {
                         let [argument] = args else {
                             return Err(
-                                "direct backend expected `extend()` to receive one vector argument"
+                                "direct backend expected `extend()` to receive one list argument"
                                     .to_string(),
                             );
                         };
@@ -10088,20 +10414,45 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         Ok(unit_value(&mut self.builder))
                     }
+                    "reserve" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `reserve()` to receive one argument"
+                                    .to_string(),
+                            );
+                        };
+                        let additional = self.load_operand_with_integer_hint(
+                            &argument.value,
+                            Some(ScalarKind::Int64),
+                        )?;
+                        let additional =
+                            self.coerce_value(additional, &DirectType::Scalar(ScalarKind::Int64))?;
+                        let zero = self.builder.ins().iconst(types::I64, 0);
+                        let opcode = self.builder.ins().iconst(types::I64, 4);
+                        let inst = self.builder.ins().call(
+                            self.collection_operation,
+                            &[object.values[0], zero, additional.values[0], opcode],
+                        );
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(unit_value(&mut self.builder))
+                    }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
                         name, field
                     )),
                 };
             }
-            if name == "Map" {
+            if name == "dict" {
                 let object = self.ensure_opaque(object)?;
                 let key_ty = class_args
                     .first()
                     .cloned()
                     .unwrap_or(Type::named("Unknown"));
                 let value_ty = class_args.get(1).cloned().unwrap_or(Type::named("Unknown"));
-                let key_direct_ty = ensure_direct_type(&key_ty, &self.classes, "Map key")?;
+                let key_direct_ty = ensure_direct_type(&key_ty, &self.classes, "dict key")?;
                 let value_direct_ty = ensure_direct_type(&value_ty, &self.classes, "Map value")?;
                 return match field {
                     "len" => {
@@ -10287,7 +10638,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self.builder.ins().call(self.map_keys, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Vec".to_string(), vec![key_ty.clone()]),
+                            Type::Named("list".to_string(), vec![key_ty.clone()]),
                         ))
                     }
                     "values" => {
@@ -10301,30 +10652,20 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.map_values, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Vec".to_string(), vec![value_ty.clone()]),
+                            Type::Named("list".to_string(), vec![value_ty.clone()]),
                         ))
                     }
-                    "items" | "entries" => {
+                    "items" => {
                         if !args.is_empty() {
-                            return Err(format!(
-                                "direct backend expected `{}`() to take no arguments",
-                                field
-                            ));
+                            return Err("direct backend expected `items()` to take no arguments"
+                                .to_string());
                         }
-                        let func = if field == "items" {
-                            self.map_items
-                        } else {
-                            self.map_entries
-                        };
-                        let inst = self.builder.ins().call(func, &[object.values[0]]);
+                        let inst = self.builder.ins().call(self.map_items, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
-                                "Vec".to_string(),
-                                vec![Type::Named(
-                                    "MapEntry".to_string(),
-                                    vec![key_ty.clone(), value_ty.clone()],
-                                )],
+                                "list".to_string(),
+                                vec![Type::Tuple(vec![key_ty.clone(), value_ty.clone()])],
                             ),
                         ))
                     }
@@ -10343,10 +10684,10 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         Ok(unit_value(&mut self.builder))
                     }
-                    "extend" => {
+                    "update" => {
                         let [argument] = args else {
                             return Err(
-                                "direct backend expected `extend()` to receive one map argument"
+                                "direct backend expected `update()` to receive one dict argument"
                                     .to_string(),
                             );
                         };
@@ -10363,20 +10704,45 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         Ok(unit_value(&mut self.builder))
                     }
+                    "reserve" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `reserve()` to receive one argument"
+                                    .to_string(),
+                            );
+                        };
+                        let additional = self.load_operand_with_integer_hint(
+                            &argument.value,
+                            Some(ScalarKind::Int64),
+                        )?;
+                        let additional =
+                            self.coerce_value(additional, &DirectType::Scalar(ScalarKind::Int64))?;
+                        let zero = self.builder.ins().iconst(types::I64, 0);
+                        let opcode = self.builder.ins().iconst(types::I64, 4);
+                        let inst = self.builder.ins().call(
+                            self.collection_operation,
+                            &[object.values[0], zero, additional.values[0], opcode],
+                        );
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(unit_value(&mut self.builder))
+                    }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
                         name, field
                     )),
                 };
             }
-            if name == "Set" {
+            if name == "set" {
                 let object = self.ensure_opaque(object)?;
                 let element_ty = class_args
                     .first()
                     .cloned()
                     .unwrap_or(Type::named("Unknown"));
                 let element_direct_ty =
-                    ensure_direct_type(&element_ty, &self.classes, "Set element")?;
+                    ensure_direct_type(&element_ty, &self.classes, "set element")?;
                 return match field {
                     "len" => {
                         if !args.is_empty() {
@@ -10425,48 +10791,88 @@ impl<'a> FunctionCompiler<'a> {
                             ty: DirectType::Scalar(ScalarKind::Bool),
                         })
                     }
-                    "insert" => {
+                    "add" => {
                         let [argument] = args else {
                             return Err(
-                                "direct backend expected `insert()` to receive one value argument"
+                                "direct backend expected `add()` to receive one value argument"
                                     .to_string(),
                             );
                         };
                         let value = self
                             .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
                         let value = self.transfer_owned_opaque_value(&value);
-                        let inst = self
-                            .builder
+                        self.builder
                             .ins()
                             .call(self.set_insert_in_place, &[object.values[0], value]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Bool),
-                        })
+                        Ok(unit_value(&mut self.builder))
                     }
-                    "remove" => {
+                    "remove" | "discard" => {
                         let [argument] = args else {
-                            return Err(
-                                "direct backend expected `remove()` to receive one value argument"
-                                    .to_string(),
-                            );
+                            return Err(format!(
+                                "direct backend expected `{field}()` to receive one value argument"
+                            ));
                         };
                         let value = self
                             .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
+                        let zero = self.builder.ins().iconst(types::I64, 0);
+                        let opcode = self
+                            .builder
+                            .ins()
+                            .iconst(types::I64, if field == "remove" { 5 } else { 6 });
                         let inst = self.builder.ins().call(
-                            self.set_remove_in_place,
-                            &[object.values[0], value.values[0]],
+                            self.collection_operation,
+                            &[object.values[0], value.values[0], zero, opcode],
                         );
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Bool),
-                        })
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        Ok(unit_value(&mut self.builder))
+                    }
+                    "clear" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `clear()` to take no arguments"
+                                .to_string());
+                        }
+                        let zero = self.builder.ins().iconst(types::I64, 0);
+                        let opcode = self.builder.ins().iconst(types::I64, 7);
+                        let inst = self.builder.ins().call(
+                            self.collection_operation,
+                            &[object.values[0], zero, zero, opcode],
+                        );
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(unit_value(&mut self.builder))
+                    }
+                    "reserve" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `reserve()` to receive one argument"
+                                    .to_string(),
+                            );
+                        };
+                        let additional = self.load_operand_with_integer_hint(
+                            &argument.value,
+                            Some(ScalarKind::Int64),
+                        )?;
+                        let additional =
+                            self.coerce_value(additional, &DirectType::Scalar(ScalarKind::Int64))?;
+                        let zero = self.builder.ins().iconst(types::I64, 0);
+                        let opcode = self.builder.ins().iconst(types::I64, 4);
+                        let inst = self.builder.ins().call(
+                            self.collection_operation,
+                            &[object.values[0], zero, additional.values[0], opcode],
+                        );
+                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(unit_value(&mut self.builder))
                     }
                     "__index_option" => {
                         let [argument] = args else {
@@ -10477,7 +10883,7 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_index = self.load_operand(&argument.value)?;
                         let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
                         let inst = self
                             .builder
                             .ins()
@@ -10502,7 +10908,7 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_index = self.load_operand(&argument.value)?;
                         let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
                         let inst = self.builder.ins().call(
                             self.set_take_index_in_place,
                             &[object.values[0], index.values[0]],
@@ -10538,7 +10944,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::named("String"),
+                                    Type::named("str"),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -10560,7 +10966,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                                    Type::Named("list".to_string(), vec![Type::named("uint8")]),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -10831,7 +11237,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::named("String"),
+                                    Type::named("str"),
                                     Type::Named("process.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -10849,7 +11255,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                                     Type::Named("process.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -10878,7 +11284,7 @@ impl<'a> FunctionCompiler<'a> {
                                     Type::Named(
                                         "Option".to_string(),
                                         vec![Type::Named(
-                                            "Vec".to_string(),
+                                            "list".to_string(),
                                             vec![Type::named("uint8")],
                                         )],
                                     ),
@@ -11015,7 +11421,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.process_completed_stdout, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::named("String"),
+                            Type::named("str"),
                         ))
                     }
                     "stderr" => {
@@ -11029,7 +11435,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.process_completed_stderr, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::named("String"),
+                            Type::named("str"),
                         ))
                     }
                     "stdout_bytes" => {
@@ -11045,7 +11451,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.process_completed_stdout_bytes, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
                         ))
                     }
                     "stderr_bytes" => {
@@ -11061,7 +11467,7 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.process_completed_stderr_bytes, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
                         ))
                     }
                     "check" => {
@@ -11137,8 +11543,8 @@ impl<'a> FunctionCompiler<'a> {
                             self.owned_opaque_result(
                                 self.builder.inst_results(init).to_vec(),
                                 Type::Named(
-                                    "Map".to_string(),
-                                    vec![Type::named("String"), Type::named("String")],
+                                    "dict".to_string(),
+                                    vec![Type::named("str"), Type::named("str")],
                                 ),
                             )
                         };
@@ -11388,7 +11794,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::named("String"),
+                                    Type::named("str"),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -11427,7 +11833,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::named("String"),
+                                    Type::named("str"),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -11445,7 +11851,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -11474,7 +11880,7 @@ impl<'a> FunctionCompiler<'a> {
                                     Type::Named(
                                         "Option".to_string(),
                                         vec![Type::Named(
-                                            "Vec".to_string(),
+                                            "list".to_string(),
                                             vec![Type::named("uint8")],
                                         )],
                                     ),
@@ -11503,7 +11909,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                                    Type::Named("list".to_string(), vec![Type::named("uint8")]),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -11584,7 +11990,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::named("String"),
+                                    Type::named("str"),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -11606,7 +12012,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::named("String"),
+                                    Type::named("str"),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -11774,7 +12180,7 @@ impl<'a> FunctionCompiler<'a> {
                                     Type::Named(
                                         "Option".to_string(),
                                         vec![Type::Named(
-                                            "Vec".to_string(),
+                                            "list".to_string(),
                                             vec![Type::named("uint8")],
                                         )],
                                     ),
@@ -11825,7 +12231,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::named("String"),
+                                    Type::named("str"),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -11841,7 +12247,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::named("String"),
+                                    Type::named("str"),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -11867,14 +12273,14 @@ impl<'a> FunctionCompiler<'a> {
                     "address" => {
                         let results = self
                             .runtime_call_results(self.udp_datagram_address, &[object.values[0]]);
-                        Ok(self.owned_opaque_result(results, Type::named("String")))
+                        Ok(self.owned_opaque_result(results, Type::named("str")))
                     }
                     "bytes" => {
                         let results =
                             self.runtime_call_results(self.udp_datagram_bytes, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             results,
-                            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
                         ))
                     }
                     "text" => {
@@ -11885,7 +12291,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::named("String"),
+                                    Type::named("str"),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -11928,7 +12334,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::named("String"),
+                                    Type::named("str"),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -11954,12 +12360,12 @@ impl<'a> FunctionCompiler<'a> {
                     "method" => {
                         let results = self
                             .runtime_call_results(self.http_exchange_method, &[object.values[0]]);
-                        Ok(self.owned_opaque_result(results, Type::named("String")))
+                        Ok(self.owned_opaque_result(results, Type::named("str")))
                     }
                     "path" => {
                         let results =
                             self.runtime_call_results(self.http_exchange_path, &[object.values[0]]);
-                        Ok(self.owned_opaque_result(results, Type::named("String")))
+                        Ok(self.owned_opaque_result(results, Type::named("str")))
                     }
                     "headers" => {
                         let results = self
@@ -11967,8 +12373,8 @@ impl<'a> FunctionCompiler<'a> {
                         Ok(self.owned_opaque_result(
                             results,
                             Type::Named(
-                                "Map".to_string(),
-                                vec![Type::named("String"), Type::named("String")],
+                                "dict".to_string(),
+                                vec![Type::named("str"), Type::named("str")],
                             ),
                         ))
                     }
@@ -11982,7 +12388,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::named("String"),
+                                    Type::named("str"),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -11995,7 +12401,7 @@ impl<'a> FunctionCompiler<'a> {
                         );
                         Ok(self.owned_opaque_result(
                             results,
-                            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
                         ))
                     }
                     "respond_text" => {
@@ -12071,7 +12477,7 @@ impl<'a> FunctionCompiler<'a> {
                     "reason" => {
                         let results = self
                             .runtime_call_results(self.http_response_reason, &[object.values[0]]);
-                        Ok(self.owned_opaque_result(results, Type::named("String")))
+                        Ok(self.owned_opaque_result(results, Type::named("str")))
                     }
                     "headers" => {
                         let results = self
@@ -12079,8 +12485,8 @@ impl<'a> FunctionCompiler<'a> {
                         Ok(self.owned_opaque_result(
                             results,
                             Type::Named(
-                                "Map".to_string(),
-                                vec![Type::named("String"), Type::named("String")],
+                                "dict".to_string(),
+                                vec![Type::named("str"), Type::named("str")],
                             ),
                         ))
                     }
@@ -12092,7 +12498,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::named("String"),
+                                    Type::named("str"),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -12103,7 +12509,7 @@ impl<'a> FunctionCompiler<'a> {
                             .runtime_call_results(self.http_response_bytes, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             results,
-                            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
                         ))
                     }
                     "close" => Ok(unit_value(&mut self.builder)),
@@ -12144,7 +12550,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::named("String"),
+                                    Type::named("str"),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -12214,7 +12620,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -12235,7 +12641,7 @@ impl<'a> FunctionCompiler<'a> {
                                     Type::Named(
                                         "Option".to_string(),
                                         vec![Type::Named(
-                                            "Vec".to_string(),
+                                            "list".to_string(),
                                             vec![Type::named("uint8")],
                                         )],
                                     ),
@@ -12308,7 +12714,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -12334,7 +12740,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                                    Type::Named("list".to_string(), vec![Type::named("uint8")]),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -12406,7 +12812,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::named("String"),
+                                    Type::named("str"),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -12441,7 +12847,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -12467,7 +12873,7 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named(
                                 "Result".to_string(),
                                 vec![
-                                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                                    Type::Named("list".to_string(), vec![Type::named("uint8")]),
                                     Type::Named("io.Error".to_string(), Vec::new()),
                                 ],
                             ),
@@ -13833,9 +14239,20 @@ fn validate_function(
             }
             Terminator::ForRange { iterable, .. } => validate_operand(iterable)?,
             Terminator::Match { scrutinee, .. } => validate_operand(scrutinee)?,
-            Terminator::AssertFail { message, .. } => {
+            Terminator::AssertFail {
+                message, captures, ..
+            } => {
                 if let Some(message) = message {
                     validate_operand(message)?;
+                }
+                if !captures.is_empty() && captures.len() != 2 {
+                    return Err(
+                        "direct backend requires exactly two assertion captures when captures are present"
+                            .to_string(),
+                    );
+                }
+                for capture in captures {
+                    validate_operand(&capture.value)?;
                 }
             }
             other => {
@@ -13855,6 +14272,7 @@ fn validate_rvalue(
 ) -> std::result::Result<(), String> {
     match rvalue {
         Rvalue::Use(operand) => validate_operand(operand),
+        Rvalue::ModuleConstant { .. } => Ok(()),
         Rvalue::Closure {
             signature,
             captures,
@@ -13869,8 +14287,11 @@ fn validate_rvalue(
         }
         Rvalue::FormatString { parts } => {
             for part in parts {
-                if let MirFormatPart::Value(value) = part {
-                    validate_non_consuming_operand(value, "format-string interpolation")?;
+                match part {
+                    MirFormatPart::Value(value) | MirFormatPart::Formatted { value, .. } => {
+                        validate_non_consuming_operand(value, "format-string interpolation")?;
+                    }
+                    MirFormatPart::Literal(_) => {}
                 }
             }
             Ok(())
@@ -13956,7 +14377,7 @@ fn validate_rvalue(
             key_type,
             value_type,
         } => {
-            ensure_direct_type(key_type, classes, "Map key")?;
+            ensure_direct_type(key_type, classes, "dict key")?;
             ensure_direct_type(value_type, classes, "Map value")?;
             for entry in entries {
                 validate_operand(&entry.key)?;
@@ -13968,7 +14389,7 @@ fn validate_rvalue(
             elements,
             element_type,
         } => {
-            ensure_direct_type(element_type, classes, "Set element")?;
+            ensure_direct_type(element_type, classes, "set element")?;
             for element in elements {
                 validate_operand(element)?;
             }
@@ -14094,7 +14515,7 @@ fn direct_ffi_type_for_source(
             "uint64" => Some(FfiType::U64),
             "float32" => Some(FfiType::F32),
             "float64" => Some(FfiType::F64),
-            "String" if passing == Some(MirReceiverKind::Borrow) => Some(FfiType::StringView),
+            "str" if passing == Some(MirReceiverKind::Borrow) => Some(FfiType::StringView),
             _ => None,
         };
         if let Some(ffi_type) = scalar {
@@ -14109,9 +14530,9 @@ fn direct_ffi_type_for_source(
             }
             return Ok(DirectFfiType::scalar(ffi_type));
         }
-        if name == "String" {
+        if name == "str" {
             return Err(
-                "direct backend can pass `String` through FFI v0 only as a shared view".to_string(),
+                "direct backend can pass `str` through FFI v0 only as a shared view".to_string(),
             );
         }
         if passing == Some(MirReceiverKind::BorrowMut) {
@@ -14121,15 +14542,17 @@ fn direct_ffi_type_for_source(
         }
         return Ok(DirectFfiType::opaque(name.clone()));
     }
-    if name == "Vec" && args.as_slice() == [Type::named("uint8")] {
+    if name == "list" && args.as_slice() == [Type::named("uint8")] {
         return Ok(DirectFfiType::scalar(match passing {
             Some(MirReceiverKind::Borrow) => FfiType::BytesView,
             Some(MirReceiverKind::BorrowMut) => FfiType::BytesViewMut,
             Some(MirReceiverKind::Value) => {
-                return Err("direct backend cannot pass `own Vec[uint8]` through FFI v0".to_string())
+                return Err(
+                    "direct backend cannot pass `own list[uint8]` through FFI v0".to_string(),
+                )
             }
             None => {
-                return Err("direct backend cannot return `Vec[uint8]` through FFI v0".to_string())
+                return Err("direct backend cannot return `list[uint8]` through FFI v0".to_string())
             }
         }));
     }
@@ -14266,8 +14689,9 @@ fn infer_rvalue_type(
 ) -> Option<DirectType> {
     match rvalue {
         Rvalue::Use(operand) => infer_operand_type(operand, variable_types, classes),
+        Rvalue::ModuleConstant { .. } => None,
         Rvalue::Closure { signature, .. } => Some(DirectType::Opaque(signature.clone())),
-        Rvalue::FormatString { .. } => Some(DirectType::Opaque(Type::named("String"))),
+        Rvalue::FormatString { .. } => Some(DirectType::Opaque(Type::named("str"))),
         Rvalue::Unary { op, value, .. } => {
             match (op, infer_operand_type(value, variable_types, classes)?) {
                 (UnaryOp::Neg, DirectType::Scalar(kind)) if kind.is_integer() => {
@@ -14323,7 +14747,13 @@ fn infer_rvalue_type(
             | BinaryOp::Mul
             | BinaryOp::Div
             | BinaryOp::FloorDiv
-            | BinaryOp::Mod => infer_operand_type(left, variable_types, classes),
+            | BinaryOp::Mod
+            | BinaryOp::Pow
+            | BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => infer_operand_type(left, variable_types, classes),
         },
         Rvalue::Call { callee, args } => match callee {
             CallTarget::Value(function) => {
@@ -14344,7 +14774,7 @@ fn infer_rvalue_type(
                 Some(DirectType::Scalar(ScalarKind::Int64))
             }
             CallTarget::Name(name) if name == "random::secure_bytes" => Some(DirectType::Opaque(
-                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                Type::Named("list".to_string(), vec![Type::named("uint8")]),
             )),
             CallTarget::Name(name) if name == "range" => {
                 Some(DirectType::Opaque(Type::named("Range")))
@@ -14353,16 +14783,16 @@ fn infer_rvalue_type(
                 "Queue".to_string(),
                 vec![Type::named("Unknown")],
             ))),
-            CallTarget::Name(name) if name == "Vec" => Some(DirectType::Opaque(Type::Named(
-                "Vec".to_string(),
+            CallTarget::Name(name) if name == "list" => Some(DirectType::Opaque(Type::Named(
+                "list".to_string(),
                 vec![Type::named("Unknown")],
             ))),
-            CallTarget::Name(name) if name == "Set" => Some(DirectType::Opaque(Type::Named(
-                "Set".to_string(),
+            CallTarget::Name(name) if name == "set" => Some(DirectType::Opaque(Type::Named(
+                "set".to_string(),
                 vec![Type::named("Unknown")],
             ))),
-            CallTarget::Name(name) if name == "Map" => Some(DirectType::Opaque(Type::Named(
-                "Map".to_string(),
+            CallTarget::Name(name) if name == "dict" => Some(DirectType::Opaque(Type::Named(
+                "dict".to_string(),
                 vec![Type::named("Unknown"), Type::named("Unknown")],
             ))),
             CallTarget::Name(name) if name == "TaskGroup" => {
@@ -14408,7 +14838,7 @@ fn infer_rvalue_type(
                         infer_operand_type(&argument.value, variable_types, classes)
                     })
                     .map(|direct| match direct {
-                        DirectType::Opaque(Type::Named(vec_name, args)) if vec_name == "Vec" => {
+                        DirectType::Opaque(Type::Named(vec_name, args)) if vec_name == "list" => {
                             match args.as_slice() {
                                 [Type::Named(task_name, task_args)] if task_name == "Task" => {
                                     task_args.first().cloned().unwrap_or(Type::Unit)
@@ -14438,7 +14868,7 @@ fn infer_rvalue_type(
                 Some(DirectType::Opaque(Type::Named(
                     "Result".to_string(),
                     vec![
-                        Type::Named("Option".to_string(), vec![Type::named("String")]),
+                        Type::Named("Option".to_string(), vec![Type::named("str")]),
                         Type::Named("io.Error".to_string(), Vec::new()),
                     ],
                 )))
@@ -14450,7 +14880,7 @@ fn infer_rvalue_type(
                 Some(DirectType::Opaque(Type::Named(
                     "Result".to_string(),
                     vec![
-                        Type::named("String"),
+                        Type::named("str"),
                         Type::Named("io.Error".to_string(), Vec::new()),
                     ],
                 )))
@@ -14459,7 +14889,7 @@ fn infer_rvalue_type(
                 Some(DirectType::Opaque(Type::Named(
                     "Result".to_string(),
                     vec![
-                        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                        Type::Named("list".to_string(), vec![Type::named("uint8")]),
                         Type::Named("io.Error".to_string(), Vec::new()),
                     ],
                 )))
@@ -14484,7 +14914,7 @@ fn infer_rvalue_type(
                 Some(DirectType::Opaque(Type::Named(
                     "Result".to_string(),
                     vec![
-                        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+                        Type::Named("list".to_string(), vec![Type::named("str")]),
                         Type::Named("io.Error".to_string(), Vec::new()),
                     ],
                 )))
@@ -14659,20 +15089,41 @@ fn infer_rvalue_type(
             CallTarget::Name(name) if name == "parse_int32" => {
                 Some(DirectType::Opaque(Type::Named(
                     "Result".to_string(),
-                    vec![Type::named("int32"), Type::named("String")],
+                    vec![Type::named("int32"), Type::named("str")],
                 )))
             }
             CallTarget::Name(name) if name == "parse_int64" => {
                 Some(DirectType::Opaque(Type::Named(
                     "Result".to_string(),
-                    vec![Type::named("int64"), Type::named("String")],
+                    vec![Type::named("int64"), Type::named("str")],
                 )))
             }
             CallTarget::Name(name) if name == "parse_float64" => {
                 Some(DirectType::Opaque(Type::Named(
                     "Result".to_string(),
-                    vec![Type::named("float64"), Type::named("String")],
+                    vec![Type::named("float64"), Type::named("str")],
                 )))
+            }
+            CallTarget::Name(name) if name == "round" => {
+                let operand = args.first().and_then(|argument| {
+                    infer_operand_type(&argument.value, variable_types, classes)
+                })?;
+                Some(match operand.scalar_kind() {
+                    Some(ScalarKind::Float32 | ScalarKind::Float64) => {
+                        DirectType::Scalar(ScalarKind::Int64)
+                    }
+                    _ => operand,
+                })
+            }
+            CallTarget::Name(name) if name == "divmod" => {
+                let operand = args.first().and_then(|argument| {
+                    infer_operand_type(&argument.value, variable_types, classes)
+                })?;
+                let operand = direct_type_to_type(&operand);
+                Some(DirectType::Opaque(Type::Tuple(vec![
+                    operand.clone(),
+                    operand,
+                ])))
             }
             CallTarget::Name(name)
                 if matches!(
@@ -14692,7 +15143,7 @@ fn infer_rvalue_type(
                     return Some(object_ty);
                 }
                 if object_ty.scalar_kind().is_some() && field == "to_string" {
-                    return Some(DirectType::Opaque(Type::named("String")));
+                    return Some(DirectType::Opaque(Type::named("str")));
                 }
                 if matches!(object_ty.scalar_kind(), Some(kind) if kind.is_integer())
                     && field == "to_float"
@@ -14708,6 +15159,10 @@ fn infer_rvalue_type(
                             | "saturating_add"
                             | "saturating_sub"
                             | "saturating_mul"
+                            | "wrapping_shl"
+                            | "wrapping_shr"
+                            | "saturating_shl"
+                            | "saturating_shr"
                     )
                 {
                     return Some(object_ty);
@@ -14746,7 +15201,7 @@ fn infer_rvalue_type(
             }
         },
         Rvalue::VecLiteral { element_type, .. } => Some(DirectType::Opaque(Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
             vec![element_type.clone()],
         ))),
         Rvalue::TupleLiteral { element_types, .. } => {
@@ -14759,11 +15214,11 @@ fn infer_rvalue_type(
             value_type,
             ..
         } => Some(DirectType::Opaque(Type::Named(
-            "Map".to_string(),
+            "dict".to_string(),
             vec![key_type.clone(), value_type.clone()],
         ))),
         Rvalue::SetLiteral { element_type, .. } => Some(DirectType::Opaque(Type::Named(
-            "Set".to_string(),
+            "set".to_string(),
             vec![element_type.clone()],
         ))),
         Rvalue::Construct { class_name, .. } => direct_type(&Type::named(class_name), classes),
@@ -14831,6 +15286,10 @@ fn builtin_opaque_member_return_type(
                 | "saturating_add"
                 | "saturating_sub"
                 | "saturating_mul"
+                | "wrapping_shl"
+                | "wrapping_shr"
+                | "saturating_shl"
+                | "saturating_shr"
         )
     {
         return direct_type(object_ty, classes);
@@ -14856,37 +15315,38 @@ fn builtin_opaque_member_return_type(
                 | "float64"
         )
     {
-        return Some(DirectType::Opaque(Type::named("String")));
+        return Some(DirectType::Opaque(Type::named("str")));
     }
     match (name.as_str(), field) {
         ("random.Rng", "next_int") => Some(DirectType::Scalar(ScalarKind::Int64)),
         ("random.Rng", "next_float") => Some(DirectType::Scalar(ScalarKind::Float64)),
         ("random.Rng", "shuffle") => Some(DirectType::Scalar(ScalarKind::Unit)),
-        ("String", "len") | ("String", "byte_len") => direct_type(&Type::named("int64"), classes),
-        ("String", "contains") | ("String", "starts_with") | ("String", "ends_with") => {
+        ("str", "len") | ("str", "byte_len") => direct_type(&Type::named("int64"), classes),
+        ("str", "contains") | ("str", "starts_with") | ("str", "ends_with") => {
             Some(DirectType::Scalar(ScalarKind::Bool))
         }
-        ("String", "split") => Some(DirectType::Opaque(Type::Named(
-            "Vec".to_string(),
-            vec![Type::named("String")],
+        ("str", "split") => Some(DirectType::Opaque(Type::Named(
+            "list".to_string(),
+            vec![Type::named("str")],
         ))),
-        ("String", "replace")
-        | ("String", "add")
-        | ("String", "to_lower")
-        | ("String", "to_upper")
-        | ("String", "trim")
-        | ("String", "__slice")
-        | ("String", "clone") => Some(DirectType::Opaque(Type::named("String"))),
-        ("String", "to_bytes") => Some(DirectType::Opaque(Type::Named(
-            "Vec".to_string(),
+        ("str", "replace")
+        | ("str", "add")
+        | ("str", "to_lower")
+        | ("str", "to_upper")
+        | ("str", "trim")
+        | ("str", "__slice")
+        | ("str", "clone") => Some(DirectType::Opaque(Type::named("str"))),
+        ("str", "to_bytes") => Some(DirectType::Opaque(Type::Named(
+            "list".to_string(),
             vec![Type::named("uint8")],
         ))),
-        ("String", "join") => Some(DirectType::Opaque(Type::named("String"))),
-        ("String", "strip_prefix") | ("String", "strip_suffix") => Some(DirectType::Opaque(
-            Type::Named("Option".to_string(), vec![Type::named("String")]),
-        )),
+        ("str", "join") => Some(DirectType::Opaque(Type::named("str"))),
+        ("str", "strip_prefix") | ("str", "strip_suffix") => Some(DirectType::Opaque(Type::Named(
+            "Option".to_string(),
+            vec![Type::named("str")],
+        ))),
         ("Array", "shape") => Some(DirectType::Opaque(Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
             vec![Type::named("int64")],
         ))),
         ("Array", "len") => Some(DirectType::Scalar(ScalarKind::Int64)),
@@ -14917,90 +15377,96 @@ fn builtin_opaque_member_return_type(
             "Array".to_string(),
             vec![Type::named("Unknown")],
         ))),
-        ("Vec", "len") => direct_type(&Type::named("int64"), classes),
-        ("Vec", "is_empty") => Some(DirectType::Scalar(ScalarKind::Bool)),
-        ("Vec", "clone") => Some(DirectType::Opaque(Type::Named(
-            "Vec".to_string(),
+        ("list", "len") => direct_type(&Type::named("int64"), classes),
+        ("list", "is_empty") => Some(DirectType::Scalar(ScalarKind::Bool)),
+        ("list", "copy") => Some(DirectType::Opaque(Type::Named(
+            "list".to_string(),
             args.clone(),
         ))),
-        ("Vec", "__slice") => Some(DirectType::Opaque(Type::Named(
-            "Vec".to_string(),
+        ("list", "__slice") => Some(DirectType::Opaque(Type::Named(
+            "list".to_string(),
             args.clone(),
         ))),
-        ("Vec", "push")
-        | ("Vec", "extend")
-        | ("Vec", "clear")
-        | ("Vec", "reverse")
-        | ("Vec", "__set_index") => Some(DirectType::Scalar(ScalarKind::Unit)),
-        ("Vec", "swap") | ("Vec", "contains") | ("Vec", "insert") => {
+        ("list", "append")
+        | ("list", "extend")
+        | ("list", "clear")
+        | ("list", "reverse")
+        | ("list", "swap")
+        | ("list", "insert")
+        | ("list", "remove")
+        | ("list", "reserve")
+        | ("list", "__set_index") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("list", "contains") => Some(DirectType::Scalar(ScalarKind::Bool)),
+        ("list", "get") | ("list", "__index_option") | ("list", "__take_index_option") => {
+            direct_type(
+                &Type::Named(
+                    "Option".to_string(),
+                    vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
+                ),
+                classes,
+            )
+        }
+        ("list", "pop") | ("list", "set") | ("list", "__index") => {
+            direct_type(args.first().unwrap_or(&Type::named("Unknown")), classes)
+        }
+        ("list", "index") | ("list", "count") => direct_type(&Type::named("int64"), classes),
+        ("dict", "len") => direct_type(&Type::named("int64"), classes),
+        ("dict", "is_empty") | ("dict", "contains_key") => {
             Some(DirectType::Scalar(ScalarKind::Bool))
         }
-        ("Vec", "pop")
-        | ("Vec", "get")
-        | ("Vec", "set")
-        | ("Vec", "remove")
-        | ("Vec", "__index_option")
-        | ("Vec", "__take_index_option") => direct_type(
-            &Type::Named(
-                "Option".to_string(),
-                vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
-            ),
-            classes,
-        ),
-        ("Vec", "__index") => direct_type(args.first().unwrap_or(&Type::named("Unknown")), classes),
-        ("Map", "len") => direct_type(&Type::named("int64"), classes),
-        ("Map", "is_empty") | ("Map", "contains_key") => Some(DirectType::Scalar(ScalarKind::Bool)),
-        ("Map", "clone") => Some(DirectType::Opaque(Type::Named(
-            "Map".to_string(),
+        ("dict", "copy") => Some(DirectType::Opaque(Type::Named(
+            "dict".to_string(),
             args.clone(),
         ))),
-        ("Map", "get") | ("Map", "set") | ("Map", "remove") => direct_type(
+        ("dict", "get") | ("dict", "set") | ("dict", "remove") => direct_type(
             &Type::Named(
                 "Option".to_string(),
                 vec![args.get(1).cloned().unwrap_or(Type::named("Unknown"))],
             ),
             classes,
         ),
-        ("Map", "keys") => direct_type(
+        ("dict", "keys") => direct_type(
             &Type::Named(
-                "Vec".to_string(),
+                "list".to_string(),
                 vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
             ),
             classes,
         ),
-        ("Map", "values") => direct_type(
+        ("dict", "values") => direct_type(
             &Type::Named(
-                "Vec".to_string(),
+                "list".to_string(),
                 vec![args.get(1).cloned().unwrap_or(Type::named("Unknown"))],
             ),
             classes,
         ),
-        ("Map", "items") | ("Map", "entries") => direct_type(
+        ("dict", "items") => direct_type(
             &Type::Named(
-                "Vec".to_string(),
-                vec![Type::Named(
-                    "MapEntry".to_string(),
-                    vec![
-                        args.first().cloned().unwrap_or(Type::named("Unknown")),
-                        args.get(1).cloned().unwrap_or(Type::named("Unknown")),
-                    ],
-                )],
+                "list".to_string(),
+                vec![Type::Tuple(vec![
+                    args.first().cloned().unwrap_or(Type::named("Unknown")),
+                    args.get(1).cloned().unwrap_or(Type::named("Unknown")),
+                ])],
             ),
             classes,
         ),
-        ("Map", "clear") | ("Map", "extend") => Some(DirectType::Scalar(ScalarKind::Unit)),
-        ("Map", "__index") => direct_type(args.get(1).unwrap_or(&Type::named("Unknown")), classes),
-        ("Map", "__set_index") => Some(DirectType::Scalar(ScalarKind::Unit)),
-        ("Set", "len") => direct_type(&Type::named("int64"), classes),
-        ("Set", "is_empty") => Some(DirectType::Scalar(ScalarKind::Bool)),
-        ("Set", "clone") => Some(DirectType::Opaque(Type::Named(
-            "Set".to_string(),
+        ("dict", "clear") | ("dict", "update") | ("dict", "reserve") => {
+            Some(DirectType::Scalar(ScalarKind::Unit))
+        }
+        ("dict", "__index") => direct_type(args.get(1).unwrap_or(&Type::named("Unknown")), classes),
+        ("dict", "__set_index") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("set", "len") => direct_type(&Type::named("int64"), classes),
+        ("set", "is_empty") => Some(DirectType::Scalar(ScalarKind::Bool)),
+        ("set", "copy") => Some(DirectType::Opaque(Type::Named(
+            "set".to_string(),
             args.clone(),
         ))),
-        ("Set", "contains") | ("Set", "insert") | ("Set", "remove") => {
-            Some(DirectType::Scalar(ScalarKind::Bool))
-        }
-        ("Set", "__index_option") | ("Set", "__take_index_option") => direct_type(
+        ("set", "contains") => Some(DirectType::Scalar(ScalarKind::Bool)),
+        ("set", "add")
+        | ("set", "remove")
+        | ("set", "discard")
+        | ("set", "clear")
+        | ("set", "reserve") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("set", "__index_option") | ("set", "__take_index_option") => direct_type(
             &Type::Named(
                 "Option".to_string(),
                 vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
@@ -15043,7 +15509,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::named("String"),
+                    Type::named("str"),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15053,7 +15519,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                    Type::Named("list".to_string(), vec![Type::named("uint8")]),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15120,7 +15586,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::named("String"),
+                    Type::named("str"),
                     Type::Named("process.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15130,7 +15596,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                     Type::Named("process.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15142,7 +15608,7 @@ fn builtin_opaque_member_return_type(
                 vec![
                     Type::Named(
                         "Option".to_string(),
-                        vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
+                        vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
                     ),
                     Type::Named("process.Error".to_string(), Vec::new()),
                 ],
@@ -15168,11 +15634,11 @@ fn builtin_opaque_member_return_type(
         ),
         ("process.Completed", "success") => Some(DirectType::Scalar(ScalarKind::Bool)),
         ("process.Completed", "stdout") | ("process.Completed", "stderr") => {
-            direct_type(&Type::named("String"), classes)
+            direct_type(&Type::named("str"), classes)
         }
         ("process.Completed", "stdout_bytes") | ("process.Completed", "stderr_bytes") => {
             direct_type(
-                &Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                &Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 classes,
             )
         }
@@ -15222,7 +15688,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::named("String"),
+                    Type::named("str"),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15235,7 +15701,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::named("String"),
+                    Type::named("str"),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15245,7 +15711,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15257,7 +15723,7 @@ fn builtin_opaque_member_return_type(
                 vec![
                     Type::Named(
                         "Option".to_string(),
-                        vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
+                        vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
                     ),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
@@ -15268,7 +15734,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                    Type::Named("list".to_string(), vec![Type::named("uint8")]),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15300,7 +15766,7 @@ fn builtin_opaque_member_return_type(
                 vec![
                     Type::Named(
                         "Option".to_string(),
-                        vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
+                        vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
                     ),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
@@ -15324,23 +15790,23 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::named("String"),
+                    Type::named("str"),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
             classes,
         ),
         ("net.UdpSocket", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
-        ("net.UdpDatagram", "address") => direct_type(&Type::named("String"), classes),
+        ("net.UdpDatagram", "address") => direct_type(&Type::named("str"), classes),
         ("net.UdpDatagram", "bytes") => direct_type(
-            &Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            &Type::Named("list".to_string(), vec![Type::named("uint8")]),
             classes,
         ),
         ("net.UdpDatagram", "text") => direct_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::named("String"),
+                    Type::named("str"),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15360,7 +15826,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::named("String"),
+                    Type::named("str"),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15368,12 +15834,12 @@ fn builtin_opaque_member_return_type(
         ),
         ("net.HttpListener", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
         ("net.HttpExchange", "method") | ("net.HttpExchange", "path") => {
-            direct_type(&Type::named("String"), classes)
+            direct_type(&Type::named("str"), classes)
         }
         ("net.HttpExchange", "headers") | ("net.HttpResponse", "headers") => direct_type(
             &Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("String")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("str")],
             ),
             classes,
         ),
@@ -15381,14 +15847,14 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::named("String"),
+                    Type::named("str"),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
             classes,
         ),
         ("net.HttpExchange", "body_bytes") | ("net.HttpResponse", "bytes") => direct_type(
-            &Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            &Type::Named("list".to_string(), vec![Type::named("uint8")]),
             classes,
         ),
         ("net.HttpExchange", "respond_text") | ("net.HttpExchange", "respond_bytes") => {
@@ -15402,7 +15868,7 @@ fn builtin_opaque_member_return_type(
         }
         ("net.HttpExchange", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
         ("net.HttpResponse", "status") => direct_type(&Type::named("int32"), classes),
-        ("net.HttpResponse", "reason") => direct_type(&Type::named("String"), classes),
+        ("net.HttpResponse", "reason") => direct_type(&Type::named("str"), classes),
         ("net.HttpResponse", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
         ("net.WebSocketListener", "accept") => direct_type(
             &Type::Named(
@@ -15418,7 +15884,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::named("String"),
+                    Type::named("str"),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15436,7 +15902,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15448,7 +15914,7 @@ fn builtin_opaque_member_return_type(
                 vec![
                     Type::Named(
                         "Option".to_string(),
-                        vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
+                        vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
                     ),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
@@ -15471,7 +15937,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15481,7 +15947,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                    Type::Named("list".to_string(), vec![Type::named("uint8")]),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15509,7 +15975,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::named("String"),
+                    Type::named("str"),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15520,7 +15986,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15530,7 +15996,7 @@ fn builtin_opaque_member_return_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                    Type::Named("list".to_string(), vec![Type::named("uint8")]),
                     Type::Named("io.Error".to_string(), Vec::new()),
                 ],
             ),
@@ -15566,13 +16032,22 @@ fn infer_variant_payload_type(
         ("SendError", [inner], "Closed" | "Cancelled" | "TimedOut" | "Full", 0) => inner.clone(),
         ("QueueReceive", [inner], "Item", 0) => inner.clone(),
         ("TaskResult", [inner], "Ready", 0) => inner.clone(),
-        ("TaskResult", [_], "Error", 0) => Type::named("String"),
-        ("WaitAny", [_], "Ready" | "Error", 0) => Type::named("int32"),
+        ("TaskResult", [_], "Error", 0) => Type::named("str"),
+        ("WaitAny", [_], "Ready" | "Error", 0) => Type::named("int64"),
         ("WaitAny", [inner], "Ready", 1) => inner.clone(),
-        ("WaitAny", [_], "Error", 1) => Type::named("String"),
-        ("WaitAll", [inner], "Ready", 0) => Type::Named("Vec".to_string(), vec![inner.clone()]),
-        ("WaitAll", [_], "Error", 0) => Type::named("int32"),
-        ("WaitAll", [_], "Error", 1) => Type::named("String"),
+        ("WaitAny", [_], "Error", 1) => Type::named("str"),
+        ("WaitAll", [inner], "Ready", 0) => Type::Named("list".to_string(), vec![inner.clone()]),
+        ("WaitAll", [_], "Error", 0) => Type::named("int64"),
+        ("WaitAll", [_], "Error", 1) => Type::named("str"),
+        ("SelectOutcome", [_, _], "Queue", 0) => Type::named("int64"),
+        ("SelectOutcome", [queue, _], "Queue", 1) => {
+            Type::Named("QueueReceive".to_string(), vec![queue.clone()])
+        }
+        ("SelectOutcome", [_, _], "Task", 0) => Type::named("int64"),
+        ("SelectOutcome", [_, task], "Task", 1) => {
+            Type::Named("TaskResult".to_string(), vec![task.clone()])
+        }
+        ("SelectOutcome", [_, _], "Deadline", 0) => Type::named("int64"),
         _ => return None,
     };
     direct_type(&payload_ty, classes)
@@ -15601,14 +16076,24 @@ fn enum_variant_payload_types_for_target(
         ("QueueReceive", [inner], "Item") => vec![inner.clone()],
         ("QueueReceive", [_], "Closed" | "TimedOut" | "Cancelled") => Vec::new(),
         ("TaskResult", [inner], "Ready") => vec![inner.clone()],
-        ("TaskResult", [_], "Error") => vec![Type::named("String")],
+        ("TaskResult", [_], "Error") => vec![Type::named("str")],
         ("TaskResult", [_], "TimedOut" | "Cancelled") => Vec::new(),
-        ("WaitAny", [inner], "Ready") => vec![Type::named("int32"), inner.clone()],
-        ("WaitAny", [_], "Error") => vec![Type::named("int32"), Type::named("String")],
+        ("WaitAny", [inner], "Ready") => vec![Type::named("int64"), inner.clone()],
+        ("WaitAny", [_], "Error") => vec![Type::named("int64"), Type::named("str")],
         ("WaitAny", [_], "TimedOut" | "Cancelled") => Vec::new(),
-        ("WaitAll", [inner], "Ready") => vec![Type::Named("Vec".to_string(), vec![inner.clone()])],
-        ("WaitAll", [_], "Error") => vec![Type::named("int32"), Type::named("String")],
+        ("WaitAll", [inner], "Ready") => vec![Type::Named("list".to_string(), vec![inner.clone()])],
+        ("WaitAll", [_], "Error") => vec![Type::named("int64"), Type::named("str")],
         ("WaitAll", [_], "TimedOut" | "Cancelled") => Vec::new(),
+        ("SelectOutcome", [queue, _], "Queue") => vec![
+            Type::named("int64"),
+            Type::Named("QueueReceive".to_string(), vec![queue.clone()]),
+        ],
+        ("SelectOutcome", [_, task], "Task") => vec![
+            Type::named("int64"),
+            Type::Named("TaskResult".to_string(), vec![task.clone()]),
+        ],
+        ("SelectOutcome", [_, _], "Deadline") => vec![Type::named("int64")],
+        ("SelectOutcome", [_, _], "Cancelled") => Vec::new(),
         _ => return None,
     };
     Some(
@@ -15647,13 +16132,6 @@ fn direct_field_type(
     let DirectType::Opaque(Type::Named(class_name, args)) = ty else {
         return None;
     };
-    if class_name == "MapEntry" {
-        return match (field, args.as_slice()) {
-            ("key", [key, _value]) => direct_type(key, classes),
-            ("value", [_key, value]) => direct_type(value, classes),
-            _ => None,
-        };
-    }
     let class = classes.get(class_name)?;
     if args.len() != class.type_params.len() {
         return None;
@@ -15696,7 +16174,7 @@ fn infer_operand_type(
         Operand::Float(_) => Some(DirectType::Scalar(ScalarKind::Float64)),
         Operand::Bool(_) => Some(DirectType::Scalar(ScalarKind::Bool)),
         Operand::Unit => Some(DirectType::Scalar(ScalarKind::Unit)),
-        Operand::String(_) => Some(DirectType::Opaque(Type::named("String"))),
+        Operand::String(_) => Some(DirectType::Opaque(Type::named("str"))),
         Operand::Duration(_) => Some(DirectType::Opaque(Type::named("Duration"))),
         Operand::Function { signature, .. } => Some(DirectType::Opaque(signature.as_ref().clone())),
     }

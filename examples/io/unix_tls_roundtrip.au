@@ -2,7 +2,7 @@ import fs
 import io
 import net
 
-def tls_cert_pem() -> String:
+def tls_cert_pem() -> str:
     mut pem = "-----BEGIN CERTIFICATE-----\n"
     pem += "MIIBXjCCAQSgAwIBAgIUHOWpZBAhE8jU0OF6Xr60iZ9T9SgwCgYIKoZIzj0EAwIw\n"
     pem += "ITEfMB0GA1UEAwwWcmNnZW4gc2VsZiBzaWduZWQgY2VydDAgFw03NTAxMDEwMDAw\n"
@@ -15,7 +15,7 @@ def tls_cert_pem() -> String:
     pem += "-----END CERTIFICATE-----\n"
     return pem
 
-def tls_key_pem() -> String:
+def tls_key_pem() -> str:
     mut pem = "-----BEGIN PRIVATE KEY-----\n"
     pem += "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg+8hjtR4ZkxE/ihgN\n"
     pem += "uGWCL+RPfTlu2/qKI50VJNL+Q1qhRANCAAT9PXbcRjcmGWHh9zOhGdwIuXGUnpSN\n"
@@ -23,7 +23,7 @@ def tls_key_pem() -> String:
     pem += "-----END PRIVATE KEY-----\n"
     return pem
 
-def serve_unix(path: String, ready: Queue[bool]) -> Result[None, io.Error]:
+def serve_unix(path: str, ready: Queue[bool]) -> Result[None, io.Error]:
     with server_listener = try net.unix_listen(path):
         ready.put(true)
         stream = try server_listener.accept(timeout=5s)
@@ -35,7 +35,7 @@ def serve_unix(path: String, ready: Queue[bool]) -> Result[None, io.Error]:
                 case Option.None:
                     return Result.Ok(None)
 
-def serve_tls(cert_path: String, key_path: String, addresses: Queue[String]) -> Result[None, io.Error]:
+def serve_tls(cert_path: str, key_path: str, addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.tls_listen("127.0.0.1:0", cert_path, key_path):
         addresses.put(try server_listener.local_addr())
         stream = try server_listener.accept(timeout=5s)
@@ -97,7 +97,7 @@ def run() -> Result[None, io.Error]:
             case TaskResult.TimedOut:
                 return Result.Ok(None)
 
-        tls_addresses = Queue[String](capacity=1)
+        tls_addresses = Queue[str](capacity=1)
         tls_task = group.start(serve_tls, cert_path.clone(), key_path.clone(), tls_addresses)
         match tls_addresses.get(timeout=5s):
             case QueueReceive.Item(tls_addr):

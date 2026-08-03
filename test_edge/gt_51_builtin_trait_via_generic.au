@@ -3,10 +3,10 @@
 ## Expects: "int" but actually errors
 
 trait Show:
-    def show(self) -> String
+    def show(self) -> str
 
 impl Show for int32:
-    def show(self) -> String:
+    def show(self) -> str:
         return "int"
 
 def display[T: Show](val: T):

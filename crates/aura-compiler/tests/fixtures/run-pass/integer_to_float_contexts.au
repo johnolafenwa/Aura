@@ -22,7 +22,7 @@ def main() -> int32:
     exact_cast: float64 = exact as float64
     print(exact_cast == exact.to_float())
 
-    values: Vec[float64] = [rounded.to_float(), exact.to_float()]
+    values: list[float64] = [rounded.to_float(), exact.to_float()]
     print(values[0] == values[1])
 
     signed_wide: int128 = -9007199254740993

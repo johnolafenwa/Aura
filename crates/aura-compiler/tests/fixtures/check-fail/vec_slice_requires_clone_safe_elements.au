@@ -1,7 +1,0 @@
-import random
-
-class Holder:
-    generator: random.Rng
-
-def duplicate(values: Vec[Holder]) -> Vec[Holder]:
-    return values[:]

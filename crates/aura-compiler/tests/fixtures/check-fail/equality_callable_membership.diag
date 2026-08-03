@@ -1,0 +1,7 @@
+error[AU2008]: cannot test membership for `def(int64) -> int64` because `def(int64) -> int64` does not define equality
+ --> crates/aura-compiler/tests/fixtures/check-fail/equality_callable_membership.au:2:17
+  |
+2 |     print(value in values)
+  |                 ^
+  = note: Aura has no identity-equality fallback; equality-dependent operations require a defined value relation
+  = help: compare explicit results or a stable discriminant; callable identity is not value equality

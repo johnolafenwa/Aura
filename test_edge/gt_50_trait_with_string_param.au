@@ -1,17 +1,17 @@
-## Test 50: Trait method that takes a String parameter
+## Test 50: Trait method that takes a str parameter
 ## Expects: "greeting: hi aura"
 
 trait Formatter:
-    def format(self, prefix: String) -> String
+    def format(self, prefix: str) -> str
 
 class Name:
-    text: String
+    text: str
 
 impl Formatter for Name:
-    def format(self, prefix: String) -> String:
+    def format(self, prefix: str) -> str:
         return prefix + " " + self.text
 
-def render[T: Formatter](item: T, prefix: String):
+def render[T: Formatter](item: T, prefix: str):
     print(item.format(prefix))
 
 def main() -> int32:

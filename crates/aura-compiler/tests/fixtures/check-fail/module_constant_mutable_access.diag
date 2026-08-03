@@ -1,0 +1,6 @@
+error[AU3003]: module constant `values` cannot provide a mutable receiver for method `append`
+ --> crates/aura-compiler/tests/fixtures/check-fail/module_constant_mutable_access.au:4:12
+  |
+4 |     values.append(4)
+  |            ^
+  = help: put mutable state in a local value owned by `main` or another explicit owner

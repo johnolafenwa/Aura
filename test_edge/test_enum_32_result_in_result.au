@@ -1,9 +1,9 @@
-def inner(x: int32) -> Result[int32, String]:
+def inner(x: int32) -> Result[int32, str]:
     if x == 0:
         return Result.Err("zero")
     return Result.Ok(x)
 
-def outer(x: int32) -> Result[int32, String]:
+def outer(x: int32) -> Result[int32, str]:
     v = try inner(x)
     v2 = try inner(v + 1)
     return Result.Ok(v2)

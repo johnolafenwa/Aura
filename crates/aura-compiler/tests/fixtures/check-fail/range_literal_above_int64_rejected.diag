@@ -1,0 +1,5 @@
+error[AU2999]: integer literal `9223372036854775808` does not fit in `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/range_literal_above_int64_rejected.au:2:17
+  |
+2 |     print(range(9223372036854775808))
+  |                 ^

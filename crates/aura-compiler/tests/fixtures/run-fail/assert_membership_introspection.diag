@@ -1,0 +1,8 @@
+error[AU4001]: assertion failed
+ --> crates/aura-compiler/tests/fixtures/run-fail/assert_membership_introspection.au:4:5
+  |
+4 |     assert item in values
+  |     ^
+  = note: item = 4
+  = note: collection = [1, 2, 3]
+  = note: Aura call chain (innermost first): main at 1:1

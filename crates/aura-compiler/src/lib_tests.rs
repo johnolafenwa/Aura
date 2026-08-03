@@ -3,13 +3,15 @@ use super::{
     check_path_with_source, check_source, emit_host_native_object, exported_binding,
     exported_namespace, find_type_namespace_path, import_exists_from_root, infer_package_root,
     insert_namespace_import, is_builtin_export_type, local_item_exists, logical_module_name,
-    lower_path_to_mir, lower_path_with_source_to_mir, lower_source_to_mir, parse_source,
-    qualify_enum_decl_for_export, qualify_export_bounds, qualify_export_type,
-    qualify_export_type_ref, qualify_impl_decl_for_export, qualify_imported_module_namespaces,
+    lower_path_to_checked_mir, lower_path_to_mir, lower_path_with_source_to_mir,
+    lower_source_to_mir, parse_source, qualify_enum_decl_for_export, qualify_export_bounds,
+    qualify_export_type, qualify_export_type_ref, qualify_impl_decl_for_export,
+    qualify_imported_module_namespaces, run_checked_mir_entry_with_stdout_sink_and_program_args,
     run_mir, run_path, run_path_entry_with_stdout_sink_and_program_args, run_path_with_source,
     run_path_with_source_and_stdout_sink, run_path_with_source_and_stdout_sink_and_program_args,
     run_path_with_stdout_sink, run_path_with_stdout_sink_and_program_args, run_serialized_mir,
-    run_source, run_source_with_stdout_sink, ModuleLoader, StdoutSink, Value,
+    run_source, run_source_with_stdout_sink, sha256_hex, update_git_dependencies_in_working_dir,
+    ModuleLoader, StdoutSink, Value,
 };
 use crate::ast::TypeRef;
 use crate::diag::Span;
@@ -30,6 +32,19 @@ const BASIC_ADDITION_SOURCE: &str = include_str!("../../../examples/basic_additi
 const TOP_LEVEL_ADDITION_SOURCE: &str = include_str!("../../../examples/top_level_addition.au");
 const CONTROL_FLOW_SOURCE: &str = include_str!("../../../examples/control_flow.au");
 static IO_EXAMPLE_LOCK: Mutex<()> = Mutex::new(());
+
+#[test]
+fn public_sha256_hex_is_lowercase_and_preserves_leading_zeroes() {
+    assert_eq!(
+        sha256_hex(b""),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    assert_eq!(
+        sha256_hex(b"Aura"),
+        "224ea01e4a299102cf8da1698a931bad291415dcefea7493576c17cf1fa960b9"
+    );
+    assert_eq!(sha256_hex(&[0]).len(), 64);
+}
 
 fn lock_io_example() -> std::sync::MutexGuard<'static, ()> {
     IO_EXAMPLE_LOCK
@@ -57,6 +72,60 @@ fn captured_stdout_sink() -> (Arc<Mutex<String>>, StdoutSink) {
             .push_str(chunk);
     });
     (captured, sink)
+}
+
+#[test]
+fn public_path_entry_and_dependency_update_facades_preserve_results() {
+    let temp = TempDir::new("aura-public-path-facades");
+    fs::create_dir_all(temp.path().join("src")).expect("package source directory should exist");
+    fs::write(
+        temp.path().join("Aura.toml"),
+        "[package]\nname = \"facades\"\nversion = \"0.3.0\"\nedition = \"2026\"\n",
+    )
+    .expect("package manifest should be written");
+    let entry_path = temp.path().join("src/main.au");
+    fs::write(
+        &entry_path,
+        concat!(
+            "import sys\n\n",
+            "def selected() -> int64:\n",
+            "    print(\"selected\")\n",
+            "    print(sys.args().len())\n",
+            "    return 17\n\n",
+            "def main() -> int32:\n",
+            "    return 0\n",
+        ),
+    )
+    .expect("package entry should be written");
+
+    let (captured, sink) = captured_stdout_sink();
+    let output = run_path_entry_with_stdout_sink_and_program_args(
+        &entry_path,
+        Some("selected"),
+        Some(sink),
+        vec!["first".to_string(), "second".to_string()],
+    )
+    .expect("the public path facade should execute the selected entry");
+    assert_eq!(output.stdout, "selected\n2\n");
+    assert_eq!(output.value, Value::Int(IntegerValue::from_signed(17)));
+    assert_eq!(
+        captured
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_str(),
+        "selected\n2\n"
+    );
+
+    let update = update_git_dependencies_in_working_dir(temp.path(), None)
+        .expect("the public update facade should write a lock for the package");
+    assert!(update.updated_packages.is_empty());
+    assert_eq!(
+        update.lockfile_root,
+        fs::canonicalize(temp.path()).expect("package root should canonicalize")
+    );
+    let lockfile = fs::read_to_string(temp.path().join("Aura.lock"))
+        .expect("the public update facade should write Aura.lock");
+    assert!(lockfile.contains("name = \"facades\""));
 }
 
 #[test]
@@ -246,6 +315,25 @@ def main():
             .as_str(),
         "true\n1\n"
     );
+
+    let checked_mir = lower_path_to_checked_mir(&main_path)
+        .expect("manifest checking should produce an opaque trusted MIR module");
+    let first = run_checked_mir_entry_with_stdout_sink_and_program_args(
+        &checked_mir,
+        Some("selected"),
+        None,
+        vec!["first".to_string()],
+    )
+    .expect("checked MIR should preserve manifest-authorized FFI for a selected entry");
+    let second = run_checked_mir_entry_with_stdout_sink_and_program_args(
+        &checked_mir,
+        Some("main"),
+        None,
+        vec!["one".to_string(), "two".to_string()],
+    )
+    .expect("the same checked MIR should be reusable for another selected entry");
+    assert_eq!(first.stdout, "true\n1\n");
+    assert_eq!(second.stdout, "true\n2\n");
 }
 
 const EXAMPLE_CASES: &[(&str, &str)] = &[
@@ -402,8 +490,8 @@ const EXAMPLE_CASES: &[(&str, &str)] = &[
         include_str!("../../../examples/numbers/numeric_builtins.au"),
     ),
     (
-        "examples/collections/map_basics.au",
-        include_str!("../../../examples/collections/map_basics.au"),
+        "examples/collections/dict_basics.au",
+        include_str!("../../../examples/collections/dict_basics.au"),
     ),
     (
         "examples/collections/set_basics.au",
@@ -505,18 +593,18 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "6\n1\n",
     ),
     (
-        "examples/collections/vec_basics.au",
-        include_str!("../../../examples/collections/vec_basics.au"),
+        "examples/collections/list_basics.au",
+        include_str!("../../../examples/collections/list_basics.au"),
         "3\n1\n2\n2\n20\n1\n99\nfalse\n",
     ),
     (
-        "examples/collections/vec_iteration.au",
-        include_str!("../../../examples/collections/vec_iteration.au"),
+        "examples/collections/list_iteration.au",
+        include_str!("../../../examples/collections/list_iteration.au"),
         "Ada\nGrace\n2\n9\n",
     ),
     (
-        "examples/collections/vec_polish.au",
-        include_str!("../../../examples/collections/vec_polish.au"),
+        "examples/collections/list_polish.au",
+        include_str!("../../../examples/collections/list_polish.au"),
         "Ada\nGrace\ntrue\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n",
     ),
     (
@@ -667,7 +755,7 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
     (
         "examples/traits/builtin_target_traits.au",
         include_str!("../../../examples/traits/builtin_target_traits.au"),
-        "vec of 2\ntext of 5\n",
+        "list of 2\ntext of 5\n",
     ),
     (
         "examples/control_flow/membership_and_chains.au",
@@ -1046,6 +1134,53 @@ fn module_loader_package_qualification_ignores_paths_outside_graph_sources() {
 }
 
 #[test]
+fn module_constant_plan_is_dependency_first_import_ordered_and_diamond_safe() {
+    let temp = TempDir::new("aura-module-constant-plan");
+    let main_path = temp.path().join("main.au");
+    fs::write(temp.path().join("shared.au"), "public marker = 1\n").expect("write shared module");
+    fs::write(
+        temp.path().join("beta.au"),
+        "import shared\npublic marker = shared.marker + 1\n",
+    )
+    .expect("write beta module");
+    fs::write(
+        temp.path().join("alpha.au"),
+        "import shared\npublic marker = shared.marker + 2\n",
+    )
+    .expect("write alpha module");
+    fs::write(
+        &main_path,
+        "import beta\nimport alpha\nroot = beta.marker + alpha.marker\n\ndef main():\n    print(root)\n",
+    )
+    .expect("write entry module");
+
+    let program = check_path(&main_path).expect("constant modules should check");
+    let plan = program
+        .constant_init_plan
+        .iter()
+        .map(|constant| format!("{}::{}", constant.module_name, constant.decl.name))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        plan,
+        [
+            "shared::marker",
+            "beta::marker",
+            "alpha::marker",
+            "main::root",
+        ]
+    );
+
+    let mir = lower_path_to_mir(&main_path).expect("constant modules should lower");
+    assert_eq!(
+        mir.constants
+            .iter()
+            .map(|constant| constant.key.as_str())
+            .collect::<Vec<_>>(),
+        plan
+    );
+}
+
+#[test]
 fn imported_rng_clone_obligations_and_qualified_wrapper_identity_survive_namespaces() {
     let temp = TempDir::new("aura-rng-clone-obligation-imports");
     let utils_path = temp.path().join("utils.au");
@@ -1053,12 +1188,12 @@ fn imported_rng_clone_obligations_and_qualified_wrapper_identity_survive_namespa
     let other_path = temp.path().join("other.au");
     fs::write(
         &utils_path,
-        r#"public def duplicate[T](values: Vec[T]) -> Vec[T]:
-    return values.clone()
+        r#"public def duplicate[T](values: list[T]) -> list[T]:
+    return values.copy()
 
 public class Duplicator:
-    public def duplicate[T](values: Vec[T]) -> Vec[T]:
-        return values.clone()
+    public def duplicate[T](values: list[T]) -> list[T]:
+        return values.copy()
 "#,
     )
     .expect("write generic clone helper module");
@@ -1138,7 +1273,7 @@ class Holder:
 
 def main() -> int32:
     holders = [wrapped.Holder(random.Rng(seed=1))]
-    copies = holders.clone()
+    copies = holders.copy()
     print(copies)
     return 0
 "#,
@@ -1161,7 +1296,7 @@ enum Status:
 
 def main() -> int32:
     statuses = [wrapped.Status.Value(random.Rng(seed=1))]
-    copies = statuses.clone()
+    copies = statuses.copy()
     print(copies)
     return 0
 "#,
@@ -1183,7 +1318,7 @@ def make() -> Holder:
 
 def main() -> int32:
     holders = [make()]
-    copies = holders.clone()
+    copies = holders.copy()
     print(copies)
     return 0
 "#,
@@ -1205,7 +1340,7 @@ fn imported_same_leaf_class_identity_survives_mir_and_direct_lowering() {
     fs::write(
         &named_path,
         r#"public trait Named:
-    def name(self) -> String
+    def name(self) -> str
 "#,
     )
     .expect("write shared trait module");
@@ -1214,16 +1349,16 @@ fn imported_same_leaf_class_identity_survives_mir_and_direct_lowering() {
         r#"from named import Named
 
 public class User:
-    public label: String
+    public label: str
 
-    public def associated() -> String:
+    public def associated() -> str:
         return "remote-associated"
 
-    public def inherent(self) -> String:
+    public def inherent(self) -> str:
         return f"remote-inherent:{self.label}"
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return f"remote:{self.label}"
 "#,
     )
@@ -1234,16 +1369,16 @@ impl Named for User:
 import remote
 
 class User:
-    label: String
+    label: str
 
-    def associated() -> String:
+    def associated() -> str:
         return "local-associated"
 
-    def inherent(self) -> String:
+    def inherent(self) -> str:
         return f"local-inherent:{self.label}"
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return f"local:{self.label}"
 
 def main() -> int32:
@@ -1280,8 +1415,8 @@ fn qualified_inherent_associated_methods_use_class_type_arguments_for_clone_safe
         &factory_path,
         r#"public class Factory[T]:
     public def probe() -> int32:
-        values = Vec[T]()
-        copies = values.clone()
+        values = list[T]()
+        copies = values.copy()
         print(copies)
         return 0
 "#,
@@ -1351,7 +1486,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
 
     fs::write(
         &named_path,
-        "public trait Named:\n    def name(self) -> String\n",
+        "public trait Named:\n    def name(self) -> str\n",
     )
     .expect("write named module");
     fs::write(
@@ -1375,7 +1510,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
             "    Hidden",
             "",
             "public trait Show[T]:",
-            "    def render(self, other: T) -> String",
+            "    def render(self, other: T) -> str",
             "",
             "trait HiddenTrait:",
             "    def hide(self)",
@@ -1387,7 +1522,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
             "    return 0",
             "",
             "impl[T] Show[T] for Box[T]:",
-            "    def render(self, other: T) -> String:",
+            "    def render(self, other: T) -> str:",
             "        return \"ok\"",
         ]
         .join("\n"),
@@ -1448,7 +1583,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
         &["pkg".to_string(), "named".to_string()]
     ));
     assert_eq!(logical_module_name(temp.path(), &user_path), "pkg.user");
-    assert!(is_builtin_export_type("String"));
+    assert!(is_builtin_export_type("str"));
     assert!(is_builtin_export_type("int"));
     assert!(!is_builtin_export_type("Box"));
 
@@ -1818,7 +1953,7 @@ fn module_loader_reports_import_resolution_and_export_errors() {
             "    Ready",
             "",
             "public trait Show:",
-            "    def render(self) -> String",
+            "    def render(self) -> str",
         ]
         .join("\n"),
     )
@@ -1950,11 +2085,34 @@ fn omitted_none_return_type_is_allowed() {
 fn top_level_scripts_run_without_main() {
     let module = parse_source(TOP_LEVEL_ADDITION_SOURCE).expect("top-level addition should parse");
     assert_eq!(module.items.len(), 0);
-    assert_eq!(module.top_level_stmts.len(), 4);
+    assert_eq!(module.constants.len(), 3);
+    assert_eq!(module.top_level_stmts.len(), 1);
 
     let output = run_source(TOP_LEVEL_ADDITION_SOURCE).expect("top-level addition should run");
     assert_eq!(output.stdout, "16\n");
     assert_eq!(output.value, zero_exit_value());
+}
+
+#[test]
+fn script_mode_mutable_locals_coexist_with_module_constants() {
+    let source = "limit: int32 = 3\nmut counter: int32 = 0\nwhile counter < limit:\n    counter += 1\nprint(counter)\n";
+    let module = parse_source(source).expect("script source should parse");
+    assert_eq!(module.constants.len(), 1);
+    assert_eq!(module.top_level_stmts.len(), 3);
+
+    check_source(source).expect("script source should type-check");
+    let output = run_source(source).expect("script source should run");
+    assert_eq!(output.stdout, "3\n");
+    assert_eq!(output.value, zero_exit_value());
+}
+
+#[test]
+fn mutable_top_level_binding_cannot_be_module_storage_beside_main() {
+    let error = check_source("mut counter: int32 = 0\ndef main():\n    print(counter)\n")
+        .expect_err("mutable module storage must remain rejected");
+    assert_eq!(error.code, "AU3003");
+    assert_eq!(error.span, Some(crate::diag::Span::new(1, 5)));
+    assert!(error.message.contains("module bindings are immutable"));
 }
 
 #[test]
@@ -2772,9 +2930,9 @@ fn categorized_examples_run_with_expected_output() {
                 "7\n3.5\n2\n12\n9.0\n9.0\n",
             ),
             (
-                "examples/collections/map_basics.au",
+                "examples/collections/dict_basics.au",
                 EXAMPLE_CASES[38].1,
-                "3\ntrue\n1\n1\n5\naura\n3\n3\n3\n3\ntrue\n",
+                "3\ntrue\n1\n1\n5\n(aura, 5)\n(repo, 3)\n3\n3\n3\ntrue\n",
             ),
             (
                 "examples/collections/set_basics.au",
@@ -2886,14 +3044,14 @@ def main() -> int32:
     mut numbers = [1, 2]
     print(numbers.len())
     print(numbers.is_empty())
-    mut clone_numbers = numbers.clone()
-    clone_numbers.push(3)
+    mut clone_numbers = numbers.copy()
+    clone_numbers.append(3)
     print(clone_numbers.pop())
     print(clone_numbers.get(0))
     print(clone_numbers[1])
     print(clone_numbers.set(0, 9))
     clone_numbers[1] = 8
-    print(clone_numbers.remove(0))
+    print(clone_numbers.remove(9))
     print(clone_numbers.swap(0, 0))
     print(clone_numbers.contains(8))
     print(clone_numbers.insert(1, 7))
@@ -2905,29 +3063,29 @@ def main() -> int32:
     mut counts = {"a": 1}
     print(counts.len())
     print(counts.is_empty())
-    copy_counts = counts.clone()
+    copy_counts = counts.copy()
     print(copy_counts.get("a"))
     print(copy_counts["a"])
-    print(counts.set("a", 2))
+    print(counts["a"])
+    counts["a"] = 2
     counts["b"] = 3
     print(counts.remove("a"))
-    print(counts.contains_key("b"))
+    print("b" in counts)
     print(counts.keys().len())
     print(counts.values().len())
     print(counts.items().len())
-    print(counts.entries().len())
-    counts.extend({"c": 4})
+    counts.update({"c": 4})
     counts.clear()
     print(counts.is_empty())
 
-    mut seen = Set{"x"}
+    mut seen = {"x"}
     print(seen.len())
     print(seen.is_empty())
-    copy_seen = seen.clone()
-    print(copy_seen.contains("x"))
-    print(seen.insert("y"))
+    copy_seen = seen.copy()
+    print("x" in copy_seen)
+    print(seen.add("y"))
     print(seen.remove("x"))
-    print(seen.contains("y"))
+    print("y" in seen)
 
     jobs = Queue[int32]()
     jobs_copy = jobs
@@ -2981,7 +3139,7 @@ def main() -> int32:
     copy_into(source=first, target=second)
     print(second.value)
 
-    mut total: int32 = 0
+    mut total: int64 = 0
     for i in range(stop=3):
         total += i
     print(total)
@@ -3026,12 +3184,12 @@ fn cancellation_wakes_sleep_tasks_promptly() {
     let blocked_sleep = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
     let source = format!(
         r#"
-def sleeper(started: Queue[String], finished: Queue[String]) -> None:
+def sleeper(started: Queue[str], finished: Queue[str]) -> None:
     started.put("sleep")
     sleep({blocked_sleep_ms}ms)
     finished.put("sleep")
 
-def wait_for_one(queue: Queue[String]):
+def wait_for_one(queue: Queue[str]):
     while true:
         match queue.get():
             case QueueReceive.Item(_):
@@ -3044,9 +3202,9 @@ def wait_for_one(queue: Queue[String]):
                 pass
 
 def main() -> int32:
-    started = Queue[String]()
+    started = Queue[str]()
     with TaskGroup() as group:
-        finished = Queue[String]()
+        finished = Queue[str]()
         group.start(sleeper, started, finished)
         wait_for_one(started)
         group.cancel()
@@ -3072,7 +3230,7 @@ fn cancellation_wakes_queue_wait_tasks_promptly() {
     let blocked_wait = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
     let source = format!(
         r#"
-def waiter(started: Queue[String], jobs: Queue[int32], finished: Queue[String]) -> None:
+def waiter(started: Queue[str], jobs: Queue[int32], finished: Queue[str]) -> None:
     started.put("wait")
     while not cancelled():
         match jobs.get(timeout={blocked_wait_ms}ms):
@@ -3086,7 +3244,7 @@ def waiter(started: Queue[String], jobs: Queue[int32], finished: Queue[String]) 
                 pass
     finished.put("wait")
 
-def wait_for_one(queue: Queue[String]):
+def wait_for_one(queue: Queue[str]):
     while true:
         match queue.get():
             case QueueReceive.Item(_):
@@ -3099,8 +3257,8 @@ def wait_for_one(queue: Queue[String]):
                 pass
 
 def main() -> int32:
-    started = Queue[String]()
-    finished = Queue[String]()
+    started = Queue[str]()
+    finished = Queue[str]()
     jobs = Queue[int32]()
     with TaskGroup() as group:
         group.start(waiter, started, jobs, finished)
@@ -3143,8 +3301,8 @@ import fs
 
 def consumer(
     jobs: Queue[int32],
-    after_get_path: String,
-    release_path: String
+    after_get_path: str,
+    release_path: str
 ) -> None:
     while not fs.exists(release_path):
         sleep(5ms)
@@ -3257,14 +3415,14 @@ fn async_file_io_keeps_the_scheduler_running_while_a_fifo_read_waits() {
         r#"
 import fs
 
-def wait_for_text(path: String):
+def wait_for_text(path: str):
     match fs.read_to_string(path):
         case Result.Ok(text):
             print(text)
         case Result.Err(err):
             print(err)
 
-def mark_ready(path: String):
+def mark_ready(path: str):
     sleep(20ms)
     match fs.write_string(path, "ready"):
         case Result.Ok(_):

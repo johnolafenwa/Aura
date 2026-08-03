@@ -1,8 +1,8 @@
 ## Test: Various string operations
 def main() -> int32:
     ## Concatenation
-    a: String = "hello"
-    b: String = " world"
+    a: str = "hello"
+    b: str = " world"
     c = a + b
     print(c)
 
@@ -12,11 +12,11 @@ def main() -> int32:
     print(msg)
 
     ## Empty string
-    empty: String = ""
+    empty: str = ""
     print(empty)
 
-    ## String with special chars
-    special: String = "tab\there"
+    ## str with special chars
+    special: str = "tab\there"
     print(special)
 
     return 0

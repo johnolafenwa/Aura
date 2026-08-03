@@ -1,0 +1,6 @@
+error[AU4002]: integer shift count `8` is outside the required range `0..8`
+ --> crates/aura-compiler/tests/fixtures/run-fail/shift_count_out_of_range.au:4:11
+  |
+4 |     print(value << count)
+  |           ^
+  = note: Aura call chain (innermost first): main at 1:1

@@ -1,0 +1,74 @@
+trait Ord[Rhs]:
+    def lt(self, rhs: Rhs) -> bool
+    def le(self, rhs: Rhs) -> bool
+    def gt(self, rhs: Rhs) -> bool
+    def ge(self, rhs: Rhs) -> bool
+
+class Row:
+    key: int32
+    order: int32
+
+impl Ord[Row] for Row:
+    def lt(self, rhs: Row) -> bool:
+        return self.key < rhs.key
+
+    def le(self, rhs: Row) -> bool:
+        return self.key <= rhs.key
+
+    def gt(self, rhs: Row) -> bool:
+        return self.key > rhs.key
+
+    def ge(self, rhs: Row) -> bool:
+        return self.key >= rhs.key
+
+class Box:
+    value: int32
+
+def descending_key(value: int32) -> int32:
+    print(value)
+    return 10 - value
+
+def box_double(value: int32) -> Box:
+    return Box(value=value * 2)
+
+def even(value: int32) -> bool:
+    print(value)
+    return value % 2 == 0
+
+def main():
+    mut empty = list[int32]()
+    empty.sort()
+    empty.sort(key = descending_key)
+    print(empty)
+    print(empty.map(descending_key))
+    print(empty.filter(even))
+
+    mut singleton: list[int32] = [7]
+    singleton.sort()
+    singleton.sort(key = descending_key)
+    print(singleton)
+
+    mut plain: list[int32] = [3, 1, 2, 2]
+    plain.sort()
+    print(plain)
+
+    mut keyed: list[int32] = [3, 1, 2, 2]
+    keyed.sort(key = descending_key)
+    print(keyed)
+
+    boxes = plain.map(box_double)
+    for box in own boxes:
+        print(box.value)
+
+    filtered = plain.filter(even)
+    print(plain)
+    print(filtered)
+
+    mut rows: list[Row] = [
+        Row(key=2, order=0),
+        Row(key=1, order=1),
+        Row(key=2, order=2)
+    ]
+    rows.sort()
+    for row in rows:
+        print(row.order)

@@ -1,9 +1,9 @@
 # Edge test: with-resource block with error propagation via try
 
 class Connection:
-    name: String
+    name: str
 
-    def query(self, q: int32) -> Result[int32, String]:
+    def query(self, q: int32) -> Result[int32, str]:
         if q < 0:
             return Result.Err("invalid query")
         return Result.Ok(q * 10)
@@ -11,7 +11,7 @@ class Connection:
     def close(mut self):
         print(f"closing {self.name}")
 
-def run_query(q: int32) -> Result[int32, String]:
+def run_query(q: int32) -> Result[int32, str]:
     with conn = Connection(name="db"):
         result = try conn.query(q)
         return Result.Ok(result + 1)

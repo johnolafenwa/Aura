@@ -40,15 +40,15 @@ unsigned 8/16/32/64-bit integers plus `bool`, `float32`, and `float64`.
 more directly. Results may use one of those scalars, `None`, or a declared
 opaque handle.
 
-A bare `String` lowers to a temporary const UTF-8 pointer and byte length; it
-is not NUL-terminated. `Vec[uint8]` is the matching read-only byte view, while
-`mut Vec[uint8]` uses a same-length scratch buffer for copy-in/out without
-changing the vector length. Empty views pass a null pointer and length zero.
+A bare `str` lowers to a temporary const UTF-8 pointer and byte length; it
+is not NUL-terminated. `list[uint8]` is the matching read-only byte view, while
+`mut list[uint8]` uses a same-length scratch buffer for copy-in/out without
+changing the list length. Empty views pass a null pointer and length zero.
 The native callee must not retain any view pointer after the synchronous call.
 
 ```python
-public extern "C" def checksum(data: Vec[uint8]) -> uint64
-public extern "C" def normalize(data: mut Vec[uint8]) -> None
+public extern "C" def checksum(data: list[uint8]) -> uint64
+public extern "C" def normalize(data: mut list[uint8]) -> None
 ```
 
 ## Opaque Handles

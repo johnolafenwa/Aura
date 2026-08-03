@@ -1,10 +1,10 @@
 class Address:
-    street: String
-    city: String
-    zip: String
+    street: str
+    city: str
+    zip: str
 
 class Person:
-    name: String
+    name: str
     age: int32
     address: Address
 

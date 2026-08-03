@@ -6,7 +6,7 @@ class Engine:
         return self.horsepower > 200
 
 class Car:
-    name: String
+    name: str
     engine: Engine
 
     def get_engine(self) -> Engine:

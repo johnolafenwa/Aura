@@ -6,7 +6,7 @@ def second() -> int64:
     print("second")
     return 2
 
-def make() -> (int64, (String, int64)):
+def make() -> (int64, (str, int64)):
     print("make")
     return (first(), ("middle", second()))
 

@@ -2,10 +2,10 @@
 ## Expects: "num" then "num"
 
 trait Describable:
-    def describe(self) -> String
+    def describe(self) -> str
 
 impl Describable for int32:
-    def describe(self) -> String:
+    def describe(self) -> str:
         return "num"
 
 def show[T: Describable](val: T):

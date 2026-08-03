@@ -1,4 +1,4 @@
-def show(value: own SelectOutcome[String, None]):
+def show(value: own SelectOutcome[str, None]):
     match own value:
         case SelectOutcome.Queue(index, outcome):
             print(index)
@@ -11,20 +11,20 @@ def show(value: own SelectOutcome[String, None]):
             print("cancelled")
 
 def main():
-    first = Queue[String]()
-    second = Queue[String]()
+    first = Queue[str]()
+    second = Queue[str]()
     first.put("first")
     second.put("second")
     show(select(first, second))
     print(second.get())
 
-    duplicate = Queue[String]()
+    duplicate = Queue[str]()
     duplicate.put("one")
     duplicate.put("two")
     show(select(duplicate, duplicate))
     print(duplicate.get())
 
-    buffered = Queue[String]()
+    buffered = Queue[str]()
     buffered.put("buffered")
     buffered.close()
     show(select(buffered))

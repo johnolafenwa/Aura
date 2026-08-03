@@ -1,0 +1,4 @@
+def main() -> int32:
+    value = str("hello", "world")
+    print(value)
+    return 0

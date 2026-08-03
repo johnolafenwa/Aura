@@ -1,8 +1,8 @@
-def child(events: Queue[String], label: own String, value: int32) -> int32:
+def child(events: Queue[str], label: own str, value: int32) -> int32:
     events.put(label)
     return value
 
-def cleanup_after_release(events: Queue[String], release: Queue[int32]) -> None:
+def cleanup_after_release(events: Queue[str], release: Queue[int32]) -> None:
     match release.get():
         case QueueReceive.Item(_):
             events.put("cleanup")
@@ -13,7 +13,7 @@ def cleanup_after_release(events: Queue[String], release: Queue[int32]) -> None:
         case QueueReceive.Cancelled:
             events.put("cleanup-cancelled")
 
-def nested_parent(events: Queue[String]) -> int32:
+def nested_parent(events: Queue[str]) -> int32:
     events.put("parent-start")
     release = Queue[int32]()
     mut total: int32 = 0
@@ -52,7 +52,7 @@ def nested_parent(events: Queue[String]) -> int32:
     events.put("parent-joined")
     return total
 
-def next_event(events: Queue[String]) -> String:
+def next_event(events: Queue[str]) -> str:
     match events.get(timeout=2s):
         case QueueReceive.Item(event):
             return event.clone()
@@ -63,7 +63,7 @@ def next_event(events: Queue[String]) -> String:
         case QueueReceive.Cancelled:
             return "event-cancelled"
 
-def event_code(event: String) -> int32:
+def event_code(event: str) -> int32:
     if event == "parent-start":
         return 2
     if event == "parent-wait":
@@ -85,7 +85,7 @@ def event_code(event: String) -> int32:
     return 0
 
 def main() -> int32:
-    events = Queue[String]()
+    events = Queue[str]()
     mut total: int32 = 0
 
     with TaskGroup() as parents:

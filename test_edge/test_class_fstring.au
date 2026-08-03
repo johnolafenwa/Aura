@@ -1,8 +1,8 @@
 class Person:
-    name: String
+    name: str
     age: int32
 
-    def describe(self) -> String:
+    def describe(self) -> str:
         return f"{self.name} is {self.age} years old"
 
 def main() -> int32:

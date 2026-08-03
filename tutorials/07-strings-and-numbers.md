@@ -65,10 +65,10 @@ print(-10.5 // 3.0) # -4.0
 print(-10.5 % 3.0)  # 1.5
 ```
 
-The matching compound assignments are `+=`, `-=`, `*=`, `/=`, `%=`, and
-`//=`. Integer `/=` is rejected for the same reason as integer `/`; floating
-`/=` remains true division. `//` can also use the `FloorDiv` operator trait
-when no builtin numeric or Duration rule applies.
+The matching compound assignments are `+=`, `-=`, `*=`, `**=`, `/=`, `%=`,
+and `//=`. Integer `/=` is rejected for the same reason as integer `/`;
+floating `/=` remains true division. `//` can also use the `FloorDiv`
+operator trait when no builtin numeric or Duration rule applies.
 
 Unary minus works on integers and floats:
 
@@ -80,6 +80,82 @@ temperature: float64 = -3.5
 See [examples/numbers/unary_minus.au](../examples/numbers/unary_minus.au).
 
 Aura does not do implicit numeric widening. Mixed expressions like `int32 + int64` are rejected -- use explicit casts instead (see below).
+
+## Integer Literal Bases
+
+Integer literals can use decimal, hexadecimal, binary, or octal notation.
+Underscores can group digits without changing the value:
+
+```python
+requests = 1_000_000
+red: uint32 = 0xFF
+permissions: uint16 = 0o755
+flags: uint8 = 0b1010_0110
+```
+
+The prefixes are case-insensitive. An underscore must sit between two digits
+that are valid in the selected base. The sign remains a unary operator, so
+`-0x7F` means unary minus applied to `0x7F`. Contextual typing and integer
+range checks are identical for every literal spelling.
+
+## Bitwise Operators And Shifts
+
+Every integer type supports `&`, `|`, `^`, `~`, `<<`, and `>>`. Both operands
+of a binary operation have the same exact integer type. This includes a shift
+count:
+
+```python
+value: uint32 = 0b1010_0000
+mask: uint32 = 0b1111_0000
+four: uint32 = 4
+
+print(value & mask)       # 160
+print(value | 0b0000_1111) # 175
+print(value ^ mask)       # 80
+print(~value)             # 4294967135
+print(value >> four)      # 10
+print(value << four)      # 2560
+```
+
+A shift count must be in `0..width`. Signed right shift extends the sign bit;
+unsigned right shift fills with zero. Ordinary left shift is checked and
+reports `AU4002` when the mathematical result does not fit. The compound forms
+are `&=`, `|=`, `^=`, `<<=`, and `>>=`.
+
+## Power, Rounding, And Divmod
+
+`**` is right-associative and more tightly bound than unary minus on its left:
+
+```python
+print(2 ** 3 ** 2) # 512
+print(-2 ** 2)     # -4
+print((-2) ** 2)   # 4
+print(2.0 ** -2.0) # 0.25
+```
+
+Integer power preserves the exact integer type, rejects negative exponents,
+and checks overflow. Floating power preserves the exact floating type and
+reports defined domain and overflow failures.
+
+`round` uses nearest-integer ties-to-even for floating inputs and returns
+`int64`. An integer input is returned unchanged with its exact type:
+
+```python
+print(round(2.5)) # 2
+print(round(3.5)) # 4
+```
+
+`divmod(left, right)` evaluates both values once and returns the floor quotient
+and divisor-signed remainder together:
+
+```python
+quotient, remainder = divmod(-17, 5)
+print(quotient)  # -4
+print(remainder) # 3
+```
+
+The two arguments have one exact integer or floating type. A zero divisor
+reports `AU4004`.
 
 ## Explicit Integer Arithmetic Modes
 
@@ -96,6 +172,21 @@ print(top.wrapping_sub(-1))   # -2147483648
 print(top.saturating_mul(2))  # 2147483647
 ```
 
+Shift operations have the same explicit arithmetic modes. The count has the
+receiver's exact type and must remain below its bit width:
+
+```python
+high: uint8 = 0b1000_0000
+one: uint8 = 1
+
+print(high.wrapping_shl(one))   # 0
+print(high.saturating_shl(one)) # 255
+print(high.wrapping_shr(one))   # 64
+print(high.saturating_shr(one)) # 64
+```
+
+The two right-shift methods match ordinary `>>` after count validation.
+
 The same six method names are available on integer `Array[T]`. Their right
 operand is either another same-shape `Array[T]` or one scalar of exactly `T`.
 
@@ -108,7 +199,7 @@ exactly `int32`, `int64`, `float32`, and `float64`:
 def square(value: float64) -> float64:
     return value * value
 
-matrix = Array[float64].from_vec([1.0, 2.0, 3.0, 4.0], [2, 2])
+matrix = Array[float64].from_list([1.0, 2.0, 3.0, 4.0], [2, 2])
 squares = matrix.map[float64](square)
 first_row = squares[0:1]
 
@@ -159,7 +250,9 @@ print(value.sqrt())   # 9.0
 
 Printed `float32` and `float64` values use the shortest decimal spelling that round-trips to the same source type. Whole-number floats keep a trailing `.0`, signed zero stays `-0.0`, and large or tiny values use concise scientific notation. For example, `9007199254740992.0`, `1e300`, and `1e-300` print without being routed through lower `float32` precision.
 
-See [examples/numbers/numeric_builtins.au](../examples/numbers/numeric_builtins.au) and [examples/numbers/float_sqrt.au](../examples/numbers/float_sqrt.au).
+See [examples/numbers/numeric_builtins.au](../examples/numbers/numeric_builtins.au),
+[examples/numbers/float_sqrt.au](../examples/numbers/float_sqrt.au), and
+[examples/numbers/bit_packing.au](../examples/numbers/bit_packing.au).
 
 ## `.to_string()`
 
@@ -208,7 +301,7 @@ The combined arithmetic example is
 | `int128` | `uint128` | |
 | `intsize` | `uintsize` | |
 
-Use `int` (the `int64` alias) and `float64` by default. Other explicit widths are useful when you need control over memory layout, value ranges, or a fixed API contract. APIs declared with `int32` remain `int32`; the new literal default does not widen them. Full-range `uint128` arithmetic is supported:
+Use `int` (the `int64` alias) and `float64` by default. Other explicit widths are useful when you need control over memory layout, value ranges, or a fixed API contract. APIs declared with `int32` remain `int32`; literal defaulting does not widen them. Full-range `uint128` arithmetic is supported:
 
 ```python
 value: uint128 = 340282366920938463463374607431768211455
@@ -232,10 +325,10 @@ def double(x: float32) -> float32:
 
 See [examples/numbers/float32_values.au](../examples/numbers/float32_values.au).
 
-## String Basics
+## str Basics
 
 Ordinary strings use matching single or double quotes. Both forms produce the
-same `String`, support the same escapes, and concatenate with `+`:
+same `str`, support the same escapes, and concatenate with `+`:
 
 ```python
 greeting = 'hello' + ", aura"
@@ -244,18 +337,40 @@ quotation = 'the compiler said "ready"'
 ```
 
 The supported escapes are `\n`, `\t`, `\"`, `\'`, `\\`, `\0`, `\xHH`, and
-`\u{H...}`. Triple-quoted, raw, and byte-string literals are not implemented,
-and a one-character literal remains a `String`. Aura has no character type.
+`\u{H...}`. A one-character literal remains a `str`. Aura has no character
+type.
+
+Use three matching quotes for exact multiline text. The compiler keeps the
+first newline, last newline, indentation, spaces, and physical tabs:
+
+```python
+prompt = """Summarize the request.
+Return JSON with a label and reason.
+"""
+```
+
+Use lowercase `r` for a single-line value where backslashes are data:
+
+```python
+model_dir = r"C:\models\agent"
+number_pattern = r'\d+\.\d+'
+```
+
+A raw string cannot end in an odd run of backslashes. Raw triple strings and
+byte strings are unavailable.
 
 ## F-Strings
 
 Interpolated strings use the double-quoted `f"..."` form and produce an owned
-`String`; `f'...'` is not supported:
+`str`; `f'...'` is not supported:
 
 ```python
-name: String = "Aura"
+name: str = "Aura"
 answer: int32 = 42
 print(f"Hello, {name} {answer}")
+print(f"{name:·^16.8s} {answer:>8,d}")
+print(f"success rate: {0.875:+.1%}")
+print(f"delta: {-1.25:09.3f}")
 ```
 
 Interpolations accept any expression, including indexed lookups:
@@ -264,20 +379,29 @@ Interpolations accept any expression, including indexed lookups:
 print(f"value: {counts['key']}")
 ```
 
+A static format specification follows a top-level colon. It supports a
+one-scalar fill, `<`, `^`, and `>` alignment, numeric signs, minimum width,
+comma grouping, precision, and `d`, `f`, `e`, `x`, `X`, `b`, `o`, `%`, and
+`s` type codes. Width counts Unicode scalars. String precision truncates by
+Unicode scalar count. Numeric precision rounds ties to even. Specifications
+are checked against the interpolation's static type before execution. A
+numeric width beginning with `0` pads after the sign. Decimal grouping always
+uses an explicit `d`, `f`, or `%` code.
+
 See [examples/strings/f_strings.au](../examples/strings/f_strings.au).
 
-## Borrowed String Parameters
+## Borrowed str Parameters
 
 When a function takes a string it only reads, use `str`:
 
 ```python
-def greet(name: str) -> String:
+def greet(name: str) -> str:
     return "Hello, " + name
 ```
 
 See [examples/strings/borrow_str.au](../examples/strings/borrow_str.au).
 
-## String Methods
+## str Methods
 
 Aura provides a rich set of string methods:
 
@@ -303,8 +427,8 @@ print(text.len())       # 2; O(n)
 print(text.byte_len())  # 5; O(1)
 ```
 
-Integer indexing on `String` remains unavailable, but one-colon slicing
-returns a fresh owned String:
+Integer indexing on `str` remains unavailable, but one-colon slicing
+returns a fresh owned str:
 
 ```python
 text = "A🎉Z"
@@ -316,7 +440,7 @@ print(text[:])     # A🎉Z
 
 Endpoints count Unicode scalar values, matching `len()`. They do not count
 UTF-8 bytes or grapheme clusters. Locating scalar boundaries scans the text, so
-String slicing is O(n). Written endpoints are exactly `int32`; negatives
+String slicing is O(n). Written endpoints use `int64`; negatives
 normalize once. Both effective endpoints must lie in `0..=len`, and start must
 not exceed end. Aura does not clamp invalid bounds like Python: invalid or
 reversed ranges trap with `AU4003`.
@@ -324,11 +448,11 @@ reversed ranges trap with `AU4003`.
 The result is an owned copy, not a view. Slice steps and slice assignment are
 unavailable. Character iteration, `ord()`, and `chr()` are also not
 implemented. Strict UTF-8 conversion is available through `text.to_bytes()`
-and `String.from_bytes(payload)`; hexadecimal, base64, typed conversion errors,
+and `str.from_bytes(payload)`; hexadecimal, base64, typed conversion errors,
 and SHA-256 are taught in [22-bytes.md](22-bytes.md). An explicit `encoding`
 argument remains reserved but unimplemented.
 
-`strip_prefix(...)` and `strip_suffix(...)` return `Option[String]`, so they compose with `match`:
+`strip_prefix(...)` and `strip_suffix(...)` return `Option[str]`, so they compose with `match`:
 
 ```python
 match trimmed.strip_prefix("aura "):
@@ -348,7 +472,7 @@ print("-".join(parts))    # "aura-lang-tests"
 `clone()` creates an independent copy of a string (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for why this matters):
 
 ```python
-text: String = "aura"
+text: str = "aura"
 copy = text.clone()
 print(text)    # still valid
 print(copy)
@@ -360,9 +484,9 @@ See [examples/strings/string_methods.au](../examples/strings/string_methods.au) 
 
 Aura provides parsing builtins that return `Result`:
 
-- `parse_int32(text: str) -> Result[int32, String]`
-- `parse_int64(text: str) -> Result[int64, String]`
-- `parse_float64(text: str) -> Result[float64, String]`
+- `parse_int32(text: str) -> Result[int32, str]`
+- `parse_int64(text: str) -> Result[int64, str]`
+- `parse_float64(text: str) -> Result[float64, str]`
 
 Use `match` to handle success and failure:
 
@@ -374,11 +498,11 @@ match parse_int32("42"):
         print(message)
 ```
 
-Combined with `.to_string()` and `String.join(...)`, these cover the maintained formatting surface.
+Combined with `.to_string()` and `str.join(...)`, these cover the maintained formatting surface.
 
 See [examples/strings/string_parsing_and_formatting.au](../examples/strings/string_parsing_and_formatting.au).
 
-## String Equality
+## str Equality
 
 Strings support `==` and `!=`:
 

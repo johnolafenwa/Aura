@@ -1,6 +1,6 @@
 # Edge: class with some fields having defaults and some not
 class Item:
-    name: String
+    name: str
     quantity: int32 = 1
     price: float64
 

@@ -8,7 +8,7 @@ enum Size:
     Medium
     Large
 
-def describe(c: Color, s: Size) -> String:
+def describe(c: Color, s: Size) -> str:
     match own c:
         case Color.Red:
             match own s:

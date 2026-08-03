@@ -1,2 +1,2 @@
-def read(value: (String)):
+def read(value: (str)):
     pass

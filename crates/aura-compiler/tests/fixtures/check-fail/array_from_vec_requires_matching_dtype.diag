@@ -1,5 +1,0 @@
-error[AU2002]: `Array.from_vec` expects `Vec[int32]` for `values`, found `Vec[int64]`
- --> crates/aura-compiler/tests/fixtures/check-fail/array_from_vec_requires_matching_dtype.au:3:35
-  |
-3 |     array = Array[int32].from_vec(values=values, shape=[2])
-  |                                   ^

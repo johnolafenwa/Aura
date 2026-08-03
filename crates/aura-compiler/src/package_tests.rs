@@ -1412,6 +1412,46 @@ fn package_git_dependency_resolution_uses_cached_revision_selectors() {
 }
 
 #[test]
+fn package_git_dependency_resolution_reuses_the_locked_branch_revision() {
+    let _env_lock = lock_package_env();
+    let temp = TempDir::new("aura-package-locked-branch-cache");
+    fs::create_dir_all(temp.path.join("local_repo")).expect("failed to create local repo dir");
+    let source = fs::canonicalize(temp.path.join("local_repo"))
+        .expect("local repo path should canonicalize")
+        .to_string_lossy()
+        .to_string();
+    let selector = GitSelector::Branch("main".to_string());
+    let locked = LockedPackage {
+        source: LockedPackageSource::Git {
+            source: source.clone(),
+            rev: "abcdef0".to_string(),
+            selector: selector.clone(),
+        },
+    };
+
+    let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache"));
+    let checkout = git_cache_root()
+        .join(hash_source_key(&source))
+        .join("abcdef0");
+    fs::create_dir_all(&checkout).expect("failed to create cached checkout");
+    fs::write(
+        checkout.join(MANIFEST_NAME),
+        "[package]\nname = \"util\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    )
+    .expect("failed to write cached manifest");
+    write_cached_git_revision(&checkout, "abcdef0").expect("failed to write cached rev");
+
+    let resolved =
+        resolve_git_dependency(&temp.path, "util", source.clone(), &selector, Some(&locked))
+            .expect("a matching lock entry should resolve without refreshing its branch");
+
+    assert_eq!(resolved.checkout_dir, checkout);
+    assert_eq!(resolved.normalized_source, source);
+    assert_eq!(resolved.resolved_rev, "abcdef0");
+    assert_eq!(resolved.selector, selector);
+}
+
+#[test]
 fn package_resolver_reports_git_dependency_resolution_and_package_name_errors() {
     let _env_lock = lock_package_env();
     let temp = TempDir::new("aura-package-git-resolver-errors");
@@ -1814,6 +1854,74 @@ fn package_graph_helpers_report_unusual_but_supported_edges() {
     let bad_lock = PackageGraph::discover_for_entry(&bad_lock_main)
         .expect_err("directory lockfiles should fail package discovery");
     assert!(bad_lock.message.contains("failed to read lockfile"));
+}
+
+#[test]
+fn public_package_graph_round_trips_git_locks_and_rejects_version_only_dependencies() {
+    let _env_lock = lock_package_env();
+    let temp = TempDir::new("aura-package-public-git-lock-contract");
+    let repository = init_git_package_repo(&temp, "util-repo", "util");
+    let source = fs::canonicalize(&repository)
+        .expect("git dependency source should canonicalize")
+        .to_string_lossy()
+        .to_string();
+    let revision = run_git(&repository, &["rev-parse", "HEAD"]);
+    let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache"));
+
+    let app_dir = write_package(
+        &temp,
+        "app",
+        "app",
+        &format!(
+            "\n[dependencies]\nutil = {{ git = {}, branch = \"main\" }}\n",
+            toml_string(&source)
+        ),
+    );
+    let main_path =
+        fs::canonicalize(app_dir.join("src/main.au")).expect("package entry should canonicalize");
+    let graph = PackageGraph::discover_for_entry(&main_path)
+        .expect("a local git dependency should resolve")
+        .expect("the entry should discover a package graph");
+    graph
+        .write_lockfile()
+        .expect("the resolved graph should write its public lockfile");
+
+    let lockfile = fs::read_to_string(app_dir.join(LOCKFILE_NAME))
+        .expect("the public lockfile should be readable");
+    assert!(lockfile.contains("name = \"util\""));
+    assert!(lockfile.contains("source = \"git\""));
+    assert!(lockfile.contains(&format!("git = {}", toml_string(&source))));
+    assert!(lockfile.contains(&format!("rev = {}", toml_string(&revision))));
+    assert!(lockfile.contains("branch = \"main\""));
+
+    let locked_graph = PackageGraph::discover_for_entry(&main_path)
+        .expect("the written git lock should load")
+        .expect("the locked entry should still discover its package graph");
+    assert!(locked_graph
+        .dependency_aliases_for_path(&main_path)
+        .contains("util"));
+    let imported = locked_graph
+        .resolve_import_path(&main_path, &["util".to_string(), "lib".to_string()])
+        .expect("the locked git dependency import should resolve");
+    assert_eq!(
+        fs::read_to_string(imported).expect("resolved dependency source should be readable"),
+        "public def value() -> int32:\n    return 1\n"
+    );
+
+    let version_only_dir = write_package(
+        &temp,
+        "version-only",
+        "version_only",
+        "\n[dependencies]\nutil = \"1.2.3\"\n",
+    );
+    let version_only_entry = fs::canonicalize(version_only_dir.join("src/main.au"))
+        .expect("version-only entry should canonicalize");
+    let version_error = PackageGraph::discover_for_entry(&version_only_entry)
+        .expect_err("version-only dependencies should fail public package discovery");
+    assert_eq!(
+        version_error.message,
+        "version-only dependencies are not supported yet for `util` (requested `1.2.3`); use `util = { path = \"...\" }` or `util = { git = \"...\" }` instead"
+    );
 }
 
 #[test]

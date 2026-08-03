@@ -1,0 +1,12 @@
+enum State:
+    Ready
+    Waiting
+
+def main() -> int32:
+    state = State.Ready
+    match state:
+        case Ready if true:
+            pass
+        case Waiting:
+            pass
+    return 0

@@ -1,5 +1,5 @@
-error[AU2002]: binding `pair` has annotated type `(int32, String)`, but value has type `(int32, int64)`
+error[AU2002]: binding `pair` has annotated type `(int32, str)`, but value has type `(int32, int64)`
  --> crates/aura-compiler/tests/fixtures/check-fail/tuple_annotation_type_mismatch.au:2:5
   |
-2 |     pair: (int32, String) = (1, 2)
+2 |     pair: (int32, str) = (1, 2)
   |     ^

@@ -1,7 +1,7 @@
 # Edge test: Using borrow match result as method receiver
 
 class Container:
-    value: String
+    value: str
 
     def get_length(self) -> int32:
         return 5

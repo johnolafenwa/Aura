@@ -2,7 +2,7 @@ def stack_bytes() -> int64:
     print("stack")
     return 262144
 
-def argument(label: String, value: int32) -> int32:
+def argument(label: str, value: int32) -> int32:
     print(label)
     return value
 

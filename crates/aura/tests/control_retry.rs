@@ -142,14 +142,14 @@ import control
 import fs
 import sys
 
-def store_state(value: String) -> None:
+def store_state(value: str) -> None:
     match fs.write_string("{state}", value):
         case Result.Ok(_):
             pass
         case Result.Err(_):
             print("state-write-failed")
 
-def flaky_worker() -> Result[Vec[String], String]:
+def flaky_worker() -> Result[list[str], str]:
     print(f"attempt {{sys.monotonic_time_ms()}}")
     match own fs.read_to_string("{state}"):
         case Result.Ok(value):
@@ -165,7 +165,7 @@ def flaky_worker() -> Result[Vec[String], String]:
 
 def main() -> int32:
     store_state("one")
-    match own control.retry[Vec[String], String](
+    match own control.retry[list[str], str](
         initial_backoff=20ms,
         worker=flaky_worker,
         max_attempts=3
@@ -225,12 +225,12 @@ fn specialized_retry_function_value_preserves_retry_semantics_on_both_backends()
     let source = r#"
 import control
 
-def worker() -> Result[int32, String]:
+def worker() -> Result[int32, str]:
     print("attempt")
     return Result.Ok(42)
 
 def main() -> int32:
-    retry = control.retry[int32, String]
+    retry = control.retry[int32, str]
     match retry(worker, max_attempts=2, initial_backoff=0ms):
         case Result.Ok(value):
             print(value)
@@ -281,7 +281,7 @@ fn retry_validates_arguments_before_invoking_the_worker_on_both_backends() {
 import control
 import fs
 
-def worker() -> Result[int32, String]:
+def worker() -> Result[int32, str]:
     match fs.write_string("{marker_source}", "called"):
         case Result.Ok(_):
             pass
@@ -290,7 +290,7 @@ def worker() -> Result[int32, String]:
     return Result.Err("worker-result")
 
 def main() -> int32:
-    print(control.retry[int32, String](worker=worker, {arguments}))
+    print(control.retry[int32, str](worker=worker, {arguments}))
     return 0
 "#
         );
@@ -332,12 +332,12 @@ fn retry_propagates_worker_traps_without_retrying_on_both_backends() {
     let source = r#"
 import control
 
-def trapping_worker() -> Result[int32, String]:
+def trapping_worker() -> Result[int32, str]:
     print("trap-attempt")
     return Result.Ok(1 // 0)
 
 def main() -> int32:
-    print(control.retry[int32, String](trapping_worker, max_attempts=3))
+    print(control.retry[int32, str](trapping_worker, max_attempts=3))
     return 0
 "#;
     let source_path = temp.source("trap", source);
@@ -370,14 +370,14 @@ fn retry_propagates_task_cancellation_instead_of_returning_the_last_error() {
     let source = r#"
 import control
 
-def sleeping_worker() -> Result[int32, String]:
+def sleeping_worker() -> Result[int32, str]:
     print("worker-start")
     sleep(60m)
     print("worker-resumed")
     return Result.Err("must-not-escape")
 
-def invoke_retry() -> Result[int32, String]:
-    return control.retry[int32, String](
+def invoke_retry() -> Result[int32, str]:
+    return control.retry[int32, str](
         sleeping_worker,
         max_attempts=3,
         initial_backoff=1s
@@ -420,22 +420,22 @@ fn retry_rejects_nonzero_arity_and_non_result_workers_with_teaching_diagnostics(
         (
             "argument-worker",
             r#"
-def invalid_worker(value: int32) -> Result[int32, String]:
+def invalid_worker(value: int32) -> Result[int32, str]:
     return Result.Ok(value)
 "#,
             "invalid_worker",
             "expected `def() -> Result[T, E]`",
-            "def(int32) -> Result[int32, String]",
+            "def(int32) -> Result[int32, str]",
         ),
         (
             "defaulted-argument-worker",
             r#"
-def invalid_worker(value: int32 = 1) -> Result[int32, String]:
+def invalid_worker(value: int32 = 1) -> Result[int32, str]:
     return Result.Ok(value)
 "#,
             "invalid_worker",
             "expected `def() -> Result[T, E]`",
-            "def(int32) -> Result[int32, String]",
+            "def(int32) -> Result[int32, str]",
         ),
         (
             "mutable-argument-worker",
@@ -443,23 +443,23 @@ def invalid_worker(value: int32 = 1) -> Result[int32, String]:
 class Counter:
     value: int32
 
-def invalid_worker(counter: mut Counter) -> Result[int32, String]:
+def invalid_worker(counter: mut Counter) -> Result[int32, str]:
     counter.value += 1
     return Result.Ok(counter.value)
 "#,
             "invalid_worker",
             "expected `def() -> Result[T, E]`",
-            "def(mut Counter) -> Result[int32, String]",
+            "def(mut Counter) -> Result[int32, str]",
         ),
         (
             "owned-argument-worker",
             r#"
-def invalid_worker(value: own String) -> Result[int32, String]:
+def invalid_worker(value: own str) -> Result[int32, str]:
     return Result.Ok(value.len() as int32)
 "#,
             "invalid_worker",
             "expected `def() -> Result[T, E]`",
-            "def(own String) -> Result[int32, String]",
+            "def(own str) -> Result[int32, str]",
         ),
         (
             "non-result-worker",
@@ -480,7 +480,7 @@ def invalid_worker() -> int32:
 import control
 {declaration}
 def main() -> int32:
-    print(control.retry[int32, String]({worker}))
+    print(control.retry[int32, str]({worker}))
     return 0
 "#
         );

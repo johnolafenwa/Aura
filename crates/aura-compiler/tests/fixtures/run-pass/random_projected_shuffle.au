@@ -1,10 +1,10 @@
 import random
 
 class Item:
-    label: String
+    label: str
 
 class Holder:
-    values: Vec[Item]
+    values: list[Item]
 
 def main() -> int32:
     mut rng = random.Rng(42)

@@ -1,4 +1,4 @@
-def bad() -> Result[int32, String]:
+def bad() -> Result[int32, str]:
     return Result.Ok("wrong type")
 
 def main() -> int32:

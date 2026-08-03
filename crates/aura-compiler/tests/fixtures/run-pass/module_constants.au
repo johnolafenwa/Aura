@@ -1,0 +1,18 @@
+base: int64 = 40
+answer = base + 2
+labels = ["planner", "worker"]
+service_name = "planner"
+shared_queues = [Queue[int32](capacity=1)]
+
+def label_count() -> int64:
+    return labels.len()
+
+def main():
+    print(answer)
+    print(service_name)
+    print(label_count())
+    print(labels.len())
+    owned_labels = labels.copy()
+    print(owned_labels.len())
+    shared_queues[0].put(9)
+    print(shared_queues[0].get())

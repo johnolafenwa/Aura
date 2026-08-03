@@ -21,7 +21,7 @@ def main() -> int32:
             print("empty")
 
     # Test with a more complex type
-    msg: Container[String] = Container.Full("borrowed")
+    msg: Container[str] = Container.Full("borrowed")
     match msg:
         case Container.Full(s):
             print(s)

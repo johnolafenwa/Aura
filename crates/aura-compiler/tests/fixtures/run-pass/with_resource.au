@@ -1,13 +1,13 @@
 class FileHandle:
-    name: String
+    name: str
 
-    def read(self) -> String:
+    def read(self) -> str:
         return self.name.clone()
 
     def close(mut self):
         print("closed " + self.name)
 
-def use_resource() -> Result[String, String]:
+def use_resource() -> Result[str, str]:
     with file = FileHandle(name="demo"):
         print(file.read())
         return Result.Ok("done")

@@ -1,4 +1,4 @@
-error[AU2002]: list literal elements must all have type `int64`, found `String`
+error[AU2002]: list literal elements must all have type `int64`, found `str`
  --> crates/aura-compiler/tests/fixtures/check-fail/list_literal_elements_must_share_type.au:2:14
   |
 2 |     xs = [1, "two"]

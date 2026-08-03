@@ -7,7 +7,7 @@ Aura provides three built-in generic enums for representing success/failure and 
 Use `Result[T, E]` when an operation can succeed with a value of type `T` or fail with an error of type `E`:
 
 ```python
-def divide(a: int32, b: int32) -> Result[int32, String]:
+def divide(a: int32, b: int32) -> Result[int32, str]:
     if b == 0:
         return Result.Err("division by zero")
     return Result.Ok(a // b)
@@ -30,7 +30,7 @@ This is Aura's primary error-handling pattern. Instead of exceptions (like Pytho
 Use `Option[T]` when a value may or may not be present:
 
 ```python
-def find_user(id: int32) -> Option[String]:
+def find_user(id: int32) -> Option[str]:
     if id == 1:
         return Option.Some("Ada")
     return Option.None
@@ -46,10 +46,12 @@ match find_user(1):
         print("not found")
 ```
 
-You will see `Option[T]` throughout Aura's standard library -- `Vec.pop()`, `Vec.get()`, `Map.get()`, and `String.strip_prefix()` all return `Option` values.
+You will see `Option[T]` throughout Aura's standard library. `list.get()`,
+`dict.get()`, `dict.remove()`, and `str.strip_prefix()` all return `Option`
+values.
 
-Those APIs do not all obtain `T` the same way. `pop` transfers a stored value,
-while collection `get` clones one and therefore requires clone-safe `T`; a
+Those APIs do not all obtain `T` the same way. `dict.remove` transfers a stored
+value, while collection `get` clones one and therefore requires clone-safe `T`; a
 stored value containing `random.Rng` must be removed or otherwise transferred.
 
 ## `None` vs `Option.None`
@@ -102,7 +104,7 @@ See [examples/concurrency/send_result.au](../examples/concurrency/send_result.au
 A common pattern is chaining operations that each return `Result`. Use `match` to unwrap each step:
 
 ```python
-def process(input: String) -> Result[int32, String]:
+def process(input: str) -> Result[int32, str]:
     match parse_int32(input):
         case Ok(value):
             if value < 0:
@@ -121,7 +123,7 @@ For simpler cases, Aura provides `try expr` to reduce the nesting. See [12-error
 ```python
 import control
 
-def attempt() -> Result[int32, String]:
+def attempt() -> Result[int32, str]:
     return Result.Err("not ready")
 
 result = control.retry(

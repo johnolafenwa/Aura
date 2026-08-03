@@ -5,7 +5,7 @@ copy class Money:
         return Money(amount=self.amount + other.amount)
 
 class Account:
-    name: String
+    name: str
     balance: Money
 
     def get_balance(self) -> int32:
@@ -15,9 +15,9 @@ class Account:
         self.balance = self.balance.add(other=m)
 
 class Bank:
-    name: String
+    name: str
 
-    def create_account(self, holder: own String) -> Account:
+    def create_account(self, holder: own str) -> Account:
         return Account(name=holder, balance=Money(amount=0))
 
 def main() -> int32:

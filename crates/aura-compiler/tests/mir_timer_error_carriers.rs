@@ -10,14 +10,14 @@ def main() -> int32:
     print(net.unix_connect_timeout("/unused/aura.sock", Duration.ms(-1)))
     print(net.tls_connect_timeout("127.0.0.1:1", "localhost", "/unused/ca.pem", Duration.ms(-1)))
     print(net.http_request_text_timeout("GET", "http://127.0.0.1:1/", "", {}, Duration.ms(-1)))
-    print(net.http_request_bytes_timeout("GET", "http://127.0.0.1:1/", Vec[uint8](), {}, Duration.ms(-1)))
+    print(net.http_request_bytes_timeout("GET", "http://127.0.0.1:1/", list[uint8](), {}, Duration.ms(-1)))
     print(net.websocket_connect_timeout("ws://127.0.0.1:1/", Duration.ms(-1)))
     print(net.connect_timeout("127.0.0.1:1", Duration.minutes(9223372036854775807)))
     print(net.connect_timeout("127.0.0.1:1", Duration.seconds(9223372036854775807)))
     print(net.unix_connect_timeout("/unused/aura.sock", Duration.seconds(9223372036854775807)))
     print(net.tls_connect_timeout("127.0.0.1:1", "localhost", "/unused/ca.pem", Duration.seconds(9223372036854775807)))
     print(net.http_request_text_timeout("GET", "http://127.0.0.1:1/", "", {}, Duration.seconds(9223372036854775807)))
-    print(net.http_request_bytes_timeout("GET", "http://127.0.0.1:1/", Vec[uint8](), {}, Duration.seconds(9223372036854775807)))
+    print(net.http_request_bytes_timeout("GET", "http://127.0.0.1:1/", list[uint8](), {}, Duration.seconds(9223372036854775807)))
     print(net.websocket_connect_timeout("ws://127.0.0.1:1/", Duration.seconds(9223372036854775807)))
     return 0
 "#;
@@ -156,7 +156,7 @@ def main() -> int32:
             "wait_any(timeout=...)",
             r#"
 def main() -> int32:
-    tasks = Vec[Task[int32]]()
+    tasks = list[Task[int32]]()
     print(wait_any(tasks, timeout=Duration.ms(-1)))
     return 0
 "#,
@@ -165,7 +165,7 @@ def main() -> int32:
             "wait_all(timeout=...)",
             r#"
 def main() -> int32:
-    tasks = Vec[Task[int32]]()
+    tasks = list[Task[int32]]()
     print(wait_all(tasks, timeout=Duration.ms(-1)))
     return 0
 "#,
@@ -212,7 +212,7 @@ def main() -> int32:
 
     let deadline_overflow = r#"
 def main() -> int32:
-    tasks: Vec[Task[int32]] = Vec[Task[int32]]()
+    tasks: list[Task[int32]] = list[Task[int32]]()
     print(wait_all(tasks, timeout=Duration.seconds(9223372036854775807)))
     return 0
 "#;

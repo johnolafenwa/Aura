@@ -1,18 +1,18 @@
 trait Show:
-    def show(self) -> String
+    def show(self) -> str
 
 impl Show for int32:
-    def show(self) -> String:
+    def show(self) -> str:
         return "int32"
 
 impl Show for int64:
-    def show(self) -> String:
+    def show(self) -> str:
         return "int64"
 
 class Wrapper[T: Show]:
     value: T
 
-    def render(self) -> String:
+    def render(self) -> str:
         return self.value.show()
 
 def main() -> int32:

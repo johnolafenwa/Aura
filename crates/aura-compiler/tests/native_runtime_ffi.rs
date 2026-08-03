@@ -9,6 +9,8 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::ptr;
+use std::sync::atomic::Ordering;
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -19,6 +21,37 @@ extern "C-unwind" {
         args_ptr: *const i64,
         arg_count: i64,
     ) -> *mut c_void;
+}
+
+static DIRECT_RUNTIME_FFI_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn direct_live_value_count() -> usize {
+    DIRECT_VALUE_LIVE_COUNT.load(Ordering::Acquire)
+}
+
+struct DirectRuntimeFfiTestGuard {
+    _lock: MutexGuard<'static, ()>,
+    initial_live_values: usize,
+}
+
+impl Drop for DirectRuntimeFfiTestGuard {
+    fn drop(&mut self) {
+        assert_eq!(
+            direct_live_value_count(),
+            self.initial_live_values,
+            "the direct-runtime FFI test leaked opaque values"
+        );
+    }
+}
+
+fn direct_runtime_ffi_test_guard() -> DirectRuntimeFfiTestGuard {
+    let lock = DIRECT_RUNTIME_FFI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    DirectRuntimeFfiTestGuard {
+        _lock: lock,
+        initial_live_values: direct_live_value_count(),
+    }
 }
 
 fn append_direct_ffi_text(encoded: &mut Vec<u8>, text: &str) {
@@ -141,6 +174,26 @@ unsafe fn release(value: *mut OpaqueValue) {
     }
 }
 
+struct ScopedValue(*mut OpaqueValue);
+
+impl ScopedValue {
+    fn new(value: *mut OpaqueValue) -> Self {
+        Self(value)
+    }
+
+    fn as_ptr(&self) -> *mut OpaqueValue {
+        self.0
+    }
+}
+
+impl Drop for ScopedValue {
+    fn drop(&mut self) {
+        unsafe {
+            release(self.0);
+        }
+    }
+}
+
 unsafe fn int_value(value: i64) -> *mut OpaqueValue {
     aura_direct_box_i64(value)
 }
@@ -206,7 +259,7 @@ unsafe fn float_array(
             ));
         }
     }
-    let vector_type = format!("Vec[{runtime_type}]");
+    let vector_type = format!("list[{runtime_type}]");
     aura_direct_tag_value_type(vector, vector_type.as_ptr(), vector_type.len());
     let shape = unsafe { int64_vec(shape) };
     let array = aura_direct_array_from_vec(dtype, vector, shape, 1, 1);
@@ -384,6 +437,7 @@ fn unique_temp_path(name: &str) -> String {
 
 #[test]
 fn direct_ffi_adapter_executes_every_v0_boundary_kind_through_the_library_copy() {
+    let _runtime_guard = direct_runtime_ffi_test_guard();
     // Keep every test-owned C symbol in the executable's process-global symbol
     // table. The adapter still resolves by name, exactly as generated Aura
     // programs do.
@@ -472,18 +526,19 @@ fn direct_ffi_adapter_executes_every_v0_boundary_kind_through_the_library_copy()
 
 #[test]
 fn direct_callable_ffi_symbols_preserve_the_public_runtime_contract() {
+    let _runtime_guard = direct_runtime_ffi_test_guard();
     let signature = Type::Function {
         params: vec![
             FunctionParamContract {
                 name: "path".to_string(),
-                ty: Type::named("String"),
+                ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
                 default_erased: false,
             },
             FunctionParamContract {
                 name: "buffer".to_string(),
-                ty: Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 passing: ReceiverKind::BorrowMut,
                 has_default: true,
                 default_erased: false,
@@ -528,6 +583,7 @@ fn direct_callable_ffi_symbols_preserve_the_public_runtime_contract() {
 
 #[test]
 fn direct_random_ffi_symbols_preserve_the_public_runtime_contract() {
+    let _runtime_guard = direct_runtime_ffi_test_guard();
     unsafe {
         let integers = aura_direct_rng_new(42);
         assert_eq!(aura_direct_rng_next_int(integers, 0, 10), 2);
@@ -574,23 +630,47 @@ fn direct_random_ffi_symbols_preserve_the_public_runtime_contract() {
 
 #[test]
 fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
+    let _runtime_guard = direct_runtime_ffi_test_guard();
     unsafe {
-        let negated = aura_direct_unary_value(0, int_value(7));
+        let negated = aura_direct_unary_value(0, ScopedValue::new(int_value(7)).as_ptr());
         assert_eq!(expect_i64(negated), -7);
 
-        let inverted = aura_direct_unary_value_at(1, bool_value(false), 1, 1);
+        let inverted =
+            aura_direct_unary_value_at(1, ScopedValue::new(bool_value(false)).as_ptr(), 1, 1);
         assert!(expect_bool(inverted));
 
-        let sum = aura_direct_binary_value(0, int_value(20), int_value(22));
+        let sum = aura_direct_binary_value(
+            0,
+            ScopedValue::new(int_value(20)).as_ptr(),
+            ScopedValue::new(int_value(22)).as_ptr(),
+        );
         assert_eq!(expect_i64(sum), 42);
 
-        let floor = aura_direct_binary_value(13, int_value(-7), int_value(3));
+        let floor = aura_direct_binary_value(
+            13,
+            ScopedValue::new(int_value(-7)).as_ptr(),
+            ScopedValue::new(int_value(3)).as_ptr(),
+        );
         assert_eq!(expect_i64(floor), -3);
 
-        let ordered = aura_direct_binary_value_at(7, int_value(2), int_value(3), 1, 1);
+        let ordered = aura_direct_binary_value_at(
+            7,
+            ScopedValue::new(int_value(2)).as_ptr(),
+            ScopedValue::new(int_value(3)).as_ptr(),
+            0,
+            1,
+            1,
+        );
         assert!(expect_bool(ordered));
 
-        let floor_at = aura_direct_binary_value_at(13, int_value(7), int_value(-3), 1, 1);
+        let floor_at = aura_direct_binary_value_at(
+            13,
+            ScopedValue::new(int_value(7)).as_ptr(),
+            ScopedValue::new(int_value(-3)).as_ptr(),
+            0,
+            1,
+            1,
+        );
         assert_eq!(expect_i64(floor_at), -3);
 
         let duration = aura_direct_duration_from_i64(1_500, 1_000_000);
@@ -619,7 +699,11 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         );
 
         let cast_target = "float64";
-        let cast = aura_direct_cast_value(int_value(5), cast_target.as_ptr(), cast_target.len());
+        let cast = aura_direct_cast_value(
+            ScopedValue::new(int_value(5)).as_ptr(),
+            cast_target.as_ptr(),
+            cast_target.len(),
+        );
         release(cast);
 
         let wide_signed = aura_direct_box_i64(i64::MIN);
@@ -718,7 +802,10 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         release(aura_direct_vec_push_in_place(vec, int_value(1)));
         release(aura_direct_vec_push_in_place(vec, int_value(3)));
         assert_eq!(aura_direct_vec_len(vec), 2);
-        assert_eq!(aura_direct_vec_contains(vec, int_value(1)), 1);
+        assert_eq!(
+            aura_direct_vec_contains(vec, ScopedValue::new(int_value(1)).as_ptr()),
+            1
+        );
         release(aura_direct_vec_get(vec, 0));
         assert_eq!(expect_i64(aura_direct_vec_index(vec, 1, 1, 1)), 3);
         release(aura_direct_vec_index_option(vec, 8));
@@ -759,19 +846,29 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
             int_value(2),
         ));
         assert_eq!(aura_direct_map_len(map), 2);
-        assert_eq!(aura_direct_map_contains_key(map, string_value("left")), 1);
-        release(aura_direct_map_get(map, string_value("left")));
         assert_eq!(
-            expect_i64(aura_direct_map_index(map, string_value("right"), 1, 1)),
+            aura_direct_map_contains_key(map, ScopedValue::new(string_value("left")).as_ptr(),),
+            1
+        );
+        release(aura_direct_map_get(
+            map,
+            ScopedValue::new(string_value("left")).as_ptr(),
+        ));
+        assert_eq!(
+            expect_i64(aura_direct_map_index(
+                map,
+                ScopedValue::new(string_value("right")).as_ptr(),
+                1,
+                1,
+            )),
             2
         );
         release(aura_direct_map_keys(map));
         release(aura_direct_map_values(map));
         release(aura_direct_map_items(map));
-        release(aura_direct_map_entries(map));
         release(aura_direct_map_remove_in_place(
             map,
-            string_value("missing"),
+            ScopedValue::new(string_value("missing")).as_ptr(),
         ));
         let other_map = aura_direct_map_empty();
         release(aura_direct_map_set_in_place(
@@ -812,9 +909,15 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         assert_eq!(aura_direct_set_insert_in_place(set, int_value(1)), 1);
         assert_eq!(aura_direct_set_insert_in_place(set, int_value(1)), 0);
         assert_eq!(aura_direct_set_len(set), 1);
-        assert_eq!(aura_direct_set_contains(set, int_value(1)), 1);
+        assert_eq!(
+            aura_direct_set_contains(set, ScopedValue::new(int_value(1)).as_ptr()),
+            1
+        );
         release(aura_direct_set_index_option(set, 0));
-        assert_eq!(aura_direct_set_remove_in_place(set, int_value(1)), 1);
+        assert_eq!(
+            aura_direct_set_remove_in_place(set, ScopedValue::new(int_value(1)).as_ptr()),
+            1
+        );
         assert_eq!(aura_direct_set_is_empty(set), 1);
         release(set);
 
@@ -922,6 +1025,7 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
 
 #[test]
 fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_library_copy() {
+    let _runtime_guard = direct_runtime_ffi_test_guard();
     unsafe {
         let shape = int64_vec(&[2, 2]);
         let zeros = aura_direct_array_zeros(0, shape, 2, 3);
@@ -948,7 +1052,7 @@ fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_libra
         release(shape);
 
         let vector = int32_array(&[5, 6, 7], &[3]);
-        let scalar_coordinate = int32_value(-1);
+        let scalar_coordinate = int_value(-1);
         assert_eq!(
             expect_i64(aura_direct_array_index(vector, scalar_coordinate, 3, 4,)),
             7
@@ -956,7 +1060,7 @@ fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_libra
         release(scalar_coordinate);
         release(vector);
 
-        let coordinates = int32_vec(&[0, 1]);
+        let coordinates = int64_vec(&[0, 1]);
         assert_eq!(
             expect_i64(expect_option_some_payload(aura_direct_array_get(
                 source,
@@ -969,7 +1073,7 @@ fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_libra
         release(coordinates);
 
         let working = int32_array(&[1, 2, 3, 4], &[2, 2]);
-        let coordinates = int32_vec(&[0, 1]);
+        let coordinates = int64_vec(&[0, 1]);
         let nine = int32_value(9);
         assert_eq!(
             expect_i64(expect_option_some_payload(aura_direct_array_set_in_place(
@@ -983,13 +1087,13 @@ fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_libra
         );
         release(coordinates);
         release(nine);
-        let negative_coordinates = int32_vec(&[-1, -1]);
+        let negative_coordinates = int64_vec(&[-1, -1]);
         assert_eq!(
             expect_i64(aura_direct_array_index(working, negative_coordinates, 5, 6,)),
             4
         );
         release(negative_coordinates);
-        let coordinates = int32_vec(&[1, 0]);
+        let coordinates = int64_vec(&[1, 0]);
         let eleven = int32_value(11);
         release(aura_direct_array_set_index_in_place(
             working,
@@ -1123,6 +1227,7 @@ fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_libra
 
 #[test]
 fn direct_runtime_exported_array_kernels_cover_int64_float32_and_float64() {
+    let _runtime_guard = direct_runtime_ffi_test_guard();
     unsafe {
         let shape = int64_vec(&[2]);
         let int64_zeros = aura_direct_array_zeros(1, shape, 20, 21);
@@ -1232,6 +1337,7 @@ fn direct_runtime_exported_array_kernels_cover_int64_float32_and_float64() {
 
 #[test]
 fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
+    let _runtime_guard = direct_runtime_ffi_test_guard();
     unsafe {
         let command = string_vec(&["/bin/sh", "-c", "cat; printf err >&2"]);
         let cwd = enum_unit("Option", "None");
@@ -1255,13 +1361,13 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
         let child_stderr = expect_option_some_payload(aura_direct_process_child_stderr(child));
         expect_result_ok_unit(aura_direct_process_pipe_write_all(
             child_stdin,
-            string_value("left"),
-            duration_value(5_000),
+            ScopedValue::new(string_value("left")).as_ptr(),
+            ScopedValue::new(duration_value(5_000)).as_ptr(),
         ));
         expect_result_ok_unit(aura_direct_process_pipe_write_bytes(
             child_stdin,
-            byte_vec(b"-right\n"),
-            duration_value(5_000),
+            ScopedValue::new(byte_vec(b"-right\n")).as_ptr(),
+            ScopedValue::new(duration_value(5_000)).as_ptr(),
         ));
         expect_result_ok_unit(aura_direct_process_pipe_flush(child_stdin));
         release(aura_direct_process_pipe_close(child_stdin));
@@ -1275,7 +1381,7 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
         );
         release(aura_direct_process_child_wait_or_none(
             child,
-            duration_value(5_000),
+            ScopedValue::new(duration_value(5_000)).as_ptr(),
         ));
         release(aura_direct_process_child_wait(child, ptr::null_mut()));
         release(aura_direct_process_child_wait_ok(child, ptr::null_mut()));
@@ -1287,52 +1393,54 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
         release(child_stdout);
         release(child_stderr);
 
-        let listener =
-            expect_result_ok_payload(aura_direct_net_listen(string_value("127.0.0.1:0")));
+        let listener = expect_result_ok_payload(aura_direct_net_listen(
+            ScopedValue::new(string_value("127.0.0.1:0")).as_ptr(),
+        ));
         let tcp_address = expect_result_ok_string(aura_direct_tcp_listener_local_addr(listener));
         let listener_handle = listener as usize;
         let tcp_server = thread::spawn(move || {
             let listener = listener_handle as *mut OpaqueValue;
             let accepted = expect_result_ok_payload(aura_direct_tcp_listener_accept(
                 listener,
-                duration_value(5_000),
+                ScopedValue::new(duration_value(5_000)).as_ptr(),
             ));
             assert_eq!(
                 expect_result_ok_string(aura_direct_tcp_stream_read_all(
                     accepted,
-                    duration_value(5_000),
+                    ScopedValue::new(duration_value(5_000)).as_ptr(),
                 )),
                 "ping\n"
             );
             expect_result_ok_unit(aura_direct_tcp_stream_write_all(
                 accepted,
-                string_value("pong-rest"),
-                duration_value(5_000),
+                ScopedValue::new(string_value("pong-rest")).as_ptr(),
+                ScopedValue::new(duration_value(5_000)).as_ptr(),
             ));
             expect_result_ok_unit(aura_direct_tcp_stream_flush(accepted));
             expect_result_ok_unit(aura_direct_tcp_stream_shutdown_write(accepted));
             release(aura_direct_tcp_stream_close(accepted));
             release(accepted);
         });
-        let tcp_client =
-            expect_result_ok_payload(aura_direct_net_connect(string_value(&tcp_address)));
+        let tcp_client = expect_result_ok_payload(aura_direct_net_connect(
+            ScopedValue::new(string_value(&tcp_address)).as_ptr(),
+        ));
         expect_result_ok_unit(aura_direct_tcp_stream_write_bytes(
             tcp_client,
-            byte_vec(b"ping\n"),
-            duration_value(5_000),
+            ScopedValue::new(byte_vec(b"ping\n")).as_ptr(),
+            ScopedValue::new(duration_value(5_000)).as_ptr(),
         ));
         expect_result_ok_unit(aura_direct_tcp_stream_shutdown_write(tcp_client));
         release(aura_direct_tcp_stream_local_addr(tcp_client));
         release(aura_direct_tcp_stream_peer_addr(tcp_client));
         release(aura_direct_tcp_stream_read_exact(
             tcp_client,
-            int_value(4),
-            duration_value(5_000),
+            ScopedValue::new(int_value(4)).as_ptr(),
+            ScopedValue::new(duration_value(5_000)).as_ptr(),
         ));
         assert_eq!(
             expect_result_ok_string(aura_direct_tcp_stream_read_all(
                 tcp_client,
-                duration_value(5_000),
+                ScopedValue::new(duration_value(5_000)).as_ptr(),
             )),
             "-rest"
         );
@@ -1345,21 +1453,26 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
         release(aura_direct_tcp_listener_close(listener));
         release(listener);
 
-        let udp_sender =
-            expect_result_ok_payload(aura_direct_net_udp_bind(string_value("127.0.0.1:0")));
-        let udp_receiver =
-            expect_result_ok_payload(aura_direct_net_udp_bind(string_value("127.0.0.1:0")));
+        let udp_sender = expect_result_ok_payload(aura_direct_net_udp_bind(
+            ScopedValue::new(string_value("127.0.0.1:0")).as_ptr(),
+        ));
+        let udp_receiver = expect_result_ok_payload(aura_direct_net_udp_bind(
+            ScopedValue::new(string_value("127.0.0.1:0")).as_ptr(),
+        ));
         let udp_receiver_address =
             expect_result_ok_string(aura_direct_udp_socket_local_addr(udp_receiver));
         expect_result_ok_unit(aura_direct_udp_socket_send_bytes(
             udp_sender,
-            string_value(&udp_receiver_address),
-            byte_vec(b"hello"),
-            duration_value(5_000),
+            ScopedValue::new(string_value(&udp_receiver_address)).as_ptr(),
+            ScopedValue::new(byte_vec(b"hello")).as_ptr(),
+            ScopedValue::new(duration_value(5_000)).as_ptr(),
         ));
-        let datagram = expect_option_some_payload(expect_result_ok_payload(
-            aura_direct_udp_socket_recv_from(udp_receiver, int_value(64), duration_value(5_000)),
-        ));
+        let datagram =
+            expect_option_some_payload(expect_result_ok_payload(aura_direct_udp_socket_recv_from(
+                udp_receiver,
+                ScopedValue::new(int_value(64)).as_ptr(),
+                ScopedValue::new(duration_value(5_000)).as_ptr(),
+            )));
         let reply_address = expect_string(aura_direct_udp_datagram_address(datagram));
         release(aura_direct_udp_datagram_bytes(datagram));
         assert_eq!(
@@ -1368,12 +1481,16 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
         );
         expect_result_ok_unit(aura_direct_udp_socket_send_bytes(
             udp_receiver,
-            string_value(&reply_address),
-            byte_vec(b"ok"),
-            duration_value(5_000),
+            ScopedValue::new(string_value(&reply_address)).as_ptr(),
+            ScopedValue::new(byte_vec(b"ok")).as_ptr(),
+            ScopedValue::new(duration_value(5_000)).as_ptr(),
         ));
         release(expect_option_some_payload(expect_result_ok_payload(
-            aura_direct_udp_socket_recv(udp_sender, int_value(64), duration_value(5_000)),
+            aura_direct_udp_socket_recv(
+                udp_sender,
+                ScopedValue::new(int_value(64)).as_ptr(),
+                ScopedValue::new(duration_value(5_000)).as_ptr(),
+            ),
         )));
         release(aura_direct_udp_socket_close(udp_sender));
         release(aura_direct_udp_socket_close(udp_receiver));
@@ -1393,39 +1510,41 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
                     % 1_000_000
             );
             let _ = fs::remove_file(&unix_path);
-            let unix_listener =
-                expect_result_ok_payload(aura_direct_net_unix_listen(string_value(&unix_path)));
+            let unix_listener = expect_result_ok_payload(aura_direct_net_unix_listen(
+                ScopedValue::new(string_value(&unix_path)).as_ptr(),
+            ));
             let unix_listener_handle = unix_listener as usize;
             let unix_server = thread::spawn(move || {
                 let unix_listener = unix_listener_handle as *mut OpaqueValue;
                 let accepted = expect_result_ok_payload(aura_direct_unix_listener_accept(
                     unix_listener,
-                    duration_value(5_000),
+                    ScopedValue::new(duration_value(5_000)).as_ptr(),
                 ));
                 release(aura_direct_unix_stream_read_exact(
                     accepted,
-                    int_value(4),
-                    duration_value(5_000),
+                    ScopedValue::new(int_value(4)).as_ptr(),
+                    ScopedValue::new(duration_value(5_000)).as_ptr(),
                 ));
                 expect_result_ok_unit(aura_direct_unix_stream_write_all(
                     accepted,
-                    string_value("ok"),
-                    duration_value(5_000),
+                    ScopedValue::new(string_value("ok")).as_ptr(),
+                    ScopedValue::new(duration_value(5_000)).as_ptr(),
                 ));
                 release(aura_direct_unix_stream_close(accepted));
                 release(accepted);
             });
-            let unix_client =
-                expect_result_ok_payload(aura_direct_net_unix_connect(string_value(&unix_path)));
+            let unix_client = expect_result_ok_payload(aura_direct_net_unix_connect(
+                ScopedValue::new(string_value(&unix_path)).as_ptr(),
+            ));
             expect_result_ok_unit(aura_direct_unix_stream_write_all(
                 unix_client,
-                string_value("unix"),
-                duration_value(5_000),
+                ScopedValue::new(string_value("unix")).as_ptr(),
+                ScopedValue::new(duration_value(5_000)).as_ptr(),
             ));
             release(aura_direct_unix_stream_read_exact(
                 unix_client,
-                int_value(2),
-                duration_value(5_000),
+                ScopedValue::new(int_value(2)).as_ptr(),
+                ScopedValue::new(duration_value(5_000)).as_ptr(),
             ));
             release(aura_direct_unix_stream_close(unix_client));
             release(unix_client);
@@ -1464,11 +1583,11 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
                 .expect("HTTP fixture should write chunked response body");
         });
         let http_response = expect_result_ok_payload(aura_direct_net_http_request_bytes_timeout(
-            string_value("POST"),
-            string_value(&format!("http://{http_address}/ffi")),
-            byte_vec(b"body"),
-            aura_direct_map_empty(),
-            duration_value(5_000),
+            ScopedValue::new(string_value("POST")).as_ptr(),
+            ScopedValue::new(string_value(&format!("http://{http_address}/ffi"))).as_ptr(),
+            ScopedValue::new(byte_vec(b"body")).as_ptr(),
+            ScopedValue::new(aura_direct_map_empty()).as_ptr(),
+            ScopedValue::new(duration_value(5_000)).as_ptr(),
         ));
         assert_eq!(aura_direct_http_response_status(http_response), 201);
         assert_eq!(
@@ -1486,9 +1605,9 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
             .join()
             .expect("HTTP fixture server should finish");
 
-        let ws_listener = expect_result_ok_payload(aura_direct_net_websocket_listen(string_value(
-            "127.0.0.1:0",
-        )));
+        let ws_listener = expect_result_ok_payload(aura_direct_net_websocket_listen(
+            ScopedValue::new(string_value("127.0.0.1:0")).as_ptr(),
+        ));
         let ws_address =
             expect_result_ok_string(aura_direct_websocket_listener_local_addr(ws_listener));
         let ws_listener_handle = ws_listener as usize;
@@ -1496,29 +1615,35 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
             let ws_listener = ws_listener_handle as *mut OpaqueValue;
             let socket = expect_result_ok_payload(aura_direct_websocket_listener_accept(
                 ws_listener,
-                duration_value(5_000),
+                ScopedValue::new(duration_value(5_000)).as_ptr(),
             ));
             release(expect_option_some_payload(expect_result_ok_payload(
-                aura_direct_websocket_recv_text(socket, duration_value(5_000)),
+                aura_direct_websocket_recv_text(
+                    socket,
+                    ScopedValue::new(duration_value(5_000)).as_ptr(),
+                ),
             )));
             expect_result_ok_unit(aura_direct_websocket_send_bytes(
                 socket,
-                byte_vec(b"ok"),
-                duration_value(5_000),
+                ScopedValue::new(byte_vec(b"ok")).as_ptr(),
+                ScopedValue::new(duration_value(5_000)).as_ptr(),
             ));
             release(aura_direct_websocket_close(socket));
             release(socket);
         });
-        let ws_client = expect_result_ok_payload(aura_direct_net_websocket_connect(string_value(
-            &format!("ws://{ws_address}"),
-        )));
+        let ws_client = expect_result_ok_payload(aura_direct_net_websocket_connect(
+            ScopedValue::new(string_value(&format!("ws://{ws_address}"))).as_ptr(),
+        ));
         expect_result_ok_unit(aura_direct_websocket_send_text(
             ws_client,
-            string_value("hello"),
-            duration_value(5_000),
+            ScopedValue::new(string_value("hello")).as_ptr(),
+            ScopedValue::new(duration_value(5_000)).as_ptr(),
         ));
         release(expect_option_some_payload(expect_result_ok_payload(
-            aura_direct_websocket_recv_bytes(ws_client, duration_value(5_000)),
+            aura_direct_websocket_recv_bytes(
+                ws_client,
+                ScopedValue::new(duration_value(5_000)).as_ptr(),
+            ),
         )));
         release(aura_direct_websocket_close(ws_client));
         release(ws_client);

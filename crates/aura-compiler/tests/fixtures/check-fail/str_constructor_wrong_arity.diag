@@ -1,0 +1,5 @@
+error[AU2004]: `str` expects 1 argument, found 2
+ --> crates/aura-compiler/tests/fixtures/check-fail/str_constructor_wrong_arity.au:2:13
+  |
+2 |     value = str("hello", "world")
+  |             ^

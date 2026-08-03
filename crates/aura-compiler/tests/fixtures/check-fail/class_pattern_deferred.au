@@ -1,0 +1,11 @@
+class Point:
+    x: int32
+
+def main() -> int32:
+    point = Point(x=1)
+    match point:
+        case Point(value):
+            print(value)
+        case _:
+            pass
+    return 0

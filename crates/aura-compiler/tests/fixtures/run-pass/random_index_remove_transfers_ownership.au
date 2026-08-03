@@ -4,22 +4,15 @@ class Holder:
     generator: random.Rng
 
 def main():
-    # `generators[0]` is rejected by AU3005 because `random.Rng` cannot be
-    # cloned, so `remove(index)` is the transfer that actually works.
-    mut generators = Vec[random.Rng]()
-    generators.push(random.Rng(seed=7))
-    match own generators.remove(0):
-        case Option.Some(chosen):
-            mut owned_generator = chosen
-            print(owned_generator.next_int(lo=1, hi=10))
-        case Option.None:
-            print("none")
-    print(generators.len())
+    # `pop(index)` transfers a non-copy element out of a list.
+    mut generators = list[random.Rng]()
+    generators.append(random.Rng(seed=7))
+    mut owned_generator = generators.pop(0)
+    print(owned_generator.next_int(lo=1, hi=10))
 
-    # The same holds transitively: `Holder` is rejected because it carries
-    # `random.Rng` state, and `remove(key)` transfers it out of the map.
-    mut holders = Map[String, Holder]()
-    holders.set("a", Holder(generator=random.Rng(seed=7)))
+    # `dict.remove(key)` likewise transfers the optional stored value.
+    mut holders = dict[str, Holder]()
+    holders["a"] = Holder(generator=random.Rng(seed=7))
     match own holders.remove("a"):
         case Option.Some(chosen):
             mut owned_holder = chosen

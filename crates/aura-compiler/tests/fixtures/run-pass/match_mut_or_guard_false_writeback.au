@@ -1,0 +1,18 @@
+enum Reading:
+    Exact(int32)
+    Approx(int32)
+
+def mutate_and_reject(value: mut int32) -> bool:
+    value += 5
+    return false
+
+def main() -> int32:
+    mut reading = Reading.Approx(1)
+    match mut reading:
+        case Exact(value) | Approx(value) if mutate_and_reject(value):
+            print(0)
+        case Approx(value):
+            print(value)
+        case Exact(value):
+            print(-value)
+    return 0

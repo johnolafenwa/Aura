@@ -1,4 +1,4 @@
-def may_fail(x: int32) -> Result[int32, String]:
+def may_fail(x: int32) -> Result[int32, str]:
     if x < 0:
         return Result.Err("negative")
     return Result.Ok(x)

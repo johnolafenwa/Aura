@@ -17,7 +17,7 @@ fn builtin_type_lowering_preserves_nested_function_signatures() {
             ),
             FunctionTypeParam::new(
                 ParamMode::BorrowMut,
-                TypeRef::named("String", Vec::new(), false, span),
+                TypeRef::named("str", Vec::new(), false, span),
                 span,
             ),
             FunctionTypeParam::new(
@@ -51,7 +51,7 @@ fn builtin_type_lowering_preserves_nested_function_signatures() {
                 },
                 FunctionParamContract {
                     name: String::new(),
-                    ty: Type::named("String"),
+                    ty: Type::named("str"),
                     passing: ReceiverKind::BorrowMut,
                     has_default: false,
                     default_erased: true,
@@ -176,6 +176,27 @@ fn builtin_imported_binding_resolves_exports_and_reports_missing_names() {
         .expect("builtin function exports should resolve");
     assert!(matches!(exists, ImportedBinding::Function(_)));
 
+    let bytes_path = ["bytes".to_string()];
+    let error = builtin_imported_binding(&bytes_path, "Error", Span::new(1, 8))
+        .expect("builtin enum exports should resolve");
+    let ImportedBinding::Enum(error) = error else {
+        panic!("bytes.Error should resolve as an enum export");
+    };
+    assert_eq!(error.decl.name, "Error");
+    assert_eq!(
+        error
+            .variants
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec![
+            "InvalidBase64",
+            "InvalidHexDigit",
+            "InvalidHexLength",
+            "InvalidUtf8"
+        ]
+    );
+
     let missing = builtin_imported_binding(&fs_path, "missing", Span::new(2, 4))
         .expect_err("missing builtin exports should fail");
     assert_eq!(missing.span, Some(Span::new(2, 4)));
@@ -203,8 +224,8 @@ fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() 
         "bytes::base64_decode",
         "bytes::sha256",
         "bytes::sha256_string",
-        "String.to_bytes",
-        "String.from_bytes",
+        "str.to_bytes",
+        "str.from_bytes",
         "json::is_valid",
         "json::stringify_map",
         "json::parse_string_map",
@@ -241,19 +262,19 @@ fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() 
         vec![
             (
                 "base",
-                &crate::sema::Type::named("String"),
+                &crate::sema::Type::named("str"),
                 ReceiverKind::Borrow,
                 true
             ),
             (
                 "child",
-                &crate::sema::Type::named("String"),
+                &crate::sema::Type::named("str"),
                 ReceiverKind::Borrow,
                 true
             ),
         ]
     );
-    assert_eq!(join.return_type, crate::sema::Type::named("String"));
+    assert_eq!(join.return_type, crate::sema::Type::named("str"));
 
     let increment =
         host_builtin_metadata("metrics::increment").expect("metrics.increment metadata");
@@ -278,11 +299,93 @@ fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() 
     assert_eq!(secure_bytes.params[0].ty, crate::sema::Type::named("int64"));
     assert_eq!(
         secure_bytes.return_type,
-        crate::sema::Type::Named("Vec".to_string(), vec![crate::sema::Type::named("uint8")])
+        crate::sema::Type::Named("list".to_string(), vec![crate::sema::Type::named("uint8")])
     );
 
     assert!(host_builtin_metadata("fs::exists").is_none());
     assert!(host_builtin_metadata("missing::function").is_none());
+}
+
+#[test]
+fn math_namespace_exposes_the_exact_float64_function_contract() {
+    let namespace =
+        builtin_module_namespace(&["math".to_string()]).expect("math should be a builtin module");
+    let expected = [
+        ("ceil", vec!["value"], Type::named("int64")),
+        ("cos", vec!["value"], Type::named("float64")),
+        ("exp", vec!["value"], Type::named("float64")),
+        ("floor", vec!["value"], Type::named("int64")),
+        ("log", vec!["value"], Type::named("float64")),
+        ("log10", vec!["value"], Type::named("float64")),
+        ("log2", vec!["value"], Type::named("float64")),
+        ("pow", vec!["base", "exponent"], Type::named("float64")),
+        ("sin", vec!["value"], Type::named("float64")),
+        ("tan", vec!["value"], Type::named("float64")),
+        ("trunc", vec!["value"], Type::named("int64")),
+    ];
+
+    assert_eq!(namespace.functions.len(), expected.len());
+    for (name, parameter_names, return_type) in expected {
+        let function = namespace
+            .functions
+            .get(name)
+            .unwrap_or_else(|| panic!("math.{name} should be available"));
+        assert_eq!(
+            function
+                .decl
+                .params
+                .iter()
+                .map(|parameter| parameter.name.as_str())
+                .collect::<Vec<_>>(),
+            parameter_names
+        );
+        assert!(function
+            .signature
+            .params
+            .iter()
+            .all(|parameter| *parameter == Type::named("float64")));
+        assert_eq!(function.signature.return_type, return_type);
+        assert!(host_builtin_metadata(&format!("math::{name}")).is_some());
+    }
+}
+
+#[test]
+fn math_namespace_exposes_exact_generic_float64_constants() {
+    let namespace =
+        builtin_module_namespace(&["math".to_string()]).expect("math should be a builtin module");
+    let expected = [
+        ("e", 0x4005_bf0a_8b14_5769_u64),
+        ("inf", 0x7ff0_0000_0000_0000_u64),
+        ("nan", 0x7ff8_0000_0000_0000_u64),
+        ("pi", 0x4009_21fb_5444_2d18_u64),
+    ];
+
+    assert_eq!(namespace.constants.len(), expected.len());
+    assert_eq!(namespace.all_constants.len(), expected.len());
+    for (name, bits) in expected {
+        let constant = namespace
+            .constants
+            .get(name)
+            .unwrap_or_else(|| panic!("math.{name} should be available"));
+        assert_eq!(constant.module_name, "math");
+        assert!(constant.decl.public);
+        assert_eq!(constant.decl.name, name);
+        assert_eq!(constant.ty, Type::named("float64"));
+        let crate::ast::ExprKind::Float(value) = constant.decl.value.kind else {
+            panic!("math.{name} should use the generic float-literal constant representation");
+        };
+        assert_eq!(value.to_bits(), bits, "math.{name} bits");
+        assert_eq!(
+            namespace.all_constants[name].decl.value.span,
+            constant.decl.value.span
+        );
+    }
+
+    assert!(matches!(
+        builtin_imported_binding(&["math".to_string()], "pi", crate::diag::Span::new(7, 3))
+            .expect("math.pi should be directly importable"),
+        crate::sema::ImportedBinding::Constant(_)
+    ));
 }
 
 #[test]
@@ -346,13 +449,13 @@ fn bytes_namespace_exposes_shared_byte_vector_codecs_and_typed_errors() {
         ]
     );
 
-    let from_bytes = host_builtin_metadata("String.from_bytes").expect("associated metadata");
+    let from_bytes = host_builtin_metadata("str.from_bytes").expect("associated metadata");
     assert_eq!(from_bytes.params[0].passing, ReceiverKind::Borrow);
     assert_eq!(
         from_bytes.return_type,
         Type::Named(
             "Result".to_string(),
-            vec![Type::named("String"), Type::named("bytes.Error")],
+            vec![Type::named("str"), Type::named("bytes.Error")],
         )
     );
 }
@@ -395,7 +498,7 @@ fn random_namespace_exposes_one_opaque_rng_type_and_secure_functions() {
     );
     assert_eq!(
         secure_bytes.signature.return_type,
-        crate::sema::Type::Named("Vec".to_string(), vec![crate::sema::Type::named("uint8")])
+        crate::sema::Type::Named("list".to_string(), vec![crate::sema::Type::named("uint8")])
     );
     assert!(!namespace.functions.contains_key("secure_float"));
 
@@ -428,19 +531,19 @@ fn json_namespace_exposes_dynamic_tree_contract() {
         ("Bool", vec![Type::named("bool")]),
         ("Int", vec![Type::named("int64")]),
         ("Float", vec![Type::named("float64")]),
-        ("String", vec![Type::named("String")]),
+        ("String", vec![Type::named("str")]),
         (
             "Array",
             vec![Type::Named(
-                "Vec".to_string(),
+                "list".to_string(),
                 vec![Type::named("json.Value")],
             )],
         ),
         (
             "Object",
             vec![Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("json.Value")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("json.Value")],
             )],
         ),
     ];
@@ -479,7 +582,7 @@ fn json_namespace_exposes_dynamic_tree_contract() {
         (
             "Syntax",
             vec![
-                ("message", Type::named("String")),
+                ("message", Type::named("str")),
                 ("line", Type::named("int32")),
                 ("column", Type::named("int32")),
             ],
@@ -523,7 +626,7 @@ fn json_namespace_exposes_dynamic_tree_contract() {
     }
 
     let parse = &namespace.functions["parse"];
-    assert_eq!(parse.signature.params, vec![Type::named("String")]);
+    assert_eq!(parse.signature.params, vec![Type::named("str")]);
     assert_eq!(parse.decl.params[0].mode, ParamMode::Default);
     assert_eq!(parse.signature.param_passings, vec![ReceiverKind::Borrow]);
     assert_eq!(
@@ -556,7 +659,7 @@ fn json_namespace_exposes_dynamic_tree_contract() {
             .map(|default| &default.kind),
         Some(ExprKind::Name(name)) if name == "None"
     ));
-    assert_eq!(dumps.signature.return_type, Type::named("String"));
+    assert_eq!(dumps.signature.return_type, Type::named("str"));
     assert!(
         !host_builtin_metadata("json::dumps")
             .expect("json.dumps host metadata")
@@ -590,16 +693,16 @@ fn json_namespace_exposes_dynamic_tree_contract() {
     }
 
     for (name, inner_type) in [
-        ("into_string", Type::named("String")),
+        ("into_string", Type::named("str")),
         (
             "into_array",
-            Type::Named("Vec".to_string(), vec![Type::named("json.Value")]),
+            Type::Named("list".to_string(), vec![Type::named("json.Value")]),
         ),
         (
             "into_object",
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("json.Value")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("json.Value")],
             ),
         ),
     ] {

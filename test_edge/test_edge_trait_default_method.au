@@ -1,11 +1,11 @@
 # Test: trait with default method implementation (if supported)
 
 trait Describable:
-    def describe(self) -> String:
+    def describe(self) -> str:
         return "unknown"
 
 class Item:
-    name: String
+    name: str
 
 impl Describable for Item:
     pass

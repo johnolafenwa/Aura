@@ -1,0 +1,5 @@
+def main() -> int32:
+    mut xs: list[int32] = []
+    xs.append(1)
+    xs.append(2)
+    return 0

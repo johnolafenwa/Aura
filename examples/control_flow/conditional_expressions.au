@@ -1,4 +1,4 @@
-def describe(score: int32) -> String:
+def describe(score: int32) -> str:
     return "high" if score >= 80 else "mid" if score >= 50 else "low"
 
 def main():

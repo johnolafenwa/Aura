@@ -15,7 +15,7 @@ def main():
     length: def() -> int64 = lambda: name.len()
 
     token = "owned"
-    take: def() -> String = lambda: token
+    take: def() -> str = lambda: token
 
     print(scale(21))
     print(scale(6))
@@ -63,9 +63,9 @@ type. An expected result type also constrains the body. A zero-parameter
 expected callable type is present.
 
 ```aura
-shared: def(String) -> int64 = lambda text: text.len()
-owned: def(own String) -> String = lambda own text: text
-push_one: def(mut Vec[int32]) -> None = lambda mut values: values.push(1)
+shared: def(str) -> int64 = lambda text: text.len()
+owned: def(own str) -> str = lambda own text: text
+push_one: def(mut list[int32]) -> None = lambda mut values: values.append(1)
 ```
 
 A bare lambda parameter matches a bare shared parameter, `own name` matches an
@@ -83,7 +83,7 @@ including arguments, fields, collections, and returns.
 A capturing closure retains semantic environment and call-kind metadata that
 an arbitrary written `def(...) -> R` storage type does not describe. It may be
 held in an immutable inferred or contextually typed local, called directly,
-passed directly to compiler-known repeatable callback sites such as the Vec
+passed directly to compiler-known repeatable callback sites such as the list
 algorithms and `control.retry`, or moved into a qualifying task start. It
 cannot be coerced through an arbitrary written `def` parameter, stored in a
 `def` field or collection element, or returned through an annotated `def`
@@ -130,11 +130,12 @@ outer source afterward reports `AU3001`. Clone before creation when both
 owners are required:
 
 ```aura
-name = "Aura"
-kept = name.clone()
-length: def() -> int64 = lambda: kept.len()
-print(name)
-print(length())
+def main():
+    name = "Aura"
+    kept = name.clone()
+    length: def() -> int64 = lambda: kept.len()
+    print(name)
+    print(length())
 ```
 
 A bare parameter of an enclosing function is shared capability, not owned
@@ -170,13 +171,13 @@ and are not captures.
 A lambda expression reached inside a comprehension is created at that runtime
 position. It may snapshot a Copy target, and it may move a Queue-received owned
 target when the surrounding use permits one consuming closure. A shared
-non-Copy Vec/Set target is a capability into the source and cannot be captured;
+non-Copy list/set target is a capability into the source and cannot be captured;
 pass an explicit clone to a named helper or arrange another owned value outside
 the comprehension when independent storage is required. Capture environments
 remain read-only.
 
 The ordinary storage boundary also remains. A capturing closure cannot itself
-be inserted as a list, set, or map comprehension result because collection
+be inserted as a list, set, or dictionary comprehension result because collection
 storage erases its environment/call-kind metadata. It may be used immediately
 at a compiler-known callback or direct-call site inside an iterable, filter,
 key, value, or element expression. Such creation happens only when preceding
@@ -220,7 +221,7 @@ mutable captured state.
 Arbitrary structural `def` parameters and stored `def` fields, collection
 elements, and annotated returns currently carry only capture-free code
 pointers. Compiler-known callback sites preserve repeatable closure metadata;
-`control.retry` and the Vec callbacks reject consuming closures. Task start
+`control.retry` and the list callbacks reject consuming closures. Task start
 accepts a qualifying closure by move for one invocation.
 
 Conditional and `match` expressions cannot merge capturing closures from

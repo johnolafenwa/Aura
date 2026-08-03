@@ -1,4 +1,4 @@
 def main():
-    mut values = Vec[int32]()
-    values.push(1)
+    mut values = list[int32]()
+    values.append(1)
     print("x" in values)

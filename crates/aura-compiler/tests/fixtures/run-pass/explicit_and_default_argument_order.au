@@ -1,4 +1,4 @@
-def mark(label: String, value: int32) -> int32:
+def mark(label: str, value: int32) -> int32:
     print(label)
     return value
 

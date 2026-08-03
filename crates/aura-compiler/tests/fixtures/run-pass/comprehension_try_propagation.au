@@ -1,25 +1,25 @@
-def keep(value: int64) -> Result[bool, String]:
+def keep(value: int64) -> Result[bool, str]:
     print(f"filter {value}")
     if value == 2:
         return Result.Err("filter stopped")
     return Result.Ok(true)
 
-def produce(value: int64) -> Result[String, String]:
+def produce(value: int64) -> Result[str, str]:
     print(f"output {value}")
     if value == 2:
         return Result.Err("output stopped")
     return Result.Ok(f"owned {value}")
 
-def collect_filter() -> Result[Vec[int64], String]:
-    values: Vec[int64] = [
+def collect_filter() -> Result[list[int64], str]:
+    values: list[int64] = [
         value
         for value in [1, 2, 3]
         if try keep(value)
     ]
     return Result.Ok(values)
 
-def collect_output() -> Result[Vec[String], String]:
-    values: Vec[String] = [
+def collect_output() -> Result[list[str], str]:
+    values: list[str] = [
         try produce(value)
         for value in [1, 2, 3]
     ]

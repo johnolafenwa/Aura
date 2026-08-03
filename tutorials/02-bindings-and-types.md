@@ -29,8 +29,8 @@ c: int32 = a + b
 Type annotations are required when the compiler cannot infer the type, for example with empty collections:
 
 ```python
-mut names: Vec[String] = []
-mut counts: Map[String, int32] = {}
+mut names: list[str] = []
+mut counts: dict[str, int32] = {}
 ```
 
 See [examples/basics/main_function.au](../examples/basics/main_function.au).
@@ -73,7 +73,7 @@ Aura has a rich set of numeric types. If you are not sure which to use, start wi
 | `float64` | 64-bit floating point | Default for decimal math |
 | `float32` | 32-bit floating point | When memory or precision constraints require it |
 | `bool` | `true` or `false` | Conditions and flags |
-| `String` | Owned text | Any text data |
+| `str` | Owned text | Any text data |
 | `Duration` | Signed nanosecond time span | Computed backoff and concurrency timeouts (`5ms`, `1s`, `2m`) |
 | `None` | Unit type | Functions with no meaningful return |
 
@@ -89,13 +89,17 @@ whole_ratio: float64 = 2
 
 This float-context rule applies only to literals. It never converts an already-bound integer value. If an integer literal is not exact in the expected floating type, the compiler asks you to use an explicit floating spelling or `.to_float()` so that rounding is visible in the source.
 
-The default-type change does not alter APIs that explicitly use `int32`. For
-example, `range(...)`, Vec indexes, queue capacities, and a numeric `main()`
-exit status remain `int32`; literals passed to them adopt that expected type.
-Length members are count APIs instead: `String.len()`, `String.byte_len()`,
-`Vec.len()`, `Map.len()`, and `Set.len()` all return `int64`.
+APIs that explicitly use `int32`, including queue capacities and a numeric
+`main()` exit status, remain exact `int32` contracts. Position APIs use
+`int64`: this includes ranges, list indexes, slice endpoints, enumeration
+positions, and Array coordinates. Length members match that position domain:
+`str.len()`, `str.byte_len()`,
+`list.len()`, `dict.len()`, and `set.len()` all return `int64`.
 
-That context applies to the literal expression itself, not to a binding created earlier. `values.get(0)` uses the required `int32` context, but `index = 0` creates an `int64` binding and cannot later be used as a Vec index. Write `index: int32 = 0` when the binding is meant for a fixed-width index API.
+`values.get(0)` and `index = 0` both use `int64`, so the binding can flow
+directly into an index operation. Fixed-width `int8`, `int16`, `int32`,
+`uint8`, `uint16`, and `uint32` bindings widen losslessly only at position
+sites. Ordinary assignments and function arguments still require exact types.
 
 ## Builtin Container Types
 
@@ -103,9 +107,9 @@ Aura provides three owned collection types and several runtime types:
 
 | Type | Description |
 |------|-------------|
-| `Vec[T]` | Ordered, growable list |
-| `Map[K, V]` | Key-value map |
-| `Set[T]` | Unordered collection of unique values |
+| `list[T]` | Ordered, growable list |
+| `dict[K, V]` | Key-value dictionary |
+| `set[T]` | Unordered collection of unique values |
 | `Array[T]` | Fixed-shape contiguous numeric array; `T` is `int32`, `int64`, `float32`, or `float64` |
 | `Option[T]` | A value that may or may not be present |
 | `Result[T, E]` | Success or failure |
@@ -119,21 +123,21 @@ Aura provides three owned collection types and several runtime types:
 Construct it explicitly with an Array constructor:
 
 ```python
-source: Vec[float64] = [1.0, 2.0, 3.0, 4.0]
-matrix = Array[float64].from_vec(source, [2, 2])
+source: list[float64] = [1.0, 2.0, 3.0, 4.0]
+matrix = Array[float64].from_list(source, [2, 2])
 zeros = Array[int32].zeros([3, 4])
 filled = Array[float32].full([2, 2], 0.5)
 ```
 
-`from_vec` copies the scalar elements, so `source` remains usable. Assignment
+`from_list` copies the scalar elements, so `source` remains usable. Assignment
 of an Array transfers ownership, while `.clone()` returns an independent
 Array. All four maintained Array specializations satisfy `Transfer`. See
 [examples/numbers/numeric_arrays.au](../examples/numbers/numeric_arrays.au)
 and the [Numeric Arrays Manual](../docs/manual/numeric-arrays.md).
 
-## `Vec[T]` And List Literals
+## `list[T]` And List Literals
 
-Create a vector with a list literal:
+Create a list with a list literal:
 
 ```python
 mut numbers = [1, 2, 3]
@@ -142,7 +146,7 @@ mut numbers = [1, 2, 3]
 Or with the explicit empty constructor:
 
 ```python
-values = Vec[int32]()
+values = list[int32]()
 ```
 
 The element type must be consistent:
@@ -155,22 +159,22 @@ mut bad = [1, "two"]  # rejected: mixed types
 Empty list literals need a type annotation:
 
 ```python
-mut names: Vec[String] = []
+mut names: list[str] = []
 ```
 
-Common vector operations:
+Common list operations:
 
 ```python
 mut items = [10, 20, 30]
-items.push(40)             # append an element
+items.append(40)             # append an element
 print(items.len())         # 4
 print(items[0])            # 10 -- indexed access
-print(items.contains(20))  # true
+print(20 in items)         # true
 popped = items.pop()       # removes and returns the last element
 ```
 
-Negative Vec indexes count from the end. The same normalization applies to
-direct reads and writes and to `get`, `set`, `remove`, `swap`, and `insert`:
+Negative list indexes count from the end. The same normalization applies to
+direct reads and writes and to `get`, `set`, `pop`, and `swap`:
 
 ```python
 print(items[-1])                 # final element
@@ -182,35 +186,35 @@ match items.get(-2):
 
 items[-1] = 50
 items.insert(-1, 45)             # inserts before the final element
-end_index: int32 = items.len() as int32
+end_index: int64 = items.len()
 items.insert(end_index, 60)      # appends
 ```
 
 Normalization is `len + index`, performed once. `get` returns `None` if the
-result is still out of range; direct access and the mutating methods raise a
-runtime error. Unlike Python, `insert` does not clamp an extremely negative
-index to zero, because silently inserting at the wrong position hides bugs.
+result is still out of range; direct access, `pop`, `set`, and `swap` raise a
+runtime error. `insert` clamps positions to the range from zero through the
+current length.
 
-Vec slicing uses the same loud boundary philosophy and returns a fresh owned
-Vec:
+List slicing uses the same loud boundary philosophy and returns a fresh owned
+list:
 
 ```python
 values = [10, 20, 30, 40]
 middle = values[1:3]  # [20, 30]
 prefix = values[:2]   # [10, 20]
 suffix = values[-2:]  # [30, 40]
-copy = values[:]      # an independent Vec
+copy = values[:]      # an independent list
 ```
 
-Every written endpoint is exactly `int32`, negatives normalize once, and both
+Every written endpoint uses the `int64` position domain, negatives normalize once, and both
 effective bounds must be in `0..=len`. A start greater than end is also an
 `AU4003` runtime error. Aura does not copy Python's clamping or
 reversed-range-as-empty behavior. Slicing copies Copy elements and clones
 clone-safe non-Copy elements; it never creates a view.
 
-The full method surface includes `len`, `is_empty`, `clone`, `push`, `pop`,
-`get`, `insert`, `set`, `remove`, `swap`, `contains`, `extend`, `clear`,
-`reverse`, `sort`, `sort_by`, `map`, and `filter`.
+The method surface includes `len`, `is_empty`, `copy`, `append`, `pop`, `get`,
+`insert`, `set`, `remove`, `index`, `count`, `swap`, `extend`, `clear`,
+`reverse`, `sort`, `map`, `filter`, `reserve`, and `with_capacity`.
 
 The four callable-powered algorithms use named function values:
 
@@ -221,27 +225,25 @@ def doubled(value: int32) -> int32:
 def is_even(value: int32) -> bool:
     return value % 2 == 0
 
-values: Vec[int32] = [3, 1, 2, 4]
+values: list[int32] = [3, 1, 2, 4]
 mapped = values.map(doubled)
 filtered = values.filter(is_even)
 
-mut ordered = values.clone()
+mut ordered = values.copy()
 ordered.sort()
 ```
 
-`map` and `filter` are eager shared reads that return fresh owned vectors and
+`map` and `filter` are eager shared reads that return fresh owned lists and
 retain `values`. `filter` clones accepted elements, so the element type must be
-clone-safe. `sort` and `sort_by` are stable in-place mutations. The `sort_by`
-key callback runs once per element from left to right before mutation; a key
-trap leaves the vector unchanged. Algorithm callbacks take their element with
+clone-safe. Natural and keyed `sort` calls are stable in-place mutations. The
+`key` callback runs once per element from left to right before mutation; a key
+trap leaves the list unchanged. Algorithm callbacks take their element with
 the exact bare/shared capability shown above, not `mut` or `own`.
 
-`Vec.len()` returns `int64`, while `range(...)` and Vec indexes remain
-`int32`. Narrow explicitly at the consumer; integer casts are checked, so an
-out-of-range length fails and never wraps:
+`list.len()`, `range(...)`, and list indexes share the `int64` position domain:
 
 ```python
-for index in range(items.len() as int32):
+for index in range(items.len()):
     print(items[index])
 ```
 
@@ -253,15 +255,15 @@ assert len(items) == items.len()
 assert len("A🎉") == "A🎉".len()
 ```
 
-For `String`, `len()` counts Unicode scalar values and `byte_len()` counts the
+For `str`, `len()` counts Unicode scalar values and `byte_len()` counts the
 UTF-8 encoding bytes. Both counts are `int64`, so `"A🎉".len()` is `2` while
 `"A🎉".byte_len()` is `5`.
 
 Indexed reads work as ordinary expressions, so chains like `keys[idx].clone()` are supported.
-For clone-safe non-copy element types like `String` or ordinary user-defined
+For clone-safe non-copy element types like `str` or ordinary user-defined
 classes, use `get(index)` for an explicit cloned read. Direct `items[index]`
 access is rejected. A value containing `random.Rng` must be transferred with
-`remove(index)` because it cannot be cloned, and the rejection names that
+`pop(index)` because it cannot be cloned, and the rejection names that
 reason directly:
 
 ```python
@@ -273,20 +275,20 @@ match names.get(0):
         pass
 ```
 
-See [examples/collections/vec_basics.au](../examples/collections/vec_basics.au),
-[examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au),
-[examples/collections/vec_polish.au](../examples/collections/vec_polish.au),
+See [examples/collections/list_basics.au](../examples/collections/list_basics.au),
+[examples/collections/list_iteration.au](../examples/collections/list_iteration.au),
+[examples/collections/list_polish.au](../examples/collections/list_polish.au),
 [examples/collections/slices.au](../examples/collections/slices.au),
 and
-[examples/collections/vec_algorithms.au](../examples/collections/vec_algorithms.au).
+[examples/collections/list_algorithms.au](../examples/collections/list_algorithms.au).
 
 For integer types, the runtime enforces the annotated width. A binding like
 `value: int8 = 127` is valid, but exceeding that range at runtime produces an
 error and preserves the declared type.
 
-## `Map[K, V]` And Map Literals
+## `dict[K, V]` And Dictionary Literals
 
-Create a map with a literal:
+Create a dictionary with a literal:
 
 ```python
 mut counts = {"aura": 1, "codex": 2}
@@ -295,16 +297,16 @@ mut counts = {"aura": 1, "codex": 2}
 Or with the explicit empty constructor:
 
 ```python
-counts = Map[String, int32]()
+counts = dict[str, int32]()
 ```
 
-Empty map literals need a type annotation:
+Empty dictionary literals need a type annotation:
 
 ```python
-mut counts: Map[String, int32] = {}
+mut counts: dict[str, int32] = {}
 ```
 
-Maps support indexed reads when the value type is copy, and indexed writes for
+Dictionaries support indexed reads when the value type is copy, and indexed writes for
 all value types:
 
 ```python
@@ -312,37 +314,39 @@ counts["aura"] = 5
 print(counts["aura"])
 ```
 
-Map lookups work inside larger expressions including f-strings:
+Dictionary lookups work inside larger expressions including f-strings:
 
 ```python
 print(f"value: {counts['aura']}")
 ```
 
-For a non-copy value type, direct `map[key]` is rejected; Aura never performs a
+For a non-copy value type, direct `dictionary[key]` is rejected; Aura never performs a
 hidden clone. When the value type is clone-safe, `get(key)` gives an explicit
 cloned optional read and `remove(key)` transfers the stored value out. When the
 value type carries `random.Rng` state, only `remove(key)` works, and the
 rejection explains that `get(key)` would also be rejected.
 
-`items()` and `entries()` both return `Vec[MapEntry[K, V]]`, where each entry exposes `.key` and `.value`:
+`items()` returns `list[(K, V)]` in insertion order:
 
 ```python
 entries = counts.items()
 match entries.get(0):
-    case Option.Some(entry):
-        print(entry.key)
-        print(entry.value)
+    case Option.Some((key, value)):
+        print(key)
+        print(value)
     case Option.None:
         pass
 ```
 
-The full method surface includes `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, `values`, `items`, `entries`, `clear`, and `extend`.
+The method surface includes `len`, `is_empty`, `copy`, `get`, `remove`, `keys`,
+`values`, `items`, `clear`, `update`, `reserve`, and `with_capacity`. Use indexed
+assignment for storage and `in` for membership.
 
-See [examples/collections/map_basics.au](../examples/collections/map_basics.au).
+See [examples/collections/dict_basics.au](../examples/collections/dict_basics.au).
 
-## `Set[T]` And Set Literals
+## `set[T]` And Set Literals
 
-Create a set with value-only entries inside curly braces. Map literals use
+Create a set with value-only entries inside curly braces. Dictionary literals use
 `key: value` pairs:
 
 ```python
@@ -353,16 +357,13 @@ print(seen.len())              # 3
 Or with the explicit empty constructor:
 
 ```python
-names = Set[String]()
+names = set[str]()
 ```
 
-Empty set literals need a type annotation:
+Empty sets use the typed constructor shown above.
 
-```python
-mut names: Set[String] = {}
-```
-
-The full method surface includes `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`.
+The method surface includes `len`, `is_empty`, `copy`, `add`, `remove`,
+`discard`, `clear`, `reserve`, and `with_capacity`. Use `in` for membership.
 
 Sets deduplicate values. Bare iteration is shared; `for value in own set:`
 consumes the set.
@@ -371,7 +372,7 @@ See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
 
 ## Owned Comprehension Results
 
-List, set, and map comprehensions build fresh owned collections:
+List, set, and dictionary comprehensions build fresh owned collections:
 
 ```python
 values = [1, 2, 3, 4]
@@ -380,7 +381,7 @@ even = {value for value in values if value % 2 == 0}
 labels = {value: str(value) for value in values}
 ```
 
-Each clause uses the same bare-loop rules as `for value in values:`. A Vec or
+Each clause uses the same bare-loop rules as `for value in values:`. A list or
 Set target is shared, so storing a non-copy target in the new collection needs
 an explicit clone:
 

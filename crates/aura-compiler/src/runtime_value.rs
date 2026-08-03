@@ -660,7 +660,7 @@ impl ArrayValue {
                 ),
             ));
         }
-        let shape = try_copy_array_storage(shape, "Array.from_vec shape")?;
+        let shape = try_copy_array_storage(shape, "Array.from_list shape")?;
         Self::from_vec_with_shape(vector, dtype, shape)
     }
 
@@ -672,22 +672,22 @@ impl ArrayValue {
         let storage = match dtype {
             ArrayDType::Int32 => ArrayStorage::Int32(try_collect_array_storage(
                 vector.elements.len(),
-                "Array.from_vec",
+                "Array.from_list",
                 |index| array_int32_scalar(&vector.elements[index], index),
             )?),
             ArrayDType::Int64 => ArrayStorage::Int64(try_collect_array_storage(
                 vector.elements.len(),
-                "Array.from_vec",
+                "Array.from_list",
                 |index| array_int64_scalar(&vector.elements[index], index),
             )?),
             ArrayDType::Float32 => ArrayStorage::Float32(try_collect_array_storage(
                 vector.elements.len(),
-                "Array.from_vec",
+                "Array.from_list",
                 |index| array_float32_scalar(&vector.elements[index], index),
             )?),
             ArrayDType::Float64 => ArrayStorage::Float64(try_collect_array_storage(
                 vector.elements.len(),
-                "Array.from_vec",
+                "Array.from_list",
                 |index| array_float64_scalar(&vector.elements[index], index),
             )?),
         };
@@ -804,18 +804,18 @@ impl ArrayValue {
         }
     }
 
-    pub fn get(&self, coordinates: &[i32]) -> Result<Value> {
+    pub fn get(&self, coordinates: &[i64]) -> Result<Value> {
         Ok(self.value_at_flat(self.flat_index(coordinates)?))
     }
 
-    pub fn get_optional(&self, coordinates: &[i32]) -> Result<Option<Value>> {
+    pub fn get_optional(&self, coordinates: &[i64]) -> Result<Option<Value>> {
         Ok(self
             .flat_index(coordinates)
             .ok()
             .map(|index| self.value_at_flat(index)))
     }
 
-    pub fn set(&mut self, coordinates: &[i32], value: Value) -> Result<Value> {
+    pub fn set(&mut self, coordinates: &[i64], value: Value) -> Result<Value> {
         let index = self.flat_index(coordinates)?;
         self.set_flat(index, value)
     }
@@ -1017,7 +1017,7 @@ impl ArrayValue {
         )
     }
 
-    fn flat_index(&self, coordinates: &[i32]) -> Result<usize> {
+    fn flat_index(&self, coordinates: &[i64]) -> Result<usize> {
         if coordinates.len() != self.rank() {
             return Err(Diagnostic::coded(
                 "AU4007",
@@ -2782,7 +2782,10 @@ struct LightweightWorkerCoordinator {
 
 // Deep HTTP, TLS, and WebSocket library frames run on the bounded protocol
 // service, keeping ordinary guarded lightweight-task stacks compact.
-const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 512 * 1024;
+// The MIR interpreter can nest several large checked-dispatch frames before a
+// task reaches a blocking host call. Keep enough headroom for ordinary builtin
+// function values; the run-pass fixture suite pins this path.
+const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 768 * 1024;
 #[cfg(test)]
 thread_local! {
     static FAIL_NEXT_LIGHTWEIGHT_TASK_STACK_ALLOCATION: Cell<bool> = const { Cell::new(false) };
@@ -2975,12 +2978,12 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
                 unreachable!("numeric source types are handled before render_source_type")
             }
             Value::Bool(_) => "bool".to_string(),
-            Value::String(_) => "String".to_string(),
+            Value::String(_) => "str".to_string(),
             Value::Tuple(_) => "tuple".to_string(),
-            Value::Vec(_) => "Vec".to_string(),
+            Value::Vec(_) => "list".to_string(),
             Value::Array(_) => "Array".to_string(),
-            Value::Set(_) => "Set".to_string(),
-            Value::Map(_) => "Map".to_string(),
+            Value::Set(_) => "set".to_string(),
+            Value::Map(_) => "dict".to_string(),
             Value::Duration(_) => "Duration".to_string(),
             Value::Rng(_) => "random.Rng".to_string(),
             Value::Range(_) => "Range".to_string(),
@@ -4276,9 +4279,9 @@ fn select_runtime_sources(values: Vec<Value>) -> Result<Vec<SelectRuntimeSource>
             "select runtime requires at least one Queue, Task, or Duration source",
         ));
     }
-    if values.len() > i32::MAX as usize {
+    if i64::try_from(values.len()).is_err() {
         return Err(select_runtime_error(
-            "select runtime source count exceeds the int32 outcome-index range",
+            "select runtime source count exceeds the int64 outcome-index range",
         ));
     }
 
@@ -4330,7 +4333,7 @@ fn select_runtime_probe(
 
     let now = Instant::now();
     for (index, source) in sources.iter().enumerate() {
-        let index = i32::try_from(index).expect("select source count was validated");
+        let index = i64::try_from(index).expect("select source count was validated");
         match source {
             SelectRuntimeSource::Queue(channel) => match channel.try_recv() {
                 TryRecvResult::Value(value) => {
@@ -6688,7 +6691,11 @@ impl Value {
                     }
                     Value::Array(array) => rendered.push_str(&array.render()),
                     Value::Set(values) => {
-                        rendered.push_str("Set{");
+                        if values.elements.is_empty() {
+                            rendered.push_str("set()");
+                            continue;
+                        }
+                        rendered.push('{');
                         actions.push(RenderAction::Static("}"));
                         for (index, value) in values.elements.iter().enumerate().rev() {
                             actions.push(RenderAction::Value(value));
@@ -6804,6 +6811,618 @@ pub(crate) fn render_float32(value: f32) -> String {
     format!("{value:?}")
 }
 
+pub(crate) const MAX_FORMAT_COMPONENT: usize = 1_000_000;
+pub(crate) const MAX_STRING_BYTES: usize = 64 * 1024 * 1024;
+
+fn append_string_with_limit(output: &mut String, text: &str, limit: usize) -> Result<()> {
+    let required = output
+        .len()
+        .checked_add(text.len())
+        .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
+    if required > limit {
+        return Err(Diagnostic::coded(
+            "AU4005",
+            format!("string output exceeds the maintained {limit}-byte allocation limit"),
+        ));
+    }
+    output
+        .try_reserve(text.len())
+        .map_err(|_| Diagnostic::coded("AU4005", "string allocation failed"))?;
+    output.push_str(text);
+    Ok(())
+}
+
+pub(crate) fn append_string_checked(output: &mut String, text: &str) -> Result<()> {
+    append_string_with_limit(output, text, MAX_STRING_BYTES)
+}
+
+pub(crate) fn concat_strings_checked(mut left: String, right: &str) -> Result<String> {
+    append_string_checked(&mut left, right)?;
+    Ok(left)
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FormatSpecErrorKind {
+    Syntax,
+    Type,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FormatSpecError {
+    pub(crate) kind: FormatSpecErrorKind,
+    pub(crate) message: String,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FormatAlignment {
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FormatSign {
+    Minus,
+    Plus,
+    Space,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ParsedFormatSpec {
+    pub(crate) fill: char,
+    pub(crate) alignment: Option<FormatAlignment>,
+    pub(crate) sign: Option<FormatSign>,
+    pub(crate) width: Option<usize>,
+    pub(crate) zero_pad: bool,
+    pub(crate) grouping: bool,
+    pub(crate) precision: Option<usize>,
+    pub(crate) ty: Option<char>,
+}
+
+fn format_syntax_error(message: impl Into<String>) -> FormatSpecError {
+    FormatSpecError {
+        kind: FormatSpecErrorKind::Syntax,
+        message: message.into(),
+    }
+}
+
+fn format_type_error(message: impl Into<String>) -> FormatSpecError {
+    FormatSpecError {
+        kind: FormatSpecErrorKind::Type,
+        message: message.into(),
+    }
+}
+
+pub(crate) fn parse_format_spec(
+    source: &str,
+) -> std::result::Result<ParsedFormatSpec, FormatSpecError> {
+    if source.contains(['{', '}']) {
+        return Err(format_syntax_error(
+            "format specifications cannot contain nested replacement fields",
+        ));
+    }
+    let chars = source.chars().collect::<Vec<_>>();
+    let mut index = 0usize;
+    let mut fill = ' ';
+    let mut alignment = None;
+    let alignment_for = |ch| match ch {
+        '<' => Some(FormatAlignment::Left),
+        '^' => Some(FormatAlignment::Center),
+        '>' => Some(FormatAlignment::Right),
+        _ => None,
+    };
+    if let Some(&first) = chars.first() {
+        if let Some(value) = alignment_for(first) {
+            alignment = Some(value);
+            index = 1;
+        } else if let Some(&second) = chars.get(1) {
+            if let Some(value) = alignment_for(second) {
+                fill = first;
+                alignment = Some(value);
+                index = 2;
+            }
+        }
+    }
+
+    let sign = match chars.get(index).copied() {
+        Some('+') => {
+            index += 1;
+            Some(FormatSign::Plus)
+        }
+        Some('-') => {
+            index += 1;
+            Some(FormatSign::Minus)
+        }
+        Some(' ') => {
+            index += 1;
+            Some(FormatSign::Space)
+        }
+        _ => None,
+    };
+
+    let width_start = index;
+    while chars.get(index).is_some_and(char::is_ascii_digit) {
+        index += 1;
+    }
+    let width = if index > width_start {
+        let value = chars[width_start..index]
+            .iter()
+            .collect::<String>()
+            .parse::<usize>()
+            .map_err(|_| format_syntax_error("format width is not a valid decimal integer"))?;
+        if value > MAX_FORMAT_COMPONENT {
+            return Err(format_syntax_error(format!(
+                "format width cannot exceed {MAX_FORMAT_COMPONENT}"
+            )));
+        }
+        Some(value)
+    } else {
+        None
+    };
+    let zero_pad = index > width_start && chars[width_start] == '0';
+
+    let grouping = chars.get(index) == Some(&',');
+    if grouping {
+        index += 1;
+    }
+
+    let precision = if chars.get(index) == Some(&'.') {
+        index += 1;
+        let start = index;
+        while chars.get(index).is_some_and(char::is_ascii_digit) {
+            index += 1;
+        }
+        if start == index {
+            return Err(format_syntax_error(
+                "format precision requires decimal digits after `.`",
+            ));
+        }
+        let value = chars[start..index]
+            .iter()
+            .collect::<String>()
+            .parse::<usize>()
+            .map_err(|_| format_syntax_error("format precision is not a valid decimal integer"))?;
+        if value > MAX_FORMAT_COMPONENT {
+            return Err(format_syntax_error(format!(
+                "format precision cannot exceed {MAX_FORMAT_COMPONENT}"
+            )));
+        }
+        Some(value)
+    } else {
+        None
+    };
+
+    let ty = chars.get(index).copied();
+    if let Some(ty) = ty {
+        if !matches!(ty, 'd' | 'f' | 'e' | 'x' | 'X' | 'b' | 'o' | '%' | 's') {
+            return Err(format_syntax_error(format!(
+                "unsupported format type `{ty}`; supported codes are d, f, e, x, X, b, o, %, and s"
+            )));
+        }
+        index += 1;
+    }
+    if index != chars.len() {
+        return Err(format_syntax_error(format!(
+            "malformed format specification `{source}`"
+        )));
+    }
+    Ok(ParsedFormatSpec {
+        fill,
+        alignment,
+        sign,
+        width,
+        zero_pad,
+        grouping,
+        precision,
+        ty,
+    })
+}
+
+fn format_type_family(ty: &Type) -> (&'static str, bool, bool, bool) {
+    match ty {
+        Type::Named(name, args) if args.is_empty() && name == "str" => ("str", true, false, false),
+        Type::Named(name, args)
+            if args.is_empty() && IntegerKind::from_runtime_type_name(name).is_some() =>
+        {
+            ("integer", false, true, true)
+        }
+        Type::Named(name, args)
+            if args.is_empty() && matches!(name.as_str(), "float32" | "float64") =>
+        {
+            ("float", false, false, true)
+        }
+        _ => ("value", false, false, false),
+    }
+}
+
+pub(crate) fn validate_format_spec_for_type(
+    spec: &ParsedFormatSpec,
+    value_type: &Type,
+) -> std::result::Result<(), FormatSpecError> {
+    let (family, is_string, is_integer, is_numeric) = format_type_family(value_type);
+    match spec.ty {
+        Some('s') if !is_string => {
+            return Err(format_type_error(format!(
+                "format code `s` requires `str`, found {family}"
+            )))
+        }
+        Some('d' | 'x' | 'X' | 'b' | 'o') if !is_integer => {
+            return Err(format_type_error(format!(
+                "integer format code requires an integer value, found {family}"
+            )))
+        }
+        Some('f' | 'e' | '%') if !is_numeric => {
+            return Err(format_type_error(format!(
+                "numeric format code requires an integer or floating value, found {family}"
+            )))
+        }
+        Some(_) | None => {}
+    }
+    if spec.sign.is_some() && !is_numeric {
+        return Err(format_type_error(
+            "a format sign is valid only for numeric values",
+        ));
+    }
+    if spec.zero_pad && !is_numeric {
+        return Err(format_type_error(
+            "zero-padding shorthand is valid only for numeric values",
+        ));
+    }
+    if spec.grouping && !matches!(spec.ty, Some('d' | 'f' | '%')) {
+        return Err(format_type_error(
+            "the thousands separator is valid only with d, f, and %",
+        ));
+    }
+    if spec.precision.is_some() && !matches!(spec.ty, Some('s' | 'f' | 'e' | '%')) {
+        return Err(format_type_error(
+            "precision requires s, f, e, or %; integer precision is available only through f, e, and %",
+        ));
+    }
+    Ok(())
+}
+
+fn group_decimal_digits(value: &str) -> String {
+    let (head, tail) = value.split_once('.').unwrap_or((value, ""));
+    let mut grouped = String::with_capacity(value.len() + value.len() / 3);
+    let first = head.len() % 3;
+    let mut index = 0usize;
+    if first != 0 {
+        grouped.push_str(&head[..first]);
+        index = first;
+    }
+    while index < head.len() {
+        if !grouped.is_empty() {
+            grouped.push(',');
+        }
+        grouped.push_str(&head[index..index + 3]);
+        index += 3;
+    }
+    if !tail.is_empty() {
+        grouped.push('.');
+        grouped.push_str(tail);
+    }
+    grouped
+}
+
+fn normalize_scientific_exponent(rendered: String) -> String {
+    let Some((mantissa, exponent)) = rendered.split_once('e') else {
+        return rendered;
+    };
+    let parsed = exponent.parse::<i32>().unwrap_or(0);
+    format!("{mantissa}e{parsed:+03}")
+}
+
+fn integer_magnitude(value: IntegerValue, radix: u32, uppercase: bool) -> (bool, String) {
+    let (negative, magnitude) = match value.representation() {
+        crate::integer::IntegerRepresentation::Signed(value) if value < 0 => {
+            (true, value.unsigned_abs())
+        }
+        crate::integer::IntegerRepresentation::Signed(value) => (false, value as u128),
+        crate::integer::IntegerRepresentation::Unsigned(value) => (false, value),
+    };
+    let rendered = match (radix, uppercase) {
+        (2, _) => format!("{magnitude:b}"),
+        (8, _) => format!("{magnitude:o}"),
+        (16, false) => format!("{magnitude:x}"),
+        (16, true) => format!("{magnitude:X}"),
+        _ => magnitude.to_string(),
+    };
+    (negative, rendered)
+}
+
+fn apply_numeric_sign(mut magnitude: String, negative: bool, sign: Option<FormatSign>) -> String {
+    let prefix = if negative {
+        Some('-')
+    } else {
+        match sign {
+            Some(FormatSign::Plus) => Some('+'),
+            Some(FormatSign::Space) => Some(' '),
+            Some(FormatSign::Minus) | None => None,
+        }
+    };
+    if let Some(prefix) = prefix {
+        magnitude.insert(0, prefix);
+    }
+    magnitude
+}
+
+fn apply_format_width(rendered: String, spec: &ParsedFormatSpec, numeric: bool) -> Result<String> {
+    let width = spec.width.unwrap_or(0);
+    let length = rendered.chars().count();
+    if length >= width {
+        if rendered.len() > MAX_STRING_BYTES {
+            return Err(Diagnostic::coded(
+                "AU4005",
+                format!(
+                    "string output exceeds the maintained {MAX_STRING_BYTES}-byte allocation limit"
+                ),
+            ));
+        }
+        return Ok(rendered);
+    }
+    let padding = width - length;
+    if spec.zero_pad && spec.alignment.is_none() && numeric {
+        let Some(padding_bytes) = padding.checked_add(rendered.len()) else {
+            return Err(Diagnostic::coded(
+                "AU4005",
+                "string allocation size overflow",
+            ));
+        };
+        if padding_bytes > MAX_STRING_BYTES {
+            return Err(Diagnostic::coded(
+                "AU4005",
+                format!(
+                    "string output exceeds the maintained {MAX_STRING_BYTES}-byte allocation limit"
+                ),
+            ));
+        }
+        let mut output = String::new();
+        if output.try_reserve_exact(padding_bytes).is_err() {
+            return Err(Diagnostic::coded("AU4005", "string allocation failed"));
+        }
+        let sign_bytes = rendered
+            .chars()
+            .next()
+            .filter(|prefix| matches!(prefix, '+' | '-' | ' '))
+            .map_or(0, char::len_utf8);
+        output.push_str(&rendered[..sign_bytes]);
+        output.extend(std::iter::repeat_n('0', padding));
+        output.push_str(&rendered[sign_bytes..]);
+        return Ok(output);
+    }
+    let alignment = spec.alignment.unwrap_or(if numeric {
+        FormatAlignment::Right
+    } else {
+        FormatAlignment::Left
+    });
+    let (left, right) = match alignment {
+        FormatAlignment::Left => (0, padding),
+        FormatAlignment::Right => (padding, 0),
+        FormatAlignment::Center => (padding / 2, padding - padding / 2),
+    };
+    let fill = if spec.zero_pad { '0' } else { spec.fill };
+    let padding_bytes = padding
+        .checked_mul(fill.len_utf8())
+        .and_then(|bytes| bytes.checked_add(rendered.len()))
+        .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
+    if padding_bytes > MAX_STRING_BYTES {
+        return Err(Diagnostic::coded(
+            "AU4005",
+            format!(
+                "string output exceeds the maintained {MAX_STRING_BYTES}-byte allocation limit"
+            ),
+        ));
+    }
+    let mut output = String::new();
+    output
+        .try_reserve_exact(padding_bytes)
+        .map_err(|_| Diagnostic::coded("AU4005", "string allocation failed"))?;
+    output.extend(std::iter::repeat_n(fill, left));
+    output.push_str(&rendered);
+    output.extend(std::iter::repeat_n(fill, right));
+    Ok(output)
+}
+
+pub(crate) fn format_runtime_value(
+    value: &Value,
+    value_type: &Type,
+    source: &str,
+) -> Result<String> {
+    let spec = parse_format_spec(source).map_err(|error| {
+        Diagnostic::coded(
+            match error.kind {
+                FormatSpecErrorKind::Syntax => "AU1101",
+                FormatSpecErrorKind::Type => "AU2002",
+            },
+            error.message,
+        )
+    })?;
+    validate_format_spec_for_type(&spec, value_type)
+        .map_err(|error| Diagnostic::coded("AU2002", error.message))?;
+    let (family, _is_string, is_integer, is_numeric) = format_type_family(value_type);
+    let runtime_matches_static_family = match family {
+        "str" => matches!(value, Value::String(_)),
+        "integer" => matches!(value, Value::Int(_)),
+        "float" => matches!(value, Value::Float(_)),
+        _ => true,
+    };
+    if !runtime_matches_static_family {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "internal format contract mismatch: runtime value does not match static {family} type"
+            ),
+        ));
+    }
+
+    let rendered = match (spec.ty, value) {
+        (Some('s'), Value::String(text)) => {
+            if spec.precision.is_none() && text.len() > MAX_STRING_BYTES {
+                return Err(Diagnostic::coded(
+                    "AU4005",
+                    format!(
+                        "string output exceeds the maintained {MAX_STRING_BYTES}-byte allocation limit"
+                    ),
+                ));
+            }
+            text.chars()
+                .take(spec.precision.unwrap_or(usize::MAX))
+                .collect::<String>()
+        }
+        (Some(code @ ('d' | 'x' | 'X' | 'b' | 'o')), Value::Int(integer)) => {
+            let radix = match code {
+                'x' | 'X' => 16,
+                'b' => 2,
+                'o' => 8,
+                _ => 10,
+            };
+            let (negative, mut magnitude) = integer_magnitude(*integer, radix, code == 'X');
+            if spec.grouping {
+                magnitude = group_decimal_digits(&magnitude);
+            }
+            apply_numeric_sign(magnitude, negative, spec.sign)
+        }
+        (Some(code @ ('f' | 'e' | '%')), Value::Int(integer)) => {
+            format_numeric_integer(*integer, code, &spec)
+        }
+        (Some(code @ ('f' | 'e' | '%')), Value::Float(number)) => {
+            let mut number = if matches!(value_type, Type::Named(name, args) if name == "float32" && args.is_empty()) {
+                *number as f32 as f64
+            } else {
+                *number
+            };
+            if code == '%' {
+                number *= 100.0;
+            }
+            format_numeric_float(number, code, &spec)
+        }
+        (None, Value::Float(number)) => {
+            let rendered = if matches!(value_type, Type::Named(name, args) if name == "float32" && args.is_empty()) {
+                render_float32(*number as f32)
+            } else {
+                render_float(*number)
+            };
+            apply_numeric_sign(rendered.trim_start_matches('-').to_string(), number.is_sign_negative(), spec.sign)
+        }
+        (None, Value::Int(integer)) => {
+            let (negative, magnitude) = integer_magnitude(*integer, 10, false);
+            apply_numeric_sign(magnitude, negative, spec.sign)
+        }
+        (None, _) => value.render(),
+        (Some(code), _) => {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                format!(
+                    "internal format contract mismatch: runtime value does not support format code `{code}`"
+                ),
+            ))
+        }
+    };
+    apply_format_width(rendered, &spec, is_numeric || is_integer)
+}
+
+fn decimal_round_significant(mut digits: String, significant: usize) -> (String, bool) {
+    if digits.len() <= significant {
+        digits.extend(std::iter::repeat_n('0', significant - digits.len()));
+        return (digits, false);
+    }
+    let discarded = digits.as_bytes()[significant..].to_vec();
+    digits.truncate(significant);
+    let round_up = discarded[0] > b'5'
+        || (discarded[0] == b'5'
+            && (discarded[1..].iter().any(|digit| *digit != b'0')
+                || digits
+                    .as_bytes()
+                    .last()
+                    .is_some_and(|digit| (digit - b'0') % 2 == 1)));
+    if !round_up {
+        return (digits, false);
+    }
+    let mut bytes = digits.into_bytes();
+    for digit in bytes.iter_mut().rev() {
+        if *digit != b'9' {
+            *digit += 1;
+            return (
+                String::from_utf8(bytes).expect("decimal digits are UTF-8"),
+                false,
+            );
+        }
+        *digit = b'0';
+    }
+    bytes[0] = b'1';
+    (
+        String::from_utf8(bytes).expect("decimal digits are UTF-8"),
+        true,
+    )
+}
+
+fn format_numeric_integer(integer: IntegerValue, code: char, spec: &ParsedFormatSpec) -> String {
+    let (negative, mut digits) = integer_magnitude(integer, 10, false);
+    let precision = spec.precision.unwrap_or(6);
+    let mut rendered = if code == 'e' {
+        if digits == "0" {
+            let fraction = "0".repeat(precision);
+            if precision == 0 {
+                "0e+00".to_string()
+            } else {
+                format!("0.{fraction}e+00")
+            }
+        } else {
+            let mut exponent = digits.len() - 1;
+            let (rounded, carried) = decimal_round_significant(digits, precision + 1);
+            if carried {
+                exponent += 1;
+            }
+            let (first, rest) = rounded.split_at(1);
+            if precision == 0 {
+                format!("{first}e{exponent:+03}")
+            } else {
+                format!("{first}.{rest}e{exponent:+03}")
+            }
+        }
+    } else {
+        if code == '%' {
+            digits.push_str("00");
+        }
+        if spec.grouping {
+            digits = group_decimal_digits(&digits);
+        }
+        if precision == 0 {
+            digits
+        } else {
+            format!("{digits}.{}", "0".repeat(precision))
+        }
+    };
+    rendered = apply_numeric_sign(rendered, negative, spec.sign);
+    if code == '%' {
+        rendered.push('%');
+    }
+    rendered
+}
+
+fn format_numeric_float(number: f64, code: char, spec: &ParsedFormatSpec) -> String {
+    let negative = number.is_sign_negative();
+    let magnitude = number.abs();
+    let precision = spec.precision.unwrap_or(6);
+    let mut rendered = if magnitude.is_nan() {
+        "nan".to_string()
+    } else if magnitude.is_infinite() {
+        "inf".to_string()
+    } else if code == 'e' {
+        normalize_scientific_exponent(format!("{magnitude:.precision$e}"))
+    } else {
+        format!("{magnitude:.precision$}")
+    };
+    if spec.grouping && magnitude.is_finite() {
+        rendered = group_decimal_digits(&rendered);
+    }
+    rendered = apply_numeric_sign(rendered, negative, spec.sign);
+    if code == '%' {
+        rendered.push('%');
+    }
+    rendered
+}
+
 pub(crate) fn float_floor_divmod(left: f64, right: f64) -> (f64, f64) {
     let mut remainder = left % right;
     let mut quotient = (left - remainder) / right;
@@ -6828,6 +7447,139 @@ pub(crate) fn float_floor_divmod(left: f64, right: f64) -> (f64, f64) {
     };
 
     (quotient, remainder)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FloatPowerWidth {
+    Float32,
+    Float64,
+}
+
+/// Implements the shared floating-power contract at the destination type's
+/// width. Computing float32 power in f64 and narrowing afterwards can both
+/// double-round finite results and hide destination-width overflow.
+pub(crate) fn float_power(left: f64, right: f64, width: FloatPowerWidth) -> Result<f64> {
+    if right == 0.0 || left == 1.0 {
+        return Ok(1.0);
+    }
+    if left.is_nan() || right.is_nan() {
+        return Ok(f64::NAN);
+    }
+    if left == 0.0 && right.is_finite() && right < 0.0 {
+        return Err(Diagnostic::coded("AU4001", "floating power domain error"));
+    }
+    if left.is_finite() && left < 0.0 && right.is_finite() && right != right.trunc() {
+        return Err(Diagnostic::coded("AU4001", "floating power domain error"));
+    }
+
+    let result = match width {
+        FloatPowerWidth::Float32 => (left as f32).powf(right as f32) as f64,
+        FloatPowerWidth::Float64 => left.powf(right),
+    };
+    if left.is_finite() && right.is_finite() && result.is_infinite() {
+        return Err(Diagnostic::coded("AU4002", "floating power overflow"));
+    }
+    if result.is_nan() {
+        return Err(Diagnostic::coded("AU4001", "floating power domain error"));
+    }
+    Ok(result)
+}
+
+/// Implements Aura's exact `round(value)` numeric contract for both
+/// execution backends. Floating results use ties-to-even and must fit the
+/// complete mathematical `int64` range; integer values retain their exact
+/// runtime kind.
+pub(crate) fn round_numeric_value(value: &Value) -> Result<Value> {
+    match value {
+        Value::Int(value) => Ok(Value::Int(*value)),
+        Value::Float(value) => {
+            let rounded = value.round_ties_even();
+            const I64_MIN_AS_F64: f64 = -9_223_372_036_854_775_808.0;
+            const I64_MAX_EXCLUSIVE_AS_F64: f64 = 9_223_372_036_854_775_808.0;
+            if !rounded.is_finite()
+                || !(I64_MIN_AS_F64..I64_MAX_EXCLUSIVE_AS_F64).contains(&rounded)
+            {
+                return Err(Diagnostic::coded(
+                    "AU4002",
+                    format!(
+                        "`round(...)` cannot represent `{}` as `int64`",
+                        render_float(*value)
+                    ),
+                ));
+            }
+            Ok(Value::Int(IntegerValue::from_i64(rounded as i64)))
+        }
+        other => Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "`round(...)` expects an integer, `float32`, or `float64`, found `{}`",
+                other.render()
+            ),
+        )),
+    }
+}
+
+/// Implements Aura's paired floor quotient/remainder contract once so MIR
+/// and direct execution cannot drift. `operand_type` is the statically
+/// checked exact type used for both tuple elements.
+pub(crate) fn divmod_numeric_values(
+    left: &Value,
+    right: &Value,
+    operand_type: &Type,
+) -> Result<Value> {
+    let integer_kind = match operand_type {
+        Type::Named(name, args) if args.is_empty() => IntegerKind::from_runtime_type_name(name),
+        _ => None,
+    };
+    let (quotient, remainder) = match (left, right) {
+        (Value::Int(_), Value::Int(right)) if right.is_zero() => {
+            return Err(Diagnostic::coded(
+                "AU4004",
+                "`divmod(...)` divisor cannot be zero",
+            ))
+        }
+        (Value::Int(left), Value::Int(right)) => {
+            let mut quotient = left.checked_floor_div(*right).ok_or_else(|| {
+                Diagnostic::coded("AU4002", "`divmod(...)` integer quotient overflow")
+            })?;
+            let mut remainder = left.checked_floor_rem(*right).ok_or_else(|| {
+                Diagnostic::coded("AU4002", "`divmod(...)` integer remainder overflow")
+            })?;
+            if let Some(kind) = integer_kind {
+                quotient = quotient.with_runtime_kind(kind).ok_or_else(|| {
+                    Diagnostic::coded("AU4002", "`divmod(...)` integer quotient overflow")
+                })?;
+                remainder = remainder.with_runtime_kind(kind).ok_or_else(|| {
+                    Diagnostic::coded("AU4002", "`divmod(...)` integer remainder overflow")
+                })?;
+            }
+            (Value::Int(quotient), Value::Int(remainder))
+        }
+        (Value::Float(_), Value::Float(right)) if *right == 0.0 => {
+            return Err(Diagnostic::coded(
+                "AU4004",
+                "`divmod(...)` divisor cannot be zero",
+            ))
+        }
+        (Value::Float(left), Value::Float(right)) => {
+            let (quotient, remainder) = float_floor_divmod(*left, *right);
+            (Value::Float(quotient), Value::Float(remainder))
+        }
+        _ => {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                format!(
+                "`divmod(...)` expects two values of one exact numeric type, found `{}` and `{}`",
+                left.render(),
+                right.render()
+            ),
+            ))
+        }
+    };
+    Ok(Value::Tuple(TupleValue {
+        element_types: vec![operand_type.clone(), operand_type.clone()],
+        elements: vec![quotient, remainder],
+    }))
 }
 
 impl ChannelValue {
@@ -13263,7 +14015,7 @@ fn runtime_uint8_elements<'a>(value: &'a Value, call: &str) -> Result<&'a [Value
     let Value::Vec(value) = value else {
         return Err(Diagnostic::coded(
             "AU4001",
-            format!("`{call}` expects a runtime `Vec[uint8]` value"),
+            format!("`{call}` expects a runtime `list[uint8]` value"),
         ));
     };
     if !matches!(
@@ -13276,7 +14028,7 @@ fn runtime_uint8_elements<'a>(value: &'a Value, call: &str) -> Result<&'a [Value
     {
         return Err(Diagnostic::coded(
             "AU4001",
-            format!("`{call}` expects an exact runtime `Vec[uint8]` value"),
+            format!("`{call}` expects an exact runtime `list[uint8]` value"),
         ));
     }
     Ok(&value.elements)
@@ -13470,7 +14222,7 @@ fn host_string_value_ref<'a>(value: &'a Value, index: usize, call: &str) -> Resu
     match value {
         Value::String(value) => Ok(value),
         other => Err(Diagnostic::new(format!(
-            "`{call}` expects argument {} to be `String`, found `{}`",
+            "`{call}` expects argument {} to be `str`, found `{}`",
             index + 1,
             other.render()
         ))),
@@ -13486,13 +14238,13 @@ fn bytes_host_builtin_name(name: &str) -> bool {
             | "bytes::base64_decode"
             | "bytes::sha256"
             | "bytes::sha256_string"
-            | "String.to_bytes"
-            | "String.from_bytes"
+            | "str.to_bytes"
+            | "str.from_bytes"
     )
 }
 
 pub(crate) fn evaluate_string_to_bytes_host_ref(text: &str) -> Result<Value> {
-    bytes_resource_only(bytes_codec::string_to_bytes(text), "String.to_bytes")
+    bytes_resource_only(bytes_codec::string_to_bytes(text), "str.to_bytes")
         .and_then(|bytes| runtime_bytes_from_host(&bytes))
 }
 
@@ -13550,14 +14302,14 @@ pub(crate) fn evaluate_bytes_host_builtin_ref(name: &str, value: &Value) -> Opti
             bytes_resource_only(bytes_codec::sha256_string(text), name)
                 .and_then(|digest| runtime_bytes_from_host(&digest))
         }
-        "String.to_bytes" => {
+        "str.to_bytes" => {
             let text = match host_string_value_ref(value, 0, name) {
                 Ok(text) => text,
                 Err(error) => return Some(Err(error)),
             };
             evaluate_string_to_bytes_host_ref(text)
         }
-        "String.from_bytes" => {
+        "str.from_bytes" => {
             let elements = match runtime_uint8_elements(value, name) {
                 Ok(elements) => elements,
                 Err(error) => return Some(Err(error)),
@@ -13592,7 +14344,7 @@ fn host_string_ref_arg<'a>(args: &'a [Value], index: usize, call: &str) -> Resul
     match args.get(index) {
         Some(Value::String(value)) => Ok(value),
         Some(other) => Err(Diagnostic::new(format!(
-            "`{call}` expects argument {} to be `String`, found `{}`",
+            "`{call}` expects argument {} to be `str`, found `{}`",
             index + 1,
             other.render()
         ))),
@@ -13614,7 +14366,7 @@ fn host_string_map_arg(
 ) -> Result<BTreeMap<String, String>> {
     let Some(Value::Map(map)) = args.get(index) else {
         return Err(Diagnostic::new(format!(
-            "`{call}` expects argument {} to be `Map[String, String]`",
+            "`{call}` expects argument {} to be `dict[str, str]`",
             index + 1
         )));
     };
@@ -13623,7 +14375,7 @@ fn host_string_map_arg(
         .map(|(key, value)| match (key, value) {
             (Value::String(key), Value::String(value)) => Ok((key.clone(), value.clone())),
             _ => Err(Diagnostic::new(format!(
-                "`{call}` expects `Map[String, String]`"
+                "`{call}` expects `dict[str, str]`"
             ))),
         })
         .collect()
@@ -13631,8 +14383,8 @@ fn host_string_map_arg(
 
 fn host_string_map_value(entries: BTreeMap<String, String>) -> Value {
     Value::Map(MapValue {
-        key_type: Type::named("String"),
-        value_type: Type::named("String"),
+        key_type: Type::named("str"),
+        value_type: Type::named("str"),
         entries: entries
             .into_iter()
             .map(|(key, value)| (Value::String(key), Value::String(value)))
@@ -14148,7 +14900,7 @@ pub(crate) fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
                             "json.Value",
                             "Object",
                             json_runtime_single_payload(Value::Map(MapValue {
-                                key_type: json_runtime_type("String")?,
+                                key_type: json_runtime_type("str")?,
                                 value_type: json_runtime_type("json.Value")?,
                                 entries,
                             }))?,
@@ -14300,7 +15052,7 @@ pub(crate) fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                 }
                 ("Array", [Value::Vec(_)]) => {
                     return Err(malformed(
-                        "Value.Array payload must be exactly `Vec[json.Value]` at runtime",
+                        "Value.Array payload must be exactly `list[json.Value]` at runtime",
                     ))
                 }
                 ("Object", [Value::Map(entries)]) if json_object_metadata_is_exact(entries) => {
@@ -14315,7 +15067,7 @@ pub(crate) fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                         let (key, value) = &entries.entries[0];
                         let Value::String(key) = key else {
                             return Err(malformed(format!(
-                                "Value.Object key must be `String`, found `{}`",
+                                "Value.Object key must be `str`, found `{}`",
                                 key.render()
                             )));
                         };
@@ -14335,7 +15087,7 @@ pub(crate) fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                 }
                 ("Object", [Value::Map(_)]) => {
                     return Err(malformed(
-                        "Value.Object payload must be exactly `Map[String, json.Value]` at runtime",
+                        "Value.Object payload must be exactly `dict[str, json.Value]` at runtime",
                     ))
                 }
                 (variant_name, _) => {
@@ -14390,7 +15142,7 @@ pub(crate) fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                     if let Some((key, value)) = entries.get(next_index) {
                         let Value::String(key) = key else {
                             return Err(malformed(format!(
-                                "Value.Object key must be `String`, found `{}`",
+                                "Value.Object key must be `str`, found `{}`",
                                 key.render()
                             )));
                         };
@@ -14435,7 +15187,7 @@ pub(crate) fn json_array_metadata_is_exact(value: &VecValue) -> bool {
 }
 
 pub(crate) fn json_object_metadata_is_exact(value: &MapValue) -> bool {
-    json_exact_nominal_type(&value.key_type, "String")
+    json_exact_nominal_type(&value.key_type, "str")
         && json_exact_nominal_type(&value.value_type, "json.Value")
 }
 
@@ -14690,6 +15442,86 @@ fn evaluate_host_builtin_with_args(
     }
 
     match name {
+        "math::floor" | "math::ceil" | "math::trunc" => {
+            host_expect_arity(name, &args, 1)?;
+            let display_name = name.replace("::", ".");
+            let Value::Float(value) = args[0] else {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!("`{display_name}` expects `float64`"),
+                ));
+            };
+            let rounded = match name {
+                "math::floor" => value.floor(),
+                "math::ceil" => value.ceil(),
+                "math::trunc" => value.trunc(),
+                _ => unreachable!(),
+            };
+            // `i64::MAX as f64` rounds to 2^63, so the upper bound is
+            // intentionally exclusive while -2^63 remains representable.
+            const I64_MIN_F64: f64 = -9_223_372_036_854_775_808.0;
+            const I64_LIMIT_F64: f64 = 9_223_372_036_854_775_808.0;
+            if !rounded.is_finite() || !(I64_MIN_F64..I64_LIMIT_F64).contains(&rounded) {
+                return Err(Diagnostic::coded(
+                    "AU4002",
+                    format!("`{display_name}` result cannot be represented as `int64`"),
+                ));
+            }
+            let integer =
+                IntegerValue::from_typed_signed(rounded as i64 as i128, IntegerKind::Int64)
+                    .expect("validated math conversion must fit int64");
+            Ok(Value::Int(integer))
+        }
+        "math::pow" => {
+            host_expect_arity(name, &args, 2)?;
+            let (Value::Float(base), Value::Float(exponent)) = (&args[0], &args[1]) else {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    "`math.pow` expects two `float64` arguments",
+                ));
+            };
+            float_power(*base, *exponent, FloatPowerWidth::Float64).map(Value::Float)
+        }
+        "math::exp" | "math::log" | "math::log2" | "math::log10" | "math::sin" | "math::cos"
+        | "math::tan" => {
+            host_expect_arity(name, &args, 1)?;
+            let display_name = name.replace("::", ".");
+            let Value::Float(value) = args[0] else {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!("`{display_name}` expects `float64`"),
+                ));
+            };
+            if matches!(name, "math::log" | "math::log2" | "math::log10")
+                && value.is_finite()
+                && value <= 0.0
+            {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!("`{display_name}` domain error for `{value}`"),
+                ));
+            }
+            if matches!(name, "math::sin" | "math::cos" | "math::tan") && value.is_infinite() {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    format!("`{display_name}` domain error for `{value}`"),
+                ));
+            }
+            let result = match name {
+                "math::exp" => value.exp(),
+                "math::log" => value.ln(),
+                "math::log2" => value.log2(),
+                "math::log10" => value.log10(),
+                "math::sin" => value.sin(),
+                "math::cos" => value.cos(),
+                "math::tan" => value.tan(),
+                _ => unreachable!(),
+            };
+            if name == "math::exp" && value.is_finite() && result.is_infinite() {
+                return Err(Diagnostic::coded("AU4002", "`math.exp` overflow"));
+            }
+            Ok(Value::Float(result))
+        }
         "control::__retry_validate" => {
             host_expect_arity(name, &args, 2)?;
             let max_attempts = match &args[0] {
@@ -14739,7 +15571,7 @@ fn evaluate_host_builtin_with_args(
         "sys::args" => {
             host_expect_arity(name, &args, 0)?;
             Ok(Value::Vec(VecValue {
-                element_type: Type::named("String"),
+                element_type: Type::named("str"),
                 elements: program_args
                     .map(<[String]>::to_vec)
                     .unwrap_or_else(host_process_args)
@@ -15145,33 +15977,27 @@ pub(crate) fn task_result_cancelled() -> Value {
     })
 }
 
-pub(crate) fn select_outcome_queue(index: i32, outcome: Value) -> Value {
+pub(crate) fn select_outcome_queue(index: i64, outcome: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SelectOutcome".to_string(),
         variant_name: "Queue".to_string(),
-        payloads: vec![
-            Value::Int(IntegerValue::from_signed(index as i128)),
-            outcome,
-        ],
+        payloads: vec![Value::Int(IntegerValue::from_i64(index)), outcome],
     })
 }
 
-pub(crate) fn select_outcome_task(index: i32, outcome: Value) -> Value {
+pub(crate) fn select_outcome_task(index: i64, outcome: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SelectOutcome".to_string(),
         variant_name: "Task".to_string(),
-        payloads: vec![
-            Value::Int(IntegerValue::from_signed(index as i128)),
-            outcome,
-        ],
+        payloads: vec![Value::Int(IntegerValue::from_i64(index)), outcome],
     })
 }
 
-pub(crate) fn select_outcome_deadline(index: i32) -> Value {
+pub(crate) fn select_outcome_deadline(index: i64) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SelectOutcome".to_string(),
         variant_name: "Deadline".to_string(),
-        payloads: vec![Value::Int(IntegerValue::from_signed(index as i128))],
+        payloads: vec![Value::Int(IntegerValue::from_i64(index))],
     })
 }
 
@@ -15183,20 +16009,20 @@ pub(crate) fn select_outcome_cancelled() -> Value {
     })
 }
 
-pub(crate) fn wait_any_ready(index: i32, value: Value) -> Value {
+pub(crate) fn wait_any_ready(index: i64, value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "WaitAny".to_string(),
         variant_name: "Ready".to_string(),
-        payloads: vec![Value::Int(IntegerValue::from_signed(index as i128)), value],
+        payloads: vec![Value::Int(IntegerValue::from_i64(index)), value],
     })
 }
 
-pub(crate) fn wait_any_error(index: i32, message: String) -> Value {
+pub(crate) fn wait_any_error(index: i64, message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "WaitAny".to_string(),
         variant_name: "Error".to_string(),
         payloads: vec![
-            Value::Int(IntegerValue::from_signed(index as i128)),
+            Value::Int(IntegerValue::from_i64(index)),
             Value::String(message),
         ],
     })
@@ -15229,12 +16055,12 @@ pub(crate) fn wait_all_ready(values: Vec<Value>) -> Value {
     })
 }
 
-pub(crate) fn wait_all_error(index: i32, message: String) -> Value {
+pub(crate) fn wait_all_error(index: i64, message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "WaitAll".to_string(),
         variant_name: "Error".to_string(),
         payloads: vec![
-            Value::Int(IntegerValue::from_signed(index as i128)),
+            Value::Int(IntegerValue::from_i64(index)),
             Value::String(message),
         ],
     })

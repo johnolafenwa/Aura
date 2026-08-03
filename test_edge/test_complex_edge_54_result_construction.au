@@ -2,7 +2,7 @@
 
 def main() -> int32:
     # With explicit type annotation
-    r1: Result[int32, String] = Result.Ok(42)
+    r1: Result[int32, str] = Result.Ok(42)
     match own r1:
         case Result.Ok(v):
             print(v)

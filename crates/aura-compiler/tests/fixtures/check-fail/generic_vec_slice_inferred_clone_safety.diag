@@ -1,6 +1,0 @@
-error[AU3007]: cannot use function `duplicate` because `random.Rng` contains non-cloneable `random.Rng` state
- --> crates/aura-compiler/tests/fixtures/check-fail/generic_vec_slice_inferred_clone_safety.au:8:11
-  |
-8 |     print(duplicate(values))
-  |           ^
-  = help: move or remove the value so it has one owner, or construct an independent generator with an explicit seed

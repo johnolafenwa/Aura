@@ -3,7 +3,7 @@ class Point:
     y: float64
 
 class Person:
-    name: String
+    name: str
     age: int32
 
 def main() -> int32:

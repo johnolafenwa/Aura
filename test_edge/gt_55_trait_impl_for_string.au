@@ -1,14 +1,14 @@
-## Test 55: Trait implemented for String type
-## Expects: "hello" (testing if traits work on String like on int32)
+## Test 55: Trait implemented for str type
+## Expects: "hello" (testing if traits work on str like on int32)
 
 trait Shoutify:
-    def shout(self) -> String
+    def shout(self) -> str
 
-impl Shoutify for String:
-    def shout(self) -> String:
+impl Shoutify for str:
+    def shout(self) -> str:
         return self.clone()
 
 def main() -> int32:
-    s: String = "hello"
+    s: str = "hello"
     print(s.shout())
     return 0

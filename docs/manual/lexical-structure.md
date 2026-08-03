@@ -24,7 +24,9 @@ IDENT        = (ascii-letter | "_"),
                { ascii-letter | digit | "_" } ;
 ```
 
-Examples of identifiers are `count`, `_message`, `Result`, and `worker2`. `résultat` is not an identifier because non-ASCII letters are not accepted in names. Unicode remains valid inside strings.
+Examples of identifiers are `count`, `_message`, `buffer`, `Result`, and
+`worker2`. `résultat` is not an identifier because non-ASCII letters are not
+accepted in names. Unicode remains valid inside strings.
 
 An identifier spelling can still be rejected by static checking. Builtin types and functions reserve maintained names, declarations cannot collide in the same namespace, and some positions impose additional rules. See [Names And Scopes](/manual/names-and-scopes).
 
@@ -33,7 +35,7 @@ An identifier spelling can still be rejected by static checking. Builtin types a
 The lexer recognizes these words specially:
 
 ```text
-class enum def trait impl import from mut borrow own indirect public extern opaque
+class enum def trait impl import from mut own indirect public extern opaque
 return assert if elif else and or not match case for in while break
 continue pass try with as true false
 ```
@@ -45,19 +47,17 @@ bodyless declarations described by [FFI v0](/manual/ffi). `own` is reserved
 everywhere; it marks consuming ordinary parameters, collection loops, and
 matches, as well as the consuming receiver spelling `own self`. `mut` marks
 mutable parameters, loops, matches, and the receiver spelling `mut self`, and
-also introduces a mutable local binding. `borrow` is a **reserved keyword**,
-not an accepted capability or identifier. When it appears in a capability
-position, the diagnostic names the exact bare, `mut`, or `own` spelling to
-write.
+also introduces a mutable local binding.
 
 `from` is contextual. At module level, a complete prefix of the form `from module.path import ...` begins an import. In other identifier positions, `from` can name a parameter, local binding, expression, member, type-path component, or named argument:
 
 ```python
-def replace(from: String, to: String) -> String:
+def replace(from: str, to: str) -> str:
     return from + to
 
-mut from = "left"
-from = replace(from=from, to="right")
+def main():
+    mut from = "left"
+    from = replace(from=from, to="right")
 ```
 
 Several other spellings are lexed as ordinary identifiers and become special only in a defined context:
@@ -68,7 +68,7 @@ Several other spellings are lexed as ordinary identifiers and become special onl
 | `self` | Declares or refers to a method receiver. |
 | `Self` | Refers to the current type in supported trait and implementation type positions. |
 | `None` | The unit value, or `Option.None` when an expected option type makes that interpretation unambiguous. |
-| `Set` | Begins the explicit set literal `Set{...}` and names the builtin set type. |
+| `set` | Names the builtin set type and its constructor. |
 | `lambda` | Introduces a lambda when it appears at the start of an expression; it remains an identifier token for member and named-argument positions. |
 | `_` | The wildcard in a match pattern; elsewhere it is an identifier spelling subject to static rules. |
 
@@ -81,7 +81,7 @@ Several other spellings are lexed as ordinary identifiers and become special onl
 print("ready") # A trailing comment.
 ```
 
-Aura 0.2 has no block comments.
+Aura 0.3 has no block comments.
 
 ## Spaces, Tabs, And Indentation
 
@@ -162,26 +162,26 @@ and a closer placed on its own line. See
 [Expressions](/manual/expressions#match-expressions) and
 [Grammar](/manual/grammar#match-expressions).
 
-Backslash continuation is not implemented. Ordinary strings and f-strings remain single-line;
+Backslash continuation is not implemented. Ordinary, raw, and f-strings remain single-line;
 delimiters inside them do not continue source, and an f-string interpolation
 cannot cross a physical newline.
 
 ## Punctuation And Operators
 
-Aura 0.2 recognizes:
+Aura 0.3 recognizes:
 
 ```text
 ( ) [ ] { } : , . ?
 = == != < <= > >=
-+ += - -= * *= / /= // //= % %=
++ += - -= * *= ** **= / /= // //= % %=
+& &= | |= ^ ^= ~ << <<= >> >>=
 ->
 ```
 
 There is no semicolon. Multiple statements cannot share one physical line.
-Aura 0.2 also has no exponentiation, unary `+`, bitwise operators, assignment
-expressions or a lambda arrow; lambdas use `lambda parameters: expression`. The lexer
-chooses the longest operator spelling, so `//=` is one token rather than `//`
-followed by `=`.
+Aura has no unary `+`, assignment expressions, or lambda arrow; lambdas use
+`lambda parameters: expression`. The lexer chooses the longest operator
+spelling, so `**=`, `<<=`, `>>=`, and `//=` are each one token.
 
 Comma-separated lists do not accept a trailing comma. This applies to
 arguments, parameters, imports, type arguments, generic parameters, enum
@@ -191,29 +191,49 @@ comma, while multi-element tuples reject a trailing comma.
 
 ## Integer Literals
 
-An integer literal is one or more decimal digits:
+Integer literals may use decimal, hexadecimal, binary, or octal digits:
 
 ```ebnf
-INTEGER = digit, { digit } ;
+decimal-digit   = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+binary-digit    = "0" | "1" ;
+octal-digit     = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" ;
+hex-digit       = decimal-digit | "a" | "b" | "c" | "d" | "e" | "f"
+                  | "A" | "B" | "C" | "D" | "E" | "F" ;
+decimal-digits  = decimal-digit, { decimal-digit } ;
+decimal-integer = decimal-digit, { decimal-digit | ("_", decimal-digit) } ;
+hex-integer     = ("0x" | "0X"), hex-digit,
+                  { hex-digit | ("_", hex-digit) } ;
+binary-integer  = ("0b" | "0B"), binary-digit,
+                  { binary-digit | ("_", binary-digit) } ;
+octal-integer   = ("0o" | "0O"), octal-digit,
+                  { octal-digit | ("_", octal-digit) } ;
+INTEGER         = decimal-integer | hex-integer | binary-integer | octal-integer ;
 ```
 
-Examples are `0`, `42`, and `170000`. The lexical value must fit an unsigned
-128-bit integer. Static checking selects an expected integer type when
-available and verifies that the value fits. It may instead select an expected
-`float32` or `float64` when the integer's value is exactly representable in
-that type; otherwise the literal defaults to `int64`. The source spelling
-`int` is an alias for `int64`.
+Examples include `0`, `42`, `1_000_000`, `0xFF`, `0b1010_0110`, and
+`0o755`. Hexadecimal digits are case-insensitive. An underscore is valid only
+between two digits from the literal's selected base. It cannot follow the
+prefix, begin or end the digit sequence, or repeat without an intervening
+digit. Separators and base prefixes do not apply to floating-point or duration
+literals.
 
-`-7` is not one signed token. It is unary `-` applied to the positive integer literal `7`. Aura has no hexadecimal, octal, binary, or underscore-separated integer syntax.
+The lexical value must fit an unsigned 128-bit integer. Static checking
+selects an expected integer type when available and verifies that the value
+fits. It may instead select an expected `float32` or `float64` when the
+integer's value is exactly representable in that type; otherwise the literal
+defaults to `int64`. The source spelling `int` is an alias for `int64`.
+
+`-0x7F` is not one signed token. It is unary `-` applied to the positive
+integer literal `0x7F`.
 
 ## Floating-Point Literals
 
 Floating literals use a required fractional digit or an exponent:
 
 ```ebnf
-EXPONENT = ("e" | "E"), [ "+" | "-" ], digit, { digit } ;
-FLOAT    = INTEGER, ".", digit, { digit }, [ EXPONENT ]
-         | INTEGER, EXPONENT ;
+EXPONENT = ("e" | "E"), [ "+" | "-" ], decimal-digits ;
+FLOAT    = decimal-digits, ".", decimal-digits, [ EXPONENT ]
+         | decimal-digits, EXPONENT ;
 ```
 
 Valid examples include `1.0`, `0.25`, `1e3`, `2.5e-1`, and `3E+4`. `.5` and `3.` are not floating literals. The lexical value must be finite as an `f64`. Static checking defaults it to `float64` or adopts an expected `float32`/`float64` type.
@@ -223,7 +243,7 @@ Valid examples include `1.0`, `0.25`, `1e3`, `2.5e-1`, and `3E+4`. `.5` and `3.`
 A duration literal is a non-negative integral count followed immediately by `ms`, `s`, or `m`:
 
 ```ebnf
-DURATION = INTEGER, ("ms" | "s" | "m") ;
+DURATION = decimal-digits, ("ms" | "s" | "m") ;
 ```
 
 `10ms`, `2s`, and `1m` represent 10, 2,000, and 60,000 milliseconds
@@ -241,7 +261,7 @@ computed or negative values.
 
 `None` is lexically an identifier but statically denotes the unit value of type `None`, or the payload-free `Option.None` variant when an expected `Option[T]` type resolves the meaning. There is no null value distinct from these typed forms.
 
-## String Literals
+## str Literals
 
 Ordinary string literals use matching single or double quote delimiters and are
 single-line:
@@ -253,7 +273,7 @@ apostrophe = 'Aura\'s strings'
 quotation = 'the compiler said "ready"'
 ```
 
-Both delimiters produce a `String` and support the same escapes:
+Both delimiters produce a `str` and support the same escapes:
 
 | Escape | Decoded value |
 | --- | --- |
@@ -267,11 +287,35 @@ Both delimiters produce a `String` and support the same escapes:
 | `\u{H...}` | Unicode scalar from one or more hexadecimal digits |
 
 Unknown escapes, invalid Unicode scalars, missing hexadecimal digits, and
-missing or mismatched closing quotes are lexical errors. Triple-quoted, raw,
-and byte-string literals are not part of Aura 0.2. A one-character literal
-such as `'x'` is a `String`, not a distinct character type.
+missing or mismatched closing quotes are lexical errors. A one-character
+literal such as `'x'` is a `str`, not a distinct character type.
 
-A string literal has type `String`. See [Types](/manual/types) for ownership and [Execution Model](/manual/execution-model#evaluation-order) for expression evaluation order.
+Three matching quotes create an exact multiline string:
+
+```python
+prompt = """Classify this request.
+Return one label and one reason.
+"""
+```
+
+The value contains every scalar between the delimiters. Aura performs no
+dedent, margin calculation, trimming, leading-newline removal, trailing-newline
+removal, or Unicode normalization. Escapes retain their ordinary meaning.
+Physical tabs inside the delimiters are content.
+
+A lowercase `r` creates a single-line raw string:
+
+```python
+path = r"C:\agents\run"
+pattern = r'\d+\.\d+'
+```
+
+Backslashes are content. A backslash may retain the active quote inside the
+value, and both characters remain. A raw string cannot end in an odd run of
+backslashes or contain a physical newline. Raw triple strings and byte strings
+are unavailable.
+
+A string literal has type `str`. See [Types](/manual/types) for ownership and [Execution Model](/manual/execution-model#evaluation-order) for expression evaluation order.
 
 ## F-Strings
 
@@ -287,17 +331,43 @@ Interpolations may contain indexing, calls, nested braces used by expressions,
 and either form of ordinary string literal, including braces inside those
 strings. Empty or syntactically invalid interpolations are rejected.
 
-Use two consecutive opening braces for a literal opening brace. Two consecutive closing braces decode to one literal closing brace; Aura 0.2 also treats a lone closing brace outside an interpolation as literal text:
+Use two consecutive opening braces for a literal opening brace. Two consecutive closing braces decode to one literal closing brace; Aura 0.3 also treats a lone closing brace outside an interpolation as literal text:
 
 ```python
 print(f"{{name}} = {name}")
 ```
 
-F-strings support the same escapes as ordinary strings. F-strings themselves
-remain double-quoted: `f'...'` is not Aura 0.2 syntax. They do not support
-conversion flags such as `!r` or a format-specifier mini-language.
-Interpolations are evaluated from left to right and the result is an owned
-`String`.
+F-strings support the same escapes as ordinary strings and remain
+double-quoted. An interpolation accepts a static format specification after a
+top-level colon:
+
+```python
+def main():
+    count: int64 = 1234567
+    ratio: float32 = 0.875
+    label = "Aura"
+    print(f"{count:>12,d}")
+    print(f"{ratio:+.2%}")
+    print(f"{label:·^16.8s}")
+```
+
+The grammar is `[[fill]align][sign][width][,][.precision][type]`. Alignment is
+`<`, `^`, or `>` and type is `d`, `f`, `e`, `x`, `X`, `b`, `o`, `%`, or
+`s`. Strings default to left alignment and numbers to right alignment. Width
+counts Unicode scalars and never truncates. `s` precision is the maximum
+scalar count. Numeric precision uses ties-to-even rounding. Decimal grouping
+is available with `d`, `f`, and `%`. Width and precision are limited to
+`1_000_000`. A numeric width beginning with `0` selects zero padding. With no
+explicit alignment, zeros follow the sign, so `f"{-1.25:09.3f}"` produces
+`-0001.250`.
+
+Aura parses the complete interpolation expression before recognizing the
+top-level separator. Colons inside nested slices, dictionaries, calls, and
+collection literals remain part of the expression. Dynamic specifications,
+nested fields, conversion flags, and single-quoted f-strings are unavailable.
+`rf"..."`, `fr"..."`, and `f"""..."""` receive `AU1002` guidance to the
+supported single-line `f"..."` spelling. Interpolations evaluate once from
+left to right and the result is an owned `str`.
 
 ## Complexity Limits
 
@@ -317,8 +387,8 @@ Lexing does not assign expression types, but it preserves the literal kind and
 mathematical or decoded value used by static checking. Integer literals may
 later adopt an exact expected integer or floating type; floating literals may
 adopt `float32` or `float64`; duration, Boolean, ordinary-string, and f-string
-tokens enter checking as `Duration`, `bool`, `String`, and an interpolated
-`String` expression respectively. No lexical spelling performs a runtime
+tokens enter checking as `Duration`, `bool`, `str`, and an interpolated
+`str` expression respectively. No lexical spelling performs a runtime
 coercion.
 
 ## Runtime Semantics
@@ -362,9 +432,10 @@ the same lexical language; there is no backend-specific lexer.
 
 ## Limits And Implementation-Defined Behavior
 
-Identifiers are ASCII, source is UTF-8, physical tabs are rejected,
+Identifiers are ASCII, source is UTF-8, physical tabs are rejected outside
+triple-quoted string content,
 continuation requires an unmatched source delimiter, ordinary lists reject
-trailing commas, backslash continuation and multiline ordinary/f-strings are
+trailing commas, backslash continuation and multiline f-strings are
 unavailable, and literal magnitude and parser-complexity caps are fixed by
 this chapter and [Current Limits](/manual/current-limits). Continuation
 indentation is not semantically significant, but delimiter matching, token
@@ -374,9 +445,7 @@ implementation choices.
 ## Status
 
 The forms described as accepted above are implemented. Delimiter continuation
-and its layout/diagnostic policy are accepted under ADR-0025. Raw, byte,
-triple-quoted, and single-quoted
-f-strings; alternate integer bases; digit separators; block comments;
-semicolons; ordinary trailing commas other than the required singleton-tuple
-comma; backslash continuation; and multiline string or f-string literals are
-unavailable, not partially implemented.
+and its layout/diagnostic policy are accepted under ADR-0025. Raw triple
+strings, raw f-strings, byte strings, single-quoted f-strings, block comments,
+semicolons, ordinary trailing commas other than the required singleton-tuple
+comma, backslash continuation, and multiline f-string literals are unavailable.

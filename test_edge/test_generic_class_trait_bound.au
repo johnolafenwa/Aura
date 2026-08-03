@@ -2,13 +2,13 @@
 # e.g., class Container[T: Printable]:
 
 trait Printable:
-    def to_string(self) -> String
+    def to_string(self) -> str
 
 class Label:
-    text: String
+    text: str
 
 impl Printable for Label:
-    def to_string(self) -> String:
+    def to_string(self) -> str:
         return self.text
 
 class Container[T: Printable]:

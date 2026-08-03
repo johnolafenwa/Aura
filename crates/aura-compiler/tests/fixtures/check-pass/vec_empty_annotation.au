@@ -1,5 +1,0 @@
-def main() -> int32:
-    mut xs: Vec[int32] = []
-    xs.push(1)
-    xs.push(2)
-    return 0

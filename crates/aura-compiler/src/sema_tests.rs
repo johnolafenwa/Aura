@@ -5,6 +5,854 @@ use crate::ast::{
 use crate::diag::Span;
 use crate::integer::IntegerValue;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+#[test]
+fn s1_frontend_module_constant_failures_distinguish_collisions_order_unknowns_and_types() {
+    let collision = crate::check_source(
+        "value: int64 = 1\n\ndef value() -> int64:\n    return 2\n\ndef main():\n    pass\n",
+    )
+    .expect_err("a constant cannot collide with a function");
+    assert_eq!(collision.code, "AU2999");
+    assert!(collision
+        .message
+        .contains("module constant `value` collides with an existing function"));
+    assert_eq!(collision.secondary_spans.len(), 1);
+
+    let order = crate::check_source(
+        "first: int64 = second\nsecond: int64 = 2\n\ndef main():\n    print(first)\n",
+    )
+    .expect_err("a constant cannot read a later constant");
+    assert_eq!(order.code, "AU2001");
+    assert_eq!(
+        order.message,
+        "module constant `second` is used before initialization"
+    );
+    assert_eq!(order.secondary_spans.len(), 1);
+
+    let unknown = crate::check_source("value: int64 = missing\n\ndef main():\n    print(value)\n")
+        .expect_err("an unrelated unknown name must retain the ordinary diagnostic");
+    assert_eq!(unknown.code, "AU2001");
+    assert_eq!(unknown.message, "unknown name `missing`");
+
+    let mismatch =
+        crate::check_source("value: int64 = \"text\"\n\ndef main():\n    print(value)\n")
+            .expect_err("a constant annotation must constrain its initializer");
+    assert_eq!(mismatch.code, "AU2002");
+    assert_eq!(
+        mismatch.message,
+        "initializer for module constant `value` has type `str`, expected `int64`"
+    );
+}
+
+#[test]
+fn s1_frontend_collection_capacity_calls_report_missing_types_arity_members_and_values() {
+    for (source, code, expected) in [
+        (
+            "def main():\n    values = list.with_capacity(4)\n",
+            "AU2005",
+            "`list.with_capacity` requires explicit type arguments",
+        ),
+        (
+            "def main():\n    values = list[int64, str].with_capacity(4)\n",
+            "AU2002",
+            "`list` expects exactly 1 type argument, found 2",
+        ),
+        (
+            "def main():\n    values = dict[str].with_capacity(4)\n",
+            "AU2002",
+            "`dict` expects exactly 2 type arguments, found 1",
+        ),
+        (
+            "def main():\n    values = set[str].missing(4)\n",
+            "AU2001",
+            "type `set` has no associated function `missing`",
+        ),
+        (
+            "def main():\n    values = set[str].with_capacity(\"large\")\n",
+            "AU2002",
+            "`set.with_capacity` expects `int64`, found `str`",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err("invalid capacity call must fail");
+        assert_eq!(error.code, code, "{source}");
+        assert_eq!(error.message, expected, "{source}");
+    }
+}
+
+#[test]
+fn s1_frontend_match_guard_and_sort_reverse_errors_keep_specific_diagnostics() {
+    let guard = crate::check_source(
+        "def main():\n    match 1:\n        case _ if missing:\n            pass\n",
+    )
+    .expect_err("an invalid guard expression must retain its own diagnostic");
+    assert_eq!(guard.code, "AU2001");
+    assert_eq!(guard.message, "unknown name `missing`");
+
+    let reverse =
+        crate::check_source("def main():\n    mut values = [2, 1]\n    values.sort(reverse=1)\n")
+            .expect_err("sort reverse must be exactly bool");
+    assert_eq!(reverse.code, "AU2002");
+    assert_eq!(
+        reverse.message,
+        "`sort` expects `bool` for `reverse`, found `int64`"
+    );
+}
+
+#[test]
+fn s1_sema_collection_algorithms_pin_types_equality_and_lambda_key_orderability() {
+    crate::check_source(
+        "def main():\n    values: list[int64] = list[int64].with_capacity(4)\n    names: set[str] = set[str].with_capacity(2)\n    counts: dict[str, int64] = dict[str, int64].with_capacity(8)\n",
+    )
+    .expect("capacity constructors must retain their specialized collection types");
+
+    let equality = crate::check_source(
+        "def main():\n    left = [Array[int32].zeros(shape=[1])]\n    right = [Array[int32].zeros(shape=[1])]\n    print(left == right)\n",
+    )
+    .expect_err("collection equality must reject a recursively contained Array");
+    assert_eq!(equality.code, "AU2003");
+    assert_eq!(
+        equality.message,
+        "cannot compare `list[Array[int32]]` because it contains `Array[int32]`, whose equality is unavailable"
+    );
+
+    let orderability = crate::check_source(
+        "def main():\n    mut values = [2, 1]\n    values.sort(key=lambda value: [value])\n",
+    )
+    .expect_err("a list-valued lambda key is not naturally ordered");
+    assert_eq!(orderability.code, "AU2002");
+    assert_eq!(
+        orderability.message,
+        "`list.sort` cannot order key type `list[int64]`"
+    );
+
+    for source in [
+        "def main():\n    values = list[int64].with_capacity(missing)\n",
+        "def main():\n    mut values = [2, 1]\n    values.sort(reverse=missing)\n",
+    ] {
+        let propagated = crate::check_source(source)
+            .expect_err("collection argument inference must preserve its source diagnostic");
+        assert_eq!(propagated.code, "AU2001", "{source}");
+        assert_eq!(propagated.message, "unknown name `missing`", "{source}");
+    }
+}
+
+#[test]
+fn s1_sema_typed_power_and_shift_diagnostics_preserve_exact_operand_contracts() {
+    let negative = crate::check_source("def main():\n    value = 2 ** -1\n")
+        .expect_err("integer power must reject a negative exponent");
+    assert_eq!(negative.code, "AU2003");
+    assert_eq!(
+        negative.message,
+        "integer power does not accept a negative exponent"
+    );
+
+    let non_numeric = crate::check_source(
+        "def main():\n    left: str = \"a\"\n    right: str = \"b\"\n    value = left ** right\n",
+    )
+    .expect_err("power requires numeric operands");
+    assert_eq!(non_numeric.code, "AU2003");
+    assert_eq!(
+        non_numeric.message,
+        "power requires numeric operands, found `str` and `str`"
+    );
+
+    for operator in ["**", "<<", ">>", "&", "|", "^"] {
+        let source = format!(
+            "def main():\n    left: int8 = 2\n    right: int16 = 1\n    value = left {operator} right\n"
+        );
+        let mismatch = crate::check_source(&source)
+            .expect_err("typed integer operators require an exact shared width");
+        assert_eq!(mismatch.code, "AU2002", "{operator}");
+        assert_eq!(
+            mismatch.message,
+            "binary operator operands must match exactly, found `int8` and `int16`",
+            "{operator}"
+        );
+    }
+
+    crate::check_source(
+        "def main():\n    left: int8 = 2\n    right: int8 = 1\n    power: int8 = left ** right\n    shifted: int8 = left << right\n",
+    )
+    .expect("same-width typed integer power and shifts must retain that width");
+}
+
+#[test]
+fn s1_sema_fourth_collection_methods_pin_element_key_collection_and_capacity_types() {
+    for (source, code, expected) in [
+        (
+            "def main():\n    mut values = [1]\n    values.append(\"bad\")\n",
+            "AU2999",
+            "`append` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    mut values = [1]\n    values.set(0, \"bad\")\n",
+            "AU2999",
+            "`set` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    mut values = [1]\n    values.remove(\"bad\")\n",
+            "AU2002",
+            "`remove` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    values = [1]\n    print(values.contains(\"bad\"))\n",
+            "AU2999",
+            "`contains` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    mut values = [1]\n    other = [\"bad\"]\n    values.extend(other)\n",
+            "AU2999",
+            "`extend` expects `list[int64]`, found `list[str]`",
+        ),
+        (
+            "def main():\n    mut values = [1]\n    values.insert(0, \"bad\")\n",
+            "AU2999",
+            "`insert` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    mut values = [1]\n    values.reserve(\"bad\")\n",
+            "AU2002",
+            "`reserve` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    values = {\"one\": 1}\n    print(values.get(1))\n",
+            "AU2999",
+            "`get` expects `str`, found `int64`",
+        ),
+        (
+            "def main():\n    mut values = {\"one\": 1}\n    values.remove(1)\n",
+            "AU2999",
+            "`remove` expects `str`, found `int64`",
+        ),
+        (
+            "def main():\n    mut values = {\"one\": 1}\n    other = {1: 2}\n    values.update(other)\n",
+            "AU2999",
+            "`update` expects `dict[str, int64]`, found `dict[int64, int64]`",
+        ),
+        (
+            "def main():\n    mut values = {\"one\": 1}\n    values.reserve(\"bad\")\n",
+            "AU2002",
+            "`reserve` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    mut values = {1}\n    values.add(\"bad\")\n",
+            "AU2999",
+            "`add` expects `int64`, found `str`",
+        ),
+        (
+            "def main():\n    mut values = {1}\n    values.reserve(\"bad\")\n",
+            "AU2002",
+            "`reserve` expects `int64`, found `str`",
+        ),
+    ] {
+        let error = crate::check_source(source)
+            .expect_err("a collection method must reject the wrong static argument type");
+        assert_eq!(error.code, code, "{source}: {error:?}");
+        assert_eq!(error.message, expected, "{source}");
+    }
+}
+
+#[test]
+fn s1_sema_fourth_duplicate_ffi_items_report_the_prior_declaration_kind() {
+    for (source, expected) in [
+        (
+            "extern \"C\" opaque class Handle\nextern \"C\" opaque class Handle\n",
+            "duplicate item `Handle` (previously declared as opaque class at 1:1)",
+        ),
+        (
+            "extern \"C\" def read(value: int32) -> int32\nextern \"C\" def read(value: int32) -> int32\n",
+            "duplicate item `read` (previously declared as extern function at 1:1)",
+        ),
+    ] {
+        let error = check_ffi_source_for_test(source)
+            .expect_err("duplicate extern declarations must be rejected");
+        assert_eq!(error.code, "AU2999", "{source}: {error:?}");
+        assert_eq!(error.message, expected, "{source}");
+        assert_eq!(error.secondary_spans.len(), 0, "{source}");
+    }
+}
+
+#[test]
+fn s1_sema_fourth_expected_builtin_enum_arity_and_len_receiver_stay_specific() {
+    let arity = crate::check_source(
+        "def make() -> Option[int32]:\n    return Option.Some()\n\ndef main():\n    pass\n",
+    )
+    .expect_err("the expected Option type must not hide a missing Some payload");
+    assert_eq!(arity.code, "AU2004");
+    assert_eq!(
+        arity.message,
+        "variant `Some` of enum `Option` expects 1 payload argument, found 0"
+    );
+
+    let len = crate::check_source("def main():\n    print(len(1))\n")
+        .expect_err("len must reject scalar values through its public builtin contract");
+    assert_eq!(len.code, "AU2002");
+    assert_eq!(
+        len.message,
+        "`len(...)` expects a value with a `len()` member, found `int64`"
+    );
+
+    let field_default = crate::check_source(
+        "def initial() -> int32:\n    return 1\n\nclass Box:\n    value: int32 = initial()\n\ndef main():\n    pass\n",
+    )
+    .expect_err("class field defaults cannot call module functions");
+    assert_eq!(field_default.code, "AU2999");
+    assert_eq!(field_default.message, "unsupported call target");
+}
+
+#[test]
+fn s1_sema_fourth_match_statements_and_expressions_pin_shape_diagnostics() {
+    for (source, expected) in [
+        (
+            "enum Pair:\n    Both(int32, int32)\n\ndef main():\n    value = Pair.Both(1, 2)\n    match value:\n        case Pair.Both(left):\n            print(left)\n        case _:\n            pass\n",
+            "variant `Pair.Both` expects 2 pattern payloads, found 1",
+        ),
+        (
+            "enum Pair:\n    Both(int32, int32)\n\ndef main() -> int32:\n    value = Pair.Both(1, 2)\n    return match value:\n        case Pair.Both(left): left\n        case _: 0\n",
+            "variant `Pair.Both` expects 2 pattern payloads, found 1",
+        ),
+        (
+            "def main():\n    match [1]:\n        case _:\n            pass\n",
+            "`match` currently requires a tuple, enum, bool, integer, float, or str scrutinee, found `list[int64]`",
+        ),
+        (
+            "def main() -> int32:\n    return match [1]:\n        case _: 0\n",
+            "`match` currently requires a tuple, enum, bool, integer, float, or str scrutinee, found `list[int64]`",
+        ),
+    ] {
+        let error = crate::check_source(source)
+            .expect_err("unsupported match shapes must report a source-level diagnostic");
+        assert_eq!(error.code, "AU2999", "{source}: {error:?}");
+        assert_eq!(error.message, expected, "{source}");
+    }
+}
+
+#[test]
+fn s1_sema_fifth_entry_module_rules_and_constant_plan_are_observable() {
+    let mutable_module = crate::check_source("mut state = 1\n\ndef main():\n    pass\n")
+        .expect_err("module-level mutable state must be rejected before entrypoint checking");
+    assert_eq!(mutable_module.code, "AU3003");
+    assert_eq!(
+        mutable_module.message,
+        "module bindings are immutable; `mut` module state is not supported"
+    );
+    assert_eq!(
+        mutable_module.help,
+        vec!["put mutable state in a local value owned by `main` or another explicit owner"]
+    );
+
+    let return_type = crate::check_source("def main() -> str:\n    return \"bad\"\n")
+        .expect_err("main must retain its exact runtime return contract");
+    assert_eq!(return_type.code, "AU2999");
+    assert_eq!(
+        return_type.message,
+        "`main` must return `int32` or `None` in the bootstrap runtime"
+    );
+
+    let program = crate::check_source(
+        "first: int64 = 1\nsecond: int64 = first + 1\n\ndef main():\n    print(second)\n",
+    )
+    .expect("valid module constants must produce a deterministic source-order plan");
+    let names = program
+        .constant_init_plan
+        .iter()
+        .map(|constant| constant.decl.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["first", "second"]);
+}
+
+#[test]
+fn s1_sema_fifth_contextual_literals_lambdas_and_variants_keep_exact_errors() {
+    let float =
+        crate::check_source("def main():\n    value: float32 = -16777217\n    print(value)\n")
+            .expect_err("an inexact negative integer must not silently round in float32 context");
+    assert_eq!(float.code, "AU2002");
+    assert_eq!(
+        float.message,
+        "integer literal `-16777217` cannot be represented exactly as `float32`; write an explicit float spelling such as `-16777217.0` or use `.to_float()` when rounding is intended"
+    );
+
+    let lambda = crate::check_source(
+        "def main():\n    callback: def(int64) -> str = lambda value: value\n    print(callback)\n",
+    )
+    .expect_err("a lambda body must match its contextual callable return type");
+    assert_eq!(lambda.code, "AU2002");
+    assert_eq!(
+        lambda.message,
+        "lambda body has type `int64`, expected `str`"
+    );
+
+    let variant = crate::check_source(
+        "def make() -> Option[int32]:\n    return Option.Some(\"bad\")\n\ndef main():\n    pass\n",
+    )
+    .expect_err("an expected builtin enum type must constrain its payload");
+    assert_eq!(variant.code, "AU2999");
+    assert_eq!(
+        variant.message,
+        "variant `Some` of enum `Option` expects `int32`, found `str`"
+    );
+}
+
+#[test]
+fn s1_sema_fifth_member_values_methods_and_missing_fields_stay_specific() {
+    let associated = crate::check_source(
+        "class Box:\n    value: int32\n\n    def make(value: int32) -> Box:\n        return Box(value=value)\n\ndef main():\n    callback = Box.make\n    print(callback)\n",
+    )
+    .expect_err("associated methods are callable only through direct syntax");
+    assert_eq!(associated.code, "AU2005");
+    assert_eq!(
+        associated.message,
+        "associated method values are not supported in this language version; call `Box.make(...)` directly or wrap it in a named function"
+    );
+
+    let integer = crate::check_source(
+        "def main():\n    left: int8 = 1\n    right: int16 = 2\n    value = left.wrapping_add(right)\n    print(value)\n",
+    )
+    .expect_err("fixed-width arithmetic methods require one exact integer type");
+    assert_eq!(integer.code, "AU2002");
+    assert_eq!(
+        integer.message,
+        "`wrapping_add` expects `int8`, found `int16`"
+    );
+
+    for (source, code, expected) in [
+        (
+            "def main():\n    value = 1\n    print(value.missing)\n",
+            "AU2002",
+            "type `int64` has no field `missing`",
+        ),
+        (
+            "class Box:\n    value: int32\n\ndef main():\n    box = Box(value=1)\n    print(box.missing)\n",
+            "AU2999",
+            "class `Box` has no field `missing`",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err("unknown fields must name their owner");
+        assert_eq!(error.code, code, "{source}: {error:?}");
+        assert_eq!(error.message, expected, "{source}");
+    }
+}
+
+#[test]
+fn s1_sema_fifth_custom_compound_operator_retains_the_target_access() {
+    let error = crate::check_source(
+        r#"
+trait Add[Rhs, Out]:
+    def add(own self, rhs: own Rhs) -> Out
+
+class Box:
+    value: int32
+
+impl Add[int32, Box] for Box:
+    def add(own self, rhs: own int32) -> Box:
+        return Box(value=self.value + rhs)
+
+def main():
+    mut box = Box(value=1)
+    box += box.value
+"#,
+    )
+    .expect_err("a consuming compound operator target must conflict with a projected RHS read");
+    assert_eq!(error.code, "AU3002");
+    assert_eq!(
+        error.message,
+        "cannot borrow `box.value` while `box` remains reserved for consumption by the compound assignment target"
+    );
+    assert_eq!(error.secondary_spans.len(), 1);
+    assert_eq!(
+        error.secondary_spans[0].label,
+        "consumption by the compound assignment target begins here"
+    );
+    assert_eq!(
+        error.help,
+        vec![
+            "call `.clone()` before the expression when an independent value is intended, or perform the read in a separate statement first"
+        ]
+    );
+}
+
+#[test]
+fn s1_sema_sixth_bytes_conversion_pins_shared_input_and_result_type() {
+    crate::check_source(
+        "import bytes\n\ndef main():\n    payload: list[uint8] = [65]\n    decoded: Result[str, bytes.Error] = str.from_bytes(payload)\n    print(payload.len())\n    print(decoded)\n",
+    )
+    .expect("str.from_bytes must return its typed result without consuming the byte list");
+
+    let error = crate::check_source(
+        "import bytes\n\ndef main():\n    payload: list[int64] = [65]\n    decoded = str.from_bytes(payload)\n    print(decoded)\n",
+    )
+    .expect_err("str.from_bytes must require an exact byte-list input");
+    assert_eq!(error.code, "AU2999");
+    assert_eq!(
+        error.message,
+        "`str.from_bytes` expects `list[uint8]`, found `list[int64]`"
+    );
+}
+
+#[test]
+fn s1_sema_sixth_or_pattern_subsumption_remains_observable() {
+    let prior_or = crate::check_source(
+        "def main():\n    match 3:\n        case 1 | 2:\n            pass\n        case 1:\n            pass\n        case _:\n            pass\n",
+    )
+    .expect_err("a prior or-pattern must make its repeated alternative unreachable");
+    assert_eq!(prior_or.code, "AU2999");
+    assert_eq!(prior_or.message, "unreachable match arm");
+
+    let current_or = crate::check_source(
+        "enum Choice:\n    Value(int64)\n    Empty\n\ndef main():\n    value = Choice.Value(1)\n    match value:\n        case Value(_):\n            pass\n        case Value(1) | Value(2):\n            pass\n        case Empty:\n            pass\n",
+    )
+    .expect_err("one prior variant pattern must subsume every current alternative");
+    assert_eq!(current_or.code, "AU2999");
+    assert_eq!(current_or.message, "unreachable match arm");
+
+    let bindings = crate::check_source(
+        "enum Choice:\n    Left(int64)\n    Right(int64)\n\ndef main():\n    value = Choice.Left(1)\n    match value:\n        case Left(left) | Right(right):\n            print(left)\n",
+    )
+    .expect_err("or-pattern alternatives must expose one identical binding set");
+    assert_eq!(bindings.code, "AU2999");
+    assert_eq!(
+        bindings.message,
+        "every alternative in an or-pattern must bind the same names with identical types and capabilities"
+    );
+}
+
+#[test]
+fn s1_sema_sixth_shared_collection_field_move_offers_the_exact_copy_fix() {
+    let error = crate::check_source(
+        "class Holder:\n    values: list[int64]\n\ndef take(holder: Holder) -> list[int64]:\n    return holder.values\n\ndef main():\n    pass\n",
+    )
+    .expect_err("a collection field cannot move through a shared parameter");
+    assert_eq!(error.code, "AU3002");
+    assert_eq!(
+        error.message,
+        "cannot move non-copy field `values` out of borrowed value `holder`"
+    );
+    assert_eq!(
+        error.help,
+        ["take `holder` as `own Holder` when the field should be moved, or call `.copy()` on the field to return an independent value"]
+    );
+    assert_eq!(error.edits.len(), 1);
+    assert_eq!(error.edits[0].replacement, ".copy()");
+}
+
+#[test]
+fn s1_sema_final_nested_or_patterns_keep_exact_errors() {
+    let nested_or = crate::check_source(
+        "enum Choice:\n    Value((bool, bool))\n    Empty\n\ndef main():\n    value = Choice.Value((true, false))\n    match value:\n        case Value((true, _)):\n            pass\n        case Value((true, true) | (true, false)):\n            pass\n        case Empty:\n            pass\n        case _:\n            pass\n",
+    )
+    .expect_err("a prior tuple payload must subsume every nested or-pattern alternative");
+    assert_eq!(nested_or.code, "AU2999");
+    assert_eq!(nested_or.message, "unreachable match arm");
+
+    let tuple_union = crate::check_source(
+        "def main():\n    value: (int64, bool) = (1, true)\n    match value:\n        case (1, true):\n            pass\n        case (1, false):\n            pass\n        case (1, _):\n            pass\n        case _:\n            pass\n",
+    )
+    .expect_err("two prior tuple rows must subsume their literal-prefix wildcard");
+    assert_eq!(tuple_union.code, "AU2999");
+    assert_eq!(tuple_union.message, "unreachable match arm");
+}
+
+#[test]
+fn s1_sema_final_match_expression_or_patterns_preserve_result_types() {
+    crate::check_source(
+        "def classify(value: int64) -> str:\n    return match value:\n        case 1 | 2: \"small\"\n        case _: \"other\"\n\ndef main():\n    print(classify(1))\n",
+    )
+    .expect("match-expression or-patterns must preserve the annotated result type");
+
+    let class_pattern = crate::check_source(
+        "class Point:\n    x: int64\n\ndef describe(point: Point) -> str:\n    return match point:\n        case Point(value): \"point\"\n        case _: \"other\"\n\ndef main():\n    print(describe(Point(1)))\n",
+    )
+    .expect_err("class values cannot use enum-shaped match patterns");
+    assert_eq!(class_pattern.code, "AU2999");
+    assert_eq!(
+        class_pattern.message,
+        "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code"
+    );
+}
+
+#[test]
+fn s1_sema_final_task_specializations_preserve_matching_type_arguments() {
+    crate::check_source(
+        "class Factory[T]:\n    def make[T]() -> None:\n        pass\n\ndef main():\n    with group = TaskGroup():\n        group.start(Factory[int64].make[int64])\n",
+    )
+    .expect("matching class and associated-method arguments must remain a valid task target");
+}
+
+#[test]
+fn s1_sema_module_constants_reject_self_reentry_rebinding_mutation_and_moves() {
+    let reentry = crate::check_source("VALUE: int64 = VALUE\n\ndef main():\n    pass\n")
+        .expect_err("a module constant cannot re-enter its own initializer");
+    assert_eq!(reentry.code, "AU2001");
+    assert_eq!(
+        reentry.message,
+        "module constant `VALUE` is used before initialization"
+    );
+
+    let rebound = crate::check_source(
+        "NAMES: list[str] = [\"Aura\"]\n\ndef main():\n    NAMES = [\"changed\"]\n",
+    )
+    .expect_err("module constants cannot be rebound");
+    assert_eq!(rebound.code, "AU3003");
+    assert_eq!(rebound.message, "module constant `NAMES` is immutable");
+
+    let mutated = crate::check_source(
+        "NAMES: list[str] = [\"Aura\"]\n\ndef main():\n    NAMES.append(\"changed\")\n",
+    )
+    .expect_err("module constants cannot provide mutable receivers");
+    assert_eq!(mutated.code, "AU3003");
+    assert_eq!(
+        mutated.message,
+        "module constant `NAMES` cannot provide a mutable receiver for method `append`"
+    );
+
+    let moved = crate::check_source(
+        "import random\n\nSTATE: random.Rng = random.Rng(seed=7)\n\ndef consume(value: own random.Rng):\n    pass\n\ndef main():\n    consume(STATE)\n",
+    )
+    .expect_err("a non-cloneable module constant cannot move out of immutable storage");
+    assert_eq!(moved.code, "AU3001");
+    assert_eq!(
+        moved.message,
+        "cannot move `STATE` out of immutable module storage"
+    );
+    assert_eq!(
+        moved.help,
+        ["keep shared access or construct an independent owned value"]
+    );
+
+    let remote = crate::check_source("STATE: list[str] = [\"ready\"]\n\ndef main():\n    pass\n")
+        .expect("the imported constant fixture must be a valid checked module");
+    let state = remote.constants["STATE"].clone();
+    let mut settings = namespace("settings");
+    settings
+        .constants
+        .insert("STATE".to_string(), state.clone());
+    settings.all_constants.insert("STATE".to_string(), state);
+    let importing = crate::parser::parse(
+        "def consume(value: own list[str]):\n    pass\n\ndef main():\n    consume(settings.STATE)\n",
+    )
+    .expect("qualified constant consumption source must parse");
+    let qualified = check_with_context(
+        importing,
+        ModuleContext {
+            module_name: "<main>".to_string(),
+            imported_bindings: BTreeMap::from([(
+                "settings".to_string(),
+                ImportedBinding::Module(settings.clone()),
+            )]),
+            module_registry: BTreeMap::from([("settings".to_string(), settings)]),
+            is_entry_module: true,
+        },
+    )
+    .expect_err("qualified imported constants cannot move from module storage");
+    assert_eq!(qualified.code, "AU3001");
+    assert_eq!(
+        qualified.message,
+        "cannot move `settings.STATE` out of immutable module storage"
+    );
+    assert_eq!(
+        qualified.help,
+        ["keep shared access or construct an independent owned value"]
+    );
+}
+
+#[test]
+fn s1_sema_match_guards_and_or_patterns_pin_commit_binding_and_coverage_errors() {
+    for (source, code, expected) in [
+        (
+            "def main():\n    value: int32 = 1\n    match value:\n        case 1 if 7:\n            pass\n        case _:\n            pass\n",
+            "AU2002",
+            "match guard expects exactly `bool`, found `int64`",
+        ),
+        (
+            "enum Pair:\n    Left(int32)\n    Right(int32)\n\ndef main():\n    value = Pair.Left(1)\n    match value:\n        case Left(item) | Right(_):\n            print(item)\n",
+            "AU2999",
+            "every alternative in an or-pattern must bind the same names with identical types and capabilities",
+        ),
+        (
+            "def main():\n    value: int32 = 1\n    match value:\n        case 1 | 1:\n            pass\n        case _:\n            pass\n",
+            "AU2999",
+            "duplicate or subsumed alternative in or-pattern",
+        ),
+        (
+            "def main():\n    value: (bool, bool) = (true, false)\n    match value:\n        case (true, _) | (true, false):\n            pass\n        case _:\n            pass\n",
+            "AU2999",
+            "duplicate or subsumed alternative in or-pattern",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err("invalid guarded match must fail");
+        assert_eq!(error.code, code, "{source}");
+        assert_eq!(error.message, expected, "{source}");
+    }
+
+    let candidate_move = crate::check_source(
+        "enum Text:\n    Value(str)\n    Empty\n\ndef consume(value: own str) -> bool:\n    return value == \"yes\"\n\ndef main():\n    text = Text.Value(\"yes\")\n    match own text:\n        case Value(value) if consume(value):\n            pass\n        case Value(_):\n            pass\n        case Empty:\n            pass\n",
+    )
+    .expect_err("an own-match guard cannot consume a candidate before commit");
+    assert_eq!(candidate_move.code, "AU3001");
+    assert_eq!(
+        candidate_move.message,
+        "cannot move an owned match candidate before its guard commits the arm"
+    );
+
+    let nested = crate::check_source(
+        "enum Flag:\n    On\n    Off\n\nenum Wrap:\n    Value(Flag)\n    Empty\n\ndef main():\n    value = Wrap.Value(Flag.On)\n    match value:\n        case Value(On):\n            pass\n        case Empty:\n            pass\n",
+    )
+    .expect_err("nested enum matches must report the uncovered payload shape");
+    assert_eq!(nested.code, "AU2999");
+    assert_eq!(
+        nested.message,
+        "non-exhaustive match over `Wrap`: missing `Value(Off)`"
+    );
+
+    let primitive = crate::check_source(
+        "def main():\n    value: int64 = 1\n    match value:\n        case 1:\n            pass\n",
+    )
+    .expect_err("an open primitive match needs a fallback");
+    assert_eq!(primitive.code, "AU2999");
+    assert_eq!(
+        primitive.message,
+        "`match` over `int64` with literal patterns requires a final `case _:` arm"
+    );
+
+    let primitive_payload = crate::check_source(
+        "enum Number:\n    Value(int64)\n    Empty\n\ndef main():\n    value = Number.Value(1)\n    match value:\n        case Value(1):\n            pass\n        case Empty:\n            pass\n",
+    )
+    .expect_err("an enum payload with an open primitive domain needs a fallback shape");
+    assert_eq!(primitive_payload.code, "AU2999");
+    assert_eq!(
+        primitive_payload.message,
+        "non-exhaustive match over `Number`: missing `Value(_)`"
+    );
+
+    let pair_payload = crate::check_source(
+        "enum PairNumber:\n    Value(int64, int64)\n    Empty\n\ndef main():\n    value = PairNumber.Value(1, 1)\n    match value:\n        case Value(1, 1):\n            pass\n        case Empty:\n            pass\n",
+    )
+    .expect_err("an incompletely covered multi-payload variant needs its full fallback shape");
+    assert_eq!(pair_payload.code, "AU2999");
+    assert_eq!(
+        pair_payload.message,
+        "non-exhaustive match over `PairNumber`: missing `Value(_, _)`"
+    );
+
+    let bool_union = crate::check_source(
+        "def main():\n    value: bool = true\n    match value:\n        case true | false:\n            pass\n        case _:\n            pass\n",
+    )
+    .expect_err("a complete bool or-pattern must subsume a later wildcard");
+    assert_eq!(bool_union.code, "AU2999");
+    assert_eq!(bool_union.message, "unreachable match arm");
+}
+
+#[test]
+fn root_match_bindings_are_catch_alls_in_statements_and_expressions() {
+    crate::check_source(
+        r#"
+class Box:
+    value: int64
+
+enum State:
+    Ready
+    Done
+
+def statement(value: int64) -> int64:
+    match value:
+        case n if n > 0:
+            return n
+        case n:
+            return 0 - n
+
+def expression(value: int64) -> int64:
+    return match value:
+        case n if n >= 0: n
+        case n: 0 - n
+
+def enum_expression(state: State) -> int64:
+    return match state:
+        case whole if whole == State.Ready: 1
+        case whole: 2
+
+def consume(box: own Box) -> int64:
+    match own box:
+        case owned:
+            return owned.value
+
+def mutate(box: mut Box):
+    match mut box:
+        case current:
+            current.value += 1
+
+def whole_enum(state: State) -> State:
+    match state:
+        case whole:
+            return whole
+"#,
+    )
+    .expect("top-level bindings should be guarded or unguarded catch-all patterns");
+
+    for (source, expected) in [
+        (
+            "def main():\n    match 1:\n        case n:\n            pass\n        case _:\n            pass\n",
+            "catch-all match arm must be the final `case`",
+        ),
+        (
+            "def choose_value() -> int64:\n    return match 1:\n        case n: n\n        case _: 0\n\ndef main():\n    pass\n",
+            "catch-all match arm must be the final `case`",
+        ),
+        (
+            "enum State:\n    Ready\n    Done\n\ndef main():\n    state = State.Ready\n    match state:\n        case whole:\n            pass\n        case Ready:\n            pass\n",
+            "catch-all match arm must be the final `case`",
+        ),
+        (
+            "enum State:\n    Ready\n    Done\n\ndef choose(state: State) -> int64:\n    return match state:\n        case whole: 1\n        case Ready: 2\n\ndef main():\n    pass\n",
+            "catch-all match arm must be the final `case`",
+        ),
+        (
+            "def main():\n    match 1:\n        case n if n > 0:\n            pass\n",
+            "requires a final `case _:` arm",
+        ),
+        (
+            "class Box:\n    value: int64\n\ndef choose(box: Box) -> int64:\n    return match box:\n        case Ready: 1\n        case whole: whole.value\n\ndef main():\n    pass\n",
+            "class patterns are not supported",
+        ),
+        (
+            "def choose(value: bool) -> int64:\n    return match value:\n        case _: 1\n        case true: 2\n\ndef main():\n    pass\n",
+            "wildcard match arm must be the final `case`",
+        ),
+        (
+            "def choose(value: bool) -> int64:\n    return match value:\n        case whole if whole: 1\n\ndef main():\n    pass\n",
+            "non-exhaustive bool match: missing `false`, `true`",
+        ),
+    ] {
+        let diagnostic = crate::check_source(source)
+            .expect_err("root binding coverage and ordering must stay explicit");
+        assert!(
+            diagnostic.message.contains(expected),
+            "expected `{expected}`, got {diagnostic:?}"
+        );
+    }
+}
+
+#[test]
+fn s1_sema_fstring_specs_report_syntax_and_interpolated_type_failures() {
+    let syntax = crate::check_source("def main():\n    print(f\"{1:q}\")\n")
+        .expect_err("unsupported format codes must fail during checking");
+    assert_eq!(syntax.code, "AU1101");
+    assert_eq!(
+        syntax.message,
+        "unsupported format type `q`; supported codes are d, f, e, x, X, b, o, %, and s"
+    );
+
+    let typed = crate::check_source("def main():\n    print(f\"{true:d}\")\n")
+        .expect_err("integer format codes require an integer interpolation");
+    assert_eq!(typed.code, "AU2002");
+    assert_eq!(
+        typed.message,
+        "integer format code requires an integer value, found value"
+    );
+    assert_eq!(
+        typed.help,
+        ["supported codes are d, f, e, x, X, b, o, %, and s; omit the code for ordinary rendering"]
+    );
+}
 use std::sync::OnceLock;
 
 fn empty_canonical_type_names() -> &'static BTreeMap<String, String> {
@@ -12,9 +860,133 @@ fn empty_canonical_type_names() -> &'static BTreeMap<String, String> {
     NAMES.get_or_init(BTreeMap::new)
 }
 
+fn empty_constants() -> &'static BTreeMap<String, ConstantInfo> {
+    static EMPTY: std::sync::OnceLock<BTreeMap<String, ConstantInfo>> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(BTreeMap::new)
+}
+
+#[test]
+fn assertion_introspection_dispatch_requires_two_shared_custom_operands() {
+    assert!(assertion_dispatch_is_non_consuming(None));
+    assert!(assertion_dispatch_is_non_consuming(Some((
+        ReceiverKind::Borrow,
+        ReceiverKind::Borrow,
+    ))));
+    for dispatch in [
+        (ReceiverKind::Value, ReceiverKind::Borrow),
+        (ReceiverKind::Borrow, ReceiverKind::Value),
+        (ReceiverKind::Value, ReceiverKind::Value),
+        (ReceiverKind::BorrowMut, ReceiverKind::Borrow),
+        (ReceiverKind::Borrow, ReceiverKind::BorrowMut),
+    ] {
+        assert!(!assertion_dispatch_is_non_consuming(Some(dispatch)));
+    }
+}
+
 fn check_ffi_source_for_test(source: &str) -> Result<Program> {
     let module = crate::parse_source(source)?;
     crate::check_module_with_builtin_imports(module)
+}
+
+#[test]
+fn round_and_divmod_builtin_overloads_preserve_exact_static_types() {
+    crate::check_source(
+        r#"
+def main():
+    tiny: int8 = -7
+    other: int8 = 3
+    same: int8 = round(tiny)
+    half: float32 = 2.5
+    rounded: int64 = round(value=half)
+    integer_pair: (int8, int8) = divmod(left=tiny, right=other)
+    float_pair: (float32, float32) = divmod(half, 1.5)
+    i16: int16 = round(7 as int16)
+    i32: int32 = round(7 as int32)
+    i64: int64 = round(7 as int64)
+    i128: int128 = round(7 as int128)
+    isize: intsize = round(7 as intsize)
+    u8: uint8 = round(7 as uint8)
+    u16: uint16 = round(7 as uint16)
+    u32: uint32 = round(7 as uint32)
+    u64: uint64 = round(7 as uint64)
+    u128: uint128 = round(7 as uint128)
+    usize: uintsize = round(7 as uintsize)
+    pair_i128: (int128, int128) = divmod(7 as int128, 3 as int128)
+    pair_u128: (uint128, uint128) = divmod(7 as uint128, 3 as uint128)
+"#,
+    )
+    .expect("round and divmod overloads should preserve their ratified result types");
+
+    let round_domain = crate::check_source(
+        r#"
+def main():
+    value = round("1")
+"#,
+    )
+    .expect_err("round must reject non-numeric values");
+    assert_eq!(round_domain.code, "AU2003");
+    assert!(round_domain.message.contains("expects an integer"));
+
+    let divmod_domain = crate::check_source(
+        r#"
+def main():
+    value = divmod("1", "2")
+"#,
+    )
+    .expect_err("divmod must reject non-numeric values");
+    assert_eq!(divmod_domain.code, "AU2003");
+
+    let divmod_mismatch = crate::check_source(
+        r#"
+def main():
+    value = divmod(1, 2.0)
+"#,
+    )
+    .expect_err("divmod operands must have one exact type");
+    assert_eq!(divmod_mismatch.code, "AU2002");
+    assert!(divmod_mismatch.message.contains("one exact type"));
+
+    let arity = crate::check_source(
+        r#"
+def main():
+    value = round(1, 2)
+"#,
+    )
+    .expect_err("round has no digit-count overload");
+    assert_eq!(arity.code, "AU2004");
+}
+
+#[test]
+fn math_module_requires_and_returns_exact_float64_types() {
+    check_ffi_source_for_test(
+        r#"
+import math
+
+def main():
+    floored: int64 = math.floor(1.5)
+    ceiled: int64 = math.ceil(1.5)
+    truncated: int64 = math.trunc(-1.5)
+    powered: float64 = math.pow(2.0, 3.0)
+    exponential: float64 = math.exp(1.0)
+    natural: float64 = math.log(2.0)
+    binary: float64 = math.log2(8.0)
+    decimal: float64 = math.log10(1000.0)
+    sine: float64 = math.sin(0.0)
+    cosine: float64 = math.cos(0.0)
+    tangent: float64 = math.tan(0.0)
+"#,
+    )
+    .expect("the exact math module signatures should type check");
+
+    for source in [
+        "import math\n\ndef main():\n    value = math.sin(1 as float32)\n",
+        "import math\n\ndef main():\n    value = math.pow(2.0, 3 as int64)\n",
+    ] {
+        let error = check_ffi_source_for_test(source)
+            .expect_err("math must not introduce implicit numeric conversions");
+        assert_eq!(error.code, "AU2002");
+        assert!(error.message.contains("float64"));
+    }
 }
 
 fn public_ffi_handle_namespace(module_name: &str) -> ModuleNamespace {
@@ -23,6 +995,8 @@ fn public_ffi_handle_namespace(module_name: &str) -> ModuleNamespace {
     let mut handle = remote.opaque_handles["Handle"].clone();
     handle.module_name = module_name.to_string();
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: module_name.to_string(),
         path: module_name.to_string(),
         source_path: None,
@@ -53,6 +1027,8 @@ fn public_ffi_function_namespace(module_name: &str) -> ModuleNamespace {
     let mut scalar = remote.extern_functions["scalar"].clone();
     scalar.module_name = module_name.to_string();
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: module_name.to_string(),
         path: module_name.to_string(),
         source_path: None,
@@ -81,18 +1057,18 @@ fn array_surface_type_checks_constructors_members_operators_and_transfer() {
     crate::check_source(
         r#"
 def main():
-    mut values = Array[int32].from_vec(values=[1, 2, 3, 4], shape=[2, 2])
+    mut values = Array[int32].from_list(values=[1, 2, 3, 4], shape=[2, 2])
     zeros: Array[float64] = Array[float64].zeros(shape=[2, 2])
     full = Array[int64].full(shape=[2, 2], value=7)
 
-    shape: Vec[int64] = values.shape()
+    shape: list[int64] = values.shape()
     count: int64 = values.len()
     copied: Array[int32] = values.clone()
     maybe: Option[int32] = values.get(index=[0, 1])
     old: Option[int32] = values.set(index=[0, 1], value=9)
     values.fill(value=0)
     item: int32 = values[0, 1]
-    coordinates: Vec[int32] = [0]
+    coordinates: list[int64] = [0]
     borrowed_item: int32 = values[coordinates[0]]
     values[0, 1] = item
     rows: Array[int32] = values[:1]
@@ -141,7 +1117,7 @@ def main():
 fn array_surface_rejects_invalid_dtypes_mixed_arithmetic_and_invalid_members() {
     for (source, code, message) in [
         (
-            "def main():\n    value: Array[String] = Array[String].zeros(shape=[1])\n",
+            "def main():\n    value: Array[str] = Array[str].zeros(shape=[1])\n",
             "AU2002",
             "Array dtype must be one of",
         ),
@@ -176,9 +1152,9 @@ fn array_surface_rejects_invalid_dtypes_mixed_arithmetic_and_invalid_members() {
             "Array.map type argument `int64` does not match callback result `float64`",
         ),
         (
-            "def main():\n    values = Array[int32].zeros(shape=[1])\n    index: int64 = 0\n    print(values[index])\n",
+            "def main():\n    values = Array[int32].zeros(shape=[1])\n    index: uint64 = 0\n    print(values[index])\n",
             "AU2002",
-            "Array indices must have type `int32`",
+            "Array indices must have type `int64` or a losslessly narrower integer type",
         ),
         (
             "def main():\n    values = Array[int32].zeros(shape=[1])\n    values.fill(value=1)\n",
@@ -218,9 +1194,9 @@ fn array_surface_reports_reachable_constructor_member_and_operator_contracts() {
         ),
         (
             "invalid constructor dtype",
-            "def main():\n    values = Array[String].zeros([1])\n    print(values)\n",
+            "def main():\n    values = Array[str].zeros([1])\n    print(values)\n",
             "AU2002",
-            "Array dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `String`",
+            "Array dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `str`",
         ),
         (
             "unknown constructor",
@@ -242,51 +1218,51 @@ fn array_surface_reports_reachable_constructor_member_and_operator_contracts() {
         ),
         (
             "zeros shape",
-            "def main():\n    shape: Vec[int32] = [1]\n    values = Array[int32].zeros(shape)\n    print(values)\n",
+            "def main():\n    shape: list[int32] = [1]\n    values = Array[int32].zeros(shape)\n    print(values)\n",
             "AU2002",
-            "`Array.zeros` expects `Vec[int64]` for `shape`, found `Vec[int32]`",
+            "`Array.zeros` expects `list[int64]` for `shape`, found `list[int32]`",
         ),
         (
             "full value",
             "def main():\n    values = Array[int32].full([1], \"bad\")\n    print(values)\n",
             "AU2002",
-            "`Array.full` expects `int32` for `value`, found `String`",
+            "`Array.full` expects `int32` for `value`, found `str`",
         ),
         (
-            "from_vec values",
-            "def main():\n    values: Vec[int64] = [1]\n    array = Array[int32].from_vec(values, [1])\n    print(array)\n",
+            "from_list values",
+            "def main():\n    values: list[int64] = [1]\n    array = Array[int32].from_list(values, [1])\n    print(array)\n",
             "AU2002",
-            "`Array.from_vec` expects `Vec[int32]` for `values`, found `Vec[int64]`",
+            "`Array.from_list` expects `list[int32]` for `values`, found `list[int64]`",
         ),
         (
-            "from_vec shape",
-            "def main():\n    shape: Vec[int32] = [1]\n    array = Array[int32].from_vec([1], shape)\n    print(array)\n",
+            "from_list shape",
+            "def main():\n    shape: list[int32] = [1]\n    array = Array[int32].from_list([1], shape)\n    print(array)\n",
             "AU2002",
-            "`Array.from_vec` expects `Vec[int64]` for `shape`, found `Vec[int32]`",
+            "`Array.from_list` expects `list[int64]` for `shape`, found `list[int32]`",
         ),
         (
             "get index",
-            "def main():\n    values = Array[int32].zeros([1])\n    index: Vec[int64] = [0]\n    print(values.get(index))\n",
+            "def main():\n    values = Array[int32].zeros([1])\n    index: list[int32] = [0]\n    print(values.get(index))\n",
             "AU2002",
-            "`Array.get` expects `Vec[int32]`, found `Vec[int64]`",
+            "`Array.get` expects `list[int64]`, found `list[int32]`",
         ),
         (
             "set index",
-            "def main():\n    mut values = Array[int32].zeros([1])\n    index: Vec[int64] = [0]\n    print(values.set(index, 1))\n",
+            "def main():\n    mut values = Array[int32].zeros([1])\n    index: list[int32] = [0]\n    print(values.set(index, 1))\n",
             "AU2002",
-            "`Array.set` expects `Vec[int32]`, found `Vec[int64]`",
+            "`Array.set` expects `list[int64]`, found `list[int32]`",
         ),
         (
             "set value",
             "def main():\n    mut values = Array[int32].zeros([1])\n    print(values.set([0], \"bad\"))\n",
             "AU2002",
-            "`Array.set` expects `int32`, found `String`",
+            "`Array.set` expects `int32`, found `str`",
         ),
         (
             "fill value",
             "def main():\n    mut values = Array[int32].zeros([1])\n    values.fill(\"bad\")\n",
             "AU2002",
-            "`Array.fill` expects `int32`, found `String`",
+            "`Array.fill` expects `int32`, found `str`",
         ),
         (
             "map type argument arity",
@@ -296,9 +1272,9 @@ fn array_surface_reports_reachable_constructor_member_and_operator_contracts() {
         ),
         (
             "map output dtype",
-            "def widen(value: int32) -> float64:\n    return value.to_float()\n\ndef main():\n    values = Array[int32].zeros([1])\n    print(values.map[String](widen))\n",
+            "def widen(value: int32) -> float64:\n    return value.to_float()\n\ndef main():\n    values = Array[int32].zeros([1])\n    print(values.map[str](widen))\n",
             "AU2002",
-            "Array.map output dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `String`",
+            "Array.map output dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `str`",
         ),
         (
             "integer-only method",
@@ -379,38 +1355,38 @@ fn array_surface_reports_reachable_constructor_member_and_operator_contracts() {
 fn array_containment_rejects_contextual_empty_sets_and_map_indexing() {
     let cases = [
         (
-            "empty contextual Set",
+            "empty contextual set",
             r#"
 def main():
-    values: Set[Array[int32]] = {}
+    values: set[Array[int32]] = {}
     print(values)
 "#,
-            "cannot use `Array[int32]` as a Set element because it contains `Array[int32]`, whose equality is unavailable",
+            "cannot use `Array[int32]` as a set element because it contains `Array[int32]`, whose equality is unavailable",
         ),
         (
-            "map indexed read",
+            "dict indexed read",
             r#"
-def read(values: Map[Array[int32], int64], key: Array[int32]) -> int64:
+def read(values: dict[Array[int32], int64], key: Array[int32]) -> int64:
     return values[key]
 "#,
-            "cannot use map indexing with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
+            "cannot use dict indexing with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
         ),
         (
-            "map indexed write",
+            "dict indexed write",
             r#"
-def write(values: mut Map[Array[int32], int64], key: Array[int32]):
+def write(values: mut dict[Array[int32], int64], key: Array[int32]):
     values[key] = 1
 "#,
-            "cannot use map indexing with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
+            "cannot use dict indexing with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
         ),
         (
             "mismatched nested equality",
             r#"
 def main():
-    values: Vec[Array[int32]] = [Array[int32].zeros([1])]
+    values: list[Array[int32]] = [Array[int32].zeros([1])]
     print(1 == values)
 "#,
-            "cannot compare `Vec[Array[int32]]` because it contains `Array[int32]`, whose equality is unavailable",
+            "cannot compare `list[Array[int32]]` because it contains `Array[int32]`, whose equality is unavailable",
         ),
     ];
 
@@ -619,22 +1595,22 @@ def main():
 fn array_containment_recursively_disables_structural_equality() {
     let cases = [
         (
-            "Vec value",
-            "Vec[Array[int32]]",
+            "list value",
+            "list[Array[int32]]",
             r#"
 def main():
-    left: Vec[Array[int32]] = [Array[int32].zeros([1])]
-    right: Vec[Array[int32]] = [Array[int32].zeros([1])]
+    left: list[Array[int32]] = [Array[int32].zeros([1])]
+    right: list[Array[int32]] = [Array[int32].zeros([1])]
     print(left == right)
 "#,
         ),
         (
-            "Map value",
-            "Map[String, Array[int32]]",
+            "dict value",
+            "dict[str, Array[int32]]",
             r#"
 def main():
-    left: Map[String, Array[int32]] = {"values": Array[int32].zeros([1])}
-    right: Map[String, Array[int32]] = {"values": Array[int32].zeros([1])}
+    left: dict[str, Array[int32]] = {"values": Array[int32].zeros([1])}
+    right: dict[str, Array[int32]] = {"values": Array[int32].zeros([1])}
     print(left != right)
 "#,
         ),
@@ -660,11 +1636,11 @@ def main():
         ),
         (
             "Result payload",
-            "Result[Array[int32], String]",
+            "Result[Array[int32], str]",
             r#"
 def main():
-    left: Result[Array[int32], String] = Result.Ok(Array[int32].zeros([1]))
-    right: Result[Array[int32], String] = Result.Ok(Array[int32].zeros([1]))
+    left: Result[Array[int32], str] = Result.Ok(Array[int32].zeros([1]))
+    right: Result[Array[int32], str] = Result.Ok(Array[int32].zeros([1]))
     print(left != right)
 "#,
         ),
@@ -726,98 +1702,76 @@ fn array_containment_disables_membership_and_key_deduplication() {
             r#"
 def main():
     needle = Array[int32].zeros([1])
-    values: Vec[Array[int32]] = [needle.clone()]
+    values: list[Array[int32]] = [needle.clone()]
     print(needle in values)
 "#,
             "cannot test membership for `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
         ),
         (
-            "Vec.contains",
+            "list.contains",
             r#"
 def main():
     needle = Array[int32].zeros([1])
-    values: Vec[Array[int32]] = [needle.clone()]
+    values: list[Array[int32]] = [needle.clone()]
     print(values.contains(needle))
 "#,
-            "cannot use `Vec.contains` with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
+            "cannot use `list.contains` with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
         ),
         (
-            "Set constructor",
+            "set constructor",
             r#"
 def main():
-    values = Set[Array[int32]]()
+    values = set[Array[int32]]()
     print(values)
 "#,
-            "cannot use `Array[int32]` as a Set element because it contains `Array[int32]`, whose equality is unavailable",
+            "cannot use `Array[int32]` as a set element because it contains `Array[int32]`, whose equality is unavailable",
         ),
         (
-            "Set literal",
+            "set literal",
             r#"
 def main():
     values = {Array[int32].zeros([1])}
     print(values)
 "#,
-            "cannot use `Array[int32]` as a Set element because it contains `Array[int32]`, whose equality is unavailable",
+            "cannot use `Array[int32]` as a set element because it contains `Array[int32]`, whose equality is unavailable",
         ),
         (
-            "Map constructor",
+            "dict constructor",
             r#"
 def main():
-    values = Map[Array[int32], int64]()
+    values = dict[Array[int32], int64]()
     print(values)
 "#,
-            "cannot use `Array[int32]` as a Map key because it contains `Array[int32]`, whose equality is unavailable",
+            "cannot use `Array[int32]` as a dict key because it contains `Array[int32]`, whose equality is unavailable",
         ),
         (
-            "Map literal",
+            "dict literal",
             r#"
 def main():
     values = {Array[int32].zeros([1]): 1}
     print(values)
 "#,
-            "cannot use `Array[int32]` as a Map key because it contains `Array[int32]`, whose equality is unavailable",
+            "cannot use `Array[int32]` as a dict key because it contains `Array[int32]`, whose equality is unavailable",
         ),
         (
-            "Set comprehension",
+            "set comprehension",
             r#"
 def main():
-    source: Vec[Array[int32]] = [Array[int32].zeros([1])]
+    source: list[Array[int32]] = [Array[int32].zeros([1])]
     values = {value.clone() for value in source}
     print(values)
 "#,
-            "cannot use `Array[int32]` as a Set element because it contains `Array[int32]`, whose equality is unavailable",
+            "cannot use `Array[int32]` as a set element because it contains `Array[int32]`, whose equality is unavailable",
         ),
         (
-            "Map comprehension",
+            "dict comprehension",
             r#"
 def main():
-    source: Vec[Array[int32]] = [Array[int32].zeros([1])]
+    source: list[Array[int32]] = [Array[int32].zeros([1])]
     values = {value.clone(): 1 for value in source}
     print(values)
 "#,
-            "cannot use `Array[int32]` as a Map key because it contains `Array[int32]`, whose equality is unavailable",
-        ),
-        (
-            "Map key use",
-            r#"
-def contains(values: Map[Array[int32], int64], key: Array[int32]) -> bool:
-    return values.contains_key(key)
-
-def main():
-    pass
-"#,
-            "cannot use `Map.contains_key` with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
-        ),
-        (
-            "Set element use",
-            r#"
-def contains(values: Set[Array[int32]], value: Array[int32]) -> bool:
-    return values.contains(value)
-
-def main():
-    pass
-"#,
-            "cannot use `Set.contains` with `Array[int32]` because it contains `Array[int32]`, whose equality is unavailable",
+            "cannot use `Array[int32]` as a dict key because it contains `Array[int32]`, whose equality is unavailable",
         ),
     ];
 
@@ -842,7 +1796,7 @@ fn equality_and_membership_remain_available_for_array_free_values() {
     crate::check_source(
         r#"
 class Pair:
-    values: Vec[int32]
+    values: list[int32]
 
 enum MaybePair:
     Missing
@@ -852,10 +1806,10 @@ def main():
     left = MaybePair.Present(Pair(values=[1, 2]))
     right = MaybePair.Present(Pair(values=[1, 2]))
     equal: bool = left == right
-    numbers: Vec[(int32, String)] = [(1, "one")]
+    numbers: list[(int32, str)] = [(1, "one")]
     present: bool = (1, "one") in numbers
-    keys: Set[(int32, String)] = {(1, "one")}
-    lookup: Map[(int32, String), bool] = {(1, "one"): true}
+    keys: set[(int32, str)] = {(1, "one")}
+    lookup: dict[(int32, str), bool] = {(1, "one"): true}
     print(equal)
     print(present)
     print(keys)
@@ -968,7 +1922,7 @@ fn ffi_v0_validates_views_and_opaque_handle_capabilities() {
     check_ffi_source_for_test(
         r#"
 extern "C" opaque class Handle
-extern "C" def inspect(name: String, bytes: Vec[uint8], output: mut Vec[uint8], handle: Handle) -> int32
+extern "C" def inspect(name: str, bytes: list[uint8], output: mut list[uint8], handle: Handle) -> int32
 extern "C" def close(handle: own Handle) -> None
 extern "C" def acquire() -> Handle
 "#,
@@ -987,17 +1941,17 @@ extern "C" def acquire() -> Handle
             "fixed-width scalar parameter `value` must use the bare capability",
         ),
         (
-            r#"extern "C" def bad(value: own String) -> None
+            r#"extern "C" def bad(value: own str) -> None
 "#,
-            "String view parameter `value` must use the bare capability",
+            "str view parameter `value` must use the bare capability",
         ),
         (
-            r#"extern "C" def bad(value: mut String) -> None
+            r#"extern "C" def bad(value: mut str) -> None
 "#,
-            "mutable String views are reserved",
+            "mutable str views are reserved",
         ),
         (
-            r#"extern "C" def bad(value: own Vec[uint8]) -> None
+            r#"extern "C" def bad(value: own list[uint8]) -> None
 "#,
             "owned byte views are reserved",
         ),
@@ -1036,9 +1990,9 @@ fn ffi_v0_rejects_unsupported_abi_types_and_returned_views() {
             "AU2002",
         ),
         (
-            r#"extern "C" def bad(value: Vec[int32]) -> None
+            r#"extern "C" def bad(value: list[int32]) -> None
 "#,
-            "only `Vec[uint8]` is supported as an FFI byte view",
+            "only `list[uint8]` is supported as an FFI byte view",
             "AU2002",
         ),
         (
@@ -1060,15 +2014,15 @@ fn ffi_v0_rejects_unsupported_abi_types_and_returned_views() {
             "AU2005",
         ),
         (
-            r#"extern "C" def bad() -> String
+            r#"extern "C" def bad() -> str
 "#,
-            "FFI v0 cannot return a String view",
+            "FFI v0 cannot return a str view",
             "AU2002",
         ),
         (
-            r#"extern "C" def bad() -> Vec[uint8]
+            r#"extern "C" def bad() -> list[uint8]
 "#,
-            "FFI v0 cannot return a Vec[uint8] view",
+            "FFI v0 cannot return a list[uint8] view",
             "AU2002",
         ),
         (
@@ -1466,7 +2420,7 @@ def main():
         ),
         (
             "generic collection containing a handle",
-            "Vec[Handle]",
+            "list[Handle]",
             r#"
 extern "C" opaque class Handle
 extern "C" def acquire() -> Handle
@@ -1482,18 +2436,18 @@ def main():
     for (shape, compared_type, source) in cases {
         let diagnostic = check_ffi_source_for_test(source)
             .expect_err("opaque handle identity is intentionally not observable");
-        assert_eq!(diagnostic.code, "AU2003", "{shape}: {diagnostic:?}");
+        assert_eq!(diagnostic.code, "AU2008", "{shape}: {diagnostic:?}");
         assert_eq!(
             diagnostic.message,
             format!(
-                "cannot compare `{compared_type}` because it contains opaque FFI handle `Handle` and FFI v0 does not define equality for foreign identity"
+                "cannot compare `{compared_type}` because opaque FFI handle `Handle` does not define equality"
             ),
             "{shape}"
         );
         assert_eq!(
             diagnostic.help,
             vec![
-                "compare a stable scalar or String identifier exposed by the binding instead of a foreign address"
+                "compare a stable scalar or str identifier exposed by the binding instead of foreign identity"
                     .to_string()
             ],
             "{shape}"
@@ -1516,16 +2470,16 @@ def main():
         );
         let diagnostic = check_ffi_source_for_test(&source)
             .expect_err("opaque identity must remain hidden in either operand position");
-        assert_eq!(diagnostic.code, "AU2003", "{operator}: {diagnostic:?}");
+        assert_eq!(diagnostic.code, "AU2008", "{operator}: {diagnostic:?}");
         assert_eq!(
             diagnostic.message,
-            "cannot compare `Handle` because it contains opaque FFI handle `Handle` and FFI v0 does not define equality for foreign identity",
+            "cannot compare `Handle` because opaque FFI handle `Handle` does not define equality",
             "{operator}"
         );
         assert_eq!(
             diagnostic.help,
             vec![
-                "compare a stable scalar or String identifier exposed by the binding instead of a foreign address"
+                "compare a stable scalar or str identifier exposed by the binding instead of foreign identity"
                     .to_string()
             ],
             "{operator}"
@@ -1667,7 +2621,7 @@ def main():
         assert_eq!(
             diagnostic.help,
             vec![
-                "compare a stable scalar or String ordering key exposed by the binding instead of a foreign address"
+                "compare a stable scalar or str ordering key exposed by the binding instead of a foreign address"
                     .to_string()
             ],
             "{expression}"
@@ -1676,21 +2630,21 @@ def main():
 }
 
 #[test]
-fn ffi_opaque_handles_are_rejected_by_every_clone_producing_collection_observer() {
+fn ffi_opaque_handles_are_rejected_by_reachable_clone_producing_collection_observers() {
     let cases = [
         (
-            "Vec.clone",
+            "list.copy",
             r#"
 extern "C" opaque class Handle
 extern "C" def acquire() -> Handle
 
 def main():
     handles = [acquire()]
-    copied = handles.clone()
+    copied = handles.copy()
 "#,
         ),
         (
-            "Vec.get",
+            "list.get",
             r#"
 extern "C" opaque class Handle
 extern "C" def acquire() -> Handle
@@ -1701,7 +2655,7 @@ def main():
 "#,
         ),
         (
-            "Vec.filter",
+            "list.filter",
             r#"
 extern "C" opaque class Handle
 extern "C" def acquire() -> Handle
@@ -1715,80 +2669,47 @@ def main():
 "#,
         ),
         (
-            "Map.clone",
+            "dict.copy",
             r#"
 extern "C" opaque class Handle
 extern "C" def acquire() -> Handle
 
 def main():
-    handles: Map[String, Handle] = {"one": acquire()}
-    copied = handles.clone()
+    handles: dict[str, Handle] = {"one": acquire()}
+    copied = handles.copy()
 "#,
         ),
         (
-            "Map.get",
+            "dict.get",
             r#"
 extern "C" opaque class Handle
 extern "C" def acquire() -> Handle
 
 def main():
-    handles: Map[String, Handle] = {"one": acquire()}
+    handles: dict[str, Handle] = {"one": acquire()}
     copied = handles.get("one")
 "#,
         ),
         (
-            "Map.keys",
+            "dict.values",
             r#"
 extern "C" opaque class Handle
 extern "C" def acquire() -> Handle
 
 def main():
-    handles: Map[Handle, int32] = {acquire(): 1}
-    copied = handles.keys()
-"#,
-        ),
-        (
-            "Map.values",
-            r#"
-extern "C" opaque class Handle
-extern "C" def acquire() -> Handle
-
-def main():
-    handles: Map[String, Handle] = {"one": acquire()}
+    handles: dict[str, Handle] = {"one": acquire()}
     copied = handles.values()
 "#,
         ),
         (
-            "Map.items",
+            "dict.items",
             r#"
 extern "C" opaque class Handle
 extern "C" def acquire() -> Handle
 
 def main():
-    handles: Map[String, Handle] = {"one": acquire()}
+    handles: dict[str, Handle] = {"one": acquire()}
     copied = handles.items()
-"#,
-        ),
-        (
-            "Map.entries",
-            r#"
-extern "C" opaque class Handle
-extern "C" def acquire() -> Handle
-
-def main():
-    handles: Map[String, Handle] = {"one": acquire()}
-    copied = handles.entries()
-"#,
-        ),
-        (
-            "Set.clone",
-            r#"
-extern "C" opaque class Handle
-extern "C" def acquire() -> Handle
-
-def main():
-    handles: Set[Handle] = Set{acquire()}
-    copied = handles.clone()
 "#,
         ),
     ];
@@ -1820,8 +2741,8 @@ extern "C" opaque class Handle
 extern "C" def acquire() -> Handle
 
 def main():
-    values: Vec[(Handle, int32)] = [(acquire(), 1)]
-    copied = values.clone()
+    values: list[(Handle, int32)] = [(acquire(), 1)]
+    copied = values.copy()
 "#,
         ),
         (
@@ -1858,8 +2779,8 @@ def main():
 extern "C" opaque class Handle
 extern "C" def acquire() -> Handle
 
-def duplicate[T](values: Vec[T]) -> Vec[T]:
-    return values.clone()
+def duplicate[T](values: list[T]) -> list[T]:
+    return values.copy()
 
 def main():
     values = [acquire()]
@@ -1889,15 +2810,15 @@ extern "C" def acquire() -> Handle
 
 def main():
     mut popped_values = [acquire()]
-    popped: Option[Handle] = popped_values.pop()
+    popped: Handle = popped_values.pop()
 
     mut removed_values = [acquire()]
-    removed: Option[Handle] = removed_values.remove(0)
+    removed: Handle = removed_values.pop(0)
 
     mut replaced_values = [acquire()]
-    replaced: Option[Handle] = replaced_values.set(0, acquire())
+    replaced: Handle = replaced_values.set(0, acquire())
 
-    mut handles: Map[String, Handle] = {"one": acquire()}
+    mut handles: dict[str, Handle] = {"one": acquire()}
     removed_from_map: Option[Handle] = handles.remove("one")
 "#,
     )
@@ -1912,6 +2833,8 @@ fn ffi_extern_metadata_supports_from_and_qualified_import_calls() {
     let mut scalar = remote.extern_functions["scalar"].clone();
     scalar.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "ffi_api".to_string(),
         path: "ffi_api".to_string(),
         source_path: None,
@@ -1978,6 +2901,8 @@ fn ffi_qualified_imports_do_not_expose_private_extern_declarations() {
     let mut hidden = remote.extern_functions["hidden"].clone();
     hidden.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "ffi_api".to_string(),
         path: "ffi_api".to_string(),
         source_path: None,
@@ -2030,6 +2955,8 @@ fn ffi_qualified_imports_do_not_expose_private_opaque_handles() {
     let mut hidden = remote.opaque_handles["Hidden"].clone();
     hidden.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "ffi_api".to_string(),
         path: "ffi_api".to_string(),
         source_path: None,
@@ -2099,7 +3026,7 @@ fn ffi_qualified_public_opaque_handles_are_valid_in_signatures_and_non_cloneable
     .expect("a public qualified opaque handle should be valid in an extern signature");
 
     let duplication = crate::parse_source(
-        "import ffi_types\n\ndef duplicate(values: Vec[ffi_types.Handle]):\n    copied = values.clone()\n",
+        "import ffi_types\n\ndef duplicate(values: list[ffi_types.Handle]):\n    copied = values.copy()\n",
     )
     .expect("qualified opaque-handle duplication probe parses");
     let diagnostic = check_with_context(
@@ -2143,7 +3070,7 @@ def main():
     .expect("tuple literals use element-wise expected types and copy indexing");
 
     assert!(Type::Tuple(vec![Type::named("int32"), Type::Unit]).is_copy());
-    assert!(!Type::Tuple(vec![Type::named("String"), Type::Unit]).is_copy());
+    assert!(!Type::Tuple(vec![Type::named("str"), Type::Unit]).is_copy());
     assert_eq!(
         Type::Tuple(vec![Type::named("int32")]).to_string(),
         "(int32,)",
@@ -2192,14 +3119,14 @@ def main():
 fn tuple_equality_requires_the_same_static_tuple_type() {
     for operator in ["==", "!="] {
         let source = format!(
-            "def main():\n    left: (int32, String) = (1, \"same\")\n    right: (int64, String) = (1, \"same\")\n    compared = left {operator} right\n"
+            "def main():\n    left: (int32, str) = (1, \"same\")\n    right: (int64, str) = (1, \"same\")\n    compared = left {operator} right\n"
         );
         let error = crate::check_source(&source)
             .expect_err("bound tuples with different static element types must not be widened");
         assert_eq!(error.code, "AU2002");
         assert_eq!(
             error.message,
-            "tuple equality operands must have the same type, found `(int32, String)` and `(int64, String)`"
+            "tuple equality operands must have the same type, found `(int32, str)` and `(int64, str)`"
         );
     }
 }
@@ -2223,7 +3150,7 @@ fn tuple_ordering_rejects_all_four_operators_with_the_teaching_diagnostic() {
 #[test]
 fn tuple_type_helpers_preserve_generic_matching_and_recursive_storage_semantics() {
     let tuple_ref = TypeRef::tuple(
-        vec![type_ref("T"), nested_type_ref("Vec", vec![type_ref("U")])],
+        vec![type_ref("T"), nested_type_ref("list", vec![type_ref("U")])],
         false,
         Span::new(1, 1),
     );
@@ -2247,7 +3174,7 @@ fn tuple_type_helpers_preserve_generic_matching_and_recursive_storage_semantics(
     assert_eq!(type_pattern_specificity(&tuple_pattern), 2);
 
     let type_params = BTreeSet::from(["T".to_string()]);
-    let actual = Type::Tuple(vec![Type::named("String"), Type::named("int32")]);
+    let actual = Type::Tuple(vec![Type::named("str"), Type::named("int32")]);
     let mut substitutions = HashMap::new();
     assert!(type_pattern_matches(
         &tuple_pattern,
@@ -2255,27 +3182,24 @@ fn tuple_type_helpers_preserve_generic_matching_and_recursive_storage_semantics(
         &type_params,
         &mut substitutions,
     ));
-    assert_eq!(substitutions.get("T"), Some(&Type::named("String")));
+    assert_eq!(substitutions.get("T"), Some(&Type::named("str")));
     assert!(!type_pattern_matches(
         &tuple_pattern,
-        &Type::named("String"),
+        &Type::named("str"),
         &type_params,
         &mut HashMap::new(),
     ));
 
-    let not_tuple = unify_type_pattern(&tuple_pattern, &Type::named("String"), &mut HashMap::new())
+    let not_tuple = unify_type_pattern(&tuple_pattern, &Type::named("str"), &mut HashMap::new())
         .expect_err("tuple generic patterns must reject non-tuples");
-    assert_eq!(not_tuple.message, "expected `(T, int32)`, found `String`");
+    assert_eq!(not_tuple.message, "expected `(T, int32)`, found `str`");
     let wrong_arity = unify_type_pattern(
         &tuple_pattern,
-        &Type::Tuple(vec![Type::named("String")]),
+        &Type::Tuple(vec![Type::named("str")]),
         &mut HashMap::new(),
     )
     .expect_err("tuple generic patterns must reject the wrong arity");
-    assert_eq!(
-        wrong_arity.message,
-        "expected `(T, int32)`, found `(String,)`"
-    );
+    assert_eq!(wrong_arity.message, "expected `(T, int32)`, found `(str,)`");
 
     let classes = BTreeMap::from([(
         "Wrapper".to_string(),
@@ -2692,12 +3616,12 @@ def classify(value: PairState):
 #[test]
 fn d4_string_indexing_remains_rejected() {
     let error = crate::check_source(
-        "def index_text() -> String:\n    text = 'Aura'\n    return text[0]\n\ndef main() -> int32:\n    return 0\n",
+        "def index_text() -> str:\n    text = 'Aura'\n    return text[0]\n\ndef main() -> int32:\n    return 0\n",
     )
-    .expect_err("Aura 0.1 does not define integer String indexing");
+    .expect_err("Aura does not define integer str indexing");
     assert_eq!(
         error.message,
-        "cannot index non-Array, vector, or map value `String`"
+        "cannot index non-Array, list, or dict value `str`"
     );
 }
 
@@ -2734,12 +3658,12 @@ def maybe(flag: bool) -> Option[int32]:
     assert_eq!(arm_error.code, "AU2002");
     assert_eq!(
         arm_error.message,
-        "conditional expression arms must have one type; expected `int64`, found `String`"
+        "conditional expression arms must have one type; expected `int64`, found `str`"
     );
 
     let move_error = crate::check_source(
         r#"
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
 def main():
@@ -2764,9 +3688,9 @@ def choose(
     reverse_integer: int32,
     exact_float: float32,
     reverse_float: float32,
-    values: own Vec[int32],
-    reverse_values: own Vec[int32],
-    tuple_values: own Vec[int32]
+    values: own list[int32],
+    reverse_values: own list[int32],
+    tuple_values: own list[int32]
 ):
     left_empty = [] if flag else values
     right_empty = reverse_values if flag else []
@@ -2790,7 +3714,7 @@ def choose(
     assert!(
         both_unknown
             .message
-            .contains("empty list literals require an expected `Vec[T]` type"),
+            .contains("empty list literals require an expected `list[T]` type"),
         "{}",
         both_unknown.message
     );
@@ -2838,7 +3762,7 @@ fn consuming_a_conditional_moves_values_from_both_possible_arms() {
     for (source, moved_name) in [
         (
             r#"
-def consume(value: own String):
+def consume(value: own str):
     pass
 
 def exercise(flag: bool):
@@ -2851,7 +3775,7 @@ def exercise(flag: bool):
         ),
         (
             r#"
-def consume(value: own String):
+def consume(value: own str):
     pass
 
 def exercise(flag: bool):
@@ -2879,10 +3803,10 @@ def exercise(flag: bool):
 fn assert_conditional_single_consumption(expression: &str) {
     let source = format!(
         r#"
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
-def choose(flag: bool, text: own String) -> String:
+def choose(flag: bool, text: own str) -> str:
     selected = {expression}
     return selected
 "#
@@ -2908,10 +3832,10 @@ fn conditional_consumption_keeps_direct_then_arm_branch_local() {
 fn assert_match_single_consumption(then_value: &str, else_value: &str) {
     let source = format!(
         r#"
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
-def choose(flag: bool, text: own String) -> String:
+def choose(flag: bool, text: own str) -> str:
     selected = match flag:
         case true: {then_value}
         case false: {else_value}
@@ -2940,13 +3864,13 @@ fn match_consumption_keeps_direct_true_arm_branch_local() {
 fn borrowed_conditional_result_preserves_internal_arm_consumption() {
     let diagnostic = crate::check_source(
         r#"
-def consume_and_label(value: own String) -> String:
+def consume_and_label(value: own str) -> str:
     return "used"
 
-def observe(value: String):
+def observe(value: str):
     pass
 
-def exercise(flag: bool, spent: own String):
+def exercise(flag: bool, spent: own str):
     observe(consume_and_label(spent) if flag else "idle")
     print(spent)
 "#,
@@ -2960,13 +3884,13 @@ def exercise(flag: bool, spent: own String):
 fn borrowed_match_result_preserves_internal_arm_consumption() {
     let diagnostic = crate::check_source(
         r#"
-def consume_and_label(value: own String) -> String:
+def consume_and_label(value: own str) -> str:
     return "used"
 
-def observe(value: String):
+def observe(value: str):
     pass
 
-def exercise(flag: bool, spent: own String):
+def exercise(flag: bool, spent: own str):
     observe(match flag:
         case true: consume_and_label(spent)
         case false: "idle"
@@ -2983,35 +3907,35 @@ def exercise(flag: bool, spent: own String):
 fn composite_and_projected_arguments_conflict_with_a_retained_shared_argument() {
     for (source, consumed) in [
         (
-            "def hold(shared: Vec[int32], taken: own (Vec[int32], int32)):\n    pass\n\ndef exercise(values: own Vec[int32]):\n    hold(values, (values, 1))\n",
+            "def hold(shared: list[int32], taken: own (list[int32], int32)):\n    pass\n\ndef exercise(values: own list[int32]):\n    hold(values, (values, 1))\n",
             "values",
         ),
         (
-            "def hold(shared: Vec[int32], taken: own Vec[Vec[int32]]):\n    pass\n\ndef exercise(values: own Vec[int32]):\n    hold(values, [values])\n",
+            "def hold(shared: list[int32], taken: own list[list[int32]]):\n    pass\n\ndef exercise(values: own list[int32]):\n    hold(values, [values])\n",
             "values",
         ),
         (
-            "def hold(shared: String, taken: own Set[String]):\n    pass\n\ndef exercise(text: own String):\n    hold(text, {text})\n",
+            "def hold(shared: str, taken: own set[str]):\n    pass\n\ndef exercise(text: own str):\n    hold(text, {text})\n",
             "text",
         ),
         (
-            "def hold(shared: String, taken: own Map[String, String]):\n    pass\n\ndef exercise(text: own String, other: own String):\n    hold(text, {other: text})\n",
+            "def hold(shared: str, taken: own dict[str, str]):\n    pass\n\ndef exercise(text: own str, other: own str):\n    hold(text, {other: text})\n",
             "text",
         ),
         (
-            "class Holder:\n    text: String\n\ndef hold(shared: String, taken: own String):\n    pass\n\ndef exercise(flag: bool, left: own Holder, right: own Holder):\n    hold(left.text, (left if flag else right).text)\n",
+            "class Holder:\n    text: str\n\ndef hold(shared: str, taken: own str):\n    pass\n\ndef exercise(flag: bool, left: own Holder, right: own Holder):\n    hold(left.text, (left if flag else right).text)\n",
             "left.text",
         ),
         (
-            "class Holder:\n    text: String\n\ndef hold(shared: String, taken: own String):\n    pass\n\ndef exercise(flag: bool, left: own Holder, right: own Holder):\n    hold(left.text, (match flag:\n        case true: left\n        case false: right\n    ).text)\n",
+            "class Holder:\n    text: str\n\ndef hold(shared: str, taken: own str):\n    pass\n\ndef exercise(flag: bool, left: own Holder, right: own Holder):\n    hold(left.text, (match flag:\n        case true: left\n        case false: right\n    ).text)\n",
             "left.text",
         ),
         (
-            "class Holder:\n    text: String\n\nenum Choice:\n    First\n    Second\n\ndef hold(shared: String, taken: own String):\n    pass\n\ndef exercise(choice: own Choice, left: own Holder, right: own Holder):\n    hold(left.text, (match choice:\n        case Choice.First: left\n        case Choice.Second: right\n    ).text)\n",
+            "class Holder:\n    text: str\n\nenum Choice:\n    First\n    Second\n\ndef hold(shared: str, taken: own str):\n    pass\n\ndef exercise(choice: own Choice, left: own Holder, right: own Holder):\n    hold(left.text, (match choice:\n        case Choice.First: left\n        case Choice.Second: right\n    ).text)\n",
             "left.text",
         ),
         (
-            "def hold(shared: Vec[int32], taken: own Vec[Vec[int32]]):\n    pass\n\ndef exercise(values: own Vec[int32]):\n    hold(values, ([values]))\n",
+            "def hold(shared: list[int32], taken: own list[list[int32]]):\n    pass\n\ndef exercise(values: own list[int32]):\n    hold(values, ([values]))\n",
             "values",
         ),
     ] {
@@ -3042,13 +3966,13 @@ fn conditional_inference_exchanges_set_and_map_literal_shapes() {
         r#"
 def main():
     flag = true
-    numbers: Set[int32] = {1, 2} if flag else {3}
-    lookup: Map[String, int32] = {"a": 1} if flag else {"b": 2}
+    numbers: set[int32] = {1, 2} if flag else {3}
+    lookup: dict[str, int32] = {"a": 1} if flag else {"b": 2}
     print(numbers.len())
     print(lookup.len())
 "#,
     )
-    .expect("peer set and map literal arms should infer one result type");
+    .expect("peer set and dict literal arms should infer one result type");
     assert_eq!(output.stdout, "2\n1\n");
 
     let grouped = crate::run_source(
@@ -3080,7 +4004,7 @@ def main():
     print(widened)
 "#,
     )
-    .expect("peer tuple, list, set, and map arms should infer one result type");
+    .expect("peer tuple, list, set, and dict arms should infer one result type");
     assert_eq!(unannotated.stdout, "7\n2\n2\n1\n1.5\n");
 }
 
@@ -3089,15 +4013,15 @@ fn a_projected_branch_result_field_is_consumed_from_every_arm() {
     let output = crate::run_source(
         r#"
 class Holder:
-    text: String
+    text: str
 
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
-def project(flag: bool, left: own Holder, right: own Holder) -> String:
+def project(flag: bool, left: own Holder, right: own Holder) -> str:
     return take((left if flag else right).text)
 
-def project_match(flag: bool, left: own Holder, right: own Holder) -> String:
+def project_match(flag: bool, left: own Holder, right: own Holder) -> str:
     return take((match flag:
         case true: left
         case false: right
@@ -3114,25 +4038,25 @@ def main():
     let pattern_arms = crate::run_source(
         r#"
 class Holder:
-    text: String
+    text: str
 
 enum Choice:
     First
     Second
 
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
-def keep(holder: own Holder) -> String:
+def keep(holder: own Holder) -> str:
     return holder.text
 
-def project_enum(choice: own Choice, left: own Holder, right: own Holder) -> String:
+def project_enum(choice: own Choice, left: own Holder, right: own Holder) -> str:
     return take((match choice:
         case Choice.First: left
         case Choice.Second: right
     ).text)
 
-def choose_enum(choice: own Choice, left: own Holder, right: own Holder) -> String:
+def choose_enum(choice: own Choice, left: own Holder, right: own Holder) -> str:
     return keep(match choice:
         case Choice.First: left
         case Choice.Second: right
@@ -3155,10 +4079,10 @@ fn retained_access_help_names_the_conflicting_access_kind() {
     for (source, access) in [
         (
             r#"
-def id_s(s: own String) -> String:
+def id_s(s: own str) -> str:
     return s
 
-def use_both(text: String, owned: own String) -> None:
+def use_both(text: str, owned: own str) -> None:
     print(text)
     print(owned)
 
@@ -3191,12 +4115,12 @@ def main():
         ),
         (
             r#"
-def replace_and_return(value: mut String) -> String:
+def replace_and_return(value: mut str) -> str:
     value = "B"
     return "C"
 
 def main():
-    mut value: String = "A"
+    mut value: str = "A"
     print(value + replace_and_return(value))
 "#,
             "mutation",
@@ -3219,12 +4143,12 @@ fn indexed_read_guidance_follows_the_element_clone_safety() {
     // A clone-safe element keeps the explicit cloned-read guidance.
     for (source, message) in [
         (
-            "def main():\n    values: Vec[String] = [\"one\"]\n    taken = values[0]\n    print(taken)\n",
-            "cannot implicitly copy `String` out of a vector index; use `get(index)` for an explicit cloned read instead",
+            "def main():\n    values: list[str] = [\"one\"]\n    taken = values[0]\n    print(taken)\n",
+            "cannot implicitly copy `str` out of a list index; use `get(index)` for an explicit cloned read instead",
         ),
         (
-            "def main():\n    mut values = Map[String, String]()\n    values.set(\"a\", \"b\")\n    taken = values[\"a\"]\n    print(taken)\n",
-            "cannot implicitly copy `String` out of a map index; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership",
+            "def main():\n    mut values = dict[str, str]()\n    values[\"a\"] = \"b\"\n    taken = values[\"a\"]\n    print(taken)\n",
+            "cannot implicitly copy `str` out of a dict index; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership",
         ),
     ] {
         let rejected = crate::check_source(source)
@@ -3238,12 +4162,12 @@ fn indexed_read_guidance_follows_the_element_clone_safety() {
     // transfer that actually works.
     for (source, message) in [
         (
-            "import random\n\ndef main():\n    mut generators = Vec[random.Rng]()\n    generators.push(random.Rng(seed=1))\n    chosen = generators[0]\n    print(chosen.next_float())\n",
-            "cannot implicitly copy `random.Rng` out of a vector index; `get(index)` cannot clone it because `random.Rng` is directly non-cloneable, so use `remove(index)` to transfer ownership instead",
+            "import random\n\ndef main():\n    mut generators = list[random.Rng]()\n    generators.append(random.Rng(seed=1))\n    chosen = generators[0]\n    print(chosen.next_float())\n",
+            "cannot implicitly copy `random.Rng` out of a list index; `get(index)` cannot clone it because `random.Rng` is directly non-cloneable, so use `pop(index)` to transfer ownership instead",
         ),
         (
-            "import random\n\nclass Holder:\n    generator: random.Rng\n\ndef main():\n    mut holders = Map[String, Holder]()\n    holders.set(\"a\", Holder(generator=random.Rng(seed=1)))\n    chosen = holders[\"a\"]\n    print(chosen.generator.next_float())\n",
-            "cannot implicitly copy `Holder` out of a map index; `get(key)` cannot clone it because `Holder` contains non-cloneable `random.Rng` state, so use `remove(key)` to transfer ownership instead",
+            "import random\n\nclass Holder:\n    generator: random.Rng\n\ndef main():\n    mut holders = dict[str, Holder]()\n    holders[\"a\"] = Holder(generator=random.Rng(seed=1))\n    chosen = holders[\"a\"]\n    print(chosen.generator.next_float())\n",
+            "cannot implicitly copy `Holder` out of a dict index; `get(key)` cannot clone it because `Holder` contains non-cloneable `random.Rng` state, so use `remove(key)` to transfer ownership instead",
         ),
     ] {
         let rejected = crate::check_source(source)
@@ -3256,16 +4180,16 @@ fn indexed_read_guidance_follows_the_element_clone_safety() {
     // what `get` would require and still offers the transfer.
     for (source, message) in [
         (
-            "def first[T](values: Vec[T]) -> T:\n    return values[0]\n\ndef main():\n    print(\"ok\")\n",
-            "cannot implicitly copy `T` out of a vector index; `get(index)` requires a clone-safe `T`, or use `remove(index)` to transfer ownership",
+            "def first[T](values: list[T]) -> T:\n    return values[0]\n\ndef main():\n    print(\"ok\")\n",
+            "cannot implicitly copy `T` out of a list index; `get(index)` requires a clone-safe `T`, or use `pop(index)` to transfer ownership",
         ),
         (
-            "def lookup[V](values: Map[String, V], key: String) -> V:\n    return values[key]\n\ndef main():\n    print(\"ok\")\n",
-            "cannot implicitly copy `V` out of a map index; `get(key)` requires a clone-safe `V`, or use `remove(key)` to transfer ownership",
+            "def lookup[V](values: dict[str, V], key: str) -> V:\n    return values[key]\n\ndef main():\n    print(\"ok\")\n",
+            "cannot implicitly copy `V` out of a dict index; `get(key)` requires a clone-safe `V`, or use `remove(key)` to transfer ownership",
         ),
         (
-            "def first(values: Vec[Task[String]]) -> Task[String]:\n    return values[0]\n",
-            "cannot implicitly copy `Task[String]` out of a vector index; `get(index)` cannot clone it because that would duplicate the single observation right for task result `String`, so use `remove(index)` to transfer ownership instead",
+            "def first(values: list[Task[str]]) -> Task[str]:\n    return values[0]\n",
+            "cannot implicitly copy `Task[str]` out of a list index; `get(index)` cannot clone it because that would duplicate the single observation right for task result `str`, so use `pop(index)` to transfer ownership instead",
         ),
     ] {
         let rejected = crate::check_source(source)
@@ -3280,18 +4204,15 @@ fn indexed_read_guidance_follows_the_element_clone_safety() {
 import random
 
 def main():
-    mut generators = Vec[random.Rng]()
-    generators.push(random.Rng(seed=7))
-    match own generators.remove(0):
-        case Option.Some(chosen):
-            mut taken = chosen
-            print(taken.next_int(lo=1, hi=10))
-        case Option.None:
-            print("none")
+    mut generators = list[random.Rng]()
+    generators.append(random.Rng(seed=7))
+    chosen = generators.pop(0)
+    mut taken = chosen
+    print(taken.next_int(lo=1, hi=10))
     print(generators.len())
 "#,
     )
-    .expect("`remove` transfers a non-cloneable element out of a vector");
+    .expect("`pop` transfers a non-cloneable element out of a list");
     assert_eq!(vec_transfer.stdout, "4\n0\n");
 
     let map_transfer = crate::run_source(
@@ -3302,8 +4223,8 @@ class Holder:
     generator: random.Rng
 
 def main():
-    mut holders = Map[String, Holder]()
-    holders.set("a", Holder(generator=random.Rng(seed=7)))
+    mut holders = dict[str, Holder]()
+    holders["a"] = Holder(generator=random.Rng(seed=7))
     match own holders.remove("a"):
         case Option.Some(chosen):
             mut taken = chosen
@@ -3321,32 +4242,32 @@ def main():
 fn indexed_compound_assignment_guidance_follows_the_element_clone_safety() {
     for (source, message) in [
         (
-            "def main():\n    mut values: Vec[String] = [\"A\"]\n    values[0] += \"B\"\n",
-            "cannot implicitly copy `String` out of a vector index for compound assignment; use `get(index)` for an explicit cloned optional read, update it, then write the result back with `set(index, value)`",
+            "def main():\n    mut values: list[str] = [\"A\"]\n    values[0] += \"B\"\n",
+            "cannot implicitly copy `str` out of a list index for compound assignment; use `get(index)` for an explicit cloned optional read, update it, then write the result back with `set(index, value)`",
         ),
         (
-            "class Box:\n    value: int32\n\ndef main():\n    mut values: Map[String, Box] = {\"one\": Box(value=1)}\n    values[\"one\"] += Box(value=2)\n",
-            "cannot implicitly copy `Box` out of a map index for compound assignment; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership; update the selected value, then write it back with `set(key, value)`",
+            "class Box:\n    value: int32\n\ndef main():\n    mut values: dict[str, Box] = {\"one\": Box(value=1)}\n    values[\"one\"] += Box(value=2)\n",
+            "cannot implicitly copy `Box` out of a dict index for compound assignment; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership; update the selected value, then write it back with indexed assignment",
         ),
         (
-            "import random\n\ndef main():\n    mut values: Vec[random.Rng] = [random.Rng(seed=1)]\n    values[0] += random.Rng(seed=2)\n",
-            "cannot implicitly copy `random.Rng` out of a vector index for compound assignment; `get(index)` cannot clone it because `random.Rng` is directly non-cloneable, so use `remove(index)` to transfer ownership; update the selected value, then write it back with `insert(index, value)`",
+            "import random\n\ndef main():\n    mut values: list[random.Rng] = [random.Rng(seed=1)]\n    values[0] += random.Rng(seed=2)\n",
+            "cannot implicitly copy `random.Rng` out of a list index for compound assignment; `get(index)` cannot clone it because `random.Rng` is directly non-cloneable, so use `pop(index)` to transfer ownership; update the selected value, then write it back with `insert(index, value)`",
         ),
         (
-            "import random\n\ndef main():\n    mut values: Map[String, random.Rng] = {\"one\": random.Rng(seed=1)}\n    values[\"one\"] += random.Rng(seed=2)\n",
-            "cannot implicitly copy `random.Rng` out of a map index for compound assignment; `get(key)` cannot clone it because `random.Rng` is directly non-cloneable, so use `remove(key)` to transfer ownership; update the selected value, then write it back with `set(key, value)`",
+            "import random\n\ndef main():\n    mut values: dict[str, random.Rng] = {\"one\": random.Rng(seed=1)}\n    values[\"one\"] += random.Rng(seed=2)\n",
+            "cannot implicitly copy `random.Rng` out of a dict index for compound assignment; `get(key)` cannot clone it because `random.Rng` is directly non-cloneable, so use `remove(key)` to transfer ownership; update the selected value, then write it back with `indexed assignment`",
         ),
         (
-            "def update[T](values: mut Vec[T], rhs: T):\n    values[0] += rhs\n",
-            "cannot implicitly copy `T` out of a vector index for compound assignment; `get(index)` requires a clone-safe `T`, or use `remove(index)` to transfer ownership; update the selected value, then write it back with `insert(index, value)`",
+            "def update[T](values: mut list[T], rhs: T):\n    values[0] += rhs\n",
+            "cannot implicitly copy `T` out of a list index for compound assignment; `get(index)` requires a clone-safe `T`, or use `pop(index)` to transfer ownership; update the selected value, then write it back with `insert(index, value)`",
         ),
         (
-            "def update[V](values: mut Map[String, V], rhs: V):\n    values[\"one\"] += rhs\n",
-            "cannot implicitly copy `V` out of a map index for compound assignment; `get(key)` requires a clone-safe `V`, or use `remove(key)` to transfer ownership; update the selected value, then write it back with `set(key, value)`",
+            "def update[V](values: mut dict[str, V], rhs: V):\n    values[\"one\"] += rhs\n",
+            "cannot implicitly copy `V` out of a dict index for compound assignment; `get(key)` requires a clone-safe `V`, or use `remove(key)` to transfer ownership; update the selected value, then write it back with `indexed assignment`",
         ),
         (
-            "def update(values: mut Vec[Task[String]], rhs: Task[String]):\n    values[0] += rhs\n",
-            "cannot implicitly copy `Task[String]` out of a vector index for compound assignment; `get(index)` cannot clone it because that would duplicate the single observation right for task result `String`, so use `remove(index)` to transfer ownership; update the selected value, then write it back with `insert(index, value)`",
+            "def update(values: mut list[Task[str]], rhs: Task[str]):\n    values[0] += rhs\n",
+            "cannot implicitly copy `Task[str]` out of a list index for compound assignment; `get(index)` cannot clone it because that would duplicate the single observation right for task result `str`, so use `pop(index)` to transfer ownership; update the selected value, then write it back with `insert(index, value)`",
         ),
     ] {
         let rejected = crate::check_source(source)
@@ -3361,13 +4282,13 @@ fn len_delegates_to_the_value_and_str_renders_it() {
     let output = crate::run_source(
         r#"
 def main():
-    mut values = Vec[int32]()
-    values.push(1)
-    values.push(2)
-    mut ages = Map[String, int32]()
-    ages.set("ada", 36)
-    mut tags = Set[String]()
-    tags.insert("beta")
+    mut values = list[int32]()
+    values.append(1)
+    values.append(2)
+    mut ages = dict[str, int32]()
+    ages["ada"] = 36
+    mut tags = set[str]()
+    tags.add("beta")
     text = "é🙂"
 
     print(len(values))
@@ -3401,8 +4322,8 @@ def main():
     let matches_interpolation = crate::run_source(
         r#"
 def main():
-    mut values = Vec[int32]()
-    values.push(7)
+    mut values = list[int32]()
+    values.append(7)
     print(str(values) == f"{values}")
     print(str(2.5) == f"{2.5}")
 "#,
@@ -3417,7 +4338,7 @@ def main():
             "`len(...)` expects a value with a `len()` member, found `int64`",
         ),
         (
-            "def main():\n    mut values = Vec[int32]()\n    print(len(values, values))\n",
+            "def main():\n    mut values = list[int32]()\n    print(len(values, values))\n",
             "AU2004",
             "`len` expects 1 argument, found 2",
         ),
@@ -3432,7 +4353,7 @@ def main():
     // way `abs` and `print` cannot.
     for name in ["len", "str"] {
         let source = format!(
-            "def {name}(value: Vec[int32]) -> int32:\n    return 0\n\ndef main():\n    pass\n"
+            "def {name}(value: list[int32]) -> int32:\n    return 0\n\ndef main():\n    pass\n"
         );
         let rejected = crate::check_source(&source)
             .expect_err("a builtin function name must not be redefined");
@@ -3450,24 +4371,24 @@ fn enumerate_and_zip_iterate_in_lockstep_over_the_bare_loop_default() {
     let output = crate::run_source(
         r#"
 def main():
-    mut names = Vec[String]()
-    names.push("ada")
-    names.push("grace")
+    mut names = list[str]()
+    names.append("ada")
+    names.append("grace")
     for index, name in enumerate(names):
         print(f"{index}:{name}")
 
-    mut tags = Set[String]()
-    tags.insert("beta")
+    mut tags = set[str]()
+    tags.add("beta")
     for index, tag in enumerate(tags):
         print(f"set {index}:{tag}")
 
-    mut numbers = Vec[int32]()
-    numbers.push(1)
-    numbers.push(2)
-    numbers.push(3)
-    mut words = Vec[String]()
-    words.push("one")
-    words.push("two")
+    mut numbers = list[int32]()
+    numbers.append(1)
+    numbers.append(2)
+    numbers.append(3)
+    mut words = list[str]()
+    words.append("one")
+    words.append("two")
     for number, word in zip(numbers, words):
         print(f"{number}={word}")
 
@@ -3491,30 +4412,30 @@ def main():
         (
             "def main():\n    for index, value in enumerate(range(3)):\n        print(index)\n",
             "AU2002",
-            "`enumerate` requires a `Vec[T]` or `Set[T]` iterable, found `Range`",
+            "`enumerate` requires a `list[T]` or `set[T]` iterable, found `Range`",
         ),
         (
-            "def main():\n    mut values = Vec[int32]()\n    for index, value in own enumerate(values):\n        print(index)\n",
+            "def main():\n    mut values = list[int32]()\n    for index, value in own enumerate(values):\n        print(index)\n",
             "AU3002",
             "`enumerate` iterates over the bare-loop shared default; write `for ... in enumerate(...):` without an ownership modifier",
         ),
         (
-            "def main():\n    mut values = Vec[int32]()\n    for index, value in enumerate(values, values):\n        print(index)\n",
+            "def main():\n    mut values = list[int32]()\n    for index, value in enumerate(values, values):\n        print(index)\n",
             "AU2004",
             "`enumerate` takes 1 iterable, found 2",
         ),
         (
-            "def main():\n    mut values = Vec[int32]()\n    for first, second in zip(values):\n        print(first)\n",
+            "def main():\n    mut values = list[int32]()\n    for first, second in zip(values):\n        print(first)\n",
             "AU2004",
             "`zip` takes 2 iterables, found 1",
         ),
         (
-            "def main():\n    mut values = Vec[int32]()\n    for index, value in enumerate(values=values):\n        print(index)\n",
+            "def main():\n    mut values = list[int32]()\n    for index, value in enumerate(values=values):\n        print(index)\n",
             "AU2004",
             "`enumerate` takes positional iterables only",
         ),
         (
-            "def main():\n    mut values = Vec[int32]()\n    pairs = enumerate(values)\n    print(pairs)\n",
+            "def main():\n    mut values = list[int32]()\n    pairs = enumerate(values)\n    print(pairs)\n",
             "AU2005",
             "`enumerate` is a `for` loop form, not a value; write `for ... in enumerate(...):`",
         ),
@@ -3528,7 +4449,7 @@ def main():
     // The iterables stay borrowed for the whole loop, and a non-copy element
     // binding is a shared borrow rather than a move.
     let frozen = crate::check_source(
-        "def main():\n    mut values = Vec[String]()\n    values.push(\"a\")\n    for index, value in enumerate(values):\n        values.push(value)\n",
+        "def main():\n    mut values = list[str]()\n    values.append(\"a\")\n    for index, value in enumerate(values):\n        values.append(value)\n",
     )
     .expect_err("mutating an iterable during a lockstep loop must be rejected");
     assert_eq!(frozen.code, "AU3002");
@@ -3541,7 +4462,7 @@ def main():
     );
 
     let moved = crate::check_source(
-        "def take(value: own String) -> String:\n    return value\n\ndef main():\n    mut values = Vec[String]()\n    values.push(\"a\")\n    for index, value in enumerate(values):\n        print(take(value))\n",
+        "def take(value: own str) -> str:\n    return value\n\ndef main():\n    mut values = list[str]()\n    values.append(\"a\")\n    for index, value in enumerate(values):\n        print(take(value))\n",
     )
     .expect_err("a borrowed lockstep element must not be moved out");
     assert_eq!(moved.code, "AU3002");
@@ -3554,12 +4475,12 @@ def main():
     // A user definition shadows the loop form.
     let shadowed = crate::run_source(
         r#"
-def zip(left: Vec[int32], right: Vec[int32]) -> int32:
+def zip(left: list[int32], right: list[int32]) -> int32:
     return left.len() as int32 + right.len() as int32
 
 def main():
-    mut values = Vec[int32]()
-    values.push(1)
+    mut values = list[int32]()
+    values.append(1)
     print(zip(values, values))
 "#,
     )
@@ -3573,7 +4494,7 @@ fn membership_and_chain_operands_are_visible_to_defaults_and_argument_reads() {
     // reference hides inside the expression.
     for (source, name) in [
         (
-            "def probe(ports: Vec[int32], present: bool = 1 in ports) -> bool:\n    return present\n\ndef main():\n    print(probe(Vec[int32]()))\n",
+            "def probe(ports: list[int32], present: bool = 1 in ports) -> bool:\n    return present\n\ndef main():\n    print(probe(list[int32]()))\n",
             "ports",
         ),
         (
@@ -3590,8 +4511,8 @@ fn membership_and_chain_operands_are_visible_to_defaults_and_argument_reads() {
     // A place read inside a membership test or a chain still conflicts with a
     // consumed argument at the same call.
     for source in [
-        "def hold(taken: own Vec[int32], flag: bool):\n    pass\n\ndef exercise(values: own Vec[int32]):\n    hold(values, 1 in values)\n",
-        "def hold(taken: own Vec[int32], flag: bool):\n    pass\n\ndef exercise(values: own Vec[int32], n: int32):\n    hold(values, 1 < n < values.len() as int32)\n",
+        "def hold(taken: own list[int32], flag: bool):\n    pass\n\ndef exercise(values: own list[int32]):\n    hold(values, 1 in values)\n",
+        "def hold(taken: own list[int32], flag: bool):\n    pass\n\ndef exercise(values: own list[int32], n: int32):\n    hold(values, 1 < n < values.len() as int32)\n",
     ] {
         let overlap = crate::check_source(source)
             .expect_err("reading a consumed argument inside an operand must be rejected");
@@ -3613,8 +4534,8 @@ class Observer[T]:
 class Nested[U]:
     observer: Observer[Result[U, U]]
 
-def duplicate(values: Vec[Nested[int32]]) -> Vec[Nested[int32]]:
-    return values.clone()
+def duplicate(values: list[Nested[int32]]) -> list[Nested[int32]]:
+    return values.copy()
 "#,
     )
     .expect(
@@ -3629,8 +4550,8 @@ class Observer[T]:
 class Nested[U]:
     observer: Observer[Result[U, U]]
 
-def duplicate(values: Vec[Nested[String]]) -> Vec[Nested[String]]:
-    return values.clone()
+def duplicate(values: list[Nested[str]]) -> list[Nested[str]]:
+    return values.copy()
 "#,
     )
     .expect_err(
@@ -3640,22 +4561,20 @@ def duplicate(values: Vec[Nested[String]]) -> Vec[Nested[String]]:
     assert!(
         nested
             .message
-            .contains("non-repeatable task result `Result[String, String]`"),
+            .contains("non-repeatable task result `Result[str, str]`"),
         "{nested:?}"
     );
 
     let tuple = crate::check_source(
         r#"
-def duplicate(values: Vec[(Task[String], int32)]) -> Vec[(Task[String], int32)]:
-    return values.clone()
+def duplicate(values: list[(Task[str], int32)]) -> list[(Task[str], int32)]:
+    return values.copy()
 "#,
     )
     .expect_err("a task right nested in a tuple must remain single-consumer");
     assert_eq!(tuple.code, "AU3009");
     assert!(
-        tuple
-            .message
-            .contains("non-repeatable task result `String`"),
+        tuple.message.contains("non-repeatable task result `str`"),
         "{tuple:?}"
     );
 }
@@ -3665,20 +4584,20 @@ fn membership_tests_read_supported_containers_and_reject_the_rest() {
     let output = crate::run_source(
         r#"
 def main():
-    mut values = Vec[int32]()
-    values.push(1)
-    values.push(2)
+    mut values = list[int32]()
+    values.append(1)
+    values.append(2)
     print(1 in values)
     print(3 in values)
     print(3 not in values)
 
-    mut names = Set[String]()
-    names.insert("aura")
+    mut names = set[str]()
+    names.add("aura")
     print("aura" in names)
     print("other" not in names)
 
-    mut ages = Map[String, int32]()
-    ages.set("ada", 36)
+    mut ages = dict[str, int32]()
+    ages["ada"] = 36
     print("ada" in ages)
     print("bob" in ages)
 
@@ -3690,7 +4609,7 @@ def main():
     print(text)
 "#,
     )
-    .expect("membership tests should read Vec, Set, Map keys, and String substrings");
+    .expect("membership tests should read list, set, dict keys, and str substrings");
     assert_eq!(
         output.stdout,
         "true\nfalse\ntrue\ntrue\ntrue\ntrue\nfalse\ntrue\nfalse\n2\nhello world\n"
@@ -3700,17 +4619,17 @@ def main():
         (
             "def main():\n    print(1 in 5)\n",
             "AU2003",
-            "`in` requires a `Vec[T]`, `Set[T]`, `Map[K, V]`, or `String` container, found `int64`",
+            "`in` requires a `list[T]`, `set[T]`, `dict[K, V]`, or `str` container, found `int64`",
         ),
         (
-            "def main():\n    mut values = Vec[int32]()\n    print(\"x\" in values)\n",
+            "def main():\n    mut values = list[int32]()\n    print(\"x\" in values)\n",
             "AU2002",
-            "`in` expects a `int32` element, found `String`",
+            "`in` expects a `int32` element, found `str`",
         ),
         (
-            "def main():\n    mut ages = Map[String, int32]()\n    print(1 in ages)\n",
+            "def main():\n    mut ages = dict[str, int32]()\n    print(1 in ages)\n",
             "AU2002",
-            "`in` expects a `String` key, found `int64`",
+            "`in` expects a `str` key, found `int64`",
         ),
     ] {
         let diagnostic =
@@ -3724,7 +4643,7 @@ def main():
 fn comparison_chains_evaluate_each_operand_once_and_short_circuit() {
     let output = crate::run_source(
         r#"
-def trace(label: String, value: int32) -> int32:
+def trace(label: str, value: int32) -> int32:
     print(label)
     return value
 
@@ -3749,15 +4668,15 @@ def main():
     let mixed = crate::run_source(
         r#"
 def main():
-    mut words = Vec[String]()
-    words.push("abc")
+    mut words = list[str]()
+    words.append("abc")
     text = "abc"
     needle = "a"
     print(needle in text in words)
     print(needle in text not in words)
 
-    mut ports = Vec[int32]()
-    ports.push(80)
+    mut ports = list[int32]()
+    ports.append(80)
     port: int32 = 80
     low: int32 = 1
     high: int32 = 1024
@@ -3777,7 +4696,7 @@ def main():
         ("def main():\n    print(1 < missing < 2)\n", 15),
         ("def main():\n    print(1 < 2 < missing)\n", 19),
         (
-            "def main():\n    mut ports = Vec[int32]()\n    print(missing in ports)\n",
+            "def main():\n    mut ports = list[int32]()\n    print(missing in ports)\n",
             11,
         ),
         ("def main():\n    print(1 in missing)\n", 16),
@@ -3798,19 +4717,19 @@ def main():
     // and a membership link inside a chain reports its own operand mismatch.
     for (source, code, message) in [
         (
-            "def main():\n    mut small = Vec[int8]()\n    print(300 in small)\n",
+            "def main():\n    mut small = list[int8]()\n    print(300 in small)\n",
             "AU2999",
             "integer literal `300` does not fit in `int8`",
         ),
         (
-            "def main():\n    mut small = Vec[int8]()\n    limit: int64 = 1\n    print(limit < 300 in small)\n",
+            "def main():\n    mut small = list[int8]()\n    limit: int64 = 1\n    print(limit < 300 in small)\n",
             "AU2999",
             "integer literal `300` does not fit in `int8`",
         ),
         (
             "def main():\n    text = \"abc\"\n    limit: int64 = 1\n    print(limit < 2 in text)\n",
             "AU2002",
-            "`in` expects a `String` substring, found `int64`",
+            "`in` expects a `str` substring, found `int64`",
         ),
     ] {
         let rejected = crate::check_source(source)
@@ -3841,7 +4760,7 @@ enum Shape:
     Empty
     Filled(int64)
 
-def describe(shape: own Shape) -> String:
+def describe(shape: own Shape) -> str:
     match shape:
         case Shape.Empty:
             return "empty"
@@ -3864,14 +4783,14 @@ def main():
 fn conditional_result_consumption_preserves_preexisting_moves() {
     let diagnostic = crate::check_source(
         r#"
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
 def exercise(
     flag: bool,
-    already: own String,
-    left: own String,
-    right: own String
+    already: own str,
+    left: own str,
+    right: own str
 ):
     saved = take(already)
     selected = left if flag else right
@@ -3891,10 +4810,10 @@ fn conditional_condition_moves_are_visible_to_both_result_arms() {
     ] {
         let source = format!(
             r#"
-def consume_flag(value: own String) -> bool:
+def consume_flag(value: own str) -> bool:
     return true
 
-def exercise(text: own String):
+def exercise(text: own str):
     selected = {expression}
 "#
         );
@@ -3914,13 +4833,13 @@ fn conditional_result_consumption_preserves_unrelated_partial_moves() {
     crate::check_source(
         r#"
 class Pair:
-    left: String
-    right: String
+    left: str
+    right: str
 
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
-def choose(flag: bool, pair: own Pair, fallback: own String):
+def choose(flag: bool, pair: own Pair, fallback: own str):
     moved_left = take(pair.left)
     selected = pair.right if flag else fallback
 "#,
@@ -3932,10 +4851,10 @@ def choose(flag: bool, pair: own Pair, fallback: own String):
 fn conditional_arm_still_rejects_an_internal_move_followed_by_direct_reuse() {
     let diagnostic = crate::check_source(
         r#"
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
-def exercise(flag: bool, text: own String):
+def exercise(flag: bool, text: own str):
     selected = (take(text), text) if flag else ("fallback", "other")
 "#,
     )
@@ -3948,10 +4867,10 @@ def exercise(flag: bool, text: own String):
 fn conditional_arm_rejects_direct_consumption_followed_by_an_internal_move() {
     let diagnostic = crate::check_source(
         r#"
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
-def exercise(flag: bool, text: own String):
+def exercise(flag: bool, text: own str):
     selected = (text, take(text)) if flag else ("fallback", "other")
 "#,
     )
@@ -3968,13 +4887,13 @@ fn conditional_result_consumption_interleaves_nested_composite_elements() {
     ] {
         let source = format!(
             r#"
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
-def consume_pair(value: own (String, String)):
+def consume_pair(value: own (str, str)):
     pass
 
-def exercise(flag: bool, text: own String):
+def exercise(flag: bool, text: own str):
     {body}
 "#
         );
@@ -3996,9 +4915,9 @@ fn consuming_a_field_of_a_conditional_result_moves_each_possible_field() {
         let source = format!(
             r#"
 class Holder:
-    text: String
+    text: str
 
-def take(value: own String):
+def take(value: own str):
     pass
 
 def exercise(flag: bool, left: own Holder, right: own Holder):
@@ -4024,7 +4943,7 @@ fn consuming_a_field_of_a_match_result_moves_each_possible_field() {
         let source = format!(
             r#"
 class Holder:
-    text: String
+    text: str
 
 def exercise(flag: bool, left: own Holder, right: own Holder):
     selected = (match flag:
@@ -4050,10 +4969,10 @@ def exercise(flag: bool, left: own Holder, right: own Holder):
 fn match_arm_rejects_direct_consumption_followed_by_an_internal_move() {
     let diagnostic = crate::check_source(
         r#"
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
-def exercise(flag: bool, text: own String):
+def exercise(flag: bool, text: own str):
     selected = match flag:
         case true: (text, take(text))
         case false: ("fallback", "other")
@@ -4072,10 +4991,10 @@ fn conditional_inference_recursively_unifies_peer_tuple_and_generic_literals() {
         r#"
 def choose(
     flag: bool,
-    left: own Vec[int32],
-    right: own Vec[int32]
+    left: own list[int32],
+    right: own list[int32]
 ):
-    nested_literals = ([1], right.clone()) if flag else (left.clone(), [2])
+    nested_literals = ([1], right.copy()) if flag else (left.copy(), [2])
 "#,
     )
     .expect(
@@ -4089,8 +5008,8 @@ fn conditional_inference_combines_complementary_empty_collection_context() {
         r#"
 def choose(
     flag: bool,
-    left: own Vec[int32],
-    right: own Vec[int32]
+    left: own list[int32],
+    right: own list[int32]
 ):
     nested_empty = ([], right) if flag else (left, [])
 "#,
@@ -4104,11 +5023,11 @@ fn conditional_inference_recurses_through_collection_shapes() {
         r#"
 def choose(
     flag: bool,
-    left: own Vec[int32],
-    right: own Vec[int32]
+    left: own list[int32],
+    right: own list[int32]
 ):
-    nested_list = [([], right.clone())] if flag else [(left.clone(), [])]
-    nested_set = Set{([], right.clone())} if flag else Set{(left.clone(), [])}
+    nested_list = [([], right.copy())] if flag else [(left.copy(), [])]
+    nested_set = {([], right.copy())} if flag else {(left.copy(), [])}
     nested_map = {1: ([], right)} if flag else {2: (left, [])}
 "#,
     )
@@ -4119,15 +5038,15 @@ def choose(
 fn conditional_inference_speculation_uses_isolated_result_replay() {
     crate::check_source(
         r#"
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
 def choose(
     outer: bool,
     left_flag: bool,
     right_flag: bool,
-    left: own String,
-    right: own String
+    left: own str,
+    right: own str
 ):
     selected = take(take(left) if left_flag else left) if outer else take(take(right) if right_flag else right)
 "#,
@@ -4140,14 +5059,14 @@ fn try_consumes_each_possible_conditional_result_source() {
     for reused in ["left", "right"] {
         let source = format!(
             r#"
-def observe(value: Result[String, String]):
+def observe(value: Result[str, str]):
     pass
 
 def exercise(
     flag: bool,
-    left: own Result[String, String],
-    right: own Result[String, String]
-) -> Result[None, String]:
+    left: own Result[str, str],
+    right: own Result[str, str]
+) -> Result[None, str]:
     text = try (left if flag else right)
     observe({reused})
     return Result.Ok(None)
@@ -4244,13 +5163,13 @@ fn conditional_result_places_participate_in_call_access_conflicts() {
     ] {
         let source = format!(
             r#"
-def shared_then_owned(shared: String, consumed: own String):
+def shared_then_owned(shared: str, consumed: own str):
     pass
 
-def owned_then_shared(consumed: own String, shared: String):
+def owned_then_shared(consumed: own str, shared: str):
     pass
 
-def exercise(flag: bool, value: own String, other: own String):
+def exercise(flag: bool, value: own str, other: own str):
     {call}
 "#
         );
@@ -4272,7 +5191,7 @@ def exercise(flag: bool, value: own String, other: own String):
 fn d3_assert_checks_exact_types_and_remains_fallthrough() {
     crate::check_source(
         r#"
-def verify(ready: bool, message: String):
+def verify(ready: bool, message: str):
     assert ready
     assert ready, message
 
@@ -4294,10 +5213,10 @@ verify(true, "ready")
     );
 
     let bad_message = crate::check_source("assert true, 1\n")
-        .expect_err("assertion messages must be exactly String");
+        .expect_err("assertion messages must be exactly str");
     assert_eq!(
         bad_message.message,
-        "`assert` message must have type `String`, found `int64`"
+        "`assert` message must have type `str`, found `int64`"
     );
     assert_eq!(bad_message.span, Some(Span::new(1, 1)));
 
@@ -4318,7 +5237,7 @@ verify(true, "ready")
 fn d3_assert_keeps_condition_effects_and_discards_lazy_message_effects() {
     let condition_move = crate::check_source(
         r#"
-def consume_for_condition(value: own String) -> bool:
+def consume_for_condition(value: own str) -> bool:
     return true
 
 def main():
@@ -4332,7 +5251,7 @@ def main():
 
     let message_observes_post_condition = crate::check_source(
         r#"
-def consume_for_condition(value: own String) -> bool:
+def consume_for_condition(value: own str) -> bool:
     return true
 
 def main():
@@ -4347,7 +5266,7 @@ def main():
 
     crate::check_source(
         r#"
-def consume_for_message(value: own String) -> String:
+def consume_for_message(value: own str) -> str:
     return value
 
 def main():
@@ -4360,7 +5279,7 @@ def main():
 
     let invalid_message_move = crate::check_source(
         r#"
-def combine(first: own String, second: own String) -> String:
+def combine(first: own str, second: own str) -> str:
     return first
 
 def main():
@@ -4386,7 +5305,7 @@ enum Maybe[T]:
     Some(T)
     None
 
-def modes(scalar: int32, text: String, copy_box: CopyBox, copy_enum: Maybe[int32], heap_enum: Maybe[String], owned: own String, shared: int32, mutable: mut int32):
+def modes(scalar: int32, text: str, copy_box: CopyBox, copy_enum: Maybe[int32], heap_enum: Maybe[str], owned: own str, shared: int32, mutable: mut int32):
     pass
 
 def generic[T](value: T):
@@ -4496,7 +5415,7 @@ def reuse(token: pkg.types.Token[int32], marker: pkg.types.Marker[int32]) -> int
 fn d6_implicit_borrows_are_reusable_and_consumption_teaches_own() {
     crate::check_source(
         r#"
-def view(value: String):
+def view(value: str):
     print(value)
 
 def main() -> int32:
@@ -4511,22 +5430,22 @@ def main() -> int32:
 
     let error = crate::check_source(
         r#"
-def sink(value: own String):
+def sink(value: own str):
     print(value)
 
-def broken(value: String):
+def broken(value: str):
     sink(value)
 "#,
     )
     .expect_err("consuming an implicitly borrowed parameter should teach explicit ownership");
     assert_eq!(
         error.message,
-        "parameter `value` is borrowed; declare it as `own String` to take ownership, or clone the value before consuming it"
+        "parameter `value` is borrowed; declare it as `own str` to take ownership, or clone the value before consuming it"
     );
 
     let caller_move = crate::check_source(
         r#"
-def sink(value: own String):
+def sink(value: own str):
     print(value)
 
 def main() -> int32:
@@ -4544,10 +5463,10 @@ def main() -> int32:
 fn d6_parameter_defaults_allow_shared_and_owned_temporaries_but_reject_borrow_mut() {
     crate::check_source(
         r#"
-def shared(value: String = "shared") -> String:
+def shared(value: str = "shared") -> str:
     return value.clone()
 
-def owned(value: own String = "owned") -> String:
+def owned(value: own str = "owned") -> str:
     return value
 
 def main() -> int32:
@@ -4561,7 +5480,7 @@ def main() -> int32:
     let expected = "`mut` parameter `value` cannot have a default: the default creates a caller-invisible temporary, so mutations through it would be silently lost; require the caller to pass a value, or take the parameter as `own T` and return the result";
     for source in [
         "def invalid(value: mut int32 = 1):\n    pass\n",
-        "def invalid(value: mut String = \"lost\"):\n    pass\n",
+        "def invalid(value: mut str = \"lost\"):\n    pass\n",
     ] {
         let error = crate::check_source(source)
             .expect_err("borrow-mut defaults must be rejected for copy and non-copy types");
@@ -4574,7 +5493,7 @@ fn d6_place_iteration_and_queue_receive_have_distinct_ownership() {
     crate::check_source(
         r#"
 class Job:
-    name: String
+    name: str
 
 def consume(value: own Job):
     print(value.name)
@@ -4583,7 +5502,7 @@ def main() -> int32:
     jobs = Queue[Job]()
     for job in jobs:
         consume(job)
-    values: Vec[Job] = [Job(name="one")]
+    values: list[Job] = [Job(name="one")]
     for value in own values:
         consume(value)
     return 0
@@ -4594,13 +5513,13 @@ def main() -> int32:
     let borrowed_item = crate::check_source(
         r#"
 class Job:
-    name: String
+    name: str
 
 def consume(value: own Job):
     print(value.name)
 
 def main() -> int32:
-    values: Vec[Job] = [Job(name="one")]
+    values: list[Job] = [Job(name="one")]
     for value in values:
         consume(value)
     return 0
@@ -4627,15 +5546,15 @@ fn range_iteration_rejects_ownership_modifiers_and_keeps_the_bare_form() {
     crate::check_source(
         r#"
 def main() -> int32:
-    mut total: int32 = 0
+    mut total: int64 = 0
     for value in range(0, 3):
         total += value
-    return total
+    return total as int32
 "#,
     )
-    .expect("bare Range iteration should keep yielding copy int32 values");
+    .expect("bare Range iteration should yield copy int64 values");
 
-    let expected = "Range iteration yields copy `int32` values, so ownership modifiers have nothing to modify or transfer; use the bare form `for item in range(...):`";
+    let expected = "Range iteration yields copy `int64` values, so ownership modifiers have nothing to modify or transfer; use the bare form `for item in range(...):`";
     for mode in ["mut ", "own "] {
         let source = format!(
             "def main() -> int32:\n    for item in {mode}range(0, 3):\n        print(item)\n    return 0\n"
@@ -4651,7 +5570,7 @@ def main() -> int32:
 fn d6_task_captures_are_owned_while_shared_child_parameters_are_allowed() {
     crate::check_source(
         r#"
-def worker(value: String):
+def worker(value: str):
     print(value)
 
 def main() -> int32:
@@ -4665,7 +5584,7 @@ def main() -> int32:
 
     let moved_capture = crate::check_source(
         r#"
-def worker(value: String):
+def worker(value: str):
     print(value)
 
 def main() -> int32:
@@ -4681,7 +5600,7 @@ def main() -> int32:
 
     let mutable_target = crate::check_source(
         r#"
-def worker(value: mut String):
+def worker(value: mut str):
     pass
 
 def main() -> int32:
@@ -4702,8 +5621,8 @@ def main() -> int32:
 #[test]
 fn d6_builtin_retention_metadata_controls_observable_consumption() {
     for source in [
-        "def main() -> int32:\n    mut values = Vec[String]()\n    text = \"owned\"\n    values.push(text)\n    print(text)\n    return 0\n",
-        "def main() -> int32:\n    jobs = Queue[String]()\n    text = \"owned\"\n    jobs.put(text)\n    print(text)\n    return 0\n",
+        "def main() -> int32:\n    mut values = list[str]()\n    text = \"owned\"\n    values.append(text)\n    print(text)\n    return 0\n",
+        "def main() -> int32:\n    jobs = Queue[str]()\n    text = \"owned\"\n    jobs.put(text)\n    print(text)\n    return 0\n",
     ] {
         let error = crate::check_source(source)
             .expect_err("retaining builtins should consume non-copy arguments");
@@ -4715,13 +5634,13 @@ fn d6_builtin_retention_metadata_controls_observable_consumption() {
 import fs
 
 def keep_after_remove() -> int32:
-    mut values = Set{"kept"}
+    mut values = {"kept"}
     text = "kept"
     values.remove(text)
     print(text)
     return 0
 
-def keep_after_write(file: mut fs.File, text: String):
+def keep_after_write(file: mut fs.File, text: str):
     file.write_all(text)
     print(text)
 "#,
@@ -4729,21 +5648,21 @@ def keep_after_write(file: mut fs.File, text: String):
     .expect("non-retaining remove and I/O write arguments should stay reusable");
 
     let immutable_receiver = crate::check_source(
-        "def main() -> int32:\n    values = Vec[int32]()\n    values.push(1)\n    return 0\n",
+        "def main() -> int32:\n    values = list[int32]()\n    values.append(1)\n    return 0\n",
     )
     .expect_err("borrow-mut builtin receivers should require mutable places");
     assert_eq!(immutable_receiver.code, "AU3003");
     assert!(immutable_receiver
         .message
-        .contains("method `push` requires a mutable receiver"));
+        .contains("method `append` requires a mutable receiver"));
 
     let invalid_copy_slot = crate::check_source(
-        "def main() -> int32:\n    values = Vec[int32]()\n    values.get(index=values)\n    return 0\n",
+        "def main() -> int32:\n    values = list[int32]()\n    values.get(index=values)\n    return 0\n",
     )
     .expect_err("ill-typed copy slots should be diagnosed before overlap analysis");
     assert!(invalid_copy_slot
         .message
-        .contains("vector indices must have type `int32`, found `Vec[int32]`"));
+        .contains("list indices must have type `int64` or a losslessly narrower integer type, found `list[int32]`"));
 }
 
 #[test]
@@ -4752,7 +5671,7 @@ fn random_static_surface_supports_qualified_and_imported_rng_use() {
         r#"
 import random
 
-def sample(rng: mut random.Rng, values: mut Vec[String]) -> int64:
+def sample(rng: mut random.Rng, values: mut list[str]) -> int64:
     rng.shuffle(values=values)
     fraction: float64 = rng.next_float()
     print(fraction)
@@ -4763,7 +5682,7 @@ def main() -> int32:
     mut values = ["a", "b", "c"]
     print(sample(rng, values))
     chosen: int64 = random.secure_int(lo=0, hi=10)
-    bytes: Vec[uint8] = random.secure_bytes(n=4)
+    bytes: list[uint8] = random.secure_bytes(n=4)
     print(chosen)
     print(bytes)
     return 0
@@ -4774,7 +5693,7 @@ def main() -> int32:
         qualified.functions["sample"].signature.params,
         vec![
             Type::named("random.Rng"),
-            Type::Named("Vec".to_string(), vec![Type::named("String")])
+            Type::Named("list".to_string(), vec![Type::named("str")])
         ]
     );
 
@@ -4788,7 +5707,7 @@ def make() -> Rng:
 def main() -> int32:
     mut rng: Rng = make()
     print(rng.next_int(lo=-5, hi=6))
-    bytes: Vec[uint8] = secure_bytes(n=0)
+    bytes: list[uint8] = secure_bytes(n=0)
     print(bytes)
     return 0
 "#,
@@ -4813,7 +5732,7 @@ fn random_static_surface_rejects_wrong_types_and_immutable_places() {
         ),
         (
             "import random\n\ndef main() -> int32:\n    mut rng = random.Rng(seed=1)\n    rng.shuffle(values=3)\n    return 0\n",
-            "`shuffle` expects `Vec[T]`, found `int64`",
+            "`shuffle` expects `list[T]`, found `int64`",
         ),
         (
             "import random\n\ndef main() -> int32:\n    print(random.secure_int(lo=0, hi=false))\n    return 0\n",
@@ -4845,7 +5764,7 @@ fn random_static_surface_rejects_wrong_types_and_immutable_places() {
     let immutable_values = crate::check_source(
         "import random\n\ndef main() -> int32:\n    mut rng = random.Rng(seed=1)\n    values = [1, 2, 3]\n    rng.shuffle(values=values)\n    return 0\n",
     )
-    .expect_err("shuffle requires a mutable vector place");
+    .expect_err("shuffle requires a mutable list place");
     assert_eq!(immutable_values.code, "AU3002");
     assert_eq!(
         immutable_values.message,
@@ -4902,23 +5821,23 @@ impl CounterfeitRandom for random.Rng:
 fn builtin_method_names_cannot_be_shadowed_on_any_builtin_target() {
     for (source, expected) in [
         (
-            "trait Sized:\n    def len(self) -> int64\n\nimpl Sized for Vec[int32]:\n    def len(self) -> int64:\n        return 99\n",
-            "Vec.len",
+            "trait Sized:\n    def len(self) -> int64\n\nimpl Sized for list[int32]:\n    def len(self) -> int64:\n        return 99\n",
+            "list.len",
         ),
         (
-            "trait Probe:\n    def contains(self, needle: String) -> bool\n\nimpl Probe for String:\n    def contains(self, needle: String) -> bool:\n        return false\n",
-            "String.contains",
+            "trait Probe:\n    def contains(self, needle: str) -> bool\n\nimpl Probe for str:\n    def contains(self, needle: str) -> bool:\n        return false\n",
+            "str.contains",
         ),
         (
-            "trait Lookup:\n    def get(self, key: String) -> Option[String]\n\nimpl Lookup for Map[String, String]:\n    def get(self, key: String) -> Option[String]:\n        return Option.None\n",
-            "Map.get",
+            "trait Lookup:\n    def get(self, key: str) -> Option[str]\n\nimpl Lookup for dict[str, str]:\n    def get(self, key: str) -> Option[str]:\n        return Option.None\n",
+            "dict.get",
         ),
         (
             "import fs\n\ntrait Closer:\n    def close(self) -> int64\n\nimpl Closer for fs.File:\n    def close(self) -> int64:\n        return 7\n",
             "fs.File.close",
         ),
         (
-            "trait Render:\n    def to_string(self) -> String\n\nimpl Render for int32:\n    def to_string(self) -> String:\n        return \"shadowed\"\n",
+            "trait Render:\n    def to_string(self) -> str\n\nimpl Render for int32:\n    def to_string(self) -> str:\n        return \"shadowed\"\n",
             "int32.to_string",
         ),
     ] {
@@ -4937,20 +5856,20 @@ fn builtin_method_names_cannot_be_shadowed_on_any_builtin_target() {
     let accepted = crate::run_source(
         r#"
 trait Describe:
-    def describe(self) -> String
+    def describe(self) -> str
 
-impl Describe for Vec[int32]:
-    def describe(self) -> String:
+impl Describe for list[int32]:
+    def describe(self) -> str:
         return f"vec of {self.len()}"
 
-impl Describe for String:
-    def describe(self) -> String:
+impl Describe for str:
+    def describe(self) -> str:
         return f"text of {self.len()}"
 
 def main():
-    mut values = Vec[int32]()
-    values.push(1)
-    values.push(2)
+    mut values = list[int32]()
+    values.append(1)
+    values.append(2)
     print(values.describe())
     text = "hello"
     print(text.describe())
@@ -4988,13 +5907,13 @@ def main() -> int32:
 "#,
         ),
         (
-            "direct vector element",
+            "direct list element",
             r#"
 import random
 
 def main() -> int32:
     generators = [random.Rng(seed=1)]
-    copies = generators.clone()
+    copies = generators.copy()
     print(copies)
     return 0
 "#,
@@ -5009,19 +5928,19 @@ class Holder:
 
 def main() -> int32:
     holders = [Holder(random.Rng(seed=1))]
-    copies = holders.clone()
+    copies = holders.copy()
     print(copies)
     return 0
 "#,
         ),
         (
-            "nested map value",
+            "nested dict value",
             r#"
 import random
 
 def main() -> int32:
     generators = {"main": random.Rng(seed=1)}
-    copies = generators.clone()
+    copies = generators.copy()
     print(copies)
     return 0
 "#,
@@ -5042,28 +5961,28 @@ def main() -> int32:
 fn random_rng_clone_producing_collection_and_task_observers_are_rejected() {
     let cases = [
         (
-            "Vec.get",
-            "import random\n\ndef observe(values: Vec[random.Rng]):\n    print(values.get(0))\n",
+            "list.get",
+            "import random\n\ndef observe(values: list[random.Rng]):\n    print(values.get(0))\n",
         ),
         (
-            "Map.get",
-            "import random\n\ndef observe(values: Map[String, random.Rng]):\n    print(values.get(\"main\"))\n",
+            "dict.get",
+            "import random\n\ndef observe(values: dict[str, random.Rng]):\n    print(values.get(\"main\"))\n",
         ),
         (
-            "Map.keys",
-            "import random\n\ndef observe(values: Map[random.Rng, String]):\n    print(values.keys())\n",
+            "dict.keys",
+            "import random\n\ndef observe(values: dict[random.Rng, str]):\n    print(values.keys())\n",
         ),
         (
-            "Map.values",
-            "import random\n\ndef observe(values: Map[String, random.Rng]):\n    print(values.values())\n",
+            "dict.values",
+            "import random\n\ndef observe(values: dict[str, random.Rng]):\n    print(values.values())\n",
         ),
         (
-            "Map.items",
-            "import random\n\ndef observe(values: Map[String, random.Rng]):\n    print(values.items())\n",
+            "dict.items",
+            "import random\n\ndef observe(values: dict[str, random.Rng]):\n    print(values.items())\n",
         ),
         (
-            "Map.entries",
-            "import random\n\ndef observe(values: Map[random.Rng, String]):\n    print(values.entries())\n",
+            "dict.items",
+            "import random\n\ndef observe(values: dict[random.Rng, str]):\n    print(values.items())\n",
         ),
         (
             "Task.result",
@@ -5079,11 +5998,11 @@ fn random_rng_clone_producing_collection_and_task_observers_are_rejected() {
         ),
         (
             "wait_any",
-            "import random\n\ndef observe(tasks: Vec[Task[random.Rng]]):\n    print(wait_any(tasks))\n",
+            "import random\n\ndef observe(tasks: list[Task[random.Rng]]):\n    print(wait_any(tasks))\n",
         ),
         (
             "wait_all",
-            "import random\n\ndef observe(tasks: Vec[Task[random.Rng]]):\n    print(wait_all(tasks))\n",
+            "import random\n\ndef observe(tasks: list[Task[random.Rng]]):\n    print(wait_all(tasks))\n",
         ),
     ];
 
@@ -5104,8 +6023,8 @@ fn random_rng_clone_producing_collection_and_task_observers_are_rejected() {
 fn random_rng_clone_safety_defers_generic_obligations_to_use_sites() {
     crate::check_source(
         r#"
-def duplicate[T](values: Vec[T]) -> Vec[T]:
-    return values.clone()
+def duplicate[T](values: list[T]) -> list[T]:
+    return values.copy()
 
 def main() -> int32:
     values = [1, 2]
@@ -5122,8 +6041,8 @@ def main() -> int32:
             r#"
 import random
 
-def duplicate[T](values: Vec[T]) -> Vec[T]:
-    return values.clone()
+def duplicate[T](values: list[T]) -> list[T]:
+    return values.copy()
 
 def main() -> int32:
     values = [random.Rng(seed=1)]
@@ -5137,10 +6056,10 @@ def main() -> int32:
             r#"
 import random
 
-def duplicate[T](values: Vec[T]) -> Vec[T]:
-    return values.clone()
+def duplicate[T](values: list[T]) -> list[T]:
+    return values.copy()
 
-def forward[T](values: Vec[T]) -> Vec[T]:
+def forward[T](values: list[T]) -> list[T]:
     return duplicate(values)
 
 def main() -> int32:
@@ -5165,22 +6084,22 @@ def main() -> int32:
         r#"
 import random
 
-def clone_task_handles(values: Vec[Task[int64]]) -> Vec[Task[int64]]:
-    return values.clone()
+def clone_task_handles(values: list[Task[int64]]) -> list[Task[int64]]:
+    return values.copy()
 
-def clone_queue_handles(values: Vec[Queue[random.Rng]]) -> Vec[Queue[random.Rng]]:
-    return values.clone()
+def clone_queue_handles(values: list[Queue[random.Rng]]) -> list[Queue[random.Rng]]:
+    return values.copy()
 
-def pop_generator(values: mut Vec[random.Rng]) -> Option[random.Rng]:
+def pop_generator(values: mut list[random.Rng]) -> random.Rng:
     return values.pop()
 
-def remove_generator(values: mut Vec[random.Rng]) -> Option[random.Rng]:
-    return values.remove(0)
+def pop_first_generator(values: mut list[random.Rng]) -> random.Rng:
+    return values.pop(0)
 
-def remove_mapped_generator(values: mut Map[String, random.Rng]) -> Option[random.Rng]:
+def remove_mapped_generator(values: mut dict[str, random.Rng]) -> Option[random.Rng]:
     return values.remove("main")
 
-def shuffle_generators(rng: mut random.Rng, values: mut Vec[random.Rng]):
+def shuffle_generators(rng: mut random.Rng, values: mut list[random.Rng]):
     rng.shuffle(values)
 "#,
     )
@@ -5190,7 +6109,7 @@ def shuffle_generators(rng: mut random.Rng, values: mut Vec[random.Rng]):
         r#"
 import random
 
-def consume(values: own Vec[random.Rng]):
+def consume(values: own list[random.Rng]):
     pass
 
 def main() -> int32:
@@ -5211,8 +6130,8 @@ fn rng_clone_safety_seeds_inherent_associated_method_class_type_arguments() {
     let surface = r#"
 class Factory[T]:
     def probe() -> int32:
-        values = Vec[T]()
-        copies = values.clone()
+        values = list[T]()
+        copies = values.copy()
         print(copies)
         return 0
 "#;
@@ -5241,8 +6160,8 @@ class Factory[T]:
 fn rng_clone_safety_trait_contracts_cover_direct_and_bound_dispatch() {
     let trait_surface = r#"
 trait Copier[Item]:
-    def duplicate(self, values: Vec[Item]) -> Vec[Item]:
-        return values.clone()
+    def duplicate(self, values: list[Item]) -> list[Item]:
+        return values.copy()
 
 class Wrapper[Element]:
     marker: Element
@@ -5250,7 +6169,7 @@ class Wrapper[Element]:
 impl[Element] Copier[Element] for Wrapper[Element]:
     pass
 
-def through[Value, C: Copier[Value]](copier: C, values: Vec[Value]) -> Vec[Value]:
+def through[Value, C: Copier[Value]](copier: C, values: list[Value]) -> list[Value]:
     return copier.duplicate(values)
 "#;
 
@@ -5278,14 +6197,14 @@ def through[Value, C: Copier[Value]](copier: C, values: Vec[Value]) -> Vec[Value
     let strengthened = crate::check_source(
         r#"
 trait Copier[T]:
-    def duplicate(self) -> Vec[T]
+    def duplicate(self) -> list[T]
 
 class Wrapper[T]:
-    values: Vec[T]
+    values: list[T]
 
 impl[T] Copier[T] for Wrapper[T]:
-    def duplicate(self) -> Vec[T]:
-        return self.values.clone()
+    def duplicate(self) -> list[T]:
+        return self.values.copy()
 "#,
     )
     .expect_err("an impl may not strengthen an abstract trait clone-safety contract");
@@ -5297,8 +6216,8 @@ impl[T] Copier[T] for Wrapper[T]:
 fn rng_clone_safety_trait_method_generics_wait_for_call_inference() {
     let instance_surface = r#"
 trait Copier:
-    def duplicate[T](self, values: Vec[T]) -> Vec[T]:
-        return values.clone()
+    def duplicate[T](self, values: list[T]) -> list[T]:
+        return values.copy()
 
 class Marker:
     value: int64
@@ -5320,7 +6239,7 @@ impl Copier for Marker:
     assert!(instance_rng.message.contains("non-cloneable `random.Rng`"));
 
     let bound_rng = crate::check_source(&format!(
-        "import random\n{instance_surface}\ndef forward[T, U, C: Copier](marker: C, values: Vec[U]) -> Vec[U]:\n    return marker.duplicate(values)\n\ndef main() -> int32:\n    marker = Marker(0)\n    values = [random.Rng(seed=1)]\n    copies = forward[int64, random.Rng, Marker](marker, values)\n    print(copies)\n    return 0\n"
+        "import random\n{instance_surface}\ndef forward[T, U, C: Copier](marker: C, values: list[U]) -> list[U]:\n    return marker.duplicate(values)\n\ndef main() -> int32:\n    marker = Marker(0)\n    values = [random.Rng(seed=1)]\n    copies = forward[int64, random.Rng, Marker](marker, values)\n    print(copies)\n    return 0\n"
     ))
     .expect_err(
         "bound dispatch must propagate the inferred method obligation to the matching caller parameter",
@@ -5330,8 +6249,8 @@ impl Copier for Marker:
 
     let associated_surface = r#"
 trait Factory:
-    def duplicate[T](values: Vec[T]) -> Vec[T]:
-        return values.clone()
+    def duplicate[T](values: list[T]) -> list[T]:
+        return values.copy()
 
 class Marker:
     value: int64
@@ -5359,7 +6278,7 @@ impl Factory for Marker:
 fn rng_clone_safety_method_inference_preserves_general_diagnostics() {
     let surface = r#"
 trait Display:
-    def text(self) -> String
+    def text(self) -> str
 
 trait Factory:
     def choose[T](self, left: own T, right: own T) -> T:
@@ -5429,7 +6348,7 @@ class Pair[A, B]:
 trait Add[Rhs, Out]:
     def add[T](self, rhs: Pair[T, T]) -> Out
 
-def combine[X: Add[Pair[int64, String], int64]](left: X, right: Pair[int64, String]) -> int64:
+def combine[X: Add[Pair[int64, str], int64]](left: X, right: Pair[int64, str]) -> int64:
     return left + right
 "#,
     )
@@ -5437,7 +6356,7 @@ def combine[X: Add[Pair[int64, String], int64]](left: X, right: Pair[int64, Stri
     assert_eq!(conflict.code, "AU2002");
     assert!(
         conflict.message.contains(
-            "argument type mismatch for operator trait `Add.add`: conflicting inferred types for `T`: `int64` and `String`"
+            "argument type mismatch for operator trait `Add.add`: conflicting inferred types for `T`: `int64` and `str`"
         ),
         "unexpected mismatch diagnostic: {}",
         conflict.message
@@ -5465,7 +6384,7 @@ def invert[X: Neg[int64]](value: X) -> int64:
     let missing_bound = crate::check_source(
         r#"
 trait Display:
-    def text(self) -> String
+    def text(self) -> str
 
 class Plain:
     value: int64
@@ -5639,20 +6558,20 @@ fn rng_clone_safety_ignores_handle_payloads_and_ambiguous_nominal_fallbacks() {
 fn rng_clone_safety_terminates_for_expanding_recursive_generics() {
     let surface = r#"
 class Grow[T]:
-    next: indirect Grow[Vec[T]]
+    next: indirect Grow[list[T]]
     value: T
 
-def duplicate[T](values: Vec[Grow[T]]) -> Vec[Grow[T]]:
-    return values.clone()
+def duplicate[T](values: list[Grow[T]]) -> list[Grow[T]]:
+    return values.copy()
 "#;
 
     crate::check_source(&format!(
-        "{surface}\ndef accept_safe(values: Vec[Grow[int64]]) -> Vec[Grow[int64]]:\n    return duplicate(values)\n\ndef main() -> int32:\n    return 0\n"
+        "{surface}\ndef accept_safe(values: list[Grow[int64]]) -> list[Grow[int64]]:\n    return duplicate(values)\n\ndef main() -> int32:\n    return 0\n"
     ))
     .expect("an expanding recursive generic clone obligation should terminate and accept a safe concrete instantiation");
 
     let error = crate::check_source(&format!(
-        "import random\n{surface}\ndef reject(values: Vec[Grow[random.Rng]]) -> Vec[Grow[random.Rng]]:\n    return duplicate(values)\n"
+        "import random\n{surface}\ndef reject(values: list[Grow[random.Rng]]) -> list[Grow[random.Rng]]:\n    return duplicate(values)\n"
     ))
     .expect_err("the recursive generic must still reject an Rng instantiation");
     assert_eq!(error.code, "AU3007");
@@ -5666,17 +6585,17 @@ enum Envelope[T]:
     Empty
     Value(T)
 
-def duplicate[T](values: Vec[Envelope[T]]) -> Vec[Envelope[T]]:
-    return values.clone()
+def duplicate[T](values: list[Envelope[T]]) -> list[Envelope[T]]:
+    return values.copy()
 "#;
 
     crate::check_source(&format!(
-        "{surface}\ndef accept(values: Vec[Envelope[int64]]) -> Vec[Envelope[int64]]:\n    return duplicate(values)\n"
+        "{surface}\ndef accept(values: list[Envelope[int64]]) -> list[Envelope[int64]]:\n    return duplicate(values)\n"
     ))
     .expect("an enum payload obligation should accept a clone-safe specialization");
 
     let error = crate::check_source(&format!(
-        "import random\n{surface}\ndef reject(values: Vec[Envelope[random.Rng]]) -> Vec[Envelope[random.Rng]]:\n    return duplicate(values)\n"
+        "import random\n{surface}\ndef reject(values: list[Envelope[random.Rng]]) -> list[Envelope[random.Rng]]:\n    return duplicate(values)\n"
     ))
     .expect_err("an enum payload obligation must reject an Rng specialization");
     assert_eq!(error.code, "AU3007");
@@ -5689,19 +6608,19 @@ fn rng_clone_safety_terminates_for_recursive_generic_enums() {
     let surface = r#"
 enum Chain[T]:
     End(T)
-    Link(indirect Chain[Vec[T]])
+    Link(indirect Chain[list[T]])
 
-def duplicate[T](values: Vec[Chain[T]]) -> Vec[Chain[T]]:
-    return values.clone()
+def duplicate[T](values: list[Chain[T]]) -> list[Chain[T]]:
+    return values.copy()
 "#;
 
     crate::check_source(&format!(
-        "{surface}\ndef accept(values: Vec[Chain[int64]]) -> Vec[Chain[int64]]:\n    return duplicate(values)\n"
+        "{surface}\ndef accept(values: list[Chain[int64]]) -> list[Chain[int64]]:\n    return duplicate(values)\n"
     ))
     .expect("a recursive enum obligation should terminate for a safe specialization");
 
     let error = crate::check_source(&format!(
-        "import random\n{surface}\ndef reject(values: Vec[Chain[random.Rng]]) -> Vec[Chain[random.Rng]]:\n    return duplicate(values)\n"
+        "import random\n{surface}\ndef reject(values: list[Chain[random.Rng]]) -> list[Chain[random.Rng]]:\n    return duplicate(values)\n"
     ))
     .expect_err("a recursive enum obligation must terminate and reject an Rng specialization");
     assert_eq!(error.code, "AU3007");
@@ -5905,13 +6824,13 @@ impl Accepts[int64] for Accepted:
         ),
         (
             "substituted class bound",
-            "value = remote.Bounded[String, Accepted](\"x\", Accepted(1))",
-            "does not implement trait `Accepts[String]`",
+            "value = remote.Bounded[str, Accepted](\"x\", Accepted(1))",
+            "does not implement trait `Accepts[str]`",
         ),
         (
             "substituted enum bound",
-            "value = remote.BoundedChoice[String, Accepted].Value(Accepted(1))",
-            "does not implement trait `Accepts[String]`",
+            "value = remote.BoundedChoice[str, Accepted].Value(Accepted(1))",
+            "does not implement trait `Accepts[str]`",
         ),
     ] {
         let source = format!("{local_surface}\ndef reject():\n    {statement}\n");
@@ -5932,8 +6851,8 @@ impl Accepts[int64] for Accepted:
 fn rng_clone_safety_covers_associated_operator_and_specialized_trait_routes() {
     let associated = r#"
 trait Factory[Item]:
-    def duplicate(values: Vec[Item]) -> Vec[Item]:
-        return values.clone()
+    def duplicate(values: list[Item]) -> list[Item]:
+        return values.copy()
 
 class Wrapper[Element]:
     marker: Element
@@ -5954,8 +6873,8 @@ impl[Element] Factory[Element] for Wrapper[Element]:
     let specialized_safe = crate::check_source(
         r#"
 trait Copier[Item]:
-    def duplicate(self, values: Vec[Item]) -> Vec[Item]:
-        return values.clone()
+    def duplicate(self, values: list[Item]) -> list[Item]:
+        return values.copy()
 
 class Fixed:
     value: int64
@@ -5980,8 +6899,8 @@ def main() -> int32:
 import random
 
 trait Copier[Item]:
-    def duplicate(self, values: Vec[Item]) -> Vec[Item]:
-        return values.clone()
+    def duplicate(self, values: list[Item]) -> list[Item]:
+        return values.copy()
 
 class Fixed:
     value: int64
@@ -5996,14 +6915,14 @@ impl Copier[random.Rng] for Fixed:
 
     let operator = r#"
 trait Add[Item, Out]:
-    def add(self, rhs: own Item) -> Vec[Item]:
+    def add(self, rhs: own Item) -> list[Item]:
         values = [rhs]
-        return values.clone()
+        return values.copy()
 
 class Wrapper[Element]:
     marker: Element
 
-impl[Element] Add[Element, Vec[Element]] for Wrapper[Element]:
+impl[Element] Add[Element, list[Element]] for Wrapper[Element]:
     pass
 "#;
     crate::check_source(&format!(
@@ -6023,7 +6942,7 @@ fn rng_clone_safety_operator_method_generics_bind_the_actual_rhs() {
 trait Add[Rhs]:
     def add[T](self, rhs: own T):
         values = [rhs]
-        copies = values.clone()
+        copies = values.copy()
         print(copies)
 
 class Marker:
@@ -6055,12 +6974,12 @@ def combine[T, U](marker: Marker, rhs: own U):
 fn rng_clone_safety_is_enforced_when_try_selects_a_from_impl() {
     let surface = r#"
 class Target[Element]:
-    values: Vec[Element]
+    values: list[Element]
 
 trait From[Item]:
     def from(value: own Item) -> Target[Item]:
         values = [value]
-        return Target(values.clone())
+        return Target(values.copy())
 
 impl[Item] From[Item] for Target[Item]:
     pass
@@ -6087,7 +7006,7 @@ class Target[Source]:
 trait From[Source]:
     def from[T](value: own T) -> Target[Source]:
         values = [value]
-        copies = values.clone()
+        copies = values.copy()
         print(copies)
         return Target(0)
 
@@ -6123,17 +7042,17 @@ class Rng:
     def next_int(self, lo: int64, hi: int64) -> int64:
         return self.value
 
-    def next_float(self) -> String:
+    def next_float(self) -> str:
         return "local"
 
     def shuffle(self, value: int64) -> int64:
         return value
 
 trait LocalShuffle:
-    def rearrange(self) -> String
+    def rearrange(self) -> str
 
 impl LocalShuffle for Rng:
-    def rearrange(self) -> String:
+    def rearrange(self) -> str:
         return self.next_float()
 
 def main() -> int32:
@@ -6154,12 +7073,12 @@ fn d3_int_alias_canonicalizes_across_signatures_generics_and_casts() {
 def identity[T](value: own T) -> T:
     return value
 
-def round_trip(value: int, values: Vec[int]) -> int:
+def round_trip(value: int, values: list[int]) -> int:
     casted: int = value as int
     return identity[int](value=casted)
 
 def main() -> int32:
-    values: Vec[int] = [2147483648]
+    values: list[int] = [2147483648]
     print(round_trip(1, values))
     return 0
 "#;
@@ -6173,7 +7092,7 @@ def main() -> int32:
         round_trip.signature.params,
         vec![
             Type::named("int64"),
-            Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+            Type::Named("list".to_string(), vec![Type::named("int64")]),
         ]
     );
     assert_eq!(round_trip.signature.return_type, Type::named("int64"));
@@ -6197,7 +7116,7 @@ fn d3_unhinted_integer_literals_default_to_checked_int64() {
 def accept(value: int64):
     print(value)
 
-def accept_values(values: Vec[int64]):
+def accept_values(values: list[int64]):
     print(values.len())
 
 def accept_option(value: Option[int64]):
@@ -6239,11 +7158,105 @@ def main() -> int32:
 }
 
 #[test]
-fn d3_fixed_int32_builtin_and_index_positions_contextually_type_literals() {
+fn integer_base_spellings_preserve_contextual_fixed_width_typing() {
+    crate::check_source(
+        r#"
+def main():
+    signed8_max: int8 = 0x7f
+    signed8_min: int8 = -0x80
+    unsigned8_max: uint8 = 0Xff
+    signed16_max: int16 = 0x7fff
+    signed16_min: int16 = -0x8000
+    unsigned16_max: uint16 = 0xffff
+    signed32_max: int32 = 0x7fff_ffff
+    signed32_min: int32 = -0x8000_0000
+    unsigned32_max: uint32 = 0xffff_ffff
+    signed64_max: int64 = 0x7fff_ffff_ffff_ffff
+    signed64_min: int64 = -0x8000_0000_0000_0000
+    unsigned64_max: uint64 = 0xffff_ffff_ffff_ffff
+    signed128_max: int128 = 0x7fff_ffff_ffff_ffff_ffff_ffff_ffff_ffff
+    signed128_min: int128 = -0x8000_0000_0000_0000_0000_0000_0000_0000
+    unsigned128_max: uint128 = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffff
+    alias: int = 0b1010_0110
+    octal: uint16 = 0O17_777
+"#,
+    )
+    .expect("base-prefixed values should retain ordinary contextual integer typing");
+
+    let narrow = crate::check_source("def main():\n    value: int8 = 0x80\n")
+        .expect_err("base spelling must not bypass contextual range checking");
+    assert_eq!(
+        narrow.message,
+        "integer literal `128` does not fit in `int8`"
+    );
+
+    let defaulted = crate::check_source("def main():\n    value = 0x8000_0000_0000_0000\n")
+        .expect_err("unhinted base spelling must still default to int64");
+    assert_eq!(
+        defaulted.message,
+        "integer literal `9223372036854775808` does not fit in `int64`"
+    );
+}
+
+#[test]
+fn bitwise_shift_and_power_operators_require_the_accepted_exact_numeric_types() {
+    crate::check_source(
+        r#"
+def main():
+    mut a: int8 = 5
+    b: int8 = 3
+    anded: int8 = a & b
+    ored: int8 = a | b
+    xored: int8 = a ^ b
+    inverted: int8 = ~a
+    left: int8 = b << 1
+    right: int8 = a >> 1
+    powered: int8 = b ** 3
+    float_power: float64 = 2.0 ** -2.0
+    a &= b
+    a |= b
+    a ^= b
+    a <<= 1
+    a >>= 1
+    a **= 2
+"#,
+    )
+    .expect("accepted bitwise, shift, power, and compound forms should type check");
+
+    for (source, code, fragment) in [
+        (
+            "def main():\n    value = 1 & 1.0\n",
+            "AU2003",
+            "require integer operands",
+        ),
+        (
+            "def main():\n    value = 1.0 << 1.0\n",
+            "AU2003",
+            "require integer operands",
+        ),
+        (
+            "def main():\n    value = ~1.0\n",
+            "AU2003",
+            "expects an integer",
+        ),
+        (
+            "def main():\n    value = 2 ** -1\n",
+            "AU2003",
+            "negative exponent",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}: {error}");
+        assert!(error.message.contains(fragment), "{source}: {error}");
+    }
+}
+
+#[test]
+fn index_domain_positions_contextually_type_literals_as_int64() {
     crate::check_source(
         r#"
 def main() -> int32:
-    mut values: Vec[int32] = [1]
+    mut values: list[int32] = [1]
     values[0] = 2
     print(values[0])
     print(values.get(index=0))
@@ -6256,41 +7269,40 @@ def main() -> int32:
     return 0
 "#,
     )
-    .expect("fixed int32 APIs should contextually type ordinary literals");
+    .expect("index-domain APIs should contextually type ordinary literals as int64");
 
-    for statement in ["print(values[2147483648])", "values[2147483648] = 1"] {
+    for statement in [
+        "print(values[9223372036854775808])",
+        "values[9223372036854775808] = 1",
+    ] {
         let source = format!(
-            "def main() -> int32:\n    mut values: Vec[int32] = [1]\n    {statement}\n    return 0\n"
+            "def main() -> int32:\n    mut values: list[int32] = [1]\n    {statement}\n    return 0\n"
         );
-        let error = crate::check_source(&source)
-            .expect_err("vector index literals must remain constrained to int32");
+        let error = crate::check_source(&source).expect_err("list index literals must fit int64");
         assert_eq!(
             error.message,
-            "integer literal `2147483648` does not fit in `int32`"
+            "integer literal `9223372036854775808` does not fit in `int64`"
         );
     }
 }
 
 #[test]
-fn d3_vec_index_contract_rejects_default_int64_variables() {
+fn index_domain_accepts_default_int64_variables() {
     for statement in [
         "print(values[index])",
         "values[index] = 2",
         "print(values.get(index))",
         "values.set(index, 2)",
-        "values.remove(index)",
+        "values.pop(index)",
         "values.swap(index, 0)",
         "values.insert(index, 2)",
     ] {
         let source = format!(
-            "def main() -> int32:\n    mut values: Vec[int32] = [1]\n    index = 0\n    {statement}\n    return 0\n"
+            "def main() -> int32:\n    mut values: list[int32] = [1]\n    index = 0\n    {statement}\n    return 0\n"
         );
-        let error = crate::check_source(&source)
-            .expect_err("default int64 variables must not enter fixed int32 index positions");
-        assert_eq!(
-            error.message, "vector indices must have type `int32`, found `int64`",
-            "unexpected diagnostic for `{statement}`"
-        );
+        crate::check_source(&source).unwrap_or_else(|error| {
+            panic!("default int64 index failed for `{statement}`: {error:?}")
+        });
     }
 }
 
@@ -6613,6 +7625,8 @@ fn enum_info(name: &str, payload: Option<Type>) -> EnumInfo {
 
 fn namespace(path: &str) -> ModuleNamespace {
     ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: path.rsplit('.').next().unwrap_or(path).to_string(),
         path: path.to_string(),
         source_path: None,
@@ -6656,6 +7670,7 @@ fn checker<'a>(
         classes,
         enums,
         functions,
+        empty_constants(),
         traits,
         trait_impls,
         imported_modules,
@@ -6735,7 +7750,7 @@ fn checker_small_helper_utilities_cover_default_arg_and_recursive_type_paths() {
     let type_names = BTreeMap::from([("Known".to_string(), Span::new(1, 1))]);
     collect_type_ref_type_params(&type_ref("T"), &type_names, &mut collected, true);
     collect_type_ref_type_params(
-        &nested_type_ref("Vec", vec![type_ref("U")]),
+        &nested_type_ref("list", vec![type_ref("U")]),
         &type_names,
         &mut collected,
         false,
@@ -6789,21 +7804,21 @@ fn checker_small_helper_utilities_cover_default_arg_and_recursive_type_paths() {
         "1.5"
     );
 
-    let string_ty = Type::named("String");
+    let string_ty = Type::named("str");
     let int_ty = Type::named("int32");
-    let set_ty = Type::Named("Set".to_string(), vec![string_ty.clone()]);
-    let map_ty = Type::Named("Map".to_string(), vec![string_ty.clone(), int_ty.clone()]);
+    let set_ty = Type::Named("set".to_string(), vec![string_ty.clone()]);
+    let map_ty = Type::Named("dict".to_string(), vec![string_ty.clone(), int_ty.clone()]);
     assert_eq!(set_element_type(&set_ty), Some(&string_ty));
     assert_eq!(map_key_value_types(&map_ty), Some((&string_ty, &int_ty)));
 
     assert!(Type::named("int32").is_copy());
-    assert!(!Type::Named("Vec".to_string(), vec![Type::named("int32")]).is_copy());
+    assert!(!Type::Named("list".to_string(), vec![Type::named("int32")]).is_copy());
     assert!(type_contains_named(
         &Type::Named(
-            "Map".to_string(),
+            "dict".to_string(),
             vec![
-                Type::named("String"),
-                Type::Named("Vec".to_string(), vec![Type::named("Leaf")]),
+                Type::named("str"),
+                Type::Named("list".to_string(), vec![Type::named("Leaf")]),
             ],
         ),
         "Leaf"
@@ -6882,7 +7897,7 @@ fn checker_small_helper_utilities_cover_default_arg_and_recursive_type_paths() {
 #[test]
 fn checker_helper_paths_cover_explicit_type_args_and_pattern_unification_edges() {
     let program = crate::check_source(
-            "class Box[T]:\n    value: T\n\ntrait Show:\n    def show(self) -> String\n\ndef main():\n    pass\n",
+            "class Box[T]:\n    value: T\n\ntrait Show:\n    def show(self) -> str\n\ndef main():\n    pass\n",
         )
         .expect("helper program should type check");
     let (type_names, type_arities) = type_maps_from_program(&program);
@@ -6894,6 +7909,7 @@ fn checker_helper_paths_cover_explicit_type_args_and_pattern_unification_edges()
         &program.classes,
         &program.enums,
         &program.functions,
+        &program.constants,
         &program.traits,
         &program.trait_impls,
         &program.imported_modules,
@@ -6925,17 +7941,17 @@ fn checker_helper_paths_cover_explicit_type_args_and_pattern_unification_edges()
     );
 
     let explicit = checker
-        .explicit_type_substitutions(&["T".to_string()], &[type_ref("String")], span, "Box")
+        .explicit_type_substitutions(&["T".to_string()], &[type_ref("str")], span, "Box")
         .expect("single explicit type arg should lower");
     assert_eq!(
         explicit,
-        HashMap::from([("T".to_string(), Type::named("String"))])
+        HashMap::from([("T".to_string(), Type::named("str"))])
     );
 
     let explicit_arity = checker
         .explicit_type_substitutions(
             &["T".to_string()],
-            &[type_ref("String"), type_ref("int32")],
+            &[type_ref("str"), type_ref("int32")],
             span,
             "Box",
         )
@@ -6945,7 +7961,7 @@ fn checker_helper_paths_cover_explicit_type_args_and_pattern_unification_edges()
         .contains("Box expects 1 type argument"));
 
     checker
-        .validate_integer_literal(7, &Type::named("String"), span)
+        .validate_integer_literal(7, &Type::named("str"), span)
         .expect("non-integer targets should skip integer literal bounds checks");
     checker
         .validate_integer_literal(127, &Type::named("int8"), span)
@@ -7022,11 +8038,11 @@ fn checker_helper_paths_cover_explicit_type_args_and_pattern_unification_edges()
         .message
         .contains("expected `module helpers.math`, found `module helpers.other`"));
     let named_against_unit =
-        unify_type_pattern(&Type::named("String"), &Type::Unit, &mut HashMap::new())
+        unify_type_pattern(&Type::named("str"), &Type::Unit, &mut HashMap::new())
             .expect_err("named patterns should reject non-named actual types");
     assert!(named_against_unit
         .message
-        .contains("expected `String`, found `None`"));
+        .contains("expected `str`, found `None`"));
 }
 
 #[test]
@@ -7142,29 +8158,30 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         &program.classes,
         &program.enums,
         &program.functions,
+        &program.constants,
         &traits,
         &trait_impls,
         &program.imported_modules,
         &program.module_registry,
     );
-    let vec_string = Type::Named("Vec".to_string(), vec![Type::named("String")]);
-    let set_string = Type::Named("Set".to_string(), vec![Type::named("String")]);
+    let vec_string = Type::Named("list".to_string(), vec![Type::named("str")]);
+    let set_string = Type::Named("set".to_string(), vec![Type::named("str")]);
     let map_string_string = Type::Named(
-        "Map".to_string(),
-        vec![Type::named("String"), Type::named("String")],
+        "dict".to_string(),
+        vec![Type::named("str"), Type::named("str")],
     );
     let option_int = Type::Named("Option".to_string(), vec![Type::named("int32")]);
     let result_int_string = Type::Named(
         "Result".to_string(),
-        vec![Type::named("int32"), Type::named("String")],
+        vec![Type::named("int32"), Type::named("str")],
     );
     let task_int = Type::Named("Task".to_string(), vec![Type::named("int32")]);
-    let task_list_int = Type::Named("Vec".to_string(), vec![task_int.clone()]);
+    let task_list_int = Type::Named("list".to_string(), vec![task_int.clone()]);
     let mut locals = HashMap::from([
         (
             "moved".to_string(),
             local_binding(
-                Type::named("String"),
+                Type::named("str"),
                 true,
                 true,
                 ReceiverKind::Value,
@@ -7245,7 +8262,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         (
             "text".to_string(),
             local_binding(
-                Type::named("String"),
+                Type::named("str"),
                 false,
                 false,
                 ReceiverKind::Value,
@@ -7289,7 +8306,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         (
             "unit_tasks".to_string(),
             local_binding(
-                Type::Named("Vec".to_string(), vec![Type::Unit]),
+                Type::Named("list".to_string(), vec![Type::Unit]),
                 false,
                 false,
                 ReceiverKind::Value,
@@ -7362,7 +8379,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 &mut locals,
                 Some(&vec_string),
             )
-            .expect("String lists should type check"),
+            .expect("str lists should type check"),
         vec_string
     );
     assert!(checker
@@ -7372,7 +8389,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 expr(ExprKind::Int(1)),
             ])),
             &mut locals,
-            Some(&Type::Named("Vec".to_string(), vec![Type::named("String")])),
+            Some(&Type::Named("list".to_string(), vec![Type::named("str")])),
         )
         .expect_err("heterogeneous lists should fail")
         .message
@@ -7381,7 +8398,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         .type_of_expr(&expr(ExprKind::List(Vec::new())), &mut locals)
         .expect_err("empty lists require context")
         .message
-        .contains("empty list literals require an expected `Vec[T]`"));
+        .contains("empty list literals require an expected `list[T]`"));
 
     assert_eq!(
         checker
@@ -7393,7 +8410,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 &mut locals,
                 Some(&set_string),
             )
-            .expect("String sets should type check"),
+            .expect("str sets should type check"),
         set_string
     );
     assert!(checker
@@ -7403,7 +8420,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 expr(ExprKind::Int(1)),
             ])),
             &mut locals,
-            Some(&Type::Named("Set".to_string(), vec![Type::named("String")])),
+            Some(&Type::Named("set".to_string(), vec![Type::named("str")])),
         )
         .expect_err("heterogeneous sets should fail")
         .message
@@ -7412,7 +8429,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         .type_of_expr(&expr(ExprKind::Set(Vec::new())), &mut locals)
         .expect_err("empty sets require context")
         .message
-        .contains("empty set literals require an expected `Set[T]`"));
+        .contains("empty set literals require an expected `set[T]`"));
 
     assert_eq!(
         checker
@@ -7424,7 +8441,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 &mut locals,
                 Some(&map_string_string),
             )
-            .expect("String maps should type check"),
+            .expect("str maps should type check"),
         map_string_string
     );
     assert!(checker
@@ -7443,62 +8460,62 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         .type_of_expr(&expr(ExprKind::Map(Vec::new())), &mut locals)
         .expect_err("empty maps require context")
         .message
-        .contains("empty map literals require an expected `Map[K, V]`"));
+        .contains("empty map literals require an expected `dict[K, V]`"));
 
     assert!(checker
         .type_of_expr(
             &expr(ExprKind::Specialize {
-                expr: Box::new(expr(ExprKind::Name("Set".to_string()))),
-                type_args: vec![type_ref("int32"), type_ref("String")],
+                expr: Box::new(expr(ExprKind::Name("set".to_string()))),
+                type_args: vec![type_ref("int32"), type_ref("str")],
             }),
             &mut locals,
         )
         .expect_err("Set arity mismatches should fail")
         .message
-        .contains("type `Set` expects exactly one type argument"));
+        .contains("type `set` expects exactly one type argument"));
     assert_eq!(
         checker
             .type_of_expr(
                 &expr(ExprKind::Specialize {
-                    expr: Box::new(expr(ExprKind::Name("Set".to_string()))),
+                    expr: Box::new(expr(ExprKind::Name("set".to_string()))),
                     type_args: vec![type_ref("int32")],
                 }),
                 &mut locals,
             )
             .expect("Set specialization should preserve its explicit element type"),
-        Type::Named("Set".to_string(), vec![Type::named("int32")])
+        Type::Named("set".to_string(), vec![Type::named("int32")])
     );
     assert!(checker
         .type_of_expr(
             &expr(ExprKind::Specialize {
-                expr: Box::new(expr(ExprKind::Name("Map".to_string()))),
-                type_args: vec![type_ref("String")],
+                expr: Box::new(expr(ExprKind::Name("dict".to_string()))),
+                type_args: vec![type_ref("str")],
             }),
             &mut locals,
         )
         .expect_err("Map arity mismatches should fail")
         .message
-        .contains("type `Map` expects exactly two type arguments"));
+        .contains("type `dict` expects exactly two type arguments"));
     assert_eq!(
         checker
             .type_of_expr(
                 &expr(ExprKind::Specialize {
-                    expr: Box::new(expr(ExprKind::Name("Map".to_string()))),
-                    type_args: vec![type_ref("String"), type_ref("int32")],
+                    expr: Box::new(expr(ExprKind::Name("dict".to_string()))),
+                    type_args: vec![type_ref("str"), type_ref("int32")],
                 }),
                 &mut locals,
             )
             .expect("Map specialization should preserve explicit key/value types"),
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")]
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")]
         )
     );
     assert!(checker
         .type_of_expr(
             &expr(ExprKind::Specialize {
                 expr: Box::new(expr(ExprKind::Name("Holder".to_string()))),
-                type_args: vec![type_ref("int32"), type_ref("String")],
+                type_args: vec![type_ref("int32"), type_ref("str")],
             }),
             &mut locals,
         )
@@ -7532,7 +8549,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         .type_of_expr(
             &expr(ExprKind::Specialize {
                 expr: Box::new(expr(ExprKind::Name("Maybe".to_string()))),
-                type_args: vec![type_ref("int32"), type_ref("String")],
+                type_args: vec![type_ref("int32"), type_ref("str")],
             }),
             &mut locals,
         )
@@ -7555,12 +8572,12 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             .type_of_expr(
                 &expr(ExprKind::Specialize {
                     expr: Box::new(expr(ExprKind::Name("Maybe".to_string()))),
-                    type_args: vec![type_ref("String")],
+                    type_args: vec![type_ref("str")],
                 }),
                 &mut locals,
             )
             .expect("generic enum specialization should lower explicit type args"),
-        Type::Named("Maybe".to_string(), vec![Type::named("String")])
+        Type::Named("Maybe".to_string(), vec![Type::named("str")])
     );
     let nongeneric_function_specialization = checker
         .type_of_expr(
@@ -7762,7 +8779,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         )
         .expect_err("wait_any should reject non-container task arguments")
         .message
-        .contains("`wait_any` expects `Vec[Task[T]]`, found `None`"));
+        .contains("`wait_any` expects `list[Task[T]]`, found `None`"));
     assert!(checker
         .type_of_expr(
             &expr(ExprKind::Call {
@@ -7771,9 +8788,9 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             }),
             &mut locals,
         )
-        .expect_err("wait_all should reject Vec[None] task containers")
+        .expect_err("wait_all should reject list[None] task containers")
         .message
-        .contains("`wait_all` expects `Vec[Task[T]]`, found `Vec[None]`"));
+        .contains("`wait_all` expects `list[Task[T]]`, found `list[None]`"));
     assert!(checker
         .type_of_expr(
             &expr(ExprKind::Call {
@@ -7782,9 +8799,9 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             }),
             &mut locals,
         )
-        .expect_err("wait_any should reject non-task vector elements")
+        .expect_err("wait_any should reject non-task list elements")
         .message
-        .contains("`wait_any` expects `Vec[Task[T]]`, found `Vec[String]`"));
+        .contains("`wait_any` expects `list[Task[T]]`, found `list[str]`"));
 
     checker.current_return_type = Some(result_int_string.clone());
     assert_eq!(
@@ -7927,7 +8944,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             &expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Specialize {
                     expr: Box::new(expr(ExprKind::Name("Maybe".to_string()))),
-                    type_args: vec![type_ref("int32"), type_ref("String")],
+                    type_args: vec![type_ref("int32"), type_ref("str")],
                 })),
                 field: "Empty".to_string(),
             }),
@@ -8000,9 +9017,9 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             }),
             &mut locals,
         )
-        .expect_err("vector indices should stay integer-only")
+        .expect_err("list indices should stay integer-only")
         .message
-        .contains("vector indices must have type `int32`"));
+        .contains("list indices must have type `int64` or a losslessly narrower integer type"));
     assert!(checker
         .type_of_expr(
             &expr(ExprKind::Index {
@@ -8024,7 +9041,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         )
         .expect_err("non-indexable values should fail")
         .message
-        .contains("cannot index non-Array, vector, or map value"));
+        .contains("cannot index non-Array, list, or dict value"));
 
     let missing_specialized_variant = checker
         .type_of_expr(
@@ -8094,7 +9111,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
             false,
             vec![
                 ("value", Type::named("int32"), false),
-                ("text", Type::named("String"), false),
+                ("text", Type::named("str"), false),
             ],
         ),
     )]);
@@ -8117,10 +9134,10 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
         &imported_modules,
         &module_registry,
     );
-    let vec_int = Type::Named("Vec".to_string(), vec![Type::named("int32")]);
+    let vec_int = Type::Named("list".to_string(), vec![Type::named("int32")]);
     let map_string_int = Type::Named(
-        "Map".to_string(),
-        vec![Type::named("String"), Type::named("int32")],
+        "dict".to_string(),
+        vec![Type::named("str"), Type::named("int32")],
     );
 
     let mut locals = HashMap::from([(
@@ -8170,9 +9187,9 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
             ),
             &mut locals,
         )
-        .expect_err("vector indices should stay integer-only in assignments")
+        .expect_err("list indices should stay integer-only in assignments")
         .message
-        .contains("vector indices must have type `int32`"));
+        .contains("list indices must have type `int64` or a losslessly narrower integer type"));
 
     let mut locals = HashMap::from([(
         "scores".to_string(),
@@ -8206,7 +9223,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
     let mut locals = HashMap::from([(
         "text".to_string(),
         local_binding(
-            Type::named("String"),
+            Type::named("str"),
             true,
             true,
             ReceiverKind::Value,
@@ -8230,7 +9247,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
         )
         .expect_err("non-indexable assignment targets should fail")
         .message
-        .contains("cannot index non-Array, vector, or map value"));
+        .contains("cannot index non-Array, list, or dict value"));
 
     let mut locals = HashMap::from([(
         "nums".to_string(),
@@ -8252,7 +9269,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
         )
         .expect_err("indexed assignment types should match")
         .message
-        .contains("cannot assign value of type `String` to indexed element of type `int32`"));
+        .contains("cannot assign value of type `str` to indexed element of type `int32`"));
 
     let mut locals = HashMap::from([(
         "counter".to_string(),
@@ -8423,7 +9440,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
             &assign_stmt(
                 AssignTarget::Name("typed".to_string()),
                 false,
-                Some(type_ref("String")),
+                Some(type_ref("str")),
                 None,
                 expr(ExprKind::Int(1)),
             ),
@@ -8431,7 +9448,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
         )
         .expect_err("reassignment annotations should match the existing type")
         .message
-        .contains("reassignment annotation for `typed` has type `String`, expected `int32`"));
+        .contains("reassignment annotation for `typed` has type `str`, expected `int32`"));
 
     let mut locals = HashMap::from([(
         "typed".to_string(),
@@ -8480,7 +9497,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
             &assign_stmt(
                 AssignTarget::Name("fresh".to_string()),
                 false,
-                Some(type_ref("String")),
+                Some(type_ref("str")),
                 None,
                 expr(ExprKind::Int(1)),
             ),
@@ -8488,7 +9505,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
         )
         .expect_err("new bindings should honor their annotations")
         .message
-        .contains("binding `fresh` has annotated type `String`, but value has type `int64`"));
+        .contains("binding `fresh` has annotated type `str`, but value has type `int64`"));
     checker
         .check_assign(
             &assign_stmt(
@@ -8534,9 +9551,9 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
             &mut locals,
         )
         .expect_err("member assignments should enforce field types");
-    assert!(member_type_mismatch.message.contains(
-        "cannot assign value of type `String` to member `counter.value` of type `int32`"
-    ));
+    assert!(member_type_mismatch
+        .message
+        .contains("cannot assign value of type `str` to member `counter.value` of type `int32`"));
 }
 
 #[test]
@@ -8582,12 +9599,12 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         &module_registry,
     );
     let span = Span::new(1, 1);
-    let channel_string = Type::Named("Queue".to_string(), vec![Type::named("String")]);
+    let channel_string = Type::Named("Queue".to_string(), vec![Type::named("str")]);
     let mut locals = HashMap::from([
         (
             "text".to_string(),
             local_binding(
-                Type::named("String"),
+                Type::named("str"),
                 true,
                 true,
                 ReceiverKind::Value,
@@ -8610,7 +9627,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
             "tasks".to_string(),
             local_binding(
                 Type::Named(
-                    "Vec".to_string(),
+                    "list".to_string(),
                     vec![Type::Named("Task".to_string(), vec![Type::named("int32")])],
                 ),
                 true,
@@ -8623,7 +9640,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         (
             "numbers".to_string(),
             local_binding(
-                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                Type::Named("list".to_string(), vec![Type::named("int32")]),
                 true,
                 true,
                 ReceiverKind::Value,
@@ -8634,7 +9651,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         (
             "generic_tasks".to_string(),
             local_binding(
-                Type::Named("Vec".to_string(), vec![Type::TypeParam("T".to_string())]),
+                Type::Named("list".to_string(), vec![Type::TypeParam("T".to_string())]),
                 true,
                 true,
                 ReceiverKind::Value,
@@ -8662,7 +9679,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         .type_of_call(
             &expr(ExprKind::Specialize {
                 expr: Box::new(expr(ExprKind::Name("Queue".to_string()))),
-                type_args: vec![type_ref("String"), type_ref("int32")],
+                type_args: vec![type_ref("str"), type_ref("int32")],
             }),
             &[],
             span,
@@ -8676,7 +9693,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         .type_of_call(
             &expr(ExprKind::Specialize {
                 expr: Box::new(expr(ExprKind::Name("Queue".to_string()))),
-                type_args: vec![type_ref("String")],
+                type_args: vec![type_ref("str")],
             }),
             &[named_arg(
                 "capacity",
@@ -8694,7 +9711,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
             .type_of_call(
                 &expr(ExprKind::Specialize {
                     expr: Box::new(expr(ExprKind::Name("Queue".to_string()))),
-                    type_args: vec![type_ref("String")],
+                    type_args: vec![type_ref("str")],
                 }),
                 &[named_arg("capacity", expr(ExprKind::Int(4)))],
                 span,
@@ -8707,13 +9724,13 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
 
     for (name, type_args, expected_fragment) in [
         (
-            "Vec",
-            vec![type_ref("int32"), type_ref("String")],
+            "list",
+            vec![type_ref("int32"), type_ref("str")],
             "expects exactly one type argument",
         ),
         (
-            "Set",
-            vec![type_ref("int32"), type_ref("String")],
+            "set",
+            vec![type_ref("int32"), type_ref("str")],
             "expects exactly one type argument",
         ),
     ] {
@@ -8735,7 +9752,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Specialize {
-                expr: Box::new(expr(ExprKind::Name("Vec".to_string()))),
+                expr: Box::new(expr(ExprKind::Name("list".to_string()))),
                 type_args: vec![type_ref("int32")],
             }),
             &[arg(expr(ExprKind::Int(1)))],
@@ -8749,7 +9766,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Specialize {
-                expr: Box::new(expr(ExprKind::Name("Set".to_string()))),
+                expr: Box::new(expr(ExprKind::Name("set".to_string()))),
                 type_args: vec![type_ref("int32")],
             }),
             &[arg(expr(ExprKind::Int(1)))],
@@ -8763,8 +9780,8 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Specialize {
-                expr: Box::new(expr(ExprKind::Name("Map".to_string()))),
-                type_args: vec![type_ref("String")],
+                expr: Box::new(expr(ExprKind::Name("dict".to_string()))),
+                type_args: vec![type_ref("str")],
             }),
             &[],
             span,
@@ -8777,8 +9794,8 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Specialize {
-                expr: Box::new(expr(ExprKind::Name("Map".to_string()))),
-                type_args: vec![type_ref("String"), type_ref("int32")],
+                expr: Box::new(expr(ExprKind::Name("dict".to_string()))),
+                type_args: vec![type_ref("str"), type_ref("int32")],
             }),
             &[named_arg("value", expr(ExprKind::Int(1)))],
             span,
@@ -8827,7 +9844,9 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         )
         .expect_err("range arguments stay int32-only")
         .message
-        .contains("`range` arguments must have type `int32`"));
+        .contains(
+            "`range` arguments must have type `int64` or a losslessly narrower integer type"
+        ));
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Name("wait_any".to_string())),
@@ -8836,9 +9855,9 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
             &mut locals,
             None,
         )
-        .expect_err("wait_any() requires a Vec[Task[T]]")
+        .expect_err("wait_any() requires a list[Task[T]]")
         .message
-        .contains("expects `Vec[Task[T]]`"));
+        .contains("expects `list[Task[T]]`"));
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Name("wait_any".to_string())),
@@ -8847,9 +9866,9 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
             &mut locals,
             None,
         )
-        .expect_err("wait_any() requires Vec rather than Queue")
+        .expect_err("wait_any() requires list rather than Queue")
         .message
-        .contains("expects `Vec[Task[T]]`"));
+        .contains("expects `list[Task[T]]`"));
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Name("wait_any".to_string())),
@@ -8858,9 +9877,9 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
             &mut locals,
             None,
         )
-        .expect_err("wait_any() requires Vec[Task[T]], not Vec[T]")
+        .expect_err("wait_any() requires list[Task[T]], not list[T]")
         .message
-        .contains("expects `Vec[Task[T]]`"));
+        .contains("expects `list[Task[T]]`"));
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Name("wait_any".to_string())),
@@ -8871,7 +9890,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         )
         .expect_err("wait_any() requires task elements")
         .message
-        .contains("expects `Vec[Task[T]]`"));
+        .contains("expects `list[Task[T]]`"));
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Name("wait_all".to_string())),
@@ -8955,7 +9974,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
             )
             .expect_err("parse helpers stay string-only")
             .message
-            .contains("expects `String`"));
+            .contains("expects `str`"));
     }
 
     assert_eq!(
@@ -9022,7 +10041,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         .type_of_call(
             &expr(ExprKind::Specialize {
                 expr: Box::new(expr(ExprKind::Name("Box".to_string()))),
-                type_args: vec![type_ref("String")],
+                type_args: vec![type_ref("str")],
             }),
             &[named_arg("value", expr(ExprKind::Int(1)))],
             span,
@@ -9031,7 +10050,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         )
         .expect_err("explicit generic constructors should honor their field type")
         .message
-        .contains("field `value` expects `String`, found `int64`"));
+        .contains("field `value` expects `str`, found `int64`"));
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Name("Phantom".to_string())),
@@ -9057,7 +10076,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         )
         .expect_err("min should reject non-numeric matching arguments")
         .message
-        .contains("`min` expects numeric arguments, found `String`"));
+        .contains("`min` expects numeric arguments, found `str`"));
 }
 
 #[test]
@@ -9074,7 +10093,7 @@ def main() -> None:
     .expect_err("ordinary callable arguments should enforce declared parameter types");
 
     assert!(error.message.contains(
-        "argument type mismatch for function `takes_count`: expected `int32`, found `String`"
+        "argument type mismatch for function `takes_count`: expected `int32`, found `str`"
     ));
 }
 
@@ -9618,13 +10637,13 @@ fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
         &module_registry,
     );
     let span = Span::new(1, 1);
-    let string_ty = Type::named("String");
-    let vec_string = Type::Named("Vec".to_string(), vec![string_ty.clone()]);
+    let string_ty = Type::named("str");
+    let vec_string = Type::Named("list".to_string(), vec![string_ty.clone()]);
     let map_string = Type::Named(
-        "Map".to_string(),
+        "dict".to_string(),
         vec![string_ty.clone(), string_ty.clone()],
     );
-    let set_string = Type::Named("Set".to_string(), vec![string_ty.clone()]);
+    let set_string = Type::Named("set".to_string(), vec![string_ty.clone()]);
     let channel_string = Type::Named("Queue".to_string(), vec![string_ty.clone()]);
     let mut locals = HashMap::from([
         (
@@ -9717,9 +10736,9 @@ fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
             &mut locals,
             None,
         )
-        .expect_err("join() expects Vec[String]")
+        .expect_err("join() expects list[str]")
         .message
-        .contains("`join` expects `Vec[String]`"));
+        .contains("`join` expects `list[str]`"));
     assert_eq!(
         checker
             .type_of_call(
@@ -9732,7 +10751,7 @@ fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
                 &mut locals,
                 None,
             )
-            .expect("join() should accept Vec[String]"),
+            .expect("join() should accept list[str]"),
         string_ty
     );
     assert!(checker
@@ -9746,9 +10765,9 @@ fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
             &mut locals,
             None,
         )
-        .expect_err("strip_prefix() expects String")
+        .expect_err("strip_prefix() expects str")
         .message
-        .contains("expects `String`"));
+        .contains("expects `str`"));
 
     assert!(checker
         .type_of_call(
@@ -9763,76 +10782,7 @@ fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
         )
         .expect_err("map.get() should enforce key type")
         .message
-        .contains("`get` expects `String`"));
-    assert!(checker
-        .type_of_call(
-            &expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
-                field: "set".to_string(),
-            }),
-            &[
-                named_arg("key", expr(ExprKind::String("name".to_string()))),
-                named_arg("value", expr(ExprKind::String("aura".to_string()))),
-            ],
-            span,
-            &mut locals,
-            None,
-        )
-        .expect_err("map.set() requires a mutable receiver")
-        .message
-        .contains("requires a mutable receiver"));
-    assert!(checker
-        .type_of_call(
-            &expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("mutable_mapping".to_string()))),
-                field: "set".to_string(),
-            }),
-            &[
-                named_arg("key", expr(ExprKind::Int(1))),
-                named_arg("value", expr(ExprKind::String("aura".to_string()))),
-            ],
-            span,
-            &mut locals,
-            None,
-        )
-        .expect_err("map.set() should enforce key types")
-        .message
-        .contains("expects key type `String`"));
-    assert!(checker
-        .type_of_call(
-            &expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("mutable_mapping".to_string()))),
-                field: "set".to_string(),
-            }),
-            &[
-                named_arg("key", expr(ExprKind::String("name".to_string()))),
-                named_arg("value", expr(ExprKind::Int(1))),
-            ],
-            span,
-            &mut locals,
-            None,
-        )
-        .expect_err("map.set() should enforce value types")
-        .message
-        .contains("expects value type `String`"));
-    assert_eq!(
-        checker
-            .type_of_call(
-                &expr(ExprKind::Member {
-                    object: Box::new(expr(ExprKind::Name("mutable_mapping".to_string()))),
-                    field: "set".to_string(),
-                }),
-                &[
-                    named_arg("key", expr(ExprKind::Name("text".to_string()))),
-                    named_arg("value", expr(ExprKind::String("aura".to_string()))),
-                ],
-                span,
-                &mut locals,
-                None,
-            )
-            .expect("map.set() should type check on mutable maps"),
-        Type::Named("Option".to_string(), vec![string_ty.clone()])
-    );
+        .contains("`get` expects `str`"));
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Member {
@@ -9846,21 +10796,7 @@ fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
         )
         .expect_err("map.remove() should enforce key types")
         .message
-        .contains("`remove` expects `String`"));
-    assert!(checker
-        .type_of_call(
-            &expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
-                field: "contains_key".to_string(),
-            }),
-            &[arg(expr(ExprKind::Int(1)))],
-            span,
-            &mut locals,
-            None,
-        )
-        .expect_err("map.contains_key() should enforce key types")
-        .message
-        .contains("`contains_key` expects `String`"));
+        .contains("`remove` expects `str`"));
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Member {
@@ -9879,59 +10815,45 @@ fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
         .type_of_call(
             &expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("mutable_mapping".to_string()))),
-                field: "extend".to_string(),
+                field: "update".to_string(),
             }),
             &[arg(expr(ExprKind::Int(1)))],
             span,
             &mut locals,
             None,
         )
-        .expect_err("map.extend() should enforce map types")
+        .expect_err("dict.update() should enforce dict types")
         .message
-        .contains("`extend` expects `Map[String, String]`"));
+        .contains("`update` expects `dict[str, str]`"));
 
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("items".to_string()))),
-                field: "contains".to_string(),
-            }),
-            &[arg(expr(ExprKind::Int(1)))],
-            span,
-            &mut locals,
-            None,
-        )
-        .expect_err("set.contains() should enforce element types")
-        .message
-        .contains("`contains` expects `String`"));
-    assert!(checker
-        .type_of_call(
-            &expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("items".to_string()))),
-                field: "insert".to_string(),
+                field: "add".to_string(),
             }),
             &[arg(expr(ExprKind::String("aura".to_string())))],
             span,
             &mut locals,
             None,
         )
-        .expect_err("set.insert() requires a mutable receiver")
+        .expect_err("set.add() requires a mutable receiver")
         .message
         .contains("requires a mutable receiver"));
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("mutable_items".to_string()))),
-                field: "insert".to_string(),
+                field: "add".to_string(),
             }),
             &[arg(expr(ExprKind::Int(1)))],
             span,
             &mut locals,
             None,
         )
-        .expect_err("set.insert() should enforce element types")
+        .expect_err("set.add() should enforce element types")
         .message
-        .contains("`insert` expects `String`"));
+        .contains("`add` expects `str`"));
     assert_eq!(
         checker
             .type_of_call(
@@ -9945,7 +10867,7 @@ fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
                 None,
             )
             .expect("set.remove() should type check on mutable sets"),
-        Type::named("bool")
+        Type::Unit
     );
 
     assert!(checker
@@ -9961,7 +10883,7 @@ fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
         )
         .expect_err("channel.put() should enforce payload types")
         .message
-        .contains("`put` expects `String`"));
+        .contains("`put` expects `str`"));
 }
 
 #[test]
@@ -9987,20 +10909,20 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         &module_registry,
     );
     let span = Span::new(1, 1);
-    let string_ty = Type::named("String");
+    let string_ty = Type::named("str");
     let int_ty = Type::named("int32");
     let count_ty = Type::named("int64");
     let float_ty = Type::named("float64");
     let bool_ty = Type::named("bool");
-    let vec_int = Type::Named("Vec".to_string(), vec![int_ty.clone()]);
-    let vec_bool = Type::Named("Vec".to_string(), vec![bool_ty.clone()]);
-    let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+    let vec_int = Type::Named("list".to_string(), vec![int_ty.clone()]);
+    let vec_bool = Type::Named("list".to_string(), vec![bool_ty.clone()]);
+    let bytes_ty = Type::Named("list".to_string(), vec![Type::named("uint8")]);
     let headers_ty = Type::Named(
-        "Map".to_string(),
+        "dict".to_string(),
         vec![string_ty.clone(), string_ty.clone()],
     );
-    let map_ty = Type::Named("Map".to_string(), vec![string_ty.clone(), int_ty.clone()]);
-    let set_ty = Type::Named("Set".to_string(), vec![string_ty.clone()]);
+    let map_ty = Type::Named("dict".to_string(), vec![string_ty.clone(), int_ty.clone()]);
+    let set_ty = Type::Named("set".to_string(), vec![string_ty.clone()]);
     let channel_ty = Type::Named("Queue".to_string(), vec![string_ty.clone()]);
     let task_ty = Type::Named("Task".to_string(), vec![int_ty.clone()]);
     let result_ty = |ok: Type| {
@@ -10213,7 +11135,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "split".to_string(),
             }),
             vec![arg(expr(ExprKind::String(",".to_string())))],
-            Type::Named("Vec".to_string(), vec![string_ty.clone()]),
+            Type::Named("list".to_string(), vec![string_ty.clone()]),
         ),
         (
             expr(ExprKind::Member {
@@ -10328,7 +11250,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("values".to_string()))),
-                field: "clone".to_string(),
+                field: "copy".to_string(),
             }),
             Vec::new(),
             vec_int.clone(),
@@ -10336,7 +11258,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("values".to_string()))),
-                field: "push".to_string(),
+                field: "append".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
             Type::Unit,
@@ -10347,7 +11269,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "pop".to_string(),
             }),
             Vec::new(),
-            Type::Named("Option".to_string(), vec![int_ty.clone()]),
+            int_ty.clone(),
         ),
         (
             expr(ExprKind::Member {
@@ -10366,7 +11288,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 named_arg("index", expr(ExprKind::Int(0))),
                 named_arg("value", expr(ExprKind::Int(9))),
             ],
-            Type::Named("Option".to_string(), vec![int_ty.clone()]),
+            int_ty.clone(),
         ),
         (
             expr(ExprKind::Member {
@@ -10382,7 +11304,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "remove".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(0)))],
-            Type::Named("Option".to_string(), vec![int_ty.clone()]),
+            Type::Unit,
         ),
         (
             expr(ExprKind::Member {
@@ -10390,7 +11312,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "swap".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(0))), arg(expr(ExprKind::Int(1)))],
-            bool_ty.clone(),
+            Type::Unit,
         ),
         (
             expr(ExprKind::Member {
@@ -10406,7 +11328,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "insert".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(0))), arg(expr(ExprKind::Int(9)))],
-            bool_ty.clone(),
+            Type::Unit,
         ),
         (
             expr(ExprKind::Member {
@@ -10443,7 +11365,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
-                field: "clone".to_string(),
+                field: "copy".to_string(),
             }),
             Vec::new(),
             map_ty.clone(),
@@ -10454,17 +11376,6 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "get".to_string(),
             }),
             vec![arg(expr(ExprKind::String("count".to_string())))],
-            Type::Named("Option".to_string(), vec![int_ty.clone()]),
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
-                field: "set".to_string(),
-            }),
-            vec![
-                arg(expr(ExprKind::String("count".to_string()))),
-                arg(expr(ExprKind::Int(1))),
-            ],
             Type::Named("Option".to_string(), vec![int_ty.clone()]),
         ),
         (
@@ -10481,7 +11392,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "keys".to_string(),
             }),
             Vec::new(),
-            Type::Named("Vec".to_string(), vec![string_ty.clone()]),
+            Type::Named("list".to_string(), vec![string_ty.clone()]),
         ),
         (
             expr(ExprKind::Member {
@@ -10489,7 +11400,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "values".to_string(),
             }),
             Vec::new(),
-            Type::Named("Vec".to_string(), vec![int_ty.clone()]),
+            Type::Named("list".to_string(), vec![int_ty.clone()]),
         ),
         (
             expr(ExprKind::Member {
@@ -10498,34 +11409,9 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             }),
             Vec::new(),
             Type::Named(
-                "Vec".to_string(),
-                vec![Type::Named(
-                    "MapEntry".to_string(),
-                    vec![string_ty.clone(), int_ty.clone()],
-                )],
+                "list".to_string(),
+                vec![Type::Tuple(vec![string_ty.clone(), int_ty.clone()])],
             ),
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
-                field: "entries".to_string(),
-            }),
-            Vec::new(),
-            Type::Named(
-                "Vec".to_string(),
-                vec![Type::Named(
-                    "MapEntry".to_string(),
-                    vec![string_ty.clone(), int_ty.clone()],
-                )],
-            ),
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
-                field: "contains_key".to_string(),
-            }),
-            vec![arg(expr(ExprKind::String("name".to_string())))],
-            bool_ty.clone(),
         ),
         (
             expr(ExprKind::Member {
@@ -10538,7 +11424,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
-                field: "extend".to_string(),
+                field: "update".to_string(),
             }),
             vec![arg(expr(ExprKind::Map(vec![MapEntryExpr {
                 key: expr(ExprKind::String("next".to_string())),
@@ -10565,15 +11451,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("items".to_string()))),
-                field: "contains".to_string(),
-            }),
-            vec![arg(expr(ExprKind::String("name".to_string())))],
-            bool_ty.clone(),
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("items".to_string()))),
-                field: "clone".to_string(),
+                field: "copy".to_string(),
             }),
             Vec::new(),
             set_ty.clone(),
@@ -10581,10 +11459,10 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("items".to_string()))),
-                field: "insert".to_string(),
+                field: "add".to_string(),
             }),
             vec![arg(expr(ExprKind::String("name".to_string())))],
-            bool_ty.clone(),
+            Type::Unit,
         ),
         (
             expr(ExprKind::Member {
@@ -10592,7 +11470,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "remove".to_string(),
             }),
             vec![arg(expr(ExprKind::String("name".to_string())))],
-            bool_ty.clone(),
+            Type::Unit,
         ),
         (
             expr(ExprKind::Member {
@@ -11480,7 +12358,8 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             checker
                 .type_of_call(&callee, &args, span, &mut locals, None)
                 .expect("member call should type check"),
-            expected
+            expected,
+            "{callee:?}"
         );
     }
 
@@ -11502,7 +12381,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "try_put".to_string(),
             }),
             vec![arg(expr(ExprKind::Bool(true)))],
-            "`try_put` expects `String`, found `bool`",
+            "`try_put` expects `str`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -11537,7 +12416,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "get_or".to_string(),
             }),
             vec![arg(expr(ExprKind::Bool(true)))],
-            "`get_or` expects `String`, found `bool`",
+            "`get_or` expects `str`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -11628,7 +12507,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_bytes".to_string(),
             }),
             vec![arg(expr(ExprKind::String("bad".to_string())))],
-            "`read_bytes` expects `int32`, found `String`",
+            "`read_bytes` expects `int32`, found `str`",
         ),
         (
             expr(ExprKind::Member {
@@ -11644,7 +12523,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "write_all".to_string(),
             }),
             vec![arg(expr(ExprKind::Bool(true)))],
-            "`write_all` expects `String`, found `bool`",
+            "`write_all` expects `str`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -11663,7 +12542,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "write_bytes".to_string(),
             }),
             vec![arg(expr(ExprKind::Name("bad_bytes".to_string())))],
-            "`write_bytes` expects `Vec[uint8]`, found `Vec[bool]`",
+            "`write_bytes` expects `list[uint8]`, found `list[bool]`",
         ),
         (
             expr(ExprKind::Member {
@@ -11684,7 +12563,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                     "/bin/echo".to_string(),
                 ))]))),
             ],
-            "`start` expects `String`, found `bool`",
+            "`start` expects `str`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -11695,7 +12574,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::String("svc".to_string()))),
                 arg(expr(ExprKind::Bool(true))),
             ],
-            "`start` expects `Vec[String]`, found `bool`",
+            "`start` expects `list[str]`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -11709,7 +12588,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 ))]))),
                 named_arg("cwd", expr(ExprKind::Bool(true))),
             ],
-            "`start` expects `Option[String]`, found `bool`",
+            "`start` expects `Option[str]`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -11723,7 +12602,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 ))]))),
                 named_arg("env", expr(ExprKind::Bool(true))),
             ],
-            "`start` expects `Map[String, String]`, found `bool`",
+            "`start` expects `dict[str, str]`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -11839,7 +12718,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "write_all".to_string(),
             }),
             vec![arg(expr(ExprKind::Bool(true)))],
-            "`write_all` expects `String`, found `bool`",
+            "`write_all` expects `str`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -11847,7 +12726,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "write_all".to_string(),
             }),
             vec![arg(expr(ExprKind::Bool(true)))],
-            "`write_all` expects `String`, found `bool`",
+            "`write_all` expects `str`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -11855,7 +12734,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "write_bytes".to_string(),
             }),
             vec![arg(expr(ExprKind::Name("bad_bytes".to_string())))],
-            "`write_bytes` expects `Vec[uint8]`, found `Vec[bool]`",
+            "`write_bytes` expects `list[uint8]`, found `list[bool]`",
         ),
         (
             expr(ExprKind::Member {
@@ -11863,7 +12742,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "split".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`split` expects `String`, found `int64`",
+            "`split` expects `str`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -11871,7 +12750,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "strip_prefix".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`strip_prefix` expects `String`, found `int64`",
+            "`strip_prefix` expects `str`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -11879,26 +12758,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "get".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`get` expects `String`, found `int64`",
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
-                field: "set".to_string(),
-            }),
-            vec![arg(expr(ExprKind::Int(1))), arg(expr(ExprKind::Int(2)))],
-            "`set` expects key type `String`, found `int64`",
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
-                field: "set".to_string(),
-            }),
-            vec![
-                arg(expr(ExprKind::String("count".to_string()))),
-                arg(expr(ExprKind::Bool(true))),
-            ],
-            "`set` expects value type `int32`, found `bool`",
+            "`get` expects `str`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -11906,39 +12766,23 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "remove".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`remove` expects `String`, found `int64`",
+            "`remove` expects `str`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
-                field: "contains_key".to_string(),
-            }),
-            vec![arg(expr(ExprKind::Int(1)))],
-            "`contains_key` expects `String`, found `int64`",
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
-                field: "extend".to_string(),
+                field: "update".to_string(),
             }),
             vec![arg(expr(ExprKind::Bool(true)))],
-            "`extend` expects `Map[String, int32]`, found `bool`",
+            "`update` expects `dict[str, int32]`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("items".to_string()))),
-                field: "contains".to_string(),
+                field: "add".to_string(),
             }),
             vec![arg(expr(ExprKind::Bool(true)))],
-            "`contains` expects `String`, found `bool`",
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("items".to_string()))),
-                field: "insert".to_string(),
-            }),
-            vec![arg(expr(ExprKind::Bool(true)))],
-            "`insert` expects `String`, found `bool`",
+            "`add` expects `str`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -11946,7 +12790,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "remove".to_string(),
             }),
             vec![arg(expr(ExprKind::Bool(true)))],
-            "`remove` expects `String`, found `bool`",
+            "`remove` expects `str`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -11954,7 +12798,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_bytes".to_string(),
             }),
             vec![arg(expr(ExprKind::String("bad".to_string())))],
-            "`read_bytes` expects `int32`, found `String`",
+            "`read_bytes` expects `int32`, found `str`",
         ),
         (
             expr(ExprKind::Member {
@@ -11986,7 +12830,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_exact".to_string(),
             }),
             vec![arg(expr(ExprKind::String("bad".to_string())))],
-            "`read_exact` expects `int32`, found `String`",
+            "`read_exact` expects `int32`, found `str`",
         ),
         (
             expr(ExprKind::Member {
@@ -12013,7 +12857,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "write_bytes".to_string(),
             }),
             vec![arg(expr(ExprKind::Name("bad_bytes".to_string())))],
-            "`write_bytes` expects `Vec[uint8]`, found `Vec[bool]`",
+            "`write_bytes` expects `list[uint8]`, found `list[bool]`",
         ),
         (
             expr(ExprKind::Member {
@@ -12032,7 +12876,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::Int(1))),
                 arg(expr(ExprKind::String("ok".to_string()))),
             ],
-            "`send_text` expects `String`, found `int64`",
+            "`send_text` expects `str`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -12043,7 +12887,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::String("127.0.0.1:9".to_string()))),
                 arg(expr(ExprKind::Bool(true))),
             ],
-            "`send_text` expects `String`, found `bool`",
+            "`send_text` expects `str`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -12063,7 +12907,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "send_bytes".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1))), arg(bytes_expr())],
-            "`send_bytes` expects `String`, found `int64`",
+            "`send_bytes` expects `str`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -12074,7 +12918,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::String("127.0.0.1:9".to_string()))),
                 arg(expr(ExprKind::Name("bad_bytes".to_string()))),
             ],
-            "`send_bytes` expects `Vec[uint8]`, found `Vec[bool]`",
+            "`send_bytes` expects `list[uint8]`, found `list[bool]`",
         ),
         (
             expr(ExprKind::Member {
@@ -12094,7 +12938,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "recv".to_string(),
             }),
             vec![arg(expr(ExprKind::String("bad".to_string())))],
-            "`recv` expects `int32`, found `String`",
+            "`recv` expects `int32`, found `str`",
         ),
         (
             expr(ExprKind::Member {
@@ -12110,7 +12954,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "recv_from".to_string(),
             }),
             vec![arg(expr(ExprKind::String("bad".to_string())))],
-            "`recv_from` expects `int32`, found `String`",
+            "`recv_from` expects `int32`, found `str`",
         ),
         (
             expr(ExprKind::Member {
@@ -12150,7 +12994,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::Bool(true))),
                 arg(headers_expr()),
             ],
-            "`respond_text` expects `String`, found `bool`",
+            "`respond_text` expects `str`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -12162,7 +13006,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::String("ok".to_string()))),
                 arg(expr(ExprKind::Bool(true))),
             ],
-            "`respond_text` expects `Map[String, String]`, found `bool`",
+            "`respond_text` expects `dict[str, str]`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -12186,7 +13030,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::Name("bad_bytes".to_string()))),
                 arg(headers_expr()),
             ],
-            "`respond_bytes` expects `Vec[uint8]`, found `Vec[bool]`",
+            "`respond_bytes` expects `list[uint8]`, found `list[bool]`",
         ),
         (
             expr(ExprKind::Member {
@@ -12198,7 +13042,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(bytes_expr()),
                 arg(expr(ExprKind::Bool(true))),
             ],
-            "`respond_bytes` expects `Map[String, String]`, found `bool`",
+            "`respond_bytes` expects `dict[str, str]`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -12214,7 +13058,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "send_text".to_string(),
             }),
             vec![arg(expr(ExprKind::Bool(true)))],
-            "`send_text` expects `String`, found `bool`",
+            "`send_text` expects `str`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -12233,7 +13077,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "send_bytes".to_string(),
             }),
             vec![arg(expr(ExprKind::Name("bad_bytes".to_string())))],
-            "`send_bytes` expects `Vec[uint8]`, found `Vec[bool]`",
+            "`send_bytes` expects `list[uint8]`, found `list[bool]`",
         ),
         (
             expr(ExprKind::Member {
@@ -12281,7 +13125,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_exact".to_string(),
             }),
             vec![arg(expr(ExprKind::String("bad".to_string())))],
-            "`read_exact` expects `int32`, found `String`",
+            "`read_exact` expects `int32`, found `str`",
         ),
         (
             expr(ExprKind::Member {
@@ -12297,7 +13141,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "write_all".to_string(),
             }),
             vec![arg(expr(ExprKind::Bool(true)))],
-            "`write_all` expects `String`, found `bool`",
+            "`write_all` expects `str`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -12332,7 +13176,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_exact".to_string(),
             }),
             vec![arg(expr(ExprKind::String("bad".to_string())))],
-            "`read_exact` expects `int32`, found `String`",
+            "`read_exact` expects `int32`, found `str`",
         ),
         (
             expr(ExprKind::Member {
@@ -12348,7 +13192,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "write_all".to_string(),
             }),
             vec![arg(expr(ExprKind::Bool(true)))],
-            "`write_all` expects `String`, found `bool`",
+            "`write_all` expects `str`, found `bool`",
         ),
         (
             expr(ExprKind::Member {
@@ -12390,10 +13234,10 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
     }
 
     for field in [
-        "push", "pop", "set", "remove", "swap", "extend", "insert", "clear", "reverse",
+        "append", "pop", "set", "remove", "swap", "extend", "insert", "clear", "reverse",
     ] {
         let args = match field {
-            "push" => vec![arg(expr(ExprKind::Int(1)))],
+            "append" => vec![arg(expr(ExprKind::Int(1)))],
             "pop" | "clear" | "reverse" => Vec::new(),
             "set" => vec![
                 named_arg("index", expr(ExprKind::Int(0))),
@@ -12432,9 +13276,9 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             &mut locals,
             None,
         )
-        .expect_err("vec.get() should enforce integer indices")
+        .expect_err("list.get() should enforce integer indices")
         .message
-        .contains("vector indices must have type `int32`"));
+        .contains("list indices must have type `int64` or a losslessly narrower integer type"));
 
     assert!(checker
         .type_of_call(
@@ -12450,9 +13294,9 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             &mut locals,
             None,
         )
-        .expect_err("vec.set() should enforce integer indices")
+        .expect_err("list.set() should enforce integer indices")
         .message
-        .contains("vector indices must have type `int32`"));
+        .contains("list indices must have type `int64` or a losslessly narrower integer type"));
 
     assert!(checker
         .type_of_call(
@@ -12468,7 +13312,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             &mut locals,
             None,
         )
-        .expect_err("vec.set() should enforce element types")
+        .expect_err("list.set() should enforce element types")
         .message
         .contains("`set` expects `int32`"));
 
@@ -12483,9 +13327,9 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             &mut locals,
             None,
         )
-        .expect_err("vec.remove() should enforce integer indices")
+        .expect_err("list.remove() should enforce element types")
         .message
-        .contains("vector indices must have type `int32`"));
+        .contains("`remove` expects `int32`"));
 
     assert!(checker
         .type_of_call(
@@ -12498,9 +13342,9 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             &mut locals,
             None,
         )
-        .expect_err("vec.swap() should enforce the first integer index")
+        .expect_err("list.swap() should enforce the first integer index")
         .message
-        .contains("vector indices must have type `int32`"));
+        .contains("list indices must have type `int64` or a losslessly narrower integer type"));
 
     assert!(checker
         .type_of_call(
@@ -12513,9 +13357,9 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             &mut locals,
             None,
         )
-        .expect_err("vec.swap() should enforce integer indices")
+        .expect_err("list.swap() should enforce integer indices")
         .message
-        .contains("vector indices must have type `int32`"));
+        .contains("list indices must have type `int64` or a losslessly narrower integer type"));
 
     assert!(checker
         .type_of_call(
@@ -12528,7 +13372,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             &mut locals,
             None,
         )
-        .expect_err("vec.contains() should enforce element types")
+        .expect_err("list.contains() should enforce element types")
         .message
         .contains("`contains` expects `int32`"));
 
@@ -12543,9 +13387,9 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             &mut locals,
             None,
         )
-        .expect_err("vec.extend() should enforce vector types")
+        .expect_err("list.extend() should enforce list types")
         .message
-        .contains("`extend` expects `Vec[int32]`"));
+        .contains("`extend` expects `list[int32]`"));
 
     assert!(checker
         .type_of_call(
@@ -12558,9 +13402,9 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             &mut locals,
             None,
         )
-        .expect_err("vec.insert() should enforce integer indices")
+        .expect_err("list.insert() should enforce integer indices")
         .message
-        .contains("vector indices must have type `int32`"));
+        .contains("list indices must have type `int64` or a losslessly narrower integer type"));
 
     assert!(checker
         .type_of_call(
@@ -12573,7 +13417,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             &mut locals,
             None,
         )
-        .expect_err("vec.insert() should enforce element types")
+        .expect_err("list.insert() should enforce element types")
         .message
         .contains("`insert` expects `int32`"));
 }
@@ -12594,7 +13438,7 @@ fn copy_and_type_classifier_helpers_cover_builtin_and_user_types() {
         ),
         (
             "Owned".to_string(),
-            class_info("Owned", false, vec![("name", Type::named("String"), false)]),
+            class_info("Owned", false, vec![("name", Type::named("str"), false)]),
         ),
     ]);
     let enums = BTreeMap::from([
@@ -12604,12 +13448,12 @@ fn copy_and_type_classifier_helpers_cover_builtin_and_user_types() {
         ),
         (
             "MaybeName".to_string(),
-            enum_info("MaybeName", Some(Type::named("String"))),
+            enum_info("MaybeName", Some(Type::named("str"))),
         ),
     ]);
 
     assert!(is_builtin_copy_named_type("int32", &[]));
-    assert!(!is_builtin_copy_named_type("String", &[]));
+    assert!(!is_builtin_copy_named_type("str", &[]));
     assert!(type_is_copy_in_context(
         &Type::named("Pair"),
         &classes,
@@ -12628,7 +13472,7 @@ fn copy_and_type_classifier_helpers_cover_builtin_and_user_types() {
     assert!(!type_is_copy_in_context(
         &Type::Named(
             "Result".to_string(),
-            vec![Type::named("int32"), Type::named("String")]
+            vec![Type::named("int32"), Type::named("str")]
         ),
         &classes,
         &enums,
@@ -12644,10 +13488,10 @@ fn copy_and_type_classifier_helpers_cover_builtin_and_user_types() {
         &enums
     ));
 
-    assert!(is_builtin_type("Vec"));
+    assert!(is_builtin_type("list"));
     assert!(is_integer_type(&Type::named("int64")));
     assert!(is_float_type(&Type::named("float64")));
-    assert!(is_string_type(&Type::named("String")));
+    assert!(is_string_type(&Type::named("str")));
     assert!(is_numeric_type(&Type::named("float32")));
     assert!(Type::Unit.is_copy());
     assert!(!Type::Module("pkg.tools".to_string()).is_copy());
@@ -12660,11 +13504,11 @@ fn copy_and_type_classifier_helpers_cover_builtin_and_user_types() {
     );
     assert_eq!(
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         )
         .to_string(),
-        "Map[String, int32]"
+        "dict[str, int32]"
     );
 }
 
@@ -12704,7 +13548,7 @@ fn sema_helper_edges_cover_copy_defaults_literal_patterns_and_module_members() {
         ("Flag".to_string(), enum_info("Flag", None)),
         (
             "Payload".to_string(),
-            enum_info("Payload", Some(Type::named("String"))),
+            enum_info("Payload", Some(Type::named("str"))),
         ),
     ]);
     assert!(!type_is_copy_in_context(
@@ -12972,10 +13816,10 @@ fn sema_render_and_builtin_enum_hint_helpers_cover_remaining_paths() {
     );
 
     assert_eq!(
-        set_element_type(&Type::Named("Set".to_string(), vec![Type::named("String")])),
-        Some(&Type::named("String"))
+        set_element_type(&Type::Named("set".to_string(), vec![Type::named("str")])),
+        Some(&Type::named("str"))
     );
-    assert_eq!(set_element_type(&Type::named("String")), None);
+    assert_eq!(set_element_type(&Type::named("str")), None);
 
     let option_name = expr(ExprKind::Name("Option".to_string()));
     let specialized_option = expr(ExprKind::Specialize {
@@ -13061,13 +13905,13 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
     let substitutions = checker
         .explicit_type_substitutions(
             &["T".to_string(), "U".to_string()],
-            &[type_ref("int32"), type_ref("String")],
+            &[type_ref("int32"), type_ref("str")],
             span,
             "Pair",
         )
         .expect("matching explicit type arguments should lower");
     assert_eq!(substitutions.get("T"), Some(&Type::named("int32")));
-    assert_eq!(substitutions.get("U"), Some(&Type::named("String")));
+    assert_eq!(substitutions.get("U"), Some(&Type::named("str")));
     let mismatch = checker
         .explicit_type_substitutions(
             &["T".to_string(), "U".to_string()],
@@ -13081,7 +13925,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
         .contains("Pair expects 2 type arguments, found 1"));
 
     checker
-        .validate_negative_integer_literal(7, &Type::named("String"), span)
+        .validate_negative_integer_literal(7, &Type::named("str"), span)
         .expect("non-integer targets should be ignored");
     let neg_overflow = checker
         .validate_negative_integer_literal(u128::MAX, &Type::named("int128"), span)
@@ -13126,7 +13970,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
     let mut borrowed_locals = HashMap::from([(
         "borrowed".to_string(),
         LocalBinding {
-            ty: Type::named("String"),
+            ty: Type::named("str"),
             assignable: true,
             mutable_place: false,
             managed_resource: false,
@@ -13154,7 +13998,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
     let mut moved_locals = HashMap::from([(
         "text".to_string(),
         LocalBinding {
-            ty: Type::named("String"),
+            ty: Type::named("str"),
             assignable: true,
             mutable_place: true,
             managed_resource: false,
@@ -13183,11 +14027,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
     let span = Span::new(1, 1);
     let classes = BTreeMap::from([(
         "Holder".to_string(),
-        class_info(
-            "Holder",
-            false,
-            vec![("text", Type::named("String"), false)],
-        ),
+        class_info("Holder", false, vec![("text", Type::named("str"), false)]),
     )]);
     let type_names = BTreeMap::from([("Holder".to_string(), span)]);
     let type_arities = BTreeMap::from([("Holder".to_string(), 0usize)]);
@@ -13214,7 +14054,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
         LocalBinding {
             managed_resource: true,
             ..local_binding(
-                Type::named("String"),
+                Type::named("str"),
                 true,
                 true,
                 ReceiverKind::Value,
@@ -13233,7 +14073,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
     let mut specialized_locals = HashMap::from([(
         "owned".to_string(),
         local_binding(
-            Type::named("String"),
+            Type::named("str"),
             true,
             true,
             ReceiverKind::Value,
@@ -13245,7 +14085,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
         .consume_value_expr(
             &expr(ExprKind::Specialize {
                 expr: Box::new(expr(ExprKind::Name("owned".to_string()))),
-                type_args: vec![type_ref("String")],
+                type_args: vec![type_ref("str")],
             }),
             &mut specialized_locals,
         )
@@ -13291,7 +14131,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
         (
             "owned".to_string(),
             local_binding(
-                Type::named("String"),
+                Type::named("str"),
                 true,
                 true,
                 ReceiverKind::Value,
@@ -13306,6 +14146,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
                 scrutinee: Box::new(expr(ExprKind::Name("flag".to_string()))),
                 capability: ReceiverKind::Borrow,
                 arms: vec![MatchExprArm {
+                    guard: None,
                     pattern: Pattern::Wildcard(span),
                     value: expr(ExprKind::Name("owned".to_string())),
                     span,
@@ -13424,7 +14265,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
             &HashMap::from([(
                 "outer".to_string(),
                 local_binding(
-                    Type::named("String"),
+                    Type::named("str"),
                     true,
                     true,
                     ReceiverKind::Value,
@@ -13442,7 +14283,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
 #[test]
 fn vec_literal_consumes_non_copy_elements_only_once() {
     crate::check_source(
-        "class Box:\n    value: int32\n\ndef main() -> int32:\n    b = Box(value=1)\n    values: Vec[Box] = [b]\n    return 0\n",
+        "class Box:\n    value: int32\n\ndef main() -> int32:\n    b = Box(value=1)\n    values: list[Box] = [b]\n    return 0\n",
     )
     .expect("Vec literals should accept the first move of a non-copy element");
 }
@@ -13513,8 +14354,8 @@ fn namespace_and_type_parameter_helpers_cover_registration_lookup_and_collection
 
     let mut collected = BTreeSet::new();
     collect_type_ref_type_params(
-        &nested_type_ref("Vec", vec![nested_type_ref("Boxed", vec![type_ref("T")])]),
-        &BTreeMap::from([("Vec".to_string(), Span::new(1, 1))]),
+        &nested_type_ref("list", vec![nested_type_ref("Boxed", vec![type_ref("T")])]),
+        &BTreeMap::from([("list".to_string(), Span::new(1, 1))]),
         &mut collected,
         false,
     );
@@ -13551,16 +14392,16 @@ fn default_argument_and_trait_bound_helpers_cover_nested_expression_cases() {
         ("Mapper".to_string(), trait_info("Mapper", vec!["T"])),
     ]);
     let type_names = BTreeMap::from([
-        ("String".to_string(), Span::new(1, 1)),
+        ("str".to_string(), Span::new(1, 1)),
         ("int32".to_string(), Span::new(1, 1)),
     ]);
-    let type_arities = BTreeMap::from([("String".to_string(), 0), ("int32".to_string(), 0)]);
+    let type_arities = BTreeMap::from([("str".to_string(), 0), ("int32".to_string(), 0)]);
     let lowered = lower_trait_bounds(
         &BTreeMap::from([(
             "T".to_string(),
             vec![
                 type_ref("Named"),
-                nested_type_ref("Mapper", vec![type_ref("String")]),
+                nested_type_ref("Mapper", vec![type_ref("str")]),
             ],
         )]),
         &traits,
@@ -13579,7 +14420,7 @@ fn default_argument_and_trait_bound_helpers_cover_nested_expression_cases() {
             },
             TraitBound {
                 trait_name: "Mapper".to_string(),
-                trait_args: vec![Type::named("String")],
+                trait_args: vec![Type::named("str")],
             },
         ])
     );
@@ -13615,8 +14456,8 @@ fn type_pattern_and_collection_helpers_cover_recursive_and_error_paths() {
 
     assert!(type_contains_named(
         &Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("Leaf")]
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("Leaf")]
         ),
         "Leaf"
     ));
@@ -13633,13 +14474,13 @@ fn type_pattern_and_collection_helpers_cover_recursive_and_error_paths() {
         &mut BTreeSet::new()
     ));
 
-    let substitutions = HashMap::from([("T".to_string(), Type::named("String"))]);
+    let substitutions = HashMap::from([("T".to_string(), Type::named("str"))]);
     assert_eq!(
         substitute_type(
-            &Type::Named("Vec".to_string(), vec![Type::TypeParam("T".to_string())]),
+            &Type::Named("list".to_string(), vec![Type::TypeParam("T".to_string())]),
             &substitutions,
         ),
-        Type::Named("Vec".to_string(), vec![Type::named("String")])
+        Type::Named("list".to_string(), vec![Type::named("str")])
     );
     let substituted_bounds = substitute_trait_bounds(
         &BTreeMap::from([(
@@ -13655,7 +14496,7 @@ fn type_pattern_and_collection_helpers_cover_recursive_and_error_paths() {
         substituted_bounds.get("T"),
         Some(&vec![TraitBound {
             trait_name: "Mapper".to_string(),
-            trait_args: vec![Type::named("String")],
+            trait_args: vec![Type::named("str")],
         }])
     );
 
@@ -13677,8 +14518,8 @@ fn type_pattern_and_collection_helpers_cover_recursive_and_error_paths() {
 
     let mut substitutions = HashMap::new();
     assert!(type_pattern_matches(
-        &Type::Named("Vec".to_string(), vec![Type::TypeParam("T".to_string())]),
-        &Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        &Type::Named("list".to_string(), vec![Type::TypeParam("T".to_string())]),
+        &Type::Named("list".to_string(), vec![Type::named("int32")]),
         &BTreeSet::from(["T".to_string()]),
         &mut substitutions,
     ));
@@ -13689,10 +14530,10 @@ fn type_pattern_and_collection_helpers_cover_recursive_and_error_paths() {
     assert_eq!(
         substitutions_from_decl_type_args(
             &["K".to_string(), "V".to_string()],
-            &[Type::named("String"), Type::named("int32")],
+            &[Type::named("str"), Type::named("int32")],
         ),
         HashMap::from([
-            ("K".to_string(), Type::named("String")),
+            ("K".to_string(), Type::named("str")),
             ("V".to_string(), Type::named("int32")),
         ])
     );
@@ -13700,24 +14541,24 @@ fn type_pattern_and_collection_helpers_cover_recursive_and_error_paths() {
     let mut unify = HashMap::new();
     unify_type_pattern(
         &Type::Named(
-            "Map".to_string(),
+            "dict".to_string(),
             vec![
                 Type::TypeParam("K".to_string()),
                 Type::TypeParam("V".to_string()),
             ],
         ),
         &Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         ),
         &mut unify,
     )
     .expect("type pattern should unify");
-    assert_eq!(unify.get("K"), Some(&Type::named("String")));
+    assert_eq!(unify.get("K"), Some(&Type::named("str")));
     assert_eq!(unify.get("V"), Some(&Type::named("int32")));
     let conflict = unify_type_pattern(
         &Type::TypeParam("T".to_string()),
-        &Type::named("String"),
+        &Type::named("str"),
         &mut HashMap::from([("T".to_string(), Type::named("int32"))]),
     )
     .expect_err("conflicting substitutions should fail");
@@ -13736,19 +14577,19 @@ fn type_pattern_and_collection_helpers_cover_recursive_and_error_paths() {
         "\"aura\""
     );
     assert_eq!(
-        vec_element_type(&Type::Named("Vec".to_string(), vec![Type::named("String")])),
-        Some(&Type::named("String"))
+        vec_element_type(&Type::Named("list".to_string(), vec![Type::named("str")])),
+        Some(&Type::named("str"))
     );
     assert_eq!(
-        set_element_type(&Type::Named("Set".to_string(), vec![Type::named("bool")])),
+        set_element_type(&Type::Named("set".to_string(), vec![Type::named("bool")])),
         Some(&Type::named("bool"))
     );
     assert_eq!(
         map_key_value_types(&Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         )),
-        Some((&Type::named("String"), &Type::named("int32")))
+        Some((&Type::named("str"), &Type::named("int32")))
     );
     assert!(place_path("counter.value").overlaps(&place_path("counter")));
     assert!(place_path("counter").overlaps(&place_path("counter.value")));
@@ -13783,10 +14624,10 @@ fn operator_trait_helpers_map_supported_operators() {
     assert_eq!(
         TraitBound {
             trait_name: "Mapper".to_string(),
-            trait_args: vec![Type::named("String")],
+            trait_args: vec![Type::named("str")],
         }
         .to_string(),
-        "Mapper[String]"
+        "Mapper[str]"
     );
 }
 
@@ -14013,7 +14854,7 @@ fn default_argument_reference_detection_walks_nested_expression_shapes() {
         default_argument_references_param(
             &expr(ExprKind::Specialize {
                 expr: Box::new(name_left.clone()),
-                type_args: vec![type_ref("String")],
+                type_args: vec![type_ref("str")],
             }),
             &params,
         ),
@@ -14075,6 +14916,7 @@ fn default_argument_reference_detection_walks_nested_expression_shapes() {
                 scrutinee: Box::new(unrelated.clone()),
                 capability: ReceiverKind::Borrow,
                 arms: vec![MatchExprArm {
+                    guard: None,
                     pattern: Pattern::Wildcard(Span::new(1, 1)),
                     value: name_right.clone(),
                     span: Span::new(1, 1),
@@ -14106,22 +14948,31 @@ fn reserved_type_names_are_rejected() {
     for source in [
         "class Task:\n    value: int32\n\ndef main():\n    pass\n",
         "enum Result:\n    Ok\n\ndef main():\n    pass\n",
-        "trait Queue:\n    def label(self) -> String\n\ndef main():\n    pass\n",
+        "trait Queue:\n    def label(self) -> str\n\ndef main():\n    pass\n",
     ] {
         let error = crate::check_source(source).expect_err("reserved built-in names should fail");
         assert!(error.message.contains("reserved built-in type name"));
     }
+
+    crate::check_source(
+        "class MapEntry:\n    key: int64\n\ndef main():\n    value = MapEntry(key=1)\n    print(value.key)\n",
+    )
+    .expect("a former helper name must be available as an ordinary user type");
+
+    let unknown = crate::check_source("def inspect(value: MapEntry[int64, str]):\n    pass\n")
+        .expect_err("a former helper type must receive the ordinary unknown-type diagnostic");
+    assert!(unknown.message.contains("unknown type `MapEntry`"));
 }
 
 #[test]
 fn check_reports_duplicate_type_params_across_top_level_item_kinds() {
     let cases = [
             (
-                "trait Box[T, T]:\n    def show(self) -> String\n\ndef main():\n    pass\n",
+                "trait Box[T, T]:\n    def show(self) -> str\n\ndef main():\n    pass\n",
                 "duplicate type parameter `T` on trait",
             ),
             (
-                "trait Box:\n    def show[T, T](self) -> String\n\ndef main():\n    pass\n",
+                "trait Box:\n    def show[T, T](self) -> str\n\ndef main():\n    pass\n",
                 "duplicate type parameter `T` on trait method",
             ),
             (
@@ -14133,7 +14984,7 @@ fn check_reports_duplicate_type_params_across_top_level_item_kinds() {
                 "duplicate type parameter `T` on class",
             ),
             (
-                "class Box:\n    def show[T, T](self) -> String:\n        return \"x\"\n\ndef main():\n    pass\n",
+                "class Box:\n    def show[T, T](self) -> str:\n        return \"x\"\n\ndef main():\n    pass\n",
                 "duplicate type parameter `T` on method",
             ),
             (
@@ -14141,7 +14992,7 @@ fn check_reports_duplicate_type_params_across_top_level_item_kinds() {
                 "duplicate type parameter `T` on function",
             ),
             (
-                "trait Show:\n    def show(self) -> String\n\nclass Box:\n    value: int32\n\nimpl[T, T] Show for Box:\n    def show(self) -> String:\n        return \"x\"\n\ndef main():\n    pass\n",
+                "trait Show:\n    def show(self) -> str\n\nclass Box:\n    value: int32\n\nimpl[T, T] Show for Box:\n    def show(self) -> str:\n        return \"x\"\n\ndef main():\n    pass\n",
                 "duplicate type parameter `T` on impl",
             ),
             (
@@ -14216,8 +15067,8 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
             &canonical_type_names,
             &type_params,
         )
-        .expect("str should canonicalize to String"),
-        Type::named("String")
+        .expect("str should canonicalize to str"),
+        Type::named("str")
     );
     assert_eq!(
         lower_type(
@@ -14232,7 +15083,7 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
     );
     assert_eq!(
         lower_type(
-            &nested_type_ref("Map", vec![type_ref("String"), type_ref("int32")]),
+            &nested_type_ref("dict", vec![type_ref("str"), type_ref("int32")]),
             &type_names,
             &type_arities,
             &canonical_type_names,
@@ -14240,8 +15091,8 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
         )
         .expect("Map should lower"),
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         )
     );
     assert_eq!(
@@ -14375,8 +15226,8 @@ fn lower_trait_bounds_reports_unknown_traits_and_arity_mismatches() {
         ("Named".to_string(), trait_info("Named", vec![])),
         ("Mapper".to_string(), trait_info("Mapper", vec!["T"])),
     ]);
-    let type_names = BTreeMap::from([("String".to_string(), Span::new(1, 1))]);
-    let type_arities = BTreeMap::from([("String".to_string(), 0usize)]);
+    let type_names = BTreeMap::from([("str".to_string(), Span::new(1, 1))]);
+    let type_arities = BTreeMap::from([("str".to_string(), 0usize)]);
     let scope = type_param_scope(&["T".to_string()]);
 
     let unknown = lower_trait_bounds(
@@ -14430,10 +15281,10 @@ fn lower_supertraits_reports_unknown_arity_and_lowers_self_args() {
         ("Mapper".to_string(), trait_info("Mapper", vec!["T"])),
     ]);
     let type_names = BTreeMap::from([
-        ("String".to_string(), Span::new(1, 1)),
+        ("str".to_string(), Span::new(1, 1)),
         ("Widget".to_string(), Span::new(1, 1)),
     ]);
-    let type_arities = BTreeMap::from([("String".to_string(), 0usize), ("Widget".to_string(), 0)]);
+    let type_arities = BTreeMap::from([("str".to_string(), 0usize), ("Widget".to_string(), 0)]);
     let scope = type_param_scope(&["T".to_string()]);
 
     let unknown = lower_supertraits(
@@ -14533,7 +15384,7 @@ fn function_signature_helper_constructor_is_used() {
 #[test]
 fn structured_wait_helpers_cover_valid_and_error_paths() {
     let valid = crate::check_source(
-            "def worker(value: int32) -> int32:\n    return value\n\ndef notify(value: int32):\n    print(value)\n\ndef main() -> int32:\n    jobs = Queue[int32]()\n    with TaskGroup() as group:\n        mut tasks = Vec[Task[int32]]()\n        tasks.push(group.start(worker, 1))\n        group.start_soon(notify, 2)\n        print(wait_any(tasks, timeout=1ms))\n        print(wait_all(tasks))\n    match jobs.get(timeout=1ms):\n        case QueueReceive.TimedOut:\n            pass\n        case _:\n            pass\n    return 0\n",
+            "def worker(value: int32) -> int32:\n    return value\n\ndef notify(value: int32):\n    print(value)\n\ndef main() -> int32:\n    jobs = Queue[int32]()\n    with TaskGroup() as group:\n        mut tasks = list[Task[int32]]()\n        tasks.append(group.start(worker, 1))\n        group.start_soon(notify, 2)\n        print(wait_any(tasks, timeout=1ms))\n        print(wait_all(tasks))\n    match jobs.get(timeout=1ms):\n        case QueueReceive.TimedOut:\n            pass\n        case _:\n            pass\n    return 0\n",
         )
         .expect("structured wait helpers should type check");
     assert!(valid.functions.contains_key("main"));
@@ -14541,10 +15392,10 @@ fn structured_wait_helpers_cover_valid_and_error_paths() {
     let wait_non_tasks =
         crate::check_source("def main() -> int32:\n    return wait_any(tasks=true)\n")
             .expect_err("wait_any should reject non-task vectors");
-    assert!(wait_non_tasks.message.contains("expects `Vec[Task[T]]`"));
+    assert!(wait_non_tasks.message.contains("expects `list[Task[T]]`"));
 
     let wait_timeout = crate::check_source(
-            "def worker(value: int32) -> int32:\n    return value\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        mut tasks = Vec[Task[int32]]()\n        tasks.push(group.start(worker, 1))\n        return wait_all(tasks, timeout=1)\n",
+            "def worker(value: int32) -> int32:\n    return value\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        mut tasks = list[Task[int32]]()\n        tasks.append(group.start(worker, 1))\n        return wait_all(tasks, timeout=1)\n",
         )
         .expect_err("wait_all timeout should require Duration");
     assert!(wait_timeout
@@ -14582,22 +15433,22 @@ def ready() -> int32:
     return 7
 
 def main():
-    jobs = Queue[String]()
+    jobs = Queue[str]()
     with TaskGroup() as group:
         task = group.start(ready)
         deadline_only: SelectOutcome[None, None] = select(1ms)
-        queue_only: SelectOutcome[String, None] = select(jobs)
+        queue_only: SelectOutcome[str, None] = select(jobs)
         task_only: SelectOutcome[None, int32] = select(task)
-        mixed: SelectOutcome[String, int32] = select(jobs, task, 1ms)
+        mixed: SelectOutcome[str, int32] = select(jobs, task, 1ms)
         match mixed:
             case SelectOutcome.Queue(index, outcome):
-                expected_index: int32 = index
-                expected_queue: QueueReceive[String] = outcome
+                expected_index: int64 = index
+                expected_queue: QueueReceive[str] = outcome
             case SelectOutcome.Task(index, outcome):
-                expected_index: int32 = index
+                expected_index: int64 = index
                 expected_task: TaskResult[int32] = outcome
             case SelectOutcome.Deadline(index):
-                expected_index: int32 = index
+                expected_index: int64 = index
             case SelectOutcome.Cancelled:
                 pass
 "#,
@@ -14641,7 +15492,7 @@ fn typed_select_rejects_invalid_call_shapes_and_inconsistent_sources() {
             "`select` sources must be `Queue[Q]`, `Task[T]`, or `Duration`",
         ),
         (
-            "def main():\n    left = Queue[int32]()\n    right = Queue[String]()\n    print(select(left, right))\n",
+            "def main():\n    left = Queue[int32]()\n    right = Queue[str]()\n    print(select(left, right))\n",
             "AU2002",
             "all Queue sources in one `select` call must have the same payload type",
         ),
@@ -14656,7 +15507,7 @@ fn typed_select_rejects_invalid_call_shapes_and_inconsistent_sources() {
 def number() -> int32:
     return 1
 
-def text() -> String:
+def text() -> str:
     return "one"
 
 def main():
@@ -14680,7 +15531,7 @@ fn typed_select_consumes_each_nonrepeatable_task_and_rejects_visible_duplicates(
     )
     .expect("recursively repeatable task sources may be duplicated and remain reusable");
 
-    let shared = crate::check_source("def observe(task: Task[String]):\n    print(select(task))\n")
+    let shared = crate::check_source("def observe(task: Task[str]):\n    print(select(task))\n")
         .expect_err("shared access cannot consume a non-repeatable task source");
     assert_eq!(shared.code, "AU3002");
     assert!(shared
@@ -14688,15 +15539,14 @@ fn typed_select_consumes_each_nonrepeatable_task_and_rejects_visible_duplicates(
         .contains("`select` consumes every non-repeatable Task source at call entry"));
 
     let moved = crate::check_source(
-        "def observe(task: own Task[String]):\n    print(select(task))\n    print(task)\n",
+        "def observe(task: own Task[str]):\n    print(select(task))\n    print(task)\n",
     )
     .expect_err("a consumed select source must be moved");
     assert_eq!(moved.code, "AU3001");
 
-    let duplicate = crate::check_source(
-        "def observe(task: own Task[String]):\n    print(select(task, task))\n",
-    )
-    .expect_err("one select cannot duplicate a single-consumer observation right");
+    let duplicate =
+        crate::check_source("def observe(task: own Task[str]):\n    print(select(task, task))\n")
+            .expect_err("one select cannot duplicate a single-consumer observation right");
     assert_eq!(duplicate.code, "AU3009");
     assert_eq!(
         duplicate.message,
@@ -14716,12 +15566,12 @@ fn typed_select_rejects_non_cloneable_results_and_accepts_inline_task_rights() {
 
     crate::check_source(
         r#"
-def text() -> String:
+def text() -> str:
     return "ready"
 
 def main():
     with TaskGroup() as group:
-        outcome: SelectOutcome[None, String] = select(group.start(text))
+        outcome: SelectOutcome[None, str] = select(group.start(text))
         print(outcome)
 "#,
     )
@@ -14753,9 +15603,9 @@ fn typed_select_names_are_reserved_builtins() {
 #[test]
 fn checker_function_default_loop_and_resource_validation_cover_additional_branches() {
     for source in [
-        "class Job:\n    label: String\n\ndef main() -> None:\n    jobs = Queue[Job]()\n    for job in jobs:\n        pass\n",
+        "class Job:\n    label: str\n\ndef main() -> None:\n    jobs = Queue[Job]()\n    for job in jobs:\n        pass\n",
         "def main() -> None:\n    jobs = Queue[int32]()\n    for job in jobs:\n        pass\n",
-        "class Job:\n    label: String\n\ndef main() -> None:\n    jobs: Set[Job] = Set[Job]()\n    for job in jobs:\n        pass\n",
+        "class Job:\n    label: str\n\ndef main() -> None:\n    jobs: set[Job] = set[Job]()\n    for job in jobs:\n        pass\n",
     ] {
         crate::check_source(source).expect("supported loop source should type check");
     }
@@ -14790,16 +15640,16 @@ fn checker_function_default_loop_and_resource_validation_cover_additional_branch
                 "method `show` is missing a return",
             ),
             (
-                "def main() -> None:\n    values = Set{1}\n    for value in mut values:\n        pass\n",
-                "`for value in mut ...:` is not supported for `Set[T]`; use `insert`/`remove` on the set directly",
+                "def main() -> None:\n    values = {1}\n    for value in mut values:\n        pass\n",
+                "`for value in mut ...:` is not supported for `set[T]`; use `add`/`remove` on the set directly",
             ),
             (
                 "def main() -> None:\n    values = [1]\n    for value in mut values:\n        pass\n",
-                "`for value in mut ...:` requires a mutable `Vec[T]` place",
+                "`for value in mut ...:` requires a mutable `list[T]` place",
             ),
             (
                 "def main() -> None:\n    flag = true\n    for value in flag:\n        pass\n",
-                "`for` currently requires a `Range`, `Queue[T]`, `Vec[T]`, or `Set[T]` iterable, found `bool`",
+                "`for` currently requires a `Range`, `Queue[T]`, `list[T]`, or `set[T]` iterable, found `bool`",
             ),
             (
                 "def main() -> None:\n    value = 1\n    for value in range(3):\n        pass\n",
@@ -14821,7 +15671,7 @@ fn checker_function_default_loop_and_resource_validation_cover_additional_branch
 
 #[test]
 fn checker_loop_move_helper_reports_full_and_partial_repeated_moves() {
-    let program = crate::check_source("class Name:\n    value: String\n\ndef main():\n    pass\n")
+    let program = crate::check_source("class Name:\n    value: str\n\ndef main():\n    pass\n")
         .expect("helper program should type check");
     let (type_names, type_arities) = type_maps_from_program(&program);
     let checker = FunctionChecker::new(
@@ -14832,6 +15682,7 @@ fn checker_loop_move_helper_reports_full_and_partial_repeated_moves() {
         &program.classes,
         &program.enums,
         &program.functions,
+        &program.constants,
         &program.traits,
         &program.trait_impls,
         &program.imported_modules,
@@ -14890,12 +15741,12 @@ fn checker_loop_move_helper_reports_full_and_partial_repeated_moves() {
 #[test]
 fn checker_loop_const_bool_conditions_cover_grouped_and_negated_forms() {
     crate::check_source(
-        "class Name:\n    value: String\n\ndef main():\n    name = Name(value=\"aura\")\n    while (false):\n        moved = name.value\n    later = name.value\n",
+        "class Name:\n    value: str\n\ndef main():\n    name = Name(value=\"aura\")\n    while (false):\n        moved = name.value\n    later = name.value\n",
     )
     .expect("grouped false loops should not merge move state from unreachable bodies");
 
     let repeated_move = crate::check_source(
-        "class Name:\n    value: String\n\ndef main():\n    name = Name(value=\"aura\")\n    while not false:\n        moved = name.value\n",
+        "class Name:\n    value: str\n\ndef main():\n    name = Name(value=\"aura\")\n    while not false:\n        moved = name.value\n",
     )
     .expect_err("negated false loops may execute and should reject repeated moves");
     assert!(repeated_move
@@ -14964,11 +15815,11 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
 
     // ADR-0022 Q6 removed borrowed returns, so an owned local now returns
     // cleanly where the borrowed-source check used to reject it.
-    let return_checker = checker.with_return_type(Type::named("String"));
+    let return_checker = checker.with_return_type(Type::named("str"));
     let mut owned_return_locals = HashMap::from([(
         "owned".to_string(),
         local_binding(
-            Type::named("String"),
+            Type::named("str"),
             true,
             false,
             ReceiverKind::Value,
@@ -14983,7 +15834,7 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
                 span,
             })],
             &mut owned_return_locals,
-            &Type::named("String"),
+            &Type::named("str"),
             0,
             true,
         )
@@ -15151,7 +16002,7 @@ fn checker_select_and_assignment_direct_helpers_cover_remaining_error_and_succes
         (
             "values".to_string(),
             local_binding(
-                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                Type::Named("list".to_string(), vec![Type::named("int32")]),
                 true,
                 true,
                 ReceiverKind::Value,
@@ -15163,8 +16014,8 @@ fn checker_select_and_assignment_direct_helpers_cover_remaining_error_and_succes
             "mapping".to_string(),
             local_binding(
                 Type::Named(
-                    "Map".to_string(),
-                    vec![Type::named("String"), Type::named("int32")],
+                    "dict".to_string(),
+                    vec![Type::named("str"), Type::named("int32")],
                 ),
                 true,
                 true,
@@ -15206,7 +16057,7 @@ fn checker_select_and_assignment_direct_helpers_cover_remaining_error_and_succes
             &mut locals,
         )
         .expect_err("wait_any should reject non-task vectors");
-    assert!(invalid_wait_any.message.contains("expects `Vec[Task[T]]`"));
+    assert!(invalid_wait_any.message.contains("expects `list[Task[T]]`"));
 
     let index_mut_error = checker
         .check_assign(
@@ -15336,7 +16187,7 @@ fn checker_select_and_assignment_direct_helpers_cover_remaining_error_and_succes
 #[test]
 fn builtin_call_and_member_resolution_surface_type_checks() {
     let program = crate::check_source(
-            "def main() -> int32:\n    text = \"  Aura  \"\n    pieces: Vec[String] = text.split(\"u\")\n    replaced: String = text.replace(\"Aura\", \"language\")\n    lowered: String = text.to_lower()\n    raised: String = text.to_upper()\n    prefix: Option[String] = text.strip_prefix(\"  \")\n    suffix: Option[String] = text.strip_suffix(\"  \")\n    text_len: int64 = text.len()\n    text_byte_len: int64 = text.byte_len()\n    text_has: bool = text.contains(\"Aur\")\n    text_start: bool = text.starts_with(\"  A\")\n    text_end: bool = text.ends_with(\"  \")\n    parsed_i32: Result[int32, String] = parse_int32(text=\"7\")\n    parsed_i64: Result[int64, String] = parse_int64(text=\"9\")\n    parsed_f64: Result[float64, String] = parse_float64(text=\"3.5\")\n    negative: int32 = -7\n    one: int32 = 1\n    two: int32 = 2\n    abs_i32: int32 = abs(value=negative)\n    min_i32: int32 = min(left=one, right=two)\n    max_i32: int32 = max(left=one, right=two)\n    root: float64 = sqrt(value=9.0)\n    mut values: Vec[int32] = [1, 2, 3]\n    values_len: int64 = values.len()\n    popped: Option[int32] = values.pop()\n    gotten: Option[int32] = values.get(index=0)\n    inserted: bool = values.insert(index=0, value=9)\n    mut counts: Map[String, int32] = {\"a\": 1}\n    counts_len: int64 = counts.len()\n    keys: Vec[String] = counts.keys()\n    vals: Vec[int32] = counts.values()\n    entries: Vec[MapEntry[String, int32]] = counts.items()\n    mut names = Set{\"ada\"}\n    names_len: int64 = names.len()\n    has_name: bool = names.contains(\"ada\")\n    inserted_name: bool = names.insert(\"bob\")\n    removed_name: bool = names.remove(\"ada\")\n    return (text_len as int32) + abs_i32 + min_i32 + max_i32 + (root as int32)\n",
+            "def main() -> int32:\n    text = \"  Aura  \"\n    pieces: list[str] = text.split(\"u\")\n    replaced: str = text.replace(\"Aura\", \"language\")\n    lowered: str = text.to_lower()\n    raised: str = text.to_upper()\n    prefix: Option[str] = text.strip_prefix(\"  \")\n    suffix: Option[str] = text.strip_suffix(\"  \")\n    text_len: int64 = text.len()\n    text_byte_len: int64 = text.byte_len()\n    text_has: bool = text.contains(\"Aur\")\n    text_start: bool = text.starts_with(\"  A\")\n    text_end: bool = text.ends_with(\"  \")\n    parsed_i32: Result[int32, str] = parse_int32(text=\"7\")\n    parsed_i64: Result[int64, str] = parse_int64(text=\"9\")\n    parsed_f64: Result[float64, str] = parse_float64(text=\"3.5\")\n    negative: int32 = -7\n    one: int32 = 1\n    two: int32 = 2\n    abs_i32: int32 = abs(value=negative)\n    min_i32: int32 = min(left=one, right=two)\n    max_i32: int32 = max(left=one, right=two)\n    root: float64 = sqrt(value=9.0)\n    mut values: list[int32] = [1, 2, 3]\n    values_len: int64 = values.len()\n    popped: int32 = values.pop()\n    gotten: Option[int32] = values.get(index=0)\n    values.insert(index=0, value=9)\n    mut counts: dict[str, int32] = {\"a\": 1}\n    counts_len: int64 = counts.len()\n    keys: list[str] = counts.keys()\n    vals: list[int32] = counts.values()\n    items: list[(str, int32)] = counts.items()\n    mut names = {\"ada\"}\n    names_len: int64 = names.len()\n    has_name: bool = \"ada\" in names\n    names.add(\"bob\")\n    names.remove(\"ada\")\n    return (text_len as int32) + abs_i32 + min_i32 + max_i32 + (root as int32)\n",
         )
         .expect("builtin call/member surface should type check");
     assert!(program.functions.contains_key("main"));
@@ -15365,10 +16216,10 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
         &module_registry,
     );
     let span = Span::new(1, 1);
-    let string_ty = Type::named("String");
+    let string_ty = Type::named("str");
     let float_ty = Type::named("float64");
     let int_ty = Type::named("int32");
-    let channel_ty = Type::Named("Queue".to_string(), vec![Type::named("String")]);
+    let channel_ty = Type::Named("Queue".to_string(), vec![Type::named("str")]);
     let mut locals = HashMap::from([
         (
             "text".to_string(),
@@ -15427,7 +16278,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             "Queue",
             expr(ExprKind::Specialize {
                 expr: Box::new(expr(ExprKind::Name("Queue".to_string()))),
-                type_args: vec![type_ref("String")],
+                type_args: vec![type_ref("str")],
             }),
             Vec::new(),
             channel_ty.clone(),
@@ -15535,34 +16386,34 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             None,
         ),
         (
-            "Vec",
+            "list",
             expr(ExprKind::Specialize {
-                expr: Box::new(expr(ExprKind::Name("Vec".to_string()))),
+                expr: Box::new(expr(ExprKind::Name("list".to_string()))),
                 type_args: vec![type_ref("int32")],
             }),
             Vec::new(),
-            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
             None,
         ),
         (
-            "Set",
+            "set",
             expr(ExprKind::Specialize {
-                expr: Box::new(expr(ExprKind::Name("Set".to_string()))),
-                type_args: vec![type_ref("String")],
+                expr: Box::new(expr(ExprKind::Name("set".to_string()))),
+                type_args: vec![type_ref("str")],
             }),
             Vec::new(),
-            Type::Named("Set".to_string(), vec![string_ty.clone()]),
+            Type::Named("set".to_string(), vec![string_ty.clone()]),
             None,
         ),
         (
-            "Map",
+            "dict",
             expr(ExprKind::Specialize {
-                expr: Box::new(expr(ExprKind::Name("Map".to_string()))),
-                type_args: vec![type_ref("String"), type_ref("int32")],
+                expr: Box::new(expr(ExprKind::Name("dict".to_string()))),
+                type_args: vec![type_ref("str"), type_ref("int32")],
             }),
             Vec::new(),
             Type::Named(
-                "Map".to_string(),
+                "dict".to_string(),
                 vec![string_ty.clone(), Type::named("int32")],
             ),
             None,
@@ -15603,12 +16454,12 @@ fn checker_builtin_constructor_and_variant_error_edges_cover_direct_paths() {
     );
     let span = Span::new(1, 1);
     let int_ty = Type::named("int32");
-    let string_ty = Type::named("String");
+    let string_ty = Type::named("str");
     let bool_ty = Type::named("bool");
-    let vec_int_ty = Type::Named("Vec".to_string(), vec![int_ty.clone()]);
-    let vec_type_param_ty = Type::Named("Vec".to_string(), vec![Type::TypeParam("T".to_string())]);
+    let vec_int_ty = Type::Named("list".to_string(), vec![int_ty.clone()]);
+    let vec_type_param_ty = Type::Named("list".to_string(), vec![Type::TypeParam("T".to_string())]);
     let vec_task_int_ty = Type::Named(
-        "Vec".to_string(),
+        "list".to_string(),
         vec![Type::Named("Task".to_string(), vec![int_ty.clone()])],
     );
     let queue_int_ty = Type::Named("Queue".to_string(), vec![int_ty.clone()]);
@@ -15702,7 +16553,7 @@ fn checker_builtin_constructor_and_variant_error_edges_cover_direct_paths() {
             "`TaskGroup` does not take constructor arguments",
         ),
         (
-            specialize("Queue", vec![type_ref("int32"), type_ref("String")]),
+            specialize("Queue", vec![type_ref("int32"), type_ref("str")]),
             Vec::new(),
             "class `Queue` expects exactly one type argument, found 2",
         ),
@@ -15712,34 +16563,34 @@ fn checker_builtin_constructor_and_variant_error_edges_cover_direct_paths() {
             "field `capacity` expects `int32`, found `bool`",
         ),
         (
-            specialize("Vec", vec![type_ref("int32"), type_ref("String")]),
+            specialize("list", vec![type_ref("int32"), type_ref("str")]),
             Vec::new(),
-            "class `Vec` expects exactly one type argument, found 2",
+            "class `list` expects exactly one type argument, found 2",
         ),
         (
-            specialize("Vec", vec![type_ref("int32")]),
+            specialize("list", vec![type_ref("int32")]),
             vec![arg(expr(ExprKind::Int(1)))],
-            "class `Vec` does not take constructor arguments",
+            "class `list` does not take constructor arguments",
         ),
         (
-            specialize("Set", vec![type_ref("String"), type_ref("int32")]),
+            specialize("set", vec![type_ref("str"), type_ref("int32")]),
             Vec::new(),
-            "class `Set` expects exactly one type argument, found 2",
+            "class `set` expects exactly one type argument, found 2",
         ),
         (
-            specialize("Set", vec![type_ref("String")]),
+            specialize("set", vec![type_ref("str")]),
             vec![arg(expr(ExprKind::String("ada".to_string())))],
-            "class `Set` does not take constructor arguments",
+            "class `set` does not take constructor arguments",
         ),
         (
-            specialize("Map", vec![type_ref("String")]),
+            specialize("dict", vec![type_ref("str")]),
             Vec::new(),
-            "class `Map` expects exactly two type arguments, found 1",
+            "class `dict` expects exactly two type arguments, found 1",
         ),
         (
-            specialize("Map", vec![type_ref("String"), type_ref("int32")]),
+            specialize("dict", vec![type_ref("str"), type_ref("int32")]),
             vec![arg(expr(ExprKind::Int(1)))],
-            "class `Map` does not take constructor arguments",
+            "class `dict` does not take constructor arguments",
         ),
     ] {
         expect_error(callee, args, None, expected);
@@ -15749,17 +16600,17 @@ fn checker_builtin_constructor_and_variant_error_edges_cover_direct_paths() {
         (
             name("wait_any"),
             vec![arg(name("queue"))],
-            "`wait_any` expects `Vec[Task[T]]`, found `Queue[int32]`",
+            "`wait_any` expects `list[Task[T]]`, found `Queue[int32]`",
         ),
         (
             name("wait_all"),
             vec![arg(name("numbers"))],
-            "`wait_all` expects `Vec[Task[T]]`, found `Vec[int32]`",
+            "`wait_all` expects `list[Task[T]]`, found `list[int32]`",
         ),
         (
             name("wait_any"),
             vec![arg(name("generic_values"))],
-            "`wait_any` expects `Vec[Task[T]]`, found `Vec[T]`",
+            "`wait_any` expects `list[Task[T]]`, found `list[T]`",
         ),
         (
             name("wait_all"),
@@ -15964,11 +16815,11 @@ fn method_receiver_borrow_aliasing_checks_overlap_and_distinct_places() {
 fn shared_self_projection_mutations_and_mutable_borrow_then_consume_are_actionable() {
     for (source, operation) in [
         (
-            "class Bucket:\n    values: Vec[int32]\n\n    def replace(self):\n        self.values[0] = 1\n",
+            "class Bucket:\n    values: list[int32]\n\n    def replace(self):\n        self.values[0] = 1\n",
             "indexed assignment",
         ),
         (
-            "class Bucket:\n    values: Vec[int32]\n\n    def append(self):\n        self.values.push(1)\n",
+            "class Bucket:\n    values: list[int32]\n\n    def append(self):\n        self.values.append(1)\n",
             "mutating member call",
         ),
     ] {
@@ -16094,10 +16945,6 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "wildcard match arm must be the final `case`",
             ),
             (
-                "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    match status:\n        case value:\n            return 1\n",
-                "top-level binding patterns are not yet supported",
-            ),
-            (
                 "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    match status:\n        case Other.Ready:\n            return 1\n        case _:\n            return 0\n",
                 "unknown enum `Other` in match pattern",
             ),
@@ -16130,24 +16977,16 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "non-exhaustive match over `Status`: missing `Done`",
             ),
             (
-                "class Packet:\n    value: int32\n\ndef main() -> int32:\n    packet = Packet(value=1)\n    match packet:\n        case _:\n            return 0\n",
-                "`match` currently requires a tuple, enum, bool, integer, float, or String scrutinee",
-            ),
-            (
                 "enum Status:\n    Ready\n\ndef main() -> int32:\n    match 1:\n        case Status.Ready:\n            return 1\n        case _:\n            return 0\n",
                 "match over `int64` only supports literal patterns and `_`",
             ),
             (
-                "def main() -> int32:\n    match 1:\n        case value:\n            return 1\n",
-                "top-level binding patterns are not yet supported",
-            ),
-            (
                 "def main() -> int32:\n    return range(start=true, stop=3)\n",
-                "`range` arguments must have type `int32`, found `bool`",
+                "`range` arguments must have type `int64` or a losslessly narrower integer type, found `bool`",
             ),
             (
                 "def main() -> int32:\n    return wait_any(tasks=true)\n",
-                "`wait_any` expects `Vec[Task[T]]`, found `bool`",
+                "`wait_any` expects `list[Task[T]]`, found `bool`",
             ),
             (
                 "def main() -> int32:\n    jobs = Queue[int32]()\n    return jobs.get(timeout=1)\n",
@@ -16159,7 +16998,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             ),
             (
                 "def main() -> int32:\n    return abs(value=\"x\")\n",
-                "`abs(...)` expects an integer or float value, found `String`",
+                "`abs(...)` expects an integer or float value, found `str`",
             ),
             (
                 "def main() -> int32:\n    return min(left=true, right=false)\n",
@@ -16175,31 +17014,31 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             ),
             (
                 "def main() -> int32:\n    return parse_int32(text=1)\n",
-                "`parse_int32(...)` expects `String`, found `int64`",
+                "`parse_int32(...)` expects `str`, found `int64`",
             ),
             (
                 "def main() -> int32:\n    return parse_int64(text=1)\n",
-                "`parse_int64(...)` expects `String`, found `int64`",
+                "`parse_int64(...)` expects `str`, found `int64`",
             ),
             (
                 "def main() -> int32:\n    return parse_float64(text=1)\n",
-                "`parse_float64(...)` expects `String`, found `int64`",
+                "`parse_float64(...)` expects `str`, found `int64`",
             ),
             (
                 "def main() -> int32:\n    text = \"aura\"\n    ok: bool = text.contains(1)\n    return 0\n",
-                "`contains` expects `String`, found `int64`",
+                "`contains` expects `str`, found `int64`",
             ),
             (
-                "def main() -> int32:\n    text = \"aura\"\n    replaced: String = text.replace(1, \"x\")\n    return 0\n",
-                "`replace` expects `String` for `from`, found `int64`",
+                "def main() -> int32:\n    text = \"aura\"\n    replaced: str = text.replace(1, \"x\")\n    return 0\n",
+                "`replace` expects `str` for `from`, found `int64`",
             ),
             (
-                "def main() -> int32:\n    text = \"aura\"\n    replaced: String = text.replace(\"a\", 1)\n    return 0\n",
-                "`replace` expects `String` for `to`, found `int64`",
+                "def main() -> int32:\n    text = \"aura\"\n    replaced: str = text.replace(\"a\", 1)\n    return 0\n",
+                "`replace` expects `str` for `to`, found `int64`",
             ),
             (
-                "def main() -> None:\n    mut values = [1]\n    values.push(\"x\")\n",
-                "`push` expects `int64`, found `String`",
+                "def main() -> None:\n    mut values = [1]\n    values.append(\"x\")\n",
+                "`append` expects `int64`, found `str`",
             ),
             (
                 "import fs\n\ndef main() -> int32:\n    file = fs.File()\n    return 0\n",
@@ -16283,7 +17122,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             ),
             (
                 "def make() -> Option[int32]:\n    return Option[int32].Some(\"x\")\n\ndef main():\n    pass\n",
-                "variant `Some` of enum `Option` expects `int32`, found `String`",
+                "variant `Some` of enum `Option` expects `int32`, found `str`",
             ),
             (
                 "def make() -> Option[int32]:\n    return Option.None(1)\n\ndef main():\n    pass\n",
@@ -16310,16 +17149,8 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
 
     for (source, expected) in [
         (
-            "class Packet:\n    value: int32\n\ndef main() -> int32:\n    packet = Packet(value=1)\n    return match packet:\n        case _: 0\n",
-            "`match` currently requires a tuple, enum, bool, integer, float, or String scrutinee",
-        ),
-        (
             "enum Status:\n    Ready\n\ndef main() -> int32:\n    return match 1:\n        case Status.Ready: 1\n        case _: 0\n",
             "match over `int64` only supports literal patterns and `_`",
-        ),
-        (
-            "def main() -> int32:\n    return match 1:\n        case value: 1\n",
-            "top-level binding patterns are not yet supported",
         ),
         (
             "def main() -> int32:\n    return match 1:\n        case _: 0\n        case 1: 1\n",
@@ -16339,15 +17170,11 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
         ),
         (
             "def main() -> int32:\n    return match true:\n        case true: 1\n        case false: \"no\"\n",
-            "match arm expression expects `int32`, found `String`",
+            "match arm expression expects `int32`, found `str`",
         ),
         (
             "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case 1: 1\n        case _: 0\n",
             "match over `Status` expects enum variant patterns, not literal `1`",
-        ),
-        (
-            "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case value: 1\n",
-            "top-level binding patterns are not yet supported",
         ),
         (
             "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case Other.Ready: 1\n        case _: 0\n",
@@ -16379,7 +17206,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
         ),
         (
             "enum Status:\n    Ready\n    Done\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case Status.Ready: 1\n        case Status.Done: \"no\"\n",
-            "match arm expression expects `int32`, found `String`",
+            "match arm expression expects `int32`, found `str`",
         ),
         (
             "enum Status:\n    Ready\n    Done\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case Status.Ready: 1\n",
@@ -16394,6 +17221,14 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             error.message,
             source
         );
+    }
+
+    for source in [
+        "class Packet:\n    value: int32\n\ndef main() -> int32:\n    packet = Packet(value=1)\n    match packet:\n        case _:\n            return 0\n",
+        "class Packet:\n    value: int32\n\ndef main() -> int32:\n    packet = Packet(value=1)\n    return match packet:\n        case _: 0\n",
+    ] {
+        crate::check_source(source)
+            .expect("a wildcard-only match may cover a class value without destructuring it");
     }
 
     let span = Span::new(1, 1);
@@ -16545,7 +17380,7 @@ fn checker_module_member_type_edges_cover_private_and_uncalled_members() {
         false,
         vec![
             ("value", Type::named("int32"), false),
-            ("secret", Type::named("String"), false),
+            ("secret", Type::named("str"), false),
         ],
     );
     widget.module_name = "pkg".to_string();
@@ -16558,7 +17393,7 @@ fn checker_module_member_type_edges_cover_private_and_uncalled_members() {
         "hidden".to_string(),
         MethodInfo {
             decl: hidden,
-            signature: function_signature(Vec::new(), Type::named("String")),
+            signature: function_signature(Vec::new(), Type::named("str")),
             type_param_bounds: BTreeMap::new(),
         },
     );
@@ -16601,11 +17436,6 @@ fn checker_module_member_type_edges_cover_private_and_uncalled_members() {
             Type::Named("Option".to_string(), vec![Type::named("int32")]),
             "Some",
             "variant `Some` of enum `Option` requires a payload",
-        ),
-        (
-            Type::named("MapEntry"),
-            "other",
-            "type `MapEntry` has no field `other`",
         ),
         (
             Type::named("Widget"),
@@ -16659,7 +17489,7 @@ def main() -> int32:
     let program = crate::check_source(
         "\
 trait Named:
-    def name(self) -> String
+    def name(self) -> str
 
 trait Add[Rhs, Out]:
     def add(self, rhs: own Rhs) -> Out
@@ -16668,7 +17498,7 @@ trait Neg[Out]:
     def neg(self) -> Out
 
 class User:
-    label: String
+    label: str
 
 class Point:
     x: int32
@@ -16677,7 +17507,7 @@ class Box[T]:
     value: T
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.label.clone()
 
 impl Add[Point, Point] for Point:
@@ -16927,7 +17757,7 @@ def main():
             "T".to_string(),
             vec![TraitBound {
                 trait_name: "Add".to_string(),
-                trait_args: vec![Type::named("String"), Type::named("Point")],
+                trait_args: vec![Type::named("str"), Type::named("Point")],
             }],
         )]),
     );
@@ -16972,7 +17802,7 @@ def main():
         .is_none());
 
     let mut wrong_rhs_impl = add_point_impl.clone();
-    wrong_rhs_impl.trait_args = vec![Type::named("String"), Type::named("Point")];
+    wrong_rhs_impl.trait_args = vec![Type::named("str"), Type::named("Point")];
     let wrong_rhs_impls = vec![wrong_rhs_impl];
     let wrong_rhs_impl_checker = checker(
         &program.module_name,
@@ -17118,7 +17948,7 @@ fn operator_method_from_type_param_reports_ambiguity_when_multiple_bounds_match(
             vec![
                 TraitBound {
                     trait_name: "Add".to_string(),
-                    trait_args: vec![Type::named("int32"), Type::named("String")],
+                    trait_args: vec![Type::named("int32"), Type::named("str")],
                 },
                 TraitBound {
                     trait_name: "Add".to_string(),
@@ -17382,8 +18212,9 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         ),
         Some(Vec::new())
     );
-    let string_ty = Type::named("String");
+    let string_ty = Type::named("str");
     let int_ty = Type::named("int32");
+    let index_ty = Type::named("int64");
     let builtin_payload_cases = [
         (
             Type::Named(
@@ -17443,13 +18274,13 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
             Type::Named("WaitAny".to_string(), vec![int_ty.clone()]),
             "WaitAny",
             "Ready",
-            vec![int_ty.clone(), int_ty.clone()],
+            vec![index_ty.clone(), int_ty.clone()],
         ),
         (
             Type::Named("WaitAny".to_string(), vec![int_ty.clone()]),
             "WaitAny",
             "Error",
-            vec![int_ty.clone(), string_ty.clone()],
+            vec![index_ty.clone(), string_ty.clone()],
         ),
         (
             Type::Named("WaitAny".to_string(), vec![int_ty.clone()]),
@@ -17460,17 +18291,17 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         (
             Type::Named(
                 "WaitAll".to_string(),
-                vec![Type::Named("Vec".to_string(), vec![int_ty.clone()])],
+                vec![Type::Named("list".to_string(), vec![int_ty.clone()])],
             ),
             "WaitAll",
             "Ready",
-            vec![Type::Named("Vec".to_string(), vec![int_ty.clone()])],
+            vec![Type::Named("list".to_string(), vec![int_ty.clone()])],
         ),
         (
             Type::Named("WaitAll".to_string(), vec![int_ty.clone()]),
             "WaitAll",
             "Error",
-            vec![int_ty.clone(), string_ty.clone()],
+            vec![index_ty.clone(), string_ty.clone()],
         ),
         (
             Type::Named("WaitAll".to_string(), vec![int_ty.clone()]),
@@ -17486,7 +18317,7 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
             "SelectOutcome",
             "Queue",
             vec![
-                int_ty.clone(),
+                index_ty.clone(),
                 Type::Named("QueueReceive".to_string(), vec![string_ty.clone()]),
             ],
         ),
@@ -17498,7 +18329,7 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
             "SelectOutcome",
             "Task",
             vec![
-                int_ty.clone(),
+                index_ty.clone(),
                 Type::Named("TaskResult".to_string(), vec![int_ty.clone()]),
             ],
         ),
@@ -17509,7 +18340,7 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
             ),
             "SelectOutcome",
             "Deadline",
-            vec![int_ty.clone()],
+            vec![index_ty.clone()],
         ),
         (
             Type::Named(
@@ -17542,15 +18373,11 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
     );
     assert_eq!(
         checker
-            .explicit_builtin_type(
-                "Result",
-                &[Type::named("int32"), Type::named("String")],
-                span,
-            )
+            .explicit_builtin_type("Result", &[Type::named("int32"), Type::named("str")], span,)
             .expect("built-in enum specialization should succeed"),
         Type::Named(
             "Result".to_string(),
-            vec![Type::named("int32"), Type::named("String")]
+            vec![Type::named("int32"), Type::named("str")]
         )
     );
     for (name, args) in [
@@ -17813,11 +18640,7 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
     math.all_enums = math.enums.clone();
 
     let mut other = namespace("helpers.other");
-    let mut other_widget = class_info(
-        "Widget",
-        false,
-        vec![("label", Type::named("String"), false)],
-    );
+    let mut other_widget = class_info("Widget", false, vec![("label", Type::named("str"), false)]);
     other_widget.module_name = "helpers.other".to_string();
     other.classes.insert("Widget".to_string(), other_widget);
     other.all_classes = other.classes.clone();
@@ -18334,7 +19157,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
         (
             "items".to_string(),
             local_binding(
-                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                Type::Named("list".to_string(), vec![Type::named("int32")]),
                 true,
                 true,
                 ReceiverKind::Value,
@@ -18557,31 +19380,6 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
         .message
         .contains("requires a mutable receiver"));
 
-    assert_eq!(
-        checker
-            .resolve_member_type(
-                &Type::Named(
-                    "MapEntry".to_string(),
-                    vec![Type::named("String"), Type::named("int32")]
-                ),
-                "key",
-                span,
-            )
-            .expect("MapEntry.key should resolve"),
-        Type::named("String")
-    );
-    let map_entry_error = checker
-        .resolve_member_type(
-            &Type::Named(
-                "MapEntry".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
-            ),
-            "missing",
-            span,
-        )
-        .expect_err("unknown MapEntry fields should fail");
-    assert!(map_entry_error.message.contains("has no field `missing`"));
-
     checker
         .require_with_resource(&Type::named("TaskGroup"), span)
         .expect("TaskGroup should be allowed in with");
@@ -18618,7 +19416,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             "work",
             &[Param {
                 name: "value".to_string(),
-                ty: type_ref("String"),
+                ty: type_ref("str"),
                 mode: ParamMode::Default,
                 default: None,
                 span,
@@ -18732,9 +19530,9 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
 fn top_level_type_and_trait_helpers_cover_display_and_copy_paths() {
     let bound = TraitBound {
         trait_name: "Mapper".to_string(),
-        trait_args: vec![Type::named("String"), Type::named("int32")],
+        trait_args: vec![Type::named("str"), Type::named("int32")],
     };
-    assert_eq!(bound.to_string(), "Mapper[String, int32]");
+    assert_eq!(bound.to_string(), "Mapper[str, int32]");
     assert_eq!(
         TraitBound {
             trait_name: "Show".to_string(),
@@ -18762,7 +19560,7 @@ fn top_level_type_and_trait_helpers_cover_display_and_copy_paths() {
     assert!(!Type::Module("pkg.tools".to_string()).is_copy());
     assert!(!Type::TypeParam("T".to_string()).is_copy());
     assert!(Type::named("float64").is_copy());
-    assert!(!Type::named("String").is_copy());
+    assert!(!Type::named("str").is_copy());
     assert_eq!(Type::Unit.to_string(), "None");
     assert_eq!(
         Type::Module("pkg.tools".to_string()).to_string(),
@@ -18770,8 +19568,8 @@ fn top_level_type_and_trait_helpers_cover_display_and_copy_paths() {
     );
     assert_eq!(Type::TypeParam("T".to_string()).to_string(), "T");
     assert_eq!(
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]).to_string(),
-        "Vec[int32]"
+        Type::Named("list".to_string(), vec![Type::named("int32")]).to_string(),
+        "list[int32]"
     );
 
     let classes = BTreeMap::from([
@@ -18785,7 +19583,7 @@ fn top_level_type_and_trait_helpers_cover_display_and_copy_paths() {
         ),
         (
             "Thing".to_string(),
-            class_info("Thing", false, vec![("name", Type::named("String"), false)]),
+            class_info("Thing", false, vec![("name", Type::named("str"), false)]),
         ),
     ]);
     let enums = BTreeMap::from([
@@ -18795,7 +19593,7 @@ fn top_level_type_and_trait_helpers_cover_display_and_copy_paths() {
         ),
         (
             "MaybeText".to_string(),
-            enum_info("MaybeText", Some(Type::named("String"))),
+            enum_info("MaybeText", Some(Type::named("str"))),
         ),
     ]);
     assert!(type_is_copy_in_context(
@@ -18865,6 +19663,8 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
     let remote_enum = enum_info("RemoteStatus", Some(Type::named("int32")));
     let remote_trait = trait_info("RemoteShow", Vec::new());
     let namespace = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "tools".to_string(),
         path: "pkg.tools".to_string(),
         source_path: None,
@@ -18915,6 +19715,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
     };
     let program = check_with_context(
         Module {
+            constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Function(function_decl("main"))],
             top_level_stmts: Vec::new(),
@@ -18928,6 +19729,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_class = check_with_context(
         Module {
+            constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Class(class_decl("RemoteBox", false, Vec::new()))],
             top_level_stmts: Vec::new(),
@@ -18949,6 +19751,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_enum = check_with_context(
         Module {
+            constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Enum(EnumDecl {
                 public: true,
@@ -18977,6 +19780,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_function = check_with_context(
         Module {
+            constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Function(function_decl("remote_fn"))],
             top_level_stmts: Vec::new(),
@@ -19006,11 +19810,11 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
     .expect_err("mismatched defaults should fail");
     assert!(default_mismatch
         .message
-        .contains("default value for field `value` has type `String`, expected `int32`"));
+        .contains("default value for field `value` has type `str`, expected `int32`"));
 
     let unknown_trait = check(
             crate::parser::parse(
-                "class Box:\n    value: int32\n\nimpl Missing for Box:\n    def show(self) -> String:\n        return \"x\"\n",
+                "class Box:\n    value: int32\n\nimpl Missing for Box:\n    def show(self) -> str:\n        return \"x\"\n",
             )
             .expect("unknown-trait snippet should parse"),
         )
@@ -19019,7 +19823,7 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
 
     let trait_arity = check(
             crate::parser::parse(
-                "trait Mapper[T]:\n    def map(self, value: T) -> T\n\nclass Box:\n    value: int32\n\nimpl Mapper[int32, String] for Box:\n    def map(self, value: int32) -> int32:\n        return value\n",
+                "trait Mapper[T]:\n    def map(self, value: T) -> T\n\nclass Box:\n    value: int32\n\nimpl Mapper[int32, str] for Box:\n    def map(self, value: int32) -> int32:\n        return value\n",
             )
             .expect("trait-arity snippet should parse"),
         )
@@ -19030,7 +19834,7 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
 
     let type_param_target = check(
             crate::parser::parse(
-                "trait Show:\n    def show(self) -> String\n\nimpl[T] Show for T:\n    def show(self) -> String:\n        return \"x\"\n",
+                "trait Show:\n    def show(self) -> str\n\nimpl[T] Show for T:\n    def show(self) -> str:\n        return \"x\"\n",
             )
             .expect("type-param target snippet should parse"),
         )
@@ -19041,7 +19845,7 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
 
     let duplicate_impl = check(
             crate::parser::parse(
-                "trait Show:\n    def show(self) -> String\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(self) -> String:\n        return \"a\"\n\nimpl Show for Box:\n    def show(self) -> String:\n        return \"b\"\n",
+                "trait Show:\n    def show(self) -> str\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(self) -> str:\n        return \"a\"\n\nimpl Show for Box:\n    def show(self) -> str:\n        return \"b\"\n",
             )
             .expect("duplicate-impl snippet should parse"),
         )
@@ -19052,7 +19856,7 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
 
     let unknown_method = check(
             crate::parser::parse(
-                "trait Show:\n    def show(self) -> String\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def other(self) -> String:\n        return \"x\"\n",
+                "trait Show:\n    def show(self) -> str\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def other(self) -> str:\n        return \"x\"\n",
             )
             .expect("unknown-method snippet should parse"),
         )
@@ -19063,7 +19867,7 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
 
     let receiver_mismatch = check(
             crate::parser::parse(
-                "trait Show:\n    def show(self) -> String\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(own self) -> String:\n        return \"x\"\n",
+                "trait Show:\n    def show(self) -> str\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(own self) -> str:\n        return \"x\"\n",
             )
             .expect("receiver-mismatch snippet should parse"),
         )
@@ -19074,7 +19878,7 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
 
     let signature_mismatch = check(
             crate::parser::parse(
-                "trait Mapper[T]:\n    def map(self, value: T) -> T\n\nclass Box:\n    value: int32\n\nimpl Mapper[int32] for Box:\n    def map(self, value: String) -> String:\n        return value\n",
+                "trait Mapper[T]:\n    def map(self, value: T) -> T\n\nclass Box:\n    value: int32\n\nimpl Mapper[int32] for Box:\n    def map(self, value: str) -> str:\n        return value\n",
             )
             .expect("signature-mismatch snippet should parse"),
         )
@@ -19084,7 +19888,7 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
         .contains("method `map` in impl of `Mapper` does not match the trait signature"));
 
     for source in [
-        "trait Show:\n    def show(self, text: String) -> int32\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(self, text: own String) -> int32:\n        return self.value\n",
+        "trait Show:\n    def show(self, text: str) -> int32\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(self, text: own str) -> int32:\n        return self.value\n",
     ] {
         let error = crate::check_source(source)
             .expect_err("a trait impl passing mismatch should fail");
@@ -19098,7 +19902,7 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
     }
 
     crate::check_source(
-        "trait Identity:\n    def identity(self, value: own String) -> String\n\nclass Picker:\n    value: int32\n\nimpl Identity for Picker:\n    def identity(self, renamed: own String) -> String:\n        return renamed\n",
+        "trait Identity:\n    def identity(self, value: own str) -> str\n\nclass Picker:\n    value: int32\n\nimpl Identity for Picker:\n    def identity(self, renamed: own str) -> str:\n        return renamed\n",
     )
     .expect("a trait impl may rename its parameters");
 
@@ -19158,7 +19962,7 @@ fn check_reports_duplicate_recursive_and_copy_class_errors() {
                 "tuple types cannot be `indirect`",
             ),
             (
-                "copy class Holder:\n    name: String\n",
+                "copy class Holder:\n    name: str\n",
                 "field `name` on `copy class Holder` must be a copy type",
             ),
         ] {
@@ -19176,7 +19980,7 @@ fn check_reports_duplicate_recursive_and_copy_class_errors() {
 fn check_reports_top_level_lowering_errors_from_source() {
     for (source, expected) in [
         (
-            "trait Child: Missing:\n    def label() -> String\n\ndef main():\n    pass\n",
+            "trait Child: Missing:\n    def label() -> str\n\ndef main():\n    pass\n",
             "unknown trait `Missing`",
         ),
         (
@@ -19224,11 +20028,11 @@ fn check_reports_top_level_lowering_errors_from_source() {
             "unknown type `Missing`",
         ),
         (
-            "trait Show:\n    def render() -> String\n\nclass Box:\n    value: int32\n\nimpl[T: Missing] Show for Box:\n    def render() -> String:\n        return \"x\"\n\ndef main():\n    pass\n",
+            "trait Show:\n    def render() -> str\n\nclass Box:\n    value: int32\n\nimpl[T: Missing] Show for Box:\n    def render() -> str:\n        return \"x\"\n\ndef main():\n    pass\n",
             "unknown trait `Missing`",
         ),
         (
-            "trait Pair[A, B]:\n    def render() -> String\n\nclass Box:\n    value: int32\n\nimpl Pair for Box:\n    def render() -> String:\n        return \"x\"\n\ndef main():\n    pass\n",
+            "trait Pair[A, B]:\n    def render() -> str\n\nclass Box:\n    value: int32\n\nimpl Pair for Box:\n    def render() -> str:\n        return \"x\"\n\ndef main():\n    pass\n",
             "expects exactly 2 type arguments",
         ),
         (
@@ -19236,7 +20040,7 @@ fn check_reports_top_level_lowering_errors_from_source() {
             "unknown trait `Missing`",
         ),
         (
-            "trait Show:\n    def render() -> String\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def render() -> Missing:\n        pass\n\ndef main():\n    pass\n",
+            "trait Show:\n    def render() -> str\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def render() -> Missing:\n        pass\n\ndef main():\n    pass\n",
             "unknown type `Missing`",
         ),
     ] {
@@ -19444,7 +20248,7 @@ fn lower_type_and_imported_context_helpers_cover_builtin_and_context_paths() {
             &type_params,
         )
         .expect("str should canonicalize"),
-        Type::named("String")
+        Type::named("str")
     );
     assert_eq!(
         lower_type(
@@ -19480,19 +20284,19 @@ fn lower_type_and_imported_context_helpers_cover_builtin_and_context_paths() {
             "`Queue` expects exactly one type argument",
         ),
         (
-            nested_type_ref("Map", vec![type_ref("String")]),
-            "`Map` expects exactly two type arguments",
+            nested_type_ref("dict", vec![type_ref("str")]),
+            "`dict` expects exactly two type arguments",
         ),
         (
-            nested_type_ref("MapEntry", vec![type_ref("String")]),
-            "`MapEntry` expects exactly two type arguments",
+            nested_type_ref("MapEntry", vec![type_ref("str")]),
+            "unknown type `MapEntry`",
         ),
         (
             nested_type_ref("TaskGroup", vec![type_ref("int32")]),
             "`TaskGroup` does not take type arguments",
         ),
         (
-            nested_type_ref("int32", vec![type_ref("String")]),
+            nested_type_ref("int32", vec![type_ref("str")]),
             "`int32` does not take type arguments",
         ),
         (
@@ -19617,7 +20421,7 @@ enum CopyState:
     Count(int32)
 
 enum HeapState:
-    Text(String)
+    Text(str)
 
 def main():
     pass
@@ -19651,7 +20455,7 @@ def main():
         &program.enums,
     ));
     assert!(!type_is_copy_in_context(
-        &Type::Named("Option".to_string(), vec![Type::named("String")]),
+        &Type::Named("Option".to_string(), vec![Type::named("str")]),
         &program.classes,
         &program.enums,
     ));
@@ -19674,7 +20478,7 @@ def main():
         &program.enums,
     ));
     assert!(!type_is_copy_in_context(
-        &Type::Named("HeapBox".to_string(), vec![Type::named("String")]),
+        &Type::Named("HeapBox".to_string(), vec![Type::named("str")]),
         &program.classes,
         &program.enums,
     ));
@@ -19705,14 +20509,14 @@ def main():
         "module pkg.tools"
     );
     assert_eq!(Type::TypeParam("T".to_string()).to_string(), "T");
-    assert_eq!(Type::named("String").to_string(), "String");
+    assert_eq!(Type::named("str").to_string(), "str");
     assert_eq!(
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         )
         .to_string(),
-        "Map[String, int32]"
+        "dict[str, int32]"
     );
 }
 
@@ -19785,13 +20589,13 @@ fn sema_type_helper_suite_covers_default_args_patterns_and_classifiers() {
         &Type::Named(
             "Result".to_string(),
             vec![
-                Type::Named("Option".to_string(), vec![Type::named("String")]),
+                Type::Named("Option".to_string(), vec![Type::named("str")]),
                 Type::named("int32"),
             ],
         ),
-        "String",
+        "str",
     ));
-    assert!(!type_contains_named(&Type::Unit, "String"));
+    assert!(!type_contains_named(&Type::Unit, "str"));
 
     let class_program = crate::check_source(
         "\
@@ -19823,13 +20627,13 @@ def main():
     ));
 
     let substitutions = HashMap::from([
-        ("T".to_string(), Type::named("String")),
+        ("T".to_string(), Type::named("str")),
         ("U".to_string(), Type::named("int32")),
     ]);
     assert_eq!(
         substitute_type(
             &Type::Named(
-                "Map".to_string(),
+                "dict".to_string(),
                 vec![
                     Type::TypeParam("T".to_string()),
                     Type::TypeParam("U".to_string())
@@ -19838,8 +20642,8 @@ def main():
             &substitutions,
         ),
         Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int32")],
         )
     );
     assert_eq!(
@@ -19852,7 +20656,7 @@ def main():
         ),
         TraitBound {
             trait_name: "Mapper".to_string(),
-            trait_args: vec![Type::named("String")],
+            trait_args: vec![Type::named("str")],
         }
     );
     assert_eq!(
@@ -19892,28 +20696,28 @@ def main():
     let mut pattern_substitutions = HashMap::new();
     assert!(type_pattern_matches(
         &Type::Named("Box".to_string(), vec![Type::TypeParam("T".to_string())]),
-        &Type::Named("Box".to_string(), vec![Type::named("String")]),
+        &Type::Named("Box".to_string(), vec![Type::named("str")]),
         &type_params,
         &mut pattern_substitutions,
     ));
-    assert_eq!(pattern_substitutions.get("T"), Some(&Type::named("String")));
+    assert_eq!(pattern_substitutions.get("T"), Some(&Type::named("str")));
     assert!(!type_pattern_matches(
         &Type::Named("Box".to_string(), vec![Type::TypeParam("T".to_string())]),
-        &Type::Named("Vec".to_string(), vec![Type::named("String")]),
+        &Type::Named("list".to_string(), vec![Type::named("str")]),
         &type_params,
         &mut HashMap::new(),
     ));
     assert!(has_unresolved_type_params(&Type::TypeParam(
         "T".to_string()
     )));
-    assert!(!has_unresolved_type_params(&Type::named("String")));
+    assert!(!has_unresolved_type_params(&Type::named("str")));
     assert_eq!(
         substitutions_from_decl_type_args(
             &["K".to_string(), "V".to_string()],
-            &[Type::named("String"), Type::named("int32")],
+            &[Type::named("str"), Type::named("int32")],
         ),
         HashMap::from([
-            ("K".to_string(), Type::named("String")),
+            ("K".to_string(), Type::named("str")),
             ("V".to_string(), Type::named("int32")),
         ])
     );
@@ -19928,28 +20732,28 @@ def main():
     assert_eq!(unified.get("T"), Some(&Type::named("int32")));
     let conflict = unify_type_pattern(
         &Type::TypeParam("T".to_string()),
-        &Type::named("String"),
+        &Type::named("str"),
         &mut HashMap::from([("T".to_string(), Type::named("int32"))]),
     )
     .expect_err("conflicting substitutions should fail");
     assert!(conflict.message.contains("conflicting inferred types"));
     let mismatch = unify_type_pattern(
-        &Type::Named("Vec".to_string(), vec![Type::named("int32")]),
-        &Type::named("String"),
+        &Type::Named("list".to_string(), vec![Type::named("int32")]),
+        &Type::named("str"),
         &mut HashMap::new(),
     )
     .expect_err("named type mismatches should fail");
     assert!(mismatch
         .message
-        .contains("expected `Vec[int32]`, found `String`"));
+        .contains("expected `list[int32]`, found `str`"));
 
-    assert!(is_builtin_type("Vec"));
+    assert!(is_builtin_type("list"));
     assert!(!is_builtin_type("Widget"));
     assert!(is_integer_type(&Type::named("int32")));
     assert!(is_float_type(&Type::named("float64")));
-    assert!(is_string_type(&Type::named("String")));
+    assert!(is_string_type(&Type::named("str")));
     assert!(is_numeric_type(&Type::named("uint64")));
-    assert!(!is_numeric_type(&Type::named("String")));
+    assert!(!is_numeric_type(&Type::named("str")));
     assert!(integer_type_bounds(&Type::named("int8")).is_some());
     assert!(integer_type_bounds(&Type::named("float64")).is_none());
 
@@ -19988,8 +20792,8 @@ def main():
     let duplicate_trait_method = crate::check_source(
         "\
 trait Show:
-    def render() -> String
-    def render() -> String
+    def render() -> str
+    def render() -> str
 
 def main():
     pass
@@ -20033,10 +20837,10 @@ def main():
     let duplicate_method = crate::check_source(
         "\
 class Box:
-    def render() -> String:
+    def render() -> str:
         return \"a\"
 
-    def render() -> String:
+    def render() -> str:
         return \"b\"
 
 def main():
@@ -20060,7 +20864,7 @@ def main():
     .expect_err("mismatched field defaults should be rejected");
     assert!(bad_field_default
         .message
-        .contains("default value for field `value` has type `String`, expected `int32`"));
+        .contains("default value for field `value` has type `str`, expected `int32`"));
 
     let mixed_top_level = crate::check_source(
         "\
@@ -20092,7 +20896,7 @@ class Box:
     value: int32
 
 impl Missing for Box:
-    def render() -> String:
+    def render() -> str:
         return \"x\"
 
 def main():
@@ -20128,10 +20932,10 @@ def main():
     let trait_impl_target_type_param = crate::check_source(
         "\
 trait Show:
-    def render() -> String
+    def render() -> str
 
 impl[T] Show for T:
-    def render() -> String:
+    def render() -> str:
         return \"x\"
 
 def main():
@@ -20146,17 +20950,17 @@ def main():
     let duplicate_trait_impl = crate::check_source(
         "\
 trait Show:
-    def render() -> String
+    def render() -> str
 
 class Box:
     value: int32
 
 impl Show for Box:
-    def render() -> String:
+    def render() -> str:
         return \"x\"
 
 impl Show for Box:
-    def render() -> String:
+    def render() -> str:
         return \"y\"
 
 def main():
@@ -20171,13 +20975,13 @@ def main():
     let trait_impl_unknown_method = crate::check_source(
         "\
 trait Show:
-    def render() -> String
+    def render() -> str
 
 class Box:
     value: int32
 
 impl Show for Box:
-    def missing() -> String:
+    def missing() -> str:
         return \"x\"
 
 def main():
@@ -20192,13 +20996,13 @@ def main():
     let trait_impl_receiver_mismatch = crate::check_source(
         "\
 trait Show:
-    def render() -> String
+    def render() -> str
 
 class Box:
     value: int32
 
 impl Show for Box:
-    def render(self) -> String:
+    def render(self) -> str:
         return \"x\"
 
 def main():
@@ -20213,7 +21017,7 @@ def main():
     let trait_impl_signature_mismatch = crate::check_source(
         "\
 trait Show:
-    def render() -> String
+    def render() -> str
 
 class Box:
     value: int32
@@ -20234,14 +21038,14 @@ def main():
     let trait_impl_missing_method = crate::check_source(
         "\
 trait Show:
-    def render() -> String
-    def label() -> String
+    def render() -> str
+    def label() -> str
 
 class Box:
     value: int32
 
 impl Show for Box:
-    def render() -> String:
+    def render() -> str:
         return \"x\"
 
 def main():
@@ -20262,9 +21066,9 @@ fn moving_a_payload_out_of_a_bare_match_names_match_own() {
     let rejected = crate::check_source(
         r#"
 enum Packet:
-    Text(String)
+    Text(str)
 
-def unwrap(packet: own Packet) -> String:
+def unwrap(packet: own Packet) -> str:
     match packet:
         case Packet.Text(text):
             return text
@@ -20288,9 +21092,9 @@ def main():
     let consumed = crate::run_source(
         r#"
 enum Packet:
-    Text(String)
+    Text(str)
 
-def unwrap(packet: own Packet) -> String:
+def unwrap(packet: own Packet) -> str:
     match own packet:
         case Packet.Text(text):
             return text
@@ -20310,7 +21114,7 @@ fn mutable_noncopy_sources_cannot_form_local_aliases() {
             "parameter/plain",
             r#"
 class User:
-    name: String
+    name: str
 
 def rename(user: mut User):
     alias = user
@@ -20322,7 +21126,7 @@ def rename(user: mut User):
             "parameter/mut",
             r#"
 class User:
-    name: String
+    name: str
 
 def rename(user: mut User):
     mut alias = user
@@ -20334,7 +21138,7 @@ def rename(user: mut User):
             "receiver/plain",
             r#"
 class User:
-    name: String
+    name: str
 
     def rename(mut self):
         alias = self
@@ -20346,7 +21150,7 @@ class User:
             "receiver/mut",
             r#"
 class User:
-    name: String
+    name: str
 
     def rename(mut self):
         mut alias = self
@@ -20358,7 +21162,7 @@ class User:
             "match/plain",
             r#"
 class User:
-    name: String
+    name: str
 
 enum Slot:
     Filled(User)
@@ -20375,7 +21179,7 @@ def rename(slot: mut Slot):
             "match/mut",
             r#"
 class User:
-    name: String
+    name: str
 
 enum Slot:
     Filled(User)
@@ -20392,9 +21196,9 @@ def rename(slot: mut Slot):
             "loop/plain",
             r#"
 class User:
-    name: String
+    name: str
 
-def rename(users: mut Vec[User]):
+def rename(users: mut list[User]):
     for user in mut users:
         alias = user
         alias.name = "Grace"
@@ -20405,9 +21209,9 @@ def rename(users: mut Vec[User]):
             "loop/mut",
             r#"
 class User:
-    name: String
+    name: str
 
-def rename(users: mut Vec[User]):
+def rename(users: mut list[User]):
     for user in mut users:
         mut alias = user
         alias.name = "Grace"
@@ -20418,7 +21222,7 @@ def rename(users: mut Vec[User]):
             "member projection",
             r#"
 class Profile:
-    name: String
+    name: str
 
 class User:
     profile: Profile
@@ -20469,7 +21273,7 @@ fn shared_local_alias_rebinding_has_capability_aware_guidance() {
     let rejected = crate::check_source(
         r#"
 class User:
-    name: String
+    name: str
 
 def replace(user: User):
     alias = user
@@ -20493,7 +21297,7 @@ def replace(user: User):
     crate::check_source(
         r#"
 class User:
-    name: String
+    name: str
 
 def replace(user: own User):
     mut replacement = user
@@ -20503,7 +21307,7 @@ def replace(user: own User):
     .expect("an owned input can initialize a separate rebindable value");
     crate::check_source(
         r#"
-def replace(user: String):
+def replace(user: str):
     mut replacement = user.clone()
     replacement = "Grace"
 "#,
@@ -20516,7 +21320,7 @@ fn ownership_help_uses_current_capability_language() {
     let cases = [
         (
             r#"
-def consume(value: own String):
+def consume(value: own str):
     pass
 
 def main():
@@ -20560,8 +21364,8 @@ def main():
         (
             r#"
 class Pair:
-    first: String
-    second: String
+    first: str
+    second: str
 
 def main():
     pair = Pair(first="a", second="b")
@@ -20585,6 +21389,40 @@ def main():
 }
 
 #[test]
+fn moved_collection_diagnostic_offers_the_canonical_copy_member() {
+    for (collection_type, literal) in [
+        ("list[int64]", "[1]"),
+        ("dict[str, int64]", "{\"one\": 1}"),
+        ("set[int64]", "{1}"),
+    ] {
+        let source = format!(
+            r#"
+def consume(values: own {collection_type}):
+    pass
+
+def main():
+    values = {literal}
+    consume(values)
+    print(values)
+"#
+        );
+        let rejected = crate::check_source(&source)
+            .expect_err("using a transferred collection must be rejected");
+
+        assert_eq!(rejected.code, "AU3001", "{source}");
+        assert_eq!(
+            rejected.help,
+            vec![
+                "pass shared access when ownership is not needed, or call `.copy()` at the move site when an independent value is required"
+            ],
+            "{source}"
+        );
+        assert_eq!(rejected.edits.len(), 1, "{source}");
+        assert_eq!(rejected.edits[0].replacement, ".copy()", "{source}");
+    }
+}
+
+#[test]
 fn shared_match_aliases_keep_source_provenance_until_last_use() {
     for (label, alias_expr, alias_use) in [
         ("direct", "user", "alias.profile.name"),
@@ -20593,7 +21431,7 @@ fn shared_match_aliases_keep_source_provenance_until_last_use() {
         let source = format!(
             r#"
 class Profile:
-    name: String
+    name: str
 
 class User:
     profile: Profile
@@ -20631,7 +21469,7 @@ def main():
     let direct_payload = crate::check_source(
         r#"
 class User:
-    name: String
+    name: str
 
 enum Slot:
     Filled(User)
@@ -20657,7 +21495,7 @@ def main():
     let branch_change = crate::check_source(
         r#"
 class User:
-    name: String
+    name: str
 
 enum Slot:
     Filled(User)
@@ -20685,7 +21523,7 @@ def main():
     let after_last_use = crate::run_source(
         r#"
 class User:
-    name: String
+    name: str
 
 enum Slot:
     Filled(User)
@@ -20909,35 +21747,35 @@ def sample(rng: mut random.Rng, value: mut int64):
 "#,
         ),
         (
-            "Vec.set index",
+            "list.set index",
             r#"
 def bump(value: mut int32) -> int32:
     value += 1
     return value
 
-def update(values: mut Vec[int32], index: mut int32):
+def update(values: mut list[int32], index: mut int32):
     values.set(index, bump(index))
 "#,
         ),
         (
-            "Vec.insert index",
+            "list.insert index",
             r#"
 def bump(value: mut int32) -> int32:
     value += 1
     return value
 
-def update(values: mut Vec[int32], index: mut int32):
+def update(values: mut list[int32], index: mut int32):
     values.insert(index, bump(index))
 "#,
         ),
         (
-            "Vec.swap first",
+            "list.swap first",
             r#"
 def bump(value: mut int32) -> int32:
     value += 1
     return value
 
-def update(values: mut Vec[int32], index: mut int32):
+def update(values: mut list[int32], index: mut int32):
     values.swap(index, bump(index))
 "#,
         ),
@@ -20946,7 +21784,7 @@ def update(values: mut Vec[int32], index: mut int32):
             r#"
 import net
 
-def text_after_bump(status: mut int32) -> String:
+def text_after_bump(status: mut int32) -> str:
     status += 1
     return "done"
 
@@ -20959,7 +21797,7 @@ def respond(exchange: net.HttpExchange, status: mut int32):
             r#"
 import net
 
-def bytes_after_bump(status: mut int32) -> Vec[uint8]:
+def bytes_after_bump(status: mut int32) -> list[uint8]:
     status += 1
     return [1 as uint8]
 
@@ -21077,7 +21915,7 @@ def bump(value: mut int32) -> int32:
     value += 1
     return value
 
-def update(values: mut Vec[int32], index: mut int32):
+def update(values: mut list[int32], index: mut int32):
     values.set(value=bump(index), index=index)
 "#,
     )
@@ -21129,9 +21967,7 @@ def main() -> int32:
         let wrong_type = crate::check_source(&source).expect_err("stack size must be int64");
         assert_eq!(wrong_type.code, "AU2002", "{method}");
         assert!(
-            wrong_type
-                .message
-                .contains("expects `int64`, found `String`"),
+            wrong_type.message.contains("expects `int64`, found `str`"),
             "unexpected diagnostic for {method}: {wrong_type:?}"
         );
     }
@@ -21142,30 +21978,30 @@ fn task_boundaries_accept_structurally_transferable_values_and_results() {
     crate::check_source(
         r#"
 class Message:
-    label: String
-    samples: Vec[int64]
+    label: str
+    samples: list[int64]
 
 enum Delivery:
     Ready(Message)
-    Routed(queue: Queue[String], task: Task[String])
+    Routed(queue: Queue[str], task: Task[str])
 
-def echo(payload: own Delivery, metadata: own Map[String, Set[int32]]) -> Delivery:
+def echo(payload: own Delivery, metadata: own dict[str, set[int32]]) -> Delivery:
     print(metadata)
     return payload
 
-def relay(task: own Task[String], queue: Queue[String]) -> (Task[String], Queue[String]):
+def relay(task: own Task[str], queue: Queue[str]) -> (Task[str], Queue[str]):
     return (task, queue)
 
-def launch(task: own Task[String], queue: Queue[String]):
+def launch(task: own Task[str], queue: Queue[str]):
     with group = TaskGroup():
-        metadata = Map[String, Set[int32]]()
+        metadata = dict[str, set[int32]]()
         payload = Delivery.Ready(Message(label="ready", samples=[1, 2]))
         group.start(echo, payload, metadata)
         group.start(relay, task, queue)
 "#,
     )
     .expect(
-        "copy data, String, structural containers, classes, enums, tuples, and handles are Transfer",
+        "copy data, str, structural containers, classes, enums, tuples, and handles are Transfer",
     );
 }
 
@@ -21173,10 +22009,10 @@ def launch(task: own Task[String], queue: Queue[String]):
 fn task_boundaries_derive_transfer_for_both_select_outcome_payload_categories() {
     crate::check_source(
         r#"
-def consume(outcome: own SelectOutcome[String, int32]):
+def consume(outcome: own SelectOutcome[str, int32]):
     print(outcome)
 
-def launch(outcome: own SelectOutcome[String, int32]):
+def launch(outcome: own SelectOutcome[str, int32]):
     with group = TaskGroup():
         group.start(consume, outcome)
 "#,
@@ -21189,8 +22025,8 @@ def launch(outcome: own SelectOutcome[String, int32]):
             "queue payload of `SelectOutcome[random.Rng, int32]`",
         ),
         (
-            "String, random.Rng",
-            "task payload of `SelectOutcome[String, random.Rng]`",
+            "str, random.Rng",
+            "task payload of `SelectOutcome[str, random.Rng]`",
         ),
     ] {
         let source = format!(
@@ -21259,7 +22095,7 @@ class GeneratorBox:
     generator: random.Rng
 
 class Job:
-    boxes: Vec[GeneratorBox]
+    boxes: list[GeneratorBox]
 
 def use_job(job: own Job):
     pass
@@ -21279,7 +22115,7 @@ def launch(job: own Job):
     );
     assert!(
         nested_argument.message.contains(
-            "field `boxes` of `Job` -> element of `Vec[GeneratorBox]` -> field `generator` of `GeneratorBox` -> `random.Rng` is a stateful generator and is not Transfer"
+            "field `boxes` of `Job` -> element of `list[GeneratorBox]` -> field `generator` of `GeneratorBox` -> `random.Rng` is a stateful generator and is not Transfer"
         ),
         "{nested_argument:?}"
     );
@@ -21328,7 +22164,7 @@ def launch():
         group.start(echo, "transfer")
 "#,
     )
-    .expect("a generic task target specialized with String should be Transfer");
+    .expect("a generic task target specialized with str should be Transfer");
 
     let rejected = crate::check_source(
         r#"
@@ -21412,7 +22248,7 @@ fn transfer_coinduction_checks_changing_recursive_specializations() {
         r#"
 class Growing[T]:
     value: T
-    next: indirect Growing[Vec[T]]
+    next: indirect Growing[list[T]]
 
 def worker(value: own Growing[int32]):
     pass
@@ -21468,7 +22304,7 @@ def launch():
 
     let consumed = crate::check_source(
         r#"
-def text() -> String:
+def text() -> str:
     return "ready"
 
 def launch():
@@ -21484,7 +22320,7 @@ def launch():
 
     let shared = crate::check_source(
         r#"
-def observe(task: Task[String]):
+def observe(task: Task[str]):
     print(task.result_or("missing"))
 "#,
     )
@@ -21493,7 +22329,7 @@ def observe(task: Task[String]):
     assert!(shared.message.contains("parameter `task` is borrowed"));
 
     assert!(Type::Named("Task".to_string(), vec![Type::named("int32")]).is_copy());
-    assert!(!Type::Named("Task".to_string(), vec![Type::named("String")]).is_copy());
+    assert!(!Type::Named("Task".to_string(), vec![Type::named("str")]).is_copy());
     assert!(Type::Named(
         "Task".to_string(),
         vec![Type::Named(
@@ -21504,7 +22340,7 @@ def observe(task: Task[String]):
     .is_copy());
     assert!(!Type::Named(
         "Task".to_string(),
-        vec![Type::Named("Task".to_string(), vec![Type::named("String")])]
+        vec![Type::Named("Task".to_string(), vec![Type::named("str")])]
     )
     .is_copy());
 }
@@ -21513,8 +22349,8 @@ def observe(task: Task[String]):
 fn clone_producing_operations_cannot_duplicate_task_observation_rights() {
     let rejected = crate::check_source(
         r#"
-def duplicate(tasks: Vec[Task[String]]) -> Vec[Task[String]]:
-    return tasks.clone()
+def duplicate(tasks: list[Task[str]]) -> list[Task[str]]:
+    return tasks.copy()
 "#,
     )
     .expect_err("cloning a container must not duplicate single-consumer Task handles");
@@ -21522,7 +22358,7 @@ def duplicate(tasks: Vec[Task[String]]) -> Vec[Task[String]]:
     assert!(
         rejected
             .message
-            .contains("second observation right for non-repeatable task result `String`"),
+            .contains("second observation right for non-repeatable task result `str`"),
         "{rejected:?}"
     );
 }
@@ -21611,21 +22447,35 @@ def launch(stream: own net.TcpStream):
 }
 
 #[test]
-fn map_entry_clone_observers_preserve_single_task_result_rights() {
-    for helper in ["items", "entries"] {
-        let source = format!(
-            "def duplicate(values: Map[String, Task[String]]):\n    print(values.{helper}())\n"
-        );
-        let rejected = crate::check_source(&source)
-            .expect_err("Map entry cloning must not duplicate a Task[String] right");
-        assert_eq!(rejected.code, "AU3009", "{helper}: {rejected:?}");
-        assert!(
-            rejected
-                .message
-                .contains("non-repeatable task result `String`"),
-            "{helper}: {rejected:?}"
-        );
-    }
+fn dict_items_clone_observers_preserve_single_task_result_rights() {
+    let rejected = crate::check_source(
+        "def duplicate(values: dict[str, Task[str]]):\n    print(values.items())\n",
+    )
+    .expect_err("dict item cloning must not duplicate a Task[str] right");
+    assert_eq!(rejected.code, "AU3009", "{rejected:?}");
+    assert!(
+        rejected
+            .message
+            .contains("non-repeatable task result `str`"),
+        "{rejected:?}"
+    );
+}
+
+#[test]
+fn empty_set_constructor_requires_an_explicit_element_type() {
+    let rejected = crate::check_source("def main():\n    values = set()\n")
+        .expect_err("an empty set constructor cannot infer its element type");
+
+    assert_eq!(rejected.code, "AU2005");
+    assert_eq!(
+        rejected.message,
+        "empty set construction requires an explicit element type"
+    );
+    assert_eq!(
+        rejected.help,
+        ["write `set[T]()` with the intended element type"]
+    );
+    assert!(rejected.edits.is_empty());
 }
 
 #[test]
@@ -21642,15 +22492,15 @@ class Factory:
 def pair[A, B]() -> (Option[A], Option[B]):
     return (Option.None, Option.None)
 
-def fallback(value: own Option[String] = Option.None) -> Option[String]:
+def fallback(value: own Option[str] = Option.None) -> Option[str]:
     return value
 
 def launch():
     with group = TaskGroup():
-        first = group.start(empty[String])
-        second = group.start(Factory.empty[String])
+        first = group.start(empty[str])
+        second = group.start(Factory.empty[str])
         third = group.start(fallback)
-        group.start(pair[String, int32])
+        group.start(pair[str, int32])
         print(first.result_or(Option.None))
         print(second.result_or(Option.None))
         print(third.result_or(Option.None))
@@ -21665,7 +22515,7 @@ def pair[A, B]() -> (Option[A], Option[B]):
 
 def launch():
     with group = TaskGroup():
-        group.start(pair[String])
+        group.start(pair[str])
 "#,
     )
     .expect_err("task callable specialization must enforce all explicit type arguments");
@@ -21690,10 +22540,10 @@ def launch(value: int32):
 
     let rejected = crate::check_source(
         r#"
-def worker(value: own String):
+def worker(value: own str):
     pass
 
-def launch(value: String):
+def launch(value: str):
     with group = TaskGroup():
         group.start_soon(worker, value)
 "#,
@@ -21713,10 +22563,10 @@ class Stair[A, B]:
     value: A
     next: indirect Stair[B, random.Rng]
 
-def worker(value: own Stair[int32, String]):
+def worker(value: own Stair[int32, str]):
     pass
 
-def launch(value: own Stair[int32, String]):
+def launch(value: own Stair[int32, str]):
     with group = TaskGroup():
         group.start_soon(worker, value)
 "#,
@@ -21738,8 +22588,8 @@ fn task_observation_duplication_ignores_phantom_type_arguments() {
 class Phantom[T]:
     marker: int32
 
-def duplicate(values: Vec[Phantom[Task[String]]]) -> Vec[Phantom[Task[String]]]:
-    return values.clone()
+def duplicate(values: list[Phantom[Task[str]]]) -> list[Phantom[Task[str]]]:
+    return values.copy()
 "#,
     )
     .expect("a Task in an unused type argument does not create a stored observation right");
@@ -21748,10 +22598,10 @@ def duplicate(values: Vec[Phantom[Task[String]]]) -> Vec[Phantom[Task[String]]]:
         r#"
 class Growing[T]:
     value: T
-    next: indirect Growing[Vec[T]]
+    next: indirect Growing[list[T]]
 
-def duplicate(values: Vec[Growing[Task[int32]]]) -> Vec[Growing[Task[int32]]]:
-    return values.clone()
+def duplicate(values: list[Growing[Task[int32]]]) -> list[Growing[Task[int32]]]:
+    return values.copy()
 "#,
     )
     .expect("changing recursive specializations must not invent an observation right");
@@ -21762,9 +22612,9 @@ fn conditional_task_observation_consumption_participates_in_argument_overlap() {
     let task_member = crate::check_source(
         r#"
 class Holder:
-    task: Task[String]
+    task: Task[str]
 
-def derive(holder: Holder) -> String:
+def derive(holder: Holder) -> str:
     return "fallback"
 
 def observe(holder: own Holder):
@@ -21783,10 +22633,10 @@ def observe(holder: own Holder):
 
     let wait = crate::check_source(
         r#"
-def derive_timeout(tasks: Vec[Task[String]]) -> Duration:
+def derive_timeout(tasks: list[Task[str]]) -> Duration:
     return 1ms
 
-def observe(tasks: own Vec[Task[String]]):
+def observe(tasks: own list[Task[str]]):
     print(wait_any(tasks, timeout=derive_timeout(tasks)))
 "#,
     )
@@ -21801,10 +22651,10 @@ def observe(tasks: own Vec[Task[String]]):
 
     crate::check_source(
         r#"
-def derive_timeout(tasks: Vec[Task[int32]]) -> Duration:
+def derive_timeout(tasks: list[Task[int32]]) -> Duration:
     return 1ms
 
-def observe(tasks: Vec[Task[int32]]):
+def observe(tasks: list[Task[int32]]):
     print(wait_any(tasks, timeout=derive_timeout(tasks)))
     print(wait_all(tasks, timeout=derive_timeout(tasks)))
 "#,
@@ -21813,15 +22663,15 @@ def observe(tasks: Vec[Task[int32]]):
 }
 
 #[test]
-fn transfer_diagnostics_preserve_map_entry_result_and_generic_witnesses() {
+fn transfer_diagnostics_preserve_dict_result_and_generic_witnesses() {
     let map_key = crate::check_source(
         r#"
 import random
 
-def consume(values: own Map[random.Rng, String]):
+def consume(values: own dict[random.Rng, str]):
     pass
 
-def launch(values: own Map[random.Rng, String]):
+def launch(values: own dict[random.Rng, str]):
     with group = TaskGroup():
         group.start(consume, values)
 "#,
@@ -21832,7 +22682,7 @@ def launch(values: own Map[random.Rng, String]):
     assert!(
         map_key
             .message
-            .contains("key of `Map[random.Rng, String]` -> `random.Rng`"),
+            .contains("key of `dict[random.Rng, str]` -> `random.Rng`"),
         "{map_key:?}"
     );
     assert!(map_key
@@ -21840,53 +22690,11 @@ def launch(values: own Map[random.Rng, String]):
         .iter()
         .any(|help| help.contains("keep capabilities and host resources on their owning worker")));
 
-    let entry_value = crate::check_source(
-        r#"
-import fs
-
-def consume(entry: own MapEntry[String, fs.File]):
-    pass
-
-def launch(entry: own MapEntry[String, fs.File]):
-    with group = TaskGroup():
-        group.start(consume, entry)
-"#,
-    )
-    .expect_err("a non-Transfer MapEntry value must name its stored field");
-    assert_eq!(entry_value.code, "AU3008");
-    assert!(
-        entry_value
-            .message
-            .contains("field `value` of `MapEntry[String, fs.File]` -> `fs.File`"),
-        "{entry_value:?}"
-    );
-
-    let entry_key = crate::check_source(
-        r#"
-import random
-
-def consume(entry: own MapEntry[random.Rng, String]):
-    pass
-
-def launch(entry: own MapEntry[random.Rng, String]):
-    with group = TaskGroup():
-        group.start(consume, entry)
-"#,
-    )
-    .expect_err("a non-Transfer MapEntry key must name its stored field");
-    assert_eq!(entry_key.code, "AU3008");
-    assert!(
-        entry_key
-            .message
-            .contains("field `key` of `MapEntry[random.Rng, String]` -> `random.Rng`"),
-        "{entry_key:?}"
-    );
-
     let result_error = crate::check_source(
         r#"
 import random
 
-def produce() -> Result[String, random.Rng]:
+def produce() -> Result[str, random.Rng]:
     return Result.Ok("ready")
 
 def launch():
@@ -21899,7 +22707,7 @@ def launch():
     assert!(
         result_error
             .message
-            .contains("error payload of `Result[String, random.Rng]` -> `random.Rng`"),
+            .contains("error payload of `Result[str, random.Rng]` -> `random.Rng`"),
         "{result_error:?}"
     );
 
@@ -21978,35 +22786,33 @@ fn clone_rejection_follows_stored_task_rights_through_classes_enums_and_generics
     let class = crate::check_source(
         r#"
 class Holder:
-    label: String
-    task: Task[String]
+    label: str
+    task: Task[str]
 
-def duplicate(values: Vec[Holder]) -> Vec[Holder]:
-    return values.clone()
+def duplicate(values: list[Holder]) -> list[Holder]:
+    return values.copy()
 "#,
     )
-    .expect_err("a stored Task[String] right makes its enclosing class non-duplicable");
+    .expect_err("a stored Task[str] right makes its enclosing class non-duplicable");
     assert_eq!(class.code, "AU3009");
     assert_eq!(class.span, Some(Span::new(7, 19)));
-    assert!(class
-        .message
-        .contains("non-repeatable task result `String`"));
+    assert!(class.message.contains("non-repeatable task result `str`"));
 
     let enumeration = crate::check_source(
         r#"
 enum Work:
     Empty
-    Pending(Task[String])
+    Pending(Task[str])
 
-def duplicate(values: Vec[Work]) -> Vec[Work]:
-    return values.clone()
+def duplicate(values: list[Work]) -> list[Work]:
+    return values.copy()
 "#,
     )
     .expect_err("a task right in a later enum variant must still prevent duplication");
     assert_eq!(enumeration.code, "AU3009");
     assert!(enumeration
         .message
-        .contains("non-repeatable task result `String`"));
+        .contains("non-repeatable task result `str`"));
 
     crate::check_source(
         r#"
@@ -22016,11 +22822,11 @@ class Holder[T]:
 class Observer[T]:
     task: Task[T]
 
-def copy_containment(values: Vec[Holder[Task[int32]]]) -> Vec[Holder[Task[int32]]]:
-    return values.clone()
+def copy_containment(values: list[Holder[Task[int32]]]) -> list[Holder[Task[int32]]]:
+    return values.copy()
 
-def copy_conditional(values: Vec[Observer[int32]]) -> Vec[Observer[int32]]:
-    return values.clone()
+def copy_conditional(values: list[Observer[int32]]) -> list[Observer[int32]]:
+    return values.copy()
 "#,
     )
     .expect("copy-result tasks remain repeatably observable through generic stored fields");
@@ -22030,24 +22836,24 @@ def copy_conditional(values: Vec[Observer[int32]]) -> Vec[Observer[int32]]:
 class Holder[T]:
     value: T
 
-def duplicate(values: Vec[Holder[Task[String]]]) -> Vec[Holder[Task[String]]]:
-    return values.clone()
+def duplicate(values: list[Holder[Task[str]]]) -> list[Holder[Task[str]]]:
+    return values.copy()
 "#,
         r#"
 class Observer[T]:
     task: Task[T]
 
-def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
-    return values.clone()
+def duplicate(values: list[Observer[str]]) -> list[Observer[str]]:
+    return values.copy()
 "#,
     ] {
         let rejected = crate::check_source(source)
-            .expect_err("a concrete String specialization has one stored task-result right");
+            .expect_err("a concrete str specialization has one stored task-result right");
         assert_eq!(rejected.code, "AU3009", "{rejected:?}");
         assert!(
             rejected
                 .message
-                .contains("non-repeatable task result `String`"),
+                .contains("non-repeatable task result `str`"),
             "{rejected:?}"
         );
     }
@@ -22088,29 +22894,29 @@ class EnumObserver[T]:
 class CopyClassObserver:
     task: Task[CopyPoint]
 
-def copy_tuple(values: Vec[TupleObserver[int32]]) -> Vec[TupleObserver[int32]]:
-    return values.clone()
+def copy_tuple(values: list[TupleObserver[int32]]) -> list[TupleObserver[int32]]:
+    return values.copy()
 
-def copy_option(values: Vec[OptionObserver[int32]]) -> Vec[OptionObserver[int32]]:
-    return values.clone()
+def copy_option(values: list[OptionObserver[int32]]) -> list[OptionObserver[int32]]:
+    return values.copy()
 
-def copy_result(values: Vec[ResultObserver[int32]]) -> Vec[ResultObserver[int32]]:
-    return values.clone()
+def copy_result(values: list[ResultObserver[int32]]) -> list[ResultObserver[int32]]:
+    return values.copy()
 
-def copy_send(values: Vec[SendObserver[int32]]) -> Vec[SendObserver[int32]]:
-    return values.clone()
+def copy_send(values: list[SendObserver[int32]]) -> list[SendObserver[int32]]:
+    return values.copy()
 
-def copy_receive(values: Vec[ReceiveObserver[int32]]) -> Vec[ReceiveObserver[int32]]:
-    return values.clone()
+def copy_receive(values: list[ReceiveObserver[int32]]) -> list[ReceiveObserver[int32]]:
+    return values.copy()
 
-def copy_nested_task(values: Vec[NestedTaskObserver[int32]]) -> Vec[NestedTaskObserver[int32]]:
-    return values.clone()
+def copy_nested_task(values: list[NestedTaskObserver[int32]]) -> list[NestedTaskObserver[int32]]:
+    return values.copy()
 
-def copy_enum(values: Vec[EnumObserver[int32]]) -> Vec[EnumObserver[int32]]:
-    return values.clone()
+def copy_enum(values: list[EnumObserver[int32]]) -> list[EnumObserver[int32]]:
+    return values.copy()
 
-def copy_class(values: Vec[CopyClassObserver]) -> Vec[CopyClassObserver]:
-    return values.clone()
+def copy_class(values: list[CopyClassObserver]) -> list[CopyClassObserver]:
+    return values.copy()
 "#,
     )
     .expect("every all-Copy specialization retains repeatable task observation");
@@ -22122,10 +22928,10 @@ def copy_class(values: Vec[CopyClassObserver]) -> Vec[CopyClassObserver]:
 class Observer[T]:
     task: Task[(T, int32)]
 
-def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
-    return values.clone()
+def duplicate(values: list[Observer[str]]) -> list[Observer[str]]:
+    return values.copy()
 "#,
-            "(String, int32)",
+            "(str, int32)",
         ),
         (
             "option",
@@ -22133,10 +22939,10 @@ def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
 class Observer[T]:
     task: Task[Option[T]]
 
-def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
-    return values.clone()
+def duplicate(values: list[Observer[str]]) -> list[Observer[str]]:
+    return values.copy()
 "#,
-            "Option[String]",
+            "Option[str]",
         ),
         (
             "result",
@@ -22144,10 +22950,10 @@ def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
 class Observer[T]:
     task: Task[Result[int32, T]]
 
-def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
-    return values.clone()
+def duplicate(values: list[Observer[str]]) -> list[Observer[str]]:
+    return values.copy()
 "#,
-            "Result[int32, String]",
+            "Result[int32, str]",
         ),
         (
             "send error",
@@ -22155,10 +22961,10 @@ def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
 class Observer[T]:
     task: Task[SendError[T]]
 
-def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
-    return values.clone()
+def duplicate(values: list[Observer[str]]) -> list[Observer[str]]:
+    return values.copy()
 "#,
-            "SendError[String]",
+            "SendError[str]",
         ),
         (
             "queue receive",
@@ -22166,10 +22972,10 @@ def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
 class Observer[T]:
     task: Task[QueueReceive[T]]
 
-def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
-    return values.clone()
+def duplicate(values: list[Observer[str]]) -> list[Observer[str]]:
+    return values.copy()
 "#,
-            "QueueReceive[String]",
+            "QueueReceive[str]",
         ),
         (
             "nested task",
@@ -22177,10 +22983,10 @@ def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
 class Observer[T]:
     task: Task[Task[T]]
 
-def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
-    return values.clone()
+def duplicate(values: list[Observer[str]]) -> list[Observer[str]]:
+    return values.copy()
 "#,
-            "Task[String]",
+            "Task[str]",
         ),
         (
             "generic enum",
@@ -22192,22 +22998,22 @@ enum Maybe[T]:
 class Observer[T]:
     task: Task[Maybe[T]]
 
-def duplicate(values: Vec[Observer[String]]) -> Vec[Observer[String]]:
-    return values.clone()
+def duplicate(values: list[Observer[str]]) -> list[Observer[str]]:
+    return values.copy()
 "#,
-            "Maybe[String]",
+            "Maybe[str]",
         ),
         (
             "non-copy class",
             r#"
 class HeapValue:
-    text: String
+    text: str
 
 class Observer:
     task: Task[HeapValue]
 
-def duplicate(values: Vec[Observer]) -> Vec[Observer]:
-    return values.clone()
+def duplicate(values: list[Observer]) -> list[Observer]:
+    return values.copy()
 "#,
             "HeapValue",
         ),
@@ -22235,8 +23041,8 @@ enum Chain[T]:
 class Observer:
     task: Task[Chain[int32]]
 
-def duplicate(values: Vec[Observer]) -> Vec[Observer]:
-    return values.clone()
+def duplicate(values: list[Observer]) -> list[Observer]:
+    return values.copy()
 "#,
     )
     .expect_err("recursive heap-backed result shapes are not implicitly repeatable");
@@ -22262,9 +23068,9 @@ class Factory:
 
 def launch():
     with group = TaskGroup():
-        group.start(empty[Option[String]])
-        group.start(Factory.empty[Result[String, int32]])
-        group.start(identity[((String, int32))], ("ready", 7))
+        group.start(empty[Option[str]])
+        group.start(Factory.empty[Result[str, int32]])
+        group.start(identity[((str, int32))], ("ready", 7))
 "#,
     )
     .expect("task targets accept nested named types and one grouped tuple type argument");
@@ -22274,8 +23080,8 @@ def launch():
 def empty[T]() -> Option[T]:
     return Option.None
 
-def make_type() -> String:
-    return "String"
+def make_type() -> str:
+    return "str"
 
 def launch():
     with group = TaskGroup():
@@ -22307,7 +23113,7 @@ fn capture_free_function_types_are_copy_values_with_declaration_spelling() {
             },
             FunctionParamContract {
                 name: "right".to_string(),
-                ty: Type::named("String"),
+                ty: Type::named("str"),
                 passing: ReceiverKind::Value,
                 has_default: true,
                 default_erased: false,
@@ -22325,7 +23131,7 @@ fn capture_free_function_types_are_copy_values_with_declaration_spelling() {
     assert!(function.is_copy(), "capture-free code pointers are Copy");
     assert_eq!(
         function.to_string(),
-        "def(int32, own String, mut int64) -> bool",
+        "def(int32, own str, mut int64) -> bool",
         "written function types preserve parameter capability contracts"
     );
 }
@@ -22351,7 +23157,7 @@ def main():
     copied = inferred
     annotated: def(int32) -> int32 = increment
     pipeline = Pipeline(transform=annotated)
-    transforms: Vec[def(int32) -> int32] = [increment, double]
+    transforms: list[def(int32) -> int32] = [increment, double]
     first: int32 = apply(copied, 1)
     second: int32 = pipeline.transform(first)
     third: int32 = transforms[1](second)
@@ -22365,7 +23171,7 @@ def main():
 fn inferred_function_values_preserve_own_and_mut_capabilities() {
     crate::check_source(
         r#"
-def consume(value: own String) -> int32:
+def consume(value: own str) -> int32:
     return 1
 
 def bump(value: mut int32):
@@ -22400,15 +23206,15 @@ def main():
 #[test]
 fn written_function_types_preserve_nonshared_capabilities_and_reject_mismatches() {
     for source in [
-        "def transform(value: own String) -> String:\n    return value\n\ndef main():\n    callback: def(own String) -> String = transform\n    text = \"value\"\n    result: String = callback(text)\n",
-        "def transform(value: mut String):\n    value += \"!\"\n\ndef main():\n    callback: def(mut String) -> None = transform\n    mut text = \"value\"\n    callback(text)\n",
+        "def transform(value: own str) -> str:\n    return value\n\ndef main():\n    callback: def(own str) -> str = transform\n    text = \"value\"\n    result: str = callback(text)\n",
+        "def transform(value: mut str):\n    value += \"!\"\n\ndef main():\n    callback: def(mut str) -> None = transform\n    mut text = \"value\"\n    callback(text)\n",
     ] {
         crate::check_source(source)
             .expect("written function types should preserve explicit nonshared capabilities");
     }
 
     let mismatch = crate::check_source(
-        "def transform(value: own String) -> String:\n    return value\n\ndef main():\n    callback: def(mut String) -> String = transform\n",
+        "def transform(value: own str) -> str:\n    return value\n\ndef main():\n    callback: def(mut str) -> str = transform\n",
     )
     .expect_err("different written capabilities remain incompatible");
     assert_eq!(mismatch.code, "AU2002");
@@ -22431,11 +23237,11 @@ def empty[T]() -> Option[T]:
     return Option.None
 
 def main():
-    identity_string = identity[String]
+    identity_string = identity[str]
     copied = identity_string
-    value: String = copied("ready")
-    empty_string: def() -> Option[String] = empty
-    missing: Option[String] = empty_string()
+    value: str = copied("ready")
+    empty_string: def() -> Option[str] = empty
+    missing: Option[str] = empty_string()
 "#,
     )
     .expect("generic function values specialize explicitly or from an expected function type");
@@ -22622,7 +23428,7 @@ fn repeated_generic_evidence_intersects_callable_contract_metadata() {
 
     let nested = |contract| {
         Type::Tuple(vec![Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
             vec![Type::Named("Holder".to_string(), vec![contract])],
         )])
     };
@@ -22738,7 +23544,7 @@ def main():
             "    selected = choose((first, first), (second, second), true)[0]\n    selected(value=3)\n",
         ),
         (
-            "Vec",
+            "list",
             "    selected = choose([first], [second], true)[0]\n    selected(value=3)\n",
         ),
         (
@@ -22781,7 +23587,7 @@ fn inferred_own_and_mut_function_contracts_survive_generic_and_storage_paths() {
 def identity[T](value: own T) -> T:
     return value
 
-def consume(value: own String) -> int32:
+def consume(value: own str) -> int32:
     return 1
 
 def bump(value: mut int32):
@@ -22824,12 +23630,12 @@ def second(number: int32 = 2) -> int32:
 
 def main():
     mut callbacks = [first]
-    callbacks.push(second)
+    callbacks.append(second)
     callbacks.set(0, second)
     from_vec: int32 = callbacks[0](3)
 
     mut callbacks_by_name = {"first": first}
-    callbacks_by_name.set("second", second)
+    callbacks_by_name["second"] = second
     from_map: int32 = callbacks_by_name["second"](4)
 
     mut holder = Holder(callback=first)
@@ -22849,7 +23655,7 @@ def second(number: int32 = 2) -> int32:
 
 def main():
     mut callbacks = [first]
-    callbacks.push(second)
+    callbacks.append(second)
     callbacks.set(0, second)
     callbacks[0](value=3)
 "#,
@@ -22868,7 +23674,7 @@ def required(value: int32) -> int32:
 
 def main():
     mut callbacks = [defaulted]
-    callbacks.push(required)
+    callbacks.append(required)
     callbacks.set(0, required)
     callbacks[0]()
 "#,
@@ -22887,7 +23693,7 @@ def second(number: int32 = 2) -> int32:
 
 def main():
     mut callbacks = {"first": first}
-    callbacks.set("second", second)
+    callbacks["second"] = second
     callbacks["second"](number=3)
 "#,
     )
@@ -22947,6 +23753,8 @@ fn imported_module_functions_are_first_class_values() {
         type_param_bounds: BTreeMap::new(),
     };
     let namespace = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "tools".to_string(),
         path: "pkg.tools".to_string(),
         source_path: None,
@@ -22996,6 +23804,8 @@ fn nested_imported_module_functions_are_first_class_values() {
         type_param_bounds: BTreeMap::new(),
     };
     let helpers = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "helpers".to_string(),
         path: "function_value_imported_support.helpers".to_string(),
         source_path: None,
@@ -23018,6 +23828,8 @@ fn nested_imported_module_functions_are_first_class_values() {
         comprehensions: BTreeMap::new(),
     };
     let support = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "function_value_imported_support".to_string(),
         path: "function_value_imported_support".to_string(),
         source_path: None,
@@ -23113,7 +23925,7 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
             type_ref("T"),
             span,
         )],
-        nested_type_ref("Vec", vec![type_ref("U")]),
+        nested_type_ref("list", vec![type_ref("U")]),
         span,
     );
     let mut ref_params = BTreeSet::new();
@@ -23133,7 +23945,7 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
             default_erased: true,
         }],
         return_type: Box::new(Type::Named(
-            "Vec".to_string(),
+            "list".to_string(),
             vec![Type::TypeParam("U".to_string())],
         )),
     };
@@ -23171,7 +23983,7 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
             has_default: true,
             default_erased: false,
         }],
-        return_type: Box::new(Type::Named("Vec".to_string(), vec![Type::named("String")])),
+        return_type: Box::new(Type::Named("list".to_string(), vec![Type::named("str")])),
     };
     let type_params = BTreeSet::from(["T".to_string(), "U".to_string()]);
     let mut substitutions = HashMap::new();
@@ -23182,22 +23994,22 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
         &mut substitutions,
     ));
     assert_eq!(substitutions.get("T"), Some(&Type::named("int32")));
-    assert_eq!(substitutions.get("U"), Some(&Type::named("String")));
+    assert_eq!(substitutions.get("U"), Some(&Type::named("str")));
     assert!(
         !type_pattern_matches(
             &pattern,
-            &Type::named("String"),
+            &Type::named("str"),
             &type_params,
             &mut HashMap::new(),
         ),
         "a function pattern does not match a non-callable value",
     );
 
-    let non_callable = unify_type_pattern(&pattern, &Type::named("String"), &mut HashMap::new())
+    let non_callable = unify_type_pattern(&pattern, &Type::named("str"), &mut HashMap::new())
         .expect_err("function unification rejects a non-callable actual type");
     assert_eq!(
         non_callable.message,
-        "expected `def(mut T) -> Vec[U]`, found `String`",
+        "expected `def(mut T) -> list[U]`, found `str`",
     );
 
     let wrong_capability = Type::Function {
@@ -23208,7 +24020,7 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
             has_default: false,
             default_erased: false,
         }],
-        return_type: Box::new(Type::Named("Vec".to_string(), vec![Type::named("String")])),
+        return_type: Box::new(Type::Named("list".to_string(), vec![Type::named("str")])),
     };
     let mismatch = unify_type_pattern(&pattern, &wrong_capability, &mut HashMap::new())
         .expect_err("function unification preserves parameter capabilities");
@@ -23219,13 +24031,13 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
 
     let wrong_arity = Type::Function {
         params: Vec::new(),
-        return_type: Box::new(Type::Named("Vec".to_string(), vec![Type::named("String")])),
+        return_type: Box::new(Type::Named("list".to_string(), vec![Type::named("str")])),
     };
     let mismatch = unify_type_pattern(&pattern, &wrong_arity, &mut HashMap::new())
         .expect_err("function unification preserves callable arity");
     assert_eq!(
         mismatch.message,
-        "expected `def(mut T) -> Vec[U]`, found `def() -> Vec[String]`",
+        "expected `def(mut T) -> list[U]`, found `def() -> list[str]`",
     );
 
     assert!(
@@ -23246,11 +24058,11 @@ fn function_value_diagnostics_distinguish_lowering_capability_and_call_contract_
     for (surface, source) in [
         (
             "parameter",
-            "def apply(callback: def(Vec[int32, String]) -> int32):\n    pass\n",
+            "def apply(callback: def(list[int32, str]) -> int32):\n    pass\n",
         ),
         (
             "return",
-            "def apply(callback: def(int32) -> Vec[int32, String]):\n    pass\n",
+            "def apply(callback: def(int32) -> list[int32, str]):\n    pass\n",
         ),
     ] {
         let error =
@@ -23259,17 +24071,17 @@ fn function_value_diagnostics_distinguish_lowering_capability_and_call_contract_
         assert!(
             error
                 .message
-                .contains("`Vec` expects exactly one type argument"),
+                .contains("`list` expects exactly one type argument"),
             "{surface}: {error:?}",
         );
     }
 
     let reassignment = crate::check_source(
         r#"
-def consume(value: own String) -> String:
+def consume(value: own str) -> str:
     return value
 
-def inspect(value: String) -> String:
+def inspect(value: str) -> str:
     return value.clone()
 
 def main():
@@ -23333,7 +24145,7 @@ def identity[T](value: own T) -> T:
     return value
 
 def main():
-    callback: def(mut String) -> String = identity
+    callback: def(mut str) -> str = identity
 "#,
     )
     .expect_err("contextual generic specialization preserves capabilities");
@@ -23345,11 +24157,11 @@ def main():
 
     let parameter = crate::check_source(
         r#"
-def first[T](values: own Vec[T]) -> Vec[T]:
+def first[T](values: own list[T]) -> list[T]:
     return values
 
 def main():
-    callback: def(own Set[int32]) -> Vec[int32] = first
+    callback: def(own set[int32]) -> list[int32] = first
 "#,
     )
     .expect_err("the expected parameter shape must specialize the generic declaration");
@@ -23359,7 +24171,7 @@ def main():
         .contains("cannot specialize function `first`"));
     assert!(parameter
         .message
-        .contains("expected `Vec[T]`, found `Set[int32]`"));
+        .contains("expected `list[T]`, found `set[int32]`"));
 
     let return_type = crate::check_source(
         r#"
@@ -23367,7 +24179,7 @@ def identity[T](value: own T) -> T:
     return value
 
 def main():
-    callback: def(own int32) -> String = identity
+    callback: def(own int32) -> str = identity
 "#,
     )
     .expect_err("parameter and return evidence must agree on one specialization");
@@ -23377,7 +24189,7 @@ def main():
         .contains("cannot specialize function `identity`"));
     assert!(return_type
         .message
-        .contains("conflicting inferred types for `T`: `int32` and `String`"));
+        .contains("conflicting inferred types for `T`: `int32` and `str`"));
 
     let unresolved = crate::check_source(
         r#"
@@ -23400,7 +24212,7 @@ def identity[T](value: own T) -> T:
     return value
 
 def main():
-    callback = identity[int32, String]
+    callback = identity[int32, str]
 "#,
     )
     .expect_err("explicit specialization supplies every type argument exactly once");
@@ -23469,6 +24281,8 @@ fn imported_generic_function_values_specialize_as_values_and_task_targets() {
         type_param_bounds: BTreeMap::new(),
     };
     let namespace = ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "tools".to_string(),
         path: "pkg.tools".to_string(),
         source_path: None,
@@ -23529,13 +24343,13 @@ def identity(value: int32) -> int32:
 def apply(callback: own def(int32) -> int32, value: int32) -> int32:
     return callback(value)
 
-def clone_holders(values: Vec[Holder]) -> Vec[Holder]:
-    return values.clone()
+def clone_holders(values: list[Holder]) -> list[Holder]:
+    return values.copy()
 
 def clone_tasks(
-    tasks: Vec[Task[def(int32) -> int32]]
-) -> Vec[Task[def(int32) -> int32]]:
-    return tasks.clone()
+    tasks: list[Task[def(int32) -> int32]]
+) -> list[Task[def(int32) -> int32]]:
+    return tasks.copy()
 
 def launch():
     with group = TaskGroup():
@@ -23564,7 +24378,7 @@ def launch():
     assert_eq!(call_mismatch.code, "AU2002");
     assert!(call_mismatch
         .message
-        .contains("argument type mismatch for function value: expected `int32`, found `String`"));
+        .contains("argument type mismatch for function value: expected `int32`, found `str`"));
 
     let argument = crate::check_source(
         r#"
@@ -23614,8 +24428,8 @@ fn function_value_specialization_enforces_clone_safety_at_value_creation() {
         r#"
 import random
 
-def duplicate[T](values: Vec[T]) -> Vec[T]:
-    return values.clone()
+def duplicate[T](values: list[T]) -> list[T]:
+    return values.copy()
 
 def main():
     callback = duplicate[random.Rng]
@@ -23641,7 +24455,7 @@ impl Ord[Score] for Score:
     def lt(self, rhs: Score) -> bool:
         return self.value < rhs.value
 
-def label(value: int64) -> String:
+def label(value: int64) -> str:
     return value.to_string()
 
 def positive(value: int64) -> bool:
@@ -23656,20 +24470,20 @@ def ratio_key(value: int64) -> float64:
 def identity(value: int64) -> int64:
     return value
 
-def map_values[T, U](values: Vec[T], f: def(T) -> U) -> Vec[U]:
+def map_values[T, U](values: list[T], f: def(T) -> U) -> list[U]:
     return values.map(f)
 
-def sort_values[T: Ord[T]](values: mut Vec[T]):
+def sort_values[T: Ord[T]](values: mut list[T]):
     values.sort()
 
 def main():
     mut numbers = [3, 1, 2]
     numbers.sort()
-    numbers.sort_by(identity)
-    numbers.sort_by(ratio_key)
-    labels: Vec[String] = numbers.map(label)
-    generic_labels: Vec[String] = map_values(numbers, label)
-    kept: Vec[int64] = numbers.filter(positive)
+    numbers.sort(key=identity)
+    numbers.sort(key=ratio_key)
+    labels: list[str] = numbers.map(label)
+    generic_labels: list[str] = map_values(numbers, label)
+    kept: list[int64] = numbers.filter(positive)
 
     mut durations = [2ms, 1ms]
     durations.sort()
@@ -23679,7 +24493,7 @@ def main():
 
     mut scores = [Score(value=2), Score(value=1)]
     scores.sort()
-    scores.sort_by(score_key)
+    scores.sort(key=score_key)
     sort_values(scores)
 "#,
     )
@@ -23694,7 +24508,7 @@ fn vec_algorithm_methods_enforce_arity_capability_returns_mutability_and_orderab
             "requires a mutable receiver",
         ),
         (
-            "def own_key(value: own int64) -> int64:\n    return value\n\ndef main():\n    mut values = [2, 1]\n    values.sort_by(own_key)\n",
+            "def own_key(value: own int64) -> int64:\n    return value\n\ndef main():\n    mut values = [2, 1]\n    values.sort(key=own_key)\n",
             "must take exactly one shared parameter",
         ),
         (
@@ -23711,10 +24525,10 @@ fn vec_algorithm_methods_enforce_arity_capability_returns_mutability_and_orderab
         ),
         (
             "def main():\n    mut values = [[1], [2]]\n    values.sort()\n",
-            "cannot order Vec element type",
+            "cannot order list element type",
         ),
         (
-            "def key(value: int64) -> Vec[int64]:\n    return [value]\n\ndef main():\n    mut values = [2, 1]\n    values.sort_by(key)\n",
+            "def key(value: int64) -> list[int64]:\n    return [value]\n\ndef main():\n    mut values = [2, 1]\n    values.sort(key=key)\n",
             "cannot order key type",
         ),
     ] {
@@ -23727,8 +24541,6 @@ fn vec_algorithm_methods_enforce_arity_capability_returns_mutability_and_orderab
     }
 
     for source in [
-        "def key(value: int64) -> int64:\n    return value\n\ndef main():\n    mut values = [1]\n    values.sort_by()\n",
-        "def key(value: int64) -> int64:\n    return value\n\ndef main():\n    mut values = [1]\n    values.sort_by(key, key)\n",
         "def key(value: int64) -> int64:\n    return value\n\ndef main():\n    values = [1]\n    values.map()\n",
         "def key(value: int64) -> int64:\n    return value\n\ndef main():\n    values = [1]\n    values.filter(key, key)\n",
     ] {
@@ -23757,14 +24569,14 @@ def main():
     )
     .expect_err("filter must clone retained elements rather than transfer them");
     assert_eq!(rejected.code, "AU3007");
-    assert!(rejected.message.contains("Vec.filter"));
+    assert!(rejected.message.contains("list.filter"));
     assert!(rejected.message.contains("non-cloneable `random.Rng`"));
 
     let generic = crate::check_source(
         r#"
 import random
 
-def retain[T](values: Vec[T], predicate: def(T) -> bool) -> Vec[T]:
+def retain[T](values: list[T], predicate: def(T) -> bool) -> list[T]:
     return values.filter(predicate)
 
 def keep(value: random.Rng) -> bool:
@@ -23784,24 +24596,24 @@ def main():
 fn owned_vec_and_string_slices_preserve_result_types_and_sources() {
     crate::check_source(
         r#"
-def retain_slice[T](values: Vec[T], start: int32, end: int32) -> Vec[T]:
+def retain_slice[T](values: list[T], start: int32, end: int32) -> list[T]:
     return values[start:end]
 
 def main():
-    values: Vec[int32] = [1, 2, 3, 4]
-    prefix: Vec[int32] = values[:2]
-    suffix: Vec[int32] = values[1:]
-    middle: Vec[int32] = values[1:3]
-    copy: Vec[int32] = values[:]
-    empty: Vec[int32] = [][:]
-    names: Vec[String] = ["Ada", "Grace"]
-    names_copy: Vec[String] = names[:]
-    text: String = "Aé🙂Z"
-    text_prefix: String = text[:2]
-    text_suffix: String = text[-2:]
-    text_middle: String = text[1:3]
-    text_copy: String = text[:]
-    generic: Vec[int32] = retain_slice(values, 0, 2)
+    values: list[int32] = [1, 2, 3, 4]
+    prefix: list[int32] = values[:2]
+    suffix: list[int32] = values[1:]
+    middle: list[int32] = values[1:3]
+    copy: list[int32] = values[:]
+    empty: list[int32] = [][:]
+    names: list[str] = ["Ada", "Grace"]
+    names_copy: list[str] = names[:]
+    text: str = "Aé🙂Z"
+    text_prefix: str = text[:2]
+    text_suffix: str = text[-2:]
+    text_middle: str = text[1:3]
+    text_copy: str = text[:]
+    generic: list[int32] = retain_slice(values, 0, 2)
     print(values.len())
     print(text.len())
     print(prefix.len() + suffix.len() + middle.len() + copy.len() + empty.len() + generic.len())
@@ -23809,31 +24621,31 @@ def main():
     print(text_prefix + text_suffix + text_middle + text_copy)
 "#,
     )
-    .expect("owned Vec and String slices should retain their source and preserve its type");
+    .expect("owned Vec and str slices should retain their source and preserve its type");
 }
 
 #[test]
-fn owned_slice_endpoints_require_exact_int32_with_literal_context() {
+fn owned_slice_endpoints_use_the_int64_index_domain() {
     for (source, found) in [
         (
-            "def invalid(values: Vec[int32], endpoint: int64):\n    print(values[endpoint:])\n",
-            "int64",
-        ),
-        (
-            "def invalid(values: Vec[int32], endpoint: bool):\n    print(values[:endpoint])\n",
+            "def invalid(values: list[int32], endpoint: bool):\n    print(values[:endpoint])\n",
             "bool",
         ),
         (
-            "def invalid(text: String, endpoint: String):\n    print(text[endpoint:])\n",
-            "String",
+            "def invalid(text: str, endpoint: str):\n    print(text[endpoint:])\n",
+            "str",
+        ),
+        (
+            "def invalid(values: list[int32], endpoint: uint64):\n    print(values[endpoint:])\n",
+            "uint64",
         ),
     ] {
         let rejected =
-            crate::check_source(source).expect_err("present slice endpoints must be exact int32");
+            crate::check_source(source).expect_err("slice endpoints must enter the int64 domain");
         assert_eq!(rejected.code, "AU2002");
         assert!(
             rejected.message.contains(&format!(
-                "slice endpoints must have type `int32`, found `{found}`"
+                "slice endpoints must have type `int64` or a losslessly narrower integer type, found `{found}`"
             )),
             "{source}: {rejected:?}"
         );
@@ -23842,22 +24654,23 @@ fn owned_slice_endpoints_require_exact_int32_with_literal_context() {
     crate::check_source(
         r#"
 def main():
-    values: Vec[int32] = [1, 2, 3]
+    values: list[int32] = [1, 2, 3]
     text = "Aé🙂Z"
     print(values[0:2])
     print(values[-2:-1])
     print(text[1:3])
 "#,
     )
-    .expect("integer literals in slice endpoints should receive int32 context");
+    .expect("integer literals in slice endpoints should receive int64 context");
 
-    let overflow =
-        crate::check_source("def main():\n    values = [1]\n    print(values[2147483648:])\n")
-            .expect_err("slice endpoint literals must fit int32");
-    assert_eq!(overflow.code, "AU2002");
+    let overflow = crate::check_source(
+        "def main():\n    values = [1]\n    print(values[9223372036854775808:])\n",
+    )
+    .expect_err("slice endpoint literals must fit int64");
+    assert_eq!(overflow.code, "AU2999");
     assert!(
-        overflow.message.contains("int32"),
-        "overflowing endpoint should name the int32 boundary: {overflow:?}"
+        overflow.message.contains("int64"),
+        "overflowing endpoint should name the int64 boundary: {overflow:?}"
     );
 }
 
@@ -23865,23 +24678,23 @@ def main():
 fn owned_slices_reject_unsupported_bases_and_string_scalar_indexing_remains_unavailable() {
     for source in [
         "def main():\n    value: int32 = 1\n    print(value[:])\n",
-        "def main():\n    values = Set{1, 2}\n    print(values[:])\n",
+        "def main():\n    values = {1, 2}\n    print(values[:])\n",
         "def main():\n    values = {\"one\": 1}\n    print(values[:])\n",
         "def main():\n    values = (1, 2)\n    print(values[:])\n",
     ] {
         let rejected =
-            crate::check_source(source).expect_err("only Vec and String support owned slicing");
+            crate::check_source(source).expect_err("only list and str support owned slicing");
         assert_eq!(rejected.code, "AU2003");
         assert!(
             rejected
                 .message
-                .contains("owned slicing is available only for `Array[T]`, `Vec[T]`, and `String`"),
+                .contains("owned slicing is available only for `Array[T]`, `list[T]`, and `str`"),
             "{source}: {rejected:?}"
         );
     }
 
     let indexed = crate::check_source("def main():\n    print(\"text\"[0])\n")
-        .expect_err("String scalar indexing remains unavailable");
+        .expect_err("str scalar indexing remains unavailable");
     assert!(indexed.message.contains("cannot index"));
 }
 
@@ -23891,13 +24704,13 @@ fn vec_slices_require_structurally_clone_safe_elements() {
         r#"
 import random
 
-def duplicate(values: Vec[random.Rng]) -> Vec[random.Rng]:
+def duplicate(values: list[random.Rng]) -> list[random.Rng]:
     return values[:]
 "#,
     )
-    .expect_err("a Vec slice must not duplicate random.Rng state");
+    .expect_err("a list slice must not duplicate random.Rng state");
     assert_eq!(rng.code, "AU3007");
-    assert!(rng.message.contains("Vec slice"));
+    assert!(rng.message.contains("list slice"));
     assert!(rng.message.contains("non-cloneable `random.Rng`"));
 
     let transitive = crate::check_source(
@@ -23907,25 +24720,25 @@ import random
 class Holder:
     generator: random.Rng
 
-def duplicate(values: Vec[Holder]) -> Vec[Holder]:
+def duplicate(values: list[Holder]) -> list[Holder]:
     return values[1:]
 "#,
     )
-    .expect_err("Vec slice clone safety must be structural");
+    .expect_err("list slice clone safety must be structural");
     assert_eq!(transitive.code, "AU3007");
-    assert!(transitive.message.contains("Vec slice"));
+    assert!(transitive.message.contains("list slice"));
 
     let task = crate::check_source(
         r#"
-def duplicate(values: Vec[Task[String]]) -> Vec[Task[String]]:
+def duplicate(values: list[Task[str]]) -> list[Task[str]]:
     return values[:]
 "#,
     )
-    .expect_err("a Vec slice must not duplicate a non-repeatable Task observation right");
+    .expect_err("a list slice must not duplicate a non-repeatable Task observation right");
     assert_eq!(task.code, "AU3009");
-    assert!(task.message.contains("Vec slice"));
+    assert!(task.message.contains("list slice"));
     assert!(
-        task.message.contains("non-repeatable task result `String`"),
+        task.message.contains("non-repeatable task result `str`"),
         "{task:?}"
     );
 
@@ -23933,7 +24746,7 @@ def duplicate(values: Vec[Task[String]]) -> Vec[Task[String]]:
         r#"
 import random
 
-def duplicate[T](values: Vec[T]) -> Vec[T]:
+def duplicate[T](values: list[T]) -> list[T]:
     return values[:]
 
 def main():
@@ -23947,10 +24760,10 @@ def main():
 
     let consuming_closure = crate::check_source(
         r#"
-def singleton[T](value: own T) -> Vec[T]:
+def singleton[T](value: own T) -> list[T]:
     return [value]
 
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
 def main():
@@ -23961,9 +24774,9 @@ def main():
     print(copies.len())
 "#,
     )
-    .expect_err("generic construction must not let a Vec slice duplicate a closure environment");
+    .expect_err("generic construction must not let a list slice duplicate a closure environment");
     assert_eq!(consuming_closure.code, "AU3007");
-    assert!(consuming_closure.message.contains("Vec slice"));
+    assert!(consuming_closure.message.contains("list slice"));
     assert!(
         consuming_closure.message.contains("non-cloneable closure"),
         "{consuming_closure:?}"
@@ -23974,33 +24787,33 @@ def main():
 fn slice_base_is_retained_through_both_endpoint_expressions() {
     for source in [
         r#"
-def consume(values: own Vec[int32]) -> int32:
+def consume(values: own list[int32]) -> int32:
     return 0
 
-def invalid(values: own Vec[int32]) -> Vec[int32]:
+def invalid(values: own list[int32]) -> list[int32]:
     return values[consume(values):]
 "#,
         r#"
-def consume(values: own Vec[int32]) -> int32:
+def consume(values: own list[int32]) -> int32:
     return 0
 
-def invalid(values: own Vec[int32]) -> Vec[int32]:
+def invalid(values: own list[int32]) -> list[int32]:
     return values[:consume(values)]
 "#,
         r#"
-def mutate(values: mut Vec[int32]) -> int32:
+def mutate(values: mut list[int32]) -> int32:
     values.clear()
     return 0
 
-def invalid(values: mut Vec[int32]) -> Vec[int32]:
+def invalid(values: mut list[int32]) -> list[int32]:
     return values[mutate(values):]
 "#,
         r#"
-def mutate(values: mut Vec[int32]) -> int32:
+def mutate(values: mut list[int32]) -> int32:
     values.clear()
     return 0
 
-def invalid(values: mut Vec[int32]) -> Vec[int32]:
+def invalid(values: mut list[int32]) -> list[int32]:
     return values[:mutate(values)]
 "#,
     ] {
@@ -24019,21 +24832,21 @@ fn slice_walkers_cover_defaults_lambdas_and_nested_expression_positions() {
     for (source, parameter) in [
         (
             r#"
-def invalid(values: Vec[int32], copy: Vec[int32] = values[:]):
+def invalid(values: list[int32], copy: list[int32] = values[:]):
     pass
 "#,
             "values",
         ),
         (
             r#"
-def invalid(start: int32, copy: Vec[int32] = [][start:]):
+def invalid(start: int32, copy: list[int32] = [][start:]):
     pass
 "#,
             "start",
         ),
         (
             r#"
-def invalid(end: int32, copy: Vec[int32] = [][:end]):
+def invalid(end: int32, copy: list[int32] = [][:end]):
     pass
 "#,
             "end",
@@ -24053,11 +24866,11 @@ def invalid(end: int32, copy: Vec[int32] = [][:end]):
     let program = crate::check_source(
         r#"
 def main():
-    values: Vec[int32] = [1, 2, 3]
+    values: list[int32] = [1, 2, 3]
     start: int32 = 0
     end: int32 = 2
-    nested: Vec[Vec[int32]] = [values[:]]
-    take: def() -> Vec[int32] = lambda: values[start:end]
+    nested: list[list[int32]] = [values[:]]
+    take: def() -> list[int32] = lambda: values[start:end]
     print(nested)
     print(take())
 "#,
@@ -24091,7 +24904,7 @@ def make_value() -> int32:
 fn lambdas_infer_contextual_parameters_and_record_lexical_capture_metadata() {
     let program = crate::check_source(
         r#"
-def inspect(prefix: String, value: int32) -> bool:
+def inspect(prefix: str, value: int32) -> bool:
     return prefix == "kept" and value > 0
 
 def main():
@@ -24134,10 +24947,10 @@ fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
             has_default: false,
             default_erased: false,
         }]),
-        return_type: Box::new(Type::named("String")),
+        return_type: Box::new(Type::named("str")),
         captures: Box::new(vec![ClosureCapture {
             name: "prefix".to_string(),
-            ty: Type::named("String"),
+            ty: Type::named("str"),
             mode: ClosureCaptureMode::Move,
             span: Span::new(4, 17),
         }]),
@@ -24167,10 +24980,10 @@ fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
                     "has_default": false,
                     "default_erased": false
                 }],
-                "return_type": {"Named": ["String", []]},
+                "return_type": {"Named": ["str", []]},
                 "captures": [{
                     "name": "prefix",
-                    "ty": {"Named": ["String", []]},
+                    "ty": {"Named": ["str", []]},
                     "mode": "Move",
                     "span": {"line": 4, "column": 17}
                 }],
@@ -24188,7 +25001,7 @@ fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
 fn noncopy_capture_moves_at_creation_and_reports_au3001_on_later_use() {
     let diagnostic = crate::check_source(
         r#"
-def inspect(value: String) -> bool:
+def inspect(value: str) -> bool:
     return value == "captured"
 
 def main():
@@ -24211,7 +25024,7 @@ def main():
 fn consuming_capture_makes_the_closure_single_use() {
     let diagnostic = crate::check_source(
         r#"
-def take(value: own String) -> int32:
+def take(value: own str) -> int32:
     return 1
 
 def main():
@@ -24230,8 +25043,8 @@ def main():
 fn shared_parameter_capture_is_rejected_with_clone_or_own_guidance() {
     let diagnostic = crate::check_source(
         r#"
-def build(value: String):
-    inspect: def() -> String = lambda: value
+def build(value: str):
+    inspect: def() -> str = lambda: value
 "#,
     )
     .expect_err("a bare parameter is shared capability and cannot be captured by value");
@@ -24241,7 +25054,7 @@ def build(value: String):
         "lambda cannot capture shared parameter `value` by value"
     );
     assert!(diagnostic.help.iter().any(|help| {
-        help.contains("clone `value` into an owned local") && help.contains("`own String`")
+        help.contains("clone `value` into an owned local") && help.contains("`own str`")
     }));
 }
 
@@ -24251,7 +25064,7 @@ fn mutable_access_to_a_capture_is_rejected_until_fnmut_exists() {
         r#"
 def main():
     mut values = ["kept"]
-    update: def() -> None = lambda: values.push("new")
+    update: def() -> None = lambda: values.append("new")
 "#,
     )
     .expect_err("Phase 6.3 does not define mutable closures");
@@ -24266,7 +25079,7 @@ def main():
 fn capturing_closure_uses_annotation_as_context_without_erasing_ownership() {
     let program = crate::check_source(
         r#"
-def inspect(value: String) -> bool:
+def inspect(value: str) -> bool:
     return value == "kept"
 
 def main():
@@ -24288,7 +25101,7 @@ def main():
         r#"
 def main():
     token = "kept"
-    mut inspect_later: def() -> String = lambda: token
+    mut inspect_later: def() -> str = lambda: token
 "#,
     )
     .expect_err("mutable def storage cannot erase capture ownership metadata");
@@ -24324,7 +25137,7 @@ fn lambda_capture_discovery_respects_match_pattern_shadowing() {
         r#"
 def main():
     outer = "outside"
-    checks: def(Option[String]) -> bool = lambda choice: match choice:
+    checks: def(Option[str]) -> bool = lambda choice: match choice:
         case Option.Some(outer): outer == "inside"
         case Option.None: false
     print(checks(Option.Some("inside")))
@@ -24367,7 +25180,7 @@ fn task_group_start_moves_a_transfer_closure_target_once() {
         r#"
 def main():
     payload = "task"
-    worker: def() -> String = lambda: f"{payload}"
+    worker: def() -> str = lambda: f"{payload}"
     with TaskGroup() as group:
         task = group.start(worker)
         print(task.result_or("missing", timeout=1s))
@@ -24386,7 +25199,7 @@ fn branch_expressions_reject_capturing_closure_unions_with_teaching_diagnostics(
 def main():
     left = "left"
     right = "right"
-    selected: def() -> String = (lambda: left) if true else (lambda: right)
+    selected: def() -> str = (lambda: left) if true else (lambda: right)
 "#,
     )
     .expect_err("conditional branches cannot erase distinct closure environments");
@@ -24429,8 +25242,8 @@ fn vec_callbacks_preserve_repeatable_closure_types_and_diagnose_invalid_values()
 def main():
     offset: int64 = 1
     values = [1, 2]
-    mapped: Vec[int64] = values.map(lambda value: value + offset)
-    kept: Vec[int64] = values.filter(lambda value: value > offset)
+    mapped: list[int64] = values.map(lambda value: value + offset)
+    kept: list[int64] = values.filter(lambda value: value > offset)
 "#,
     )
     .expect("Vec callbacks should contextualize repeatable capturing lambdas");
@@ -24452,7 +25265,7 @@ def main():
 
     let consuming = crate::check_source(
         r#"
-def take(value: own String) -> int64:
+def take(value: own str) -> int64:
     return 1
 
 def main():
@@ -24461,24 +25274,24 @@ def main():
     values.map(lambda value: value + take(token))
 "#,
     )
-    .expect_err("Vec.map may invoke its callback repeatedly");
+    .expect_err("list.map may invoke its callback repeatedly");
     assert_eq!(consuming.code, "AU2002");
     assert_eq!(
         consuming.message,
-        "`Vec.map` callback must be repeatable, found `consuming closure def(int64) -> int64`"
+        "`list.map` callback must be repeatable, found `consuming closure def(int64) -> int64`"
     );
 
     let non_callable = crate::check_source("def main():\n    values = [1]\n    values.map(1)\n")
-        .expect_err("Vec.map requires a callable value");
+        .expect_err("list.map requires a callable value");
     assert_eq!(non_callable.code, "AU2002");
     assert_eq!(
         non_callable.message,
-        "`Vec.map` expects a function value, found `int64`"
+        "`list.map` expects a function value, found `int64`"
     );
 
     let wrong_element = crate::check_source(
         r#"
-def text_length(value: String) -> int64:
+def text_length(value: str) -> int64:
     return value.length()
 
 def main():
@@ -24486,11 +25299,11 @@ def main():
     values.map(text_length)
 "#,
     )
-    .expect_err("Vec callbacks receive the vector element by shared capability");
+    .expect_err("Vec callbacks receive the list element by shared capability");
     assert_eq!(wrong_element.code, "AU2002");
     assert_eq!(
         wrong_element.message,
-        "`Vec.map` callback expects shared `int64`, found shared `String`"
+        "`list.map` callback expects shared `int64`, found shared `str`"
     );
 }
 
@@ -24510,7 +25323,7 @@ fn lambda_context_diagnostics_pin_inference_arity_and_capability_boundaries() {
             "lambda expects 0 contextual parameters, but its function type provides 1",
         ),
         (
-            "def main():\n    callback: def(own String) -> int64 = lambda value: 1\n",
+            "def main():\n    callback: def(own str) -> int64 = lambda value: 1\n",
             "lambda parameter `value` has `shared` capability, but the expected function type requires `own`",
         ),
     ] {
@@ -24534,7 +25347,7 @@ def main():
     index: int32 = 0
     fallback: int64 = 0
     label = Label(number=99)
-    render: def(bool) -> String = lambda use_value: f"{prefix}{values[index] if use_value else fallback}{label.number}"
+    render: def(bool) -> str = lambda use_value: f"{prefix}{values[index] if use_value else fallback}{label.number}"
 "#,
     )
     .expect("capture discovery should walk formatting, conditionals, indexing, and fields");
@@ -24565,7 +25378,7 @@ def main():
             ClosureCaptureMode::Move,
         ]
     );
-    assert_eq!(closure.return_type, Type::named("String"));
+    assert_eq!(closure.return_type, Type::named("str"));
 }
 
 #[test]
@@ -24574,8 +25387,8 @@ fn lambda_capture_rejects_already_moved_partially_moved_and_shared_local_state()
         r#"
 def main():
     token = "one owner"
-    first: def() -> String = lambda: token
-    second: def() -> String = lambda: token
+    first: def() -> str = lambda: token
+    second: def() -> str = lambda: token
 "#,
     )
     .expect_err("a second closure cannot capture a value moved into the first");
@@ -24589,16 +25402,16 @@ def main():
     let partially_moved = crate::check_source(
         r#"
 class Pair:
-    first: String
-    second: String
+    first: str
+    second: str
 
-def take(value: own String):
+def take(value: own str):
     pass
 
 def main():
     pair = Pair(first="first", second="second")
     take(pair.first)
-    later: def() -> String = lambda: pair.second
+    later: def() -> str = lambda: pair.second
 "#,
     )
     .expect_err("a closure cannot hide a prior partial move of its environment");
@@ -24610,9 +25423,9 @@ def main():
 
     let shared_local = crate::check_source(
         r#"
-def build(value: String):
+def build(value: str):
     alias = value
-    later: def() -> String = lambda: alias
+    later: def() -> str = lambda: alias
 "#,
     )
     .expect_err("a shared local alias cannot become an owned closure capture");
@@ -24654,7 +25467,7 @@ def main():
     let field = crate::check_source(
         r#"
 class Holder:
-    callback: def() -> String
+    callback: def() -> str
 
 def main():
     token = "field"
@@ -24665,7 +25478,7 @@ def main():
     assert_eq!(field.code, "AU2002");
     assert_eq!(
         field.message,
-        "expected `def() -> String`, found `consuming closure def() -> String`"
+        "expected `def() -> str`, found `consuming closure def() -> str`"
     );
     assert!(field.help.iter().any(|help| {
         help.contains("capturing closures cannot be stored in fields")
@@ -24677,14 +25490,14 @@ def main():
 fn task_closure_targets_preserve_consuming_types_and_reject_nontransfer_captures() {
     let program = crate::check_source(
         r#"
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
 def main():
     token = "task"
-    worker: def() -> String = lambda: take(token)
+    worker: def() -> str = lambda: take(token)
     with TaskGroup() as group:
-        task: Task[String] = group.start(worker)
+        task: Task[str] = group.start(worker)
 "#,
     )
     .expect("a consuming closure may transfer to one child task and run once");
@@ -24694,7 +25507,7 @@ def main():
         .next()
         .expect("task closure metadata");
     assert_eq!(closure.call_kind, ClosureCallKind::Consuming);
-    assert_eq!(closure.return_type, Type::named("String"));
+    assert_eq!(closure.return_type, Type::named("str"));
 
     let rejected = crate::check_source(
         r#"
@@ -24748,15 +25561,15 @@ def main():
 
     list_left: int64 = 9
     list_right: int64 = 10
-    listed: def() -> Vec[int64] = lambda: [list_left, list_right]
+    listed: def() -> list[int64] = lambda: [list_left, list_right]
 
     set_left: int64 = 11
     set_right: int64 = 12
-    setted: def() -> Set[int64] = lambda: Set{set_left, set_right}
+    setted: def() -> set[int64] = lambda: {set_left, set_right}
 
     map_key: int64 = 13
     map_value: int64 = 14
-    mapped: def() -> Map[int64, int64] = lambda: {map_key: map_value}
+    mapped: def() -> dict[int64, int64] = lambda: {map_key: map_value}
 
     low: int64 = 15
     high: int64 = 20
@@ -24768,7 +25581,7 @@ def main():
 
     nested_values = [1, 2]
     nested_offset: int64 = 3
-    nested: def() -> Vec[int64] = lambda: nested_values.map(
+    nested: def() -> list[int64] = lambda: nested_values.map(
         lambda value: value + nested_offset
     )
 "#,
@@ -24802,16 +25615,16 @@ def main():
         ),
         (
             vec!["list_left", "list_right"],
-            Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+            Type::Named("list".to_string(), vec![Type::named("int64")]),
         ),
         (
             vec!["set_left", "set_right"],
-            Type::Named("Set".to_string(), vec![Type::named("int64")]),
+            Type::Named("set".to_string(), vec![Type::named("int64")]),
         ),
         (
             vec!["map_key", "map_value"],
             Type::Named(
-                "Map".to_string(),
+                "dict".to_string(),
                 vec![Type::named("int64"), Type::named("int64")],
             ),
         ),
@@ -24819,7 +25632,7 @@ def main():
         (vec![], Type::named("int64")),
         (
             vec!["nested_values", "nested_offset"],
-            Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+            Type::Named("list".to_string(), vec![Type::named("int64")]),
         ),
         (vec!["nested_offset"], Type::named("int64")),
     ] {
@@ -24843,8 +25656,8 @@ def main():
 
     let try_program = crate::check_source(
         r#"
-def unwrap_result() -> Result[int64, String]:
-    outcome: Result[int64, String] = Result.Ok(1)
+def unwrap_result() -> Result[int64, str]:
+    outcome: Result[int64, str] = Result.Ok(1)
     unwrap: def() -> int64 = lambda: try outcome
     return Result.Ok(unwrap())
 
@@ -24903,7 +25716,7 @@ def hold[T](value: own T):
 
     let concrete_ty = substitute_type(
         &generic_ty,
-        &HashMap::from([("T".to_string(), Type::named("String"))]),
+        &HashMap::from([("T".to_string(), Type::named("str"))]),
     );
     assert!(!has_unresolved_type_params(&concrete_ty));
     assert_eq!(
@@ -24913,7 +25726,7 @@ def hold[T](value: own T):
             return_type: Box::new(Type::Unit),
             captures: Box::new(vec![ClosureCapture {
                 name: "value".to_string(),
-                ty: Type::named("String"),
+                ty: Type::named("str"),
                 mode: ClosureCaptureMode::Move,
                 span: generic_closure.captures[0].span,
             }]),
@@ -24928,12 +25741,12 @@ def hold[T](value: own T):
         &BTreeSet::from(["T".to_string()]),
         &mut matched,
     ));
-    assert_eq!(matched.get("T"), Some(&Type::named("String")));
+    assert_eq!(matched.get("T"), Some(&Type::named("str")));
 
     let mut unified = HashMap::new();
     unify_type_pattern(&generic_ty, &concrete_ty, &mut unified)
         .expect("closure unification should infer through capture types");
-    assert_eq!(unified.get("T"), Some(&Type::named("String")));
+    assert_eq!(unified.get("T"), Some(&Type::named("str")));
 
     let rng_program = crate::check_source(
         r#"
@@ -25010,6 +25823,8 @@ def invalid(
 fn callable_equality_is_rejected_uniformly_for_function_values_and_closures() {
     const MESSAGE: &str =
         "callable equality is not supported; compare results or use an explicit discriminant";
+    const NOTE: &str =
+        "Aura has no identity-equality fallback; equality-dependent operations require a defined value relation";
     let cases = [
         (
             "named function value ==",
@@ -25080,6 +25895,193 @@ def main():
             crate::check_source(source).expect_err("callable equality must be rejected");
         assert_eq!(diagnostic.code, "AU2008", "{case}: {diagnostic:?}");
         assert_eq!(diagnostic.message, MESSAGE, "{case}: {diagnostic:?}");
+        assert_eq!(diagnostic.notes, [NOTE], "{case}: {diagnostic:?}");
+    }
+}
+
+#[test]
+fn equality_dependent_collection_surfaces_reject_callables_and_rng_state() {
+    let callable_cases = [
+        (
+            "list.remove",
+            r#"
+def reject(values: mut list[def(int64) -> int64], value: def(int64) -> int64):
+    values.remove(value)
+"#,
+        ),
+        (
+            "list.index",
+            r#"
+def reject(values: list[def(int64) -> int64], value: def(int64) -> int64):
+    print(values.index(value))
+"#,
+        ),
+        (
+            "list.count",
+            r#"
+def reject(values: list[def(int64) -> int64], value: def(int64) -> int64):
+    print(values.count(value))
+"#,
+        ),
+        (
+            "membership",
+            r#"
+def reject(values: list[def(int64) -> int64], value: def(int64) -> int64):
+    print(value in values)
+"#,
+        ),
+        (
+            "set.add",
+            r#"
+def reject(values: mut set[def(int64) -> int64], value: own def(int64) -> int64):
+    values.add(value)
+"#,
+        ),
+        (
+            "dict key assignment",
+            r#"
+def reject(values: mut dict[def(int64) -> int64, int64], key: own def(int64) -> int64):
+    values[key] = 1
+"#,
+        ),
+        (
+            "transitive class membership",
+            r#"
+class Handler:
+    callback: def(int64) -> int64
+
+def reject(values: list[Handler], value: Handler):
+    print(value in values)
+"#,
+        ),
+        (
+            "recursive enum dictionary key",
+            r#"
+enum CallbackChain:
+    Done
+    Next(indirect CallbackChain)
+    Work(def(int64) -> int64)
+
+def reject(values: dict[CallbackChain, int64], key: CallbackChain):
+    print(values[key])
+"#,
+        ),
+    ];
+
+    for (operation, source) in callable_cases {
+        let diagnostic = crate::check_source(source)
+            .expect_err("callable values must not reach identity equality in collections");
+        assert_eq!(diagnostic.code, "AU2008", "{operation}: {diagnostic:?}");
+        assert!(
+            diagnostic.message.contains("does not define equality"),
+            "{operation}: {diagnostic:?}"
+        );
+        assert!(
+            diagnostic.message.contains("def(int64) -> int64"),
+            "{operation}: {diagnostic:?}"
+        );
+        assert_eq!(
+            diagnostic.notes,
+            ["Aura has no identity-equality fallback; equality-dependent operations require a defined value relation"],
+            "{operation}: {diagnostic:?}"
+        );
+    }
+
+    let rng_cases = [
+        (
+            "direct equality",
+            r#"
+import random
+
+def reject(left: random.Rng, right: random.Rng):
+    print(left == right)
+"#,
+        ),
+        (
+            "list.remove",
+            r#"
+import random
+
+def reject(values: mut list[random.Rng], value: random.Rng):
+    values.remove(value)
+"#,
+        ),
+        (
+            "list.index",
+            r#"
+import random
+
+def reject(values: list[random.Rng], value: random.Rng):
+    print(values.index(value))
+"#,
+        ),
+        (
+            "list.count",
+            r#"
+import random
+
+def reject(values: list[random.Rng], value: random.Rng):
+    print(values.count(value))
+"#,
+        ),
+        (
+            "membership",
+            r#"
+import random
+
+def reject(values: list[random.Rng], value: random.Rng):
+    print(value in values)
+"#,
+        ),
+        (
+            "set.add",
+            r#"
+import random
+
+def reject(values: mut set[random.Rng], value: own random.Rng):
+    values.add(value)
+"#,
+        ),
+        (
+            "dict key assignment",
+            r#"
+import random
+
+def reject(values: mut dict[random.Rng, int64], key: own random.Rng):
+    values[key] = 1
+"#,
+        ),
+        (
+            "transitive wrapper membership",
+            r#"
+import random
+
+class Holder:
+    generator: random.Rng
+
+def reject(values: list[Holder], value: Holder):
+    print(value in values)
+"#,
+        ),
+    ];
+
+    for (operation, source) in rng_cases {
+        let diagnostic = crate::check_source(source)
+            .expect_err("random.Rng identity must not reach equality-dependent operations");
+        assert_eq!(diagnostic.code, "AU2008", "{operation}: {diagnostic:?}");
+        assert!(
+            diagnostic.message.contains("does not define equality"),
+            "{operation}: {diagnostic:?}"
+        );
+        assert!(
+            diagnostic.message.contains("random.Rng"),
+            "{operation}: {diagnostic:?}"
+        );
+        assert_eq!(
+            diagnostic.notes,
+            ["Aura has no identity-equality fallback; equality-dependent operations require a defined value relation"],
+            "{operation}: {diagnostic:?}"
+        );
     }
 }
 
@@ -25226,7 +26228,7 @@ def main():
     assert_eq!(diagnostic.code, "AU2002");
     assert_eq!(
         diagnostic.message,
-        "expected `consuming closure def() -> String`, found `consuming closure def() -> String`"
+        "expected `consuming closure def() -> str`, found `consuming closure def() -> str`"
     );
     assert!(diagnostic.help.iter().any(|help| {
         help.contains("capturing closures cannot be stored in fields")
@@ -25239,15 +26241,15 @@ fn comprehensions_share_bare_loop_types_and_export_progressive_metadata() {
     let program = crate::check_source(
         r#"
 def main():
-    numbers: Vec[int32] = [1, 2, 3]
+    numbers: list[int32] = [1, 2, 3]
     names = ["a", "b"]
-    doubled: Vec[int32] = [value * 2 for value in numbers if value > 0]
-    unique: Set[int32] = {value for value in numbers}
-    lookup: Map[int64, String] = {index: name.clone() for index, name in enumerate(names)}
-    pairs: Vec[int32] = [left + right for left, right in zip(numbers, numbers)]
-    nested: Vec[int32] = [outer * 10 + inner for outer in range(0, 2) for inner in range(0, outer)]
-    jobs = Queue[String]()
-    received: Vec[String] = [job for job in jobs]
+    doubled: list[int32] = [value * 2 for value in numbers if value > 0]
+    unique: set[int32] = {value for value in numbers}
+    lookup: dict[int64, str] = {index: name.clone() for index, name in enumerate(names)}
+    pairs: list[int32] = [left + right for left, right in zip(numbers, numbers)]
+    nested: list[int64] = [outer * 10 + inner for outer in range(0, 2) for inner in range(0, outer)]
+    jobs = Queue[str]()
+    received: list[str] = [job for job in jobs]
 "#,
     )
     .expect("every ordinary bare-loop source should work in a comprehension");
@@ -25258,11 +26260,11 @@ def main():
         .values()
         .map(|info| info.result_type.clone())
         .collect::<Vec<_>>();
-    assert!(result_types.contains(&Type::Named("Vec".to_string(), vec![Type::named("int32")])));
-    assert!(result_types.contains(&Type::Named("Set".to_string(), vec![Type::named("int32")])));
+    assert!(result_types.contains(&Type::Named("list".to_string(), vec![Type::named("int32")])));
+    assert!(result_types.contains(&Type::Named("set".to_string(), vec![Type::named("int32")])));
     assert!(result_types.contains(&Type::Named(
-        "Map".to_string(),
-        vec![Type::named("int64"), Type::named("String")]
+        "dict".to_string(),
+        vec![Type::named("int64"), Type::named("str")]
     )));
     let nested = program
         .comprehensions
@@ -25275,14 +26277,14 @@ def main():
             .iter()
             .map(|clause| clause.binding_type.clone())
             .collect::<Vec<_>>(),
-        vec![Type::named("int32"), Type::named("int32")]
+        vec![Type::named("int64"), Type::named("int64")]
     );
     let queue = program
         .comprehensions
         .values()
         .find(|info| info.clauses.iter().any(|clause| clause.receive_owned))
         .expect("Queue receive-owned metadata");
-    assert_eq!(queue.clauses[0].binding_type, Type::named("String"));
+    assert_eq!(queue.clauses[0].binding_type, Type::named("str"));
 }
 
 #[test]
@@ -25311,7 +26313,7 @@ fn comprehension_filters_targets_and_contextual_results_are_checked_exactly() {
     .expect_err("comprehension targets must not leak");
     assert_eq!(leak.message, "unknown name `value`");
 
-    crate::check_source("def main():\n    values: Vec[int32] = [1 for value in range(0, 2)]\n")
+    crate::check_source("def main():\n    values: list[int32] = [1 for value in range(0, 2)]\n")
         .expect("result expressions should receive their collection annotation as context");
 }
 
@@ -25334,7 +26336,7 @@ def main():
 
     let shared_result = crate::check_source(
         r#"
-def observe(values: Vec[String]):
+def observe(values: list[str]):
     pass
 
 def main():
@@ -25354,7 +26356,7 @@ def main():
         r#"
 def main():
     values = ["one"]
-    copied: Vec[String] = [value.clone() for value in values]
+    copied: list[str] = [value.clone() for value in values]
 "#,
     )
     .expect("an explicit clone should produce owned output");
@@ -25363,7 +26365,7 @@ def main():
         r#"
 def main():
     mut values = [1]
-    changed = [values.push(value) for value in values]
+    changed = [values.append(value) for value in values]
 "#,
     )
     .expect_err("an active source stays frozen through output evaluation");
@@ -25375,7 +26377,7 @@ def main():
 
     let token_move = crate::check_source(
         r#"
-def take(value: own String) -> int64:
+def take(value: own str) -> int64:
     return 1
 
 def main():
@@ -25392,10 +26394,10 @@ def main():
     let partial_move = crate::check_source(
         r#"
 class Pair:
-    left: String
-    right: String
+    left: str
+    right: str
 
-def take(value: own String) -> int64:
+def take(value: own str) -> int64:
     return 1
 
 def main():
@@ -25419,7 +26421,7 @@ def main():
     copied = [value for value in values]
 "#,
     )
-    .expect_err("a comprehension cannot silently clone a shared String element");
+    .expect_err("a comprehension cannot silently clone a shared str element");
     assert_eq!(cloneable.code, "AU3002");
     assert!(cloneable.message.contains("cannot move"), "{cloneable:?}");
     assert_eq!(
@@ -25468,8 +26470,8 @@ fn comprehension_lambda_capture_scopes_follow_adr_0037() {
         r#"
 def main():
     values = [1, 2]
-    build: def() -> Vec[int64] = lambda: [value + 1 for value in values]
-    immediate: Vec[int32] = [(lambda: value)() for value in range(0, 2)]
+    build: def() -> list[int64] = lambda: [value + 1 for value in values]
+    immediate: list[int64] = [(lambda: value)() for value in range(0, 2)]
 "#,
     )
     .expect("targets stay local while surrounding lambda sources are captured");
@@ -25531,7 +26533,7 @@ def main():
     );
     assert!(shared_target.help.iter().any(|help| {
         help.contains("clone `name` into an owned local")
-            && help.contains("declare the enclosing parameter as `own String`")
+            && help.contains("declare the enclosing parameter as `own str`")
     }));
 }
 
@@ -25539,7 +26541,7 @@ def main():
 fn comprehension_walkers_cover_default_parameter_references_and_bad_iterables() {
     let default = crate::check_source(
         r#"
-def collect(values: Vec[int64], copied: Vec[int64] = [value for value in values]):
+def collect(values: list[int64], copied: list[int64] = [value for value in values]):
     pass
 
 def main():
@@ -25559,7 +26561,7 @@ def main():
     assert_eq!(unsupported.code, "AU2002");
     assert_eq!(
         unsupported.message,
-        "comprehension iteration requires a `Range`, `Queue[T]`, `Vec[T]`, or `Set[T]` iterable, found `bool`"
+        "comprehension iteration requires a `Range`, `Queue[T]`, `list[T]`, or `set[T]` iterable, found `bool`"
     );
 }
 
@@ -25568,9 +26570,9 @@ fn comprehensions_in_function_and_field_defaults_retain_lowering_metadata() {
     let program = crate::check_source(
         r#"
 class Bucket:
-    values: Vec[int64] = [value * 2 for value in [2, 4]]
+    values: list[int64] = [value * 2 for value in [2, 4]]
 
-def selected(values: own Vec[int64] = [value * 2 for value in [1, 2, 3]]) -> Vec[int64]:
+def selected(values: own list[int64] = [value * 2 for value in [1, 2, 3]]) -> list[int64]:
     return values
 
 def main():
@@ -25603,11 +26605,11 @@ fn comprehension_lockstep_sources_reject_non_collection_inputs_with_teaching_dia
     for (source, expected_message) in [
         (
             "def main():\n    values = [index for index, value in enumerate(range(0, 2))]\n",
-            "`enumerate` requires a `Vec[T]` or `Set[T]` iterable, found `Range`",
+            "`enumerate` requires a `list[T]` or `set[T]` iterable, found `Range`",
         ),
         (
             "def main():\n    values = [left for left, right in zip([1, 2], range(0, 2))]\n",
-            "`zip` requires a `Vec[T]` or `Set[T]` iterable, found `Range`",
+            "`zip` requires a `list[T]` or `set[T]` iterable, found `Range`",
         ),
     ] {
         let diagnostic = crate::check_source(source)
@@ -25630,30 +26632,30 @@ fn comprehension_contextual_output_mismatches_name_each_collection_position() {
         (
             r#"
 def main():
-    values: Vec[int32] = ["value" for value in range(0, 2)]
+    values: list[int32] = ["value" for value in range(0, 2)]
 "#,
-            "list comprehension result has type `String`, expected `int32`",
+            "list comprehension result has type `str`, expected `int32`",
         ),
         (
             r#"
 def main():
-    values: Set[int32] = {"value" for value in range(0, 2)}
+    values: set[int32] = {"value" for value in range(0, 2)}
 "#,
-            "set comprehension result has type `String`, expected `int32`",
+            "set comprehension result has type `str`, expected `int32`",
         ),
         (
             r#"
 def main():
-    values: Map[int32, String] = {"key": "value" for value in range(0, 2)}
+    values: dict[int32, str] = {"key": "value" for value in range(0, 2)}
 "#,
-            "map comprehension key has type `String`, expected `int32`",
+            "map comprehension key has type `str`, expected `int32`",
         ),
         (
             r#"
 def main():
-    values: Map[int32, int32] = {value: "value" for value in range(0, 2)}
+    values: dict[int64, int32] = {value: "value" for value in range(0, 2)}
 "#,
-            "map comprehension value has type `String`, expected `int32`",
+            "map comprehension value has type `str`, expected `int32`",
         ),
     ] {
         let diagnostic = crate::check_source(source)
@@ -25668,7 +26670,7 @@ fn comprehension_default_parameter_dependencies_cover_filters_nested_sources_and
     for (source, expected_parameter) in [
         (
             r#"
-def collect(limit: int64, copied: Vec[int64] = [value for value in [1, 2] if value < limit]):
+def collect(limit: int64, copied: list[int64] = [value for value in [1, 2] if value < limit]):
     pass
 
 def main():
@@ -25678,7 +26680,7 @@ def main():
         ),
         (
             r#"
-def collect(limit: int64, copied: Vec[int64] = [inner for outer in [1, 2] for inner in range(0, limit)]):
+def collect(limit: int64, copied: list[int64] = [inner for outer in [1, 2] for inner in range(0, limit)]):
     pass
 
 def main():
@@ -25688,7 +26690,7 @@ def main():
         ),
         (
             r#"
-def collect(offset: int64, copied: Set[int64] = {value + offset for value in [1, 2]}):
+def collect(offset: int64, copied: set[int64] = {value + offset for value in [1, 2]}):
     pass
 
 def main():
@@ -25698,7 +26700,7 @@ def main():
         ),
         (
             r#"
-def collect(offset: int64, copied: Map[int64, int64] = {value + offset: value for value in [1, 2]}):
+def collect(offset: int64, copied: dict[int64, int64] = {value + offset: value for value in [1, 2]}):
     pass
 
 def main():
@@ -25708,7 +26710,7 @@ def main():
         ),
         (
             r#"
-def collect(offset: int64, copied: Map[int64, int64] = {value: value + offset for value in [1, 2]}):
+def collect(offset: int64, copied: dict[int64, int64] = {value: value + offset for value in [1, 2]}):
     pass
 
 def main():
@@ -25739,8 +26741,8 @@ def main():
     set_offset: int64 = 10
     key_offset: int64 = 20
     value_offset: int64 = 30
-    build_set: def() -> Set[int64] = lambda: {value + set_offset for value in set_values if value > threshold}
-    build_map: def() -> Map[int64, int64] = lambda: {value + key_offset: value + value_offset for value in map_values if value > threshold}
+    build_set: def() -> set[int64] = lambda: {value + set_offset for value in set_values if value > threshold}
+    build_map: def() -> dict[int64, int64] = lambda: {value + key_offset: value + value_offset for value in map_values if value > threshold}
 "#,
     )
     .expect("comprehension targets stay local while every surrounding use is captured");
@@ -25780,7 +26782,7 @@ def main():
 fn comprehension_arguments_preserve_owned_results_and_allow_source_reuse() {
     crate::check_source(
         r#"
-def observe(values: Vec[int64], unique: Set[int64], lookup: Map[int64, int64]):
+def observe(values: list[int64], unique: set[int64], lookup: dict[int64, int64]):
     pass
 
 def main():
@@ -25803,7 +26805,7 @@ fn comprehension_defaults_find_parameter_dependencies_inside_nested_expression_c
     for (source, parameter) in [
         (
             r#"
-def collect(offset: int64, copied: Vec[int64] = [value for value in ([offset] if true else [1])]):
+def collect(offset: int64, copied: list[int64] = [value for value in ([offset] if true else [1])]):
     pass
 
 def main():
@@ -25813,7 +26815,7 @@ def main():
         ),
         (
             r#"
-def collect(offset: int64, copied: Vec[int64] = [value for value in ([1] if true else [offset])]):
+def collect(offset: int64, copied: list[int64] = [value for value in ([1] if true else [offset])]):
     pass
 
 def main():
@@ -25823,7 +26825,7 @@ def main():
         ),
         (
             r#"
-def collect(limit: int64, copied: Vec[int64] = [value for value in [1, 2] if 0 in [limit]]):
+def collect(limit: int64, copied: list[int64] = [value for value in [1, 2] if 0 in [limit]]):
     pass
 
 def main():
@@ -25833,7 +26835,7 @@ def main():
         ),
         (
             r#"
-def collect(limit: int64, copied: Vec[int64] = [value for value in [1, 2] if 0 < limit < 10]):
+def collect(limit: int64, copied: list[int64] = [value for value in [1, 2] if 0 < limit < 10]):
     pass
 
 def main():
@@ -25843,7 +26845,7 @@ def main():
         ),
         (
             r#"
-def collect(offset: int64, copied: Vec[Map[String, int64]] = [{"fixed": offset} for value in [1, 2]]):
+def collect(offset: int64, copied: list[dict[str, int64]] = [{"fixed": offset} for value in [1, 2]]):
     pass
 
 def main():
@@ -25853,7 +26855,7 @@ def main():
         ),
         (
             r#"
-def collect(label: String, copied: Set[String] = {f"value={label}" for value in [1, 2]}):
+def collect(label: str, copied: set[str] = {f"value={label}" for value in [1, 2]}):
     pass
 
 def main():
@@ -25863,7 +26865,7 @@ def main():
         ),
         (
             r#"
-def collect(offset: int64, copied: Map[int64, int64] = {int64(offset): value for value in [1, 2]}):
+def collect(offset: int64, copied: dict[int64, int64] = {int64(offset): value for value in [1, 2]}):
     pass
 
 def main():
@@ -25873,7 +26875,7 @@ def main():
         ),
         (
             r#"
-def collect(offset: int64, copied: Map[int64, int64] = {value: [10, 20][offset] for value in [1, 2]}):
+def collect(offset: int64, copied: dict[int64, int64] = {value: [10, 20][offset] for value in [1, 2]}):
     pass
 
 def main():
@@ -25883,7 +26885,7 @@ def main():
         ),
         (
             r#"
-def collect(offset: int64, copied: Vec[int64] = [(match true:
+def collect(offset: int64, copied: list[int64] = [(match true:
     case true: offset
     case false: 0
 ) for value in [1, 2]]):
@@ -25896,7 +26898,7 @@ def main():
         ),
         (
             r#"
-def collect(offset: int64, copied: Vec[int64] = [(lambda: offset)() for value in [1, 2]]):
+def collect(offset: int64, copied: list[int64] = [(lambda: offset)() for value in [1, 2]]):
     pass
 
 def main():
@@ -25921,7 +26923,7 @@ def main():
 fn comprehension_default_tuple_targets_shadow_same_named_parameters() {
     crate::check_source(
         r#"
-def collect(left: int64, right: int64, copied: Vec[(int64, int64)] = [(left, right) for left, right in zip([1, 2], [3, 4])]):
+def collect(left: int64, right: int64, copied: list[(int64, int64)] = [(left, right) for left, right in zip([1, 2], [3, 4])]):
     pass
 
 def main():

@@ -1,7 +1,7 @@
-# Test: match borrow on Result[String, String] then reuse
+# Test: match borrow on Result[str, str] then reuse
 
 def main() -> int32:
-    result: Result[String, String] = Result.Ok("hello")
+    result: Result[str, str] = Result.Ok("hello")
 
     # First match borrow
     match result:

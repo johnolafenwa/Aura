@@ -1,5 +1,5 @@
 class Person:
-    name: String
+    name: str
     age: int32
 
 def main() -> int32:

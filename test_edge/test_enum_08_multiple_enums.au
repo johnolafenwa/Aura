@@ -22,7 +22,7 @@ def animal_sound(a: Animal) -> Sound:
         case Animal.Bird:
             return Sound.Chirp
 
-def sound_to_string(s: Sound) -> String:
+def sound_to_string(s: Sound) -> str:
     match own s:
         case Sound.Meow:
             return "meow"
@@ -31,7 +31,7 @@ def sound_to_string(s: Sound) -> String:
         case Sound.Chirp:
             return "chirp"
 
-def size_to_string(sz: Size) -> String:
+def size_to_string(sz: Size) -> str:
     match own sz:
         case Size.Small:
             return "small"

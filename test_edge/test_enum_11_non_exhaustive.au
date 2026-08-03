@@ -3,7 +3,7 @@ enum Fruit:
     Banana
     Cherry
 
-def name(f: Fruit) -> String:
+def name(f: Fruit) -> str:
     match own f:
         case Fruit.Apple:
             return "apple"

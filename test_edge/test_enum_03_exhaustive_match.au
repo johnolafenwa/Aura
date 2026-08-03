@@ -4,7 +4,7 @@ enum Direction:
     East
     West
 
-def direction_to_string(d: Direction) -> String:
+def direction_to_string(d: Direction) -> str:
     match own d:
         case Direction.North:
             return "north"

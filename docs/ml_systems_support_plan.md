@@ -21,7 +21,7 @@ Aura already has useful foundations for that direction:
 - shell-free process execution, pipes, timeouts, process groups, and supervisors
 - program arguments, environment, paths, working-directory access, and clocks
 - recursive dynamic JSON values with typed parse errors and deterministic
-  dumping, plus typed `Map[String, String]` JSON/TOML compatibility codecs
+  dumping, plus typed `dict[str, str]` JSON/TOML codecs
 - structured log/trace records and process-local counters
 - certificate-validated HTTPS plus chunked HTTP framing
 
@@ -62,7 +62,7 @@ Those may become future integrations, but they are not the first milestone.
 
 ## Problem Statement
 
-Aura now has a usable first control-plane boundary, but it is still missing the data-plane and exporter depth a production ML systems language needs:
+Aura has a usable first control-plane boundary, but it is missing the data-plane and exporter depth a production ML systems language needs:
 
 - no maintained host-side dense-array surface for local numeric work
 - no maintained shared-memory or copy-avoiding borrowed-buffer transport surface
@@ -432,7 +432,7 @@ Deliverables:
 - implemented: process-local counter metrics baseline
 - implemented: recursive JSON values, typed parse failures, deterministic
   compact/pretty dumping, and exact accessors
-- implemented: typed string-map JSON/TOML codecs
+- implemented: typed `dict[str, str]` JSON/TOML codecs
 - implemented: args/environment/path/time host APIs and HTTPS/chunked HTTP
 
 Follow-on depth within this phase includes schema-derived codecs, streaming
@@ -482,7 +482,7 @@ Deliverables:
 Success criteria:
 
 - Aura can coordinate local Python workers using shared memory plus control sockets
-- large payloads no longer require repeated string or byte copying through ad hoc layers
+- large payload paths avoid repeated string or byte copying through ad hoc layers
 
 ## Phase 4: Tensor And Device Handle Core
 

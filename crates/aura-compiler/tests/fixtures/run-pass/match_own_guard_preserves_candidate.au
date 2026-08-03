@@ -1,0 +1,14 @@
+enum Text:
+    Value(str)
+    Empty
+
+def main() -> int32:
+    text = Text.Value("kept")
+    match own text:
+        case Value(value) if value == "other":
+            print("wrong")
+        case Value(value):
+            print(value)
+        case Empty:
+            print("empty")
+    return 0

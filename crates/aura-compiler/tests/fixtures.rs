@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 
-use aura_compiler::{check_path, check_source, parse_source, run_path, run_source};
+use aura_compiler::{check_path, check_source, parse_source, run_path};
 
 #[test]
 fn parse_pass_fixtures_parse() {
@@ -91,18 +91,6 @@ fn check_path_fail_fixtures_match_expected_diagnostics() {
 fn python_migration_hint_fixtures_match_expected_messages_and_codes() {
     for fixture in fixture_files("python-hints") {
         let source = read(&fixture);
-        // A retired hint keeps its fixture and asserts that the Python form is
-        // now accepted, so the family still pins every migrated shape.
-        if fixture.with_extension("accept").exists() {
-            check_source(&source).unwrap_or_else(|error| {
-                panic!(
-                    "{} retired its migration hint and should type-check: {}",
-                    fixture.display(),
-                    error
-                )
-            });
-            continue;
-        }
         let error = match check_source(&source) {
             Ok(_) => panic!("{} should produce a migration hint", fixture.display()),
             Err(error) => error,
@@ -141,7 +129,7 @@ fn run_pass_fixtures_match_expected_stdout() {
 fn run_fail_fixtures_match_expected_diagnostics() {
     for fixture in fixture_files("run-fail") {
         let source = read(&fixture);
-        let error = match run_source_on_large_stack(source.clone()) {
+        let error = match run_path_on_large_stack(fixture.clone()) {
             Ok(output) => panic!(
                 "{} should fail at runtime, but produced stdout:\n{}",
                 fixture.display(),
@@ -216,15 +204,6 @@ fn run_path_on_large_stack(path: PathBuf) -> aura_compiler::Result<aura_compiler
     thread::Builder::new()
         .stack_size(16 * 1024 * 1024)
         .spawn(move || run_path(&path))
-        .unwrap_or_else(|error| panic!("failed to spawn runtime fixture thread: {}", error))
-        .join()
-        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
-}
-
-fn run_source_on_large_stack(source: String) -> aura_compiler::Result<aura_compiler::RunOutput> {
-    thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || run_source(&source))
         .unwrap_or_else(|error| panic!("failed to spawn runtime fixture thread: {}", error))
         .join()
         .unwrap_or_else(|payload| std::panic::resume_unwind(payload))

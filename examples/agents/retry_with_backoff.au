@@ -1,13 +1,13 @@
 import control
 import metrics
 
-def eventually_succeeds() -> Result[int32, String]:
+def eventually_succeeds() -> Result[int32, str]:
     metrics.increment("success-attempts", 1)
     if metrics.get("success-attempts") < 3:
         return Result.Err("not ready")
     return Result.Ok(42)
 
-def always_fails() -> Result[int32, String]:
+def always_fails() -> Result[int32, str]:
     metrics.increment("failure-attempts", 1)
     return Result.Err(f"attempt {metrics.get('failure-attempts')}")
 

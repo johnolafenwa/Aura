@@ -1,8 +1,8 @@
 def explode(value: int32) -> int32:
-    values: Vec[int32] = []
+    values: list[int32] = []
     return values[value]
 
 def main():
-    source: Vec[int32] = [0]
-    values = Array[int32].from_vec(source, [1])
+    source: list[int32] = [0]
+    values = Array[int32].from_list(source, [1])
     print(values.map[int32](f=explode))

@@ -1,0 +1,4 @@
+def main():
+    base: int8 = 2
+    exponent: int8 = 7
+    print(base ** exponent)

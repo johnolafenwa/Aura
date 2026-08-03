@@ -256,7 +256,22 @@ impl<'a> AnalysisBuilder<'a> {
     }
 
     fn build(mut self) -> AnalysisOutput {
+        self.visit_import_aliases();
         let mut top_level_scope = BTreeMap::new();
+        for constant in &self.program.module.constants {
+            self.visit_expr(&constant.value, &top_level_scope);
+            if let Some(info) = self.program.constants.get(&constant.name) {
+                top_level_scope.insert(
+                    constant.name.clone(),
+                    BindingInfo {
+                        ty: info.ty.clone(),
+                        trait_bounds: Vec::new(),
+                        definition: self.constant_definition(info),
+                        hover: format_value_hover("module constant", &constant.name, &info.ty),
+                    },
+                );
+            }
+        }
         self.visit_stmts(&self.program.top_level_stmts, &mut top_level_scope);
 
         for item in &self.program.module.items {
@@ -284,6 +299,82 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         self.output
+    }
+
+    fn visit_import_aliases(&mut self) {
+        let empty_scope = BTreeMap::new();
+        let imports = self.program.module.imports.clone();
+        for import in &imports {
+            match &import.kind {
+                ImportKind::Module {
+                    path,
+                    alias: Some(alias),
+                } => {
+                    let Some(range) = self.find_module_alias_range(import.span.line, alias) else {
+                        continue;
+                    };
+                    let target = path.join(".");
+                    let definition = self.find_imported_module_range(&target);
+                    self.push_occurrence(
+                        range,
+                        format!("```aura\nmodule {alias} = {target}\n```"),
+                        definition,
+                    );
+                }
+                ImportKind::From { names, .. } => {
+                    for imported_name in names {
+                        let Some(alias) = imported_name.alias.as_deref() else {
+                            continue;
+                        };
+                        let Some(range) = self.find_from_import_alias_range(
+                            imported_name.span.line,
+                            imported_name.span.column,
+                            alias,
+                        ) else {
+                            continue;
+                        };
+                        let Some(resolved) = self.resolve_name(alias, &empty_scope) else {
+                            continue;
+                        };
+                        self.push_occurrence(range, resolved.hover, resolved.definition);
+                    }
+                }
+                ImportKind::Module { alias: None, .. } => {}
+            }
+        }
+    }
+
+    fn find_module_alias_range(&self, line_number: usize, alias: &str) -> Option<AnalysisRange> {
+        let line_index = line_number.checked_sub(1)?;
+        let line = *self.source_lines.get(line_index)?;
+        let start = line.rfind(alias)?;
+        Some(AnalysisRange {
+            file_path: self.current_source_path(),
+            line: line_index,
+            start_character: start,
+            end_character: start + alias.len(),
+        })
+    }
+
+    fn find_from_import_alias_range(
+        &self,
+        line_number: usize,
+        imported_name_column: usize,
+        alias: &str,
+    ) -> Option<AnalysisRange> {
+        let line_index = line_number.checked_sub(1)?;
+        let line = *self.source_lines.get(line_index)?;
+        let segment_start = imported_name_column.saturating_sub(1);
+        let remainder = line.get(segment_start..)?;
+        let segment = remainder.split(',').next()?;
+        let relative_start = segment.rfind(alias)?;
+        let start = segment_start + relative_start;
+        Some(AnalysisRange {
+            file_path: self.current_source_path(),
+            line: line_index,
+            start_character: start,
+            end_character: start + alias.len(),
+        })
     }
 
     fn complete(
@@ -314,8 +405,23 @@ impl<'a> AnalysisBuilder<'a> {
                 }
             }
             if let ExprKind::Index { object, .. } = &receiver_expr.kind {
-                if matches!(&object.kind, ExprKind::Name(name) if name == "Array") {
-                    return Ok(builtin_associated_function_completions("Array"));
+                if let ExprKind::Name(name) = &object.kind {
+                    if matches!(name.as_str(), "Array" | "list" | "dict" | "set") {
+                        return Ok(builtin_specialized_associated_function_completions(
+                            name,
+                            &receiver_text,
+                        ));
+                    }
+                }
+            }
+            if let ExprKind::Specialize { expr, .. } = &receiver_expr.kind {
+                if let ExprKind::Name(name) = &expr.kind {
+                    if matches!(name.as_str(), "Array" | "list" | "dict" | "set") {
+                        return Ok(builtin_specialized_associated_function_completions(
+                            name,
+                            &receiver_text,
+                        ));
+                    }
                 }
             }
             let Some(receiver_type) = self.infer_expr_type(&receiver_expr, &scope) else {
@@ -326,6 +432,9 @@ impl<'a> AnalysisBuilder<'a> {
 
         let scope = self.scope_for_position(line, character);
         let mut completions = self.top_level_completions();
+        completions.retain(|completion| {
+            completion.kind != "constant" || scope.contains_key(&completion.name)
+        });
         let mut names = completions
             .iter()
             .map(|completion| completion.name.clone())
@@ -347,7 +456,7 @@ impl<'a> AnalysisBuilder<'a> {
         function_decl: &FunctionDecl,
         function_info: &FunctionInfo,
     ) -> BTreeMap<String, BindingInfo> {
-        let mut scope = BTreeMap::new();
+        let mut scope = self.constant_scope();
         for (param, ty) in function_decl
             .params
             .iter()
@@ -372,6 +481,57 @@ impl<'a> AnalysisBuilder<'a> {
             );
         }
         scope
+    }
+
+    fn constant_scope(&self) -> BTreeMap<String, BindingInfo> {
+        self.program
+            .constants
+            .iter()
+            .map(|(name, info)| (name.clone(), self.constant_binding_info(name, info)))
+            .collect()
+    }
+
+    fn constant_scope_before_line(&self, target_line: usize) -> BTreeMap<String, BindingInfo> {
+        let ready_local_constants = self
+            .program
+            .module
+            .constants
+            .iter()
+            .filter(|constant| expression_end_line(&constant.value) < target_line)
+            .map(|constant| constant.name.as_str())
+            .collect::<BTreeSet<_>>();
+
+        self.program
+            .constants
+            .iter()
+            .filter(|(name, info)| {
+                info.module_name != self.program.module_name
+                    || ready_local_constants.contains(name.as_str())
+            })
+            .map(|(name, info)| (name.clone(), self.constant_binding_info(name, info)))
+            .collect()
+    }
+
+    fn top_level_constant_scope(&self, target_line: usize) -> BTreeMap<String, BindingInfo> {
+        let inside_initializer = self.program.module.constants.iter().any(|constant| {
+            constant.span.line <= target_line && target_line <= expression_end_line(&constant.value)
+        });
+        if inside_initializer {
+            self.constant_scope_before_line(target_line)
+        } else {
+            // Executable top-level statements start only after the complete
+            // module initialization phase, so every constant is ready there.
+            self.constant_scope()
+        }
+    }
+
+    fn constant_binding_info(&self, name: &str, info: &crate::sema::ConstantInfo) -> BindingInfo {
+        BindingInfo {
+            ty: info.ty.clone(),
+            trait_bounds: Vec::new(),
+            definition: self.constant_definition(info),
+            hover: format_value_hover("module constant", name, &info.ty),
+        }
     }
 
     fn method_scope(
@@ -423,7 +583,7 @@ impl<'a> AnalysisBuilder<'a> {
             return scope;
         }
 
-        let mut scope = BTreeMap::new();
+        let mut scope = self.top_level_constant_scope(target_line);
         self.accumulate_scope_from_stmts(&self.program.top_level_stmts, target_line, &mut scope);
         scope
     }
@@ -684,13 +844,19 @@ impl<'a> AnalysisBuilder<'a> {
             }
             ExprKind::FString(parts) => {
                 for part in parts {
-                    if let crate::ast::FormatPart::Expr(part_expr) = part {
-                        self.extend_lambda_scope_from_expr(
-                            part_expr,
-                            target_line,
-                            character,
-                            scope,
-                        );
+                    match part {
+                        crate::ast::FormatPart::Expr(part_expr)
+                        | crate::ast::FormatPart::Formatted {
+                            expr: part_expr, ..
+                        } => {
+                            self.extend_lambda_scope_from_expr(
+                                part_expr,
+                                target_line,
+                                character,
+                                scope,
+                            );
+                        }
+                        crate::ast::FormatPart::Literal(_) => {}
                     }
                 }
             }
@@ -748,6 +914,9 @@ impl<'a> AnalysisBuilder<'a> {
             } => {
                 self.extend_lambda_scope_from_expr(scrutinee, target_line, character, scope);
                 for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.extend_lambda_scope_from_expr(guard, target_line, character, scope);
+                    }
                     self.extend_lambda_scope_from_expr(&arm.value, target_line, character, scope);
                 }
             }
@@ -1145,23 +1314,23 @@ impl<'a> AnalysisBuilder<'a> {
                 detail: "Aura keyword".to_string(),
             });
         }
-        for class_info in self.program.classes.values() {
+        for (visible_name, class_info) in &self.program.classes {
             completions.push(AnalysisCompletion {
-                name: class_info.decl.name.clone(),
+                name: visible_name.clone(),
                 kind: "class".to_string(),
                 detail: format_class_detail(class_info),
             });
         }
-        for enum_info in self.program.enums.values() {
+        for visible_name in self.program.enums.keys() {
             completions.push(AnalysisCompletion {
-                name: enum_info.decl.name.clone(),
+                name: visible_name.clone(),
                 kind: "enum".to_string(),
                 detail: "Aura enum".to_string(),
             });
         }
-        for trait_info in self.program.traits.values() {
+        for visible_name in self.program.traits.keys() {
             completions.push(AnalysisCompletion {
-                name: trait_info.decl.name.clone(),
+                name: visible_name.clone(),
                 kind: "trait".to_string(),
                 detail: "Aura trait".to_string(),
             });
@@ -1178,23 +1347,30 @@ impl<'a> AnalysisBuilder<'a> {
             kind: "class".to_string(),
             detail: "Array[T] numeric multidimensional array".to_string(),
         });
-        for function_info in self.program.functions.values() {
+        for (visible_name, function_info) in &self.program.functions {
             completions.push(AnalysisCompletion {
-                name: function_info.decl.name.clone(),
+                name: visible_name.clone(),
                 kind: "function".to_string(),
                 detail: format_function_detail(&function_info.decl),
             });
         }
-        for function_info in self.program.extern_functions.values() {
+        for (visible_name, constant) in &self.program.constants {
             completions.push(AnalysisCompletion {
-                name: function_info.decl.name.clone(),
+                name: visible_name.clone(),
+                kind: "constant".to_string(),
+                detail: constant.ty.to_string(),
+            });
+        }
+        for (visible_name, function_info) in &self.program.extern_functions {
+            completions.push(AnalysisCompletion {
+                name: visible_name.clone(),
                 kind: "function".to_string(),
                 detail: format_extern_function_detail(&function_info.decl),
             });
         }
-        for handle_info in self.program.opaque_handles.values() {
+        for (visible_name, handle_info) in &self.program.opaque_handles {
             completions.push(AnalysisCompletion {
-                name: handle_info.decl.name.clone(),
+                name: visible_name.clone(),
                 kind: "class".to_string(),
                 detail: format_extern_opaque_detail(&handle_info.decl),
             });
@@ -1206,9 +1382,9 @@ impl<'a> AnalysisBuilder<'a> {
                 detail: builtin.detail().to_string(),
             });
         }
-        for namespace in self.program.imported_modules.values() {
+        for (visible_name, namespace) in &self.program.imported_modules {
             completions.push(AnalysisCompletion {
-                name: namespace.name.clone(),
+                name: visible_name.clone(),
                 kind: "module".to_string(),
                 detail: format!("module {}", namespace.path),
             });
@@ -1232,6 +1408,13 @@ impl<'a> AnalysisBuilder<'a> {
                         name: function.decl.name.clone(),
                         kind: "function".to_string(),
                         detail: format_function_detail(&function.decl),
+                    });
+                }
+                for constant in namespace.constants.values() {
+                    completions.push(AnalysisCompletion {
+                        name: constant.decl.name.clone(),
+                        kind: "constant".to_string(),
+                        detail: constant.ty.to_string(),
                     });
                 }
                 for function in namespace.extern_functions.values() {
@@ -1467,6 +1650,9 @@ impl<'a> AnalysisBuilder<'a> {
     }
 
     fn module_namespace(&self, path: &str) -> Option<&crate::sema::ModuleNamespace> {
+        if let Some(namespace) = self.program.module_registry.get(path) {
+            return Some(namespace);
+        }
         let mut segments = path.split('.');
         let first = segments.next()?;
         let mut namespace = self.program.imported_modules.get(first)?;
@@ -1515,6 +1701,14 @@ impl<'a> AnalysisBuilder<'a> {
             &function.module_name,
             function.decl.span,
             function.decl.name.len(),
+        )
+    }
+
+    fn constant_definition(&self, constant: &crate::sema::ConstantInfo) -> AnalysisRange {
+        self.definition_range(
+            &constant.module_name,
+            constant.decl.span,
+            constant.decl.name.len(),
         )
     }
 
@@ -1571,7 +1765,7 @@ impl<'a> AnalysisBuilder<'a> {
         }
         let target_segments = target_path.split('.').collect::<Vec<_>>();
         for import in &self.program.module.imports {
-            let ImportKind::Module { path } = &import.kind else {
+            let ImportKind::Module { path, .. } = &import.kind else {
                 continue;
             };
             if path.len() < target_segments.len() {
@@ -1793,6 +1987,9 @@ impl<'a> AnalysisBuilder<'a> {
                     let mut arm_scope = scope.clone();
                     self.visit_match_arm_pattern(arm, scrutinee_type.as_ref());
                     self.bind_match_arm(arm, scrutinee_type.as_ref(), &mut arm_scope);
+                    if let Some(guard) = &arm.guard {
+                        self.visit_expr(guard, &arm_scope);
+                    }
                     self.visit_stmts(&arm.body, &mut arm_scope);
                 }
             }
@@ -1924,6 +2121,14 @@ impl<'a> AnalysisBuilder<'a> {
         bindings: &mut Vec<(String, Type, usize)>,
     ) {
         match pattern {
+            Pattern::Or(pattern) => {
+                // Every alternative has the same checked binding set. Record
+                // the first once so completion/hover expose one logical arm
+                // scope rather than duplicate definitions.
+                if let Some(alternative) = pattern.alternatives.first() {
+                    self.collect_match_pattern_bindings(alternative, expected_type, bindings);
+                }
+            }
             Pattern::Binding(binding) => bindings.push((
                 binding.name.clone(),
                 expected_type.cloned().unwrap_or(Type::Unit),
@@ -1966,6 +2171,11 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn visit_match_pattern_occurrences(&mut self, pattern: &Pattern, expected_type: Option<&Type>) {
         match pattern {
+            Pattern::Or(pattern) => {
+                for alternative in &pattern.alternatives {
+                    self.visit_match_pattern_occurrences(alternative, expected_type);
+                }
+            }
             Pattern::Tuple(tuple) => {
                 let element_types = match expected_type {
                     Some(Type::Tuple(elements)) => Some(elements.as_slice()),
@@ -2134,8 +2344,12 @@ impl<'a> AnalysisBuilder<'a> {
             }
             ExprKind::FString(parts) => {
                 for part in parts {
-                    if let crate::ast::FormatPart::Expr(expr) = part {
-                        self.visit_expr(expr, scope);
+                    match part {
+                        crate::ast::FormatPart::Expr(expr)
+                        | crate::ast::FormatPart::Formatted { expr, .. } => {
+                            self.visit_expr(expr, scope);
+                        }
+                        crate::ast::FormatPart::Literal(_) => {}
                     }
                 }
             }
@@ -2235,8 +2449,23 @@ impl<'a> AnalysisBuilder<'a> {
                 scrutinee, arms, ..
             } => {
                 self.visit_expr(scrutinee, scope);
+                let scrutinee_type = self.infer_expr_type(scrutinee, scope);
                 for arm in arms {
-                    self.visit_expr(&arm.value, scope);
+                    let mut arm_scope = scope.clone();
+                    self.visit_match_pattern_occurrences(&arm.pattern, scrutinee_type.as_ref());
+                    let mut bindings = Vec::new();
+                    self.collect_match_pattern_bindings(
+                        &arm.pattern,
+                        scrutinee_type.as_ref(),
+                        &mut bindings,
+                    );
+                    for (name, ty, line) in bindings {
+                        self.bind_named_value(&name, ty, line, "local", &mut arm_scope);
+                    }
+                    if let Some(guard) = &arm.guard {
+                        self.visit_expr(guard, &arm_scope);
+                    }
+                    self.visit_expr(&arm.value, &arm_scope);
                 }
             }
             ExprKind::Int(_)
@@ -2276,38 +2505,87 @@ impl<'a> AnalysisBuilder<'a> {
             });
         }
 
+        if let Some(constant) = self.program.constants.get(name) {
+            return Some(ResolvedSymbol {
+                hover: append_alias_target(
+                    format_value_hover("module constant", name, &constant.ty),
+                    name,
+                    &constant.module_name,
+                    &constant.decl.name,
+                ),
+                definition: Some(self.constant_definition(constant)),
+            });
+        }
+
         if let Some(function) = self.program.functions.get(name) {
             return Some(ResolvedSymbol {
-                hover: format_function_hover(&function.decl),
+                hover: append_alias_target(
+                    format_function_hover(&function.decl),
+                    name,
+                    &function.module_name,
+                    &function.decl.name,
+                ),
                 definition: Some(self.function_definition(function)),
             });
         }
 
         if let Some(function) = self.program.extern_functions.get(name) {
             return Some(ResolvedSymbol {
-                hover: format_extern_function_hover(&function.decl),
+                hover: append_alias_target(
+                    format_extern_function_hover(&function.decl),
+                    name,
+                    &function.module_name,
+                    &function.decl.name,
+                ),
                 definition: Some(self.extern_function_definition(function)),
             });
         }
 
         if let Some(handle) = self.program.opaque_handles.get(name) {
             return Some(ResolvedSymbol {
-                hover: format_extern_opaque_hover(&handle.decl),
+                hover: append_alias_target(
+                    format_extern_opaque_hover(&handle.decl),
+                    name,
+                    &handle.module_name,
+                    &handle.decl.name,
+                ),
                 definition: Some(self.opaque_handle_definition(handle)),
             });
         }
 
         if let Some(class_info) = self.program.classes.get(name) {
             return Some(ResolvedSymbol {
-                hover: format_class_hover(class_info),
+                hover: append_alias_target(
+                    format_class_hover(class_info),
+                    name,
+                    &class_info.module_name,
+                    &class_info.decl.name,
+                ),
                 definition: Some(self.class_definition(class_info)),
             });
         }
 
         if let Some(enum_info) = self.program.enums.get(name) {
             return Some(ResolvedSymbol {
-                hover: format_enum_hover_named(&self.canonical_enum_identity(name, enum_info)),
+                hover: append_alias_target(
+                    format_enum_hover_named(&self.canonical_enum_identity(name, enum_info)),
+                    name,
+                    &enum_info.module_name,
+                    &enum_info.decl.name,
+                ),
                 definition: Some(self.enum_definition(enum_info)),
+            });
+        }
+
+        if let Some(trait_info) = self.program.traits.get(name) {
+            return Some(ResolvedSymbol {
+                hover: append_alias_target(
+                    format!("```aura\ntrait {}\n```", trait_info.decl.name),
+                    name,
+                    &trait_info.module_name,
+                    &trait_info.decl.name,
+                ),
+                definition: Some(self.trait_definition(trait_info)),
             });
         }
 
@@ -2320,7 +2598,11 @@ impl<'a> AnalysisBuilder<'a> {
 
         if let Some(namespace) = self.program.imported_modules.get(name) {
             return Some(ResolvedSymbol {
-                hover: format!("```aura\nmodule {}\n```", namespace.path),
+                hover: if namespace.path == name {
+                    format!("```aura\nmodule {}\n```", namespace.path)
+                } else {
+                    format!("```aura\nmodule {name} = {}\n```", namespace.path)
+                },
                 definition: self.find_imported_module_range(&namespace.path),
             });
         }
@@ -2392,9 +2674,9 @@ impl<'a> AnalysisBuilder<'a> {
             if !scope.contains_key(type_name) {
                 let associated_ty = match (type_name.as_str(), field) {
                     ("Duration", "ms" | "seconds" | "minutes") => Some(Type::named("Duration")),
-                    ("String", "from_bytes") => Some(Type::Named(
+                    ("str", "from_bytes") => Some(Type::Named(
                         "Result".to_string(),
-                        vec![Type::named("String"), Type::named("bytes.Error")],
+                        vec![Type::named("str"), Type::named("bytes.Error")],
                     )),
                     _ => None,
                 };
@@ -2421,6 +2703,13 @@ impl<'a> AnalysisBuilder<'a> {
                     hover: format!("```aura\nmodule {}\n```", child.path),
                     definition: self.find_imported_module_range(&child.path),
                     ty: Some(Type::Module(child.path.clone())),
+                });
+            }
+            if let Some(constant) = namespace.constants.get(field) {
+                return Some(ResolvedMember {
+                    hover: format_value_hover("module constant", field, &constant.ty),
+                    definition: Some(self.constant_definition(constant)),
+                    ty: Some(constant.ty.clone()),
                 });
             }
             if let Some(function) = namespace.functions.get(field) {
@@ -2551,38 +2840,6 @@ impl<'a> AnalysisBuilder<'a> {
             });
         }
 
-        if base_name == "MapEntry" {
-            return match field {
-                "key" => Some(ResolvedMember {
-                    hover: format_value_hover(
-                        "field",
-                        "key",
-                        &receiver_type
-                            .type_arguments()
-                            .first()
-                            .cloned()
-                            .unwrap_or(Type::named("Unknown")),
-                    ),
-                    definition: None,
-                    ty: receiver_type.type_arguments().first().cloned(),
-                }),
-                "value" => Some(ResolvedMember {
-                    hover: format_value_hover(
-                        "field",
-                        "value",
-                        &receiver_type
-                            .type_arguments()
-                            .get(1)
-                            .cloned()
-                            .unwrap_or(Type::named("Unknown")),
-                    ),
-                    definition: None,
-                    ty: receiver_type.type_arguments().get(1).cloned(),
-                }),
-                _ => None,
-            };
-        }
-
         if let Some(enum_info) = self.resolve_named_enum_info(base_name) {
             if let Some(variant_info) = enum_info.variants.get(field) {
                 let enum_name = self.canonical_enum_identity(base_name, enum_info);
@@ -2606,95 +2863,101 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         if let Some(builtin_member) = BuiltinMember::resolve(base_name, field) {
-            let ty = match builtin_member {
-                BuiltinMember::FloatSqrt
-                | BuiltinMember::IntegerToFloat
-                | BuiltinMember::DurationToMilliseconds
-                | BuiltinMember::DurationToSeconds => Some(Type::named("float64")),
-                BuiltinMember::IntegerWrappingAdd
-                | BuiltinMember::IntegerWrappingSub
-                | BuiltinMember::IntegerWrappingMul
-                | BuiltinMember::IntegerSaturatingAdd
-                | BuiltinMember::IntegerSaturatingSub
-                | BuiltinMember::IntegerSaturatingMul => Some(receiver_type.clone()),
-                BuiltinMember::StringLen | BuiltinMember::StringByteLen => {
-                    Some(Type::named("int64"))
-                }
-                BuiltinMember::StringToBytes => {
-                    Some(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
-                }
-                BuiltinMember::StringContains
-                | BuiltinMember::StringStartsWith
-                | BuiltinMember::StringEndsWith => Some(Type::named("bool")),
-                BuiltinMember::StringSplit => {
-                    Some(Type::Named("Vec".to_string(), vec![Type::named("String")]))
-                }
-                BuiltinMember::StringReplace
-                | BuiltinMember::StringToLower
-                | BuiltinMember::StringToUpper
-                | BuiltinMember::StringTrim
-                | BuiltinMember::StringJoin
-                | BuiltinMember::ScalarToString => Some(Type::named("String")),
-                BuiltinMember::StringStripPrefix | BuiltinMember::StringStripSuffix => Some(
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
-                ),
-                BuiltinMember::ArrayShape => {
-                    Some(Type::Named("Vec".to_string(), vec![Type::named("int64")]))
-                }
-                BuiltinMember::ArrayLen => Some(Type::named("int64")),
-                BuiltinMember::ArrayClone
-                | BuiltinMember::ArrayWrappingAdd
-                | BuiltinMember::ArrayWrappingSub
-                | BuiltinMember::ArrayWrappingMul
-                | BuiltinMember::ArraySaturatingAdd
-                | BuiltinMember::ArraySaturatingSub
-                | BuiltinMember::ArraySaturatingMul => Some(receiver_type.clone()),
-                BuiltinMember::ArrayGet | BuiltinMember::ArraySet => {
-                    let payload = receiver_type
+            let ty =
+                match builtin_member {
+                    BuiltinMember::FloatSqrt
+                    | BuiltinMember::IntegerToFloat
+                    | BuiltinMember::DurationToMilliseconds
+                    | BuiltinMember::DurationToSeconds => Some(Type::named("float64")),
+                    BuiltinMember::IntegerWrappingAdd
+                    | BuiltinMember::IntegerWrappingSub
+                    | BuiltinMember::IntegerWrappingMul
+                    | BuiltinMember::IntegerSaturatingAdd
+                    | BuiltinMember::IntegerSaturatingSub
+                    | BuiltinMember::IntegerSaturatingMul
+                    | BuiltinMember::IntegerWrappingShl
+                    | BuiltinMember::IntegerWrappingShr
+                    | BuiltinMember::IntegerSaturatingShl
+                    | BuiltinMember::IntegerSaturatingShr => Some(receiver_type.clone()),
+                    BuiltinMember::StringLen | BuiltinMember::StringByteLen => {
+                        Some(Type::named("int64"))
+                    }
+                    BuiltinMember::StringToBytes => {
+                        Some(Type::Named("list".to_string(), vec![Type::named("uint8")]))
+                    }
+                    BuiltinMember::StringContains
+                    | BuiltinMember::StringStartsWith
+                    | BuiltinMember::StringEndsWith => Some(Type::named("bool")),
+                    BuiltinMember::StringSplit => {
+                        Some(Type::Named("list".to_string(), vec![Type::named("str")]))
+                    }
+                    BuiltinMember::StringReplace
+                    | BuiltinMember::StringToLower
+                    | BuiltinMember::StringToUpper
+                    | BuiltinMember::StringTrim
+                    | BuiltinMember::StringJoin
+                    | BuiltinMember::ScalarToString => Some(Type::named("str")),
+                    BuiltinMember::StringStripPrefix | BuiltinMember::StringStripSuffix => {
+                        Some(Type::Named("Option".to_string(), vec![Type::named("str")]))
+                    }
+                    BuiltinMember::ArrayShape => {
+                        Some(Type::Named("list".to_string(), vec![Type::named("int64")]))
+                    }
+                    BuiltinMember::ArrayLen => Some(Type::named("int64")),
+                    BuiltinMember::ArrayClone
+                    | BuiltinMember::ArrayWrappingAdd
+                    | BuiltinMember::ArrayWrappingSub
+                    | BuiltinMember::ArrayWrappingMul
+                    | BuiltinMember::ArraySaturatingAdd
+                    | BuiltinMember::ArraySaturatingSub
+                    | BuiltinMember::ArraySaturatingMul => Some(receiver_type.clone()),
+                    BuiltinMember::ArrayGet | BuiltinMember::ArraySet => {
+                        let payload = receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit);
+                        Some(Type::Named("Option".to_string(), vec![payload]))
+                    }
+                    BuiltinMember::ArrayFill => Some(Type::Unit),
+                    BuiltinMember::ArrayMap => None,
+                    BuiltinMember::ArraySum | BuiltinMember::ArrayMin | BuiltinMember::ArrayMax => {
+                        receiver_type.type_arguments().first().cloned()
+                    }
+                    BuiltinMember::ArrayMean => Some(Type::named("float64")),
+                    BuiltinMember::VecLen => Some(Type::named("int64")),
+                    BuiltinMember::VecIsEmpty => Some(Type::named("bool")),
+                    BuiltinMember::VecClone => Some(receiver_type.clone()),
+                    BuiltinMember::VecPush
+                    | BuiltinMember::VecRemove
+                    | BuiltinMember::VecClear
+                    | BuiltinMember::VecReverse
+                    | BuiltinMember::VecSort
+                    | BuiltinMember::VecInsert
+                    | BuiltinMember::VecSwap
+                    | BuiltinMember::VecExtend
+                    | BuiltinMember::VecReserve => Some(Type::Unit),
+                    BuiltinMember::VecIndex | BuiltinMember::VecCount => Some(Type::named("int64")),
+                    BuiltinMember::VecMap => None,
+                    BuiltinMember::VecFilter => Some(receiver_type.clone()),
+                    BuiltinMember::VecContains => Some(Type::named("bool")),
+                    BuiltinMember::MapLen => Some(Type::named("int64")),
+                    BuiltinMember::MapIsEmpty => Some(Type::named("bool")),
+                    BuiltinMember::MapClone => Some(receiver_type.clone()),
+                    BuiltinMember::MapContainsKey => Some(Type::named("bool")),
+                    BuiltinMember::MapKeys => receiver_type
                         .type_arguments()
                         .first()
                         .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
-                }
-                BuiltinMember::ArrayFill => Some(Type::Unit),
-                BuiltinMember::ArrayMap => None,
-                BuiltinMember::ArraySum | BuiltinMember::ArrayMin | BuiltinMember::ArrayMax => {
-                    receiver_type.type_arguments().first().cloned()
-                }
-                BuiltinMember::ArrayMean => Some(Type::named("float64")),
-                BuiltinMember::VecLen => Some(Type::named("int64")),
-                BuiltinMember::VecIsEmpty => Some(Type::named("bool")),
-                BuiltinMember::VecClone => Some(receiver_type.clone()),
-                BuiltinMember::VecPush
-                | BuiltinMember::VecClear
-                | BuiltinMember::VecReverse
-                | BuiltinMember::VecSort
-                | BuiltinMember::VecSortBy => Some(Type::Unit),
-                BuiltinMember::VecMap => None,
-                BuiltinMember::VecFilter => Some(receiver_type.clone()),
-                BuiltinMember::VecInsert => Some(Type::named("bool")),
-                BuiltinMember::VecSwap | BuiltinMember::VecContains => Some(Type::named("bool")),
-                BuiltinMember::VecExtend => Some(Type::Unit),
-                BuiltinMember::MapLen => Some(Type::named("int64")),
-                BuiltinMember::MapIsEmpty => Some(Type::named("bool")),
-                BuiltinMember::MapClone => Some(receiver_type.clone()),
-                BuiltinMember::MapContainsKey => Some(Type::named("bool")),
-                BuiltinMember::MapKeys => receiver_type
-                    .type_arguments()
-                    .first()
-                    .cloned()
-                    .map(|key| Type::Named("Vec".to_string(), vec![key])),
-                BuiltinMember::MapValues => receiver_type
-                    .type_arguments()
-                    .get(1)
-                    .cloned()
-                    .map(|value| Type::Named("Vec".to_string(), vec![value])),
-                BuiltinMember::MapItems | BuiltinMember::MapEntries => Some(Type::Named(
-                    "Vec".to_string(),
-                    vec![Type::Named(
-                        "MapEntry".to_string(),
-                        vec![
+                        .map(|key| Type::Named("list".to_string(), vec![key])),
+                    BuiltinMember::MapValues => receiver_type
+                        .type_arguments()
+                        .get(1)
+                        .cloned()
+                        .map(|value| Type::Named("list".to_string(), vec![value])),
+                    BuiltinMember::MapItems => Some(Type::Named(
+                        "list".to_string(),
+                        vec![Type::Tuple(vec![
                             receiver_type
                                 .type_arguments()
                                 .first()
@@ -2705,500 +2968,485 @@ impl<'a> AnalysisBuilder<'a> {
                                 .get(1)
                                 .cloned()
                                 .unwrap_or(Type::Unit),
-                        ],
-                    )],
-                )),
-                BuiltinMember::MapClear | BuiltinMember::MapExtend => Some(Type::Unit),
-                BuiltinMember::MapGet | BuiltinMember::MapSet | BuiltinMember::MapRemove => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .get(1)
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
-                }
-                BuiltinMember::VecPop => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
-                }
-                BuiltinMember::VecGet => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
-                }
-                BuiltinMember::VecSet => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
-                }
-                BuiltinMember::VecRemove => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
-                }
-                BuiltinMember::StringClone => Some(Type::named("String")),
-                BuiltinMember::SetLen => Some(Type::named("int64")),
-                BuiltinMember::SetIsEmpty => Some(Type::named("bool")),
-                BuiltinMember::SetClone => Some(receiver_type.clone()),
-                BuiltinMember::SetContains
-                | BuiltinMember::SetInsert
-                | BuiltinMember::SetRemove => Some(Type::named("bool")),
-                BuiltinMember::QueuePut | BuiltinMember::QueueTryPut => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named(
+                        ])],
+                    )),
+                    BuiltinMember::MapClear
+                    | BuiltinMember::MapExtend
+                    | BuiltinMember::MapReserve => Some(Type::Unit),
+                    BuiltinMember::MapGet | BuiltinMember::MapSet | BuiltinMember::MapRemove => {
+                        let payload = receiver_type
+                            .type_arguments()
+                            .get(1)
+                            .cloned()
+                            .unwrap_or(Type::Unit);
+                        Some(Type::Named("Option".to_string(), vec![payload]))
+                    }
+                    BuiltinMember::VecPop | BuiltinMember::VecSet => {
+                        let payload = receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit);
+                        Some(payload)
+                    }
+                    BuiltinMember::VecGet => {
+                        let payload = receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit);
+                        Some(Type::Named("Option".to_string(), vec![payload]))
+                    }
+                    BuiltinMember::StringClone => Some(Type::named("str")),
+                    BuiltinMember::SetLen => Some(Type::named("int64")),
+                    BuiltinMember::SetIsEmpty => Some(Type::named("bool")),
+                    BuiltinMember::SetClone => Some(receiver_type.clone()),
+                    BuiltinMember::SetContains => Some(Type::named("bool")),
+                    BuiltinMember::SetInsert
+                    | BuiltinMember::SetRemove
+                    | BuiltinMember::SetDiscard
+                    | BuiltinMember::SetClear
+                    | BuiltinMember::SetReserve => Some(Type::Unit),
+                    BuiltinMember::QueuePut | BuiltinMember::QueueTryPut => {
+                        let payload = receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit);
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![
+                                Type::Unit,
+                                Type::Named("SendError".to_string(), vec![payload]),
+                            ],
+                        ))
+                    }
+                    BuiltinMember::QueueGet => {
+                        let payload = receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit);
+                        Some(Type::Named("QueueReceive".to_string(), vec![payload]))
+                    }
+                    BuiltinMember::QueueGetOrNone => {
+                        let payload = receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit);
+                        Some(Type::Named("Option".to_string(), vec![payload]))
+                    }
+                    BuiltinMember::QueueGetOr => receiver_type.type_arguments().first().cloned(),
+                    BuiltinMember::QueueClose | BuiltinMember::TaskGroupCancel => Some(Type::Unit),
+                    BuiltinMember::TaskResult => Some(Type::Named(
+                        "TaskResult".to_string(),
+                        vec![receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit)],
+                    )),
+                    BuiltinMember::TaskResultOrNone => Some(Type::Named(
+                        "Option".to_string(),
+                        vec![receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::Unit)],
+                    )),
+                    BuiltinMember::TaskResultOr => receiver_type.type_arguments().first().cloned(),
+                    BuiltinMember::TaskGroupStart | BuiltinMember::TaskGroupStartWithStack => {
+                        Some(Type::Named("Task".to_string(), vec![Type::Unit]))
+                    }
+                    BuiltinMember::TaskGroupStartSoon
+                    | BuiltinMember::TaskGroupStartSoonWithStack => Some(Type::Unit),
+                    BuiltinMember::ProcessChildStdin
+                    | BuiltinMember::ProcessChildStdout
+                    | BuiltinMember::ProcessChildStderr => Some(Type::Named(
+                        "Option".to_string(),
+                        vec![Type::Named("process.Pipe".to_string(), Vec::new())],
+                    )),
+                    BuiltinMember::ProcessChildWait => {
+                        Some(Type::Named("process.Wait".to_string(), Vec::new()))
+                    }
+                    BuiltinMember::ProcessChildWaitOrNone => Some(Type::Named(
                         "Result".to_string(),
                         vec![
-                            Type::Unit,
-                            Type::Named("SendError".to_string(), vec![payload]),
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("process.ExitStatus".to_string(), Vec::new())],
+                            ),
+                            Type::Named("process.Error".to_string(), Vec::new()),
                         ],
-                    ))
-                }
-                BuiltinMember::QueueGet => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("QueueReceive".to_string(), vec![payload]))
-                }
-                BuiltinMember::QueueGetOrNone => {
-                    let payload = receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
-                }
-                BuiltinMember::QueueGetOr => receiver_type.type_arguments().first().cloned(),
-                BuiltinMember::QueueClose | BuiltinMember::TaskGroupCancel => Some(Type::Unit),
-                BuiltinMember::TaskResult => Some(Type::Named(
-                    "TaskResult".to_string(),
-                    vec![receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit)],
-                )),
-                BuiltinMember::TaskResultOrNone => Some(Type::Named(
-                    "Option".to_string(),
-                    vec![receiver_type
-                        .type_arguments()
-                        .first()
-                        .cloned()
-                        .unwrap_or(Type::Unit)],
-                )),
-                BuiltinMember::TaskResultOr => receiver_type.type_arguments().first().cloned(),
-                BuiltinMember::TaskGroupStart | BuiltinMember::TaskGroupStartWithStack => {
-                    Some(Type::Named("Task".to_string(), vec![Type::Unit]))
-                }
-                BuiltinMember::TaskGroupStartSoon | BuiltinMember::TaskGroupStartSoonWithStack => {
-                    Some(Type::Unit)
-                }
-                BuiltinMember::ProcessChildStdin
-                | BuiltinMember::ProcessChildStdout
-                | BuiltinMember::ProcessChildStderr => Some(Type::Named(
-                    "Option".to_string(),
-                    vec![Type::Named("process.Pipe".to_string(), Vec::new())],
-                )),
-                BuiltinMember::ProcessChildWait => {
-                    Some(Type::Named("process.Wait".to_string(), Vec::new()))
-                }
-                BuiltinMember::ProcessChildWaitOrNone => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named(
-                            "Option".to_string(),
-                            vec![Type::Named("process.ExitStatus".to_string(), Vec::new())],
-                        ),
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessChildWaitOk => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("process.ExitStatus".to_string(), Vec::new()),
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessChildKill | BuiltinMember::ProcessChildTerminate => {
-                    Some(Type::Named(
+                    )),
+                    BuiltinMember::ProcessChildWaitOk => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("process.ExitStatus".to_string(), Vec::new()),
+                            Type::Named("process.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::ProcessChildKill | BuiltinMember::ProcessChildTerminate => {
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![
+                                Type::Unit,
+                                Type::Named("process.Error".to_string(), Vec::new()),
+                            ],
+                        ))
+                    }
+                    BuiltinMember::ProcessChildClose => Some(Type::Unit),
+                    BuiltinMember::ProcessPipeReadAll => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
+                            Type::Named("process.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::ProcessPipeReadLine => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("Option".to_string(), vec![Type::named("str")]),
+                            Type::Named("process.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::ProcessPipeReadBytes => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
+                            ),
+                            Type::Named("process.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::ProcessPipeWriteAll
+                    | BuiltinMember::ProcessPipeWriteBytes
+                    | BuiltinMember::ProcessPipeFlush => Some(Type::Named(
                         "Result".to_string(),
                         vec![
                             Type::Unit,
                             Type::Named("process.Error".to_string(), Vec::new()),
                         ],
-                    ))
-                }
-                BuiltinMember::ProcessChildClose => Some(Type::Unit),
-                BuiltinMember::ProcessPipeReadAll => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessPipeReadLine => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Option".to_string(), vec![Type::named("String")]),
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessPipeReadBytes => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named(
-                            "Option".to_string(),
-                            vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
-                        ),
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessPipeWriteAll
-                | BuiltinMember::ProcessPipeWriteBytes
-                | BuiltinMember::ProcessPipeFlush => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Unit,
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessPipeClose => Some(Type::Unit),
-                BuiltinMember::ProcessCompletedStatus => {
-                    Some(Type::Named("process.ExitStatus".to_string(), Vec::new()))
-                }
-                BuiltinMember::ProcessCompletedSuccess => Some(Type::named("bool")),
-                BuiltinMember::ProcessCompletedStdout | BuiltinMember::ProcessCompletedStderr => {
-                    Some(Type::named("String"))
-                }
-                BuiltinMember::ProcessCompletedStdoutBytes
-                | BuiltinMember::ProcessCompletedStderrBytes => {
-                    Some(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
-                }
-                BuiltinMember::ProcessCompletedCheck => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Unit,
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessSupervisorStart | BuiltinMember::ProcessSupervisorStop => {
-                    Some(Type::Named(
+                    )),
+                    BuiltinMember::ProcessPipeClose => Some(Type::Unit),
+                    BuiltinMember::ProcessCompletedStatus => {
+                        Some(Type::Named("process.ExitStatus".to_string(), Vec::new()))
+                    }
+                    BuiltinMember::ProcessCompletedSuccess => Some(Type::named("bool")),
+                    BuiltinMember::ProcessCompletedStdout
+                    | BuiltinMember::ProcessCompletedStderr => Some(Type::named("str")),
+                    BuiltinMember::ProcessCompletedStdoutBytes
+                    | BuiltinMember::ProcessCompletedStderrBytes => {
+                        Some(Type::Named("list".to_string(), vec![Type::named("uint8")]))
+                    }
+                    BuiltinMember::ProcessCompletedCheck => Some(Type::Named(
                         "Result".to_string(),
                         vec![
                             Type::Unit,
                             Type::Named("process.Error".to_string(), Vec::new()),
                         ],
-                    ))
-                }
-                BuiltinMember::ProcessSupervisorWait => Some(Type::Named(
-                    "process.SupervisorWait".to_string(),
-                    Vec::new(),
-                )),
-                BuiltinMember::ProcessSupervisorWaitOrNone => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named(
-                            "Option".to_string(),
-                            vec![Type::Named(
-                                "process.SupervisorEvent".to_string(),
-                                Vec::new(),
-                            )],
-                        ),
-                        Type::Named("process.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::ProcessSupervisorIsEmpty => Some(Type::named("bool")),
-                BuiltinMember::ProcessSupervisorClose => Some(Type::Unit),
-                BuiltinMember::RngNextInt => Some(Type::named("int64")),
-                BuiltinMember::RngNextFloat => Some(Type::named("float64")),
-                BuiltinMember::RngShuffle => Some(Type::Unit),
-                BuiltinMember::FileReadAll => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::FileReadBytes => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::FileWriteAll
-                | BuiltinMember::FileWriteBytes
-                | BuiltinMember::FileFlush => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                )),
-                BuiltinMember::FileClose => Some(Type::Unit),
-                BuiltinMember::TcpListenerAccept => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("net.TcpStream".to_string(), Vec::new()),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TcpListenerLocalAddr => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TcpListenerClose => Some(Type::Unit),
-                BuiltinMember::TcpStreamReadAll
-                | BuiltinMember::TcpStreamLocalAddr
-                | BuiltinMember::TcpStreamPeerAddr => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TcpStreamReadLine => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Option".to_string(), vec![Type::named("String")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TcpStreamReadBytes => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named(
-                            "Option".to_string(),
-                            vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
-                        ),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TcpStreamReadExact => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TcpStreamWriteAll
-                | BuiltinMember::TcpStreamWriteBytes
-                | BuiltinMember::TcpStreamFlush
-                | BuiltinMember::TcpStreamShutdownRead
-                | BuiltinMember::TcpStreamShutdownWrite
-                | BuiltinMember::TcpStreamShutdownBoth => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                )),
-                BuiltinMember::TcpStreamClose => Some(Type::Unit),
-                BuiltinMember::UdpSocketSendText | BuiltinMember::UdpSocketSendBytes => {
-                    Some(Type::Named(
-                        "Result".to_string(),
-                        vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                    ))
-                }
-                BuiltinMember::UdpSocketRecv => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named(
-                            "Option".to_string(),
-                            vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
-                        ),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::UdpSocketRecvFrom => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named(
-                            "Option".to_string(),
-                            vec![Type::Named("net.UdpDatagram".to_string(), Vec::new())],
-                        ),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::UdpSocketLocalAddr | BuiltinMember::UdpSocketPeerAddr => {
-                    Some(Type::Named(
+                    )),
+                    BuiltinMember::ProcessSupervisorStart
+                    | BuiltinMember::ProcessSupervisorStop => Some(Type::Named(
                         "Result".to_string(),
                         vec![
-                            Type::named("String"),
-                            Type::Named("io.Error".to_string(), Vec::new()),
+                            Type::Unit,
+                            Type::Named("process.Error".to_string(), Vec::new()),
                         ],
-                    ))
-                }
-                BuiltinMember::UdpSocketClose => Some(Type::Unit),
-                BuiltinMember::UdpDatagramAddress => Some(Type::named("String")),
-                BuiltinMember::UdpDatagramBytes => {
-                    Some(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
-                }
-                BuiltinMember::UdpDatagramText => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::HttpListenerAccept => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("net.HttpExchange".to_string(), Vec::new()),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::HttpListenerLocalAddr => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::HttpListenerClose => Some(Type::Unit),
-                BuiltinMember::HttpExchangeMethod | BuiltinMember::HttpExchangePath => {
-                    Some(Type::named("String"))
-                }
-                BuiltinMember::HttpExchangeHeaders | BuiltinMember::HttpResponseHeaders => {
-                    Some(Type::Named(
-                        "Map".to_string(),
-                        vec![Type::named("String"), Type::named("String")],
-                    ))
-                }
-                BuiltinMember::HttpExchangeBodyText | BuiltinMember::HttpResponseText => {
-                    Some(Type::Named(
+                    )),
+                    BuiltinMember::ProcessSupervisorWait => Some(Type::Named(
+                        "process.SupervisorWait".to_string(),
+                        Vec::new(),
+                    )),
+                    BuiltinMember::ProcessSupervisorWaitOrNone => Some(Type::Named(
                         "Result".to_string(),
                         vec![
-                            Type::named("String"),
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named(
+                                    "process.SupervisorEvent".to_string(),
+                                    Vec::new(),
+                                )],
+                            ),
+                            Type::Named("process.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::ProcessSupervisorIsEmpty => Some(Type::named("bool")),
+                    BuiltinMember::ProcessSupervisorClose => Some(Type::Unit),
+                    BuiltinMember::RngNextInt => Some(Type::named("int64")),
+                    BuiltinMember::RngNextFloat => Some(Type::named("float64")),
+                    BuiltinMember::RngShuffle => Some(Type::Unit),
+                    BuiltinMember::FileReadAll => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
                             Type::Named("io.Error".to_string(), Vec::new()),
                         ],
-                    ))
-                }
-                BuiltinMember::HttpExchangeBodyBytes | BuiltinMember::HttpResponseBytes => {
-                    Some(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
-                }
-                BuiltinMember::HttpExchangeRespondText
-                | BuiltinMember::HttpExchangeRespondBytes => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                )),
-                BuiltinMember::HttpResponseStatus => Some(Type::named("int32")),
-                BuiltinMember::HttpResponseReason => Some(Type::named("String")),
-                BuiltinMember::WebSocketListenerAccept => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("net.WebSocket".to_string(), Vec::new()),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::WebSocketListenerLocalAddr => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::WebSocketSendText | BuiltinMember::WebSocketSendBytes => {
-                    Some(Type::Named(
+                    )),
+                    BuiltinMember::FileReadBytes => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::FileWriteAll
+                    | BuiltinMember::FileWriteBytes
+                    | BuiltinMember::FileFlush => Some(Type::Named(
                         "Result".to_string(),
                         vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                    ))
-                }
-                BuiltinMember::WebSocketRecvText => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Option".to_string(), vec![Type::named("String")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::WebSocketRecvBytes => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named(
-                            "Option".to_string(),
-                            vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
-                        ),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::WebSocketClose => Some(Type::Unit),
-                BuiltinMember::UnixListenerAccept => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("net.UnixStream".to_string(), Vec::new()),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::UnixListenerClose => Some(Type::Unit),
-                BuiltinMember::UnixStreamReadLine => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Option".to_string(), vec![Type::named("String")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::UnixStreamReadExact => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::UnixStreamWriteAll => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                )),
-                BuiltinMember::UnixStreamClose => Some(Type::Unit),
-                BuiltinMember::TlsListenerAccept => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("net.TlsStream".to_string(), Vec::new()),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TlsListenerLocalAddr => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::named("String"),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TlsListenerClose => Some(Type::Unit),
-                BuiltinMember::TlsStreamReadLine => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Option".to_string(), vec![Type::named("String")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TlsStreamReadExact => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
-                        Type::Named("io.Error".to_string(), Vec::new()),
-                    ],
-                )),
-                BuiltinMember::TlsStreamWriteAll => Some(Type::Named(
-                    "Result".to_string(),
-                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                )),
-                BuiltinMember::TlsStreamClose => Some(Type::Unit),
-            };
+                    )),
+                    BuiltinMember::FileClose => Some(Type::Unit),
+                    BuiltinMember::TcpListenerAccept => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("net.TcpStream".to_string(), Vec::new()),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TcpListenerLocalAddr => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TcpListenerClose => Some(Type::Unit),
+                    BuiltinMember::TcpStreamReadAll
+                    | BuiltinMember::TcpStreamLocalAddr
+                    | BuiltinMember::TcpStreamPeerAddr => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TcpStreamReadLine => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("Option".to_string(), vec![Type::named("str")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TcpStreamReadBytes => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
+                            ),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TcpStreamReadExact => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TcpStreamWriteAll
+                    | BuiltinMember::TcpStreamWriteBytes
+                    | BuiltinMember::TcpStreamFlush
+                    | BuiltinMember::TcpStreamShutdownRead
+                    | BuiltinMember::TcpStreamShutdownWrite
+                    | BuiltinMember::TcpStreamShutdownBoth => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                    )),
+                    BuiltinMember::TcpStreamClose => Some(Type::Unit),
+                    BuiltinMember::UdpSocketSendText | BuiltinMember::UdpSocketSendBytes => {
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                        ))
+                    }
+                    BuiltinMember::UdpSocketRecv => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
+                            ),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::UdpSocketRecvFrom => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("net.UdpDatagram".to_string(), Vec::new())],
+                            ),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::UdpSocketLocalAddr | BuiltinMember::UdpSocketPeerAddr => {
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![
+                                Type::named("str"),
+                                Type::Named("io.Error".to_string(), Vec::new()),
+                            ],
+                        ))
+                    }
+                    BuiltinMember::UdpSocketClose => Some(Type::Unit),
+                    BuiltinMember::UdpDatagramAddress => Some(Type::named("str")),
+                    BuiltinMember::UdpDatagramBytes => {
+                        Some(Type::Named("list".to_string(), vec![Type::named("uint8")]))
+                    }
+                    BuiltinMember::UdpDatagramText => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::HttpListenerAccept => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("net.HttpExchange".to_string(), Vec::new()),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::HttpListenerLocalAddr => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::HttpListenerClose => Some(Type::Unit),
+                    BuiltinMember::HttpExchangeMethod | BuiltinMember::HttpExchangePath => {
+                        Some(Type::named("str"))
+                    }
+                    BuiltinMember::HttpExchangeHeaders | BuiltinMember::HttpResponseHeaders => {
+                        Some(Type::Named(
+                            "dict".to_string(),
+                            vec![Type::named("str"), Type::named("str")],
+                        ))
+                    }
+                    BuiltinMember::HttpExchangeBodyText | BuiltinMember::HttpResponseText => {
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![
+                                Type::named("str"),
+                                Type::Named("io.Error".to_string(), Vec::new()),
+                            ],
+                        ))
+                    }
+                    BuiltinMember::HttpExchangeBodyBytes | BuiltinMember::HttpResponseBytes => {
+                        Some(Type::Named("list".to_string(), vec![Type::named("uint8")]))
+                    }
+                    BuiltinMember::HttpExchangeRespondText
+                    | BuiltinMember::HttpExchangeRespondBytes => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                    )),
+                    BuiltinMember::HttpResponseStatus => Some(Type::named("int32")),
+                    BuiltinMember::HttpResponseReason => Some(Type::named("str")),
+                    BuiltinMember::WebSocketListenerAccept => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("net.WebSocket".to_string(), Vec::new()),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::WebSocketListenerLocalAddr => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::WebSocketSendText | BuiltinMember::WebSocketSendBytes => {
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                        ))
+                    }
+                    BuiltinMember::WebSocketRecvText => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("Option".to_string(), vec![Type::named("str")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::WebSocketRecvBytes => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("list".to_string(), vec![Type::named("uint8")])],
+                            ),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::WebSocketClose => Some(Type::Unit),
+                    BuiltinMember::UnixListenerAccept => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("net.UnixStream".to_string(), Vec::new()),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::UnixListenerClose => Some(Type::Unit),
+                    BuiltinMember::UnixStreamReadLine => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("Option".to_string(), vec![Type::named("str")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::UnixStreamReadExact => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::UnixStreamWriteAll => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                    )),
+                    BuiltinMember::UnixStreamClose => Some(Type::Unit),
+                    BuiltinMember::TlsListenerAccept => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("net.TlsStream".to_string(), Vec::new()),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TlsListenerLocalAddr => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("str"),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TlsListenerClose => Some(Type::Unit),
+                    BuiltinMember::TlsStreamReadLine => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("Option".to_string(), vec![Type::named("str")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TlsStreamReadExact => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    )),
+                    BuiltinMember::TlsStreamWriteAll => Some(Type::Named(
+                        "Result".to_string(),
+                        vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                    )),
+                    BuiltinMember::TlsStreamClose => Some(Type::Unit),
+                };
             return Some(ResolvedMember {
                 hover: builtin_function_hover(builtin_member.detail(), builtin_member.docs()),
                 definition: None,
@@ -3252,7 +3500,7 @@ impl<'a> AnalysisBuilder<'a> {
                 ty: Some(Type::named("TaskResult")),
             }),
             "TaskResult" if field == "Error" => Some(ResolvedMember {
-                hover: format_variant_hover("TaskResult", field, Some(&Type::named("String"))),
+                hover: format_variant_hover("TaskResult", field, Some(&Type::named("str"))),
                 definition: None,
                 ty: Some(Type::named("TaskResult")),
             }),
@@ -3265,7 +3513,7 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: format_variant_hover_payloads(
                     "WaitAny",
                     field,
-                    ["own int32".to_string(), "own T".to_string()],
+                    ["own int64".to_string(), "own T".to_string()],
                 ),
                 definition: None,
                 ty: Some(Type::named("WaitAny")),
@@ -3274,7 +3522,7 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: format_variant_hover_payloads(
                     "WaitAny",
                     field,
-                    ["own int32".to_string(), "own String".to_string()],
+                    ["own int64".to_string(), "own str".to_string()],
                 ),
                 definition: None,
                 ty: Some(Type::named("WaitAny")),
@@ -3285,7 +3533,7 @@ impl<'a> AnalysisBuilder<'a> {
                 ty: Some(Type::named("WaitAny")),
             }),
             "WaitAll" if field == "Ready" => Some(ResolvedMember {
-                hover: format_variant_hover_payloads("WaitAll", field, ["own Vec[T]".to_string()]),
+                hover: format_variant_hover_payloads("WaitAll", field, ["own list[T]".to_string()]),
                 definition: None,
                 ty: Some(Type::named("WaitAll")),
             }),
@@ -3293,7 +3541,7 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: format_variant_hover_payloads(
                     "WaitAll",
                     field,
-                    ["own int32".to_string(), "own String".to_string()],
+                    ["own int64".to_string(), "own str".to_string()],
                 ),
                 definition: None,
                 ty: Some(Type::named("WaitAll")),
@@ -3307,7 +3555,7 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: format_variant_hover_payloads(
                     "SelectOutcome",
                     field,
-                    ["own int32".to_string(), "own QueueReceive[Q]".to_string()],
+                    ["own int64".to_string(), "own QueueReceive[Q]".to_string()],
                 ),
                 definition: None,
                 ty: Some(Type::named("SelectOutcome")),
@@ -3316,13 +3564,13 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: format_variant_hover_payloads(
                     "SelectOutcome",
                     field,
-                    ["own int32".to_string(), "own TaskResult[T]".to_string()],
+                    ["own int64".to_string(), "own TaskResult[T]".to_string()],
                 ),
                 definition: None,
                 ty: Some(Type::named("SelectOutcome")),
             }),
             "SelectOutcome" if field == "Deadline" => Some(ResolvedMember {
-                hover: format_variant_hover("SelectOutcome", field, Some(&Type::named("int32"))),
+                hover: format_variant_hover("SelectOutcome", field, Some(&Type::named("int64"))),
                 definition: None,
                 ty: Some(Type::named("SelectOutcome")),
             }),
@@ -3364,7 +3612,7 @@ impl<'a> AnalysisBuilder<'a> {
                     return Type::Unit;
                 }
                 let name = match name.as_str() {
-                    "str" => "String",
+                    "str" => "str",
                     "int" => "int64",
                     name => name,
                 };
@@ -3422,7 +3670,7 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::BuiltinOmitted => None,
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
-            ExprKind::String(_) => Some(Type::named("String")),
+            ExprKind::String(_) => Some(Type::named("str")),
             ExprKind::Lambda { .. } => self.closure_info(expr).map(ClosureInfo::ty),
             ExprKind::Tuple(elements) => Some(Type::Tuple(
                 elements
@@ -3434,21 +3682,21 @@ impl<'a> AnalysisBuilder<'a> {
                     .collect(),
             )),
             ExprKind::List(elements) => Some(Type::Named(
-                "Vec".to_string(),
+                "list".to_string(),
                 vec![elements
                     .first()
                     .and_then(|element| self.infer_expr_type(element, scope))
                     .unwrap_or(Type::named("Unknown"))],
             )),
             ExprKind::Set(elements) => Some(Type::Named(
-                "Set".to_string(),
+                "set".to_string(),
                 vec![elements
                     .first()
                     .and_then(|element| self.infer_expr_type(element, scope))
                     .unwrap_or(Type::named("Unknown"))],
             )),
             ExprKind::Map(entries) => Some(Type::Named(
-                "Map".to_string(),
+                "dict".to_string(),
                 vec![
                     entries
                         .first()
@@ -3463,7 +3711,7 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Comprehension { .. } => self
                 .comprehension_info(expr)
                 .map(|info| info.result_type.clone()),
-            ExprKind::FString(_) => Some(Type::named("String")),
+            ExprKind::FString(_) => Some(Type::named("str")),
             ExprKind::Specialize { expr, type_args } => match &expr.kind {
                 ExprKind::Name(name)
                     if self.program.classes.contains_key(name)
@@ -3475,9 +3723,9 @@ impl<'a> AnalysisBuilder<'a> {
                                 | "SendError"
                                 | "Queue"
                                 | "Array"
-                                | "Vec"
-                                | "Set"
-                                | "Map"
+                                | "list"
+                                | "set"
+                                | "dict"
                                 | "Task"
                         ) =>
                 {
@@ -3512,7 +3760,7 @@ impl<'a> AnalysisBuilder<'a> {
                 let inner_ty = self.infer_expr_type(expr, scope)?;
                 match op {
                     crate::ast::UnaryOp::Not => Some(Type::named("bool")),
-                    crate::ast::UnaryOp::Neg => Some(inner_ty),
+                    crate::ast::UnaryOp::Neg | crate::ast::UnaryOp::BitNot => Some(inner_ty),
                 }
             }
             ExprKind::Try(inner) => {
@@ -3592,14 +3840,14 @@ impl<'a> AnalysisBuilder<'a> {
                         },
                         _ => match base_type_name(&ty) {
                             "Array" => ty.type_arguments().first().cloned(),
-                            "Vec" => ty.type_arguments().first().cloned(),
-                            "Map" => ty.type_arguments().get(1).cloned(),
+                            "list" => ty.type_arguments().first().cloned(),
+                            "dict" => ty.type_arguments().get(1).cloned(),
                             _ => None,
                         },
                     })
             }
             ExprKind::Slice { object, .. } => self.infer_expr_type(object, scope).and_then(|ty| {
-                matches!(base_type_name(&ty), "Array" | "Vec" | "String").then_some(ty)
+                matches!(base_type_name(&ty), "Array" | "list" | "str").then_some(ty)
             }),
             ExprKind::Call { callee, args } => self.infer_call_type(callee, args, scope),
             ExprKind::Conditional {
@@ -3682,10 +3930,9 @@ impl<'a> AnalysisBuilder<'a> {
                     | BinaryOp::Greater
                     | BinaryOp::GreaterEq => Some(Type::named("bool")),
                     BinaryOp::Add
-                        if left_ty == Type::named("String")
-                            && right_ty == Type::named("String") =>
+                        if left_ty == Type::named("str") && right_ty == Type::named("str") =>
                     {
-                        Some(Type::named("String"))
+                        Some(Type::named("str"))
                     }
                     _ if left_ty == Type::named("float64")
                         || right_ty == Type::named("float64") =>
@@ -3734,6 +3981,25 @@ impl<'a> AnalysisBuilder<'a> {
                     BuiltinFunction::Sqrt => args
                         .first()
                         .and_then(|arg| self.infer_expr_type(&arg.value, scope)),
+                    BuiltinFunction::Round => args.first().and_then(|arg| {
+                        let ty = self.infer_expr_type(&arg.value, scope)?;
+                        Some(
+                            if matches!(
+                                ty,
+                                Type::Named(ref name, ref type_args)
+                                    if type_args.is_empty()
+                                        && matches!(name.as_str(), "float32" | "float64")
+                            ) {
+                                Type::named("int64")
+                            } else {
+                                ty
+                            },
+                        )
+                    }),
+                    BuiltinFunction::Divmod => args.first().and_then(|arg| {
+                        let ty = self.infer_expr_type(&arg.value, scope)?;
+                        Some(Type::Tuple(vec![ty.clone(), ty]))
+                    }),
                     BuiltinFunction::Select => {
                         if args.iter().any(|argument| argument.name.is_some()) {
                             return None;
@@ -3783,7 +4049,7 @@ impl<'a> AnalysisBuilder<'a> {
                         let task_list = self.infer_expr_type(&arg.value, scope)?;
                         match task_list {
                             Type::Named(vec_name, vec_args)
-                                if vec_name == "Vec" && vec_args.len() == 1 =>
+                                if vec_name == "list" && vec_args.len() == 1 =>
                             {
                                 match &vec_args[0] {
                                     Type::Named(task_name, task_args)
@@ -3804,7 +4070,7 @@ impl<'a> AnalysisBuilder<'a> {
                         let task_list = self.infer_expr_type(&arg.value, scope)?;
                         match task_list {
                             Type::Named(vec_name, vec_args)
-                                if vec_name == "Vec" && vec_args.len() == 1 =>
+                                if vec_name == "list" && vec_args.len() == 1 =>
                             {
                                 match &vec_args[0] {
                                     Type::Named(task_name, task_args)
@@ -3831,10 +4097,10 @@ impl<'a> AnalysisBuilder<'a> {
                             ("Duration", "ms" | "seconds" | "minutes") => {
                                 return Some(Type::named("Duration"));
                             }
-                            ("String", "from_bytes") => {
+                            ("str", "from_bytes") => {
                                 return Some(Type::Named(
                                     "Result".to_string(),
-                                    vec![Type::named("String"), Type::named("bytes.Error")],
+                                    vec![Type::named("str"), Type::named("bytes.Error")],
                                 ));
                             }
                             _ => {}
@@ -3865,7 +4131,7 @@ impl<'a> AnalysisBuilder<'a> {
                         }
                         _ => return None,
                     };
-                    return Some(Type::Named("Vec".to_string(), vec![*return_type]));
+                    return Some(Type::Named("list".to_string(), vec![*return_type]));
                 }
                 if BuiltinMember::resolve(base_type_name(&receiver_type), field)
                     == Some(BuiltinMember::ArrayMap)
@@ -3895,7 +4161,7 @@ impl<'a> AnalysisBuilder<'a> {
                     if self.program.classes.contains_key(name)
                         || matches!(
                             name.as_str(),
-                            "Queue" | "Array" | "Vec" | "Set" | "Map" | "Task"
+                            "Queue" | "Array" | "list" | "set" | "dict" | "Task"
                         ) =>
                 {
                     let args = type_args
@@ -3962,7 +4228,7 @@ impl<'a> AnalysisBuilder<'a> {
             &iterable.kind,
             ExprKind::Call { callee, .. } if matches!(&callee.kind, ExprKind::Name(name) if name == "range")
         ) {
-            return Some(Type::named("int32"));
+            return Some(Type::named("int64"));
         }
 
         if let ExprKind::Call { callee, args } = &iterable.kind {
@@ -3986,7 +4252,7 @@ impl<'a> AnalysisBuilder<'a> {
 
         let iterable_ty = self.infer_expr_type(iterable, scope)?;
         match base_type_name(&iterable_ty) {
-            "Queue" | "Vec" | "Set" => iterable_ty.type_arguments().first().cloned(),
+            "Queue" | "list" | "set" => iterable_ty.type_arguments().first().cloned(),
             _ => None,
         }
     }
@@ -3997,7 +4263,7 @@ impl<'a> AnalysisBuilder<'a> {
         scope: &BTreeMap<String, BindingInfo>,
     ) -> Option<Type> {
         let iterable_ty = self.infer_expr_type(iterable, scope)?;
-        matches!(base_type_name(&iterable_ty), "Vec" | "Set")
+        matches!(base_type_name(&iterable_ty), "list" | "set")
             .then(|| iterable_ty.type_arguments().first().cloned())
             .flatten()
     }
@@ -4249,7 +4515,23 @@ where
 }
 
 fn symbols_from_module(module: &Module) -> Vec<AnalysisSymbol> {
-    let mut symbols = Vec::new();
+    let mut symbols = module
+        .constants
+        .iter()
+        .map(|constant| AnalysisSymbol {
+            name: constant.name.clone(),
+            kind: "constant".to_string(),
+            detail: constant
+                .annotation
+                .as_ref()
+                .map(|ty| lower_type_ref(ty).to_string())
+                .unwrap_or_else(|| "inferred".to_string()),
+            line: constant.span.line.saturating_sub(1),
+            start_character: constant.span.column.saturating_sub(1),
+            end_character: constant.span.column.saturating_sub(1) + constant.name.len(),
+            children: Vec::new(),
+        })
+        .collect::<Vec<_>>();
     for item in &module.items {
         match item {
             Item::Class(class_decl) => {
@@ -4522,7 +4804,7 @@ fn lower_type_ref(ty: &TypeRef) -> Type {
         crate::ast::TypeRefKind::Named { name, args } if name == "None" => Type::Unit,
         crate::ast::TypeRefKind::Named { name, args } => {
             let name = match name.as_str() {
-                "str" => "String",
+                "str" => "str",
                 "int" => "int64",
                 name => name,
             };
@@ -4605,7 +4887,10 @@ fn expression_end_line(expr: &Expr) -> usize {
         ExprKind::FString(parts) => parts
             .iter()
             .filter_map(|part| match part {
-                crate::ast::FormatPart::Expr(part_expr) => Some(expression_end_line(part_expr)),
+                crate::ast::FormatPart::Expr(part_expr)
+                | crate::ast::FormatPart::Formatted {
+                    expr: part_expr, ..
+                } => Some(expression_end_line(part_expr)),
                 crate::ast::FormatPart::Literal(_) => None,
             })
             .fold(expr.span.line, usize::max),
@@ -4666,7 +4951,13 @@ fn expression_end_line(expr: &Expr) -> usize {
             scrutinee, arms, ..
         } => arms
             .iter()
-            .map(|arm| expression_end_line(&arm.value))
+            .map(|arm| {
+                arm.guard
+                    .as_ref()
+                    .map(expression_end_line)
+                    .unwrap_or(arm.span.line)
+                    .max(expression_end_line(&arm.value))
+            })
             .fold(expression_end_line(scrutinee), usize::max),
         ExprKind::Name(_)
         | ExprKind::Int(_)
@@ -4822,6 +5113,19 @@ fn format_param_decl(param: &Param) -> String {
         lower_type_ref(&param.ty),
         default
     )
+}
+
+fn append_alias_target(
+    hover: String,
+    local_name: &str,
+    module_name: &str,
+    target_name: &str,
+) -> String {
+    if local_name == target_name {
+        hover
+    } else {
+        format!("{hover}\n\nAlias `{local_name}` for `{module_name}.{target_name}`.")
+    }
 }
 
 fn format_function_hover(function_decl: &FunctionDecl) -> String {
@@ -5107,7 +5411,7 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
             AnalysisCompletion {
                 name: "Error".to_string(),
                 kind: "variant".to_string(),
-                detail: "Error(own String) -> TaskResult".to_string(),
+                detail: "Error(own str) -> TaskResult".to_string(),
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
@@ -5124,12 +5428,12 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
             AnalysisCompletion {
                 name: "Ready".to_string(),
                 kind: "variant".to_string(),
-                detail: "Ready(own int32, own T) -> WaitAny".to_string(),
+                detail: "Ready(own int64, own T) -> WaitAny".to_string(),
             },
             AnalysisCompletion {
                 name: "Error".to_string(),
                 kind: "variant".to_string(),
-                detail: "Error(own int32, own String) -> WaitAny".to_string(),
+                detail: "Error(own int64, own str) -> WaitAny".to_string(),
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
@@ -5146,12 +5450,12 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
             AnalysisCompletion {
                 name: "Ready".to_string(),
                 kind: "variant".to_string(),
-                detail: "Ready(own Vec[T]) -> WaitAll".to_string(),
+                detail: "Ready(own list[T]) -> WaitAll".to_string(),
             },
             AnalysisCompletion {
                 name: "Error".to_string(),
                 kind: "variant".to_string(),
-                detail: "Error(own int32, own String) -> WaitAll".to_string(),
+                detail: "Error(own int64, own str) -> WaitAll".to_string(),
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),
@@ -5168,17 +5472,17 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
             AnalysisCompletion {
                 name: "Queue".to_string(),
                 kind: "variant".to_string(),
-                detail: "Queue(own int32, own QueueReceive[Q]) -> SelectOutcome".to_string(),
+                detail: "Queue(own int64, own QueueReceive[Q]) -> SelectOutcome".to_string(),
             },
             AnalysisCompletion {
                 name: "Task".to_string(),
                 kind: "variant".to_string(),
-                detail: "Task(own int32, own TaskResult[T]) -> SelectOutcome".to_string(),
+                detail: "Task(own int64, own TaskResult[T]) -> SelectOutcome".to_string(),
             },
             AnalysisCompletion {
                 name: "Deadline".to_string(),
                 kind: "variant".to_string(),
-                detail: "Deadline(own int32) -> SelectOutcome".to_string(),
+                detail: "Deadline(own int64) -> SelectOutcome".to_string(),
             },
             AnalysisCompletion {
                 name: "Cancelled".to_string(),
@@ -5193,7 +5497,7 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
 fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
     let mut completions = Vec::new();
     match base_type_name(receiver_type) {
-        "Vec" => {
+        "list" => {
             completions.extend([
                 AnalysisCompletion {
                     name: "len".to_string(),
@@ -5206,24 +5510,24 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                     detail: "is_empty() -> bool".to_string(),
                 },
                 AnalysisCompletion {
-                    name: "clone".to_string(),
+                    name: "copy".to_string(),
                     kind: "method".to_string(),
-                    detail: "clone() -> Vec[T]".to_string(),
+                    detail: "copy() -> list[T]".to_string(),
                 },
                 AnalysisCompletion {
-                    name: "push".to_string(),
+                    name: "append".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::VecPush.detail().to_string(),
                 },
                 AnalysisCompletion {
                     name: "pop".to_string(),
                     kind: "method".to_string(),
-                    detail: "pop() -> Option[T]".to_string(),
+                    detail: "pop(index: int64 = -1) -> T".to_string(),
                 },
                 AnalysisCompletion {
                     name: "get".to_string(),
                     kind: "method".to_string(),
-                    detail: "get(index: int32) -> Option[T]".to_string(),
+                    detail: "get(index: int64) -> Option[T]".to_string(),
                 },
                 AnalysisCompletion {
                     name: "set".to_string(),
@@ -5233,17 +5537,12 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 AnalysisCompletion {
                     name: "remove".to_string(),
                     kind: "method".to_string(),
-                    detail: "remove(index: int32) -> Option[T]".to_string(),
+                    detail: "remove(value: T) -> None".to_string(),
                 },
                 AnalysisCompletion {
                     name: "swap".to_string(),
                     kind: "method".to_string(),
-                    detail: "swap(first: int32, second: int32) -> bool".to_string(),
-                },
-                AnalysisCompletion {
-                    name: "contains".to_string(),
-                    kind: "method".to_string(),
-                    detail: "contains(value: T) -> bool".to_string(),
+                    detail: "swap(first: int64, second: int64) -> None".to_string(),
                 },
                 AnalysisCompletion {
                     name: "insert".to_string(),
@@ -5271,11 +5570,6 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                     detail: BuiltinMember::VecSort.detail().to_string(),
                 },
                 AnalysisCompletion {
-                    name: "sort_by".to_string(),
-                    kind: "method".to_string(),
-                    detail: BuiltinMember::VecSortBy.detail().to_string(),
-                },
-                AnalysisCompletion {
                     name: "map".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::VecMap.detail().to_string(),
@@ -5287,17 +5581,12 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 },
             ]);
         }
-        "Map" => {
+        "dict" => {
             completions.extend([
                 AnalysisCompletion {
                     name: "items".to_string(),
                     kind: "method".to_string(),
-                    detail: "items() -> Vec[MapEntry[K, V]]".to_string(),
-                },
-                AnalysisCompletion {
-                    name: "entries".to_string(),
-                    kind: "method".to_string(),
-                    detail: "entries() -> Vec[MapEntry[K, V]]".to_string(),
+                    detail: "items() -> list[(K, V)]".to_string(),
                 },
                 AnalysisCompletion {
                     name: "clear".to_string(),
@@ -5305,13 +5594,13 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                     detail: "clear() -> None".to_string(),
                 },
                 AnalysisCompletion {
-                    name: "extend".to_string(),
+                    name: "update".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::MapExtend.detail().to_string(),
                 },
             ]);
         }
-        "Set" => {
+        "set" => {
             completions.extend([
                 AnalysisCompletion {
                     name: "is_empty".to_string(),
@@ -5319,38 +5608,19 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                     detail: "is_empty() -> bool".to_string(),
                 },
                 AnalysisCompletion {
-                    name: "clone".to_string(),
+                    name: "copy".to_string(),
                     kind: "method".to_string(),
-                    detail: "clone() -> Set[T]".to_string(),
+                    detail: "copy() -> set[T]".to_string(),
                 },
                 AnalysisCompletion {
-                    name: "contains".to_string(),
-                    kind: "method".to_string(),
-                    detail: "contains(value: T) -> bool".to_string(),
-                },
-                AnalysisCompletion {
-                    name: "insert".to_string(),
+                    name: "add".to_string(),
                     kind: "method".to_string(),
                     detail: BuiltinMember::SetInsert.detail().to_string(),
                 },
                 AnalysisCompletion {
                     name: "remove".to_string(),
                     kind: "method".to_string(),
-                    detail: "remove(value: T) -> bool".to_string(),
-                },
-            ]);
-        }
-        "MapEntry" => {
-            completions.extend([
-                AnalysisCompletion {
-                    name: "key".to_string(),
-                    kind: "field".to_string(),
-                    detail: "key: K".to_string(),
-                },
-                AnalysisCompletion {
-                    name: "value".to_string(),
-                    kind: "field".to_string(),
-                    detail: "value: V".to_string(),
+                    detail: "remove(value: T) -> None".to_string(),
                 },
             ]);
         }
@@ -5364,6 +5634,10 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::IntegerSaturatingAdd,
         BuiltinMember::IntegerSaturatingSub,
         BuiltinMember::IntegerSaturatingMul,
+        BuiltinMember::IntegerWrappingShl,
+        BuiltinMember::IntegerWrappingShr,
+        BuiltinMember::IntegerSaturatingShl,
+        BuiltinMember::IntegerSaturatingShr,
         BuiltinMember::ArrayShape,
         BuiltinMember::ArrayLen,
         BuiltinMember::ArrayClone,
@@ -5492,10 +5766,12 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::StringClone,
         BuiltinMember::ScalarToString,
         BuiltinMember::VecInsert,
+        BuiltinMember::VecIndex,
+        BuiltinMember::VecCount,
+        BuiltinMember::VecReserve,
         BuiltinMember::VecClear,
         BuiltinMember::VecReverse,
         BuiltinMember::VecSort,
-        BuiltinMember::VecSortBy,
         BuiltinMember::VecMap,
         BuiltinMember::VecFilter,
         BuiltinMember::MapLen,
@@ -5508,15 +5784,18 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::MapKeys,
         BuiltinMember::MapValues,
         BuiltinMember::MapItems,
-        BuiltinMember::MapEntries,
         BuiltinMember::MapClear,
         BuiltinMember::MapExtend,
+        BuiltinMember::MapReserve,
         BuiltinMember::SetLen,
         BuiltinMember::SetIsEmpty,
         BuiltinMember::SetClone,
         BuiltinMember::SetContains,
         BuiltinMember::SetInsert,
         BuiltinMember::SetRemove,
+        BuiltinMember::SetDiscard,
+        BuiltinMember::SetClear,
+        BuiltinMember::SetReserve,
         BuiltinMember::QueuePut,
         BuiltinMember::QueueTryPut,
         BuiltinMember::QueueGet,
@@ -5594,6 +5873,28 @@ fn builtin_associated_function_completions(type_name: &str) -> Vec<AnalysisCompl
         .collect()
 }
 
+fn builtin_specialized_associated_function_completions(
+    type_name: &str,
+    specialized_type: &str,
+) -> Vec<AnalysisCompletion> {
+    builtin_associated_function_completions(type_name)
+        .into_iter()
+        .map(|completion| {
+            if completion.name == "with_capacity" {
+                AnalysisCompletion {
+                    detail: format!(
+                        "with_capacity(minimum: int64) -> {}",
+                        specialized_type.trim()
+                    ),
+                    ..completion
+                }
+            } else {
+                completion
+            }
+        })
+        .collect()
+}
+
 fn builtin_function_return_type(name: &str) -> Option<Type> {
     match BuiltinFunction::from_name(name)? {
         BuiltinFunction::Print => Some(Type::Unit),
@@ -5605,22 +5906,24 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
         BuiltinFunction::WaitAny => None,
         BuiltinFunction::WaitAll => None,
         BuiltinFunction::Len => Some(Type::named("int64")),
-        BuiltinFunction::Str => Some(Type::named("String")),
+        BuiltinFunction::Str => Some(Type::named("str")),
         BuiltinFunction::Abs => None,
         BuiltinFunction::Min => None,
         BuiltinFunction::Max => None,
         BuiltinFunction::Sqrt => None,
+        BuiltinFunction::Round => None,
+        BuiltinFunction::Divmod => None,
         BuiltinFunction::ParseInt32 => Some(Type::Named(
             "Result".to_string(),
-            vec![Type::named("int32"), Type::named("String")],
+            vec![Type::named("int32"), Type::named("str")],
         )),
         BuiltinFunction::ParseInt64 => Some(Type::Named(
             "Result".to_string(),
-            vec![Type::named("int64"), Type::named("String")],
+            vec![Type::named("int64"), Type::named("str")],
         )),
         BuiltinFunction::ParseFloat64 => Some(Type::Named(
             "Result".to_string(),
-            vec![Type::named("float64"), Type::named("String")],
+            vec![Type::named("float64"), Type::named("str")],
         )),
     }
 }
@@ -6055,7 +6358,7 @@ fn placeholder_stmt_for_return_type(return_type: &str) -> Option<String> {
         "None" => Some("return".to_string()),
         "bool" => Some("return false".to_string()),
         "float32" | "float64" => Some("return 0.0".to_string()),
-        "String" | "str" => Some("return \"\"".to_string()),
+        "str" => Some("return \"\"".to_string()),
         "Duration" => Some("return 0ms".to_string()),
         "int" | "int8" | "int16" | "int32" | "int64" | "int128" | "intsize" | "uint8"
         | "uint16" | "uint32" | "uint64" | "uint128" | "uintsize" => Some("return 0".to_string()),

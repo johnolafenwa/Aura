@@ -1,4 +1,4 @@
-def parse_positive(s: String) -> Result[int32, String]:
+def parse_positive(s: str) -> Result[int32, str]:
     return Result.Err("not implemented yet")
 
 def main() -> int32:

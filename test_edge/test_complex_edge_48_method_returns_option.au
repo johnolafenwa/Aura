@@ -1,7 +1,7 @@
 # Edge test: Method returning Option, and chaining matches
 
 class NumberParser:
-    raw: String
+    raw: str
 
     def parse(self) -> int32?:
         if self.raw == "one":
@@ -12,7 +12,7 @@ class NumberParser:
             return Option.Some(3)
         return Option.None
 
-def parse_and_double(text: own String) -> String:
+def parse_and_double(text: own str) -> str:
     parser = NumberParser(raw=text)
     match parser.parse():
         case Some(n):

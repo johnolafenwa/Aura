@@ -1,4 +1,4 @@
-def worker(value: String):
+def worker(value: str):
     print(value)
 
 def main() -> int32:

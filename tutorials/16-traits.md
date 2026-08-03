@@ -8,13 +8,13 @@ A trait lists method signatures. Methods may omit a body or provide a default im
 
 ```python
 trait Greeter:
-    def greet(self) -> String
+    def greet(self) -> str
 ```
 
 ```python
 trait Named:
-    def name(self) -> String
-    def label(self) -> String:
+    def name(self) -> str
+    def label(self) -> str:
         return "name=" + self.name()
 ```
 
@@ -43,10 +43,10 @@ Traits may also inherit from other traits:
 
 ```python
 trait Named:
-    def name(self) -> String
+    def name(self) -> str
 
 trait Labelled: Named:
-    def label(self) -> String:
+    def label(self) -> str:
         return "name=" + self.name()
 ```
 
@@ -58,10 +58,10 @@ Use `impl Trait for Type:` to provide the trait's methods for a concrete type:
 
 ```python
 class User:
-    name: String
+    name: str
 
 impl Greeter for User:
-    def greet(self) -> String:
+    def greet(self) -> str:
         return "hello " + self.name
 ```
 
@@ -71,8 +71,8 @@ You can also implement traits for specialized generic instances:
 class Box[T]:
     value: T
 
-impl Greeter for Box[String]:
-    def greet(self) -> String:
+impl Greeter for Box[str]:
+    def greet(self) -> str:
         return self.value.clone()
 ```
 
@@ -80,7 +80,7 @@ Open generic impl headers work too:
 
 ```python
 impl[T] Showable for Box[T]:
-    def show(self) -> String:
+    def show(self) -> str:
         return "box"
 ```
 
@@ -99,8 +99,8 @@ Aura infers a clone-safety obligation as part of that method's contract:
 
 ```python
 trait Duplicator[T]:
-    def duplicate(self, values: Vec[T]) -> Vec[T]:
-        return values.clone()
+    def duplicate(self, values: list[T]) -> list[T]:
+        return values.copy()
 ```
 
 The requirement follows `T` and `Self` through every implementation, concrete
@@ -161,20 +161,20 @@ Specialized dispatch works across multiple implementing types in the same progra
 
 ```python
 trait Describe:
-    def describe(self) -> String
+    def describe(self) -> str
 
 class Dog:
-    name: String
+    name: str
 
 class Cat:
-    label: String
+    label: str
 
 impl Describe for Dog:
-    def describe(self) -> String:
+    def describe(self) -> str:
         return "dog"
 
 impl Describe for Cat:
-    def describe(self) -> String:
+    def describe(self) -> str:
         return "cat"
 
 def show[T: Describe](animal: T) -> None:
@@ -286,14 +286,14 @@ A trait can also target a builtin type, not only your own classes and enums:
 
 ```aura
 trait Describe:
-    def describe(self) -> String
+    def describe(self) -> str
 
-impl Describe for Vec[int32]:
-    def describe(self) -> String:
-        return f"vec of {self.len()}"
+impl Describe for list[int32]:
+    def describe(self) -> str:
+        return f"list of {self.len()}"
 
-impl Describe for String:
-    def describe(self) -> String:
+impl Describe for str:
+    def describe(self) -> str:
         return f"text of {self.len()}"
 ```
 
@@ -303,13 +303,13 @@ because the builtin `len` always wins at every call site and the trait body
 would silently never run:
 
 ```text
-error[AU2006]: trait method `len` collides with builtin method `Vec.len`
+error[AU2006]: trait method `len` collides with builtin method `list.len`
   = help: rename the trait method; builtin methods cannot be shadowed by trait implementations
 ```
 
 This holds for every builtin target: the runtime handles such as `Queue[T]`,
 `Task[T]`, `TaskGroup`, `random.Rng`, and `fs.File`, and the builtin value
-types such as `String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `Duration`, and the
+types such as `str`, `list[T]`, `dict[K, V]`, `set[T]`, `Duration`, and the
 scalar types.
 
 See [examples/traits/builtin_target_traits.au](../examples/traits/builtin_target_traits.au).

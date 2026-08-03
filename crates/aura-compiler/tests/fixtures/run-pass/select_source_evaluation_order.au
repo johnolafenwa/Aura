@@ -1,4 +1,4 @@
-def observe(label: String, queue: Queue[int32]) -> Queue[int32]:
+def observe(label: str, queue: Queue[int32]) -> Queue[int32]:
     print(label)
     return queue
 

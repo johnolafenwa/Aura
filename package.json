@@ -1,7 +1,7 @@
 {
   "name": "aura-monorepo",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "packageManager": "npm@11.4.2",
   "engines": {
     "node": "22.14.0"
@@ -38,6 +38,8 @@
     "coverage:lsp": "npm --prefix tools/aura-language-server run coverage",
     "coverage:lsp:check": "npm --prefix tools/aura-language-server run coverage:check",
     "docs:dev": "vitepress dev docs",
+    "docs:llms": "python3 scripts/generate_llms.py",
+    "docs:llms:check": "python3 scripts/generate_llms.py --check",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "check:extension": "npm --prefix tools/vscode-aura run check",

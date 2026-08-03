@@ -1,16 +1,16 @@
 trait Show:
-    def show(self) -> String
+    def show(self) -> str
 
 impl Show for int32:
-    def show(self) -> String:
+    def show(self) -> str:
         return "int32"
 
 impl Show for int64:
-    def show(self) -> String:
+    def show(self) -> str:
         return "int64"
 
 impl Show for uint64:
-    def show(self) -> String:
+    def show(self) -> str:
         return "uint64"
 
 def render[T: Show](value: T) -> None:

@@ -1,6 +1,6 @@
-# Test: Option[String] with various patterns
+# Test: Option[str] with various patterns
 
-def find(query: str) -> Option[String]:
+def find(query: str) -> Option[str]:
     if query == "yes":
         return Option.Some(f"found: {query}")
     return Option.None
@@ -23,7 +23,7 @@ def main() -> int32:
             print("not found")
 
     # Nested: Option in Option
-    inner: Option[String] = Option.Some("inner_value")
+    inner: Option[str] = Option.Some("inner_value")
     match own inner:
         case Option.Some(s):
             print(s)

@@ -1,11 +1,11 @@
 trait Showable:
-    def show(self) -> String
+    def show(self) -> str
 
 class Box[T]:
     value: T
 
 impl[T] Showable for Box[T]:
-    def show(self) -> String:
+    def show(self) -> str:
         return "box"
 
 def main() -> int32:

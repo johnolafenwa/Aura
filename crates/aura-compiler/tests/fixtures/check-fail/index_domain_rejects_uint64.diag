@@ -1,0 +1,5 @@
+error[AU2002]: list indices must have type `int64` or a losslessly narrower integer type, found `uint64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/index_domain_rejects_uint64.au:4:22
+  |
+4 |     print(values.get(index))
+  |                      ^

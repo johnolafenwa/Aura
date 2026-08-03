@@ -31,17 +31,17 @@ aura check app.au
 | `aura deps update [name]` | Refresh all git dependencies or one named dependency. |
 | `aura new path` | Create `Aura.toml` and `src/main.au` without overwriting an existing path. |
 | `aura fmt [--check] [paths...]` | Normalize Aura source whitespace or verify formatting. |
-| `aura test [--timeout-ms N] [paths...]` | Run package-aware `.au` tests, one result per `def test_*()` function or per file when a file declares none; defaults to `tests/` and a 30-second per-test timeout. |
+| `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case; defaults to `tests/` and a 30-second per-case timeout. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
-| `aura version` / `aura --version` | Print the preview channel and 12-hex-digit source commit, such as `aura 0.2.0-preview (0123456789ab)`. |
+| `aura version` / `aura --version` | Print the development channel and 12-hex-digit source commit, such as `aura 0.3.0-dev (0123456789ab)`. |
 
 ## Checking
 
 `check` is the fastest way to validate syntax, types, imports, ownership, and package resolution:
 
 ```bash
-cargo run -p aura -- check examples/collections/vec_basics.au
+cargo run -p aura -- check examples/collections/list_basics.au
 ```
 
 Use `check` before `run` when you are editing a package or diagnosing type errors.
@@ -148,11 +148,11 @@ cargo run -p aura -- complete --line 12 --character 8 --trigger . app.au
 
 Completion output is intended for tools, not humans, but it is useful when debugging the LSP.
 
-The JSON result is an array of `{ "name": String, "kind": String, "detail": String }` objects. `line` and `character` are zero-based and `--trigger` uses its first character.
+The JSON result is an array of `{ "name": str, "kind": str, "detail": str }` objects. `line` and `character` are zero-based and `--trigger` uses its first character.
 
 ## Machine-Readable And Inspection Formats
 
-`ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aura 0.2. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
+`ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aura 0.3. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
 
 `aura lsp` is a persistent JSON-lines compiler service. Each input line is an object with an optional `id`, `method`, `path`, and `source`. Supported requests are:
 
@@ -174,24 +174,95 @@ Each response is one line containing the same `id` plus either `result` or an `e
 | `run` with `main() -> None` | `0` |
 | `run` with `main() -> int32` | the returned integer requested as the host process status |
 | successful `analyze` containing source diagnostics | `0`; JSON on stdout |
-| `test` with any failed program | `1`; summary on stdout and diagnostics on stderr |
+| completed human `test` run | `0` when every selected case passes; `1` otherwise; case output and summary on stdout, failures on stderr |
+| completed JSON `test` run | `0` when every selected case passes; `1` otherwise; exactly one schema-version-1 document on stdout and no human progress lines |
 
 A broken stdout pipe is intentional clean termination and exits `0`; this lets commands compose with consumers such as `head` without printing a secondary failure.
 
-A test file that declares one or more parameterless `def test_*()` functions
-reports one result per function, labelled `path::function`. Each function runs
-on its own worker under the shared timeout, through the same runtime, scheduler,
-and trap handling an ordinary run uses. A function with parameters or a receiver
-is not a test, and neither is any other declaration in the file.
+## Testing
 
-A file that declares no `def test_*()` function keeps the file-level model: the
-path itself is one test unit, entered at `main` or at its top-level statements.
-Both models coexist, so adding a test function to a file changes only that file.
+With no paths, `aura test` recursively reads `.au` files under `tests/`. Given
+files or directories, it uses those inputs. Files are visited in normalized
+path order. Within a file, module functions are discovered in declaration
+order. A parameterless `test_*` function returning `None` is one case. Its
+canonical name is `path::test_name`. A module `test_*` function with parameters
+is an invalid test declaration. Class, trait, and implementation methods are
+not discovered. If a file declares no module `test_*` function, the file
+remains one case named `path`, entered through `main()` or its top-level
+statements.
 
-Assertions that all pass leave a test successful. A failed assertion prints its
-ordinary `AU4001` source diagnostic against the file, marks that test `FAILED`,
-and contributes to the failed count. Assertions are executed normally;
-`aura test` has no assertion-stripping option.
+`-k substring` performs a literal, case-sensitive substring match over the
+complete canonical case name. Selection happens after parameter registrations
+are expanded, so the substring may select a bracketed case label. `-k` may
+appear once and its value must be non-empty. A valid filter that selects no
+cases succeeds with `0 passed; 0 failed`. Missing, empty, or repeated filter
+values are usage errors and exit with status 2.
+
+### Setup And Teardown
+
+A file may declare ordinary parameterless `setup()` and `teardown()` module
+functions returning `None`. For each selected case, the runner invokes setup,
+then the case only when setup succeeds, then teardown. Teardown runs after an
+attempted setup even when setup traps, and after a case trap or non-zero
+file-level `main()` result. It is not run during discovery. A hook with
+parameters, a non-`None` result, or a collision with a non-function declaration
+is a check-time test failure.
+
+Setup, case, and teardown are isolated entries into one already checked and
+lowered module. The runner does not re-read or re-check the source between
+phases. Aura values and module-runtime state do not pass between phases or
+cases; external effects such as file writes remain observable. The first
+failure is primary. When teardown also fails, human output prints
+`teardown also failed for ...` after the primary failure, while JSON stores the
+teardown failure in the case record's `secondary` object with
+`stage: "teardown"`. If setup succeeds and only teardown fails, the teardown
+failure is primary. The timeout covers the complete lifecycle. A timed-out
+worker cannot be forcibly stopped, so teardown is not promised after timeout.
+
+### Parameterized Registration
+
+A parameterized `test_*` function is parameterless and returns
+`list[(str, def() -> None)]`. The runner invokes it once during discovery and
+expands its list in order. Each tuple contains a non-empty label and a named,
+capture-free, repeatable, parameterless function returning `None`. Labels must
+be unique within that registration. The canonical case name is
+`path::test_name[label]`.
+
+Registration finishes before filtering, and it never executes a returned case.
+The required `def() -> None` element type excludes capturing closures and keeps
+every expanded case independently invocable. A registration trap, timeout,
+invalid returned value, empty label, duplicate label, or invalid case function
+is one discovery failure for that registration; none of its cases run. An
+empty registration contributes no cases. Registration itself never invokes
+setup or teardown.
+
+Registration stdout is captured once. Human mode writes all registration
+stdout before case results. JSON mode records non-empty registration stdout in
+the top-level `discovery` array, whose entries contain `name`, `file`, and
+`stdout` in registration order.
+
+### Test Output Contract
+
+Human mode writes each case's captured stdout, then `ok <canonical-name>` for a
+passing case. A failed case writes `FAILED <canonical-name>` and its ordinary
+source diagnostic, or a runner reason such as a timeout, to stderr. Standard
+output ends with `<passed> passed; <failed> failed`. Test records and the
+summary retain canonical discovery order.
+
+`aura test --format json` writes exactly one JSON document to stdout and no
+human progress lines. The top-level object has integer `schema_version: 1`, a
+`summary` object with integer `selected`, `passed`, and `failed` counts, and an
+ordered `tests` array. Every test record contains `name`, `file`, `outcome`
+(`passed` or `failed`), and a non-negative integer `duration_ms` covering its
+complete lifecycle. Non-empty captured output appears as `stdout`.
+
+A trapped test record contains `diagnostic`, using the existing structured
+diagnostic schema including optional assertion operand records. A runner
+failure contains `reason`; a failed record has exactly one primary failure
+form. A second teardown failure appears as `secondary`, with `stage` plus
+either `diagnostic` or `reason`. Invalid command usage still goes to stderr and
+exits 2. Assertions execute normally in every mode; `aura test` has no
+assertion-stripping option.
 
 ## VS Code And LSP
 
@@ -203,7 +274,7 @@ receivers as `own self`, and mutable receivers as `mut self`.
 
 Ordinary parameter signatures preserve bare, `own`, and `mut` spelling, and
 built-in hover/completion detail exposes retained-value contracts such as
-`Vec.push(value: own T)`. Class field and enum payload completion detail also
+`list.append(value: own T)`. Class field and enum payload completion detail also
 renders their implicit constructor ownership as `own`.
 
 Useful repo commands:
@@ -275,7 +346,7 @@ Tool-side mutations are explicit: `fmt` without `--check`, `deps update`, and su
 
 ## Diagnostics
 
-Compiler-backed commands can surface the complete append-only registry. `AU1001` means invalid lexical input; `AU1002` means an invalid f-string delimiter; and `AU1101` means invalid syntax. `AU2001` means name-resolution failure; `AU2002` means type mismatch; `AU2003` means unsupported operator; `AU2004` means argument-binding failure; `AU2005` means focused migration guidance; `AU2006` means a builtin method collision; `AU2007` means builtin function redefinition; `AU2008` means callable equality; and `AU2999` means a general compile-time rejection without a narrower code. `AU3001` means use of a moved value; `AU3002` means a borrow violation; `AU3003` means a mutability violation; `AU3004` means an invalid ownership mode; `AU3005` means a non-copy indexed read; `AU3006` means a non-copy indexed compound assignment; `AU3007` means non-cloneable state duplication; `AU3008` means a non-transferable task or Queue boundary; and `AU3009` means single-consumer task-result duplication. `AU4001` means a general runtime trap; `AU4002` means arithmetic overflow or underflow; `AU4003` means a bounds or lookup violation; `AU4004` means a zero divisor; `AU4005` means a resource, allocation, or I/O failure; `AU4006` means invalid runtime configuration; and `AU4007` means a numeric Array shape or reduction violation. The structured schema is defined in [Diagnostics](/manual/diagnostics).
+Compiler-backed commands can surface the complete append-only registry. `AU1001` means invalid lexical input; `AU1002` means an invalid f-string delimiter; and `AU1101` means invalid syntax. `AU2001` means name-resolution failure; `AU2002` means type mismatch; `AU2003` means unsupported operator; `AU2004` means argument-binding failure; `AU2005` means unsupported syntax or feature; `AU2006` means a builtin method collision; `AU2007` means builtin function redefinition; `AU2008` means equality unavailable; and `AU2999` means a general compile-time rejection without a narrower code. `AU3001` means use of a moved value; `AU3002` means a borrow violation; `AU3003` means a mutability violation; `AU3004` means an invalid ownership mode; `AU3005` means a non-copy indexed read; `AU3006` means a non-copy indexed compound assignment; `AU3007` means non-cloneable state duplication; `AU3008` means a non-transferable task or Queue boundary; and `AU3009` means single-consumer task-result duplication. `AU4001` means a general runtime trap; `AU4002` means arithmetic overflow or underflow; `AU4003` means a bounds or lookup violation; `AU4004` means a zero divisor; `AU4005` means a resource, allocation, or I/O failure; `AU4006` means invalid runtime configuration; and `AU4007` means a numeric Array shape or reduction violation. The structured schema is defined in [Diagnostics](/manual/diagnostics).
 
 Human diagnostics render as `error[AU####]` with source context when a span is
 available. Ordinary notes are followed by readable call-chain and task-entry
@@ -293,7 +364,7 @@ The parser, checker, package resolver, diagnostic model, analysis engine, and MI
 
 `aura run --backend auto` prefers the direct backend and degrades to the MIR runtime only when direct building or launching is unavailable. Once a direct child runs, an Aura trap, signal termination, wait failure, or diagnostic-protocol failure is a final program/execution outcome and never triggers MIR fallback. Human mode prints an actual fallback reason on standard error before the MIR program runs; JSON mode includes it in the final structured report after execution. A forced `direct` run never degrades, so a parity or benchmark caller cannot silently measure the other backend. Every backend observes the same program arguments, standard output, exit code, and complete runtime diagnostic, including typed call frames and task ancestry.
 
-The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `3`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
+The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `5`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
 
 On maintained Unix hosts, cache establishment is coordinated across processes. A short runtime-identity lock protects source-checkout runtime discovery, and a separate writer lock for each content key protects the miss/recheck/build/publish sequence. Therefore, N concurrent cold runs of the same program perform one build; after that publication, the other N-1 processes recheck and consume the verified entry. Existing verified hits take the optimistic read path and do not wait for a writer holding that key. Locks are released before linking output is executed, while atomic publication and invalidation continue to ensure that readers never observe a partial entry and a stale invalidator cannot delete a replacement published for the same key.
 
@@ -301,7 +372,7 @@ In human mode, a native `run` flushes the exact line
 `aura: waiting for a concurrent build...` before it blocks on another builder
 and `aura: building native program...` before it starts building a native
 program artifact. A
-source-checkout `aura build` now flushes the same exact wait line before
+source-checkout `aura build` flushes the same exact wait line before
 blocking on another process refreshing the shared runtime. The reporter
 deduplicates each notice within one invocation. JSON `run` mode provisionally
 prioritizes the one-document stderr contract over immediate progress: it
@@ -316,7 +387,7 @@ streaming contract is ratified.
 
 `AURA_CACHE_DIR` selects the cache directory; the default is `~/.cache/aura/native`. The directory is a trust boundary. Its colocated SHA-256 detects corruption but does not authenticate bytes written by a hostile account, so the root must be private to the current OS user and every writer with access to it must be trusted. On the maintained Unix hosts, Aura rejects a root that is owned by another user or writable by group/other and creates or tightens accepted cache directories to mode `0700`. Private launch copies are removed after the child exits. Each launch carries an inherited exclusive lease, so later cleanup preserves the directory while either the `aura` parent or native child is still using it. Interrupted cache-publication, memo, and quarantine stages are collected only after their encoded 24-hour grace period and confirmation that their owner process is gone. An installed immutable runtime can still perform a direct build when caching is disabled or unavailable; no cache lock is required merely to build, and the uncached artifact is not retained.
 
-ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `3`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
+ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `5`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
 
 Backend parity is a release gate. A construct accepted by one maintained
 execution backend must have the same observable result or complete diagnostic
@@ -332,9 +403,9 @@ Filesystem path interpretation, process exit-code width, executable format, link
 
 ## Status
 
-The commands and contracts documented as maintained on this page are implemented in Aura 0.2 and covered by CLI, compiler, LSP, extension, backend-parity, and repository-gate tests. `analyze`, `complete`, and diagnostic schema version `1` are maintained tooling contracts; internal AST and MIR layouts are intentionally unstable.
+The commands and contracts documented as maintained on this page are implemented in Aura 0.3 and covered by CLI, compiler, LSP, extension, backend-parity, and repository-gate tests. `analyze`, `complete`, and diagnostic schema version `1` are maintained tooling contracts; internal AST and MIR layouts are intentionally unstable.
 
-Aura 0.2 has no package registry, publishing and installation workflow,
+Aura 0.3 has no package registry, publishing and installation workflow,
 Windows support, configurable formatter, or annotation-based test discovery.
 Its maintained execution engines are the MIR runtime and direct native
 backend.

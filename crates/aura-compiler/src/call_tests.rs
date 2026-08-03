@@ -260,6 +260,7 @@ fn builtin_function_bind_args_cover_remaining_variants() {
         BuiltinFunction::Sleep,
         BuiltinFunction::Abs,
         BuiltinFunction::Sqrt,
+        BuiltinFunction::Round,
         BuiltinFunction::ParseInt32,
         BuiltinFunction::ParseInt64,
         BuiltinFunction::ParseFloat64,
@@ -271,7 +272,11 @@ fn builtin_function_bind_args_cover_remaining_variants() {
         assert_eq!(bound.len(), 1);
     }
 
-    for builtin in [BuiltinFunction::Min, BuiltinFunction::Max] {
+    for builtin in [
+        BuiltinFunction::Min,
+        BuiltinFunction::Max,
+        BuiltinFunction::Divmod,
+    ] {
         let args = [dummy_arg(None), dummy_arg(None)];
         let bound = builtin
             .bind_args(&args, Span::new(1, 1))
@@ -279,12 +284,10 @@ fn builtin_function_bind_args_cover_remaining_variants() {
         assert_eq!(bound.len(), 2);
     }
 
-    for builtin in [BuiltinFunction::Cancelled] {
-        let bound = builtin
-            .bind_args(&[], Span::new(1, 1))
-            .expect("builtin should bind");
-        assert!(bound.is_empty());
-    }
+    let bound = BuiltinFunction::Cancelled
+        .bind_args(&[], Span::new(1, 1))
+        .expect("builtin should bind");
+    assert!(bound.is_empty());
 
     for builtin in [BuiltinFunction::WaitAny, BuiltinFunction::WaitAll] {
         let args = [dummy_arg(None), dummy_arg(Some("timeout"))];
@@ -300,7 +303,7 @@ fn call_binding_helpers_cover_argument_count_and_decl_metadata_paths() {
     let params = vec![Param {
         name: "value".to_string(),
         mode: ParamMode::Default,
-        ty: dummy_type("String"),
+        ty: dummy_type("str"),
         default: None,
         span: Span::new(2, 4),
     }];
@@ -330,7 +333,7 @@ fn call_metadata_helpers_cover_argument_count_and_doc_surface() {
 
     assert_eq!(
         BuiltinFunction::ParseFloat64.detail(),
-        "parse_float64(text: String) -> Result[float64, String]"
+        "parse_float64(text: str) -> Result[float64, str]"
     );
     assert!(BuiltinFunction::WaitAny
         .docs()
@@ -338,17 +341,16 @@ fn call_metadata_helpers_cover_argument_count_and_doc_surface() {
 
     assert_eq!(
         BuiltinMember::StringContains.detail(),
-        "contains(text: String) -> bool"
+        "contains(text: str) -> bool"
     );
     assert_eq!(
         BuiltinMember::StringToBytes.detail(),
-        "to_bytes() -> Vec[uint8]"
+        "to_bytes() -> list[uint8]"
     );
     assert_eq!(
         BuiltinMember::StringToBytes.receiver_passing(),
         ReceiverKind::Borrow
     );
-    assert!(BuiltinMember::MapEntries.docs().contains("MapEntry"));
     assert_eq!(
         BuiltinMember::QueueTryPut.detail(),
         "try_put(value: own T) -> Result[None, SendError[T]] [T must be Transfer]"
@@ -382,6 +384,9 @@ fn associated_call_metadata_covers_duration_constructors_and_string_byte_decodin
             BuiltinAssociatedFunction::ArrayZeros,
             BuiltinAssociatedFunction::ArrayFull,
             BuiltinAssociatedFunction::ArrayFromVec,
+            BuiltinAssociatedFunction::ListWithCapacity,
+            BuiltinAssociatedFunction::DictWithCapacity,
+            BuiltinAssociatedFunction::SetWithCapacity,
         ]
     );
     for (name, constructor) in [
@@ -426,12 +431,12 @@ fn associated_call_metadata_covers_duration_constructors_and_string_byte_decodin
         BuiltinAssociatedFunction::resolve("Duration", "milliseconds"),
         None
     );
-    let from_bytes = BuiltinAssociatedFunction::resolve("String", "from_bytes")
-        .expect("String.from_bytes should have associated-function metadata");
+    let from_bytes = BuiltinAssociatedFunction::resolve("str", "from_bytes")
+        .expect("str.from_bytes should have associated-function metadata");
     assert_eq!(from_bytes, BuiltinAssociatedFunction::StringFromBytes);
     assert_eq!(
         from_bytes.detail(),
-        "from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]"
+        "from_bytes(bytes: list[uint8]) -> Result[str, bytes.Error]"
     );
     assert_eq!(from_bytes.argument_passing(0), Some(ReceiverKind::Borrow));
     assert_eq!(from_bytes.argument_passing(1), None);
@@ -440,7 +445,7 @@ fn associated_call_metadata_covers_duration_constructors_and_string_byte_decodin
     let named_bytes = [dummy_arg(Some("bytes"))];
     from_bytes
         .bind_args(&named_bytes, Span::new(1, 1))
-        .expect("String.from_bytes accepts bytes=...");
+        .expect("str.from_bytes accepts bytes=...");
     assert!(from_bytes
         .bind_args(&[dummy_arg(Some("encoding"))], Span::new(1, 1))
         .unwrap_err()
@@ -471,24 +476,88 @@ fn associated_call_metadata_covers_duration_constructors_and_string_byte_decodin
 }
 
 #[test]
+fn s1_frontend_canonical_collection_associated_metadata_is_exact_and_bindable() {
+    for (owner, function, detail) in [
+        (
+            "list",
+            BuiltinAssociatedFunction::ListWithCapacity,
+            "with_capacity(minimum: int64) -> list[T]",
+        ),
+        (
+            "dict",
+            BuiltinAssociatedFunction::DictWithCapacity,
+            "with_capacity(minimum: int64) -> dict[K, V]",
+        ),
+        (
+            "set",
+            BuiltinAssociatedFunction::SetWithCapacity,
+            "with_capacity(minimum: int64) -> set[T]",
+        ),
+    ] {
+        assert_eq!(
+            BuiltinAssociatedFunction::resolve(owner, "with_capacity"),
+            Some(function)
+        );
+        assert_eq!(function.owner_name(), owner);
+        assert_eq!(function.detail(), detail);
+        assert_eq!(
+            function.docs(),
+            "Creates an empty collection with at least the requested capacity."
+        );
+        let args = [dummy_arg(Some("minimum"))];
+        let bound = function
+            .bind_args(&args, Span::new(4, 7))
+            .expect("minimum should bind by name");
+        assert_eq!(
+            bound[0].and_then(|arg| arg.name.as_deref()),
+            Some("minimum")
+        );
+    }
+}
+
+#[test]
+fn s1_frontend_canonical_membership_metadata_names_dict_and_set_behavior_plainly() {
+    assert_eq!(
+        BuiltinMember::MapSet.docs(),
+        "Inserts or replaces `key`, returning the previous value as `Option[V]`."
+    );
+    assert_eq!(
+        BuiltinMember::MapContainsKey.detail(),
+        "contains(key: K) -> bool"
+    );
+    assert_eq!(
+        BuiltinMember::MapContainsKey.docs(),
+        "Returns true when the dict contains `key`."
+    );
+    assert_eq!(
+        BuiltinMember::SetContains.detail(),
+        "contains(value: T) -> bool"
+    );
+    assert_eq!(
+        BuiltinMember::SetContains.docs(),
+        "Returns true when the set contains `value`."
+    );
+}
+
+#[test]
 fn array_call_metadata_pins_constructors_members_and_integer_modes() {
     for (function, name, detail, argument_names) in [
         (
             BuiltinAssociatedFunction::ArrayZeros,
             "zeros",
-            "zeros(shape: Vec[int64]) -> Array[T]",
+            "zeros(shape: list[int64]) -> Array[T]",
             &["shape"][..],
         ),
         (
             BuiltinAssociatedFunction::ArrayFull,
             "full",
-            "full(shape: Vec[int64], value: T) -> Array[T]",
+            "full(shape: list[int64], value: T) -> Array[T]",
             &["shape", "value"][..],
         ),
         (
             BuiltinAssociatedFunction::ArrayFromVec,
-            "from_vec",
-            "from_vec(values: Vec[T], shape: Vec[int64]) -> Array[T]",
+            "from_list",
+            "from_list(values: list[T], shape: list[int64]) -> Array[T]",
             &["values", "shape"][..],
         ),
     ] {
@@ -512,25 +581,24 @@ fn array_call_metadata_pins_constructors_members_and_integer_modes() {
             assert_eq!(function.argument_passing(index), Some(ReceiverKind::Borrow));
         }
     }
-
     for (member, receiver, name, detail) in [
         (
             BuiltinMember::ArrayShape,
             "Array",
             "shape",
-            "shape() -> Vec[int64]",
+            "shape() -> list[int64]",
         ),
         (
             BuiltinMember::ArrayGet,
             "Array",
             "get",
-            "get(index: Vec[int32]) -> Option[T]",
+            "get(index: list[int64]) -> Option[T]",
         ),
         (
             BuiltinMember::ArraySet,
             "Array",
             "set",
-            "set(index: Vec[int32], value: T) -> Option[T]",
+            "set(index: list[int64], value: T) -> Option[T]",
         ),
         (
             BuiltinMember::ArrayMean,
@@ -549,6 +617,30 @@ fn array_call_metadata_pins_constructors_members_and_integer_modes() {
             "int64",
             "saturating_mul",
             "saturating_mul(rhs: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerWrappingShl,
+            "int8",
+            "wrapping_shl",
+            "wrapping_shl(count: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerWrappingShr,
+            "uint16",
+            "wrapping_shr",
+            "wrapping_shr(count: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerSaturatingShl,
+            "int128",
+            "saturating_shl",
+            "saturating_shl(count: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerSaturatingShr,
+            "uintsize",
+            "saturating_shr",
+            "saturating_shr(count: Self) -> Self",
         ),
     ] {
         assert_eq!(BuiltinMember::resolve(receiver, name), Some(member));
@@ -605,6 +697,22 @@ fn integer_and_array_arithmetic_hover_contracts_name_each_operation() {
             BuiltinMember::IntegerSaturatingMul,
             "saturating_mul(rhs: Self) -> Self",
         ),
+        (
+            BuiltinMember::IntegerWrappingShl,
+            "wrapping_shl(count: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerWrappingShr,
+            "wrapping_shr(count: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerSaturatingShl,
+            "saturating_shl(count: Self) -> Self",
+        ),
+        (
+            BuiltinMember::IntegerSaturatingShr,
+            "saturating_shr(count: Self) -> Self",
+        ),
     ] {
         assert_eq!(member.detail(), detail);
         assert!(
@@ -613,6 +721,14 @@ fn integer_and_array_arithmetic_hover_contracts_name_each_operation() {
             member.name()
         );
     }
+    assert_eq!(
+        BuiltinMember::IntegerWrappingShl.argument_name(0),
+        Some("count")
+    );
+    assert_eq!(
+        BuiltinMember::IntegerSaturatingShr.argument_passing(0),
+        Some(ReceiverKind::Borrow)
+    );
 
     for (member, expected) in [
         (BuiltinMember::ArrayLen, "total number"),
@@ -636,6 +752,8 @@ fn builtin_function_call_shapes_expose_bare_shared_argument_metadata() {
         (BuiltinFunction::Range, &[0, 1][..]),
         (BuiltinFunction::Min, &[0, 1][..]),
         (BuiltinFunction::Max, &[0, 1][..]),
+        (BuiltinFunction::Divmod, &[0, 1][..]),
+        (BuiltinFunction::Round, &[0][..]),
     ] {
         for &position in positions {
             assert_eq!(
@@ -650,6 +768,9 @@ fn builtin_function_call_shapes_expose_bare_shared_argument_metadata() {
     assert_eq!(BuiltinFunction::Range.argument_name(1), Some("stop"));
     assert_eq!(BuiltinFunction::Min.argument_name(0), Some("left"));
     assert_eq!(BuiltinFunction::Max.argument_name(1), Some("right"));
+    assert_eq!(BuiltinFunction::Divmod.argument_name(0), Some("left"));
+    assert_eq!(BuiltinFunction::Divmod.argument_name(1), Some("right"));
+    assert_eq!(BuiltinFunction::Round.argument_name(0), Some("value"));
 }
 
 #[test]
@@ -706,7 +827,7 @@ fn random_call_metadata_covers_opaque_construction_and_mutating_members() {
         .contains("half-open interval `[0, 1)`"));
     assert_eq!(
         BuiltinMember::RngShuffle.detail(),
-        "shuffle(values: mut Vec[T]) -> None"
+        "shuffle(values: mut list[T]) -> None"
     );
     assert_eq!(
         BuiltinMember::RngNextInt.receiver_passing(),
@@ -840,19 +961,16 @@ fn builtin_member_call_shapes_declare_receiver_argument_and_variadic_passing() {
         BuiltinMember::VecLen.receiver_passing(),
         ReceiverKind::Borrow
     );
-    for member in [BuiltinMember::VecSort, BuiltinMember::VecSortBy] {
-        assert_eq!(
-            member.receiver_passing(),
-            ReceiverKind::BorrowMut,
-            "{} must mutate its vector receiver",
-            member.name()
-        );
-    }
+    assert_eq!(
+        BuiltinMember::VecSort.receiver_passing(),
+        ReceiverKind::BorrowMut,
+        "sort must mutate its list receiver"
+    );
     for member in [BuiltinMember::VecMap, BuiltinMember::VecFilter] {
         assert_eq!(
             member.receiver_passing(),
             ReceiverKind::Borrow,
-            "{} must retain its vector receiver",
+            "{} must retain its list receiver",
             member.name()
         );
         assert_eq!(
@@ -863,10 +981,10 @@ fn builtin_member_call_shapes_declare_receiver_argument_and_variadic_passing() {
         );
     }
     assert_eq!(
-        BuiltinMember::VecSortBy.argument_passing(0),
+        BuiltinMember::VecSort.argument_passing(0),
         Some(ReceiverKind::Borrow)
     );
-    assert_eq!(BuiltinMember::VecSortBy.argument_name(0), Some("key"));
+    assert_eq!(BuiltinMember::VecSort.argument_name(0), Some("key"));
     assert_eq!(BuiltinMember::VecMap.argument_name(0), Some("f"));
     assert_eq!(BuiltinMember::VecFilter.argument_name(0), Some("f"));
     assert_eq!(
@@ -927,57 +1045,59 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         ("float32", "to_string", BuiltinMember::ScalarToString),
         ("float64", "to_string", BuiltinMember::ScalarToString),
         ("bool", "to_string", BuiltinMember::ScalarToString),
-        ("String", "len", BuiltinMember::StringLen),
-        ("String", "byte_len", BuiltinMember::StringByteLen),
-        ("String", "contains", BuiltinMember::StringContains),
-        ("String", "starts_with", BuiltinMember::StringStartsWith),
-        ("String", "ends_with", BuiltinMember::StringEndsWith),
-        ("String", "split", BuiltinMember::StringSplit),
-        ("String", "replace", BuiltinMember::StringReplace),
-        ("String", "to_lower", BuiltinMember::StringToLower),
-        ("String", "to_upper", BuiltinMember::StringToUpper),
-        ("String", "strip_prefix", BuiltinMember::StringStripPrefix),
-        ("String", "strip_suffix", BuiltinMember::StringStripSuffix),
-        ("String", "trim", BuiltinMember::StringTrim),
-        ("String", "join", BuiltinMember::StringJoin),
-        ("String", "clone", BuiltinMember::StringClone),
-        ("Vec", "len", BuiltinMember::VecLen),
-        ("Vec", "is_empty", BuiltinMember::VecIsEmpty),
-        ("Vec", "clone", BuiltinMember::VecClone),
-        ("Vec", "push", BuiltinMember::VecPush),
-        ("Vec", "pop", BuiltinMember::VecPop),
-        ("Vec", "get", BuiltinMember::VecGet),
-        ("Vec", "set", BuiltinMember::VecSet),
-        ("Vec", "remove", BuiltinMember::VecRemove),
-        ("Vec", "swap", BuiltinMember::VecSwap),
-        ("Vec", "contains", BuiltinMember::VecContains),
-        ("Vec", "extend", BuiltinMember::VecExtend),
-        ("Vec", "insert", BuiltinMember::VecInsert),
-        ("Vec", "clear", BuiltinMember::VecClear),
-        ("Vec", "reverse", BuiltinMember::VecReverse),
-        ("Vec", "sort", BuiltinMember::VecSort),
-        ("Vec", "sort_by", BuiltinMember::VecSortBy),
-        ("Vec", "map", BuiltinMember::VecMap),
-        ("Vec", "filter", BuiltinMember::VecFilter),
-        ("Map", "len", BuiltinMember::MapLen),
-        ("Map", "is_empty", BuiltinMember::MapIsEmpty),
-        ("Map", "clone", BuiltinMember::MapClone),
-        ("Map", "get", BuiltinMember::MapGet),
-        ("Map", "set", BuiltinMember::MapSet),
-        ("Map", "remove", BuiltinMember::MapRemove),
-        ("Map", "contains_key", BuiltinMember::MapContainsKey),
-        ("Map", "keys", BuiltinMember::MapKeys),
-        ("Map", "values", BuiltinMember::MapValues),
-        ("Map", "items", BuiltinMember::MapItems),
-        ("Map", "entries", BuiltinMember::MapEntries),
-        ("Map", "clear", BuiltinMember::MapClear),
-        ("Map", "extend", BuiltinMember::MapExtend),
-        ("Set", "len", BuiltinMember::SetLen),
-        ("Set", "is_empty", BuiltinMember::SetIsEmpty),
-        ("Set", "clone", BuiltinMember::SetClone),
-        ("Set", "contains", BuiltinMember::SetContains),
-        ("Set", "insert", BuiltinMember::SetInsert),
-        ("Set", "remove", BuiltinMember::SetRemove),
+        ("str", "len", BuiltinMember::StringLen),
+        ("str", "byte_len", BuiltinMember::StringByteLen),
+        ("str", "contains", BuiltinMember::StringContains),
+        ("str", "starts_with", BuiltinMember::StringStartsWith),
+        ("str", "ends_with", BuiltinMember::StringEndsWith),
+        ("str", "split", BuiltinMember::StringSplit),
+        ("str", "replace", BuiltinMember::StringReplace),
+        ("str", "to_lower", BuiltinMember::StringToLower),
+        ("str", "to_upper", BuiltinMember::StringToUpper),
+        ("str", "strip_prefix", BuiltinMember::StringStripPrefix),
+        ("str", "strip_suffix", BuiltinMember::StringStripSuffix),
+        ("str", "trim", BuiltinMember::StringTrim),
+        ("str", "join", BuiltinMember::StringJoin),
+        ("str", "clone", BuiltinMember::StringClone),
+        ("list", "len", BuiltinMember::VecLen),
+        ("list", "is_empty", BuiltinMember::VecIsEmpty),
+        ("list", "copy", BuiltinMember::VecClone),
+        ("list", "append", BuiltinMember::VecPush),
+        ("list", "pop", BuiltinMember::VecPop),
+        ("list", "get", BuiltinMember::VecGet),
+        ("list", "set", BuiltinMember::VecSet),
+        ("list", "remove", BuiltinMember::VecRemove),
+        ("list", "index", BuiltinMember::VecIndex),
+        ("list", "count", BuiltinMember::VecCount),
+        ("list", "swap", BuiltinMember::VecSwap),
+        ("list", "contains", BuiltinMember::VecContains),
+        ("list", "extend", BuiltinMember::VecExtend),
+        ("list", "insert", BuiltinMember::VecInsert),
+        ("list", "clear", BuiltinMember::VecClear),
+        ("list", "reverse", BuiltinMember::VecReverse),
+        ("list", "sort", BuiltinMember::VecSort),
+        ("list", "map", BuiltinMember::VecMap),
+        ("list", "filter", BuiltinMember::VecFilter),
+        ("list", "reserve", BuiltinMember::VecReserve),
+        ("dict", "len", BuiltinMember::MapLen),
+        ("dict", "is_empty", BuiltinMember::MapIsEmpty),
+        ("dict", "copy", BuiltinMember::MapClone),
+        ("dict", "get", BuiltinMember::MapGet),
+        ("dict", "remove", BuiltinMember::MapRemove),
+        ("dict", "keys", BuiltinMember::MapKeys),
+        ("dict", "values", BuiltinMember::MapValues),
+        ("dict", "items", BuiltinMember::MapItems),
+        ("dict", "clear", BuiltinMember::MapClear),
+        ("dict", "update", BuiltinMember::MapExtend),
+        ("dict", "reserve", BuiltinMember::MapReserve),
+        ("set", "len", BuiltinMember::SetLen),
+        ("set", "is_empty", BuiltinMember::SetIsEmpty),
+        ("set", "copy", BuiltinMember::SetClone),
+        ("set", "add", BuiltinMember::SetInsert),
+        ("set", "remove", BuiltinMember::SetRemove),
+        ("set", "discard", BuiltinMember::SetDiscard),
+        ("set", "clear", BuiltinMember::SetClear),
+        ("set", "reserve", BuiltinMember::SetReserve),
         ("Queue", "put", BuiltinMember::QueuePut),
         ("Queue", "try_put", BuiltinMember::QueueTryPut),
         ("Queue", "get", BuiltinMember::QueueGet),
@@ -1004,7 +1124,17 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         assert!(!member.detail().is_empty());
         assert!(!member.docs().is_empty());
     }
-    assert_eq!(BuiltinMember::resolve("Vec", "missing"), None);
+    assert_eq!(BuiltinMember::resolve("list", "missing"), None);
+    assert_eq!(BuiltinMember::resolve("dict", "contains"), None);
+    assert_eq!(BuiltinMember::resolve("set", "contains"), None);
+    assert_eq!(
+        BuiltinMember::resolve_runtime("dict", "contains_key"),
+        Some(BuiltinMember::MapContainsKey)
+    );
+    assert_eq!(
+        BuiltinMember::resolve_runtime("set", "contains"),
+        Some(BuiltinMember::SetContains)
+    );
     assert_eq!(BuiltinMember::StringLen.detail(), "len() -> int64");
     assert!(BuiltinMember::StringLen.docs().contains("Unicode scalar"));
     assert!(BuiltinMember::StringLen.docs().contains("O(n)"));
@@ -1012,18 +1142,17 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
     assert!(BuiltinMember::StringByteLen.docs().contains("UTF-8 bytes"));
     assert!(BuiltinMember::StringByteLen.docs().contains("O(1)"));
     assert_eq!(BuiltinMember::VecLen.detail(), "len() -> int64");
-    assert_eq!(BuiltinMember::VecSort.detail(), "sort() -> None");
     assert_eq!(
-        BuiltinMember::VecSortBy.detail(),
-        "sort_by(key: def(T) -> K) -> None"
+        BuiltinMember::VecSort.detail(),
+        "sort(key: def(T) -> K = ..., reverse: bool = false) -> None"
     );
     assert_eq!(
         BuiltinMember::VecMap.detail(),
-        "map(f: def(T) -> U) -> Vec[U]"
+        "map(f: def(T) -> U) -> list[U]"
     );
     assert_eq!(
         BuiltinMember::VecFilter.detail(),
-        "filter(f: def(T) -> bool) -> Vec[T]"
+        "filter(f: def(T) -> bool) -> list[T]"
     );
     assert_eq!(BuiltinMember::MapLen.detail(), "len() -> int64");
     assert_eq!(BuiltinMember::SetLen.detail(), "len() -> int64");
@@ -1081,7 +1210,6 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         BuiltinMember::VecLen,
         BuiltinMember::VecIsEmpty,
         BuiltinMember::VecClone,
-        BuiltinMember::VecPop,
         BuiltinMember::VecClear,
         BuiltinMember::MapLen,
         BuiltinMember::MapIsEmpty,
@@ -1089,7 +1217,6 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         BuiltinMember::MapKeys,
         BuiltinMember::MapValues,
         BuiltinMember::MapItems,
-        BuiltinMember::MapEntries,
         BuiltinMember::MapClear,
         BuiltinMember::SetLen,
         BuiltinMember::SetIsEmpty,
@@ -1103,6 +1230,12 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
             .expect("member should bind");
         assert!(bound.is_empty());
     }
+
+    let pop_args = BuiltinMember::VecPop
+        .bind_args(&[], Span::new(1, 1))
+        .expect("list.pop should bind with an optional index slot");
+    assert_eq!(pop_args.len(), 1);
+    assert!(pop_args[0].is_none());
 
     let task_result_args = BuiltinMember::TaskResult
         .bind_args(&[], Span::new(1, 1))
@@ -1154,20 +1287,14 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
 }
 
 #[test]
-fn vec_indexed_mutation_hover_docs_match_runtime_failure_behavior() {
-    for member in [BuiltinMember::VecSwap, BuiltinMember::VecInsert] {
-        let docs = member.docs();
-        assert!(
-            docs.contains("runtime error"),
-            "{} hover docs should describe out-of-bounds runtime errors: {docs}",
-            member.name()
-        );
-        assert!(
-            !docs.contains("returning `false`"),
-            "{} hover docs must not promise a false out-of-bounds result: {docs}",
-            member.name()
-        );
-    }
+fn list_indexed_mutation_hover_docs_match_runtime_behavior() {
+    let swap_docs = BuiltinMember::VecSwap.docs();
+    assert!(swap_docs.contains("runtime error"));
+    assert!(!swap_docs.contains("returning `false`"));
+
+    let insert_docs = BuiltinMember::VecInsert.docs();
+    assert!(insert_docs.contains("Python-clamped"));
+    assert!(!insert_docs.contains("runtime error"));
 }
 
 #[test]
@@ -1787,11 +1914,13 @@ fn concurrency_builtin_docs_teach_transfer_and_single_consumer_contracts() {
         );
         let docs = builtin.docs();
         assert!(
-            docs.contains("non-repeatable `T` consumes the whole `Vec[Task[T]]` observation right"),
-            "{builtin:?} must teach whole-vector consumption: {docs}"
+            docs.contains(
+                "non-repeatable `T` consumes the whole `list[Task[T]]` observation right"
+            ),
+            "{builtin:?} must teach whole-list consumption: {docs}"
         );
         assert!(
-            docs.contains("repeatable `T` leaves the vector reusable"),
+            docs.contains("repeatable `T` leaves the list reusable"),
             "{builtin:?} must distinguish repeatable task results: {docs}"
         );
     }

@@ -55,7 +55,7 @@ the argument.
 
 ```python
 boxed = Box(value=7)          # Box[int64]
-value = identity("Aura")   # String
+value = identity("Aura")   # str
 ```
 
 Every declared type parameter must resolve. The checker does not invent a type for a parameter that appears nowhere in supplied values or expected context.
@@ -65,7 +65,7 @@ Explicit specialization fixes the arguments:
 ```python
 boxed = Box[int64](value=42)
 value = identity[int64](42)
-ok = Result[int32, String].Ok(7)
+ok = Result[int32, str].Ok(7)
 ```
 
 Explicit arguments must have exact arity and satisfy all substituted bounds. Specialization and indexing share bracket syntax; the parser rules that distinguish them are specified in [Grammar](/manual/grammar#explicit-specialization).
@@ -88,7 +88,7 @@ A generic-to-generic call propagates the obligation to the caller. Inference
 continues to a fixed point independent of declaration order, and the resulting
 contract is retained by imported functions and methods. The same rules apply
 to ordinary, inherent, associated, task-target, trait, operator, and `From`
-calls. There is no source annotation for this obligation in Aura 0.2.
+calls. There is no source annotation for this obligation in Aura 0.3.
 
 When a type is concrete, a substitution containing `random.Rng` is rejected
 with `AU3007`. A concrete type whose clone safety cannot be proved is rejected
@@ -101,16 +101,16 @@ A trait declares a nominal method contract:
 
 ```python
 trait Greeter:
-    def greet(self) -> String
+    def greet(self) -> str
 ```
 
 Trait methods may be signature-only, ending at the newline, or may provide a default body after `:`:
 
 ```python
 trait Named:
-    def name(self) -> String
+    def name(self) -> str
 
-    def label(self) -> String:
+    def label(self) -> str:
         return "name=" + self.name()
 ```
 
@@ -154,10 +154,10 @@ An implementation attaches one trait specialization to one target type pattern:
 
 ```python
 class Person:
-    name: String
+    name: str
 
 impl Greeter for Person:
-    def greet(self) -> String:
+    def greet(self) -> str:
         return "hello " + self.name
 ```
 
@@ -176,8 +176,8 @@ impl[T] Mapper[T] for Box[T]:
 ```
 
 ```python
-impl Displayable for Box[String]:
-    def display(self) -> String:
+impl Displayable for Box[str]:
+    def display(self) -> str:
         return self.value.clone()
 ```
 
@@ -185,7 +185,7 @@ An implementation target must have a concrete or generic named outer type such a
 
 Two implementations with exactly the same trait specialization and target are duplicates and are rejected. More general and more specialized overlapping patterns may coexist. Dispatch selects the unique applicable implementation with greatest structural specificity; equal-best matches are ambiguous and rejected. Source order is never a tie breaker.
 
-Aura 0.2 does not impose a separate orphan-rule restriction, but an implementation must refer to known visible types and traits and participates only where that implementation is present in the loaded module/package context.
+Aura 0.3 does not impose a separate orphan-rule restriction, but an implementation must refer to known visible types and traits and participates only where that implementation is present in the loaded module/package context.
 
 ## Implementation Method Conformance
 
@@ -208,7 +208,7 @@ Implementation methods cannot add default ordinary arguments. Extra methods, mis
 An explicit implementation MUST NOT strengthen its trait method's clone-safety contract.
 Its body may rely on obligations already inferred by the trait method, but it
 cannot introduce a requirement that bound-based callers cannot see. Because
-Aura 0.2 has no explicit clone-safety annotation, generic clone-producing
+Aura 0.3 has no explicit clone-safety annotation, generic clone-producing
 behavior belongs in a trait default body. An implementation that adds such a
 requirement is rejected with `AU3007`.
 
@@ -217,7 +217,7 @@ NOT explicitly define or inherit a trait method whose name is a builtin member
 of that target. This covers the
 runtime handles `Queue[T]`, `Task[T]`, `TaskGroup`, `random.Rng`, `fs.File`,
 and the `net` and `process` handles, and equally the builtin value types such
-as `String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `Duration`, and the scalar types.
+as `str`, `list[T]`, `dict[K, V]`, `set[T]`, `Duration`, and the scalar types.
 Builtin member names are reserved for their runtime operation; a collision
 reports `AU2006` and the trait method must be renamed. A trait method whose name
 does not collide still implements and dispatches normally on a builtin target.
@@ -265,7 +265,7 @@ A trait may require one or more supertraits:
 
 ```python
 trait Labelled: Named:
-    def label(self) -> String:
+    def label(self) -> str:
         return "name=" + self.name()
 ```
 
@@ -323,7 +323,7 @@ trait Ord[Rhs]:
 must return `bool`.
 
 `and` and `or` do not dispatch through traits. Builtin `==` and `!=` also do
-not use an equality trait in Aura 0.2. This includes recursive structural
+not use an equality trait in Aura 0.3. This includes recursive structural
 tuple equality, which a trait implementation cannot override. Builtin
 operations take precedence wherever their concrete value rule applies.
 
@@ -433,7 +433,7 @@ Generic functions, classes, enums, methods, traits, supertraits, default trait
 bodies, generic and specialized implementations, operator dispatch, `Self`,
 and `From` conversion are implemented for MIR execution and direct native
 generation. User-trait dispatch on builtin values, including `Queue[T]`,
-`Task[T]`, `TaskGroup`, `random.Rng`, `String`, and the builtin collections, is
+`Task[T]`, `TaskGroup`, `random.Rng`, `str`, and the builtin collections, is
 maintained for noncolliding method names on both backends;
 builtin target members always retain builtin dispatch. The checker
 supplies one resolved specialization and implementation target to lowering,
@@ -442,7 +442,7 @@ behavior.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 has no trait objects, dynamic dispatch, associated types or
+Aura 0.3 has no trait objects, dynamic dispatch, associated types or
 constants, higher-kinded parameters, default type arguments, `where` clauses,
 specialization annotations, general subtyping, or separate orphan-rule
 restriction. A bare target parameter in `impl[T] Trait for T` is unsupported.
@@ -468,8 +468,8 @@ The following blocks pin the observable boundary. A generic clone helper is
 valid for a safe specialization:
 
 ```python
-def duplicate[T](values: Vec[T]) -> Vec[T]:
-    return values.clone()
+def duplicate[T](values: list[T]) -> list[T]:
+    return values.copy()
 
 def main() -> int32:
     values = [1, 2]
@@ -482,10 +482,10 @@ The same callable rejects an unsafe concrete specialization:
 ```python
 import random
 
-def duplicate[T](values: Vec[T]) -> Vec[T]:
-    return values.clone()
+def duplicate[T](values: list[T]) -> list[T]:
+    return values.copy()
 
-def reject(values: Vec[random.Rng]) -> Vec[random.Rng]:
+def reject(values: list[random.Rng]) -> list[random.Rng]:
     return duplicate(values)
 ```
 
@@ -494,13 +494,13 @@ The requirement also survives a generic-to-generic call:
 ```python
 import random
 
-def duplicate[T](values: Vec[T]) -> Vec[T]:
-    return values.clone()
+def duplicate[T](values: list[T]) -> list[T]:
+    return values.copy()
 
-def forward[T](values: Vec[T]) -> Vec[T]:
+def forward[T](values: list[T]) -> list[T]:
     return duplicate(values)
 
-def reject(values: Vec[random.Rng]) -> Vec[random.Rng]:
+def reject(values: list[random.Rng]) -> list[random.Rng]:
     return forward(values)
 ```
 
@@ -509,22 +509,22 @@ requirement:
 
 ```python
 trait Copier[T]:
-    def copy_values(self) -> Vec[T]
+    def copy_values(self) -> list[T]
 
 class Wrapper[T]:
-    values: Vec[T]
+    values: list[T]
 
 impl[T] Copier[T] for Wrapper[T]:
-    def copy_values(self) -> Vec[T]:
-        return self.values.clone()
+    def copy_values(self) -> list[T]:
+        return self.values.copy()
 ```
 
 A trait default body can establish the requirement for safe specializations:
 
 ```python
 trait Duplicator[T]:
-    def duplicate(self, values: Vec[T]) -> Vec[T]:
-        return values.clone()
+    def duplicate(self, values: list[T]) -> list[T]:
+        return values.copy()
 
 class Marker[T]:
     value: T
@@ -545,8 +545,8 @@ Its unsafe specialization is rejected through the same contract:
 import random
 
 trait Duplicator[T]:
-    def duplicate(self, values: Vec[T]) -> Vec[T]:
-        return values.clone()
+    def duplicate(self, values: list[T]) -> list[T]:
+        return values.copy()
 
 class Marker[T]:
     value: T
@@ -554,6 +554,6 @@ class Marker[T]:
 impl[T] Duplicator[T] for Marker[T]:
     pass
 
-def reject(marker: Marker[random.Rng], values: Vec[random.Rng]) -> Vec[random.Rng]:
+def reject(marker: Marker[random.Rng], values: list[random.Rng]) -> list[random.Rng]:
     return marker.duplicate(values)
 ```

@@ -1,6 +1,6 @@
 use super::{
     integer_type_bounds, minimal_signed_type_for_negative_literal, IntegerBounds, IntegerKind,
-    IntegerRepresentation, IntegerSign, IntegerValue,
+    IntegerPowerError, IntegerRepresentation, IntegerShiftError, IntegerSign, IntegerValue,
 };
 use crate::sema::Type;
 use std::cmp::Ordering;
@@ -138,8 +138,8 @@ fn typed_integer_constructors_enforce_each_declared_width() {
 #[test]
 fn typed_integer_metadata_survives_copy_containers_and_serde() {
     let original = IntegerValue::from_i32(23);
-    let copied = Some(original);
-    let values = [copied.unwrap(), original];
+    let copied = original;
+    let values = [copied, original];
 
     assert_eq!(values[0].runtime_kind(), Some(IntegerKind::Int32));
     assert_eq!(
@@ -386,6 +386,262 @@ fn width_arithmetic_obeys_every_declared_integer_boundary() {
 }
 
 #[test]
+fn fixed_width_bitwise_and_shift_helpers_obey_the_accepted_contract() {
+    let signed = |value| {
+        IntegerValue::from_typed_signed(value, IntegerKind::Int8)
+            .expect("test value should fit int8")
+    };
+    let unsigned = |value| {
+        IntegerValue::from_typed_unsigned(value, IntegerKind::Uint8)
+            .expect("test value should fit uint8")
+    };
+
+    assert_eq!(signed(-2).checked_bitand(signed(5)), Some(signed(4)));
+    assert_eq!(signed(-2).checked_bitor(signed(5)), Some(signed(-1)));
+    assert_eq!(signed(-2).checked_bitxor(signed(5)), Some(signed(-5)));
+    assert_eq!(signed(-2).bitnot(), Some(signed(1)));
+    assert_eq!(unsigned(0b1010).bitnot(), Some(unsigned(0b1111_0101)));
+
+    assert_eq!(signed(-32).checked_shl(signed(1)), Ok(signed(-64)));
+    assert_eq!(
+        signed(64).checked_shl(signed(1)),
+        Err(IntegerShiftError::Overflow)
+    );
+    assert_eq!(signed(-5).checked_shr(signed(1)), Ok(signed(-3)));
+    assert_eq!(unsigned(0x80).checked_shr(unsigned(1)), Ok(unsigned(0x40)));
+
+    assert_eq!(signed(127).wrapping_shl(signed(1)), Ok(signed(-2)));
+    assert_eq!(signed(127).saturating_shl(signed(1)), Ok(signed(127)));
+    assert_eq!(signed(-65).saturating_shl(signed(1)), Ok(signed(-128)));
+    assert_eq!(signed(-5).wrapping_shr(signed(1)), Ok(signed(-3)));
+    assert_eq!(signed(-5).saturating_shr(signed(1)), Ok(signed(-3)));
+
+    assert_eq!(
+        signed(1).checked_shl(signed(-1)),
+        Err(IntegerShiftError::InvalidCount {
+            count: signed(-1),
+            width: 8,
+        })
+    );
+    assert_eq!(
+        unsigned(1).wrapping_shl(unsigned(8)),
+        Err(IntegerShiftError::InvalidCount {
+            count: unsigned(8),
+            width: 8,
+        })
+    );
+    assert_eq!(
+        signed(1).checked_shl(IntegerValue::from_typed_signed(1, IntegerKind::Int16).unwrap()),
+        Err(IntegerShiftError::MismatchedKinds)
+    );
+}
+
+#[test]
+fn every_integer_kind_validates_shift_counts_and_preserves_width_semantics() {
+    for kind in [
+        IntegerKind::Int8,
+        IntegerKind::Int16,
+        IntegerKind::Int32,
+        IntegerKind::Int64,
+        IntegerKind::Int128,
+        IntegerKind::IntSize,
+    ] {
+        let IntegerBounds::Signed { min, max } = kind.bounds() else {
+            unreachable!()
+        };
+        let width = kind.bit_width();
+        let typed = |value| IntegerValue::from_typed_signed(value, kind).unwrap();
+        let zero = typed(0);
+        let one = typed(1);
+        let negative_one = typed(-1);
+        let minimum = typed(min);
+        let maximum = typed(max);
+        let one_count = typed(1);
+        let last_count = typed(i128::from(width - 1));
+
+        assert_eq!(
+            negative_one.checked_shr(last_count),
+            Ok(negative_one),
+            "{kind:?}"
+        );
+        assert_eq!(one.checked_shr(last_count), Ok(zero), "{kind:?}");
+        assert_eq!(
+            negative_one.wrapping_shr(last_count),
+            Ok(negative_one),
+            "{kind:?}"
+        );
+        assert_eq!(
+            negative_one.saturating_shr(last_count),
+            Ok(negative_one),
+            "{kind:?}"
+        );
+        assert_eq!(one.wrapping_shl(last_count), Ok(minimum), "{kind:?}");
+        assert_eq!(one.saturating_shl(last_count), Ok(maximum), "{kind:?}");
+        assert_eq!(
+            negative_one.wrapping_shl(last_count),
+            Ok(minimum),
+            "{kind:?}"
+        );
+        assert_eq!(
+            negative_one.saturating_shl(last_count),
+            Ok(minimum),
+            "{kind:?}"
+        );
+        assert_eq!(maximum.saturating_shl(one_count), Ok(maximum), "{kind:?}");
+        assert_eq!(minimum.saturating_shl(one_count), Ok(minimum), "{kind:?}");
+        assert_eq!(
+            maximum.checked_shl(one_count),
+            Err(IntegerShiftError::Overflow),
+            "{kind:?}"
+        );
+        assert_eq!(
+            minimum.checked_shl(one_count),
+            Err(IntegerShiftError::Overflow),
+            "{kind:?}"
+        );
+        assert_eq!(
+            one.wrapping_shr(typed(-1)),
+            Err(IntegerShiftError::InvalidCount {
+                count: typed(-1),
+                width,
+            }),
+            "{kind:?}"
+        );
+        assert_eq!(
+            one.saturating_shl(typed(i128::from(width))),
+            Err(IntegerShiftError::InvalidCount {
+                count: typed(i128::from(width)),
+                width,
+            }),
+            "{kind:?}"
+        );
+    }
+
+    for kind in [
+        IntegerKind::Uint8,
+        IntegerKind::Uint16,
+        IntegerKind::Uint32,
+        IntegerKind::Uint64,
+        IntegerKind::Uint128,
+        IntegerKind::UintSize,
+    ] {
+        let IntegerBounds::Unsigned { max } = kind.bounds() else {
+            unreachable!()
+        };
+        let width = kind.bit_width();
+        let typed = |value| IntegerValue::from_typed_unsigned(value, kind).unwrap();
+        let one = typed(1);
+        let maximum = typed(max);
+        let one_count = typed(1);
+        let last_count = typed(u128::from(width - 1));
+        let high_bit = typed(1u128 << (width - 1));
+
+        assert_eq!(maximum.checked_shr(last_count), Ok(one), "{kind:?}");
+        assert_eq!(maximum.wrapping_shr(last_count), Ok(one), "{kind:?}");
+        assert_eq!(maximum.saturating_shr(last_count), Ok(one), "{kind:?}");
+        assert_eq!(one.wrapping_shl(last_count), Ok(high_bit), "{kind:?}");
+        assert_eq!(one.saturating_shl(last_count), Ok(high_bit), "{kind:?}");
+        assert_eq!(
+            maximum.wrapping_shl(one_count),
+            Ok(typed(max - 1)),
+            "{kind:?}"
+        );
+        assert_eq!(maximum.saturating_shl(one_count), Ok(maximum), "{kind:?}");
+        assert_eq!(
+            maximum.checked_shl(one_count),
+            Err(IntegerShiftError::Overflow),
+            "{kind:?}"
+        );
+        assert_eq!(
+            one.wrapping_shl(typed(u128::from(width))),
+            Err(IntegerShiftError::InvalidCount {
+                count: typed(u128::from(width)),
+                width,
+            }),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn checked_integer_power_preserves_width_and_reports_domain_and_overflow() {
+    let int8 = |value| {
+        IntegerValue::from_typed_signed(value, IntegerKind::Int8)
+            .expect("test value should fit int8")
+    };
+
+    assert_eq!(int8(2).checked_pow(int8(6)), Ok(int8(64)));
+    assert_eq!(int8(-2).checked_pow(int8(7)), Ok(int8(-128)));
+    assert_eq!(int8(0).checked_pow(int8(0)), Ok(int8(1)));
+    assert_eq!(
+        int8(2).checked_pow(int8(7)),
+        Err(IntegerPowerError::Overflow)
+    );
+    assert_eq!(
+        int8(2).checked_pow(int8(-1)),
+        Err(IntegerPowerError::NegativeExponent)
+    );
+    assert_eq!(
+        int8(2).checked_pow(IntegerValue::from_typed_signed(3, IntegerKind::Int16).unwrap()),
+        Err(IntegerPowerError::MismatchedKinds)
+    );
+}
+
+#[test]
+fn s1_frontend_bitwise_operations_preserve_every_runtime_integer_width() {
+    for kind in [
+        IntegerKind::Int8,
+        IntegerKind::Int16,
+        IntegerKind::Int32,
+        IntegerKind::Int64,
+        IntegerKind::Int128,
+        IntegerKind::IntSize,
+    ] {
+        let one = IntegerValue::from_typed_signed(1, kind).expect("one should fit");
+        let three = IntegerValue::from_typed_signed(3, kind).expect("three should fit");
+        let two = IntegerValue::from_typed_signed(2, kind).expect("two should fit");
+        assert_eq!(one.checked_bitand(three), Some(one), "{kind:?}");
+        assert_eq!(one.checked_bitor(two), Some(three), "{kind:?}");
+        assert_eq!(three.checked_bitxor(one), Some(two), "{kind:?}");
+        assert_eq!(
+            one.bitnot().and_then(IntegerValue::bitnot),
+            Some(one),
+            "{kind:?}"
+        );
+    }
+
+    for kind in [
+        IntegerKind::Uint8,
+        IntegerKind::Uint16,
+        IntegerKind::Uint32,
+        IntegerKind::Uint64,
+        IntegerKind::Uint128,
+        IntegerKind::UintSize,
+    ] {
+        let one = IntegerValue::from_typed_unsigned(1, kind).expect("one should fit");
+        let three = IntegerValue::from_typed_unsigned(3, kind).expect("three should fit");
+        let two = IntegerValue::from_typed_unsigned(2, kind).expect("two should fit");
+        assert_eq!(one.checked_bitand(three), Some(one), "{kind:?}");
+        assert_eq!(one.checked_bitor(two), Some(three), "{kind:?}");
+        assert_eq!(three.checked_bitxor(one), Some(two), "{kind:?}");
+        assert_eq!(
+            one.bitnot().and_then(IntegerValue::bitnot),
+            Some(one),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn s1_frontend_unsigned_integer_power_preserves_the_declared_runtime_width() {
+    let two = IntegerValue::from_typed_unsigned(2, IntegerKind::Uint16).unwrap();
+    let ten = IntegerValue::from_typed_unsigned(10, IntegerKind::Uint16).unwrap();
+    let expected = IntegerValue::from_typed_unsigned(1024, IntegerKind::Uint16).unwrap();
+    assert_eq!(two.checked_pow(ten), Ok(expected));
+    assert_eq!(expected.runtime_kind(), Some(IntegerKind::Uint16));
+}
+
+#[test]
 fn d3_negative_literal_default_is_int64_and_does_not_widen_implicitly() {
     assert_eq!(
         minimal_signed_type_for_negative_literal(7),
@@ -501,7 +757,7 @@ fn integer_value_helpers_cover_division_remainder_comparisons_and_bounds() {
     assert_eq!(integer_type_bounds(&Type::Module("pkg".to_string())), None);
     assert_eq!(integer_type_bounds(&Type::TypeParam("T".to_string())), None);
     assert_eq!(
-        integer_type_bounds(&Type::Named("Vec".to_string(), vec![Type::named("int32")])),
+        integer_type_bounds(&Type::Named("list".to_string(), vec![Type::named("int32")])),
         None
     );
     assert_eq!(

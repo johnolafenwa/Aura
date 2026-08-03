@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 export const AURA_RELEASE = Object.freeze({
-  version: '0.2.0',
-  channel: 'technical preview'
+  version: '0.3.0',
+  channel: 'development'
 })
 
 const COMMIT_PATTERN = /^[0-9a-f]{7,40}$/i

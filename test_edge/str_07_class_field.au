@@ -3,13 +3,13 @@
 #       but works in borrow self methods
 
 class User:
-    name: String
-    email: String
+    name: str
+    email: str
 
-    def greet(self) -> String:
+    def greet(self) -> str:
         return f"Hello, {self.name}"
 
-    def get_email(self) -> String:
+    def get_email(self) -> str:
         return self.email.clone()
 
     def show(self):

@@ -1,0 +1,14 @@
+trait Add[Rhs, Out]:
+    def add(self, rhs: own Rhs) -> Out
+
+class Box:
+    value: int32
+
+impl Add[int32, Box] for Box:
+    def add(self, rhs: own int32) -> Box:
+        return Box(value=self.value + rhs)
+
+def main():
+    mut boxes: dict[str, Box] = {"one": Box(value=1)}
+    delta: int32 = 2
+    boxes["one"] += delta

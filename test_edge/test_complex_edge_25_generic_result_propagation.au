@@ -1,16 +1,16 @@
 # Edge test: Generic result propagation - try with generic function returning Result
 
-def safe_divide(a: int32, b: int32) -> Result[int32, String]:
+def safe_divide(a: int32, b: int32) -> Result[int32, str]:
     if b == 0:
         return Result.Err("div by zero")
     return Result.Ok(a // b)
 
-def chain_divide(a: int32, b: int32, c: int32) -> Result[int32, String]:
+def chain_divide(a: int32, b: int32, c: int32) -> Result[int32, str]:
     first = try safe_divide(a, b)
     second = try safe_divide(first, c)
     return Result.Ok(second)
 
-def double_chain(a: int32) -> Result[String, String]:
+def double_chain(a: int32) -> Result[str, str]:
     result = try chain_divide(a, 2, 3)
     return Result.Ok(f"result: {result}")
 

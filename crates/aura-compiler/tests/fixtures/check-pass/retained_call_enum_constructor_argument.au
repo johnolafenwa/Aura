@@ -2,12 +2,12 @@ enum Wrapped[T]:
     Value(T)
 
 def main():
-    mut options: Vec[Option[int32]] = []
-    options.push(Option.Some(1))
-    options.push(Option.None)
+    mut options: list[Option[int32]] = []
+    options.append(Option.Some(1))
+    options.append(Option.None)
 
-    mut results: Vec[Result[int32, String]] = []
-    results.push(Result.Ok(2))
+    mut results: list[Result[int32, str]] = []
+    results.append(Result.Ok(2))
 
-    mut wrapped: Vec[Wrapped[int32]] = []
-    wrapped.push(Wrapped[int32].Value(3))
+    mut wrapped: list[Wrapped[int32]] = []
+    wrapped.append(Wrapped[int32].Value(3))

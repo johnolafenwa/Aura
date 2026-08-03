@@ -6,7 +6,7 @@ def map_option(opt: Option[int32], addend: int32) -> Option[int32]:
         case Option.None:
             return Option.None
 
-def flat_map_option(opt: Option[int32]) -> Option[String]:
+def flat_map_option(opt: Option[int32]) -> Option[str]:
     match own opt:
         case Option.Some(v):
             if v > 0:

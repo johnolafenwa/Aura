@@ -2,7 +2,7 @@ def widen(value: int32) -> float64:
     return value.to_float()
 
 def main():
-    mut values = Array[int32].from_vec(values=[1, 2, 3, 4], shape=[2, 2])
+    mut values = Array[int32].from_list(values=[1, 2, 3, 4], shape=[2, 2])
     zeros = Array[float64].zeros(shape=[2, 2])
     small = Array[float32].zeros(shape=[2, 2])
     full = Array[int64].full(shape=[2, 2], value=7)

@@ -7,8 +7,18 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Serialize)]
 pub struct Module {
     pub imports: Vec<ImportDecl>,
+    pub constants: Vec<ConstantDecl>,
     pub items: Vec<Item>,
     pub top_level_stmts: Vec<Stmt>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ConstantDecl {
+    pub public: bool,
+    pub name: String,
+    pub annotation: Option<TypeRef>,
+    pub value: Expr,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -46,11 +56,19 @@ pub struct ImportDecl {
 pub enum ImportKind {
     Module {
         path: Vec<String>,
+        alias: Option<String>,
     },
     From {
         module_path: Vec<String>,
-        names: Vec<String>,
+        names: Vec<ImportName>,
     },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ImportName {
+    pub name: String,
+    pub alias: Option<String>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -305,6 +323,7 @@ pub struct MatchStmt {
 #[derive(Clone, Debug, Serialize)]
 pub struct MatchArm {
     pub pattern: Pattern,
+    pub guard: Option<Expr>,
     pub body: Vec<Stmt>,
     pub span: Span,
 }
@@ -312,17 +331,25 @@ pub struct MatchArm {
 #[derive(Clone, Debug, Serialize)]
 pub struct MatchExprArm {
     pub pattern: Pattern,
+    pub guard: Option<Expr>,
     pub value: Expr,
     pub span: Span,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub enum Pattern {
+    Or(OrPattern),
     Variant(VariantPattern),
     Tuple(TuplePattern),
     Binding(BindingPattern),
     Literal(LiteralPattern),
     Wildcard(Span),
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct OrPattern {
+    pub alternatives: Vec<Pattern>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -592,6 +619,7 @@ pub struct MapEntryExpr {
 pub enum UnaryOp {
     Neg,
     Not,
+    BitNot,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -604,6 +632,12 @@ pub enum BinaryOp {
     Div,
     FloorDiv,
     Mod,
+    Pow,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
     Eq,
     NotEq,
     Less,
@@ -623,6 +657,11 @@ pub struct Argument {
 pub enum FormatPart {
     Literal(String),
     Expr(Expr),
+    Formatted {
+        expr: Expr,
+        spec: String,
+        spec_span: Span,
+    },
 }
 
 /// One parameter contract inside a structural `def(...) -> ...` type.

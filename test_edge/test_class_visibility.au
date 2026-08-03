@@ -1,5 +1,5 @@
 class Account:
-    public name: String
+    public name: str
     balance: int32
 
     def get_balance(self) -> int32:

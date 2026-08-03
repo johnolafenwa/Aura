@@ -1,2 +1,2 @@
-def load(text: String) -> mut String:
+def load(text: str) -> mut str:
     return text

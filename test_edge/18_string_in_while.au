@@ -1,5 +1,5 @@
 def main() -> int32:
-    mut result: String = ""
+    mut result: str = ""
     mut i: int32 = 0
 
     while i < 5:

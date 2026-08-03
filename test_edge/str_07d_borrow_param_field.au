@@ -1,9 +1,9 @@
-# Investigate: free function with borrow param, accessing String fields
+# Investigate: free function with borrow param, accessing str fields
 
 class Holder:
-    text: String
+    text: str
 
-def get_text(h: Holder) -> String:
+def get_text(h: Holder) -> str:
     return h.text
 
 def main() -> int32:

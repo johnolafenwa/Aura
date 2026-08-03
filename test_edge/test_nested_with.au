@@ -1,14 +1,14 @@
 ## Test 19: Nested with blocks - multiple resource cleanup
 class Handle:
-    name: String
+    name: str
 
-    def read(self) -> String:
+    def read(self) -> str:
         return self.name
 
     def close(mut self):
         print("closed " + self.name)
 
-def multi_resource() -> Result[String, String]:
+def multi_resource() -> Result[str, str]:
     with outer = Handle(name="outer"):
         with inner = Handle(name="inner"):
             msg = outer.read() + " and " + inner.read()

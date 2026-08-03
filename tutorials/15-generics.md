@@ -1,6 +1,8 @@
 # Generics
 
-Generics let you write code that works with any type. Instead of writing separate `BoxInt`, `BoxString`, and `BoxFloat` classes, you write one `Box[T]` that works with all of them.
+Generics let one `Box[T]` definition work across the types that satisfy its
+requirements. Separate `BoxInt`, `BoxString`, and `BoxFloat` classes are not
+needed.
 
 ## Generic Classes
 
@@ -18,7 +20,7 @@ Use it with any type:
 int_box: Box[int32] = Box(value=7)
 print(int_box.get())
 
-text_box: Box[String] = Box(value="hello")
+text_box: Box[str] = Box(value="hello")
 print(text_box.get())
 ```
 
@@ -52,16 +54,16 @@ enum Wrapper[T]:
 ```
 
 ```python
-wrapped: Wrapper[String] = Wrapper.Item("ok")
+wrapped: Wrapper[str] = Wrapper.Item("ok")
 
 match wrapped:
     case Wrapper.Item(value):
-        print(value)    # value is String
+        print(value)    # value is str
     case Wrapper.Empty:
         print("empty")
 ```
 
-Payload matching uses the instantiated payload type, so `value` is a `String` in the example above.
+Payload matching uses the instantiated payload type, so `value` is a `str` in the example above.
 
 Generic enums may also use bounded type parameters:
 
@@ -82,7 +84,7 @@ The compiler infers type arguments from call arguments and the expected return t
 
 ```python
 print(identity(7))               # infers T = int64
-text: String = identity("aura") # infers T = String
+text: str = identity("aura") # infers T = str
 print(text)
 ```
 
@@ -104,14 +106,14 @@ A generic body may clone values without rejecting the declaration merely
 because `T` is unresolved:
 
 ```python
-def duplicate[T](values: Vec[T]) -> Vec[T]:
-    return values.clone()
+def duplicate[T](values: list[T]) -> list[T]:
+    return values.copy()
 
-def forward[T](values: Vec[T]) -> Vec[T]:
+def forward[T](values: list[T]) -> list[T]:
     return duplicate(values)
 ```
 
-Aura infers that `T` must be clone-safe. A call with `int32` or `String`
+Aura infers that `T` must be clone-safe. A call with `int32` or `str`
 works. A call with `random.Rng`, including through a class, enum, or collection
 wrapper, is rejected with `AU3007`. `forward` receives the same requirement
 through its generic-to-generic call. The inferred contract also survives a

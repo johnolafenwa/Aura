@@ -17,7 +17,7 @@ fn p64_extern_c_functions_and_opaque_classes_are_bodyless_items() {
     let module = parse(concat!(
         "public extern \"C\" opaque class ProcessHandle\n",
         "public extern \"C\" def getpid() -> int32\n",
-        "extern \"C\" def write(fd: int32, bytes: Vec[uint8]) -> int64\n",
+        "extern \"C\" def write(fd: int32, bytes: list[uint8]) -> int64\n",
         "def main():\n",
         "    pass\n",
     ))
@@ -60,7 +60,7 @@ fn p64_extern_c_functions_and_opaque_classes_are_bodyless_items() {
             && name == "write"
             && params.len() == 2
             && matches!(named_type_ref(&params[0].ty), Some(("int32", args)) if args.is_empty())
-            && matches!(named_type_ref(&params[1].ty), Some(("Vec", args)) if args.len() == 1)
+            && matches!(named_type_ref(&params[1].ty), Some(("list", args)) if args.len() == 1)
             && matches!(named_type_ref(return_type), Some(("int64", args)) if args.is_empty())
     ));
     assert!(matches!(&module.items[3], Item::Function(_)));
@@ -133,7 +133,7 @@ fn p64_extern_declarations_reject_unsupported_abis_bodies_and_defaults() {
 
 #[test]
 fn p64_extern_declarations_reserve_variadics_callbacks_and_raw_pointers() {
-    let variadic = parse("extern \"C\" def printf(format: String, ...) -> int32\n")
+    let variadic = parse("extern \"C\" def printf(format: str, ...) -> int32\n")
         .expect_err("FFI v0 reserves C variadics");
     assert_eq!(
         variadic.message,
@@ -264,7 +264,7 @@ fn p63_lambda_rejects_non_contextual_parameter_syntax_with_teaching_diagnostics(
         typed.message,
         "lambda parameter types are inferred from context; write `lambda value: expression` without a parameter type"
     );
-    let typed_generic = parse_expression("lambda value: Vec[int32]: value")
+    let typed_generic = parse_expression("lambda value: Option[int32]: value")
         .expect_err("generic lambda parameter types come from context");
     assert_eq!(
         typed_generic.message,
@@ -307,13 +307,6 @@ fn p63_lambda_rejects_non_contextual_parameter_syntax_with_teaching_diagnostics(
     assert_eq!(
         missing_colon.message,
         "expected `:` after lambda parameter list"
-    );
-
-    let retired_borrow = parse_expression("lambda borrow value: value")
-        .expect_err("borrow spelling must stay retired");
-    assert_eq!(
-        retired_borrow.message,
-        "`borrow` lambda parameters were removed; use a bare parameter for shared access or `mut name` for mutable access"
     );
 
     let missing_owned_name = parse_expression("lambda own: 1")
@@ -426,7 +419,7 @@ fn tuple_literals_are_parenthesized_and_distinct_from_groups() {
 #[test]
 fn tuple_types_are_structural_and_support_singletons_nesting_and_option() {
     let item = parse_item_from(
-        "def rotate(value: (int32, String), only: (int64,)) -> ((String, int32), bool)?:\n    return None\n",
+        "def rotate(value: (int32, str), only: (int64,)) -> ((str, int32), bool)?:\n    return None\n",
     )
     .expect("tuple parameter and return types should parse");
     let Item::Function(function) = item else {
@@ -443,7 +436,7 @@ fn tuple_types_are_structural_and_support_singletons_nesting_and_option() {
     ));
     assert!(matches!(
         named_type_ref(&value_elements[1]),
-        Some(("String", args)) if args.is_empty()
+        Some(("str", args)) if args.is_empty()
     ));
 
     assert!(matches!(
@@ -477,7 +470,7 @@ fn tuple_types_are_structural_and_support_singletons_nesting_and_option() {
 #[test]
 fn function_types_use_declaration_shaped_syntax_and_nest_structurally() {
     let item = parse_item_from(
-        "def apply(callback: def(int32, mut String, own Vec[int32]) -> bool, factory: def() -> def(own String) -> int64) -> def((int32, String)) -> None:\n    pass\n",
+        "def apply(callback: def(int32, mut str, own list[int32]) -> bool, factory: def() -> def(own str) -> int64) -> def((int32, str)) -> None:\n    pass\n",
     )
     .expect("function type annotations should parse without changing function declarations");
     let Item::Function(function) = item else {
@@ -502,11 +495,11 @@ fn function_types_use_declaration_shaped_syntax_and_nest_structurally() {
     ));
     assert!(matches!(
         named_type_ref(&params[1].ty),
-        Some(("String", args)) if args.is_empty()
+        Some(("str", args)) if args.is_empty()
     ));
     assert!(matches!(
         named_type_ref(&params[2].ty),
-        Some(("Vec", args))
+        Some(("list", args))
             if matches!(
                 args,
                 [TypeRef {
@@ -540,7 +533,7 @@ fn function_types_use_declaration_shaped_syntax_and_nest_structurally() {
                             ..
                         },
                         ..
-                    }] if name == "String" && args.is_empty()
+                    }] if name == "str" && args.is_empty()
                 )
                     && matches!(
                         named_type_ref(return_type),
@@ -610,23 +603,12 @@ fn function_type_syntax_requires_an_arrow_and_rejects_indirect() {
 
 #[test]
 fn function_type_parameter_capabilities_reject_invalid_placements_precisely() {
-    let retired = parse_stmt_from("callback: def(borrow String) -> None = factory\n")
-        .expect_err("retired borrow must not become a type name");
-    assert!(retired.message.contains("omit `borrow` for shared access"));
-
-    let retired_mutable =
-        parse_item_from("def apply(callback: def(borrow mut String) -> None):\n    pass\n")
-            .expect_err("retired mutable-borrow spelling must point to the current capability");
-    assert!(retired_mutable
-        .message
-        .contains("write `mut T` for mutable access"));
-
-    let doubled = parse_stmt_from("callback: def(mut own String) -> None = factory\n")
+    let doubled = parse_stmt_from("callback: def(mut own str) -> None = factory\n")
         .expect_err("a function type parameter has exactly one capability");
     assert!(doubled.message.contains("only one capability modifier"));
 
     let missing_shared_type =
-        parse_item_from("def apply(callback: def(, String) -> None):\n    pass\n")
+        parse_item_from("def apply(callback: def(, str) -> None):\n    pass\n")
             .expect_err("an empty function-type parameter slot must be rejected");
     assert_eq!(
         missing_shared_type.message,
@@ -641,16 +623,16 @@ fn function_type_parameter_capabilities_reject_invalid_placements_precisely() {
         "expected a type after the function parameter capability"
     );
 
-    let named = parse_stmt_from("callback: def(value: String) -> None = factory\n")
+    let named = parse_stmt_from("callback: def(value: str) -> None = factory\n")
         .expect_err("function type parameters contain types, not names");
     assert!(named.message.contains("contain types only"));
 
-    let default = parse_stmt_from("callback: def(String = \"x\") -> None = factory\n")
+    let default = parse_stmt_from("callback: def(str = \"x\") -> None = factory\n")
         .expect_err("function type parameters cannot have defaults");
     assert!(default.message.contains("cannot declare default values"));
 
     let nested_default = parse_stmt_from(
-        "callback: def(String = build((1, 2), [3, 4], {5: 6}), int32) -> None = factory\n",
+        "callback: def(str = build((1, 2), [3, 4], {5: 6}), int32) -> None = factory\n",
     )
     .expect_err(
         "typed-binding lookahead should preserve the function-type default-value diagnostic",
@@ -660,7 +642,7 @@ fn function_type_parameter_capabilities_reject_invalid_placements_precisely() {
         "function type parameters cannot declare default values"
     );
 
-    let return_capability = parse_stmt_from("callback: def() -> own String = factory\n")
+    let return_capability = parse_stmt_from("callback: def() -> own str = factory\n")
         .expect_err("return capability labels remain invalid");
     assert!(return_capability
         .message
@@ -707,7 +689,7 @@ fn typed_binding_lookahead_recognizes_function_type_annotations() {
     assert!(matches!(value.kind, ExprKind::Name(ref name) if name == "increment"));
 
     let nested = parse_stmt_from(
-        "mut pipeline: def(def(int32) -> int32, (String, int32)) -> def() -> bool = choose\n",
+        "mut pipeline: def(def(int32) -> int32, (str, int32)) -> def() -> bool = choose\n",
     )
     .expect("lookahead should skip nested function and tuple type components");
     assert!(matches!(
@@ -826,8 +808,8 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
     ));
 
     for source in [
-        "value: Map[String, int32] = values\n",
-        "value: (String, int32) = pair\n",
+        "value: dict[str, int32] = values\n",
+        "value: (str, int32) = pair\n",
     ] {
         assert!(
             matches!(parse_stmt_from(source), Ok(Stmt::Assign(_))),
@@ -845,7 +827,7 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
         }
     }
 
-    let missing_type_comma = parse_item_from("def read(value: (String)):\n    pass\n")
+    let missing_type_comma = parse_item_from("def read(value: (str)):\n    pass\n")
         .expect_err("a singleton tuple type needs a comma");
     assert!(missing_type_comma
         .message
@@ -869,12 +851,13 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
         .message
         .contains("`mut` destructuring is not supported"));
 
+    assert!(matches!(
+        parse_pattern_from("(name)").expect("parentheses group one pattern"),
+        Pattern::Binding(BindingPattern { ref name, .. }) if name == "name"
+    ));
+
     for (source, expected) in [
         ("()", "empty tuple patterns are not supported"),
-        (
-            "(name)",
-            "tuple patterns need a comma; write `(pattern,)` for a singleton tuple pattern",
-        ),
         (
             "(left, right,)",
             "trailing commas are only allowed for singleton tuple patterns",
@@ -891,7 +874,7 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
             "empty tuple types are not supported",
         ),
         (
-            "def invalid(value: (int32, String,)):\n    pass\n",
+            "def invalid(value: (int32, str,)):\n    pass\n",
             "trailing commas are only allowed for singleton tuple types",
         ),
     ] {
@@ -934,7 +917,7 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
     );
 
     assert!(matches!(
-        parse_stmt_from("pair: (int32, String)? = None\n"),
+        parse_stmt_from("pair: (int32, str)? = None\n"),
         Ok(Stmt::Assign(_))
     ));
 }
@@ -1332,11 +1315,14 @@ fn parse_expression_reports_trailing_tokens_and_primary_errors() {
     assert!(unexpected.message.contains("no matching opener"));
     assert_eq!(unexpected.code, "AU1001");
 
-    let borrowed = parse_expression("borrow value").expect_err("expected borrow-prefix failure");
-    assert!(borrowed
-        .message
-        .contains("call arguments cannot start with `borrow`"));
-    assert_eq!(borrowed.code, "AU1101");
+    let borrow_sequence =
+        parse_expression("borrow value").expect_err("expected adjacent-name failure");
+    let arbitrary_sequence =
+        parse_expression("legacy value").expect_err("expected adjacent-name failure");
+    assert_eq!(borrow_sequence.message, arbitrary_sequence.message);
+    assert!(borrow_sequence.help.is_empty());
+    assert!(borrow_sequence.edits.is_empty());
+    assert_eq!(borrow_sequence.code, "AU1101");
 
     let identity = parse_expression("value is None").expect_err("`is` should be rejected");
     assert_eq!(
@@ -1400,6 +1386,28 @@ fn d4_parser_accepts_single_quoted_expressions_patterns_and_fstring_arguments() 
 }
 
 #[test]
+fn parses_static_f_string_format_specifications_after_complete_expressions() {
+    let expression = parse_expression("f\"{values[1:3]} {count:*>+12,d}\"")
+        .expect("format specifications should follow complete interpolation expressions");
+    let ExprKind::FString(parts) = expression.kind else {
+        panic!("expected an f-string");
+    };
+    assert!(matches!(parts.first(), Some(FormatPart::Expr(_))));
+    assert!(matches!(
+        parts.last(),
+        Some(FormatPart::Formatted { spec, .. }) if spec == "*>+12,d"
+    ));
+}
+
+#[test]
+fn rejects_nested_f_string_format_fields() {
+    let error = parse_expression("f\"{value:{width}}\"")
+        .expect_err("format specifications must remain static source text");
+    assert_eq!(error.code, "AU1101");
+    assert!(error.message.contains("nested replacement fields"));
+}
+
+#[test]
 fn comparison_chains_keep_every_operator_at_one_precedence_level() {
     for (source, expected_ops, expected_columns) in [
         (
@@ -1459,7 +1467,7 @@ fn comparison_chains_keep_every_operator_at_one_precedence_level() {
 #[test]
 fn d6_parser_preserves_parameter_modes_and_keeps_own_out_of_match() {
     let item = parse_item_from(
-        "def modes(copy_value: int32, inferred: String, owned: own String, shared: String, mutable: mut String):\n    pass\n",
+        "def modes(copy_value: int32, inferred: str, owned: own str, shared: str, mutable: mut str):\n    pass\n",
     )
     .expect("all ordinary parameter modes should parse");
     let Item::Function(function) = item else {
@@ -1536,7 +1544,9 @@ fn parse_module_imports_and_generic_bounds_cover_success_paths() {
 
     assert_eq!(module.imports.len(), 2);
     assert_eq!(module.items.len(), 2);
-    assert_eq!(module.top_level_stmts.len(), 1);
+    assert_eq!(module.constants.len(), 1);
+    assert_eq!(module.constants[0].name, "count");
+    assert_eq!(module.top_level_stmts.len(), 0);
 
     let Item::Function(function_decl) = &module.items[0] else {
         panic!("expected first item to be a function");
@@ -1550,6 +1560,147 @@ fn parse_module_imports_and_generic_bounds_cover_success_paths() {
             .len(),
         2
     );
+}
+
+#[test]
+fn parse_module_constants_preserves_visibility_annotation_and_source_order() {
+    let module =
+        parse("first = 1\npublic second: int64 = first + 1\ndef main():\n    print(second)\n")
+            .expect("module constants");
+    assert_eq!(module.constants.len(), 2);
+    assert_eq!(module.constants[0].name, "first");
+    assert!(!module.constants[0].public);
+    assert_eq!(module.constants[1].name, "second");
+    assert!(module.constants[1].public);
+    assert!(module.constants[1].annotation.is_some());
+    assert!(module.top_level_stmts.is_empty());
+}
+
+#[test]
+fn parse_preserves_top_level_mutable_bindings_for_contextual_entry_checking() {
+    let module = parse("mut counter = 0\ndef main():\n    pass\n")
+        .expect("parsing must preserve the script statement until the entry style is known");
+    assert!(module.constants.is_empty());
+    assert!(matches!(
+        module.top_level_stmts.as_slice(),
+        [Stmt::Assign(AssignStmt {
+            mutable: true,
+            target: AssignTarget::Name(name),
+            ..
+        })] if name == "counter"
+    ));
+}
+
+#[test]
+fn parse_script_mode_keeps_mutable_locals_beside_module_constants() {
+    let module = parse(
+        "limit: int32 = 2\nmut counter: int32 = 0\nwhile counter < limit:\n    counter += 1\nprint(counter)\n",
+    )
+    .expect("script-mode mutable locals must parse");
+    assert_eq!(module.constants.len(), 1);
+    assert_eq!(module.constants[0].name, "limit");
+    assert!(matches!(
+        module.top_level_stmts.as_slice(),
+        [
+            Stmt::Assign(AssignStmt { mutable: true, .. }),
+            Stmt::While(_),
+            Stmt::Expr(_)
+        ]
+    ));
+}
+
+#[test]
+fn parse_import_aliases_preserve_target_and_local_names() {
+    let module = parse(
+        [
+            "import pkg.tools as tools",
+            "from pkg.user import Box as UserBox, wrap, User as Person",
+            "",
+            "def main():",
+            "    return",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("import aliases should parse");
+
+    let ImportKind::Module { path, alias } = &module.imports[0].kind else {
+        panic!("expected module import");
+    };
+    assert_eq!(path, &vec!["pkg".to_string(), "tools".to_string()]);
+    assert_eq!(alias.as_deref(), Some("tools"));
+
+    let ImportKind::From { module_path, names } = &module.imports[1].kind else {
+        panic!("expected from import");
+    };
+    assert_eq!(module_path, &vec!["pkg".to_string(), "user".to_string()]);
+    assert_eq!(names.len(), 3);
+    assert_eq!(names[0].name, "Box");
+    assert_eq!(names[0].alias.as_deref(), Some("UserBox"));
+    assert_eq!(names[1].name, "wrap");
+    assert_eq!(names[1].alias, None);
+    assert_eq!(names[2].name, "User");
+    assert_eq!(names[2].alias.as_deref(), Some("Person"));
+}
+
+#[test]
+fn keyword_only_parameter_markers_receive_a_focused_rejection() {
+    let error = parse("def configure(path: str, *, retries: int32):\n    return\n")
+        .expect_err("keyword-only parameters remain outside Aura 0.3");
+    assert_eq!(error.code, "AU1101");
+    assert!(
+        error.message.contains(
+            "keyword-only parameters are not part of Aura 0.3's structural callable model"
+        ),
+        "unexpected diagnostic: {}",
+        error.message
+    );
+}
+
+#[test]
+fn import_alias_diagnostics_cover_invalid_and_duplicate_bindings() {
+    let cases = [
+        (
+            "import pkg.tools as\n",
+            "AU1101",
+            "expected identifier after `as`",
+        ),
+        (
+            "from pkg.tools import run as\n",
+            "AU1101",
+            "expected identifier after `as`",
+        ),
+        (
+            "import pkg.tools as _\n",
+            "AU2999",
+            "`_` cannot be used as an import alias",
+        ),
+        (
+            "import pkg.tools as def\n",
+            "AU2999",
+            "reserved words cannot be used as import aliases",
+        ),
+        (
+            "from pkg.tools import run, run as again\n",
+            "AU2999",
+            "import target `run` appears more than once",
+        ),
+        (
+            "from pkg.tools import run as task, stop as task\n",
+            "AU2999",
+            "duplicate import binding `task`",
+        ),
+    ];
+
+    for (source, code, message) in cases {
+        let error = parse(source).expect_err(source);
+        assert_eq!(error.code, code, "unexpected code for {source:?}");
+        assert!(
+            error.message.contains(message),
+            "unexpected diagnostic for {source:?}: {}",
+            error.message
+        );
+    }
 }
 
 #[test]
@@ -1736,15 +1887,24 @@ fn parse_params_and_receivers_cover_error_and_receiver_only_forms() {
         "`self: Type` is not a method receiver; use `self` for shared access, `own self` to consume, or `mut self` to mutate"
     );
 
-    let bad_param = parse_item_from(
+    let borrow_param_sequence = parse_item_from(
         ["def read(borrow counter: Counter):", "    pass"]
             .join("\n")
             .as_str(),
     )
-    .expect_err("prefix borrowed parameter should fail");
-    assert!(bad_param
-        .message
-        .contains("ordinary parameters are written as"));
+    .expect_err("an adjacent-name parameter sequence should fail");
+    let arbitrary_param_sequence = parse_item_from(
+        ["def read(legacy counter: Counter):", "    pass"]
+            .join("\n")
+            .as_str(),
+    )
+    .expect_err("the same arbitrary adjacent-name sequence should fail");
+    assert_eq!(
+        borrow_param_sequence.message,
+        arbitrary_param_sequence.message
+    );
+    assert!(borrow_param_sequence.help.is_empty());
+    assert!(borrow_param_sequence.edits.is_empty());
 
     let bad_owned_param = parse_item_from(
         ["def read(own counter: Counter):", "    pass"]
@@ -1908,13 +2068,117 @@ fn parse_statement_and_operator_variants_cover_remaining_forms() {
 }
 
 #[test]
+fn bitwise_shift_and_power_precedence_matches_the_accepted_grammar() {
+    let expression = parse_expression("1 | 2 ^ 3 & 4 << 1 + 1 < 100")
+        .expect("bitwise precedence expression should parse");
+    let ExprKind::Binary {
+        op: BinaryOp::Less,
+        left,
+        ..
+    } = expression.kind
+    else {
+        panic!("comparison should remain looser than bitwise operators");
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::BitOr,
+        right: xor,
+        ..
+    } = left.kind
+    else {
+        panic!("bitwise-or should be the loosest bitwise level");
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::BitXor,
+        right: and,
+        ..
+    } = xor.kind
+    else {
+        panic!("bitwise-xor should bind inside bitwise-or");
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::BitAnd,
+        right: shift,
+        ..
+    } = and.kind
+    else {
+        panic!("bitwise-and should bind inside bitwise-xor");
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::Shl,
+        right: additive,
+        ..
+    } = shift.kind
+    else {
+        panic!("shift should bind inside bitwise-and");
+    };
+    assert!(matches!(
+        additive.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Add,
+            ..
+        }
+    ));
+
+    let power = parse_expression("2 ** 3 ** 2").expect("power should parse");
+    assert!(matches!(
+        power.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Pow,
+            right,
+            ..
+        } if matches!(right.kind, ExprKind::Binary { op: BinaryOp::Pow, .. })
+    ));
+    let negated = parse_expression("-2 ** 2").expect("unary-left power should parse");
+    assert!(matches!(
+        negated.kind,
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr,
+        } if matches!(expr.kind, ExprKind::Binary { op: BinaryOp::Pow, .. })
+    ));
+    let negative_exponent = parse_expression("2 ** -2").expect("unary exponent should parse");
+    assert!(matches!(
+        negative_exponent.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Pow,
+            right,
+            ..
+        } if matches!(right.kind, ExprKind::Unary { op: UnaryOp::Neg, .. })
+    ));
+    assert!(matches!(
+        parse_expression("~1")
+            .expect("bitwise not should parse")
+            .kind,
+        ExprKind::Unary {
+            op: UnaryOp::BitNot,
+            ..
+        }
+    ));
+
+    for (source, expected) in [
+        ("value &= 1\n", BinaryOp::BitAnd),
+        ("value |= 1\n", BinaryOp::BitOr),
+        ("value ^= 1\n", BinaryOp::BitXor),
+        ("value <<= 1\n", BinaryOp::Shl),
+        ("value >>= 1\n", BinaryOp::Shr),
+        ("value **= 2\n", BinaryOp::Pow),
+    ] {
+        let Stmt::Assign(assign) = parse_stmt_from(source).expect("compound operator should parse")
+        else {
+            panic!("expected assignment statement");
+        };
+        assert_eq!(assign.op, Some(expected), "{source}");
+    }
+}
+
+#[test]
 fn parser_helpers_cover_brackets_keywords_and_member_names() {
-    let tokens = lex("Vec[Map[String, int32]]?\n").expect("tokens");
+    let tokens = lex("list[dict[str, int32]]?\n").expect("tokens");
     let parser = Parser::new(tokens);
     assert_eq!(parser.skip_type_tokens(0), 10);
 
     let unclosed_type =
-        lex("Vec[Map[String, int32]\n").expect_err("unclosed type brackets should fail lexing");
+        lex("list[dict[str, int32]\n").expect_err("unclosed type brackets should fail lexing");
     assert_eq!(unclosed_type.code, "AU1001");
     assert!(unclosed_type.message.contains("expected `]`"));
 
@@ -2008,7 +2272,7 @@ fn parser_reports_recursion_limits_for_nested_statements_types_and_patterns() {
     assert!(statement_error.message.contains("nesting exceeds"));
 
     let mut type_source = String::from("def main(value: ");
-    type_source.push_str(&"Vec[".repeat(depth));
+    type_source.push_str(&"list[".repeat(depth));
     type_source.push_str("int32");
     type_source.push_str(&"]".repeat(depth));
     type_source.push_str(") -> None:\n    pass\n");
@@ -2034,7 +2298,7 @@ fn parser_helpers_cover_specialization_and_format_parts() {
     let indexed = parse_expression("values[idx]").expect("index expression");
     assert!(matches!(indexed.kind, ExprKind::Index { .. }));
 
-    let multi_index = parse_expression("triple[String, int32, Option[bool]]")
+    let multi_index = parse_expression("triple[str, int32, Option[bool]]")
         .expect("comma-separated index expression");
     let ExprKind::Index { index, .. } = multi_index.kind else {
         panic!("a bare multi-type suffix remains an index until callable context resolves it");
@@ -2205,8 +2469,8 @@ fn phase72_parser_keeps_index_specialization_and_postfix_chains_distinct() {
     };
     assert!(matches!(object.kind, ExprKind::Slice { .. }));
 
-    let specialized =
-        parse_expression("Vec[int32]()[1:]").expect("specialization, call, and slice should chain");
+    let specialized = parse_expression("list[int32]()[1:]")
+        .expect("specialization, call, and slice should chain");
     let ExprKind::Slice { object, .. } = specialized.kind else {
         panic!("outer postfix should be a slice");
     };
@@ -2401,7 +2665,7 @@ fn parser_helper_functions_cover_assignment_targets_and_span_offsets() {
                                                             ty: TypeRef::named(
                                                                 "float64",
                                                                 vec![TypeRef::named(
-                                                                    "Vec",
+                                                                    "list",
                                                                     vec![TypeRef::named(
                                                                         "int32",
                                                                         vec![],
@@ -2441,9 +2705,9 @@ fn parser_helper_functions_cover_assignment_targets_and_span_offsets() {
     assert_eq!(expr.span.column, 4);
 
     let mut ty = TypeRef::named(
-        "Map",
+        "dict",
         vec![TypeRef::named(
-            "Vec",
+            "list",
             vec![TypeRef::named("int32", vec![], false, span)],
             false,
             span,
@@ -2593,6 +2857,131 @@ fn parse_control_flow_patterns_and_helper_errors_cover_more_branches() {
 }
 
 #[test]
+fn match_guards_and_or_patterns_parse_in_statement_and_expression_forms() {
+    let stmt = parse_stmt_from(
+        "match value:\n    case Pair(1 | 2, (3 | 4)) if ready and mask | 1 == 3:\n        pass\n    case _:\n        pass\n",
+    )
+    .expect("guarded nested or-pattern should parse");
+    let Stmt::Match(stmt) = stmt else {
+        panic!("expected match statement");
+    };
+    let Pattern::Variant(variant) = &stmt.arms[0].pattern else {
+        panic!("expected variant pattern");
+    };
+    assert!(matches!(variant.subpatterns[0], Pattern::Or(_)));
+    assert!(matches!(variant.subpatterns[1], Pattern::Or(_)));
+    assert!(stmt.arms[0].guard.is_some());
+    assert!(stmt.arms[1].guard.is_none());
+
+    let expr = parse_expression("match value:\n    case 1 | 2 if ready: 10\n    case _: 20\n")
+        .expect("guarded match expression should parse");
+    let ExprKind::Match { arms, .. } = expr.kind else {
+        panic!("expected match expression");
+    };
+    assert!(matches!(arms[0].pattern, Pattern::Or(_)));
+    assert!(arms[0].guard.is_some());
+
+    let missing = parse_stmt_from("match value:\n    case 1 |:\n        pass\n")
+        .expect_err("missing alternative should be rejected");
+    assert_eq!(missing.code, "AU1101");
+    assert!(missing.message.contains("requires a pattern after"));
+}
+
+#[test]
+fn s1_frontend_every_pattern_form_can_anchor_an_or_pattern_at_its_own_source_span() {
+    for (source, expected) in [
+        ("(1 | 2) | 3", Span::new(1, 2)),
+        ("Choice(1) | Choice(2)", Span::new(1, 1)),
+        ("(1, value) | (2, value)", Span::new(1, 1)),
+        ("value | value", Span::new(1, 1)),
+        ("1 | 2", Span::new(1, 1)),
+        ("_ | _", Span::new(1, 1)),
+    ] {
+        let pattern = parse_pattern_from(source).expect("or-pattern should parse");
+        let Pattern::Or(pattern) = pattern else {
+            panic!("expected `{source}` to produce an or-pattern");
+        };
+        assert_eq!(pattern.span, expected, "{source}");
+        assert_eq!(pattern.alternatives.len(), 2, "{source}");
+    }
+}
+
+#[test]
+fn or_patterns_preserve_every_alternative_in_source_order() {
+    let pattern = parse_pattern_from("1 | 2 | 3").expect("three-way or-pattern should parse");
+    let Pattern::Or(pattern) = pattern else {
+        panic!("expected an or-pattern");
+    };
+
+    assert_eq!(pattern.span, Span::new(1, 1));
+    let values = pattern
+        .alternatives
+        .iter()
+        .map(|alternative| match alternative {
+            Pattern::Literal(LiteralPattern {
+                kind: LiteralPatternKind::Int(value),
+                ..
+            }) => *value,
+            other => panic!("expected integer alternative, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        values,
+        vec![
+            crate::integer::IntegerValue::from_literal(1),
+            crate::integer::IntegerValue::from_literal(2),
+            crate::integer::IntegerValue::from_literal(3),
+        ]
+    );
+}
+
+#[test]
+fn s1_frontend_fstring_parser_treats_braces_inside_triple_quoted_arguments_as_string_content() {
+    let expression = parse_expression("f\"{echo('''left } right''')}\"")
+        .expect("triple-quoted argument content must not close interpolation");
+    let ExprKind::FString(parts) = expression.kind else {
+        panic!("expected an f-string");
+    };
+    let [FormatPart::Expr(interpolation)] = parts.as_slice() else {
+        panic!("expected exactly one interpolation");
+    };
+    let ExprKind::Call { args, .. } = &interpolation.kind else {
+        panic!("expected an interpolated call");
+    };
+    assert!(matches!(
+        args.as_slice(),
+        [Argument {
+            value: Expr {
+                kind: ExprKind::String(value),
+                ..
+            },
+            ..
+        }] if value == "left } right"
+    ));
+}
+
+#[test]
+fn s1_frontend_fstring_format_specs_require_a_real_expression_before_the_colon() {
+    let error = parse_expression("f\"{:>10}\"")
+        .expect_err("a format specification without an expression must fail");
+    assert_eq!(error.code, "AU1101");
+    assert!(error
+        .message
+        .contains("invalid f-string interpolation `:>10`"));
+}
+
+#[test]
+fn s1_frontend_multi_element_tuple_types_reject_a_trailing_comma() {
+    let error = parse_item_from("def accept(value: (int64, str,)):\n    pass\n")
+        .expect_err("only singleton tuple types accept a trailing comma");
+    assert_eq!(error.code, "AU1101");
+    assert_eq!(
+        error.message,
+        "trailing commas are only allowed for singleton tuple types"
+    );
+}
+
+#[test]
 fn parser_helper_functions_cover_format_offsets_and_specialization_checks() {
     let tokens = lex("Value[int32](1)\n").expect("tokenization should succeed");
     let mut parser = Parser::new(tokens);
@@ -2646,7 +3035,7 @@ fn offset_helpers_cover_fstring_expression_parts() {
     assert_eq!(inner.span.line, 7);
     assert!(inner.span.column >= 3);
 
-    let mut specialized = parse_expression("f\"value={Box[Vec[int32]](items[0])}\"")
+    let mut specialized = parse_expression("f\"value={Box[list[int32]](items[0])}\"")
         .expect("specialized f-string interpolation should parse");
     offset_expr_span(&mut specialized, 9, 5);
     let ExprKind::FString(specialized_parts) = &specialized.kind else {
@@ -2693,7 +3082,7 @@ fn offset_helpers_cover_fstring_expression_parts() {
     let mut type_ref = TypeRef::named(
         "Box",
         vec![TypeRef::named(
-            "Vec",
+            "list",
             vec![TypeRef::named("int32", Vec::new(), false, Span::new(1, 11))],
             false,
             Span::new(1, 7),
@@ -2709,7 +3098,7 @@ fn offset_helpers_cover_fstring_expression_parts() {
     assert_eq!(inner_args[0].span, Span::new(12, 15));
 
     let mut function_type = TypeRef::function(
-        vec![TypeRef::named("String", Vec::new(), false, Span::new(1, 7))],
+        vec![TypeRef::named("str", Vec::new(), false, Span::new(1, 7))],
         TypeRef::named("bool", Vec::new(), false, Span::new(1, 18)),
         Span::new(1, 3),
     );
@@ -2724,9 +3113,66 @@ fn offset_helpers_cover_fstring_expression_parts() {
 }
 
 #[test]
+fn fstring_interpolation_preserves_nested_operator_source_spans() {
+    let expression = parse_expression(
+        "f\"{left if ready else right}|{needle in haystack}|{low < value <= high}\"",
+    )
+    .expect("supported operators should parse inside f-string interpolations");
+
+    let ExprKind::FString(parts) = expression.kind else {
+        panic!("expected an f-string expression");
+    };
+    let [FormatPart::Expr(conditional), FormatPart::Literal(first_separator), FormatPart::Expr(membership), FormatPart::Literal(second_separator), FormatPart::Expr(comparison)] =
+        parts.as_slice()
+    else {
+        panic!("expected three interpolations separated by literal pipes");
+    };
+    assert_eq!(first_separator, "|");
+    assert_eq!(second_separator, "|");
+
+    let ExprKind::Conditional {
+        then_expr,
+        condition,
+        else_expr,
+    } = &conditional.kind
+    else {
+        panic!("expected a conditional interpolation");
+    };
+    assert_eq!(conditional.span, Span::new(1, 4));
+    assert_eq!(then_expr.span, Span::new(1, 4));
+    assert_eq!(condition.span, Span::new(1, 12));
+    assert_eq!(else_expr.span, Span::new(1, 23));
+
+    let ExprKind::Membership {
+        value,
+        container,
+        operator_span,
+        ..
+    } = &membership.kind
+    else {
+        panic!("expected a membership interpolation");
+    };
+    assert_eq!(membership.span, Span::new(1, 31));
+    assert_eq!(value.span, Span::new(1, 31));
+    assert_eq!(*operator_span, Span::new(1, 38));
+    assert_eq!(container.span, Span::new(1, 41));
+
+    let ExprKind::CompareChain { first, links } = &comparison.kind else {
+        panic!("expected a comparison-chain interpolation");
+    };
+    assert_eq!(comparison.span, Span::new(1, 52));
+    assert_eq!(first.span, Span::new(1, 52));
+    assert_eq!(links.len(), 2);
+    assert_eq!(links[0].op_span, Span::new(1, 56));
+    assert_eq!(links[0].operand.span, Span::new(1, 58));
+    assert_eq!(links[1].op_span, Span::new(1, 64));
+    assert_eq!(links[1].operand.span, Span::new(1, 67));
+}
+
+#[test]
 fn fstring_map_comprehension_preserves_exact_nested_source_spans() {
     let expression = parse_expression(
-        "f\"mapped={ {Box[def(mut Vec[int32], own (String, bool)) -> bool](lambda own item, mut sink: item): right for (left, (right,)) in pairs if ready} }\"",
+        "f\"mapped={ {Box[def(mut list[int32], own (str, bool)) -> bool](lambda own item, mut sink: item): right for (left, (right,)) in pairs if ready} }\"",
     )
     .expect("a map comprehension with nested typed expressions should parse in an f-string");
 
@@ -2746,7 +3192,7 @@ fn fstring_map_comprehension_preserves_exact_nested_source_spans() {
         panic!("expected a map comprehension");
     };
     assert_eq!(key.span, Span::new(1, 13));
-    assert_eq!(value.span, Span::new(1, 100));
+    assert_eq!(value.span, Span::new(1, 98));
 
     let ExprKind::Call { callee, args } = &key.kind else {
         panic!("expected the map key to be a specialized call");
@@ -2765,21 +3211,21 @@ fn fstring_map_comprehension_preserves_exact_nested_source_spans() {
     assert_eq!(params[0].mode, ParamMode::BorrowMut);
     assert_eq!(params[0].span, Span::new(1, 21));
     assert_eq!(params[0].ty.span, Span::new(1, 25));
-    let (_, vec_args) = named_type_ref(&params[0].ty).expect("expected Vec parameter type");
-    assert_eq!(vec_args[0].span, Span::new(1, 29));
+    let (_, list_args) = named_type_ref(&params[0].ty).expect("expected list parameter type");
+    assert_eq!(list_args[0].span, Span::new(1, 30));
 
     assert_eq!(params[1].mode, ParamMode::Own);
-    assert_eq!(params[1].span, Span::new(1, 37));
-    assert_eq!(params[1].ty.span, Span::new(1, 41));
+    assert_eq!(params[1].span, Span::new(1, 38));
+    assert_eq!(params[1].ty.span, Span::new(1, 42));
     let tuple_elements = params[1]
         .ty
         .elements()
         .expect("expected tuple parameter type");
-    assert_eq!(tuple_elements[0].span, Span::new(1, 42));
-    assert_eq!(tuple_elements[1].span, Span::new(1, 50));
-    assert_eq!(return_type.span, Span::new(1, 60));
+    assert_eq!(tuple_elements[0].span, Span::new(1, 43));
+    assert_eq!(tuple_elements[1].span, Span::new(1, 48));
+    assert_eq!(return_type.span, Span::new(1, 58));
 
-    assert_eq!(args[0].span, Span::new(1, 66));
+    assert_eq!(args[0].span, Span::new(1, 64));
     let ExprKind::Lambda {
         params: lambda_params,
         body,
@@ -2788,12 +3234,12 @@ fn fstring_map_comprehension_preserves_exact_nested_source_spans() {
         panic!("expected the specialized call argument to be a lambda");
     };
     assert_eq!(lambda_params[0].mode, ParamMode::Own);
-    assert_eq!(lambda_params[0].span, Span::new(1, 77));
+    assert_eq!(lambda_params[0].span, Span::new(1, 75));
     assert_eq!(lambda_params[1].mode, ParamMode::BorrowMut);
-    assert_eq!(lambda_params[1].span, Span::new(1, 87));
-    assert_eq!(body.span, Span::new(1, 93));
+    assert_eq!(lambda_params[1].span, Span::new(1, 85));
+    assert_eq!(body.span, Span::new(1, 91));
 
-    assert_eq!(clauses[0].span, Span::new(1, 106));
+    assert_eq!(clauses[0].span, Span::new(1, 104));
     let BindingTarget::Tuple {
         elements,
         span: target_span,
@@ -2801,11 +3247,11 @@ fn fstring_map_comprehension_preserves_exact_nested_source_spans() {
     else {
         panic!("expected a tuple comprehension target");
     };
-    assert_eq!(*target_span, Span::new(1, 111));
+    assert_eq!(*target_span, Span::new(1, 109));
     assert!(matches!(
         &elements[0],
         BindingTarget::Name { name, span }
-            if name == "left" && *span == Span::new(1, 111)
+            if name == "left" && *span == Span::new(1, 109)
     ));
     let BindingTarget::Tuple {
         elements: nested,
@@ -2814,14 +3260,14 @@ fn fstring_map_comprehension_preserves_exact_nested_source_spans() {
     else {
         panic!("expected a recursively nested tuple target");
     };
-    assert_eq!(*nested_span, Span::new(1, 118));
+    assert_eq!(*nested_span, Span::new(1, 116));
     assert!(matches!(
         &nested[0],
         BindingTarget::Name { name, span }
-            if name == "right" && *span == Span::new(1, 118)
+            if name == "right" && *span == Span::new(1, 116)
     ));
-    assert_eq!(clauses[0].iterable.span, Span::new(1, 130));
-    assert_eq!(clauses[0].filters[0].span, Span::new(1, 139));
+    assert_eq!(clauses[0].iterable.span, Span::new(1, 128));
+    assert_eq!(clauses[0].filters[0].span, Span::new(1, 137));
 }
 
 #[test]
@@ -2834,12 +3280,12 @@ fn parser_covers_blank_lines_empty_literals_and_specialization_offsets() {
         parse_item_from("enum Flag:\n\n    On\n").expect("enum with blank lines should parse");
     assert_eq!(enum_decl.name(), "Flag");
 
-    let trait_decl = parse_item_from("trait Named:\n\n    def name(self) -> String\n")
+    let trait_decl = parse_item_from("trait Named:\n\n    def name(self) -> str\n")
         .expect("trait with blank lines should parse");
     assert_eq!(trait_decl.name(), "Named");
 
     let impl_decl = parse_item_from(
-        "impl Named for Box:\n\n    def name(self) -> String:\n        return \"box\"\n",
+        "impl Named for Box:\n\n    def name(self) -> str:\n        return \"box\"\n",
     )
     .expect("impl with blank lines should parse");
     assert_eq!(impl_decl.name(), "Named");
@@ -2858,9 +3304,6 @@ fn parser_covers_blank_lines_empty_literals_and_specialization_offsets() {
     let empty_map = parse_expression("{}").expect("empty map should parse");
     assert!(matches!(empty_map.kind, ExprKind::Map(ref items) if items.is_empty()));
 
-    let empty_set = parse_expression("Set{}").expect("empty set should parse");
-    assert!(matches!(empty_set.kind, ExprKind::Set(ref items) if items.is_empty()));
-
     let tokens = lex("Value[int32].make()\n").expect("tokenization should succeed");
     let mut parser = Parser::new(tokens);
     parser.index = 1;
@@ -2870,6 +3313,14 @@ fn parser_covers_blank_lines_empty_literals_and_specialization_offsets() {
     };
     assert!(parser.starts_specialization_suffix(&expr));
     assert_eq!(parser.skip_bracketed_tokens(1), Some(4));
+
+    for expression in [
+        "list[int64].with_capacity(4)",
+        "dict[str, int64].with_capacity(4)",
+        "set[str].with_capacity(4)",
+    ] {
+        parse_expression(expression).expect("builtin collection associated call should parse");
+    }
 
     let unclosed_specialization =
         lex("Value[int32\n").expect_err("unclosed specialization should fail lexing");
@@ -3073,23 +3524,12 @@ fn parser_preserves_match_layout_islands_nested_in_delimiters() {
 }
 
 #[test]
-fn parser_additional_payload_borrow_return_and_match_expression_edges_are_covered() {
-    let mixed_payload = parse_item_from("enum Bad:\n    Value(first: int32, String)\n")
+fn parser_additional_payload_return_and_match_expression_edges_are_covered() {
+    let mixed_payload = parse_item_from("enum Bad:\n    Value(first: int32, str)\n")
         .expect_err("mixed named and positional payloads should fail");
     assert!(mixed_payload
         .message
         .contains("enum variant payloads must be either all named or all positional"));
-
-    // ADR-0022 supersedes ADR-0009's borrowed-return syntax, so the labelled
-    // form no longer parses at all.
-    let borrowed_return = parse_item_from(
-        "def borrow_return(value: borrow[src] String) -> borrow mut[src] String:\n    return value\n",
-    )
-    .expect_err("borrowed parameter and return labels were removed");
-    assert_eq!(
-        borrowed_return.message,
-        "`borrow T` was removed; write `T` for shared access"
-    );
 
     let match_expr = parse_expression(
         ["match mut value:", "    case Ready: 1", "    case _: 2"]
@@ -3119,6 +3559,7 @@ fn parser_additional_payload_borrow_return_and_match_expression_edges_are_covere
             }),
             capability: ReceiverKind::Borrow,
             arms: vec![MatchExprArm {
+                guard: None,
                 pattern: Pattern::Wildcard(span),
                 value: Expr {
                     kind: ExprKind::Int(1),
@@ -3285,7 +3726,7 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
     let whitespace_heavy_trait = parse_item_from(
         [
             "trait Show:",
-            "    def show(self) -> String",
+            "    def show(self) -> str",
             "    ",
             "    pass",
         ]
@@ -3301,7 +3742,7 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
     let whitespace_heavy_impl = parse_item_from(
         [
             "impl Show for Holder:",
-            "    def show(self) -> String:",
+            "    def show(self) -> str:",
             "        return \"ok\"",
             "    ",
             "    pass",
@@ -3373,15 +3814,15 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
     let parser = Parser::new(tokens);
     assert_eq!(parser.skip_bracketed_tokens(0), Some(5));
 
-    let fstring = parse_expression("f\"{Set{1}}\"")
+    let fstring = parse_expression("f\"{{1}}\"")
         .expect("f-string interpolation with nested set braces should parse");
     assert!(matches!(fstring.kind, ExprKind::FString(_)));
 
     let trait_with_default_method = parse_item_from(
         [
             "trait Named:",
-            "    def name(self) -> String",
-            "    def label(self) -> String:",
+            "    def name(self) -> str",
+            "    def label(self) -> str:",
             "        return self.name()",
         ]
         .join("\n")
@@ -3525,7 +3966,7 @@ fn capability_prefixes_parse_as_bare_mut_and_own() {
     // ADR-0022: bare means shared everywhere, `mut` is mutable access, and
     // `own` is ownership transfer. `borrow` no longer appears in any position.
     let params = parse_item_from(
-        "def f(shared: String, mutable: mut String, owned: own String) -> int32:\n    return 0\n",
+        "def f(shared: str, mutable: mut str, owned: own str) -> int32:\n    return 0\n",
     )
     .expect("the three parameter capabilities should parse");
     let Item::Function(function) = params else {
@@ -3589,64 +4030,6 @@ fn capability_prefixes_parse_as_bare_mut_and_own() {
 }
 
 #[test]
-fn retired_borrow_spellings_report_their_exact_replacement() {
-    // `borrow` stays reserved for one compatibility window, parsed only far
-    // enough to say what to write instead.
-    for (source, expected) in [
-        (
-            "def f(value: borrow String):\n    pass\n",
-            "`borrow T` was removed; write `T` for shared access",
-        ),
-        (
-            "def f(value: borrow mut String):\n    pass\n",
-            "`borrow mut T` was removed; write `mut T`",
-        ),
-        (
-            "class C:\n    value: int32\n    def read(borrow self) -> int32:\n        return 0\n",
-            "`borrow self` was removed; write `self` for a shared receiver",
-        ),
-        (
-            "class C:\n    value: int32\n    def bump(borrow mut self):\n        pass\n",
-            "`borrow mut self` was removed; write `mut self`",
-        ),
-        (
-            "match borrow value:\n    case _:\n        pass\n",
-            "`match borrow` was removed; write `match` for shared access",
-        ),
-        (
-            "match borrow mut value:\n    case _:\n        pass\n",
-            "`match borrow mut` was removed; write `match mut`",
-        ),
-        (
-            "for item in borrow values:\n    pass\n",
-            "`in borrow` was removed; write `in` for shared iteration",
-        ),
-        (
-            "for item in borrow mut values:\n    pass\n",
-            "`in borrow mut` was removed; write `in mut`",
-        ),
-    ] {
-        let parsed = if source.starts_with("class") || source.starts_with("def") {
-            parse_item_from(source).map(|_| ())
-        } else {
-            parse_stmt_from(source).map(|_| ())
-        };
-        let error = parsed.expect_err(source);
-        assert_eq!(error.message, expected, "{source}");
-    }
-}
-
-#[test]
-fn retired_borrowed_returns_report_their_replacement() {
-    let error = parse_item_from("def pick(a: String) -> borrow String:\n    return a\n")
-        .expect_err("borrowed returns were removed with ADR-0009's syntax");
-    assert_eq!(
-        error.message,
-        "borrowed returns were removed; return an owned value instead"
-    );
-}
-
-#[test]
 fn misplaced_capability_prefixes_name_the_valid_positions() {
     let type_position_message = |capability: &str| {
         format!(
@@ -3661,9 +4044,9 @@ fn misplaced_capability_prefixes_name_the_valid_positions() {
 
     for capability in ["mut", "own"] {
         for source in [
-            format!("class C:\n    value: {capability} String\n"),
-            format!("enum Maybe:\n    Some({capability} String)\n"),
-            format!("def pick(value: String) -> {capability} String:\n    return value\n"),
+            format!("class C:\n    value: {capability} str\n"),
+            format!("enum Maybe:\n    Some({capability} str)\n"),
+            format!("def pick(value: str) -> {capability} str:\n    return value\n"),
             format!(
                 "def convert(value: int32) -> int32:\n    return value as {capability} int32\n"
             ),
@@ -3674,7 +4057,7 @@ fn misplaced_capability_prefixes_name_the_valid_positions() {
         }
 
         let source = format!(
-            "def use(value: String):\n    pass\n\ndef main():\n    value = \"aura\"\n    use({capability} value)\n"
+            "def use(value: str):\n    pass\n\ndef main():\n    value = \"aura\"\n    use({capability} value)\n"
         );
         let error = parse(&source).expect_err(&source);
         assert_eq!(error.code, "AU1101", "{source}");
@@ -3687,7 +4070,7 @@ fn misplaced_capability_prefixes_name_the_valid_positions() {
 
     // Existing capability-bearing positions remain unambiguous.
     parse_item_from(
-        "def use(shared: String, changed: mut String, consumed: own String):\n    mut local = shared\n",
+        "def use(shared: str, changed: mut str, consumed: own str):\n    mut local = shared\n",
     )
     .expect("parameter capabilities and mutable local bindings remain valid");
     parse_stmt_from("for item in mut values:\n    pass\n")

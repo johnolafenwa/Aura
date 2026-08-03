@@ -5,7 +5,7 @@ def task_value(value: int32) -> int32:
     return value
 
 
-def read_control(expected: String) -> bool:
+def read_control(expected: str) -> bool:
     match io.read_line():
         case Result.Ok(Option.Some(line)):
             return line == expected
@@ -35,9 +35,9 @@ def main() -> int32:
 
     mut checksum: int32 = 0
     with TaskGroup() as group:
-        mut tasks = Vec[Task[int32]]()
+        mut tasks = list[Task[int32]]()
         for value in range(task_count):
-            tasks.push(group.start(task_value, value))
+            tasks.append(group.start(task_value, value))
 
         match wait_all(tasks):
             case WaitAll.Ready(results):

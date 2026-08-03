@@ -1,8 +1,8 @@
-def trace_singleton(label: String, value: int32) -> (int32,):
+def trace_singleton(label: str, value: int32) -> (int32,):
     print(label)
     return (value,)
 
-def trace_text(label: String, value: own String) -> (String,):
+def trace_text(label: str, value: own str) -> (str,):
     print(label)
     return (value,)
 
@@ -55,10 +55,10 @@ def main() -> int32:
     )
 
     score: float32 = 1.25
-    generic_left = nested_with_score[String]("aura", score)
-    generic_same = nested_with_score[String]("aura", score)
+    generic_left = nested_with_score[str]("aura", score)
+    generic_same = nested_with_score[str]("aura", score)
     print(generic_left == generic_same)
-    print(generic_left != nested_with_score[String]("aura", 2.5))
+    print(generic_left != nested_with_score[str]("aura", 2.5))
     print(generic_left == generic_same)
 
     value: float32 = 1.25

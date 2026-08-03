@@ -2,14 +2,14 @@
 ## Expects: "circle" then 314
 
 trait Shape:
-    def name(self) -> String
+    def name(self) -> str
     def area(self) -> int32
 
 class Circle:
     radius: int32
 
 impl Shape for Circle:
-    def name(self) -> String:
+    def name(self) -> str:
         return "circle"
 
     def area(self) -> int32:

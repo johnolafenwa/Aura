@@ -1,5 +1,5 @@
 error[AU1101]: `mut` is not valid in a type position; capability modifiers belong only on parameters and receivers or on supported `for` and `match` selectors (`mut` also declares mutable local bindings)
  --> crates/aura-compiler/tests/fixtures/parse-fail/capability_prefix_field_type_rejected.au:2:11
   |
-2 |     text: mut String
+2 |     text: mut str
   |           ^

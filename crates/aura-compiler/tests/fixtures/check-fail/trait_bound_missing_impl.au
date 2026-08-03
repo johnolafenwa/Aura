@@ -1,8 +1,8 @@
 trait Greeter:
-    def greet(self) -> String
+    def greet(self) -> str
 
 class User:
-    name: String
+    name: str
 
 def speak[T: Greeter](value: T):
     print(value.greet())

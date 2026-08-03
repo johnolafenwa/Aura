@@ -1,5 +1,5 @@
-error[AU2004]: `String.from_bytes` has no parameter named `encoding`
- --> crates/aura-compiler/tests/fixtures/check-fail/string_from_bytes_encoding_reserved.au:2:30
+error[AU2004]: `str.from_bytes` has no parameter named `encoding`
+ --> crates/aura-compiler/tests/fixtures/check-fail/string_from_bytes_encoding_reserved.au:2:27
   |
-2 |     text = String.from_bytes(encoding="utf-8")
-  |                              ^
+2 |     text = str.from_bytes(encoding="utf-8")
+  |                           ^

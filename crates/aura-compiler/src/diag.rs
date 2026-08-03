@@ -41,6 +41,7 @@ pub struct Diagnostic {
 pub struct DiagnosticDetails {
     pub secondary_spans: Vec<LabeledSpan>,
     pub notes: Vec<String>,
+    pub assertion_operands: Vec<AssertionOperand>,
     pub help: Vec<String>,
     pub edits: Vec<DiagnosticEdit>,
     pub call_frames: Vec<RuntimeCallFrame>,
@@ -137,7 +138,7 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
     DiagnosticCodeInfo {
         code: "AU2008",
         band: "names/types",
-        title: "callable equality",
+        title: "equality unavailable",
     },
     DiagnosticCodeInfo {
         code: "AU2999",
@@ -224,6 +225,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         band: "runtime",
         title: "array shape or reduction violation",
     },
+    DiagnosticCodeInfo {
+        code: "AU4008",
+        band: "runtime",
+        title: "collection value not found",
+    },
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -238,6 +244,53 @@ pub struct DiagnosticEdit {
     pub end: Span,
     pub replacement: String,
     pub applicability: String,
+}
+
+const MAX_ASSERTION_OPERAND_BYTES: usize = 4_096;
+const ASSERTION_OPERAND_TRUNCATION_SUFFIX: &str = "... (truncated)";
+
+/// One value captured while evaluating an introspected assertion condition.
+///
+/// `value` is the value's ordinary Aura `str()` rendering, bounded for both
+/// human and structured diagnostics. The raw identifier serializes as the
+/// public JSON field `type`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AssertionOperand {
+    pub label: String,
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub value: String,
+    pub truncated: bool,
+}
+
+impl AssertionOperand {
+    /// Builds an assertion operand whose rendered value occupies at most
+    /// 4,096 UTF-8 bytes. Truncated values always end with the fixed
+    /// `... (truncated)` suffix, and the retained prefix ends on a character
+    /// boundary.
+    pub fn bounded(
+        label: impl Into<String>,
+        type_name: impl Into<String>,
+        rendered_value: impl Into<String>,
+    ) -> Self {
+        let mut value = rendered_value.into();
+        let truncated = value.len() > MAX_ASSERTION_OPERAND_BYTES;
+        if truncated {
+            let mut prefix_bytes =
+                MAX_ASSERTION_OPERAND_BYTES - ASSERTION_OPERAND_TRUNCATION_SUFFIX.len();
+            while !value.is_char_boundary(prefix_bytes) {
+                prefix_bytes -= 1;
+            }
+            value.truncate(prefix_bytes);
+            value.push_str(ASSERTION_OPERAND_TRUNCATION_SUFFIX);
+        }
+        Self {
+            label: label.into(),
+            r#type: type_name.into(),
+            value,
+            truncated,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -333,6 +386,8 @@ pub struct StructuredDiagnostic {
     pub primary_span: Option<StructuredSpan>,
     pub secondary_spans: Vec<StructuredSpan>,
     pub notes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assertion_operands: Vec<AssertionOperand>,
     pub help: Vec<String>,
     pub edits: Vec<StructuredEdit>,
     #[serde(default)]
@@ -353,6 +408,7 @@ impl Diagnostic {
             details: Box::new(DiagnosticDetails {
                 secondary_spans: Vec::new(),
                 notes: Vec::new(),
+                assertion_operands: Vec::new(),
                 help: Vec::new(),
                 edits: Vec::new(),
                 call_frames: Vec::new(),
@@ -414,6 +470,17 @@ impl Diagnostic {
         self
     }
 
+    pub fn with_assertion_operand(
+        mut self,
+        label: impl Into<String>,
+        type_name: impl Into<String>,
+        rendered_value: impl Into<String>,
+    ) -> Self {
+        self.assertion_operands
+            .push(AssertionOperand::bounded(label, type_name, rendered_value));
+        self
+    }
+
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
         self.help.push(help.into());
         self
@@ -469,6 +536,7 @@ impl Diagnostic {
                 })
                 .collect(),
             notes: self.notes.clone(),
+            assertion_operands: self.assertion_operands.clone(),
             help: self.help.clone(),
             edits: self
                 .edits
@@ -540,6 +608,12 @@ impl Diagnostic {
         }
         for note in &self.notes {
             rendered.push_str(&format!("\n  = note: {}", note));
+        }
+        for operand in &self.assertion_operands {
+            rendered.push_str(&format!(
+                "\n  = note: {} = {}",
+                operand.label, operand.value
+            ));
         }
         if !self.call_frames.is_empty() {
             let frames = self

@@ -1,7 +1,7 @@
 # Edge test: Class implementing 3+ traits and using them in a multi-bound generic
 
 trait Printable:
-    def label(self) -> String
+    def label(self) -> str
 
 trait Measurable:
     def measure(self) -> int32
@@ -10,11 +10,11 @@ trait Validatable:
     def is_valid(self) -> bool
 
 class Item:
-    name: String
+    name: str
     weight: int32
 
 impl Printable for Item:
-    def label(self) -> String:
+    def label(self) -> str:
         return self.name.clone()
 
 impl Measurable for Item:
@@ -26,11 +26,11 @@ impl Validatable for Item:
         return self.weight > 0
 
 # Function with two trait bounds
-def describe[T: Printable + Measurable](item: T) -> String:
+def describe[T: Printable + Measurable](item: T) -> str:
     return f"{item.label()} weighs {item.measure()}"
 
 # Function with all three trait bounds
-def full_check[T: Printable + Measurable + Validatable](item: T) -> String:
+def full_check[T: Printable + Measurable + Validatable](item: T) -> str:
     if item.is_valid():
         return f"{item.label()}: valid ({item.measure()})"
     return f"{item.label()}: invalid"

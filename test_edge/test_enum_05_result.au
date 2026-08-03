@@ -1,13 +1,13 @@
-def safe_divide(a: int32, b: int32) -> Result[int32, String]:
+def safe_divide(a: int32, b: int32) -> Result[int32, str]:
     if b == 0:
         return Result.Err("division by zero")
     return Result.Ok(a // b)
 
 def main() -> int32:
-    r1: Result[int32, String] = safe_divide(10, 2)
-    r2: Result[int32, String] = safe_divide(10, 0)
-    r3: Result[int32, String] = safe_divide(0, 5)
-    r4: Result[int32, String] = safe_divide(100, 3)
+    r1: Result[int32, str] = safe_divide(10, 2)
+    r2: Result[int32, str] = safe_divide(10, 0)
+    r3: Result[int32, str] = safe_divide(0, 5)
+    r4: Result[int32, str] = safe_divide(100, 3)
 
     match own r1:
         case Result.Ok(v):

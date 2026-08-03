@@ -1,5 +1,0 @@
-error[AU2002]: empty map literals require an expected `Map[K, V]` type annotation in the bootstrap compiler
- --> crates/aura-compiler/tests/fixtures/check-fail/map_empty_literal_requires_type.au:2:14
-  |
-2 |     values = {}
-  |              ^

@@ -1,9 +1,9 @@
 # Test borrowing the same value multiple times (should be fine for immutable borrows)
 
-def first(s: str) -> String:
+def first(s: str) -> str:
     return s + "_first"
 
-def second(s: str) -> String:
+def second(s: str) -> str:
     return s + "_second"
 
 def main() -> int32:

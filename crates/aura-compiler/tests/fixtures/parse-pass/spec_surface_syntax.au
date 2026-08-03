@@ -10,7 +10,7 @@ class Node:
 class Box[T]:
     value: T
 
-def inspect(result: Result[int32, String]):
+def inspect(result: Result[int32, str]):
     match result:
         case Ok(value):
             print(f"value={value}")

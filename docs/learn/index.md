@@ -59,8 +59,8 @@ The chapters are ordered so that each idea has a practical reason to exist befor
 1. [Getting Aura Running](/learn/install-and-run) — install the CLI, run your first program, build your first binary.
 2. [The First Program](/learn/small-programs) — bindings, functions, control flow, and small decisions made with `match`.
 3. [Shaping Data](/learn/data-modeling) — classes, enums, methods, and the patterns that keep domain data honest.
-4. [Working With Collections](/learn/collections) — `Vec[T]`, `Map[K, V]`,
-   `Set[T]`, eager owned comprehensions, owned Vec/String slices, and fixed
+4. [Working With Collections](/learn/collections) — `list[T]`, `dict[K, V]`,
+   `set[T]`, eager owned comprehensions, owned list/str slices, and fixed
    shape numeric `Array[T]` values.
 5. [Values, Moves, And Borrows](/learn/ownership-and-borrowing) — the ownership model, explained through the programs that benefit from it.
 6. [Results, Options, And `try`](/learn/results-and-options) — how Aura represents recoverable failure without hiding control flow.

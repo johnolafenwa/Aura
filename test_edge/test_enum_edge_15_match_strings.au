@@ -3,7 +3,7 @@
 # This test documents that string matching must use if/elif chains
 
 # Workaround using if/elif
-def greet(name: String) -> String:
+def greet(name: str) -> str:
     if name == "Alice":
         return "Hello Alice!"
     elif name == "Bob":
@@ -13,10 +13,10 @@ def greet(name: String) -> String:
 
 # Test matching on an enum that contains string payloads (this works)
 enum Label:
-    Named(String)
+    Named(str)
     Anonymous
 
-def show_label(l: own Label) -> String:
+def show_label(l: own Label) -> str:
     match own l:
         case Label.Named(n):
             return "label: " + n

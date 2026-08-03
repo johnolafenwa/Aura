@@ -126,6 +126,52 @@ impl GitRepo {
 }
 
 #[test]
+fn package_dependency_module_constants_initialize_once_before_entry() {
+    let temp = TempDir::new("aura-package-module-constants");
+    temp.write(
+        "app/Aura.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+settings = { path = "../settings" }
+"#,
+    );
+    let main_path = temp.write(
+        "app/src/main.au",
+        r#"import settings.config
+from settings.config import service_name
+
+def main():
+    print(settings.config.service_name)
+    print(service_name)
+"#,
+    );
+    temp.write(
+        "settings/Aura.toml",
+        r#"[package]
+name = "settings"
+version = "0.1.0"
+edition = "2026"
+"#,
+    );
+    temp.write(
+        "settings/src/config.au",
+        r#"def initialize() -> str:
+    print("settings")
+    return "planner"
+
+public service_name = initialize()
+"#,
+    );
+
+    let output = run_path(&main_path).expect("dependency constants should initialize");
+    assert_eq!(output.stdout, "settings\nplanner\nplanner\n");
+}
+
+#[test]
 fn manifest_rooted_src_package_resolves_local_and_path_dependencies_and_writes_lockfile() {
     let temp = TempDir::new("aura-packages-manifest-path-deps");
     temp.write(
@@ -148,10 +194,12 @@ util = { path = "../util" }
     let main_path = temp.write(
         "app/src/main.au",
         r#"import util.math
+import util.math as util_math
 import helpers.math
 
 def main() -> int32:
     print(util.math.double(value=helpers.math.triple(value=2)))
+    print(util_math.double(value=helpers.math.triple(value=2)))
     return 0
 "#,
     );
@@ -195,7 +243,7 @@ public def double(value: int32) -> int32:
     );
 
     let output = run_path(&main_path).expect("manifest-aware package should run");
-    assert_eq!(output.stdout, "12\n");
+    assert_eq!(output.stdout, "12\n12\n");
 
     let source = fs::read_to_string(&main_path).expect("main source should be readable");
     let analysis = analyze_path_source(&main_path, &source);

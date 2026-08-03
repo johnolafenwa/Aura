@@ -1,6 +1,6 @@
-def mutate(values: mut Vec[int32]) -> int32:
+def mutate(values: mut list[int32]) -> int32:
     values.clear()
     return 0
 
-def invalid(values: mut Vec[int32]) -> Vec[int32]:
+def invalid(values: mut list[int32]) -> list[int32]:
     return values[:mutate(values)]

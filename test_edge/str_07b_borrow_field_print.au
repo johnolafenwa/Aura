@@ -1,8 +1,8 @@
-# BUG INVESTIGATION: Can we print String fields of borrowed params?
+# BUG INVESTIGATION: Can we print str fields of borrowed params?
 # print(borrowed.string_field) should ideally work, as print should borrow
 
 class User:
-    name: String
+    name: str
     age: int32
 
 def show_age(user: User):

@@ -15,7 +15,7 @@ the phase that owns the failure:
 | --- | --- | --- |
 | `AU10xx` | lexical analysis | `AU1001` invalid lexical input; `AU1002` invalid f-string delimiter |
 | `AU11xx` | parsing | `AU1101` invalid syntax |
-| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` migration guidance; `AU2006` builtin method collision; `AU2007` builtin function redefinition; `AU2008` callable equality; `AU2999` general compile-time rejection |
+| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` unsupported syntax or feature; `AU2006` builtin method collision; `AU2007` builtin function redefinition; `AU2008` equality unavailable; `AU2999` general compile-time rejection |
 | `AU30xx` | ownership, borrows, and transfer | `AU3001` moved value; `AU3002` borrow violation; `AU3003` mutability violation; `AU3004` ownership mode; `AU3005` non-copy indexed read; `AU3006` non-copy indexed compound assignment; `AU3007` non-cloneable state duplication; `AU3008` non-transferable task/Queue boundary; `AU3009` single-consumer task-result duplication |
 | `AU40xx` | runtime-checked traps | `AU4001` general runtime trap; `AU4002` arithmetic overflow or underflow; `AU4003` bounds or lookup violation; `AU4004` zero divisor; `AU4005` resource, allocation, or I/O failure; `AU4006` invalid runtime configuration; `AU4007` numeric Array shape or reduction violation |
 
@@ -39,7 +39,7 @@ tool to omit the code.
 shadow a builtin member of the implementation's builtin target. The rule covers
 every builtin target, from the runtime handles `Queue[T]`, `Task[T]`,
 `TaskGroup`, `random.Rng`, `fs.File`, and the `net` and `process` handles, to
-the builtin value types such as `String`, `Vec[T]`, `Map[K, V]`, `Set[T]`,
+the builtin value types such as `str`, `list[T]`, `dict[K, V]`, `set[T]`,
 `Duration`, and the scalar types. Its guidance requires the trait method to be
 renamed; backend dispatch is never selected by which implementation happens to
 run first.
@@ -50,14 +50,16 @@ surface is closed, so the declaration must be renamed. This rejection is
 distinct from the `AU2006` method collision: it covers free functions rather
 than trait methods on a builtin target.
 
-`AU2008` rejects `==` and `!=` when either operand is a callable. Named
-function values, capture-free closures, and capturing closures all receive the
-same diagnostic: `callable equality is not supported; compare results or use
-an explicit discriminant`. Aura does not expose backend code-pointer or
-closure-environment identity as language-level equality.
+`AU2008` reports an unmet equality obligation. It covers direct `==` and `!=`
+and every collection operation that depends on equality: membership,
+`list.remove`, `list.index`, `list.count`, set element insertion, and
+dictionary-key use. Named function values, closures, `random.Rng`, opaque FFI
+handles, and values containing any of those types do not define equality.
+The diagnostic names the unavailable relation before execution can reach a
+backend identity comparison.
 
 `AU4007` is the numeric Array structural runtime diagnostic. It reports
-rank-zero or negative-dimension construction, `from_vec` count mismatch,
+rank-zero or negative-dimension construction, `from_list` count mismatch,
 exact-shape operator mismatch, direct coordinate-count/runtime-rank mismatch,
 and empty `min`, `max`, or `mean`. Shape-product/element-count overflow and
 allocation failure remain `AU4005`. Out-of-range coordinates and invalid
@@ -65,11 +67,11 @@ first-axis slice bounds remain `AU4003`. Optional `get` absence is ordinary
 `None`; method `set` traps on an invalid coordinate or rank.
 
 `AU2002` reports an exact callback-contract mismatch for callable-powered
-builtins. Vec `map`, `filter`, and `sort_by` require the documented shared
+builtins. List `map`, `filter`, and keyed `sort` require the documented shared
 `def(T) -> ...` parameter capability; a `mut` or `own` callback is not silently
 adapted. The same code reports a `control.retry` worker that is not exactly a
 zero-parameter `def() -> Result[T, E]`. `AU2002` also reports a `sort` element
-or `sort_by` key type without the required natural ordering.
+or keyed `sort` key type without the required natural ordering.
 
 At the FFI boundary, `AU1101` provides dedicated parser guidance for malformed
 extern bodies, defaults, type parameters, callbacks, variadics, and raw-pointer
@@ -84,7 +86,7 @@ opaque-handle result, or runtime marshalling failure. Native aborts, signals,
 memory faults, and foreign unwinds may terminate the process and are not
 Aura diagnostics. See [FFI v0](/manual/ffi).
 
-`AU3005` rejects a direct `Vec` or `Map` indexed read that selects a non-copy
+`AU3005` rejects a direct `list` or `dict` indexed read that selects a non-copy
 element or value, and constant tuple indexing that selects a non-copy element.
 For collections its guidance is clone-safety aware, classified exactly as the
 rejection is: a clone-safe type is directed to the explicit cloned `get`
@@ -93,7 +95,7 @@ surface; a type carrying non-cloneable `random.Rng` state is directed to
 an unresolved generic type is told that `get` requires a clone-safe type, with
 `remove` offered unconditionally. For tuples, unpack the whole tuple to move
 its non-copy elements. `AU3006` rejects the
-corresponding `Vec` or `Map` indexed compound assignment because
+corresponding `list` or `dict` indexed compound assignment because
 read-modify-write would otherwise require a hidden clone or destructive move
 of the stored value.
 
@@ -104,9 +106,9 @@ classes, enum payloads, and other value wrappers. A generic
 definition over unresolved types records an inferred clone-safety obligation;
 `AU3007` is emitted at an unsafe concrete specialization, when a concrete
 requirement cannot be proved, or when an implementation would strengthen its
-trait method's contract. Because `Vec.filter` clones accepted source elements
+trait method's contract. Because `list.filter` clones accepted source elements
 into a fresh result, it establishes the same obligation and rejects
-`Vec[random.Rng]` or a transitive wrapper. Under Accepted ADR-0033,
+`list[random.Rng]` or a transitive wrapper. Under Accepted ADR-0033,
 `random.Rng` is not
 Transfer: a task returning it and a Queue carrying it are rejected with
 `AU3008`, and the task handle is not copyable. Moving or removing a generator
@@ -264,8 +266,7 @@ imported module is never mislabeled with the entry module's path.
 
 The arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while continuing to validate
-the fields they use. The compiler-service semantic-interface version remains
-`2`: adding diagnostic metadata does not change checked-source meaning.
+the fields they use. The compiler-service semantic-interface version is `5`.
 
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the
@@ -315,7 +316,7 @@ span. Guidance may suggest an explicit clone when the type supports it or a
 separate earlier mutation, but the compiler does not deep-clone implicitly.
 
 For example, consuming a bare shared parameter reports that parameter `x` is
-borrowed and recommends declaring it as `own String` to take ownership or
+borrowed and recommends declaring it as `own str` to take ownership or
 cloning the value before consuming it. The parameter name and concrete type in
 that message come from the rejected declaration.
 
@@ -324,7 +325,7 @@ that message come from the rejected declaration.
 `AU2005` identifies focused guidance where Python-looking source has an Aura
 spelling. Maintained hints
 cover `True`/`False`, `.append(...)`, `is` and `is None`, and `try`/`except`.
-Eager list, set, and map comprehensions are accepted. A generator expression,
+Eager list, set, and dictionary comprehensions are accepted. A generator expression,
 whether parenthesized or used as a call argument, receives this exact `AU2005`:
 
     generator expressions are unavailable; use an eager owned list comprehension or an explicit loop
@@ -339,15 +340,31 @@ receive items for Queue. Related diagnostics
 cover missing `mut`, consuming calls, integer `/`, typed `self: Type`, tab
 indentation, and single-quoted f-strings.
 
-Owned Vec and String slicing is implemented, but step syntax and slice
+String literal and format diagnostics use the smallest proving location.
+`AU1001` reports malformed or unterminated ordinary, triple-quoted, and raw
+strings, including a later physical line that contains an invalid escape.
+`AU1002` gives focused supported-form guidance for raw and triple-quoted
+f-string prefixes.
+`AU1101` reports malformed static format grammar, nested fields, unsupported
+codes, and width or precision above `1_000_000`. `AU2002` reports a valid
+specification that is incompatible with the interpolation's static type.
+Constructed string output above the 64 MiB limit reports `AU4005` before the
+oversized append mutates the partial result.
+
+Python permits decimal grouping without an explicit type code, as in
+`f"{n:,}"`. Aura requires the numeric code: use `f"{n:,d}"`, `f"{n:,f}"`, or
+`f"{n:,%}"`. This keeps grouping validation tied to a statically selected
+numeric rendering contract.
+
+Owned list and str slicing is implemented, but step syntax and slice
 assignment remain reserved. They use `AU2005` with these exact messages:
 
     slice steps are unavailable; use an explicit loop to select a stride
 
     slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value
 
-Written slice endpoints have exactly type `int32`; a mismatched bound uses
-`AU2002`. A Vec slice that would duplicate `random.Rng`, an opaque FFI handle,
+Written slice endpoints use the `int64` index domain; a mismatched bound uses
+`AU2002`. Fixed-width narrower integers widen losslessly at that position. A list slice that would duplicate `random.Rng`, an opaque FFI handle,
 or a capturing closure environment uses `AU3007`; one that would duplicate a
 non-repeatable Task result right uses `AU3009`.
 An endpoint outside `0..=len` after one negative normalization, or a start
@@ -361,7 +378,7 @@ spellings.
 Hints MUST name an available spelling when one exists. For an unavailable
 form, they MUST name a working expression or statement form. The complete hint family is
 pinned under `crates/aura-compiler/tests/fixtures/python-hints/`.
-`AU2005` also identifies `String(...)` constructor-shaped source and directs
+`AU2005` also identifies `str(...)` constructor-shaped source and directs
 the caller to Aura string literals.
 
 ## Runtime Traps And Backtraces
@@ -373,7 +390,7 @@ exits unsuccessfully.
 
 A failed assertion is `AU4001` at the `assert` keyword location. The
 message is exactly `assertion failed` when omitted and otherwise exactly the
-evaluated String, including an empty or whitespace-only value. A failure while
+evaluated str, including an empty or whitespace-only value. A failure while
 evaluating the condition or message remains primary. Active cleanup still
 runs, but a cleanup failure cannot replace an already established assertion
 diagnostic.
@@ -453,7 +470,7 @@ materialization limit uses `AU4005` instead. `json.dumps` uses `AU4003` for an
 indent outside `0..=16` or a value deeper than 128 containers, `AU4001` for a
 NaN or infinite `json.Value.Float`, and `AU4005` when conversion exceeds the
 same node limit, encoded output would exceed 67,108,864 bytes, or a controlled
-conversion/output allocation fails. No failed dump returns a partial String.
+conversion/output allocation fails. No failed dump returns a partial str.
 
 Malformed UTF-8, hexadecimal, and base64 input returns `bytes.Error`, including
 the relevant zero-based byte offset or odd input length, when that metadata fits
@@ -461,8 +478,8 @@ the retained `int32` payload. A required offset or length above `2147483647`
 uses `AU4005` rather than truncating or wrapping the typed error. A fresh bytes
 conversion or codec destination above the fixed 2,147,483,647-byte safety
 ceiling, destination-size arithmetic overflow, or allocation failure also uses
-`AU4005`; the ceiling is independent of the public String and `Vec` length
-domains, and no failed operation returns a partial String or byte vector.
+`AU4005`; the ceiling is independent of the public str and `list` length
+domains, and no failed operation returns a partial str or byte list.
 
 Unrecoverable host or dependency-internal out-of-memory termination remains
 outside the catchable diagnostic contract.

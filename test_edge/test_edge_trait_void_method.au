@@ -3,7 +3,7 @@ trait Logger:
     def log(self)
 
 class ConsoleLogger:
-    prefix: String
+    prefix: str
 
 impl Logger for ConsoleLogger:
     def log(self):

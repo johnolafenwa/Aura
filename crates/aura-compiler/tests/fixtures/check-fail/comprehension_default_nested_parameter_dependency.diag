@@ -1,5 +1,5 @@
 error[AU2004]: default argument for parameter `copied` may not reference parameter `limit`
- --> crates/aura-compiler/tests/fixtures/check-fail/comprehension_default_nested_parameter_dependency.au:3:33
+ --> crates/aura-compiler/tests/fixtures/check-fail/comprehension_default_nested_parameter_dependency.au:3:34
   |
-3 |     copied: Map[int64, int64] = {
-  |                                 ^
+3 |     copied: dict[int64, int64] = {
+  |                                  ^

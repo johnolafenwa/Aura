@@ -1,9 +1,9 @@
 enum Message:
-    Hello(String)
-    Goodbye(String)
+    Hello(str)
+    Goodbye(str)
     Empty
 
-def greet(m: own Message) -> String:
+def greet(m: own Message) -> str:
     match own m:
         case Message.Hello(name):
             return name

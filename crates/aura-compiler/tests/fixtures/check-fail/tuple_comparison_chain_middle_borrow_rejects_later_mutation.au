@@ -1,8 +1,8 @@
-def replace_and_return(value: mut (String,)) -> (String,):
+def replace_and_return(value: mut (str,)) -> (str,):
     value = ("B",)
     return ("C",)
 
 def main():
     left = ("A",)
-    mut middle: (String,) = ("A",)
+    mut middle: (str,) = ("A",)
     print(left == middle == replace_and_return(middle))

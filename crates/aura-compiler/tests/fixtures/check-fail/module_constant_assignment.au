@@ -1,0 +1,4 @@
+answer = 42
+
+def main():
+    answer = 43

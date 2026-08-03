@@ -111,6 +111,7 @@ pub(crate) fn has_runtime_named_function(name: &str) -> bool {
 fn is_builtin_unary_operator(op: UnaryOp, ty: &Type) -> bool {
     match op {
         UnaryOp::Not => *ty == Type::named("bool"),
+        UnaryOp::BitNot => crate::sema::integer_type_bounds(ty).is_some(),
         UnaryOp::Neg => {
             crate::sema::integer_type_bounds(ty).is_some()
                 || matches!(ty, Type::Named(name, _) if name == "float32" || name == "float64")
@@ -161,7 +162,16 @@ fn is_builtin_binary_operator(op: BinaryOp, left_ty: &Type, right_ty: &Type) -> 
         | BinaryOp::LessEq
         | BinaryOp::Greater
         | BinaryOp::GreaterEq => left_ty == &duration && right_ty == &duration,
-        BinaryOp::And | BinaryOp::Or | BinaryOp::Div | BinaryOp::Mod => false,
+        BinaryOp::And
+        | BinaryOp::Or
+        | BinaryOp::Div
+        | BinaryOp::Mod
+        | BinaryOp::Pow
+        | BinaryOp::BitAnd
+        | BinaryOp::BitOr
+        | BinaryOp::BitXor
+        | BinaryOp::Shl
+        | BinaryOp::Shr => false,
     } {
         return true;
     }
@@ -172,11 +182,18 @@ fn is_builtin_binary_operator(op: BinaryOp, left_ty: &Type, right_ty: &Type) -> 
         BinaryOp::And | BinaryOp::Or => *left_ty == Type::named("bool"),
         BinaryOp::Add => {
             crate::sema::integer_type_bounds(left_ty).is_some()
-                || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64" || name == "String")
+                || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64" || name == "str")
         }
         BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Mod => {
             crate::sema::integer_type_bounds(left_ty).is_some()
                 || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64")
+        }
+        BinaryOp::Pow => {
+            crate::sema::integer_type_bounds(left_ty).is_some()
+                || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64")
+        }
+        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr => {
+            crate::sema::integer_type_bounds(left_ty).is_some()
         }
         BinaryOp::Eq | BinaryOp::NotEq => true,
         BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq => {
@@ -337,7 +354,7 @@ fn default_return_operand(ty: &Type) -> Operand {
         Type::Named(name, args) if args.is_empty() => match name.as_str() {
             "bool" => Operand::Bool(false),
             "float32" | "float64" => Operand::Float(0.0),
-            "String" => Operand::String(String::new()),
+            "str" => Operand::String(String::new()),
             "Duration" => Operand::Duration(0),
             _ if matches!(
                 name.as_str(),
@@ -382,7 +399,16 @@ pub struct MirModule {
     pub functions: Vec<MirFunction>,
     pub classes: Vec<MirClass>,
     pub trait_impls: Vec<MirTraitImpl>,
+    #[serde(default)]
+    pub constants: Vec<MirConstant>,
     pub top_level: Option<MirFunction>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MirConstant {
+    pub key: String,
+    pub initializer: String,
+    pub ty: Type,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -492,6 +518,12 @@ pub enum Instruction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Rvalue {
     Use(Operand),
+    /// Read a once-initialized immutable module value. The initializer thunk
+    /// is shared by MIR and direct execution and guarded against re-entry.
+    ModuleConstant {
+        key: String,
+        initializer: String,
+    },
     /// Constructs a first-class closure around an ordinary synthesized MIR
     /// function. Captures are evaluated exactly once, in source order, and
     /// become hidden leading arguments whenever the function is invoked.
@@ -645,6 +677,11 @@ pub struct MirMapEntry {
 pub enum MirFormatPart {
     Literal(String),
     Value(Operand),
+    Formatted {
+        value: Operand,
+        spec: String,
+        value_type: Type,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -653,6 +690,19 @@ pub struct MirMatchArm {
     pub variant_name: Option<String>,
     pub wildcard: bool,
     pub label: String,
+}
+
+/// One assertion operand retained by an introspected comparison.
+///
+/// `value` is the already-rendered `str` value produced on the assertion's
+/// failure edge. Keeping rendering out of the terminator lets the optional
+/// source message remain lazy while giving both execution backends one stable
+/// diagnostic payload.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssertionCapture {
+    pub label: String,
+    pub ty: Type,
+    pub value: Operand,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -690,6 +740,7 @@ pub enum Terminator {
     },
     AssertFail {
         message: Option<Operand>,
+        captures: Vec<AssertionCapture>,
         span: crate::diag::Span,
     },
     Unreachable,
@@ -818,6 +869,22 @@ pub fn lower(program: &Program) -> MirModule {
         &mut seen_trait_impls,
     );
 
+    let mut constants = Vec::new();
+    let mut seen_constants = BTreeSet::new();
+    for constant in &program.constant_init_plan {
+        let key = format!("{}::{}", constant.module_name, constant.decl.name);
+        if !seen_constants.insert(key.clone()) {
+            continue;
+        }
+        let initializer = format!("__aura_const_init::{key}");
+        functions.extend(lower_constant_initializer(program, &initializer, constant));
+        constants.push(MirConstant {
+            key,
+            initializer,
+            ty: constant.ty.clone(),
+        });
+    }
+
     let top_level = if program.top_level_stmts.is_empty() {
         None
     } else {
@@ -828,11 +895,37 @@ pub fn lower(program: &Program) -> MirModule {
     };
 
     MirModule {
+        constants,
         functions,
         classes,
         trait_impls,
         top_level,
     }
+}
+
+fn lower_constant_initializer(
+    program: &Program,
+    name: &str,
+    constant: &crate::sema::ConstantInfo,
+) -> Vec<MirFunction> {
+    let mut lowerer = Lowerer::new(
+        program,
+        name,
+        &constant.module_name,
+        constant.ty.clone(),
+        BTreeMap::new(),
+    )
+    .with_metadata_owner(ClosureOwner::TopLevel);
+    let value = lowerer.lower_expr_for_owned_value(&constant.decl.value, Some(&constant.ty));
+    lowerer.terminate(Terminator::Return(value));
+    lowerer.finish_with_generated(MirFunctionSpec {
+        name: name.to_string(),
+        span: constant.decl.span,
+        receiver: None,
+        params: Vec::new(),
+        return_type: constant.ty.clone(),
+        default_return: default_return_operand(&constant.ty),
+    })
 }
 
 fn push_imported_module_functions(
@@ -1082,8 +1175,8 @@ fn push_imported_module_functions_from_namespace(
     functions: &mut Vec<MirFunction>,
     seen: &mut BTreeSet<String>,
 ) {
-    for (name, function) in &namespace.functions {
-        let qualified_name = imported_module_function_name(&namespace.path, name);
+    for (name, function) in &namespace.all_functions {
+        let qualified_name = imported_module_function_name(&function.module_name, name);
         if qualified_name == "control::retry" && !program_imports_control_retry(program) {
             // The builtin registry is checker-wide, but `control.retry` owns a
             // generated Aura state machine rather than a zero-cost host
@@ -1324,6 +1417,12 @@ struct VecTransformOutput<'a> {
     element_type: &'a Type,
 }
 
+struct PendingAssertionCapture {
+    label: &'static str,
+    ty: Type,
+    value: Operand,
+}
+
 struct Lowerer<'a> {
     program: &'a Program,
     function_name: &'a str,
@@ -1349,6 +1448,11 @@ struct Lowerer<'a> {
 #[derive(Clone, Debug)]
 enum PatternWriteback {
     Use(Operand),
+    Or {
+        ty: Type,
+        selected: Vec<String>,
+        alternatives: Vec<PatternWriteback>,
+    },
     Variant {
         ty: Type,
         enum_name: String,
@@ -1919,7 +2023,7 @@ impl<'a> Lowerer<'a> {
                     return Type::Unit;
                 }
                 let source_name = match source_name.as_str() {
-                    "str" => "String",
+                    "str" => "str",
                     "int" => "int64",
                     name => name,
                 };
@@ -2032,6 +2136,30 @@ impl<'a> Lowerer<'a> {
             }
             _ => None,
         }
+    }
+
+    fn resolve_constant_info(&self, name: &str) -> Option<&crate::sema::ConstantInfo> {
+        if self.local_types.contains_key(&self.render_local_name(name)) {
+            return None;
+        }
+        if self.module_name == self.program.module_name {
+            self.program.constants.get(name)
+        } else {
+            self.current_module_namespace()?.all_constants.get(name)
+        }
+    }
+
+    fn lower_constant_read(&mut self, constant: &crate::sema::ConstantInfo) -> Operand {
+        let temp = self.new_typed_temp(constant.ty.clone());
+        let key = format!("{}::{}", constant.module_name, constant.decl.name);
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::ModuleConstant {
+                initializer: format!("__aura_const_init::{key}"),
+                key,
+            },
+        });
+        Operand::Place(temp)
     }
 
     fn qualified_module_item(&self, expr: &Expr) -> Option<(String, String)> {
@@ -2298,7 +2426,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_assert(&mut self, assert_stmt: &crate::ast::AssertStmt) {
-        let condition = self.lower_expr(&assert_stmt.condition);
+        let (condition, pending_captures) = self
+            .lower_introspected_assertion_condition(&assert_stmt.condition)
+            .unwrap_or_else(|| (self.lower_expr(&assert_stmt.condition), Vec::new()));
         let failure_block = self.new_block("assert_fail");
         let continuation_block = self.new_block("assert_pass");
         self.terminate(Terminator::Branch {
@@ -2308,16 +2438,242 @@ impl<'a> Lowerer<'a> {
         });
 
         self.switch_to(failure_block);
+        // Render retained operands only on failure, before evaluating the lazy
+        // source message. The comparison itself has already consumed the raw
+        // captures, so formatting cannot alter its result or evaluate either
+        // source expression a second time.
+        let captures = pending_captures
+            .into_iter()
+            .map(|capture| {
+                let rendered = self.new_typed_temp(Type::named("str"));
+                self.emit(Instruction::Assign {
+                    target: rendered.clone(),
+                    value: Rvalue::FormatString {
+                        parts: vec![MirFormatPart::Value(capture.value)],
+                    },
+                });
+                AssertionCapture {
+                    label: capture.label.to_string(),
+                    ty: capture.ty,
+                    value: Operand::Place(rendered),
+                }
+            })
+            .collect();
         let message = assert_stmt
             .message
             .as_ref()
             .map(|message| self.lower_expr(message));
         self.terminate(Terminator::AssertFail {
             message,
+            captures,
             span: assert_stmt.span,
         });
 
         self.switch_to(continuation_block);
+    }
+
+    /// Lowers the deliberately narrow S3 assertion-introspection surface.
+    /// Grouping around the complete condition is transparent; grouping or
+    /// composition inside any other expression does not widen this boundary.
+    fn lower_introspected_assertion_condition(
+        &mut self,
+        condition: &Expr,
+    ) -> Option<(Operand, Vec<PendingAssertionCapture>)> {
+        let mut condition = condition;
+        while let ExprKind::Group(inner) = &condition.kind {
+            condition = inner;
+        }
+        match &condition.kind {
+            ExprKind::Binary { op, left, right }
+                if matches!(
+                    op,
+                    BinaryOp::Eq
+                        | BinaryOp::NotEq
+                        | BinaryOp::Less
+                        | BinaryOp::LessEq
+                        | BinaryOp::Greater
+                        | BinaryOp::GreaterEq
+                ) && self.assertion_binary_dispatch_is_non_consuming(*op, left, right) =>
+            {
+                Some(self.lower_introspected_binary_condition(condition, *op, left, right))
+            }
+            ExprKind::Membership {
+                value,
+                container,
+                negated: false,
+                operator_span,
+            } => {
+                Some(self.lower_introspected_membership_condition(value, container, *operator_span))
+            }
+            _ => None,
+        }
+    }
+
+    fn assertion_binary_dispatch_is_non_consuming(
+        &self,
+        op: BinaryOp,
+        left: &Expr,
+        right: &Expr,
+    ) -> bool {
+        let Some(left_ty) = self.infer_expr_type(left) else {
+            return false;
+        };
+        let Some(right_ty) = self.infer_expr_type(right) else {
+            return false;
+        };
+        let (left_ty, right_ty) = adjusted_binary_operand_types(left, left_ty, right, right_ty);
+        if is_builtin_binary_operator(op, &left_ty, &right_ty) {
+            return crate::sema::assertion_dispatch_is_non_consuming(None);
+        }
+        let Some((trait_name, method_name)) = binary_operator_trait(op) else {
+            return false;
+        };
+        let Some(method) = self
+            .trait_info_in_scope(trait_name)
+            .and_then(|info| info.methods.get(method_name))
+        else {
+            return false;
+        };
+        let receiver = method.decl.receiver.unwrap_or(ReceiverKind::Value);
+        let rhs = method
+            .signature
+            .param_passings
+            .first()
+            .copied()
+            .unwrap_or(ReceiverKind::Value);
+        crate::sema::assertion_dispatch_is_non_consuming(Some((receiver, rhs)))
+    }
+
+    fn lower_introspected_binary_condition(
+        &mut self,
+        condition: &Expr,
+        op: BinaryOp,
+        left: &Expr,
+        right: &Expr,
+    ) -> (Operand, Vec<PendingAssertionCapture>) {
+        let inferred_left_ty = self
+            .infer_expr_type(left)
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let inferred_right_ty = self
+            .infer_expr_type(right)
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let shared_tuple_expected = matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+            .then(|| self.infer_tuple_equality_hint(left, right))
+            .flatten();
+        let left_expected = shared_tuple_expected.as_ref().or_else(|| {
+            if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                || (is_integer_literal_expr(left)
+                    && (is_float_type(&inferred_right_ty)
+                        || crate::sema::integer_type_bounds(&inferred_right_ty).is_some()))
+            {
+                Some(&inferred_right_ty)
+            } else {
+                None
+            }
+        });
+        let right_expected = shared_tuple_expected.as_ref().or_else(|| {
+            if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                || (is_integer_literal_expr(right)
+                    && (is_float_type(&inferred_left_ty)
+                        || crate::sema::integer_type_bounds(&inferred_left_ty).is_some()))
+            {
+                Some(&inferred_left_ty)
+            } else {
+                None
+            }
+        });
+
+        let left_value = self.lower_expr_at_sequence_point(left, left_expected);
+        let right_value = self.lower_expr_at_sequence_point(right, right_expected);
+        let left_ty = left_expected
+            .cloned()
+            .unwrap_or_else(|| inferred_left_ty.clone());
+        let right_ty = right_expected
+            .cloned()
+            .unwrap_or_else(|| inferred_right_ty.clone());
+
+        let result = self.new_typed_temp(Type::named("bool"));
+        if let Some(field) = self.operator_field_for_binary(op, left, right) {
+            self.emit(Instruction::Assign {
+                target: result.clone(),
+                value: Rvalue::Call {
+                    callee: CallTarget::Member {
+                        object: left_value.clone(),
+                        field,
+                        receiver_place: None,
+                    },
+                    args: vec![MirArg {
+                        name: None,
+                        value: right_value.clone(),
+                        writeback_place: None,
+                    }],
+                },
+            });
+        } else {
+            self.emit(Instruction::Assign {
+                target: result.clone(),
+                value: Rvalue::Binary {
+                    op,
+                    left: left_value.clone(),
+                    right: right_value.clone(),
+                    span: condition.span,
+                },
+            });
+        }
+        (
+            Operand::Place(result),
+            vec![
+                PendingAssertionCapture {
+                    label: "left",
+                    ty: left_ty,
+                    value: left_value,
+                },
+                PendingAssertionCapture {
+                    label: "right",
+                    ty: right_ty,
+                    value: right_value,
+                },
+            ],
+        )
+    }
+
+    fn lower_introspected_membership_condition(
+        &mut self,
+        value: &Expr,
+        container: &Expr,
+        operator_span: Span,
+    ) -> (Operand, Vec<PendingAssertionCapture>) {
+        let container_ty = self
+            .infer_expr_type(container)
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let item_ty = crate::sema::membership_needle_type(&container_ty)
+            .or_else(|| self.infer_expr_type(value))
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let item = self.lower_expr_at_sequence_point(value, Some(&item_ty));
+        let collection = self.lower_expr_at_sequence_point(container, None);
+        let condition = self.lower_membership_call(
+            item.clone(),
+            collection.clone(),
+            None,
+            &container_ty,
+            false,
+            operator_span,
+        );
+        (
+            condition,
+            vec![
+                PendingAssertionCapture {
+                    label: "item",
+                    ty: item_ty,
+                    value: item,
+                },
+                PendingAssertionCapture {
+                    label: "collection",
+                    ty: container_ty,
+                    value: collection,
+                },
+            ],
+        )
     }
 
     fn lower_assign(&mut self, assign: &AssignStmt) {
@@ -2359,17 +2715,17 @@ impl<'a> Lowerer<'a> {
         if let AssignTarget::Index { object, index } = &assign.target {
             let lowered_object = self.lower_expr(object);
             let object_ty = self.infer_expr_type(object);
-            let (index_field, set_index_field, index_ty, target_ty) = match object_ty {
-                Some(Type::Named(name, args)) if name == "Map" && args.len() == 2 => (
+            let (index_field, set_index_field, index_ty, target_ty) = match object_ty.as_ref() {
+                Some(Type::Named(name, args)) if name == "dict" && args.len() == 2 => (
                     INTERNAL_MAP_INDEX_FIELD.to_string(),
                     INTERNAL_MAP_SET_INDEX_FIELD.to_string(),
                     Some(args[0].clone()),
                     Some(args[1].clone()),
                 ),
-                Some(Type::Named(name, args)) if name == "Vec" && args.len() == 1 => (
+                Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => (
                     INTERNAL_VEC_INDEX_FIELD.to_string(),
                     INTERNAL_VEC_SET_INDEX_FIELD.to_string(),
-                    Some(Type::named("int32")),
+                    Some(Type::named("int64")),
                     Some(args[0].clone()),
                 ),
                 Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => (
@@ -2385,7 +2741,15 @@ impl<'a> Lowerer<'a> {
                     None,
                 ),
             };
-            let lowered_index = self.lower_expr_for_owned_value(index, index_ty.as_ref());
+            let lowered_index = match object_ty.as_ref() {
+                Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
+                    self.lower_index_domain_expr(index)
+                }
+                Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => {
+                    self.lower_array_coordinate_expr(index)
+                }
+                _ => self.lower_expr_for_owned_value(index, index_ty.as_ref()),
+            };
             let (read_index, set_index) = if assign.op.is_some() {
                 let captured = match index_ty.clone() {
                     Some(ty) => self.new_typed_temp(ty),
@@ -2701,7 +3065,7 @@ impl<'a> Lowerer<'a> {
     fn lower_collection_literal_with_type(&mut self, expr: &Expr, ty: &Type) -> Option<Rvalue> {
         match (&expr.kind, ty) {
             (ExprKind::List(elements), Type::Named(name, args))
-                if name == "Vec" && args.len() == 1 =>
+                if name == "list" && args.len() == 1 =>
             {
                 Some(Rvalue::VecLiteral {
                     elements: elements
@@ -2712,7 +3076,7 @@ impl<'a> Lowerer<'a> {
                 })
             }
             (ExprKind::Set(elements), Type::Named(name, args))
-                if name == "Set" && args.len() == 1 =>
+                if name == "set" && args.len() == 1 =>
             {
                 Some(Rvalue::SetLiteral {
                     elements: elements
@@ -2723,7 +3087,7 @@ impl<'a> Lowerer<'a> {
                 })
             }
             (ExprKind::Map(entries), Type::Named(name, args))
-                if entries.is_empty() && name == "Set" && args.len() == 1 =>
+                if entries.is_empty() && name == "set" && args.len() == 1 =>
             {
                 Some(Rvalue::SetLiteral {
                     elements: Vec::new(),
@@ -2731,7 +3095,7 @@ impl<'a> Lowerer<'a> {
                 })
             }
             (ExprKind::Map(entries), Type::Named(name, args))
-                if name == "Map" && args.len() == 2 =>
+                if name == "dict" && args.len() == 2 =>
             {
                 Some(Rvalue::MapLiteral {
                     entries: entries
@@ -2869,6 +3233,7 @@ impl<'a> Lowerer<'a> {
                 self.new_block("match_next")
             };
             self.scoped_names.push(std::collections::HashMap::new());
+            let probes_candidates = arm.guard.is_some() || matches!(arm.pattern, Pattern::Or(_));
             let pattern_writeback = self.lower_pattern(
                 &arm.pattern,
                 scrutinee.clone(),
@@ -2877,17 +3242,10 @@ impl<'a> Lowerer<'a> {
                 next_block,
                 PatternLoweringOptions {
                     collect_writeback: writeback_root.is_some(),
-                    consume_payloads: consumes_scrutinee,
+                    consume_payloads: consumes_scrutinee && !probes_candidates,
                 },
             );
             self.switch_to(arm_block);
-            if consumes_scrutinee {
-                self.lower_consuming_pattern_bindings(
-                    &arm.pattern,
-                    scrutinee.clone(),
-                    scrutinee_ty.as_ref(),
-                );
-            }
             if let Some(writeback_place) = writeback_root.as_ref() {
                 let skip_place = self.new_typed_temp(Type::named("bool"));
                 self.match_writeback_stack.push(MatchWritebackState {
@@ -2899,6 +3257,35 @@ impl<'a> Lowerer<'a> {
                     target: skip_place,
                     value: Rvalue::Use(Operand::Bool(false)),
                 });
+            }
+            if let Some(guard) = &arm.guard {
+                let selected = self.new_block("match_guard_true");
+                let rejected = self.new_block("match_guard_false");
+                let condition = self.lower_expr(guard);
+                self.terminate(Terminator::Branch {
+                    condition,
+                    then_label: self.label(selected),
+                    else_label: self.label(rejected),
+                });
+                self.switch_to(rejected);
+                if let (Some(writeback_place), Some(writeback)) =
+                    (writeback_root.as_ref(), pattern_writeback.as_ref())
+                {
+                    let updated = self.materialize_pattern_writeback(writeback);
+                    self.emit(Instruction::Assign {
+                        target: writeback_place.clone(),
+                        value: Rvalue::Use(updated),
+                    });
+                }
+                self.terminate(Terminator::Goto(self.label(next_block)));
+                self.switch_to(selected);
+            }
+            if consumes_scrutinee {
+                self.lower_consuming_pattern_bindings(
+                    &arm.pattern,
+                    scrutinee.clone(),
+                    scrutinee_ty.as_ref(),
+                );
             }
             self.lower_stmts(&arm.body);
             let writeback_state = writeback_root
@@ -2937,6 +3324,53 @@ impl<'a> Lowerer<'a> {
         options: PatternLoweringOptions,
     ) -> Option<PatternWriteback> {
         match pattern {
+            Pattern::Or(pattern) => {
+                let mut next = self.current_block;
+                let selected = (0..pattern.alternatives.len())
+                    .map(|_| self.new_typed_temp(Type::named("bool")))
+                    .collect::<Vec<_>>();
+                for flag in &selected {
+                    self.emit(Instruction::Assign {
+                        target: flag.clone(),
+                        value: Rvalue::Use(Operand::Bool(false)),
+                    });
+                }
+                let mut alternatives = Vec::new();
+                for (index, alternative) in pattern.alternatives.iter().enumerate() {
+                    self.switch_to(next);
+                    let failure = if index + 1 == pattern.alternatives.len() {
+                        failure_block
+                    } else {
+                        self.new_block("match_or_next")
+                    };
+                    let alternative_success = self.new_block("match_or_selected");
+                    let candidate = self.lower_pattern(
+                        alternative,
+                        scrutinee.clone(),
+                        scrutinee_ty,
+                        alternative_success,
+                        failure,
+                        options,
+                    );
+                    alternatives.push(
+                        candidate.unwrap_or_else(|| PatternWriteback::Use(scrutinee.clone())),
+                    );
+                    self.switch_to(alternative_success);
+                    self.emit(Instruction::Assign {
+                        target: selected[index].clone(),
+                        value: Rvalue::Use(Operand::Bool(true)),
+                    });
+                    self.terminate(Terminator::Goto(self.label(success_block)));
+                    next = failure;
+                }
+                options.collect_writeback.then(|| PatternWriteback::Or {
+                    ty: scrutinee_ty
+                        .cloned()
+                        .unwrap_or_else(|| Type::named("Unknown")),
+                    selected,
+                    alternatives,
+                })
+            }
             Pattern::Wildcard(_) => {
                 self.terminate(Terminator::Goto(self.label(success_block)));
                 options
@@ -2944,15 +3378,22 @@ impl<'a> Lowerer<'a> {
                     .then_some(PatternWriteback::Use(scrutinee))
             }
             Pattern::Binding(binding) => {
-                let target = if let Some(ty) = scrutinee_ty.cloned() {
-                    self.new_typed_temp(ty)
-                } else {
-                    self.new_temp()
-                };
-                self.scoped_names
-                    .last_mut()
-                    .expect("match arm scope should exist")
-                    .insert(binding.name.clone(), target.clone());
+                let target = self
+                    .scoped_names
+                    .last()
+                    .and_then(|scope| scope.get(&binding.name).cloned())
+                    .unwrap_or_else(|| {
+                        let target = if let Some(ty) = scrutinee_ty.cloned() {
+                            self.new_typed_temp(ty)
+                        } else {
+                            self.new_temp()
+                        };
+                        self.scoped_names
+                            .last_mut()
+                            .expect("match arm scope should exist")
+                            .insert(binding.name.clone(), target.clone());
+                        target
+                    });
                 if !options.consume_payloads {
                     self.emit(Instruction::Assign {
                         target: target.clone(),
@@ -3112,12 +3553,23 @@ impl<'a> Lowerer<'a> {
 
     fn register_consuming_pattern_bindings(&mut self, pattern: &Pattern, pattern_ty: &Type) {
         match pattern {
+            Pattern::Or(pattern) => {
+                if let Some(first) = pattern.alternatives.first() {
+                    self.register_consuming_pattern_bindings(first, pattern_ty);
+                }
+            }
             Pattern::Binding(binding) => {
-                let target = self.new_typed_temp(pattern_ty.clone());
-                self.scoped_names
-                    .last_mut()
-                    .expect("match arm scope should exist")
-                    .insert(binding.name.clone(), target);
+                if !self
+                    .scoped_names
+                    .last()
+                    .is_some_and(|scope| scope.contains_key(&binding.name))
+                {
+                    let target = self.new_typed_temp(pattern_ty.clone());
+                    self.scoped_names
+                        .last_mut()
+                        .expect("match arm scope should exist")
+                        .insert(binding.name.clone(), target);
+                }
             }
             Pattern::Tuple(pattern) => {
                 let Type::Tuple(element_types) = pattern_ty else {
@@ -3138,6 +3590,45 @@ impl<'a> Lowerer<'a> {
         scrutinee_ty: Option<&Type>,
     ) {
         match pattern {
+            Pattern::Or(pattern) => {
+                // Selection populated non-consuming candidate slots so a
+                // guard could inspect them. Re-probe the private owner after
+                // the guard succeeds, then destructively extract exactly the
+                // selected alternative into those same shared binding slots.
+                let done = self.new_block("match_or_commit_done");
+                let mut next = self.current_block;
+                for (index, alternative) in pattern.alternatives.iter().enumerate() {
+                    self.switch_to(next);
+                    let selected = self.new_block("match_or_commit_selected");
+                    let rejected = if index + 1 == pattern.alternatives.len() {
+                        done
+                    } else {
+                        self.new_block("match_or_commit_next")
+                    };
+                    self.lower_pattern(
+                        alternative,
+                        scrutinee.clone(),
+                        scrutinee_ty,
+                        selected,
+                        rejected,
+                        PatternLoweringOptions {
+                            collect_writeback: false,
+                            consume_payloads: true,
+                        },
+                    );
+                    self.switch_to(selected);
+                    self.lower_consuming_pattern_bindings(
+                        alternative,
+                        scrutinee.clone(),
+                        scrutinee_ty,
+                    );
+                    if !self.current_terminated() {
+                        self.terminate(Terminator::Goto(self.label(done)));
+                    }
+                    next = rejected;
+                }
+                self.switch_to(done);
+            }
             Pattern::Wildcard(_) | Pattern::Literal(_) => {}
             Pattern::Binding(binding) => {
                 let target = self.render_local_name(&binding.name);
@@ -3354,7 +3845,7 @@ impl<'a> Lowerer<'a> {
             })
             .collect::<Vec<_>>();
 
-        let index = self.new_typed_temp(Type::named("int32"));
+        let index = self.new_typed_temp(Type::named("int64"));
         self.emit(Instruction::Assign {
             target: index.clone(),
             value: Rvalue::Use(Operand::Int(0)),
@@ -3368,11 +3859,7 @@ impl<'a> Lowerer<'a> {
             let position = self.new_typed_temp(Type::named("int64"));
             self.emit(Instruction::Assign {
                 target: position.clone(),
-                value: Rvalue::Cast {
-                    value: Operand::Place(index.clone()),
-                    ty: Type::named("int64"),
-                    span: for_stmt.span,
-                },
+                value: Rvalue::Use(Operand::Place(index.clone())),
             });
             element_operands.push(Operand::Place(position));
             element_types.push(Type::named("int64"));
@@ -3525,13 +4012,13 @@ impl<'a> Lowerer<'a> {
         let target_ty = checked_binding
             .map(|binding| binding.binding_type.clone())
             .unwrap_or_else(|| match iterable_ty.as_ref() {
-                Some(Type::Named(name, _)) if name == "Range" => Type::named("int32"),
+                Some(Type::Named(name, _)) if name == "Range" => Type::named("int64"),
                 Some(Type::Named(name, args))
-                    if matches!(name.as_str(), "Queue" | "Vec" | "Set") && args.len() == 1 =>
+                    if matches!(name.as_str(), "Queue" | "list" | "set") && args.len() == 1 =>
                 {
                     args[0].clone()
                 }
-                _ => Type::named("int32"),
+                _ => Type::named("int64"),
             });
         let target_scope = self.fresh_scoped_binding_target_slots(&for_stmt.target, &target_ty);
         let simple_binding = match &for_stmt.target {
@@ -3643,7 +4130,7 @@ impl<'a> Lowerer<'a> {
                     },
                 });
             }
-            Some(Type::Named(name, args)) if name == "Vec" && args.len() == 1 => {
+            Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
                 let element_ty = args[0].clone();
                 let takes_owned = owned_iterable_place.is_some();
                 let binding = match simple_binding.clone() {
@@ -3662,7 +4149,7 @@ impl<'a> Lowerer<'a> {
                 };
                 let next_value = self
                     .new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
-                let index = self.new_typed_temp(Type::named("int32"));
+                let index = self.new_typed_temp(Type::named("int64"));
                 self.emit(Instruction::Assign {
                     target: index.clone(),
                     value: Rvalue::Use(Operand::Int(0)),
@@ -3824,7 +4311,7 @@ impl<'a> Lowerer<'a> {
                     });
                 }
             }
-            Some(Type::Named(name, args)) if name == "Set" && args.len() == 1 => {
+            Some(Type::Named(name, args)) if name == "set" && args.len() == 1 => {
                 let element_ty = args[0].clone();
                 let takes_owned = owned_iterable_place.is_some();
                 let binding = match simple_binding.clone() {
@@ -3843,7 +4330,7 @@ impl<'a> Lowerer<'a> {
                 };
                 let next_value = self
                     .new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
-                let index = self.new_typed_temp(Type::named("int32"));
+                let index = self.new_typed_temp(Type::named("int64"));
                 self.emit(Instruction::Assign {
                     target: index.clone(),
                     value: Rvalue::Use(Operand::Int(0)),
@@ -4058,7 +4545,7 @@ impl<'a> Lowerer<'a> {
         let result_place = self.new_typed_temp(info.result_type.clone());
         let result_literal = match (&info.result_type, output) {
             (Type::Named(name, args), ComprehensionOutput::List(_))
-                if name == "Vec" && args.len() == 1 =>
+                if name == "list" && args.len() == 1 =>
             {
                 Rvalue::VecLiteral {
                     elements: Vec::new(),
@@ -4066,7 +4553,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             (Type::Named(name, args), ComprehensionOutput::Set(_))
-                if name == "Set" && args.len() == 1 =>
+                if name == "set" && args.len() == 1 =>
             {
                 Rvalue::SetLiteral {
                     elements: Vec::new(),
@@ -4074,7 +4561,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             (Type::Named(name, args), ComprehensionOutput::Map { .. })
-                if name == "Map" && args.len() == 2 =>
+                if name == "dict" && args.len() == 2 =>
             {
                 Rvalue::MapLiteral {
                     entries: Vec::new(),
@@ -4180,7 +4667,7 @@ impl<'a> Lowerer<'a> {
     ) {
         match (output, result_type) {
             (ComprehensionOutput::List(value), Type::Named(name, args))
-                if name == "Vec" && args.len() == 1 =>
+                if name == "list" && args.len() == 1 =>
             {
                 let value = self.lower_expr_for_owned_value(value, Some(&args[0]));
                 self.emit_vec_push(
@@ -4190,16 +4677,16 @@ impl<'a> Lowerer<'a> {
                 );
             }
             (ComprehensionOutput::Set(value), Type::Named(name, args))
-                if name == "Set" && args.len() == 1 =>
+                if name == "set" && args.len() == 1 =>
             {
                 let value = self.lower_expr_for_owned_value(value, Some(&args[0]));
-                let ignored = self.new_typed_temp(Type::named("bool"));
+                let ignored = self.new_typed_temp(Type::Unit);
                 self.emit(Instruction::Assign {
                     target: ignored,
                     value: Rvalue::Call {
                         callee: CallTarget::Member {
                             object: Operand::Place(result_place.to_string()),
-                            field: "insert".to_string(),
+                            field: "add".to_string(),
                             receiver_place: Some(result_place.to_string()),
                         },
                         args: vec![MirArg {
@@ -4216,7 +4703,7 @@ impl<'a> Lowerer<'a> {
                     value,
                 },
                 Type::Named(name, args),
-            ) if name == "Map" && args.len() == 2 => {
+            ) if name == "dict" && args.len() == 2 => {
                 // Map output preserves source order: evaluate the key fully
                 // before beginning the value, then replace any prior entry.
                 let key = self.lower_expr_for_owned_value(key_expr, Some(&args[0]));
@@ -4267,7 +4754,13 @@ impl<'a> Lowerer<'a> {
             ExprKind::Name(name) if name == "None" => Operand::Unit,
             ExprKind::BuiltinOmitted => Operand::Unit,
             ExprKind::Lambda { params, body } => self.lower_lambda(expr, params, body),
-            ExprKind::Name(name) => Operand::Place(self.render_local_name(name)),
+            ExprKind::Name(name) => {
+                if let Some(constant) = self.resolve_constant_info(name).cloned() {
+                    self.lower_constant_read(&constant)
+                } else {
+                    Operand::Place(self.render_local_name(name))
+                }
+            }
             ExprKind::Int(value) => Operand::Int(*value),
             ExprKind::DurationNanos(value) => Operand::Duration(*value),
             ExprKind::Float(value) => Operand::Float(*value),
@@ -4344,16 +4837,16 @@ impl<'a> Lowerer<'a> {
                 self.lower_comprehension(expr, output, clauses)
             }
             ExprKind::FString(parts) => {
-                let temp = self.new_typed_temp(Type::named("String"));
-                let parts = parts
-                    .iter()
-                    .map(|part| match part {
+                let temp = self.new_typed_temp(Type::named("str"));
+                let mut lowered_parts = Vec::with_capacity(parts.len());
+                for part in parts {
+                    let lowered = match part {
                         crate::ast::FormatPart::Literal(text) => {
                             MirFormatPart::Literal(text.clone())
                         }
                         crate::ast::FormatPart::Expr(expr) => {
                             let value = self.lower_expr_at_sequence_point(expr, None);
-                            let rendered = self.new_typed_temp(Type::named("String"));
+                            let rendered = self.new_typed_temp(Type::named("str"));
                             self.emit(Instruction::Assign {
                                 target: rendered.clone(),
                                 value: Rvalue::FormatString {
@@ -4362,11 +4855,25 @@ impl<'a> Lowerer<'a> {
                             });
                             MirFormatPart::Value(Operand::Place(rendered))
                         }
-                    })
-                    .collect::<Vec<_>>();
+                        crate::ast::FormatPart::Formatted { expr, spec, .. } => {
+                            let value_type = self
+                                .infer_expr_type(expr)
+                                .unwrap_or_else(|| Type::named("Unknown"));
+                            let value = self.lower_expr_at_sequence_point(expr, None);
+                            MirFormatPart::Formatted {
+                                value,
+                                spec: spec.clone(),
+                                value_type,
+                            }
+                        }
+                    };
+                    lowered_parts.push(lowered);
+                }
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
-                    value: Rvalue::FormatString { parts },
+                    value: Rvalue::FormatString {
+                        parts: lowered_parts,
+                    },
                 });
                 Operand::Place(temp)
             }
@@ -4516,6 +5023,15 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Member { object, field } => {
+                if let Some(module_path) = self.infer_module_path(object) {
+                    if let Some(constant) = self
+                        .module_namespace(&module_path)
+                        .and_then(|namespace| namespace.constants.get(field))
+                        .cloned()
+                    {
+                        return self.lower_constant_read(&constant);
+                    }
+                }
                 if let Some((module_path, enum_name)) = self.qualified_module_item(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(enum_info) = namespace.enums.get(&enum_name).cloned() {
@@ -4595,16 +5111,18 @@ impl<'a> Lowerer<'a> {
                 let temp = self.new_temp_for_expr(expr);
                 let object_type = self.infer_expr_type(object);
                 let lowered_object = self.lower_expr_at_sequence_point(object, None);
-                let index_type = matches!(
-                    object_type,
-                    Some(Type::Named(ref name, ref args))
-                        if name == "Array" && args.len() == 1
-                )
-                .then(|| array_coordinate_type(index));
-                let lowered_index = self.lower_expr_at_sequence_point(index, index_type.as_ref());
+                let lowered_index = match object_type.as_ref() {
+                    Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
+                        self.lower_index_domain_expr(index)
+                    }
+                    Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => {
+                        self.lower_array_coordinate_expr(index)
+                    }
+                    _ => self.lower_expr_at_sequence_point(index, None),
+                };
                 let receiver_place = self.render_place_expr_option(object);
                 let field = match object_type {
-                    Some(Type::Named(name, args)) if name == "Map" && args.len() == 2 => {
+                    Some(Type::Named(name, args)) if name == "dict" && args.len() == 2 => {
                         INTERNAL_MAP_INDEX_FIELD.to_string()
                     }
                     _ => INTERNAL_VEC_INDEX_FIELD.to_string(),
@@ -4646,14 +5164,13 @@ impl<'a> Lowerer<'a> {
             } => {
                 let temp = self.new_temp_for_expr(expr);
                 let lowered_object = self.lower_expr_at_sequence_point(object, None);
-                let endpoint_ty = Type::named("int32");
                 let lowered_start = start
                     .as_deref()
-                    .map(|start| self.lower_expr_at_sequence_point(start, Some(&endpoint_ty)))
+                    .map(|start| self.lower_index_domain_expr(start))
                     .unwrap_or(Operand::Int(0));
                 let lowered_end = end
                     .as_deref()
-                    .map(|end| self.lower_expr_at_sequence_point(end, Some(&endpoint_ty)))
+                    .map(|end| self.lower_index_domain_expr(end))
                     .unwrap_or(Operand::Int(0));
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
@@ -4732,7 +5249,7 @@ impl<'a> Lowerer<'a> {
     /// Lowers the higher-order Vec surface to the ordinary MIR operations both
     /// execution backends already share. In particular, callbacks remain
     /// `CallTarget::Value` calls instead of acquiring a second host callback
-    /// ABI. `sort_by` materializes every key before entering the mutation
+    /// ABI. `sort(key=...)` materializes every key before entering the mutation
     /// phase, so a trapping key function cannot leave the source half-sorted.
     fn lower_vec_algorithm_call(
         &mut self,
@@ -4745,19 +5262,16 @@ impl<'a> Lowerer<'a> {
         let Some(Type::Named(receiver_name, receiver_args)) = self.infer_expr_type(object) else {
             return false;
         };
-        if receiver_name != "Vec" || receiver_args.len() != 1 {
+        if receiver_name != "list" || receiver_args.len() != 1 {
             return false;
         }
         let element_ty = receiver_args[0].clone();
-        let Some(member) = BuiltinMember::resolve("Vec", field) else {
+        let Some(member) = BuiltinMember::resolve("list", field) else {
             return false;
         };
         if !matches!(
             member,
-            BuiltinMember::VecSort
-                | BuiltinMember::VecSortBy
-                | BuiltinMember::VecMap
-                | BuiltinMember::VecFilter
+            BuiltinMember::VecSort | BuiltinMember::VecMap | BuiltinMember::VecFilter
         ) {
             return false;
         }
@@ -4766,68 +5280,76 @@ impl<'a> Lowerer<'a> {
             BuiltinMember::VecSort => {
                 let receiver_place = self
                     .render_place_expr_option(object)
-                    .expect("checked Vec.sort receiver should be a mutable place");
-                self.lower_stable_vec_sort(
-                    Operand::Place(receiver_place.clone()),
-                    &receiver_place,
-                    &element_ty,
-                    None,
-                    expr.span,
-                    result,
-                );
-            }
-            BuiltinMember::VecSortBy => {
-                let receiver_place = self
-                    .render_place_expr_option(object)
-                    .expect("checked Vec.sort_by receiver should be a mutable place");
+                    .expect("checked list.sort receiver should be a mutable place");
                 let ordered = member
                     .bind_args(args, expr.span)
-                    .expect("checked Vec.sort_by arguments should bind during MIR lowering");
-                let callback_arg =
-                    ordered[0].expect("checked Vec.sort_by call should provide a key function");
-                let callback_ty = self
-                    .infer_expr_type(&callback_arg.value)
-                    .expect("checked Vec.sort_by key should have a function type");
-                let callback =
-                    self.lower_expr_at_sequence_point(&callback_arg.value, Some(&callback_ty));
-                let (Type::Function {
-                    return_type: key_ty,
-                    ..
-                }
-                | Type::Closure {
-                    return_type: key_ty,
-                    ..
-                }) = callback_ty
-                else {
-                    unreachable!("checked Vec.sort_by key should have a function type");
-                };
-                let key_ty = *key_ty;
-                let keys =
-                    self.new_typed_temp(Type::Named("Vec".to_string(), vec![key_ty.clone()]));
-                self.emit(Instruction::Assign {
-                    target: keys.clone(),
-                    value: Rvalue::VecLiteral {
-                        elements: Vec::new(),
-                        element_type: key_ty.clone(),
-                    },
+                    .expect("checked list.sort arguments should bind during MIR lowering");
+                let callback = ordered[0].map(|argument| {
+                    let callback_ty = self
+                        .infer_expr_type(&argument.value)
+                        .expect("checked list.sort key should have a function type");
+                    let callback =
+                        self.lower_expr_at_sequence_point(&argument.value, Some(&callback_ty));
+                    let (Type::Function {
+                        return_type: key_ty,
+                        ..
+                    }
+                    | Type::Closure {
+                        return_type: key_ty,
+                        ..
+                    }) = callback_ty
+                    else {
+                        unreachable!("checked list.sort key should have a function type");
+                    };
+                    (callback, *key_ty)
                 });
+                let reverse = ordered[1]
+                    .map(|argument| {
+                        self.lower_expr_at_sequence_point(
+                            &argument.value,
+                            Some(&Type::named("bool")),
+                        )
+                    })
+                    .unwrap_or(Operand::Bool(false));
                 let source = Operand::Place(receiver_place.clone());
-                self.lower_vec_key_collection_loop(
-                    source.clone(),
-                    &element_ty,
-                    callback,
-                    &keys,
-                    &key_ty,
-                    expr.span,
-                );
-                self.lower_stable_vec_sort(
-                    source,
-                    &receiver_place,
-                    &key_ty,
-                    Some((&keys, &key_ty)),
-                    expr.span,
-                    result,
-                );
+                if let Some((callback, key_ty)) = callback {
+                    let keys =
+                        self.new_typed_temp(Type::Named("list".to_string(), vec![key_ty.clone()]));
+                    self.emit(Instruction::Assign {
+                        target: keys.clone(),
+                        value: Rvalue::VecLiteral {
+                            elements: Vec::new(),
+                            element_type: key_ty.clone(),
+                        },
+                    });
+                    self.lower_vec_key_collection_loop(
+                        source.clone(),
+                        &element_ty,
+                        callback,
+                        &keys,
+                        &key_ty,
+                        expr.span,
+                    );
+                    self.lower_stable_vec_sort(
+                        source,
+                        &receiver_place,
+                        &key_ty,
+                        Some((&keys, &key_ty)),
+                        reverse,
+                        expr.span,
+                        result,
+                    );
+                } else {
+                    self.lower_stable_vec_sort(
+                        source,
+                        &receiver_place,
+                        &element_ty,
+                        None,
+                        reverse,
+                        expr.span,
+                        result,
+                    );
+                }
             }
             BuiltinMember::VecMap | BuiltinMember::VecFilter => {
                 let source = self.lower_shared_vec_source(object);
@@ -4848,7 +5370,7 @@ impl<'a> Lowerer<'a> {
                     else {
                         unreachable!("checked Vec.map result should be Vec[U]");
                     };
-                    assert_eq!(name, "Vec");
+                    assert_eq!(name, "list");
                     output_args
                         .into_iter()
                         .next()
@@ -5194,7 +5716,7 @@ impl<'a> Lowerer<'a> {
         key_ty: &Type,
         span: Span,
     ) {
-        let index = self.new_typed_temp(Type::named("int32"));
+        let index = self.new_typed_temp(Type::named("int64"));
         let next = self.new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
         let element = self.new_typed_temp(element_ty.clone());
         self.emit(Instruction::Assign {
@@ -5268,7 +5790,7 @@ impl<'a> Lowerer<'a> {
         filter: bool,
         span: Span,
     ) {
-        let index = self.new_typed_temp(Type::named("int32"));
+        let index = self.new_typed_temp(Type::named("int64"));
         let next = self.new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
         let element = self.new_typed_temp(element_ty.clone());
         self.emit(Instruction::Assign {
@@ -5373,21 +5895,23 @@ impl<'a> Lowerer<'a> {
         self.switch_to(done);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lower_stable_vec_sort(
         &mut self,
         source: Operand,
         source_place: &str,
         ordering_ty: &Type,
         keys: Option<(&str, &Type)>,
+        reverse: Operand,
         span: Span,
         result: &str,
     ) {
         let ordering_source = keys
             .map(|(keys, _)| Operand::Place(keys.to_string()))
             .unwrap_or_else(|| source.clone());
-        let length64 = self.new_typed_temp(Type::named("int64"));
+        let length = self.new_typed_temp(Type::named("int64"));
         self.emit(Instruction::Assign {
-            target: length64.clone(),
+            target: length.clone(),
             value: Rvalue::Call {
                 callee: CallTarget::Member {
                     object: ordering_source.clone(),
@@ -5397,16 +5921,7 @@ impl<'a> Lowerer<'a> {
                 args: Vec::new(),
             },
         });
-        let length = self.new_typed_temp(Type::named("int32"));
-        self.emit(Instruction::Assign {
-            target: length.clone(),
-            value: Rvalue::Cast {
-                value: Operand::Place(length64),
-                ty: Type::named("int32"),
-                span,
-            },
-        });
-        let outer_index = self.new_typed_temp(Type::named("int32"));
+        let outer_index = self.new_typed_temp(Type::named("int64"));
         self.emit(Instruction::Assign {
             target: outer_index.clone(),
             value: Rvalue::Use(Operand::Int(1)),
@@ -5438,7 +5953,7 @@ impl<'a> Lowerer<'a> {
             else_label: self.label(done),
         });
 
-        let inner_index = self.new_typed_temp(Type::named("int32"));
+        let inner_index = self.new_typed_temp(Type::named("int64"));
         self.switch_to(outer_body);
         self.emit(Instruction::Assign {
             target: inner_index.clone(),
@@ -5464,7 +5979,7 @@ impl<'a> Lowerer<'a> {
         });
 
         self.switch_to(inner_compare);
-        let previous_index = self.new_typed_temp(Type::named("int32"));
+        let previous_index = self.new_typed_temp(Type::named("int64"));
         self.emit(Instruction::Assign {
             target: previous_index.clone(),
             value: Rvalue::Binary {
@@ -5477,7 +5992,47 @@ impl<'a> Lowerer<'a> {
         let current = self.emit_vec_read(ordering_source.clone(), &inner_index, ordering_ty, span);
         let previous =
             self.emit_vec_read(ordering_source.clone(), &previous_index, ordering_ty, span);
-        let comes_before = self.emit_vec_ordering_less(&current, &previous, ordering_ty, span);
+        let ascending = self.emit_vec_ordering_less(&current, &previous, ordering_ty, span);
+        let descending = self.emit_vec_ordering_less(&previous, &current, ordering_ty, span);
+        let not_reverse = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: not_reverse.clone(),
+            value: Rvalue::Unary {
+                op: UnaryOp::Not,
+                value: reverse.clone(),
+                span,
+            },
+        });
+        let ascending_selected = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: ascending_selected.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::And,
+                left: Operand::Place(not_reverse),
+                right: Operand::Place(ascending),
+                span,
+            },
+        });
+        let descending_selected = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: descending_selected.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::And,
+                left: reverse,
+                right: Operand::Place(descending),
+                span,
+            },
+        });
+        let comes_before = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: comes_before.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Or,
+                left: Operand::Place(ascending_selected),
+                right: Operand::Place(descending_selected),
+                span,
+            },
+        });
         self.terminate(Terminator::Branch {
             condition: Operand::Place(comes_before),
             then_label: self.label(swap),
@@ -5605,7 +6160,7 @@ impl<'a> Lowerer<'a> {
             value: Rvalue::Call {
                 callee: CallTarget::Member {
                     object: vector,
-                    field: "push".to_string(),
+                    field: "append".to_string(),
                     receiver_place: Some(vector_place.to_string()),
                 },
                 args: vec![MirArg {
@@ -5618,7 +6173,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn emit_vec_swap(&mut self, vector: Operand, vector_place: &str, first: &str, second: &str) {
-        let ignored = self.new_typed_temp(Type::named("bool"));
+        let ignored = self.new_typed_temp(Type::Unit);
         self.emit(Instruction::Assign {
             target: ignored,
             value: Rvalue::Call {
@@ -5985,6 +6540,53 @@ impl<'a> Lowerer<'a> {
         Operand::Place(temp)
     }
 
+    /// Lowers one of the public index-domain positions. The checker admits
+    /// only integer types whose complete domain fits in int64; MIR makes that
+    /// narrowly scoped conversion explicit so both execution backends observe
+    /// an int64 value without enabling general implicit numeric conversion.
+    fn lower_index_domain_expr(&mut self, expr: &Expr) -> Operand {
+        let target = Type::named("int64");
+        let actual = self.infer_expr_type(expr).unwrap_or_else(|| target.clone());
+        let source_expected = if actual == target { &target } else { &actual };
+        let value = self.lower_expr_at_sequence_point(expr, Some(source_expected));
+        if actual == target {
+            return value;
+        }
+        let temp = self.new_typed_temp(target.clone());
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::Cast {
+                value,
+                ty: target,
+                span: expr.span,
+            },
+        });
+        Operand::Place(temp)
+    }
+
+    fn lower_array_coordinate_expr(&mut self, expr: &Expr) -> Operand {
+        match &expr.kind {
+            ExprKind::Group(inner) => self.lower_array_coordinate_expr(inner),
+            ExprKind::Tuple(elements) => {
+                let element_types = vec![Type::named("int64"); elements.len()];
+                let elements = elements
+                    .iter()
+                    .map(|element| self.lower_index_domain_expr(element))
+                    .collect();
+                let temp = self.new_typed_temp(Type::Tuple(element_types.clone()));
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::TupleLiteral {
+                        elements,
+                        element_types,
+                    },
+                });
+                Operand::Place(temp)
+            }
+            _ => self.lower_index_domain_expr(expr),
+        }
+    }
+
     fn lower_expr_for_passing(
         &mut self,
         expr: &Expr,
@@ -6116,6 +6718,7 @@ impl<'a> Lowerer<'a> {
                 self.new_block("match_expr_next")
             };
             self.scoped_names.push(std::collections::HashMap::new());
+            let probes_candidates = arm.guard.is_some() || matches!(arm.pattern, Pattern::Or(_));
             let pattern_writeback = self.lower_pattern(
                 &arm.pattern,
                 scrutinee.clone(),
@@ -6124,17 +6727,10 @@ impl<'a> Lowerer<'a> {
                 next_block,
                 PatternLoweringOptions {
                     collect_writeback: writeback_root.is_some(),
-                    consume_payloads: consumes_scrutinee,
+                    consume_payloads: consumes_scrutinee && !probes_candidates,
                 },
             );
             self.switch_to(arm_block);
-            if consumes_scrutinee {
-                self.lower_consuming_pattern_bindings(
-                    &arm.pattern,
-                    scrutinee.clone(),
-                    scrutinee_ty.as_ref(),
-                );
-            }
             if let Some(writeback_place) = writeback_root.as_ref() {
                 let skip_place = self.new_typed_temp(Type::named("bool"));
                 self.match_writeback_stack.push(MatchWritebackState {
@@ -6146,6 +6742,35 @@ impl<'a> Lowerer<'a> {
                     target: skip_place,
                     value: Rvalue::Use(Operand::Bool(false)),
                 });
+            }
+            if let Some(guard) = &arm.guard {
+                let selected = self.new_block("match_expr_guard_true");
+                let rejected = self.new_block("match_expr_guard_false");
+                let condition = self.lower_expr(guard);
+                self.terminate(Terminator::Branch {
+                    condition,
+                    then_label: self.label(selected),
+                    else_label: self.label(rejected),
+                });
+                self.switch_to(rejected);
+                if let (Some(writeback_place), Some(writeback)) =
+                    (writeback_root.as_ref(), pattern_writeback.as_ref())
+                {
+                    let updated = self.materialize_pattern_writeback(writeback);
+                    self.emit(Instruction::Assign {
+                        target: writeback_place.clone(),
+                        value: Rvalue::Use(updated),
+                    });
+                }
+                self.terminate(Terminator::Goto(self.label(next_block)));
+                self.switch_to(selected);
+            }
+            if consumes_scrutinee {
+                self.lower_consuming_pattern_bindings(
+                    &arm.pattern,
+                    scrutinee.clone(),
+                    scrutinee_ty.as_ref(),
+                );
             }
             let arm_type = self.infer_expr_type(&arm.value);
             let value = self.lower_expr_for_owned_value(&arm.value, arm_type.as_ref());
@@ -6183,6 +6808,44 @@ impl<'a> Lowerer<'a> {
     fn materialize_pattern_writeback(&mut self, writeback: &PatternWriteback) -> Operand {
         match writeback {
             PatternWriteback::Use(operand) => operand.clone(),
+            PatternWriteback::Or {
+                ty,
+                selected,
+                alternatives,
+            } => {
+                debug_assert_eq!(selected.len(), alternatives.len());
+                let result = self.new_typed_temp(ty.clone());
+                let done = self.new_block("match_or_writeback_done");
+                let mut dispatch = self.current_block;
+                for (index, (flag, alternative)) in selected.iter().zip(alternatives).enumerate() {
+                    self.switch_to(dispatch);
+                    let apply = self.new_block("match_or_writeback_apply");
+                    let next = if index + 1 == alternatives.len() {
+                        apply
+                    } else {
+                        self.new_block("match_or_writeback_next")
+                    };
+                    if index + 1 == alternatives.len() {
+                        self.terminate(Terminator::Goto(self.label(apply)));
+                    } else {
+                        self.terminate(Terminator::Branch {
+                            condition: Operand::Place(flag.clone()),
+                            then_label: self.label(apply),
+                            else_label: self.label(next),
+                        });
+                    }
+                    self.switch_to(apply);
+                    let value = self.materialize_pattern_writeback(alternative);
+                    self.emit(Instruction::Assign {
+                        target: result.clone(),
+                        value: Rvalue::Use(value),
+                    });
+                    self.terminate(Terminator::Goto(self.label(done)));
+                    dispatch = next;
+                }
+                self.switch_to(done);
+                Operand::Place(result)
+            }
             PatternWriteback::Variant {
                 ty,
                 enum_name,
@@ -6213,6 +6876,13 @@ impl<'a> Lowerer<'a> {
         let short_block = self.new_block("logic_short");
         let join_block = self.new_block("logic_join");
         let left_value = self.lower_expr(left);
+        // A mutable match guard may perform a successful mutation in the
+        // left operand before the right operand traps. Publish that mutation
+        // before control advances so runtime failure cleanup observes the
+        // reconstructed scrutinee.
+        if !self.match_writeback_stack.is_empty() {
+            self.emit_active_match_writebacks();
+        }
 
         let (then_label, else_label) = match op {
             BinaryOp::And => (self.label(rhs_block), self.label(short_block)),
@@ -6970,7 +7640,7 @@ impl<'a> Lowerer<'a> {
                 });
             }
             ExprKind::Name(name)
-                if name == "Vec"
+                if name == "list"
                     && matches!(&callee.kind, ExprKind::Specialize { .. })
                     && args.is_empty() =>
             {
@@ -6990,7 +7660,7 @@ impl<'a> Lowerer<'a> {
                 });
             }
             ExprKind::Name(name)
-                if name == "Map"
+                if name == "dict"
                     && matches!(&callee.kind, ExprKind::Specialize { .. })
                     && args.is_empty() =>
             {
@@ -7046,19 +7716,30 @@ impl<'a> Lowerer<'a> {
                                     vec![Type::named("int64")]
                                 }
                                 BuiltinAssociatedFunction::StringFromBytes => {
-                                    vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])]
+                                    vec![Type::Named(
+                                        "list".to_string(),
+                                        vec![Type::named("uint8")],
+                                    )]
                                 }
                                 BuiltinAssociatedFunction::ArrayZeros => {
-                                    vec![Type::Named("Vec".to_string(), vec![Type::named("int64")])]
+                                    vec![Type::Named(
+                                        "list".to_string(),
+                                        vec![Type::named("int64")],
+                                    )]
                                 }
                                 BuiltinAssociatedFunction::ArrayFull => vec![
-                                    Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+                                    Type::Named("list".to_string(), vec![Type::named("int64")]),
                                     array_element_type,
                                 ],
                                 BuiltinAssociatedFunction::ArrayFromVec => vec![
-                                    Type::Named("Vec".to_string(), vec![array_element_type]),
-                                    Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+                                    Type::Named("list".to_string(), vec![array_element_type]),
+                                    Type::Named("list".to_string(), vec![Type::named("int64")]),
                                 ],
+                                BuiltinAssociatedFunction::ListWithCapacity
+                                | BuiltinAssociatedFunction::DictWithCapacity
+                                | BuiltinAssociatedFunction::SetWithCapacity => {
+                                    vec![Type::named("int64")]
+                                }
                             };
                             let mut lowered_by_param = vec![None::<MirArg>; ordered_args.len()];
                             for argument in args {
@@ -7110,17 +7791,17 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 if field == "to_bytes"
-                    && self.infer_expr_type(object).as_ref() == Some(&Type::named("String"))
+                    && self.infer_expr_type(object).as_ref() == Some(&Type::named("str"))
                 {
                     let value = self.lower_expr_for_passing(
                         object,
-                        Some(&Type::named("String")),
+                        Some(&Type::named("str")),
                         ReceiverKind::Borrow,
                     );
                     self.emit(Instruction::Assign {
                         target: temp.clone(),
                         value: Rvalue::Call {
-                            callee: CallTarget::Name("String.to_bytes".to_string()),
+                            callee: CallTarget::Name("str.to_bytes".to_string()),
                             args: vec![MirArg {
                                 name: None,
                                 value,
@@ -7578,6 +8259,23 @@ impl<'a> Lowerer<'a> {
                     },
                 });
             }
+            ExprKind::Name(name) if name == "range" => {
+                let lowered_args = args
+                    .iter()
+                    .map(|argument| MirArg {
+                        name: argument.name.clone(),
+                        value: self.lower_index_domain_expr(&argument.value),
+                        writeback_place: None,
+                    })
+                    .collect();
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name(name.clone()),
+                        args: lowered_args,
+                    },
+                });
+            }
             ExprKind::Name(name) if name == "select" => {
                 let lowered_args = args
                     .iter()
@@ -7627,7 +8325,7 @@ impl<'a> Lowerer<'a> {
                 let consumes_tasks = matches!(
                     tasks_type.as_ref(),
                     Some(Type::Named(container, elements))
-                        if container == "Vec"
+                        if container == "list"
                             && matches!(
                                 elements.as_slice(),
                                 [Type::Named(task, result)]
@@ -7936,7 +8634,7 @@ impl<'a> Lowerer<'a> {
                     let expected = if class_name == "Array" && class_args.len() == 1 {
                         match (builtin_member, index) {
                             (BuiltinMember::ArrayGet | BuiltinMember::ArraySet, 0) => {
-                                Some(Type::Named("Vec".to_string(), vec![Type::named("int32")]))
+                                Some(Type::Named("list".to_string(), vec![Type::named("int64")]))
                             }
                             (BuiltinMember::ArraySet, 1) | (BuiltinMember::ArrayFill, 0) => {
                                 Some(class_args[0].clone())
@@ -7964,8 +8662,20 @@ impl<'a> Lowerer<'a> {
                     } else {
                         self.infer_expr_type(&argument.value)
                     };
-                    let value =
-                        self.lower_expr_for_passing(&argument.value, expected.as_ref(), passing);
+                    let index_domain_argument = class_name == "list"
+                        && matches!(
+                            (builtin_member, index),
+                            (BuiltinMember::VecGet, 0)
+                                | (BuiltinMember::VecSet, 0)
+                                | (BuiltinMember::VecPop, 0)
+                                | (BuiltinMember::VecSwap, 0 | 1)
+                                | (BuiltinMember::VecInsert, 0)
+                        );
+                    let value = if index_domain_argument {
+                        self.lower_index_domain_expr(&argument.value)
+                    } else {
+                        self.lower_expr_for_passing(&argument.value, expected.as_ref(), passing)
+                    };
                     let writeback_place = (passing == ReceiverKind::BorrowMut)
                         .then(|| self.render_place_expr_option(&argument.value))
                         .flatten();
@@ -8272,6 +8982,10 @@ impl<'a> Lowerer<'a> {
                     .get(name)
                     .cloned()
                     .or_else(|| {
+                        self.resolve_constant_info(name)
+                            .map(|constant| constant.ty.clone())
+                    })
+                    .or_else(|| {
                         self.program
                             .imported_modules
                             .get(name)
@@ -8298,7 +9012,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Int(_) => Some(Type::named("int64")),
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
-            ExprKind::String(_) => Some(Type::named("String")),
+            ExprKind::String(_) => Some(Type::named("str")),
             ExprKind::Tuple(elements) => Some(Type::Tuple(
                 elements
                     .iter()
@@ -8309,21 +9023,21 @@ impl<'a> Lowerer<'a> {
                     .collect(),
             )),
             ExprKind::List(elements) => Some(Type::Named(
-                "Vec".to_string(),
+                "list".to_string(),
                 vec![elements
                     .first()
                     .and_then(|element| self.infer_expr_type(element))
                     .unwrap_or_else(|| Type::named("Unknown"))],
             )),
             ExprKind::Set(elements) => Some(Type::Named(
-                "Set".to_string(),
+                "set".to_string(),
                 vec![elements
                     .first()
                     .and_then(|element| self.infer_expr_type(element))
                     .unwrap_or_else(|| Type::named("Unknown"))],
             )),
             ExprKind::Map(entries) => Some(Type::Named(
-                "Map".to_string(),
+                "dict".to_string(),
                 vec![
                     entries
                         .first()
@@ -8338,7 +9052,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Comprehension { .. } => self
                 .comprehension_info_at(expr.span)
                 .map(|info| info.result_type.clone()),
-            ExprKind::FString(_) => Some(Type::named("String")),
+            ExprKind::FString(_) => Some(Type::named("str")),
             ExprKind::Specialize { expr, type_args } => {
                 if let Some((_runtime_name, function)) = self.resolve_function_value_target(expr) {
                     let substitutions = substitutions_from_decl_type_args(
@@ -8354,7 +9068,7 @@ impl<'a> Lowerer<'a> {
                     ExprKind::Name(name)
                         if matches!(
                             name.as_str(),
-                            "Option" | "Result" | "SendError" | "Queue" | "Vec" | "Set" | "Map"
+                            "Option" | "Result" | "SendError" | "Queue" | "list" | "set" | "dict"
                         ) =>
                     {
                         Some(Type::Named(
@@ -8372,6 +9086,10 @@ impl<'a> Lowerer<'a> {
             ExprKind::BuiltinOmitted => None,
             ExprKind::Unary { op, expr } => match op {
                 UnaryOp::Not => Some(Type::named("bool")),
+                UnaryOp::BitNot => {
+                    let value_ty = self.infer_expr_type(expr)?;
+                    is_builtin_unary_operator(*op, &value_ty).then_some(value_ty)
+                }
                 UnaryOp::Neg => match &expr.kind {
                     ExprKind::Int(value) => minimal_signed_type_for_negative_literal(*value),
                     _ => {
@@ -8463,7 +9181,7 @@ impl<'a> Lowerer<'a> {
                             return args.first().and_then(|argument| {
                                 match self.infer_expr_type(&argument.value) {
                                     Some(Type::Named(container, container_args))
-                                        if container == "Vec" && container_args.len() == 1 =>
+                                        if container == "list" && container_args.len() == 1 =>
                                     {
                                         match &container_args[0] {
                                             Type::Named(task, task_args)
@@ -8485,7 +9203,7 @@ impl<'a> Lowerer<'a> {
                             return args.first().and_then(|argument| {
                                 match self.infer_expr_type(&argument.value) {
                                     Some(Type::Named(container, container_args))
-                                        if container == "Vec" && container_args.len() == 1 =>
+                                        if container == "list" && container_args.len() == 1 =>
                                     {
                                         match &container_args[0] {
                                             Type::Named(task, task_args)
@@ -8507,29 +9225,52 @@ impl<'a> Lowerer<'a> {
                             return Some(Type::named("int64"));
                         }
                         if name == "str" {
-                            return Some(Type::named("String"));
+                            return Some(Type::named("str"));
                         }
-                        if name == "abs" || name == "min" || name == "max" || name == "sqrt" {
+                        if matches!(name.as_str(), "abs" | "min" | "max" | "sqrt") {
                             return args
                                 .first()
                                 .and_then(|argument| self.infer_expr_type(&argument.value));
                         }
+                        if name == "round" {
+                            let ty = args
+                                .first()
+                                .and_then(|argument| self.infer_expr_type(&argument.value))?;
+                            return Some(
+                                if matches!(
+                                    ty,
+                                    Type::Named(ref type_name, ref type_args)
+                                        if type_args.is_empty()
+                                            && matches!(type_name.as_str(), "float32" | "float64")
+                                ) {
+                                    Type::named("int64")
+                                } else {
+                                    ty
+                                },
+                            );
+                        }
+                        if name == "divmod" {
+                            let ty = args
+                                .first()
+                                .and_then(|argument| self.infer_expr_type(&argument.value))?;
+                            return Some(Type::Tuple(vec![ty.clone(), ty]));
+                        }
                         if name == "parse_int32" {
                             return Some(Type::Named(
                                 "Result".to_string(),
-                                vec![Type::named("int32"), Type::named("String")],
+                                vec![Type::named("int32"), Type::named("str")],
                             ));
                         }
                         if name == "parse_int64" {
                             return Some(Type::Named(
                                 "Result".to_string(),
-                                vec![Type::named("int64"), Type::named("String")],
+                                vec![Type::named("int64"), Type::named("str")],
                             ));
                         }
                         if name == "parse_float64" {
                             return Some(Type::Named(
                                 "Result".to_string(),
-                                vec![Type::named("float64"), Type::named("String")],
+                                vec![Type::named("float64"), Type::named("str")],
                             ));
                         }
                         if name == "Queue" {
@@ -8546,10 +9287,10 @@ impl<'a> Lowerer<'a> {
                         if name == "TaskGroup" {
                             return Some(Type::named("TaskGroup"));
                         }
-                        if name == "Vec" {
+                        if name == "list" {
                             return explicit_type_args.map(|type_args| {
                                 Type::Named(
-                                    "Vec".to_string(),
+                                    "list".to_string(),
                                     type_args
                                         .iter()
                                         .map(|ty| self.lower_type_ref_with_provenance(ty))
@@ -8557,10 +9298,10 @@ impl<'a> Lowerer<'a> {
                                 )
                             });
                         }
-                        if name == "Set" {
+                        if name == "set" {
                             return explicit_type_args.map(|type_args| {
                                 Type::Named(
-                                    "Set".to_string(),
+                                    "set".to_string(),
                                     type_args
                                         .iter()
                                         .map(|ty| self.lower_type_ref_with_provenance(ty))
@@ -8568,10 +9309,10 @@ impl<'a> Lowerer<'a> {
                                 )
                             });
                         }
-                        if name == "Map" {
+                        if name == "dict" {
                             return explicit_type_args.map(|type_args| {
                                 Type::Named(
-                                    "Map".to_string(),
+                                    "dict".to_string(),
                                     type_args
                                         .iter()
                                         .map(|ty| self.lower_type_ref_with_provenance(ty))
@@ -8786,10 +9527,15 @@ impl<'a> Lowerer<'a> {
                                             Some(Type::Named(
                                                 "Result".to_string(),
                                                 vec![
-                                                    Type::named("String"),
+                                                    Type::named("str"),
                                                     Type::named("bytes.Error"),
                                                 ],
                                             ))
+                                        }
+                                        BuiltinAssociatedFunction::ListWithCapacity
+                                        | BuiltinAssociatedFunction::DictWithCapacity
+                                        | BuiltinAssociatedFunction::SetWithCapacity => {
+                                            receiver_type
                                         }
                                     };
                                 }
@@ -8859,9 +9605,9 @@ impl<'a> Lowerer<'a> {
                             };
                         }
                         if let Type::Named(name, receiver_args) = &receiver_type {
-                            if name == "Vec" && receiver_args.len() == 1 {
+                            if name == "list" && receiver_args.len() == 1 {
                                 match field.as_str() {
-                                    "sort" | "sort_by" => return Some(Type::Unit),
+                                    "sort" => return Some(Type::Unit),
                                     "filter" => return Some(receiver_type.clone()),
                                     "map" => {
                                         let callback = BuiltinMember::VecMap
@@ -8875,7 +9621,7 @@ impl<'a> Lowerer<'a> {
                                             self.infer_expr_type(&argument.value)
                                         }) {
                                             return Some(Type::Named(
-                                                "Vec".to_string(),
+                                                "list".to_string(),
                                                 vec![*return_type],
                                             ));
                                         }
@@ -8917,6 +9663,12 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Member { object, field } => {
                 if let Some(module_path) = self.infer_module_path(object) {
+                    if let Some(constant) = self
+                        .module_namespace(&module_path)
+                        .and_then(|namespace| namespace.constants.get(field))
+                    {
+                        return Some(constant.ty.clone());
+                    }
                     if let Some(function) =
                         self.module_namespace(&module_path).and_then(|namespace| {
                             namespace
@@ -8999,10 +9751,10 @@ impl<'a> Lowerer<'a> {
                 }
                 match self.infer_expr_type(object)? {
                     Type::Tuple(elements) => elements.get(tuple_constant_index(index)?).cloned(),
-                    Type::Named(name, args) if name == "Vec" && args.len() == 1 => {
+                    Type::Named(name, args) if name == "list" && args.len() == 1 => {
                         Some(args[0].clone())
                     }
-                    Type::Named(name, args) if name == "Map" && args.len() == 2 => {
+                    Type::Named(name, args) if name == "dict" && args.len() == 2 => {
                         Some(args[1].clone())
                     }
                     Type::Named(name, args) if name == "Array" && args.len() == 1 => {
@@ -9482,23 +10234,23 @@ impl<'a> Lowerer<'a> {
                 Type::Named(name, args) if name == "TaskResult" && args.len() == 1 => {
                     return Some(match variant_name {
                         "Ready" => vec![args[0].clone()],
-                        "Error" => vec![Type::named("String")],
+                        "Error" => vec![Type::named("str")],
                         "TimedOut" | "Cancelled" => Vec::new(),
                         _ => return None,
                     });
                 }
                 Type::Named(name, args) if name == "WaitAny" && args.len() == 1 => {
                     return Some(match variant_name {
-                        "Ready" => vec![Type::named("int32"), args[0].clone()],
-                        "Error" => vec![Type::named("int32"), Type::named("String")],
+                        "Ready" => vec![Type::named("int64"), args[0].clone()],
+                        "Error" => vec![Type::named("int64"), Type::named("str")],
                         "TimedOut" | "Cancelled" => Vec::new(),
                         _ => return None,
                     });
                 }
                 Type::Named(name, args) if name == "WaitAll" && args.len() == 1 => {
                     return Some(match variant_name {
-                        "Ready" => vec![Type::Named("Vec".to_string(), vec![args[0].clone()])],
-                        "Error" => vec![Type::named("int32"), Type::named("String")],
+                        "Ready" => vec![Type::Named("list".to_string(), vec![args[0].clone()])],
+                        "Error" => vec![Type::named("int64"), Type::named("str")],
                         "TimedOut" | "Cancelled" => Vec::new(),
                         _ => return None,
                     });
@@ -9506,14 +10258,14 @@ impl<'a> Lowerer<'a> {
                 Type::Named(name, args) if name == "SelectOutcome" && args.len() == 2 => {
                     return Some(match variant_name {
                         "Queue" => vec![
-                            Type::named("int32"),
+                            Type::named("int64"),
                             Type::Named("QueueReceive".to_string(), vec![args[0].clone()]),
                         ],
                         "Task" => vec![
-                            Type::named("int32"),
+                            Type::named("int64"),
                             Type::Named("TaskResult".to_string(), vec![args[1].clone()]),
                         ],
-                        "Deadline" => vec![Type::named("int32")],
+                        "Deadline" => vec![Type::named("int64")],
                         "Cancelled" => Vec::new(),
                         _ => return None,
                     });
@@ -9558,7 +10310,7 @@ impl<'a> Lowerer<'a> {
         let Type::Named(name, args) = receiver_type else {
             return None;
         };
-        let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+        let bytes_ty = Type::Named("list".to_string(), vec![Type::named("uint8")]);
         let io_error_ty = Type::Named("io.Error".to_string(), Vec::new());
         if args.is_empty()
             && field == "to_float"
@@ -9581,6 +10333,25 @@ impl<'a> Lowerer<'a> {
             return Some(Type::named("float64"));
         }
         if args.is_empty()
+            && matches!(
+                BuiltinMember::resolve(name, field),
+                Some(
+                    BuiltinMember::IntegerWrappingAdd
+                        | BuiltinMember::IntegerWrappingSub
+                        | BuiltinMember::IntegerWrappingMul
+                        | BuiltinMember::IntegerSaturatingAdd
+                        | BuiltinMember::IntegerSaturatingSub
+                        | BuiltinMember::IntegerSaturatingMul
+                        | BuiltinMember::IntegerWrappingShl
+                        | BuiltinMember::IntegerWrappingShr
+                        | BuiltinMember::IntegerSaturatingShl
+                        | BuiltinMember::IntegerSaturatingShr
+                )
+            )
+        {
+            return Some(receiver_type.clone());
+        }
+        if args.is_empty()
             && field == "to_string"
             && matches!(
                 name.as_str(),
@@ -9601,10 +10372,10 @@ impl<'a> Lowerer<'a> {
                     | "float64"
             )
         {
-            return Some(Type::named("String"));
+            return Some(Type::named("str"));
         }
         match (name.as_str(), field) {
-            ("Array", "shape") => Some(Type::Named("Vec".to_string(), vec![Type::named("int64")])),
+            ("Array", "shape") => Some(Type::Named("list".to_string(), vec![Type::named("int64")])),
             ("Array", "len") => Some(Type::named("int64")),
             ("Array", "clone")
             | ("Array", "wrapping_add")
@@ -9623,83 +10394,79 @@ impl<'a> Lowerer<'a> {
             ("Array", "fill") => Some(Type::Unit),
             ("Array", "sum") | ("Array", "min") | ("Array", "max") => args.first().cloned(),
             ("Array", "mean") => Some(Type::named("float64")),
-            ("String", "len" | "byte_len") => Some(Type::named("int64")),
-            ("String", "contains") | ("String", "starts_with") | ("String", "ends_with") => {
+            ("str", "len" | "byte_len") => Some(Type::named("int64")),
+            ("str", "contains") | ("str", "starts_with") | ("str", "ends_with") => {
                 Some(Type::named("bool"))
             }
-            ("String", "split") => {
-                Some(Type::Named("Vec".to_string(), vec![Type::named("String")]))
+            ("str", "split") => Some(Type::Named("list".to_string(), vec![Type::named("str")])),
+            ("str", "replace")
+            | ("str", "to_lower")
+            | ("str", "to_upper")
+            | ("str", "trim")
+            | ("str", "join")
+            | ("str", "clone") => Some(Type::named("str")),
+            ("str", "strip_prefix") | ("str", "strip_suffix") => {
+                Some(Type::Named("Option".to_string(), vec![Type::named("str")]))
             }
-            ("String", "replace")
-            | ("String", "to_lower")
-            | ("String", "to_upper")
-            | ("String", "trim")
-            | ("String", "join")
-            | ("String", "clone") => Some(Type::named("String")),
-            ("String", "strip_prefix") | ("String", "strip_suffix") => Some(Type::Named(
+            ("list", "len") => Some(Type::named("int64")),
+            ("list", "is_empty") => Some(Type::named("bool")),
+            ("list", "copy") => Some(Type::Named("list".to_string(), args.clone())),
+            ("list", "append")
+            | ("list", "extend")
+            | ("list", "clear")
+            | ("list", "reverse")
+            | ("list", "sort")
+            | ("list", "reserve")
+            | ("list", "remove")
+            | ("list", "swap")
+            | ("list", "insert") => Some(Type::Unit),
+            ("list", "filter") => Some(Type::Named("list".to_string(), args.clone())),
+            ("list", "contains") => Some(Type::named("bool")),
+            ("list", "index") | ("list", "count") => Some(Type::named("int64")),
+            ("list", "pop") | ("list", "set") => args.first().cloned(),
+            ("list", "get") => Some(Type::Named(
                 "Option".to_string(),
-                vec![Type::named("String")],
-            )),
-            ("Vec", "len") => Some(Type::named("int64")),
-            ("Vec", "is_empty") => Some(Type::named("bool")),
-            ("Vec", "clone") => Some(Type::Named("Vec".to_string(), args.clone())),
-            ("Vec", "push")
-            | ("Vec", "extend")
-            | ("Vec", "clear")
-            | ("Vec", "reverse")
-            | ("Vec", "sort")
-            | ("Vec", "sort_by") => Some(Type::Unit),
-            ("Vec", "filter") => Some(Type::Named("Vec".to_string(), args.clone())),
-            ("Vec", "swap") | ("Vec", "contains") | ("Vec", "insert") => Some(Type::named("bool")),
-            ("Vec", "pop") | ("Vec", "get") | ("Vec", "set") | ("Vec", "remove") => {
-                Some(Type::Named(
-                    "Option".to_string(),
-                    vec![args
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| Type::named("Unknown"))],
-                ))
-            }
-            ("Set", "len") => Some(Type::named("int64")),
-            ("Set", "is_empty") => Some(Type::named("bool")),
-            ("Set", "clone") => Some(Type::Named("Set".to_string(), args.clone())),
-            ("Set", "contains") | ("Set", "insert") | ("Set", "remove") => {
-                Some(Type::named("bool"))
-            }
-            ("Map", "len") => Some(Type::named("int64")),
-            ("Map", "is_empty") => Some(Type::named("bool")),
-            ("Map", "clone") => Some(Type::Named("Map".to_string(), args.clone())),
-            ("Map", "contains_key") => Some(Type::named("bool")),
-            ("Map", "keys") => Some(Type::Named(
-                "Vec".to_string(),
                 vec![args
                     .first()
                     .cloned()
                     .unwrap_or_else(|| Type::named("Unknown"))],
             )),
-            ("Map", "values") => Some(Type::Named(
-                "Vec".to_string(),
+            ("set", "len") => Some(Type::named("int64")),
+            ("set", "is_empty") => Some(Type::named("bool")),
+            ("set", "copy") => Some(Type::Named("set".to_string(), args.clone())),
+            ("set", "contains") => Some(Type::named("bool")),
+            ("set", "add" | "remove" | "discard" | "clear" | "reserve") => Some(Type::Unit),
+            ("dict", "len") => Some(Type::named("int64")),
+            ("dict", "is_empty") => Some(Type::named("bool")),
+            ("dict", "copy") => Some(Type::Named("dict".to_string(), args.clone())),
+            ("dict", "contains_key") => Some(Type::named("bool")),
+            ("dict", "keys") => Some(Type::Named(
+                "list".to_string(),
+                vec![args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"))],
+            )),
+            ("dict", "values") => Some(Type::Named(
+                "list".to_string(),
                 vec![args
                     .get(1)
                     .cloned()
                     .unwrap_or_else(|| Type::named("Unknown"))],
             )),
-            ("Map", "items") | ("Map", "entries") => Some(Type::Named(
-                "Vec".to_string(),
-                vec![Type::Named(
-                    "MapEntry".to_string(),
-                    vec![
-                        args.first()
-                            .cloned()
-                            .unwrap_or_else(|| Type::named("Unknown")),
-                        args.get(1)
-                            .cloned()
-                            .unwrap_or_else(|| Type::named("Unknown")),
-                    ],
-                )],
+            ("dict", "items") => Some(Type::Named(
+                "list".to_string(),
+                vec![Type::Tuple(vec![
+                    args.first()
+                        .cloned()
+                        .unwrap_or_else(|| Type::named("Unknown")),
+                    args.get(1)
+                        .cloned()
+                        .unwrap_or_else(|| Type::named("Unknown")),
+                ])],
             )),
-            ("Map", "clear") | ("Map", "extend") => Some(Type::Unit),
-            ("Map", "get") | ("Map", "set") | ("Map", "remove") => Some(Type::Named(
+            ("dict", "clear") | ("dict", "update") | ("dict", "reserve") => Some(Type::Unit),
+            ("dict", "get") | ("dict", "set") | ("dict", "remove") => Some(Type::Named(
                 "Option".to_string(),
                 vec![args
                     .get(1)
@@ -9768,7 +10535,7 @@ impl<'a> Lowerer<'a> {
             }
             ("fs.File", "read_all") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("fs.File", "read_bytes") => Some(Type::Named(
                 "Result".to_string(),
@@ -9781,7 +10548,7 @@ impl<'a> Lowerer<'a> {
             ("process.Completed", "status") => Some(Type::named("process.ExitStatus")),
             ("process.Completed", "success") => Some(Type::named("bool")),
             ("process.Completed", "stdout") | ("process.Completed", "stderr") => {
-                Some(Type::named("String"))
+                Some(Type::named("str"))
             }
             ("process.Completed", "stdout_bytes") | ("process.Completed", "stderr_bytes") => {
                 Some(bytes_ty.clone())
@@ -9796,19 +10563,19 @@ impl<'a> Lowerer<'a> {
             )),
             ("net.TcpListener", "local_addr") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.TcpListener", "close") => Some(Type::Unit),
             ("net.TcpStream", "read_all")
             | ("net.TcpStream", "local_addr")
             | ("net.TcpStream", "peer_addr") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.TcpStream", "read_line") => Some(Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                     io_error_ty.clone(),
                 ],
             )),
@@ -9853,14 +10620,14 @@ impl<'a> Lowerer<'a> {
             )),
             ("net.UdpSocket", "local_addr") | ("net.UdpSocket", "peer_addr") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.UdpSocket", "close") => Some(Type::Unit),
-            ("net.UdpDatagram", "address") => Some(Type::named("String")),
+            ("net.UdpDatagram", "address") => Some(Type::named("str")),
             ("net.UdpDatagram", "bytes") => Some(bytes_ty.clone()),
             ("net.UdpDatagram", "text") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.HttpListener", "accept") => Some(Type::Named(
                 "Result".to_string(),
@@ -9868,19 +10635,19 @@ impl<'a> Lowerer<'a> {
             )),
             ("net.HttpListener", "local_addr") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.HttpListener", "close") => Some(Type::Unit),
             ("net.HttpExchange", "method") | ("net.HttpExchange", "path") => {
-                Some(Type::named("String"))
+                Some(Type::named("str"))
             }
             ("net.HttpExchange", "headers") | ("net.HttpResponse", "headers") => Some(Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("String")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("str")],
             )),
             ("net.HttpExchange", "body_text") | ("net.HttpResponse", "text") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.HttpExchange", "body_bytes") | ("net.HttpResponse", "bytes") => {
                 Some(bytes_ty.clone())
@@ -9890,7 +10657,7 @@ impl<'a> Lowerer<'a> {
             ),
             ("net.HttpExchange", "close") => Some(Type::Unit),
             ("net.HttpResponse", "status") => Some(Type::named("int32")),
-            ("net.HttpResponse", "reason") => Some(Type::named("String")),
+            ("net.HttpResponse", "reason") => Some(Type::named("str")),
             ("net.HttpResponse", "close") => Some(Type::Unit),
             ("net.WebSocketListener", "accept") => Some(Type::Named(
                 "Result".to_string(),
@@ -9898,7 +10665,7 @@ impl<'a> Lowerer<'a> {
             )),
             ("net.WebSocketListener", "local_addr") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.WebSocketListener", "close") => Some(Type::Unit),
             ("net.WebSocket", "send_text") | ("net.WebSocket", "send_bytes") => Some(Type::Named(
@@ -9908,7 +10675,7 @@ impl<'a> Lowerer<'a> {
             ("net.WebSocket", "recv_text") => Some(Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                     io_error_ty.clone(),
                 ],
             )),
@@ -9928,7 +10695,7 @@ impl<'a> Lowerer<'a> {
             ("net.UnixStream", "read_line") => Some(Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                     io_error_ty.clone(),
                 ],
             )),
@@ -9947,13 +10714,13 @@ impl<'a> Lowerer<'a> {
             )),
             ("net.TlsListener", "local_addr") => Some(Type::Named(
                 "Result".to_string(),
-                vec![Type::named("String"), io_error_ty.clone()],
+                vec![Type::named("str"), io_error_ty.clone()],
             )),
             ("net.TlsListener", "close") => Some(Type::Unit),
             ("net.TlsStream", "read_line") => Some(Type::Named(
                 "Result".to_string(),
                 vec![
-                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("Option".to_string(), vec![Type::named("str")]),
                     io_error_ty.clone(),
                 ],
             )),
@@ -10089,7 +10856,7 @@ impl<'a> Lowerer<'a> {
             Operand::Duration(_) => Some(Type::named("Duration")),
             Operand::Float(_) => Some(Type::named("float64")),
             Operand::Bool(_) => Some(Type::named("bool")),
-            Operand::String(_) => Some(Type::named("String")),
+            Operand::String(_) => Some(Type::named("str")),
             Operand::Unit => Some(Type::Unit),
         }
     }
@@ -10230,9 +10997,9 @@ fn tuple_constant_index(expr: &Expr) -> Option<usize> {
 
 fn array_coordinate_type(expr: &Expr) -> Type {
     match &expr.kind {
-        ExprKind::Tuple(elements) => Type::Tuple(vec![Type::named("int32"); elements.len()]),
+        ExprKind::Tuple(elements) => Type::Tuple(vec![Type::named("int64"); elements.len()]),
         ExprKind::Group(inner) => array_coordinate_type(inner),
-        _ => Type::named("int32"),
+        _ => Type::named("int64"),
     }
 }
 
@@ -10261,7 +11028,7 @@ fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
                 return Type::Unit;
             }
             let name = match name.as_str() {
-                "str" => "String",
+                "str" => "str",
                 "int" => "int64",
                 name => name,
             };
@@ -10272,6 +11039,7 @@ fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
 
 fn pattern_contains_binding(pattern: &Pattern) -> bool {
     match pattern {
+        Pattern::Or(pattern) => pattern.alternatives.iter().any(pattern_contains_binding),
         Pattern::Binding(_) => true,
         Pattern::Variant(pattern) => pattern.subpatterns.iter().any(pattern_contains_binding),
         Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_contains_binding),
@@ -10281,6 +11049,10 @@ fn pattern_contains_binding(pattern: &Pattern) -> bool {
 
 fn pattern_requires_runtime_test(pattern: &Pattern) -> bool {
     match pattern {
+        Pattern::Or(pattern) => pattern
+            .alternatives
+            .iter()
+            .any(pattern_requires_runtime_test),
         Pattern::Literal(_) | Pattern::Variant(_) => true,
         Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_requires_runtime_test),
         Pattern::Binding(_) | Pattern::Wildcard(_) => false,

@@ -1,5 +1,5 @@
 # Long elif chain
-def grade(score: int32) -> String:
+def grade(score: int32) -> str:
     if score >= 97:
         return "A+"
     elif score >= 93:

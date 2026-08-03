@@ -1,6 +1,6 @@
 class User:
-    name: String
-    email: String?
+    name: str
+    email: str?
 
 def main() -> int32:
     u1 = User(name="Alice", email=Option.Some("alice@test.com"))

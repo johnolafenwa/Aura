@@ -1,5 +1,5 @@
 enum Opt:
-    Some(Vec[int32])
+    Some(list[int32])
     None
 
 def main() -> int32:
@@ -8,7 +8,7 @@ def main() -> int32:
         case Some(y):
             match mut x:
                 case Some(z):
-                    z.push(500)
+                    z.append(500)
                 case None:
                     print("none")
             print(y.len())

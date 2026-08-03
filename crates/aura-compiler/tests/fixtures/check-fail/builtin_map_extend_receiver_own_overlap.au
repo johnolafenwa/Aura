@@ -1,3 +1,0 @@
-def main():
-    mut values: Map[String, int32] = {"one": 1}
-    values.extend(values)

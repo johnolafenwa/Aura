@@ -1,5 +1,5 @@
-def consume(values: own Vec[int32]) -> int32:
+def consume(values: own list[int32]) -> int32:
     return 0
 
-def invalid(values: own Vec[int32]) -> Vec[int32]:
+def invalid(values: own list[int32]) -> list[int32]:
     return values[:consume(values)]

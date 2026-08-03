@@ -1,6 +1,6 @@
 trait Probe:
-    def contains(self, needle: String) -> bool
+    def contains(self, needle: str) -> bool
 
-impl Probe for String:
-    def contains(self, needle: String) -> bool:
+impl Probe for str:
+    def contains(self, needle: str) -> bool:
         return false

@@ -1,0 +1,3 @@
+def main() -> int32:
+    values: dict[str, int32] = {"aura": 1, "codex": "bad"}
+    return 0

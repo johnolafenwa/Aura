@@ -1,8 +1,0 @@
-def main() -> int32:
-    mut values = Vec[int32]()
-    values.extend([1, 2, 3])
-
-    for value in values:
-        print(value)
-
-    return 0

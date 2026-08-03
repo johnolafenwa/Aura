@@ -5,7 +5,7 @@ def supplier[T](callback: def() -> Option[T] = empty) -> def() -> Option[T]:
     return callback
 
 def main() -> int32:
-    supplied = supplier[String]()
+    supplied = supplier[str]()
     match supplied():
         case Option.None:
             print("ordinary-none")

@@ -12,7 +12,7 @@ use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
 use crate::diag::{
     Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span, StructuredDiagnostic,
 };
-use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
+use crate::integer::{IntegerBounds, IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
     run_lightweight_root_task, spawn_lightweight_task, ArrayDType, ArrayStorage, ArrayValue,
@@ -113,7 +113,7 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
         })
     );
 
-    let index = integer_vector(IntegerKind::Int32, &[0, -1]);
+    let index = integer_vector(IntegerKind::Int64, &[0, -1]);
     let indexed = super::aura_direct_array_index(array, index, 7, 9);
     assert_eq!(
         unsafe { take_value(indexed) },
@@ -123,14 +123,14 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
     let vector_shape = integer_vector(IntegerKind::Int64, &[4]);
     let vector_values = integer_vector(IntegerKind::Int32, &[5, 6, 7, 8]);
     let vector = super::aura_direct_array_from_vec(0, vector_values, vector_shape, 7, 9);
-    let scalar_index = super::aura_direct_box_i32(-1);
+    let scalar_index = super::aura_direct_box_i64(-1);
     let scalar_indexed = super::aura_direct_array_index(vector, scalar_index, 7, 9);
     assert_eq!(
         unsafe { take_value(scalar_indexed) },
         Value::Int(IntegerValue::from_i32(8)),
-        "rank-one Array indexing lowers its single coordinate as a scalar int32"
+        "rank-one Array indexing lowers its single coordinate as a scalar int64"
     );
-    let missing_index = super::aura_direct_box_i32(9);
+    let missing_index = super::aura_direct_box_i64(9);
     let missing = super::aura_direct_array_get(vector, missing_index, 7, 9);
     expect_option_none(missing);
 
@@ -260,7 +260,7 @@ fn direct_array_abi_accepts_positive_literal_representations_at_signed_boundarie
     let values = integer_vector(IntegerKind::Int32, &[7, 11]);
     let array = super::aura_direct_array_from_vec(0, values, shape, 17, 19);
 
-    let scalar_coordinate = boxed_value(tagged_literal(1, IntegerKind::Int32));
+    let scalar_coordinate = boxed_value(tagged_literal(1, IntegerKind::Int64));
     let scalar_result = super::aura_direct_array_index(array, scalar_coordinate, 23, 29);
     assert_eq!(
         unsafe { take_value(scalar_result) },
@@ -268,8 +268,8 @@ fn direct_array_abi_accepts_positive_literal_representations_at_signed_boundarie
     );
 
     let vector_coordinate = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("int32"),
-        elements: vec![tagged_literal(0, IntegerKind::Int32)],
+        element_type: Type::named("int64"),
+        elements: vec![tagged_literal(0, IntegerKind::Int64)],
     }));
     let vector_result = super::aura_direct_array_index(array, vector_coordinate, 31, 37);
     assert_eq!(
@@ -329,7 +329,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     assert_diagnostic(
         &diagnostic,
         "AU4007",
-        "array shape requires `Vec[int64]`, found `Vec[int32]`",
+        "array shape requires `list[int64]`, found `list[int32]`",
         Some(Span::new(75, 77)),
     );
 
@@ -393,7 +393,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     assert_diagnostic(
         &diagnostic,
         "AU4007",
-        "Array[int32].from_vec requires `Vec[int32]`, found `Vec[int64]`",
+        "Array[int32].from_list requires `list[int32]`, found `list[int64]`",
         Some(Span::new(89, 97)),
     );
 
@@ -470,7 +470,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
         Some(Span::new(131, 137)),
     );
 
-    let scalar_coordinate = super::aura_direct_box_i64(0);
+    let scalar_coordinate = super::aura_direct_box_i32(0);
     let scalar_coordinate_address = scalar_coordinate as usize;
     let array_address = array as usize;
     let diagnostic = capture_diagnostic(move || {
@@ -484,13 +484,13 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     assert_diagnostic(
         &diagnostic,
         "AU4007",
-        "array coordinates require int32 values",
+        "array coordinates require int64 values",
         Some(Span::new(139, 149)),
     );
 
     let wrong_tuple_coordinate = boxed_value(Value::Tuple(TupleValue {
-        element_types: vec![Type::named("int64")],
-        elements: vec![Value::Int(IntegerValue::from_i64(0))],
+        element_types: vec![Type::named("int32")],
+        elements: vec![Value::Int(IntegerValue::from_i32(0))],
     }));
     let wrong_tuple_coordinate_address = wrong_tuple_coordinate as usize;
     let array_address = array as usize;
@@ -505,13 +505,13 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     assert_diagnostic(
         &diagnostic,
         "AU4007",
-        "array coordinates require int32 values",
+        "array coordinates require int64 values",
         Some(Span::new(150, 151)),
     );
 
     let tuple_coordinate = boxed_value(Value::Tuple(TupleValue {
-        element_types: vec![Type::named("int32")],
-        elements: vec![Value::Int(IntegerValue::from_i32(0))],
+        element_types: vec![Type::named("int64")],
+        elements: vec![Value::Int(IntegerValue::from_i64(0))],
     }));
     let indexed = super::aura_direct_array_index(array, tuple_coordinate, 151, 157);
     assert_eq!(
@@ -533,12 +533,12 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     assert_diagnostic(
         &diagnostic,
         "AU4007",
-        "array coordinates require `Vec[int32]` or an int32 tuple, found `String`",
+        "array coordinates require `list[int64]` or an int64 tuple, found `str`",
         Some(Span::new(163, 167)),
     );
 
     let malformed_coordinates = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("int32"),
+        element_type: Type::named("int64"),
         elements: vec![Value::String("zero".to_string())],
     }));
     let malformed_coordinates_address = malformed_coordinates as usize;
@@ -554,13 +554,13 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     assert_diagnostic(
         &diagnostic,
         "AU4007",
-        "array coordinate on axis 0 is not an int32 value",
+        "array coordinate on axis 0 is not an int64 value",
         Some(Span::new(173, 179)),
     );
 
     let wrong_kind_coordinates = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("int32"),
-        elements: vec![Value::Int(IntegerValue::from_i64(0))],
+        element_type: Type::named("int64"),
+        elements: vec![Value::Int(IntegerValue::from_i32(0))],
     }));
     let wrong_kind_coordinates_address = wrong_kind_coordinates as usize;
     let array_address = array as usize;
@@ -575,7 +575,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     assert_diagnostic(
         &diagnostic,
         "AU4007",
-        "array coordinate on axis 0 is not an int32 value",
+        "array coordinate on axis 0 is not an int64 value",
         Some(Span::new(181, 191)),
     );
 
@@ -672,6 +672,7 @@ fn direct_integer_width_public_abi_preserves_validation_diagnostics() {
     let int32 = super::aura_direct_box_i32(1);
     let other_int32 = super::aura_direct_box_i32(2);
     let int64 = super::aura_direct_box_i64(2);
+    let int32_width = super::aura_direct_box_i32(32);
     let boolean = bool_value(true);
 
     let diagnostic = capture(int32, other_int32, 9, 1, 181, 191);
@@ -706,7 +707,15 @@ fn direct_integer_width_public_abi_preserves_validation_diagnostics() {
     );
     assert_eq!(diagnostic.span, Some(Span::new(223, 227)));
 
-    for value in [int32, other_int32, int64, boolean] {
+    let diagnostic = capture(int32, int32_width, 3, 1, 229, 233);
+    assert_eq!(diagnostic.code, "AU4002");
+    assert_eq!(
+        diagnostic.message,
+        "integer shift count `32` is outside the required range `0..32`"
+    );
+    assert_eq!(diagnostic.span, Some(Span::new(229, 233)));
+
+    for value in [int32, other_int32, int64, int32_width, boolean] {
         unsafe {
             release_value(value);
         }
@@ -895,7 +904,7 @@ fn direct_nested_array_collection_reads_and_clones_use_fallible_copy() {
         .contains("Array shape could not allocate"));
 
     let map = boxed_value(Value::Map(MapValue {
-        key_type: Type::named("String"),
+        key_type: Type::named("str"),
         value_type: Type::Named("Array".to_string(), vec![Type::named("int32")]),
         entries: vec![(Value::String("item".to_string()), array_value(11))],
     }));
@@ -1347,7 +1356,7 @@ fn direct_ffi_value_conversion_reports_range_type_and_nominal_mismatches() {
             &Value::String("not-a-bool".to_string()),
             &super::DirectFfiType::scalar(FfiType::Bool),
         ),
-        Err("FFI argument expected bool, but received `String`".to_string())
+        Err("FFI argument expected bool, but received `str`".to_string())
     );
 
     let handle = crate::runtime_value::FfiHandleValue::new(
@@ -1784,14 +1793,14 @@ fn select_sources(element_types: Vec<Type>, elements: Vec<Value>) -> *mut Opaque
 #[test]
 fn direct_runtime_tuple_type_names_parse_and_match_structurally() {
     assert_eq!(
-        runtime_type_from_name("(int32, String)"),
-        Type::Tuple(vec![Type::named("int32"), Type::named("String")])
+        runtime_type_from_name("(int32, str)"),
+        Type::Tuple(vec![Type::named("int32"), Type::named("str")])
     );
     assert_eq!(
-        runtime_type_from_name("Vec[(String,)]"),
+        runtime_type_from_name("list[(str,)]"),
         Type::Named(
-            "Vec".to_string(),
-            vec![Type::Tuple(vec![Type::named("String")])]
+            "list".to_string(),
+            vec![Type::Tuple(vec![Type::named("str")])]
         )
     );
 
@@ -1803,7 +1812,7 @@ fn direct_runtime_tuple_type_names_parse_and_match_structurally() {
     ));
     assert!(!runtime_type_pattern_matches(
         &pattern,
-        &Type::Tuple(vec![Type::named("int64"), Type::named("String")]),
+        &Type::Tuple(vec![Type::named("int64"), Type::named("str")]),
         &mut BTreeMap::new(),
     ));
     assert!(!runtime_type_pattern_matches(
@@ -1813,7 +1822,7 @@ fn direct_runtime_tuple_type_names_parse_and_match_structurally() {
     ));
 
     let value = Value::Tuple(TupleValue {
-        element_types: vec![Type::named("int64"), Type::named("String")],
+        element_types: vec![Type::named("int64"), Type::named("str")],
         elements: vec![
             Value::Int(IntegerValue::from_signed(1)),
             Value::String("one".to_string()),
@@ -1822,7 +1831,7 @@ fn direct_runtime_tuple_type_names_parse_and_match_structurally() {
     assert_eq!(value_type_name(&value), "tuple");
     assert_eq!(
         inferred_collection_type(&value),
-        Type::Tuple(vec![Type::named("int64"), Type::named("String")])
+        Type::Tuple(vec![Type::named("int64"), Type::named("str")])
     );
 }
 
@@ -1958,7 +1967,7 @@ fn expect_task_result_error_message(ptr: *mut OpaqueValue) -> String {
                 other => panic!("expected string payload, found {:?}", other),
             }
         }
-        other => panic!("expected TaskResult.Error(String), found {:?}", other),
+        other => panic!("expected TaskResult.Error(str), found {:?}", other),
     }
 }
 
@@ -2028,7 +2037,7 @@ fn expect_option_some_string(ptr: *mut OpaqueValue) -> String {
                 other => panic!("expected string payload, found {:?}", other),
             }
         }
-        other => panic!("expected Option.Some(String), found {:?}", other),
+        other => panic!("expected Option.Some(str), found {:?}", other),
     }
 }
 
@@ -2268,7 +2277,7 @@ fn direct_json_host_abi_rejects_malformed_values_with_precise_diagnostics() {
     );
     assert_au4001(
         direct_json_host_builtin_error("json::parse", vec![Some(Value::Bool(true))]),
-        "`json::parse` expects argument 1 to be `String`",
+        "`json::parse` expects argument 1 to be `str`",
     );
 
     assert_au4001(
@@ -2342,7 +2351,7 @@ fn direct_json_host_abi_rejects_malformed_values_with_precise_diagnostics() {
             "json::into_string",
             vec![Some(Value::EnumVariant(EnumVariantValue {
                 enum_name: "Other".to_string(),
-                variant_name: "String".to_string(),
+                variant_name: "str".to_string(),
                 payloads: vec![Value::String("value".to_string())],
             }))],
         ),
@@ -2415,7 +2424,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
     let parse_source_allocation = unsafe {
         super::with_value(parse_source, |value| match value {
             Value::String(value) => value.as_ptr(),
-            other => panic!("expected parse source String, found {other:?}"),
+            other => panic!("expected parse source str, found {other:?}"),
         })
     };
     let parsed = direct_json_host_builtin_call("json::parse", &[parse_source]);
@@ -2532,15 +2541,15 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
                         assert_eq!(value, "aura");
                         assert_eq!(value.as_ptr(), string_allocation);
                     }
-                    other => panic!("expected extracted String, found {other:?}"),
+                    other => panic!("expected extracted str, found {other:?}"),
                 }
             }
-            other => panic!("expected Option.Some(String), found {other:?}"),
+            other => panic!("expected Option.Some(str), found {other:?}"),
         });
         super::with_value(owned_string, |value| {
             assert!(
                 matches!(value, Value::Unit),
-                "owned String source was not moved"
+                "owned str source was not moved"
             )
         });
     }
@@ -2638,7 +2647,7 @@ fn direct_json_parse_materialization_allocation_failure_is_au4005_and_preserves_
     let source_ptr = unsafe {
         super::with_value(source, |value| match value {
             Value::String(value) => value.as_ptr(),
-            other => panic!("expected String, found {other:?}"),
+            other => panic!("expected str, found {other:?}"),
         })
     };
 
@@ -2661,7 +2670,7 @@ fn direct_json_parse_materialization_allocation_failure_is_au4005_and_preserves_
     unsafe {
         super::with_value(source, |value| match value {
             Value::String(value) => assert_eq!(value.as_ptr(), source_ptr),
-            other => panic!("expected String, found {other:?}"),
+            other => panic!("expected str, found {other:?}"),
         });
         release_value(source);
     }
@@ -2697,7 +2706,7 @@ fn direct_json_parse_reserves_capacity_before_borrowing_and_copying_the_source()
             .expect("codec saturation must park before the direct adapter borrows its source");
         match &mut *source_guard {
             Value::String(source) => *source = "true".to_string(),
-            other => panic!("expected direct JSON source String, found {other:?}"),
+            other => panic!("expected direct JSON source str, found {other:?}"),
         }
         drop(source_guard);
 
@@ -2757,7 +2766,7 @@ fn direct_bytes_adapter_propagates_materialization_allocation_failure_as_au4005(
     let source_elements = unsafe {
         super::with_value(source, |value| match value {
             Value::Vec(value) => value.elements.as_ptr(),
-            other => panic!("expected Vec[uint8], found {other:?}"),
+            other => panic!("expected list[uint8], found {other:?}"),
         })
     };
     let args = super::DirectHostArgBuffer {
@@ -2777,7 +2786,7 @@ fn direct_bytes_adapter_propagates_materialization_allocation_failure_as_au4005(
     unsafe {
         super::with_value(source, |value| match value {
             Value::Vec(value) => assert_eq!(value.elements.as_ptr(), source_elements),
-            other => panic!("expected Vec[uint8], found {other:?}"),
+            other => panic!("expected list[uint8], found {other:?}"),
         });
     }
 }
@@ -2799,7 +2808,7 @@ fn direct_bytes_host_ffi_dispatches_without_consuming_borrowed_input() {
     let source_elements = unsafe {
         super::with_value(source, |value| match value {
             Value::Vec(value) => value.elements.as_ptr(),
-            other => panic!("expected Vec[uint8], found {other:?}"),
+            other => panic!("expected list[uint8], found {other:?}"),
         })
     };
 
@@ -2811,7 +2820,7 @@ fn direct_bytes_host_ffi_dispatches_without_consuming_borrowed_input() {
     unsafe {
         super::with_value(source, |value| match value {
             Value::Vec(value) => assert_eq!(value.elements.as_ptr(), source_elements),
-            other => panic!("expected Vec[uint8], found {other:?}"),
+            other => panic!("expected list[uint8], found {other:?}"),
         });
         release_value(encoded);
         release_value(source);
@@ -2886,7 +2895,27 @@ fn capture_runtime_error_message(f: impl FnOnce() + panic::UnwindSafe) -> String
     capture_runtime_diagnostic(f).message
 }
 
-fn capture_direct_boundary_error_message(work: impl FnOnce() + Send + 'static) -> String {
+#[test]
+fn direct_binary_shift_preserves_the_structured_code_and_source_span() {
+    let diagnostic = capture_direct_boundary_diagnostic(|| {
+        let int8 = |value| {
+            boxed_value(Value::Int(
+                IntegerValue::from_typed_signed(value, IntegerKind::Int8)
+                    .expect("test value should fit int8"),
+            ))
+        };
+        super::aura_direct_binary_value_at(19, int8(1), int8(-1), 0, 6, 11);
+    });
+
+    assert_eq!(diagnostic.code, "AU4002");
+    assert_eq!(
+        diagnostic.message,
+        "integer shift count `-1` is outside the required range `0..8`"
+    );
+    assert_eq!(diagnostic.span, Some(Span::new(6, 11)));
+}
+
+fn capture_direct_boundary_diagnostic(work: impl FnOnce() + Send + 'static) -> Diagnostic {
     run_lightweight_root_task(move || {
         super::with_direct_task_runtime_scope(|| {
             super::with_task_runtime_error_capture(|| {
@@ -2896,7 +2925,10 @@ fn capture_direct_boundary_error_message(work: impl FnOnce() + Send + 'static) -
         })
     })
     .expect_err("the exported direct-runtime boundary should fail")
-    .message
+}
+
+fn capture_direct_boundary_error_message(work: impl FnOnce() + Send + 'static) -> String {
+    capture_direct_boundary_diagnostic(work).message
 }
 
 fn expect_option_none(ptr: *mut OpaqueValue) {
@@ -2999,7 +3031,7 @@ fn expect_result_ok_string(ptr: *mut OpaqueValue) -> String {
                 other => panic!("expected string payload, found {:?}", other),
             }
         }
-        other => panic!("expected Result.Ok(String), found {:?}", other),
+        other => panic!("expected Result.Ok(str), found {:?}", other),
     }
 }
 
@@ -3051,7 +3083,7 @@ fn expect_result_ok_vec_ints(ptr: *mut OpaqueValue) -> Vec<i128> {
                 other => panic!("expected vec payload, found {:?}", other),
             }
         }
-        other => panic!("expected Result.Ok(Vec[int]), found {:?}", other),
+        other => panic!("expected Result.Ok(list[int]), found {:?}", other),
     }
 }
 
@@ -3072,7 +3104,7 @@ fn expect_result_ok_vec_strings(ptr: *mut OpaqueValue) -> Vec<String> {
                 other => panic!("expected vec payload, found {:?}", other),
             }
         }
-        other => panic!("expected Result.Ok(Vec[String]), found {:?}", other),
+        other => panic!("expected Result.Ok(list[str]), found {:?}", other),
     }
 }
 
@@ -3098,7 +3130,7 @@ fn expect_result_err_string(ptr: *mut OpaqueValue) -> String {
                 other => panic!("expected string payload, found {:?}", other),
             }
         }
-        other => panic!("expected Result.Err(String), found {:?}", other),
+        other => panic!("expected Result.Err(str), found {:?}", other),
     }
 }
 
@@ -3277,9 +3309,7 @@ fn direct_duration_runtime_surface_is_checked_exact_and_uses_floor_division() {
         })
     })
     .expect_err("non-Duration conversions should fail the active task");
-    assert!(error
-        .message
-        .contains("expected `Duration`, found `String`"));
+    assert!(error.message.contains("expected `Duration`, found `str`"));
     unsafe { release_value(string_ptr) };
 }
 
@@ -3384,7 +3414,7 @@ fn direct_random_runtime_rejects_wrong_receivers_and_shuffle_targets() {
     })
     .expect_err("next_int on a non-generator should fail the active task");
     unsafe { release_value(integer_receiver) };
-    assert_eq!(error.message, "expected `random.Rng`, found `String`");
+    assert_eq!(error.message, "expected `random.Rng`, found `str`");
 
     let float_receiver = string_value("not a generator");
     let float_receiver_address = float_receiver as usize;
@@ -3396,7 +3426,7 @@ fn direct_random_runtime_rejects_wrong_receivers_and_shuffle_targets() {
     })
     .expect_err("next_float on a non-generator should fail the active task");
     unsafe { release_value(float_receiver) };
-    assert_eq!(error.message, "expected `random.Rng`, found `String`");
+    assert_eq!(error.message, "expected `random.Rng`, found `str`");
 
     let shuffle_receiver = string_value("not a generator");
     let shuffle_receiver_address = shuffle_receiver as usize;
@@ -3416,7 +3446,7 @@ fn direct_random_runtime_rejects_wrong_receivers_and_shuffle_targets() {
         release_value(shuffle_receiver);
         release_value(values);
     }
-    assert_eq!(error.message, "expected `random.Rng`, found `String`");
+    assert_eq!(error.message, "expected `random.Rng`, found `str`");
 
     let shuffle_rng = super::aura_direct_rng_new(42);
     let shuffle_rng_address = shuffle_rng as usize;
@@ -3436,7 +3466,7 @@ fn direct_random_runtime_rejects_wrong_receivers_and_shuffle_targets() {
         release_value(shuffle_rng);
         release_value(non_vector);
     }
-    assert_eq!(error.message, "expected `Vec`, found `random.Rng`");
+    assert_eq!(error.message, "expected `list`, found `random.Rng`");
 }
 
 #[test]
@@ -3995,7 +4025,7 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
             "command",
         );
     });
-    assert!(message.contains("expects `Vec[String]`"));
+    assert!(message.contains("expects `list[str]`"));
 
     assert_eq!(
         super::expect_optional_string_value(&Value::Unit, "stderr"),
@@ -4037,7 +4067,7 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
     let message = capture_runtime_error_message(|| {
         let _ = super::expect_optional_string_value(&Value::Bool(true), "stderr");
     });
-    assert!(message.contains("expects `Option[String]`"));
+    assert!(message.contains("expects `Option[str]`"));
 }
 
 #[test]
@@ -4354,8 +4384,8 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
         assert_eq!(
             super::aura_direct_value_type_matches(
                 candidate,
-                b"Option[Vec[?T]]".as_ptr(),
-                "Option[Vec[?T]]".len(),
+                b"Option[list[?T]]".as_ptr(),
+                "Option[list[?T]]".len(),
             ),
             0
         );
@@ -4376,8 +4406,8 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     }));
     super::aura_direct_tag_value_type(
         nested,
-        b"Option[Vec[int64]]".as_ptr(),
-        "Option[Vec[int64]]".len(),
+        b"Option[list[int64]]".as_ptr(),
+        "Option[list[int64]]".len(),
     );
     assert_eq!(
         super::aura_direct_value_type_matches(nested, b"Option[?T]".as_ptr(), "Option[?T]".len(),),
@@ -4386,16 +4416,16 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     assert_eq!(
         super::aura_direct_value_type_matches(
             nested,
-            b"Option[Vec[?T]]".as_ptr(),
-            "Option[Vec[?T]]".len(),
+            b"Option[list[?T]]".as_ptr(),
+            "Option[list[?T]]".len(),
         ),
         1
     );
     assert_eq!(
         super::aura_direct_value_type_matches(
             nested,
-            b"Option[Vec[int32]]".as_ptr(),
-            "Option[Vec[int32]]".len(),
+            b"Option[list[int32]]".as_ptr(),
+            "Option[list[int32]]".len(),
         ),
         0
     );
@@ -4410,8 +4440,8 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     }));
     super::aura_direct_tag_value_type(
         mixed_map,
-        b"Map[int32, int64]".as_ptr(),
-        "Map[int32, int64]".len(),
+        b"dict[int32, int64]".as_ptr(),
+        "dict[int32, int64]".len(),
     );
     match unsafe { value_ref(mixed_map) } {
         Value::Map(map) => {
@@ -4423,16 +4453,16 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     assert_eq!(
         super::aura_direct_value_type_matches(
             mixed_map,
-            b"Map[?K, ?V]".as_ptr(),
-            "Map[?K, ?V]".len(),
+            b"dict[?K, ?V]".as_ptr(),
+            "dict[?K, ?V]".len(),
         ),
         1
     );
     assert_eq!(
         super::aura_direct_value_type_matches(
             mixed_map,
-            b"Map[?T, ?T]".as_ptr(),
-            "Map[?T, ?T]".len(),
+            b"dict[?T, ?T]".as_ptr(),
+            "dict[?T, ?T]".len(),
         ),
         0
     );
@@ -4444,14 +4474,14 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
         element_type: Type::named("Unknown"),
         elements: Vec::new(),
     }));
-    super::aura_direct_tag_value_type(vector, b"Vec[int32]".as_ptr(), "Vec[int32]".len());
+    super::aura_direct_tag_value_type(vector, b"list[int32]".as_ptr(), "list[int32]".len());
     assert_eq!(super::aura_direct_value_has_runtime_type(vector), 1);
     match unsafe { value_ref(vector) } {
         Value::Vec(vector) => assert_eq!(vector.element_type, Type::named("int32")),
         other => panic!("expected tagged vector, found {other:?}"),
     }
     assert_eq!(
-        super::aura_direct_value_type_matches(vector, b"Vec[?T]".as_ptr(), "Vec[?T]".len(),),
+        super::aura_direct_value_type_matches(vector, b"list[?T]".as_ptr(), "list[?T]".len(),),
         1
     );
     unsafe {
@@ -4462,13 +4492,13 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
         element_type: Type::named("Unknown"),
         elements: Vec::new(),
     }));
-    super::aura_direct_tag_value_type(set, b"Set[int64]".as_ptr(), "Set[int64]".len());
+    super::aura_direct_tag_value_type(set, b"set[int64]".as_ptr(), "set[int64]".len());
     match unsafe { value_ref(set) } {
         Value::Set(set) => assert_eq!(set.element_type, Type::named("int64")),
         other => panic!("expected tagged set, found {other:?}"),
     }
     assert_eq!(
-        super::aura_direct_value_type_matches(set, b"Set[?T]".as_ptr(), "Set[?T]".len(),),
+        super::aura_direct_value_type_matches(set, b"set[?T]".as_ptr(), "set[?T]".len(),),
         1
     );
     unsafe {
@@ -4528,14 +4558,14 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
         params: vec![
             FunctionParamContract {
                 name: "shared".to_string(),
-                ty: Type::named("String"),
+                ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
                 default_erased: false,
             },
             FunctionParamContract {
                 name: "mutable".to_string(),
-                ty: Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                ty: Type::Named("list".to_string(), vec![Type::named("int32")]),
                 passing: ReceiverKind::BorrowMut,
                 has_default: true,
                 default_erased: false,
@@ -4637,8 +4667,8 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     assert_eq!(
         super::aura_direct_value_type_matches(
             untagged,
-            b"Option[Vec[?T]]".as_ptr(),
-            "Option[Vec[?T]]".len(),
+            b"Option[list[?T]]".as_ptr(),
+            "Option[list[?T]]".len(),
         ),
         0
     );
@@ -4653,21 +4683,21 @@ fn direct_function_value_abi_preserves_signature_capabilities_defaults_and_metad
         params: vec![
             FunctionParamContract {
                 name: "shared".to_string(),
-                ty: Type::named("String"),
+                ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
                 has_default: false,
                 default_erased: false,
             },
             FunctionParamContract {
                 name: "mutable".to_string(),
-                ty: Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                ty: Type::Named("list".to_string(), vec![Type::named("int32")]),
                 passing: ReceiverKind::BorrowMut,
                 has_default: true,
                 default_erased: false,
             },
             FunctionParamContract {
                 name: "owned".to_string(),
-                ty: Type::named("String"),
+                ty: Type::named("str"),
                 passing: ReceiverKind::Value,
                 has_default: false,
                 default_erased: false,
@@ -4835,7 +4865,7 @@ fn direct_function_value_type_patterns_bind_nested_types_and_capabilities() {
     let inconsistent_signature = Type::Function {
         params: vec![
             contract("shared", Type::named("int64"), ReceiverKind::Borrow),
-            contract("owned", Type::named("String"), ReceiverKind::Value),
+            contract("owned", Type::named("str"), ReceiverKind::Value),
         ],
         return_type: Box::new(Type::named("int64")),
     };
@@ -4893,7 +4923,7 @@ fn direct_closure_type_matching_preserves_callable_and_capture_contracts() {
     let actual = closure(
         Type::named("int64"),
         ReceiverKind::Borrow,
-        Type::named("String"),
+        Type::named("str"),
         ClosureCaptureMode::Copy,
         ClosureCallKind::Repeatable,
     );
@@ -5250,18 +5280,18 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
     let message = capture_runtime_error_message(|| {
         super::await_process_capture_task(Some(wrong_payload), "stderr");
     });
-    assert!(message.contains("process stderr capture returned `bad` inside `Vec[uint8]"));
+    assert!(message.contains("process stderr capture returned `bad` inside `list[uint8]"));
 
     let wrong_result_type = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
-            element_type: crate::sema::Type::named("String"),
+            element_type: crate::sema::Type::named("str"),
             elements: vec![Value::String("bad".to_string())],
         }))
     }));
     let message = capture_runtime_error_message(|| {
         super::await_process_capture_task(Some(wrong_result_type), "stderr");
     });
-    assert!(message.contains("process stderr capture returned `[bad]` instead of `Vec[uint8]"));
+    assert!(message.contains("process stderr capture returned `[bad]` instead of `list[uint8]"));
 
     let capture_error =
         TaskValue::from_handle(thread::spawn(|| Err(Diagnostic::new("pipe failed"))));
@@ -7651,6 +7681,50 @@ fn direct_runtime_string_and_numeric_helpers_cover_builtin_surface() {
 }
 
 #[test]
+fn direct_runtime_round_and_divmod_use_shared_checked_numeric_contracts() {
+    assert_eq!(expect_int(super::aura_direct_round(int_value(7))), 7);
+    for (value, expected) in [(1.5, 2), (2.5, 2), (-1.5, -2), (-2.5, -2)] {
+        assert_eq!(
+            expect_int(super::aura_direct_round(float_value(value))),
+            expected
+        );
+    }
+
+    let pair = super::aura_direct_divmod(int_value(-7), int_value(3));
+    let pair_value = unsafe { value_ref(pair) };
+    assert_eq!(
+        pair_value,
+        Value::Tuple(TupleValue {
+            element_types: vec![Type::named("int64"), Type::named("int64")],
+            elements: vec![
+                Value::Int(IntegerValue::from_i64(-3)),
+                Value::Int(IntegerValue::from_i64(2)),
+            ],
+        })
+    );
+    unsafe { release_value(pair) };
+
+    let round_error = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            super::aura_direct_round(float_value(f64::INFINITY));
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("non-finite round must trap");
+    assert_eq!(round_error.code, "AU4002");
+
+    let divmod_error = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            super::aura_direct_divmod(int_value(1), int_value(0));
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("zero divmod divisor must trap");
+    assert_eq!(divmod_error.code, "AU4004");
+    assert_eq!(divmod_error.message, "`divmod(...)` divisor cannot be zero");
+}
+
+#[test]
 fn direct_owned_slice_runtime_copies_values_and_preserves_au4003_spans() {
     let source = int_vec(&[10, 20, 30, 40]);
     let source_elements = unsafe {
@@ -7692,7 +7766,7 @@ fn direct_owned_slice_runtime_copies_values_and_preserves_au4003_spans() {
     let text_address = unsafe {
         super::with_value(text, |value| match value {
             Value::String(text) => text.as_ptr(),
-            other => panic!("expected String, found {other:?}"),
+            other => panic!("expected str, found {other:?}"),
         })
     };
     let text_slice = super::aura_direct_string_slice(text, 1, 1, 4, 1, 9, 7);
@@ -7701,9 +7775,9 @@ fn direct_owned_slice_runtime_copies_values_and_preserves_au4003_spans() {
             Value::String(slice) => assert_ne!(
                 slice.as_ptr(),
                 text_address,
-                "a direct String slice must own fresh UTF-8 storage"
+                "a direct str slice must own fresh UTF-8 storage"
             ),
-            other => panic!("expected String slice, found {other:?}"),
+            other => panic!("expected str slice, found {other:?}"),
         });
     }
     assert_eq!(expect_string(text_slice), "é🎉e");
@@ -7725,7 +7799,7 @@ fn direct_owned_slice_runtime_copies_values_and_preserves_au4003_spans() {
             Ok(Value::Unit)
         })
     })
-    .expect_err("direct String slicing must reject rather than clamp");
+    .expect_err("direct str slicing must reject rather than clamp");
     unsafe { release_value(source) };
     assert_eq!(out_of_range.code, "AU4003");
     assert_eq!(out_of_range.message, "slice end `4` is outside `0..=3`");
@@ -7765,9 +7839,9 @@ fn direct_owned_slice_runtime_copies_values_and_preserves_au4003_spans() {
             Ok(Value::Unit)
         })
     })
-    .expect_err("direct String slicing must reject the wrong receiver type");
+    .expect_err("direct str slicing must reject the wrong receiver type");
     unsafe { release_value(wrong_string_receiver) };
-    assert_eq!(wrong_receiver.message, "expected `String`, found `integer`");
+    assert_eq!(wrong_receiver.message, "expected `str`, found `integer`");
 }
 
 #[test]
@@ -7789,7 +7863,7 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
         2
     );
     assert_eq!(
-        expect_option_some_int(super::aura_direct_vec_set_in_place(vec, 1, int_value(5))),
+        expect_int(super::aura_direct_vec_set_in_place(vec, 1, int_value(5))),
         2
     );
     assert_eq!(
@@ -7854,7 +7928,7 @@ fn direct_runtime_vec_helpers_normalize_negative_indices_uniformly() {
     );
     expect_option_none(super::aura_direct_vec_get(vec, -5));
     assert_eq!(
-        expect_option_some_int(super::aura_direct_vec_set_in_place(vec, -4, int_value(11),)),
+        expect_int(super::aura_direct_vec_set_in_place(vec, -4, int_value(11),)),
         10
     );
     assert_eq!(
@@ -7869,6 +7943,20 @@ fn direct_runtime_vec_helpers_normalize_negative_indices_uniformly() {
     assert_eq!(
         expect_vec_ints(super::aura_direct_clone_value(vec)),
         vec![40, 20, 99, 11]
+    );
+
+    let clamped = int_vec(&[1, 2]);
+    assert_eq!(
+        super::aura_direct_vec_insert_in_place(clamped, -100, int_value(0)),
+        1
+    );
+    assert_eq!(
+        super::aura_direct_vec_insert_in_place(clamped, 100, int_value(3)),
+        1
+    );
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_clone_value(clamped)),
+        vec![0, 1, 2, 3]
     );
 }
 
@@ -7920,25 +8008,20 @@ fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
     match entries {
         Value::Vec(values) => {
             assert_eq!(values.elements.len(), 1);
-            let Value::Instance(entry) = &values.elements[0] else {
-                panic!("expected map entry instance");
+            let Value::Tuple(entry) = &values.elements[0] else {
+                panic!("expected map item tuple");
             };
-            assert_eq!(entry.class_name, "MapEntry");
             assert_eq!(
-                entry.fields.get("key"),
+                entry.elements.first(),
                 Some(&Value::String("name".to_string()))
             );
             assert_eq!(
-                entry.fields.get("value"),
+                entry.elements.get(1),
                 Some(&Value::Int(IntegerValue::from_signed(2)))
             );
         }
         other => panic!("expected vec of map entries, found {:?}", other),
     }
-    assert!(matches!(
-        unsafe { take_value(super::aura_direct_map_entries(map)) },
-        Value::Vec(values) if values.elements.len() == 1
-    ));
     assert_eq!(
         expect_int(super::aura_direct_map_index(
             map,
@@ -8155,12 +8238,12 @@ fn native_runtime_task_result_handoff_clones_copy_values_and_moves_noncopy_value
             let allocation = unsafe {
                 super::with_value(owned_string, |value| match value {
                     Value::String(value) => value.as_ptr(),
-                    other => panic!("expected String, found {other:?}"),
+                    other => panic!("expected str, found {other:?}"),
                 })
             };
             let moved = unsafe { super::consume_direct_task_result(owned_string, false) };
             let Value::String(moved) = moved else {
-                panic!("noncopy result handoff should move String values");
+                panic!("noncopy result handoff should move str values");
             };
             assert_eq!(
                 moved.as_ptr(),
@@ -9144,6 +9227,7 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
             0,
             string_value("aura"),
             string_value(" repo"),
+            0,
             1,
             1,
         )),
@@ -9159,7 +9243,7 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
         (12, bool_value(false), bool_value(true), true),
     ] {
         assert_eq!(
-            expect_bool_boxed(super::aura_direct_binary_value_at(op, left, right, 2, 3)),
+            expect_bool_boxed(super::aura_direct_binary_value_at(op, left, right, 0, 2, 3)),
             expected
         );
     }
@@ -9182,11 +9266,7 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
         9
     );
     assert_eq!(
-        super::aura_direct_value_type_matches(
-            string_value("aura"),
-            b"String".as_ptr(),
-            "String".len(),
-        ),
+        super::aura_direct_value_type_matches(string_value("aura"), b"str".as_ptr(), "str".len(),),
         1
     );
     assert_eq!(
@@ -9196,24 +9276,24 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
     assert_eq!(
         super::aura_direct_value_type_matches(
             super::aura_direct_vec_empty(),
-            b"Vec".as_ptr(),
-            "Vec".len(),
+            b"list".as_ptr(),
+            "list".len(),
         ),
         1
     );
     assert_eq!(
         super::aura_direct_value_type_matches(
             super::aura_direct_set_empty(),
-            b"Set".as_ptr(),
-            "Set".len(),
+            b"set".as_ptr(),
+            "set".len(),
         ),
         1
     );
     assert_eq!(
         super::aura_direct_value_type_matches(
             super::aura_direct_map_empty(),
-            b"Map".as_ptr(),
-            "Map".len(),
+            b"dict".as_ptr(),
+            "dict".len(),
         ),
         1
     );
@@ -9516,7 +9596,7 @@ fn direct_enum_owned_payload_buffer_moves_string_vec_and_map_allocations() {
     let entries = vec![(Value::String("key".to_string()), Value::Bool(true))];
     let entries_ptr = entries.as_ptr();
     let cases = [
-        ("String", Value::String(text), Allocation::String(text_ptr)),
+        ("str", Value::String(text), Allocation::String(text_ptr)),
         (
             "Array",
             Value::Vec(VecValue {
@@ -9528,7 +9608,7 @@ fn direct_enum_owned_payload_buffer_moves_string_vec_and_map_allocations() {
         (
             "Object",
             Value::Map(MapValue {
-                key_type: Type::named("String"),
+                key_type: Type::named("str"),
                 value_type: Type::named("json.Value"),
                 entries,
             }),
@@ -9598,7 +9678,7 @@ fn direct_instance_take_field_moves_nested_value_and_preserves_container() {
     unsafe {
         super::with_value(moved, |value| match value {
             Value::String(value) => assert_eq!(value.as_ptr(), text_ptr),
-            other => panic!("expected moved String, found {other:?}"),
+            other => panic!("expected moved str, found {other:?}"),
         });
         super::with_value(holder, |value| match value {
             Value::Instance(holder) => match holder.fields.get("inner") {
@@ -9627,7 +9707,7 @@ fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_
     assert_eq!(
         super::take_direct_instance_field(&mut non_instance, &["value"], "value")
             .expect_err("moving a field from a non-instance must fail"),
-        "cannot move field `value` from non-instance `String`"
+        "cannot move field `value` from non-instance `str`"
     );
     assert_eq!(non_instance, Value::String("text".to_string()));
 
@@ -9674,7 +9754,7 @@ fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_
             "inner.value",
         )
         .expect_err("a non-instance intermediate value must fail"),
-        "cannot move field `inner.value` from non-instance `String`"
+        "cannot move field `inner.value` from non-instance `str`"
     );
     assert_eq!(non_instance_nested, non_instance_nested_before);
 
@@ -9751,7 +9831,7 @@ fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_
     assert_eq!(inner.fields.get("sibling"), Some(&Value::Bool(true)));
     match inner.fields.get("value") {
         Some(Value::String(value)) => assert_eq!(value.as_ptr(), assigned_storage),
-        other => panic!("expected nested owned String, found {other:?}"),
+        other => panic!("expected nested owned str, found {other:?}"),
     }
 }
 
@@ -9781,7 +9861,7 @@ fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumptio
         (
             Value::String("text".to_string()),
             "value",
-            "cannot move field `value` from non-instance `String`",
+            "cannot move field `value` from non-instance `str`",
         ),
         (
             instance("Holder", BTreeMap::new()),
@@ -9843,7 +9923,7 @@ fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumptio
         (
             Value::String("text".to_string()),
             "value",
-            "cannot assign field `value` on non-instance `String`",
+            "cannot assign field `value` on non-instance `str`",
         ),
         (
             instance("Holder", BTreeMap::new()),
@@ -9977,7 +10057,7 @@ fn direct_instance_owned_field_set_preserves_payload_allocation_identity() {
         super::with_value(instance, |value| match value {
             Value::Instance(instance) => match instance.fields.get("value") {
                 Some(Value::String(value)) => assert_eq!(value.as_ptr(), text_ptr),
-                other => panic!("expected owned String field, found {other:?}"),
+                other => panic!("expected owned str field, found {other:?}"),
             },
             other => panic!("expected Holder instance, found {other:?}"),
         });
@@ -9999,7 +10079,7 @@ fn direct_variant_take_payload_preserves_allocation_and_consumes_slot() {
     unsafe {
         super::with_value(moved, |value| match value {
             Value::String(value) => assert_eq!(value.as_ptr(), text_ptr),
-            other => panic!("expected moved String, found {other:?}"),
+            other => panic!("expected moved str, found {other:?}"),
         });
         super::with_value(packet, |value| match value {
             Value::EnumVariant(variant) => assert_eq!(variant.payloads, vec![Value::Unit]),
@@ -10016,7 +10096,7 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
         unsafe {
             super::with_value(value, |value| match value {
                 Value::String(value) => value.as_ptr(),
-                other => panic!("expected String, found {other:?}"),
+                other => panic!("expected str, found {other:?}"),
             })
         }
     }
@@ -10029,7 +10109,7 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
         super::with_value(vector, |value| match value {
             Value::Vec(vector) => match vector.elements.as_slice() {
                 [Value::String(value)] => assert_eq!(value.as_ptr(), vector_storage),
-                other => panic!("expected one String vector element, found {other:?}"),
+                other => panic!("expected one str vector element, found {other:?}"),
             },
             other => panic!("expected Vec, found {other:?}"),
         });
@@ -10042,10 +10122,10 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
             {
                 match option.payloads.as_slice() {
                     [Value::String(value)] => assert_eq!(value.as_ptr(), vector_storage),
-                    other => panic!("expected taken vector String payload, found {other:?}"),
+                    other => panic!("expected taken vector str payload, found {other:?}"),
                 }
             }
-            other => panic!("expected Option.Some(String), found {other:?}"),
+            other => panic!("expected Option.Some(str), found {other:?}"),
         });
     }
 
@@ -10062,7 +10142,7 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
                     assert_eq!(key.as_ptr(), map_key_storage);
                     assert_eq!(value.as_ptr(), map_value_storage);
                 }
-                other => panic!("expected one String map entry, found {other:?}"),
+                other => panic!("expected one str map entry, found {other:?}"),
             },
             other => panic!("expected Map, found {other:?}"),
         });
@@ -10076,7 +10156,7 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
         super::with_value(set, |value| match value {
             Value::Set(set) => match set.elements.as_slice() {
                 [Value::String(value)] => assert_eq!(value.as_ptr(), set_storage),
-                other => panic!("expected one String set element, found {other:?}"),
+                other => panic!("expected one str set element, found {other:?}"),
             },
             other => panic!("expected Set, found {other:?}"),
         });
@@ -10089,10 +10169,10 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
             {
                 match option.payloads.as_slice() {
                     [Value::String(value)] => assert_eq!(value.as_ptr(), set_storage),
-                    other => panic!("expected taken String payload, found {other:?}"),
+                    other => panic!("expected taken str payload, found {other:?}"),
                 }
             }
-            other => panic!("expected Option.Some(String), found {other:?}"),
+            other => panic!("expected Option.Some(str), found {other:?}"),
         });
         super::with_value(set, |value| match value {
             Value::Set(set) => assert!(set.elements.is_empty()),
@@ -10112,10 +10192,10 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
             {
                 match option.payloads.as_slice() {
                     [Value::String(value)] => assert_eq!(value.as_ptr(), queued_storage),
-                    other => panic!("expected queued String payload, found {other:?}"),
+                    other => panic!("expected queued str payload, found {other:?}"),
                 }
             }
-            other => panic!("expected Option.Some(String), found {other:?}"),
+            other => panic!("expected Option.Some(str), found {other:?}"),
         });
         for value in [vector, vector_taken, map, set, taken, queue, received] {
             release_value(value);
@@ -10129,7 +10209,7 @@ fn direct_owned_index_and_fallback_adapters_preserve_allocation_identity() {
         unsafe {
             super::with_value(value, |value| match value {
                 Value::String(value) => value.as_ptr(),
-                other => panic!("expected String, found {other:?}"),
+                other => panic!("expected str, found {other:?}"),
             })
         }
     }
@@ -10152,7 +10232,7 @@ fn direct_owned_index_and_fallback_adapters_preserve_allocation_identity() {
         super::with_value(vector, |value| match value {
             Value::Vec(vector) => match vector.elements.as_slice() {
                 [Value::String(value)] => assert_eq!(value.as_ptr(), replacement_storage),
-                other => panic!("expected one replacement String, found {other:?}"),
+                other => panic!("expected one replacement str, found {other:?}"),
             },
             other => panic!("expected Vec, found {other:?}"),
         });
@@ -10216,7 +10296,7 @@ fn direct_task_producer_discovery_and_abandoned_args_do_not_clone_values() {
     let retained_storage = unsafe {
         super::with_value(retained, |value| match value {
             Value::String(value) => value.as_ptr(),
-            other => panic!("expected String, found {other:?}"),
+            other => panic!("expected str, found {other:?}"),
         })
     };
     let abandoned = unsafe { retain_value(retained) };
@@ -10225,7 +10305,7 @@ fn direct_task_producer_discovery_and_abandoned_args_do_not_clone_values() {
         super::release_abandoned_direct_task_args(args_address);
         super::with_value(retained, |value| match value {
             Value::String(value) => assert_eq!(value.as_ptr(), retained_storage),
-            other => panic!("expected retained String, found {other:?}"),
+            other => panic!("expected retained str, found {other:?}"),
         });
         release_value(retained);
         release_value(nested);
@@ -10316,7 +10396,7 @@ fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
         enum_name: "json.Value".to_string(),
         variant_name: "Object".to_string(),
         payloads: vec![Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("Unknown"),
             entries: vec![],
         })],
@@ -10950,7 +11030,7 @@ fn direct_root_entrypoint_helper_exits_for_invalid_thunks_and_return_types() {
         ("direct-root-null", "invalid direct root thunk pointer"),
         (
             "direct-root-string",
-            "direct main entry must return `int32` or `None`, found `String`",
+            "direct main entry must return `int32` or `None`, found `str`",
         ),
         (
             "direct-call-depth",
@@ -11243,7 +11323,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "command-element-type" => {
                 super::expect_command_vec(
                     &Value::Vec(VecValue {
-                        element_type: crate::sema::Type::named("String"),
+                        element_type: crate::sema::Type::named("str"),
                         elements: vec![Value::Int(IntegerValue::from_signed(1))],
                     }),
                     "command",
@@ -11485,7 +11565,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "select-source-type" => {
                 super::aura_direct_select(select_sources(
-                    vec![Type::named("String")],
+                    vec![Type::named("str")],
                     vec![Value::String("not a source".to_string())],
                 ));
             }
@@ -11506,20 +11586,20 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "select-metadata-queue-shape" => {
                 super::aura_direct_select(select_sources(
-                    vec![Type::Tuple(vec![Type::named("String")])],
+                    vec![Type::Tuple(vec![Type::named("str")])],
                     vec![Value::Channel(ChannelValue::new())],
                 ));
             }
             "select-metadata-queue-name" => {
                 super::aura_direct_select(select_sources(
-                    vec![Type::Named("Task".to_string(), vec![Type::named("String")])],
+                    vec![Type::Named("Task".to_string(), vec![Type::named("str")])],
                     vec![Value::Channel(ChannelValue::new())],
                 ));
             }
             "select-metadata-queue-payload" => {
                 super::aura_direct_select(select_sources(
                     vec![
-                        Type::Named("Queue".to_string(), vec![Type::named("String")]),
+                        Type::Named("Queue".to_string(), vec![Type::named("str")]),
                         Type::Named("Queue".to_string(), vec![Type::named("int32")]),
                         Type::named("Duration"),
                     ],
@@ -11532,7 +11612,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "select-metadata-task-shape" => {
                 super::aura_direct_select(select_sources(
-                    vec![Type::Tuple(vec![Type::named("String")])],
+                    vec![Type::Tuple(vec![Type::named("str")])],
                     vec![Value::Task(TaskValue::from_handle(thread::spawn(|| {
                         Ok(Value::Unit)
                     })))],
@@ -11557,7 +11637,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "select-metadata-task-result" => {
                 super::aura_direct_select(select_sources(
                     vec![
-                        Type::Named("Task".to_string(), vec![Type::named("String")]),
+                        Type::Named("Task".to_string(), vec![Type::named("str")]),
                         Type::Named("Task".to_string(), vec![Type::named("int32")]),
                         Type::named("Duration"),
                     ],
@@ -11570,7 +11650,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "select-metadata-duration-kind" => {
                 super::aura_direct_select(select_sources(
-                    vec![Type::named("String")],
+                    vec![Type::named("str")],
                     vec![Value::Duration(0)],
                 ));
             }
@@ -11908,8 +11988,8 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "map-values-type" => {
                 super::aura_direct_map_values(int_value(1));
             }
-            "map-entries-type" => {
-                super::aura_direct_map_entries(int_value(1));
+            "map-items-type" => {
+                super::aura_direct_map_items(int_value(1));
             }
             "map-extend-target-type" => {
                 super::aura_direct_map_extend_in_place(
@@ -12531,12 +12611,6 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "vec-method-swap-too-negative" => {
                 super::aura_direct_vec_swap_in_place(int_vec(&[1, 2, 3, 4]), -5, -1);
             }
-            "vec-method-insert-too-negative" => {
-                super::aura_direct_vec_insert_in_place(int_vec(&[1, 2, 3, 4]), -5, int_value(9));
-            }
-            "vec-method-insert-negative-empty" => {
-                super::aura_direct_vec_insert_in_place(int_vec(&[]), -1, int_value(9));
-            }
             "vec-indexed-write-too-negative" => {
                 super::aura_direct_vec_set_index_in_place(
                     int_vec(&[1, 2, 3, 4]),
@@ -12598,10 +12672,24 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                 super::aura_direct_binary_value(13, int_value(1), int_value(0));
             }
             "binary-at-no-span" => {
-                super::aura_direct_binary_value_at(0, string_value("aura"), bool_value(true), 0, 0);
+                super::aura_direct_binary_value_at(
+                    0,
+                    string_value("aura"),
+                    bool_value(true),
+                    0,
+                    0,
+                    0,
+                );
             }
             "binary-at-span" => {
-                super::aura_direct_binary_value_at(0, string_value("aura"), bool_value(true), 2, 9);
+                super::aura_direct_binary_value_at(
+                    0,
+                    string_value("aura"),
+                    bool_value(true),
+                    0,
+                    2,
+                    9,
+                );
             }
             "cast-no-span" => {
                 super::aura_direct_cast_value(
@@ -12635,32 +12723,32 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
     for (case, expected) in [
         (
             "bytes-value-type",
-            "`bytes` expects `Vec[uint8]`, found `String`",
+            "`bytes` expects `list[uint8]`, found `str`",
         ),
-        ("bytes-element-range", "`bytes` expects `Vec[uint8]`"),
-        ("bool-value-type", "`flag` expects `bool`, found `String`"),
+        ("bytes-element-range", "`bytes` expects `list[uint8]`"),
+        ("bool-value-type", "`flag` expects `bool`, found `str`"),
         ("i32-overflow", "`count` expects `int32`"),
-        ("i32-value-type", "`count` expects `int32`, found `String`"),
+        ("i32-value-type", "`count` expects `int32`, found `str`"),
         (
             "headers-map-type",
-            "`headers` expects `Map[String, String]`, found `String`",
+            "`headers` expects `dict[str, str]`, found `str`",
         ),
         (
             "headers-key-type",
-            "`headers` expects `String`, found `integer`",
+            "`headers` expects `str`, found `integer`",
         ),
         (
             "optional-timeout-type",
-            "`timeout` expects `Duration`, found `String`",
+            "`timeout` expects `Duration`, found `str`",
         ),
         ("optional-timeout-negative", "timeout must be non-negative"),
         (
             "process-timeout-type",
-            "`timeout` expects `Duration`, found `String`",
+            "`timeout` expects `Duration`, found `str`",
         ),
         (
             "duration-type",
-            "`duration` expects `Duration`, found `String`",
+            "`duration` expects `Duration`, found `str`",
         ),
         ("duration-negative", "duration must be non-negative"),
         (
@@ -12669,51 +12757,51 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "command-vec-type",
-            "`command` expects `Vec[String]`, found `String`",
+            "`command` expects `list[str]`, found `str`",
         ),
         (
             "command-element-type",
-            "`command` expects `String`, found `integer`",
+            "`command` expects `str`, found `integer`",
         ),
         (
             "optional-string-malformed",
-            "`cwd` expects `Option[String]`, found malformed option payload",
+            "`cwd` expects `Option[str]`, found malformed option payload",
         ),
         (
             "optional-string-payload-type",
-            "`cwd` expects `String`, found `bool`",
+            "`cwd` expects `str`, found `bool`",
         ),
         (
             "optional-string-type",
-            "`cwd` expects `Option[String]`, found `integer`",
+            "`cwd` expects `Option[str]`, found `integer`",
         ),
         (
             "process-start-command-type",
-            "`process.start(...)` expects `Vec[String]`, found `bool`",
+            "`process.start(...)` expects `list[str]`, found `bool`",
         ),
         (
             "process-start-cwd-type",
-            "`process.start(...)` expects `Option[String]`, found `bool`",
+            "`process.start(...)` expects `Option[str]`, found `bool`",
         ),
         (
             "process-start-env-type",
-            "`process.start(...)` expects `Map[String, String]`, found `bool`",
+            "`process.start(...)` expects `dict[str, str]`, found `bool`",
         ),
         (
             "process-start-group-type",
-            "`process.start(...)` expects `bool`, found `String`",
+            "`process.start(...)` expects `bool`, found `str`",
         ),
         (
             "process-run-command-type",
-            "`process.run(...)` expects `Vec[String]`, found `bool`",
+            "`process.run(...)` expects `list[str]`, found `bool`",
         ),
         (
             "process-run-timeout-type",
-            "`process.run(...)` expects `Duration`, found `String`",
+            "`process.run(...)` expects `Duration`, found `str`",
         ),
         (
             "process-run-group-type",
-            "`process.run(...)` expects `bool`, found `String`",
+            "`process.run(...)` expects `bool`, found `str`",
         ),
         (
             "process-supervisor-start-stdin-type",
@@ -12807,11 +12895,11 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "select-metadata-queue-shape",
-            "direct `select` ABI source 0 is tagged `(String,)` but contains `Queue`",
+            "direct `select` ABI source 0 is tagged `(str,)` but contains `Queue`",
         ),
         (
             "select-metadata-queue-name",
-            "direct `select` ABI source 0 is tagged `Task[String]` but contains `Queue`",
+            "direct `select` ABI source 0 is tagged `Task[str]` but contains `Queue`",
         ),
         (
             "select-metadata-queue-payload",
@@ -12819,7 +12907,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "select-metadata-task-shape",
-            "direct `select` ABI source 0 is tagged `(String,)` but contains `Task`",
+            "direct `select` ABI source 0 is tagged `(str,)` but contains `Task`",
         ),
         (
             "select-metadata-task-arity",
@@ -12835,7 +12923,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "select-metadata-duration-kind",
-            "direct `select` ABI source 0 is tagged `String` but contains `Duration`",
+            "direct `select` ABI source 0 is tagged `str` but contains `Duration`",
         ),
         (
             "wait-any-timeout-negative",
@@ -12847,7 +12935,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "wait-any-tasks-type",
-            "expected `wait_any` to receive `Vec[Task]`, found `bool`",
+            "expected `wait_any` to receive `list[Task]`, found `bool`",
         ),
         ("task-result-type", "expected `Task`, found `bool`"),
         (
@@ -12872,50 +12960,35 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "task-group-close-type",
             "expected `TaskGroup`, found `bool`",
         ),
-        ("io-write-type", "expected `String`, found `bool`"),
-        ("fs-exists-type", "expected `String`, found `bool`"),
-        ("fs-read-to-string-type", "expected `String`, found `bool`"),
-        ("fs-read-bytes-type", "expected `String`, found `bool`"),
-        (
-            "fs-write-string-path-type",
-            "expected `String`, found `bool`",
-        ),
-        (
-            "fs-write-string-text-type",
-            "expected `String`, found `bool`",
-        ),
+        ("io-write-type", "expected `str`, found `bool`"),
+        ("fs-exists-type", "expected `str`, found `bool`"),
+        ("fs-read-to-string-type", "expected `str`, found `bool`"),
+        ("fs-read-bytes-type", "expected `str`, found `bool`"),
+        ("fs-write-string-path-type", "expected `str`, found `bool`"),
+        ("fs-write-string-text-type", "expected `str`, found `bool`"),
         (
             "fs-write-bytes-path-type",
-            "`fs.write_bytes(...)` expects `String`, found `bool`",
+            "`fs.write_bytes(...)` expects `str`, found `bool`",
         ),
-        (
-            "fs-append-string-path-type",
-            "expected `String`, found `bool`",
-        ),
-        (
-            "fs-append-string-text-type",
-            "expected `String`, found `bool`",
-        ),
+        ("fs-append-string-path-type", "expected `str`, found `bool`"),
+        ("fs-append-string-text-type", "expected `str`, found `bool`"),
         (
             "fs-append-bytes-path-type",
-            "`fs.append_bytes(...)` expects `String`, found `bool`",
+            "`fs.append_bytes(...)` expects `str`, found `bool`",
         ),
         (
             "fs-append-bytes-bytes-type",
-            "`fs.append_bytes(...)` expects `Vec[uint8]`, found `bool`",
+            "`fs.append_bytes(...)` expects `list[uint8]`, found `bool`",
         ),
-        ("fs-create-dir-type", "expected `String`, found `bool`"),
-        ("fs-read-dir-type", "expected `String`, found `bool`"),
-        ("fs-remove-file-type", "expected `String`, found `bool`"),
-        ("fs-open-type", "expected `String`, found `bool`"),
-        ("fs-create-type", "expected `String`, found `bool`"),
-        ("fs-append-type", "expected `String`, found `bool`"),
+        ("fs-create-dir-type", "expected `str`, found `bool`"),
+        ("fs-read-dir-type", "expected `str`, found `bool`"),
+        ("fs-remove-file-type", "expected `str`, found `bool`"),
+        ("fs-open-type", "expected `str`, found `bool`"),
+        ("fs-create-type", "expected `str`, found `bool`"),
+        ("fs-append-type", "expected `str`, found `bool`"),
         ("file-read-all-type", "expected `fs.File`, found `bool`"),
         ("file-read-bytes-type", "expected `fs.File`, found `bool`"),
-        (
-            "file-write-all-text-type",
-            "expected `String`, found `bool`",
-        ),
+        ("file-write-all-text-type", "expected `str`, found `bool`"),
         (
             "file-write-all-file-type",
             "expected `fs.File`, found `bool`",
@@ -12926,41 +12999,38 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         ("file-flush-type", "expected `fs.File`, found `bool`"),
         ("file-close-type", "expected `fs.File`, found `bool`"),
-        ("contains-arg", "`contains` requires a `String` argument"),
-        ("contains-receiver", "expected `String`, found `bool`"),
-        (
-            "starts-with-arg",
-            "`starts_with` requires a `String` argument",
-        ),
-        ("starts-with-receiver", "expected `String`, found `bool`"),
-        ("ends-with-arg", "`ends_with` requires a `String` argument"),
-        ("ends-with-receiver", "expected `String`, found `bool`"),
-        ("split-arg", "`split` requires a `String` argument"),
-        ("split-receiver", "expected `String`, found `bool`"),
-        ("replace-from", "`replace` requires `String` for `from`"),
-        ("replace-to", "`replace` requires `String` for `to`"),
-        ("replace-receiver", "expected `String`, found `bool`"),
-        ("string-len-type", "expected `String`, found `bool`"),
+        ("contains-arg", "`contains` requires a `str` argument"),
+        ("contains-receiver", "expected `str`, found `bool`"),
+        ("starts-with-arg", "`starts_with` requires a `str` argument"),
+        ("starts-with-receiver", "expected `str`, found `bool`"),
+        ("ends-with-arg", "`ends_with` requires a `str` argument"),
+        ("ends-with-receiver", "expected `str`, found `bool`"),
+        ("split-arg", "`split` requires a `str` argument"),
+        ("split-receiver", "expected `str`, found `bool`"),
+        ("replace-from", "`replace` requires `str` for `from`"),
+        ("replace-to", "`replace` requires `str` for `to`"),
+        ("replace-receiver", "expected `str`, found `bool`"),
+        ("string-len-type", "expected `str`, found `bool`"),
         (
             "invalid-uint-literal",
             "invalid embedded uint literal `abc`",
         ),
-        ("to-lower-receiver", "expected `String`, found `bool`"),
-        ("to-upper-receiver", "expected `String`, found `bool`"),
+        ("to-lower-receiver", "expected `str`, found `bool`"),
+        ("to-upper-receiver", "expected `str`, found `bool`"),
         (
             "strip-prefix-arg",
-            "`strip_prefix` requires a `String` argument",
+            "`strip_prefix` requires a `str` argument",
         ),
-        ("strip-prefix-receiver", "expected `String`, found `bool`"),
+        ("strip-prefix-receiver", "expected `str`, found `bool`"),
         (
             "strip-suffix-arg",
-            "`strip_suffix` requires a `String` argument",
+            "`strip_suffix` requires a `str` argument",
         ),
-        ("strip-suffix-receiver", "expected `String`, found `bool`"),
-        ("trim-receiver", "expected `String`, found `bool`"),
-        ("join-part-element", "`join` requires `Vec[String]`"),
-        ("join-parts", "`join` requires `Vec[String]`"),
-        ("join-separator", "expected `String`, found `bool`"),
+        ("strip-suffix-receiver", "expected `str`, found `bool`"),
+        ("trim-receiver", "expected `str`, found `bool`"),
+        ("join-part-element", "`join` requires `list[str]`"),
+        ("join-parts", "`join` requires `list[str]`"),
+        ("join-separator", "expected `str`, found `bool`"),
         ("abs-type", "`abs(...)` expects an integer or float value"),
         (
             "min-mismatch",
@@ -12973,28 +13043,28 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("sqrt-type", "`sqrt(...)` expects `float32` or `float64`"),
         (
             "parse-int32-type",
-            "`parse_int32(...)` expects `String`, found `bool`",
+            "`parse_int32(...)` expects `str`, found `bool`",
         ),
         (
             "parse-int64-type",
-            "`parse_int64(...)` expects `String`, found `bool`",
+            "`parse_int64(...)` expects `str`, found `bool`",
         ),
         (
             "parse-float64-type",
-            "`parse_float64(...)` expects `String`, found `bool`",
+            "`parse_float64(...)` expects `str`, found `bool`",
         ),
-        ("map-index-missing", "map key `missing` was not present"),
+        ("map-index-missing", "dict key `missing` was not present"),
         (
             "map-index-missing-no-span",
-            "map key `missing` was not present",
+            "dict key `missing` was not present",
         ),
         (
             "vec-extend-type",
-            "`extend` requires another `Vec[T]` value",
+            "`extend` requires another `list[T]` value",
         ),
         (
             "map-extend-type",
-            "`extend` requires another `Map[K, V]` value",
+            "`update` requires another `dict[K, V]` value",
         ),
         ("variant-payload-none", "does not carry a payload"),
         (
@@ -13017,23 +13087,23 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("range-end-type", "expected `Range`, found `integer`"),
         ("range-end-overflow", "range end is outside host i64 bounds"),
         ("range-advance-type", "expected `Range`, found `integer`"),
-        ("vec-len-type", "expected `Vec`, found `integer`"),
-        ("vec-push-type", "expected `Vec`, found `integer`"),
-        ("map-len-type", "expected `Map`, found `integer`"),
-        ("map-index-type", "expected `Map`, found `integer`"),
-        ("map-set-type", "expected `Map`, found `integer`"),
-        ("map-set-index-type", "expected `Map`, found `integer`"),
-        ("map-clear-type", "expected `Map`, found `integer`"),
-        ("map-keys-type", "expected `Map`, found `integer`"),
-        ("map-values-type", "expected `Map`, found `integer`"),
-        ("map-entries-type", "expected `Map`, found `integer`"),
-        ("map-extend-target-type", "expected `Map`, found `integer`"),
-        ("set-len-type", "expected `Set`, found `integer`"),
-        ("set-is-empty-type", "expected `Set`, found `integer`"),
-        ("set-contains-type", "expected `Set`, found `integer`"),
-        ("set-insert-type", "expected `Set`, found `integer`"),
-        ("set-remove-type", "expected `Set`, found `integer`"),
-        ("set-index-type", "expected `Set`, found `integer`"),
+        ("vec-len-type", "expected `list`, found `integer`"),
+        ("vec-push-type", "expected `list`, found `integer`"),
+        ("map-len-type", "expected `dict`, found `integer`"),
+        ("map-index-type", "expected `dict`, found `integer`"),
+        ("map-set-type", "expected `dict`, found `integer`"),
+        ("map-set-index-type", "expected `dict`, found `integer`"),
+        ("map-clear-type", "expected `dict`, found `integer`"),
+        ("map-keys-type", "expected `dict`, found `integer`"),
+        ("map-values-type", "expected `dict`, found `integer`"),
+        ("map-items-type", "expected `dict`, found `integer`"),
+        ("map-extend-target-type", "expected `dict`, found `integer`"),
+        ("set-len-type", "expected `set`, found `integer`"),
+        ("set-is-empty-type", "expected `set`, found `integer`"),
+        ("set-contains-type", "expected `set`, found `integer`"),
+        ("set-insert-type", "expected `set`, found `integer`"),
+        ("set-remove-type", "expected `set`, found `integer`"),
+        ("set-index-type", "expected `set`, found `integer`"),
         (
             "tcp-read-all-type",
             "expected `net.TcpStream`, found `bool`",
@@ -13066,14 +13136,14 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "tcp-read-exact-negative-count",
             "`read_exact(...)` requires a non-negative count",
         ),
-        ("tcp-write-all-text-type", "expected `String`, found `bool`"),
+        ("tcp-write-all-text-type", "expected `str`, found `bool`"),
         (
             "tcp-write-all-type",
             "expected `net.TcpStream`, found `bool`",
         ),
         (
             "tcp-write-bytes-bytes-type",
-            "`write_bytes(...)` expects `Vec[uint8]`, found `bool`",
+            "`write_bytes(...)` expects `list[uint8]`, found `bool`",
         ),
         (
             "tcp-write-bytes-type",
@@ -13103,11 +13173,11 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("tcp-close-type", "expected `net.TcpStream`, found `bool`"),
         (
             "udp-send-text-address-type",
-            "`send_text(...)` expects `String`, found `bool`",
+            "`send_text(...)` expects `str`, found `bool`",
         ),
         (
             "udp-send-text-text-type",
-            "`send_text(...)` expects `String`, found `bool`",
+            "`send_text(...)` expects `str`, found `bool`",
         ),
         (
             "udp-send-text-type",
@@ -13115,11 +13185,11 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "udp-send-bytes-address-type",
-            "`send_bytes(...)` expects `String`, found `bool`",
+            "`send_bytes(...)` expects `str`, found `bool`",
         ),
         (
             "udp-send-bytes-bytes-type",
-            "`send_bytes(...)` expects `Vec[uint8]`, found `bool`",
+            "`send_bytes(...)` expects `list[uint8]`, found `bool`",
         ),
         (
             "udp-send-bytes-type",
@@ -13245,7 +13315,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "process-pipe-write-all-text-type",
-            "`write_all(...)` expects `String`, found `bool`",
+            "`write_all(...)` expects `str`, found `bool`",
         ),
         (
             "process-pipe-write-all-type",
@@ -13253,7 +13323,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "process-pipe-write-bytes-bytes-type",
-            "`write_bytes(...)` expects `Vec[uint8]`, found `bool`",
+            "`write_bytes(...)` expects `list[uint8]`, found `bool`",
         ),
         (
             "process-pipe-write-bytes-type",
@@ -13295,39 +13365,30 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "process-completed-check-type",
             "expected `process.Completed`, found `bool`",
         ),
-        ("net-connect-type", "expected `String`, found `bool`"),
-        (
-            "net-connect-timeout-type",
-            "expected `String`, found `bool`",
-        ),
-        ("net-listen-type", "expected `String`, found `bool`"),
-        ("net-udp-bind-type", "expected `String`, found `bool`"),
-        ("net-unix-listen-type", "expected `String`, found `bool`"),
-        ("net-unix-connect-type", "expected `String`, found `bool`"),
+        ("net-connect-type", "expected `str`, found `bool`"),
+        ("net-connect-timeout-type", "expected `str`, found `bool`"),
+        ("net-listen-type", "expected `str`, found `bool`"),
+        ("net-udp-bind-type", "expected `str`, found `bool`"),
+        ("net-unix-listen-type", "expected `str`, found `bool`"),
+        ("net-unix-connect-type", "expected `str`, found `bool`"),
         (
             "net-unix-connect-timeout-type",
-            "expected `String`, found `bool`",
+            "expected `str`, found `bool`",
         ),
         (
             "net-tls-listen-address-type",
-            "`net.tls_listen(...)` expects `String`, found `bool`",
+            "`net.tls_listen(...)` expects `str`, found `bool`",
         ),
         (
             "net-tls-connect-address-type",
-            "`net.tls_connect(...)` expects `String`, found `bool`",
+            "`net.tls_connect(...)` expects `str`, found `bool`",
         ),
-        ("net-http-listen-type", "expected `String`, found `bool`"),
-        (
-            "net-websocket-listen-type",
-            "expected `String`, found `bool`",
-        ),
-        (
-            "net-websocket-connect-type",
-            "expected `String`, found `bool`",
-        ),
+        ("net-http-listen-type", "expected `str`, found `bool`"),
+        ("net-websocket-listen-type", "expected `str`, found `bool`"),
+        ("net-websocket-connect-type", "expected `str`, found `bool`"),
         (
             "net-websocket-connect-timeout-type",
-            "expected `String`, found `bool`",
+            "expected `str`, found `bool`",
         ),
         (
             "http-listener-accept-type",
@@ -13443,7 +13504,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "unix-stream-write-all-text-type",
-            "`write_all(...)` expects `String`, found `bool`",
+            "`write_all(...)` expects `str`, found `bool`",
         ),
         (
             "unix-stream-write-all-type",
@@ -13483,7 +13544,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "tls-stream-write-all-text-type",
-            "`write_all(...)` expects `String`, found `bool`",
+            "`write_all(...)` expects `str`, found `bool`",
         ),
         (
             "tls-stream-write-all-type",
@@ -13502,39 +13563,31 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "vec-index-oob-no-span",
-            "vector index `5` is out of bounds for length `1`",
+            "list index `5` is out of bounds for length `1`",
         ),
         (
             "vec-set-oob-no-span",
-            "vector index `5` is out of bounds for length `1`",
+            "list index `5` is out of bounds for length `1`",
         ),
         (
             "vec-set-oob-span",
-            "vector index `5` is out of bounds for length `1`",
+            "list index `5` is out of bounds for length `1`",
         ),
         (
             "vec-method-set-too-negative",
-            "vector set index `-5` is out of bounds for length `4`",
+            "list set index `-5` is out of bounds for length `4`",
         ),
         (
             "vec-method-remove-too-negative",
-            "vector remove index `-5` is out of bounds for length `4`",
+            "list remove index `-5` is out of bounds for length `4`",
         ),
         (
             "vec-method-swap-too-negative",
-            "vector swap indices `-5` and `-1` are out of bounds for length `4`",
-        ),
-        (
-            "vec-method-insert-too-negative",
-            "vector insert index `-5` is out of bounds for length `4`",
-        ),
-        (
-            "vec-method-insert-negative-empty",
-            "vector insert index `-1` is out of bounds for length `0`",
+            "list swap indices `-5` and `-1` are out of bounds for length `4`",
         ),
         (
             "vec-indexed-write-too-negative",
-            "vector index `-5` is out of bounds for length `4`",
+            "list index `-5` is out of bounds for length `4`",
         ),
         (
             "unbox-i64-overflow",
@@ -13574,34 +13627,34 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "condition-type",
-            "direct backend cannot use `String` as a branch condition",
+            "direct backend cannot use `str` as a branch condition",
         ),
         ("unary-invalid-op", "unknown unary opcode `99`"),
         (
             "unary-at-no-span",
-            "unary `-` expects a numeric value, found `String`",
+            "unary `-` expects a numeric value, found `str`",
         ),
         (
             "unary-at-span",
-            "unary `-` expects a numeric value, found `String`",
+            "unary `-` expects a numeric value, found `str`",
         ),
         ("binary-invalid-op", "unknown binary opcode `99`"),
         ("binary-floor-zero-no-span", "division by zero"),
         (
             "binary-at-no-span",
-            "unsupported `+` operands `String` and `bool`",
+            "unsupported `+` operands `str` and `bool`",
         ),
         (
             "binary-at-span",
-            "unsupported `+` operands `String` and `bool`",
+            "unsupported `+` operands `str` and `bool`",
         ),
         (
             "cast-no-span",
-            "casts are only supported between numeric types, found `String` and `int32`",
+            "casts are only supported between numeric types, found `str` and `int32`",
         ),
         (
             "cast-at-span",
-            "casts are only supported between numeric types, found `String` and `int32`",
+            "casts are only supported between numeric types, found `str` and `int32`",
         ),
     ] {
         let output = Command::new(std::env::current_exe().expect("test binary should exist"))
@@ -13700,7 +13753,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
             element_type: crate::sema::Type::named("int32"),
             elements: Vec::new(),
         })),
-        "Vec"
+        "list"
     );
     let array = Value::Array(
         ArrayValue::zeros(ArrayDType::Int64, vec![2].into_boxed_slice())
@@ -13713,18 +13766,18 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         value_type_name(&Value::Set(SetValue {
-            element_type: crate::sema::Type::named("String"),
+            element_type: crate::sema::Type::named("str"),
             elements: Vec::new(),
         })),
-        "Set"
+        "set"
     );
     assert_eq!(
         value_type_name(&Value::Map(MapValue {
-            key_type: crate::sema::Type::named("String"),
+            key_type: crate::sema::Type::named("str"),
             value_type: crate::sema::Type::named("int32"),
             entries: Vec::new(),
         })),
-        "Map"
+        "dict"
     );
     assert_eq!(value_type_name(&Value::Duration(5)), "Duration");
     assert_value_metadata(
@@ -13770,32 +13823,32 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         inferred_collection_type(&Value::String("text".to_string())),
-        crate::sema::Type::named("String")
+        crate::sema::Type::named("str")
     );
     assert_eq!(
         inferred_collection_type(&Value::Vec(VecValue {
             element_type: crate::sema::Type::named("int32"),
             elements: Vec::new(),
         })),
-        crate::sema::Type::Named("Vec".to_string(), vec![crate::sema::Type::named("int32")])
+        crate::sema::Type::Named("list".to_string(), vec![crate::sema::Type::named("int32")])
     );
     assert_eq!(
         inferred_collection_type(&Value::Set(SetValue {
-            element_type: crate::sema::Type::named("String"),
+            element_type: crate::sema::Type::named("str"),
             elements: Vec::new(),
         })),
-        crate::sema::Type::Named("Set".to_string(), vec![crate::sema::Type::named("String")])
+        crate::sema::Type::Named("set".to_string(), vec![crate::sema::Type::named("str")])
     );
     assert_eq!(
         inferred_collection_type(&Value::Map(MapValue {
-            key_type: crate::sema::Type::named("String"),
+            key_type: crate::sema::Type::named("str"),
             value_type: crate::sema::Type::named("int32"),
             entries: Vec::new(),
         })),
         crate::sema::Type::Named(
-            "Map".to_string(),
+            "dict".to_string(),
             vec![
-                crate::sema::Type::named("String"),
+                crate::sema::Type::named("str"),
                 crate::sema::Type::named("int32"),
             ],
         )
@@ -15857,7 +15910,7 @@ fn native_runtime_detached_closure_task_surfaces_unobserved_trap_and_cleans_capt
                             return_type: Box::new(Type::Unit),
                             captures: Box::new(vec![crate::sema::ClosureCapture {
                                 name: "payload".to_string(),
-                                ty: Type::named("String"),
+                                ty: Type::named("str"),
                                 mode: crate::sema::ClosureCaptureMode::Move,
                                 span: Span::new(2, 1),
                             }]),
@@ -15870,7 +15923,7 @@ fn native_runtime_detached_closure_task_surfaces_unobserved_trap_and_cleans_capt
                         closure_environment: Some(Arc::new(ClosureEnvironment::new(
                             vec![ClosureCaptureValue {
                                 name: "payload".to_string(),
-                                ty: Type::named("String"),
+                                ty: Type::named("str"),
                                 value: Value::String("owned by detached task".to_string()),
                             }],
                             true,
@@ -16707,7 +16760,7 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
     let signature = Type::Closure {
         params: Box::new(vec![FunctionParamContract {
             name: "value".to_string(),
-            ty: Type::named("String"),
+            ty: Type::named("str"),
             passing: ReceiverKind::BorrowMut,
             has_default: false,
             default_erased: false,
@@ -16715,7 +16768,7 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
         return_type: Box::new(Type::Unit),
         captures: Box::new(vec![crate::sema::ClosureCapture {
             name: "captured".to_string(),
-            ty: Type::named("String"),
+            ty: Type::named("str"),
             mode: crate::sema::ClosureCaptureMode::Move,
             span: Span::new(3, 13),
         }]),
@@ -16731,7 +16784,7 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
         closure_environment: Some(Arc::new(ClosureEnvironment::new(
             vec![ClosureCaptureValue {
                 name: "captured".to_string(),
-                ty: Type::named("String"),
+                ty: Type::named("str"),
                 value: Value::String("owned capture".to_string()),
             }],
             false,
@@ -16789,7 +16842,7 @@ fn native_runtime_uncalled_closure_releases_owned_capture_environment() {
                     return_type: Box::new(Type::Unit),
                     captures: Box::new(vec![crate::sema::ClosureCapture {
                         name: "payload".to_string(),
-                        ty: Type::named("String"),
+                        ty: Type::named("str"),
                         mode: crate::sema::ClosureCaptureMode::Move,
                         span: Span::new(2, 17),
                     }]),
@@ -16876,7 +16929,9 @@ fn native_runtime_internal_diagnostic_channels_are_hidden_cloexec_and_one_shot()
         }
 
         let mut diagnostic =
-            Diagnostic::coded_at("AU4003", Span::new(4, 11), "structured channel failure");
+            Diagnostic::coded_at("AU4003", Span::new(4, 11), "structured channel failure")
+                .with_assertion_operand("left", "str", "x".repeat(6_000))
+                .with_assertion_operand("right", "str", "expected");
         diagnostic.capture_runtime_frames_once(
             vec![RuntimeCallFrame {
                 function: "child".to_string(),
@@ -16984,6 +17039,10 @@ fn native_runtime_internal_diagnostic_channels_are_hidden_cloexec_and_one_shot()
     let structured: StructuredDiagnostic =
         serde_json::from_slice(&bytes).expect("channel should carry one structured diagnostic");
     assert_eq!(structured.message, "structured channel failure");
+    assert_eq!(structured.assertion_operands.len(), 2);
+    assert!(structured.assertion_operands[0].truncated);
+    assert!(structured.assertion_operands[0].value.len() <= 4_096);
+    assert_eq!(structured.assertion_operands[1].value, "expected");
     assert_eq!(structured.call_frames.len(), 1);
     assert_eq!(structured.call_frames[0].span.path, "/workspace/child.au");
     assert_eq!(structured.task_ancestry.len(), 1);
@@ -17615,7 +17674,7 @@ fn native_runtime_max_depth_skips_saturated_cleanup_and_releases_its_snapshot() 
         unsafe {
             value_mut(value, |value| match value {
                 Value::String(text) => *text = "cleanup invoked".to_string(),
-                other => panic!("expected String cleanup witness, found {other:?}"),
+                other => panic!("expected str cleanup witness, found {other:?}"),
             });
         }
         boxed_value(Value::Unit)
@@ -17966,11 +18025,11 @@ fn native_runtime_collection_helpers_cover_remaining_success_paths() {
         expect_vec_ints(super::aura_direct_map_values(map)),
         vec![1, 2]
     );
-    let entries = unsafe { take_value(super::aura_direct_map_entries(map)) };
+    let entries = unsafe { take_value(super::aura_direct_map_items(map)) };
     match entries {
         Value::Vec(entries) => {
             assert_eq!(entries.elements.len(), 2);
-            assert!(matches!(&entries.elements[0], Value::Instance(_)));
+            assert!(matches!(&entries.elements[0], Value::Tuple(_)));
         }
         other => panic!("expected map entries vec, found {:?}", other),
     }
@@ -18083,7 +18142,7 @@ fn duration_type_mismatch_helper_exits_with_error() {
         "duration helper should exit with failure for wrong value types"
     );
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("expected `Duration`, found `String`"),
+        String::from_utf8_lossy(&output.stderr).contains("expected `Duration`, found `str`"),
         "duration helper stderr should mention the wrong runtime type"
     );
 }
@@ -18312,6 +18371,7 @@ fn native_runtime_operator_and_io_helpers_cover_additional_paths() {
             0,
             int_value(10),
             int_value(1),
+            0,
             5,
             6,
         )),
@@ -18369,6 +18429,124 @@ fn native_assert_failure_preserves_default_custom_empty_whitespace_and_span() {
 }
 
 #[test]
+fn native_detailed_assert_failure_attaches_typed_bounded_operands_without_consuming_inputs() {
+    let message = string_value("values differ");
+    let left_label = string_value("left");
+    let left_type = string_value("int64");
+    let left_value = string_value("41");
+    let right_label = string_value("right");
+    let right_type = string_value("str");
+    let long_right = "é".repeat(3_000);
+    let right_value = string_value(&long_right);
+    let addresses = [
+        message,
+        left_label,
+        left_type,
+        left_value,
+        right_label,
+        right_type,
+        right_value,
+    ]
+    .map(|value| value as usize);
+
+    let diagnostic = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            super::aura_direct_assert_fail_detailed(
+                addresses[0] as i64,
+                14,
+                6,
+                addresses[1] as i64,
+                addresses[2] as i64,
+                addresses[3] as i64,
+                addresses[4] as i64,
+                addresses[5] as i64,
+                addresses[6] as i64,
+            );
+        })
+    })
+    .expect_err("a detailed assertion failure should fail the active task");
+
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(diagnostic.message, "values differ");
+    assert_eq!(diagnostic.span, Some(Span::new(14, 6)));
+    assert_eq!(diagnostic.assertion_operands.len(), 2);
+    assert_eq!(diagnostic.assertion_operands[0].label, "left");
+    assert_eq!(diagnostic.assertion_operands[0].r#type, "int64");
+    assert_eq!(diagnostic.assertion_operands[0].value, "41");
+    assert!(!diagnostic.assertion_operands[0].truncated);
+    assert_eq!(diagnostic.assertion_operands[1].label, "right");
+    assert_eq!(diagnostic.assertion_operands[1].r#type, "str");
+    assert!(diagnostic.assertion_operands[1].truncated);
+    assert!(diagnostic.assertion_operands[1]
+        .value
+        .ends_with("... (truncated)"));
+    assert!(diagnostic.assertion_operands[1].value.len() <= 4_096);
+
+    for address in addresses {
+        let value = address as *mut OpaqueValue;
+        assert_eq!(
+            unsafe { &*value }.ref_count.load(Ordering::Acquire),
+            1,
+            "the detailed assertion helper must borrow every ABI string"
+        );
+        unsafe {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
+fn native_detailed_assert_failure_rejects_malformed_capture_strings() {
+    let left_label = string_value("left");
+    let malformed_type = int_value(17);
+    let left_value = string_value("41");
+    let right_label = string_value("right");
+    let right_type = string_value("int64");
+    let right_value = string_value("42");
+    let addresses = [
+        left_label,
+        malformed_type,
+        left_value,
+        right_label,
+        right_type,
+        right_value,
+    ]
+    .map(|value| value as usize);
+
+    let diagnostic = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            super::aura_direct_assert_fail_detailed(
+                0,
+                4,
+                2,
+                addresses[0] as i64,
+                addresses[1] as i64,
+                addresses[2] as i64,
+                addresses[3] as i64,
+                addresses[4] as i64,
+                addresses[5] as i64,
+            );
+        })
+    })
+    .expect_err("malformed private assertion captures must fail deterministically");
+
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        "direct assertion left type must be `str`, found `integer`"
+    );
+    assert_eq!(diagnostic.span, None);
+
+    for address in addresses {
+        let value = address as *mut OpaqueValue;
+        assert_eq!(unsafe { &*value }.ref_count.load(Ordering::Acquire), 1);
+        unsafe {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
 fn native_assert_failure_rejects_non_string_messages_without_consuming_them() {
     let message = int_value(17);
     let message_address = message as usize;
@@ -18383,7 +18561,7 @@ fn native_assert_failure_rejects_non_string_messages_without_consuming_them() {
     assert_eq!(diagnostic.code, "AU4001");
     assert_eq!(
         diagnostic.message,
-        "direct assertion message must be `String`, found `integer`"
+        "direct assertion message must be `str`, found `integer`"
     );
     assert_eq!(diagnostic.span, None);
     assert_eq!(
@@ -18596,11 +18774,7 @@ fn direct_tuple_abi_constructs_projects_matches_and_compares_opaque_values() {
     let left = tuple(vec![int_value(7), string_value("seven")]);
     let right = tuple(vec![int_value(7), string_value("seven")]);
     assert_eq!(
-        super::aura_direct_value_type_matches(
-            left,
-            b"(int64, String)".as_ptr(),
-            "(int64, String)".len(),
-        ),
+        super::aura_direct_value_type_matches(left, b"(int64, str)".as_ptr(), "(int64, str)".len(),),
         1,
         "an untagged tuple should infer its structural element types"
     );
@@ -18656,7 +18830,7 @@ fn direct_tuple_abi_constructs_projects_matches_and_compares_opaque_values() {
                 owned_text_allocation,
                 "destructive extraction must transfer the original allocation"
             ),
-            other => panic!("expected destructured String, found {other:?}"),
+            other => panic!("expected destructured str, found {other:?}"),
         });
         super::with_value(captured, |value| match value {
             Value::Tuple(tuple) => assert_eq!(
@@ -18692,7 +18866,7 @@ fn direct_tuple_abi_constructs_projects_matches_and_compares_opaque_values() {
 
     let inner = tuple(vec![string_value("nested")]);
     let nested = tuple(vec![int_value(9), inner]);
-    let nested_type = "(int64, (String,))";
+    let nested_type = "(int64, (str,))";
     super::aura_direct_tag_value_type(nested, nested_type.as_ptr(), nested_type.len());
     assert_eq!(
         super::aura_direct_value_type_matches(
@@ -18856,5 +19030,909 @@ fn direct_tuple_abi_constructs_projects_matches_and_compares_opaque_values() {
     );
     unsafe {
         release_value(captured_repeat);
+    }
+}
+
+#[test]
+fn canonical_collection_abi_pins_mutation_search_capacity_and_set_discard() {
+    let byte = |value: u8| {
+        boxed_value(Value::Int(
+            IntegerValue::from_typed_unsigned(value as u128, IntegerKind::Uint8)
+                .expect("every test byte fits uint8"),
+        ))
+    };
+
+    let values = int_vec(&[1, 2, 1]);
+    assert_eq!(
+        expect_int(super::aura_direct_collection_operation(
+            values,
+            std::ptr::null_mut(),
+            -1,
+            0,
+        )),
+        1,
+        "pop(-1) removes and returns the last list value"
+    );
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_clone_value(values)),
+        vec![1, 2]
+    );
+
+    let one = byte(1);
+    assert_eq!(
+        expect_int(super::aura_direct_collection_operation(values, one, 0, 2)),
+        0,
+        "index returns the first matching position"
+    );
+    assert_eq!(
+        expect_int(super::aura_direct_collection_operation(values, one, 0, 3)),
+        1,
+        "count reports the number of equal values"
+    );
+    expect_unit(super::aura_direct_collection_operation(values, one, 0, 1));
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_clone_value(values)),
+        vec![2],
+        "remove deletes the first equal value"
+    );
+    expect_unit(super::aura_direct_collection_operation(
+        values,
+        std::ptr::null_mut(),
+        16,
+        4,
+    ));
+
+    let map = super::aura_direct_map_empty();
+    expect_unit(super::aura_direct_collection_operation(
+        map,
+        std::ptr::null_mut(),
+        8,
+        4,
+    ));
+
+    let set = super::aura_direct_set_empty();
+    assert_eq!(super::aura_direct_set_insert_in_place(set, byte(3)), 1);
+    assert_eq!(super::aura_direct_set_insert_in_place(set, byte(4)), 1);
+    expect_unit(super::aura_direct_collection_operation(set, one, 0, 6));
+    assert_eq!(
+        super::aura_direct_set_len(set),
+        2,
+        "discard of an absent value is a no-op"
+    );
+    let three = byte(3);
+    expect_unit(super::aura_direct_collection_operation(set, three, 0, 5));
+    assert_eq!(super::aura_direct_set_len(set), 1);
+    expect_unit(super::aura_direct_collection_operation(
+        set,
+        std::ptr::null_mut(),
+        0,
+        7,
+    ));
+    assert_eq!(
+        super::aura_direct_set_len(set),
+        0,
+        "clear removes every set value"
+    );
+    expect_unit(super::aura_direct_collection_operation(
+        set,
+        std::ptr::null_mut(),
+        4,
+        4,
+    ));
+
+    for value in [values, one, map, set, three] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn canonical_collection_abi_preserves_absence_bounds_and_capacity_diagnostics() {
+    let capture =
+        |collection: *mut OpaqueValue, argument: *mut OpaqueValue, scalar: i64, opcode: i64| {
+            let collection = collection as usize;
+            let argument = argument as usize;
+            capture_direct_boundary_diagnostic(move || {
+                super::aura_direct_collection_operation(
+                    collection as *mut OpaqueValue,
+                    argument as *mut OpaqueValue,
+                    scalar,
+                    opcode,
+                );
+            })
+        };
+
+    let byte_nine = || {
+        boxed_value(Value::Int(
+            IntegerValue::from_typed_unsigned(9, IntegerKind::Uint8).unwrap(),
+        ))
+    };
+
+    let pop_values = int_vec(&[1, 2]);
+    let out_of_bounds = capture(pop_values, std::ptr::null_mut(), 4, 0);
+    assert_eq!(out_of_bounds.code, "AU4003");
+    assert_eq!(
+        out_of_bounds.message,
+        "list pop index `4` is out of bounds for length `2`"
+    );
+
+    let remove_values = int_vec(&[1, 2]);
+    let remove_needle = byte_nine();
+    let remove_missing = capture(remove_values, remove_needle, 0, 1);
+    assert_eq!(remove_missing.code, "AU4008");
+    assert_eq!(remove_missing.message, "collection value was not found");
+    assert_eq!(
+        remove_missing.help,
+        vec!["check `value in values` before removing when absence is expected".to_string()]
+    );
+
+    let index_values = int_vec(&[1, 2]);
+    let index_needle = byte_nine();
+    let index_missing = capture(index_values, index_needle, 0, 2);
+    assert_eq!(index_missing.code, "AU4008");
+    assert_eq!(
+        index_missing.help,
+        vec!["check `value in values` before searching when absence is expected".to_string()]
+    );
+
+    let negative_values = int_vec(&[1, 2]);
+    let negative_capacity = capture(negative_values, std::ptr::null_mut(), -1, 4);
+    assert_eq!(negative_capacity.code, "AU4003");
+    assert_eq!(
+        negative_capacity.message,
+        "collection capacity cannot be negative"
+    );
+
+    let allocation_values = int_vec(&[1, 2]);
+    let allocation = capture(allocation_values, std::ptr::null_mut(), i64::MAX, 4);
+    assert_eq!(allocation.code, "AU4005");
+    assert_eq!(allocation.message, "collection capacity allocation failed");
+
+    let set = super::aura_direct_set_empty();
+    let set_needle = byte_nine();
+    let set_missing = capture(set, set_needle, 0, 5);
+    assert_eq!(set_missing.code, "AU4008");
+    assert_eq!(set_missing.message, "collection value was not found");
+
+    for value in [
+        pop_values,
+        remove_values,
+        remove_needle,
+        index_values,
+        index_needle,
+        negative_values,
+        allocation_values,
+        set,
+        set_needle,
+    ] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn canonical_list_pop_trap_releases_the_write_lock_for_later_tasks() {
+    let values = int_vec(&[1, 2]);
+    let values_address = values as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_collection_operation(
+            values_address as *mut OpaqueValue,
+            std::ptr::null_mut(),
+            9,
+            0,
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4003");
+    assert_eq!(
+        diagnostic.message,
+        "list pop index `9` is out of bounds for length `2`"
+    );
+
+    let values_address = values as usize;
+    let later_use = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                assert_eq!(
+                    super::aura_direct_vec_len(values_address as *mut OpaqueValue),
+                    2,
+                    "the failed task must leave the shared list readable"
+                );
+                let popped = super::aura_direct_collection_operation(
+                    values_address as *mut OpaqueValue,
+                    std::ptr::null_mut(),
+                    -1,
+                    0,
+                );
+                Ok(unsafe { super::consume_value(popped) })
+            })
+        })
+    });
+    assert_eq!(
+        later_use.expect("the list must remain usable after another task traps"),
+        Value::Int(
+            IntegerValue::from_typed_unsigned(2, IntegerKind::Uint8)
+                .expect("the popped value fits uint8")
+        )
+    );
+    assert_eq!(super::aura_direct_vec_len(values), 1);
+    unsafe { release_value(values) };
+}
+
+#[test]
+fn direct_list_index_mutator_traps_release_the_write_lock_for_later_tasks() {
+    let later_len = |values: *mut OpaqueValue| {
+        let values_address = values as usize;
+        run_lightweight_root_task(move || {
+            super::with_direct_task_runtime_scope(|| {
+                super::with_task_runtime_error_capture(|| {
+                    Ok(Value::Int(IntegerValue::from_i64(
+                        super::aura_direct_vec_len(values_address as *mut OpaqueValue),
+                    )))
+                })
+            })
+        })
+        .expect("a rejected list mutation must not poison the list")
+    };
+
+    let set_values = int_vec(&[1, 2]);
+    let set_values_address = set_values as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_vec_set_in_place(
+            set_values_address as *mut OpaqueValue,
+            7,
+            int_value(9),
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4003");
+    assert_eq!(
+        diagnostic.message,
+        "list set index `7` is out of bounds for length `2`"
+    );
+    assert_eq!(later_len(set_values), Value::Int(IntegerValue::from_i64(2)));
+
+    let remove_values = int_vec(&[1, 2]);
+    let remove_values_address = remove_values as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_vec_remove_in_place(remove_values_address as *mut OpaqueValue, -3);
+    });
+    assert_eq!(diagnostic.code, "AU4003");
+    assert_eq!(
+        diagnostic.message,
+        "list remove index `-3` is out of bounds for length `2`"
+    );
+    assert_eq!(
+        later_len(remove_values),
+        Value::Int(IntegerValue::from_i64(2))
+    );
+
+    let swap_values = int_vec(&[1, 2]);
+    let swap_values_address = swap_values as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_vec_swap_in_place(swap_values_address as *mut OpaqueValue, 0, 8);
+    });
+    assert_eq!(diagnostic.code, "AU4003");
+    assert_eq!(
+        diagnostic.message,
+        "list swap indices `0` and `8` are out of bounds for length `2`"
+    );
+    assert_eq!(
+        later_len(swap_values),
+        Value::Int(IntegerValue::from_i64(2))
+    );
+
+    for values in [set_values, remove_values, swap_values] {
+        unsafe { release_value(values) };
+    }
+}
+
+#[test]
+fn direct_collection_receiver_traps_release_value_locks_for_later_tasks() {
+    let later_integer = |value: *mut OpaqueValue| {
+        let value_address = value as usize;
+        run_lightweight_root_task(move || {
+            super::with_direct_task_runtime_scope(|| {
+                super::with_task_runtime_error_capture(|| {
+                    Ok(Value::Int(IntegerValue::from_i64(
+                        super::aura_direct_unbox_i64(value_address as *mut OpaqueValue),
+                    )))
+                })
+            })
+        })
+        .expect("a rejected collection receiver must remain readable")
+    };
+
+    let not_a_map = int_value(11);
+    let not_a_map_address = not_a_map as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_map_clear_in_place(not_a_map_address as *mut OpaqueValue);
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(diagnostic.message, "expected `dict`, found `integer`");
+    assert_eq!(
+        later_integer(not_a_map),
+        Value::Int(IntegerValue::from_i64(11))
+    );
+
+    let not_a_set = int_value(13);
+    let not_a_set_address = not_a_set as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_collection_operation(
+            not_a_set_address as *mut OpaqueValue,
+            std::ptr::null_mut(),
+            0,
+            7,
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(diagnostic.message, "expected `set`, found `integer`");
+    assert_eq!(
+        later_integer(not_a_set),
+        Value::Int(IntegerValue::from_i64(13))
+    );
+
+    let not_a_collection = int_value(17);
+    let not_a_collection_address = not_a_collection as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_collection_operation(
+            not_a_collection_address as *mut OpaqueValue,
+            std::ptr::null_mut(),
+            1,
+            4,
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(diagnostic.message, "reserve requires a collection");
+    assert_eq!(
+        later_integer(not_a_collection),
+        Value::Int(IntegerValue::from_i64(17))
+    );
+
+    for value in [not_a_map, not_a_set, not_a_collection] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn direct_fixed_width_and_general_operator_abis_cover_every_new_numeric_opcode() {
+    let int8 = |value: i128| {
+        boxed_value(Value::Int(
+            IntegerValue::from_typed_signed(value, IntegerKind::Int8)
+                .expect("test value fits int8"),
+        ))
+    };
+    let width_case = |left: i128, right: i128, operation, mode, expected: i128| {
+        let left = int8(left);
+        let right = int8(right);
+        let result = super::aura_direct_integer_width_binary(left, right, operation, mode, 5, 7);
+        assert_eq!(
+            unsafe { take_value(result) },
+            Value::Int(
+                IntegerValue::from_typed_signed(expected, IntegerKind::Int8)
+                    .expect("expected value fits int8")
+            ),
+            "mode {mode}, operation {operation}"
+        );
+        unsafe {
+            release_value(left);
+            release_value(right);
+        }
+    };
+
+    for (left, right, operation, expected) in [
+        (127, 1, 0, -128),
+        (-128, 1, 1, 127),
+        (64, 2, 2, -128),
+        (65, 1, 3, -126),
+        (-128, 1, 4, -64),
+    ] {
+        width_case(left, right, operation, 1, expected);
+    }
+    for (left, right, operation, expected) in [
+        (127, 1, 0, 127),
+        (-128, 1, 1, -128),
+        (64, 2, 2, 127),
+        (65, 1, 3, 127),
+        (-128, 1, 4, -64),
+    ] {
+        width_case(left, right, operation, 2, expected);
+    }
+
+    for (opcode, left, right, expected) in [
+        (13, -7, 3, -3),
+        (14, 3, 4, 81),
+        (15, 6, 3, 2),
+        (16, 6, 3, 7),
+        (17, 6, 3, 5),
+        (18, 6, 1, 12),
+        (19, 6, 1, 3),
+    ] {
+        assert_eq!(
+            expect_int(super::aura_direct_binary_value(
+                opcode,
+                int_value(left),
+                int_value(right),
+            )),
+            expected,
+            "general numeric opcode {opcode}"
+        );
+        assert_eq!(
+            expect_int(super::aura_direct_binary_value_at(
+                opcode,
+                int_value(left),
+                int_value(right),
+                0,
+                11,
+                13,
+            )),
+            expected,
+            "spanned general numeric opcode {opcode}"
+        );
+    }
+    assert_eq!(
+        expect_int(super::aura_direct_unary_value(2, int_value(5))),
+        !5_i64 as i128
+    );
+    assert_eq!(
+        expect_int(super::aura_direct_unary_value_at(2, int_value(5), 17, 19)),
+        !5_i64 as i128
+    );
+}
+
+#[test]
+fn direct_format_abi_returns_exact_text_and_preserves_type_diagnostic_codes() {
+    let spec = "+6d";
+    let value_type = "int64";
+    let value = int_value(42);
+    assert_eq!(
+        expect_string(super::aura_direct_format_value(
+            value,
+            spec.as_ptr(),
+            spec.len(),
+            value_type.as_ptr(),
+            value_type.len(),
+        )),
+        "   +42"
+    );
+    unsafe { release_value(value) };
+
+    let invalid_spec = "s";
+    let invalid_value = int_value(42);
+    let invalid_value_address = invalid_value as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_format_value(
+            invalid_value_address as *mut OpaqueValue,
+            invalid_spec.as_ptr(),
+            invalid_spec.len(),
+            value_type.as_ptr(),
+            value_type.len(),
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        "format code `s` requires `str`, found integer"
+    );
+    unsafe { release_value(invalid_value) };
+}
+
+static DIRECT_CONSTANT_INITIALIZER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+unsafe extern "C-unwind" fn counted_direct_constant_initializer(
+    args: *const i64,
+    len: usize,
+) -> *mut OpaqueValue {
+    assert!(args.is_null());
+    assert_eq!(len, 0);
+    DIRECT_CONSTANT_INITIALIZER_CALLS.fetch_add(1, Ordering::SeqCst);
+    int_value(42)
+}
+
+#[test]
+fn direct_module_constant_abi_initializes_once_caches_and_reinitializes_after_reset() {
+    const HELPER: &str = "direct-module-constant-cache";
+    if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() != Ok(HELPER) {
+        let output = Command::new(std::env::current_exe().expect("test binary should exist"))
+            .arg("--exact")
+            .arg("native_runtime::tests::direct_module_constant_abi_initializes_once_caches_and_reinitializes_after_reset")
+            .arg("--nocapture")
+            .env("AURA_DIRECT_RUNTIME_HELPER", HELPER)
+            .output()
+            .expect("isolated module constant test should run");
+        assert!(
+            output.status.success(),
+            "isolated module constant cache test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    super::clear_direct_module_constants();
+    DIRECT_CONSTANT_INITIALIZER_CALLS.store(0, Ordering::SeqCst);
+    let key = "tests::answer";
+    let thunk = counted_direct_constant_initializer as *const () as usize as i64;
+
+    let first = super::aura_direct_module_constant(key.as_ptr(), key.len(), thunk);
+    let second = super::aura_direct_module_constant(key.as_ptr(), key.len(), thunk);
+    assert_eq!(expect_int(first), 42);
+    assert_eq!(expect_int(second), 42);
+    assert_eq!(
+        DIRECT_CONSTANT_INITIALIZER_CALLS.load(Ordering::SeqCst),
+        1,
+        "the cached value must be reused without calling its initializer twice"
+    );
+
+    super::clear_direct_module_constants();
+    let after_reset = super::aura_direct_module_constant(key.as_ptr(), key.len(), thunk);
+    assert_eq!(expect_int(after_reset), 42);
+    assert_eq!(
+        DIRECT_CONSTANT_INITIALIZER_CALLS.load(Ordering::SeqCst),
+        2,
+        "runtime reset drops cached constants so the next program initializes anew"
+    );
+    super::clear_direct_module_constants();
+}
+
+#[test]
+fn direct_module_constant_abi_rejects_a_null_initializer_exactly() {
+    const HELPER: &str = "direct-module-constant-null-initializer";
+    if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() != Ok(HELPER) {
+        let output = Command::new(std::env::current_exe().expect("test binary should exist"))
+            .arg("--exact")
+            .arg("native_runtime::tests::direct_module_constant_abi_rejects_a_null_initializer_exactly")
+            .arg("--nocapture")
+            .env("AURA_DIRECT_RUNTIME_HELPER", HELPER)
+            .output()
+            .expect("isolated module constant test should run");
+        assert!(
+            output.status.success(),
+            "isolated null initializer test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    super::clear_direct_module_constants();
+    let key = "tests::missing_initializer";
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_module_constant(key.as_ptr(), key.len(), 0);
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        "module constant `tests::missing_initializer` has a null initializer thunk"
+    );
+    super::clear_direct_module_constants();
+}
+
+const REENTRANT_DIRECT_CONSTANT_KEY: &str = "tests::reentrant_constant";
+
+unsafe extern "C-unwind" fn reentrant_direct_constant_initializer(
+    args: *const i64,
+    len: usize,
+) -> *mut OpaqueValue {
+    assert!(args.is_null());
+    assert_eq!(len, 0);
+    let thunk = reentrant_direct_constant_initializer as *const () as usize as i64;
+    super::aura_direct_module_constant(
+        REENTRANT_DIRECT_CONSTANT_KEY.as_ptr(),
+        REENTRANT_DIRECT_CONSTANT_KEY.len(),
+        thunk,
+    )
+}
+
+#[test]
+fn direct_module_constant_abi_reports_reentrancy_then_remembers_failure() {
+    const HELPER: &str = "direct-module-constant-reentrant-failure";
+    if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() != Ok(HELPER) {
+        let output = Command::new(std::env::current_exe().expect("test binary should exist"))
+            .arg("--exact")
+            .arg("native_runtime::tests::direct_module_constant_abi_reports_reentrancy_then_remembers_failure")
+            .arg("--nocapture")
+            .env("AURA_DIRECT_RUNTIME_HELPER", HELPER)
+            .output()
+            .expect("isolated reentrant module constant test should run");
+        assert!(
+            output.status.success(),
+            "isolated reentrant module constant test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    super::clear_direct_module_constants();
+    let thunk = reentrant_direct_constant_initializer as *const () as usize as i64;
+    let first = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_module_constant(
+            REENTRANT_DIRECT_CONSTANT_KEY.as_ptr(),
+            REENTRANT_DIRECT_CONSTANT_KEY.len(),
+            thunk,
+        );
+    });
+    assert_eq!(first.code, "AU4001");
+    assert_eq!(
+        first.message,
+        "module constant `tests::reentrant_constant` was read while its module was still initializing"
+    );
+
+    let second = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_module_constant(
+            REENTRANT_DIRECT_CONSTANT_KEY.as_ptr(),
+            REENTRANT_DIRECT_CONSTANT_KEY.len(),
+            thunk,
+        );
+    });
+    assert_eq!(second.code, "AU4001");
+    assert_eq!(
+        second.message,
+        "module constant `tests::reentrant_constant` previously failed to initialize"
+    );
+    super::clear_direct_module_constants();
+}
+
+#[test]
+fn direct_numeric_abis_preserve_every_integer_width_across_modes_power_round_and_divmod() {
+    fn boxed_integer(value: IntegerValue) -> *mut OpaqueValue {
+        boxed_value(Value::Int(value))
+    }
+
+    fn width_binary(
+        left: IntegerValue,
+        right: IntegerValue,
+        operation: i64,
+        mode: i64,
+    ) -> IntegerValue {
+        let left_ptr = boxed_integer(left);
+        let right_ptr = boxed_integer(right);
+        let result =
+            super::aura_direct_integer_width_binary(left_ptr, right_ptr, operation, mode, 31, 37);
+        let actual = match unsafe { value_ref(result) } {
+            Value::Int(value) => value,
+            other => panic!("expected integer result, found {other:?}"),
+        };
+        for value in [left_ptr, right_ptr, result] {
+            unsafe { release_value(value) };
+        }
+        actual
+    }
+
+    fn typed(kind: IntegerKind, value: i128) -> IntegerValue {
+        if kind.is_signed() {
+            IntegerValue::from_typed_signed(value, kind).expect("signed test value fits")
+        } else {
+            IntegerValue::from_typed_unsigned(value as u128, kind)
+                .expect("unsigned test value fits")
+        }
+    }
+
+    for kind in [
+        IntegerKind::Int8,
+        IntegerKind::Int16,
+        IntegerKind::Int32,
+        IntegerKind::Int64,
+        IntegerKind::Int128,
+        IntegerKind::IntSize,
+        IntegerKind::Uint8,
+        IntegerKind::Uint16,
+        IntegerKind::Uint32,
+        IntegerKind::Uint64,
+        IntegerKind::Uint128,
+        IntegerKind::UintSize,
+    ] {
+        let (maximum, wrapped_minimum) = match kind.bounds() {
+            IntegerBounds::Signed { min, max } => (
+                IntegerValue::from_typed_signed(max, kind).unwrap(),
+                IntegerValue::from_typed_signed(min, kind).unwrap(),
+            ),
+            IntegerBounds::Unsigned { max } => (
+                IntegerValue::from_typed_unsigned(max, kind).unwrap(),
+                IntegerValue::from_typed_unsigned(0, kind).unwrap(),
+            ),
+        };
+        let one = typed(kind, 1);
+        assert_eq!(
+            width_binary(maximum, one, 0, 1),
+            wrapped_minimum,
+            "{} wrapping_add",
+            kind.runtime_type_name()
+        );
+        assert_eq!(
+            width_binary(maximum, one, 0, 2),
+            maximum,
+            "{} saturating_add",
+            kind.runtime_type_name()
+        );
+
+        let two = typed(kind, 2);
+        let high_shift = typed(kind, i128::from(kind.bit_width() - 1));
+        assert_eq!(
+            width_binary(two, high_shift, 3, 1),
+            typed(kind, 0),
+            "{} wrapping_shl",
+            kind.runtime_type_name()
+        );
+        assert_eq!(
+            width_binary(two, high_shift, 3, 2),
+            maximum,
+            "{} saturating_shl",
+            kind.runtime_type_name()
+        );
+
+        let base = boxed_integer(typed(kind, 2));
+        let exponent = boxed_integer(typed(kind, 3));
+        let powered = super::aura_direct_binary_value_at(14, base, exponent, 0, 41, 43);
+        assert_eq!(
+            unsafe { value_ref(powered) },
+            Value::Int(typed(kind, 8)),
+            "{} power",
+            kind.runtime_type_name()
+        );
+
+        let rounded_input = boxed_integer(typed(kind, 7));
+        let rounded = super::aura_direct_round(rounded_input);
+        assert_eq!(
+            unsafe { value_ref(rounded) },
+            Value::Int(typed(kind, 7)),
+            "{} round",
+            kind.runtime_type_name()
+        );
+
+        let dividend = boxed_integer(typed(kind, 7));
+        let divisor = boxed_integer(typed(kind, 3));
+        let pair = super::aura_direct_divmod(dividend, divisor);
+        assert_eq!(
+            unsafe { value_ref(pair) },
+            Value::Tuple(TupleValue {
+                element_types: vec![
+                    Type::named(kind.runtime_type_name()),
+                    Type::named(kind.runtime_type_name()),
+                ],
+                elements: vec![Value::Int(typed(kind, 2)), Value::Int(typed(kind, 1))],
+            }),
+            "{} divmod",
+            kind.runtime_type_name()
+        );
+
+        for value in [
+            base,
+            exponent,
+            powered,
+            rounded_input,
+            rounded,
+            dividend,
+            divisor,
+            pair,
+        ] {
+            unsafe { release_value(value) };
+        }
+    }
+
+    let minimum_int128 = boxed_integer(
+        IntegerValue::from_typed_signed(i128::MIN, IntegerKind::Int128)
+            .expect("int128 minimum is representable"),
+    );
+    let minimum_address = minimum_int128 as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_abs(minimum_address as *mut OpaqueValue);
+    });
+    assert_eq!(diagnostic.code, "AU4002");
+    assert_eq!(
+        diagnostic.message,
+        "`abs(...)` overflowed the signed integer range"
+    );
+    unsafe { release_value(minimum_int128) };
+}
+
+#[test]
+fn direct_spanned_binary_abi_pins_remaining_arithmetic_and_equality_opcodes() {
+    for (opcode, left, right, expected) in [
+        (1, 9, 4, Value::Int(IntegerValue::from_i64(5))),
+        (2, 9, 4, Value::Int(IntegerValue::from_i64(36))),
+        (4, 9, 4, Value::Int(IntegerValue::from_i64(1))),
+        (5, 9, 9, Value::Bool(true)),
+    ] {
+        let result = super::aura_direct_binary_value_at(
+            opcode,
+            int_value(left),
+            int_value(right),
+            0,
+            47,
+            53,
+        );
+        assert_eq!(unsafe { value_ref(result) }, expected, "opcode {opcode}");
+        unsafe { release_value(result) };
+    }
+    let quotient =
+        super::aura_direct_binary_value_at(3, float_value(9.0), float_value(4.0), 64, 47, 53);
+    assert_eq!(unsafe { value_ref(quotient) }, Value::Float(2.25));
+    unsafe { release_value(quotient) };
+
+    let diagnostic = capture_direct_boundary_diagnostic(|| {
+        super::aura_direct_binary_value_at(3, float_value(1.0), float_value(0.0), 64, 59, 61);
+    });
+    assert_eq!(diagnostic.code, "AU4004");
+    assert_eq!(diagnostic.message, "division by zero");
+    assert_eq!(diagnostic.span, Some(Span::new(59, 61)));
+}
+
+#[test]
+fn direct_capacity_format_and_detailed_assertion_abis_pin_observable_contracts() {
+    let list = super::aura_direct_vec_empty();
+    let dict = super::aura_direct_map_empty();
+    let set = super::aura_direct_set_empty();
+    for collection in [list, dict, set] {
+        expect_unit(super::aura_direct_collection_operation(
+            collection,
+            std::ptr::null_mut(),
+            32,
+            4,
+        ));
+    }
+    assert!(super::with_vector(list, |value| value.elements.capacity()) >= 32);
+    assert!(super::with_map(dict, |value| value.entries.capacity()) >= 32);
+    assert!(super::with_set(set, |value| value.elements.capacity()) >= 32);
+
+    for (value, value_type, spec, expected) in [
+        (float_value(12.345), "float32", ".2f", "12.35"),
+        (float_value(0.125), "float64", ".1%", "12.5%"),
+        (string_value("Aura"), "str", "^8s", "  Aura  "),
+    ] {
+        assert_eq!(
+            expect_string(super::aura_direct_format_value(
+                value,
+                spec.as_ptr(),
+                spec.len(),
+                value_type.as_ptr(),
+                value_type.len(),
+            )),
+            expected
+        );
+        unsafe { release_value(value) };
+    }
+
+    let left_label = string_value("actual");
+    let left_type = string_value("int64");
+    let left_value = string_value("1");
+    let right_label = string_value("expected");
+    let right_type = string_value("int64");
+    let right_value = string_value("2");
+    let addresses = [
+        left_label,
+        left_type,
+        left_value,
+        right_label,
+        right_type,
+        right_value,
+    ]
+    .map(|value| value as usize);
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_assert_fail_detailed(
+            0,
+            0,
+            0,
+            addresses[0] as i64,
+            addresses[1] as i64,
+            addresses[2] as i64,
+            addresses[3] as i64,
+            addresses[4] as i64,
+            addresses[5] as i64,
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(diagnostic.message, "assertion failed");
+    assert_eq!(diagnostic.span, None);
+    assert_eq!(diagnostic.assertion_operands.len(), 2);
+    assert_eq!(diagnostic.assertion_operands[0].label, "actual");
+    assert_eq!(diagnostic.assertion_operands[1].label, "expected");
+
+    for value in [
+        list,
+        dict,
+        set,
+        left_label,
+        left_type,
+        left_value,
+        right_label,
+        right_type,
+        right_value,
+    ] {
+        unsafe { release_value(value) };
     }
 }

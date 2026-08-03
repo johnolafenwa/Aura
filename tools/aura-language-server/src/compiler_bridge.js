@@ -14,7 +14,7 @@ const COMPILER_REQUEST_TIMEOUT_MS = 15_000;
 const COMPILER_RESPONSE_LIMIT_BYTES = 16 * 1024 * 1024;
 // The compiler owns the canonical identity; this transport declares the one
 // compiler interface it can safely decode.
-const SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION = 3;
+const SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION = 5;
 
 function setCompilerSchemaMismatchHandler(handler) {
   compilerSchemaMismatchHandler = typeof handler === "function" ? handler : null;
@@ -312,6 +312,9 @@ function compilerDiagnosticsToLsp(analysis, documentUri) {
       call_frames: diagnostic.call_frames || [],
       task_ancestry: diagnostic.task_ancestry || []
     };
+    if (diagnostic.assertion_operands?.length) {
+      result.data.assertion_operands = diagnostic.assertion_operands;
+    }
     return result;
   });
 }
@@ -398,6 +401,8 @@ function symbolKind(kind) {
       return 11;
     case "variant":
       return 22;
+    case "constant":
+      return 14;
     default:
       return 13;
   }

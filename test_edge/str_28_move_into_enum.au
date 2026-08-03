@@ -1,13 +1,13 @@
-# Test: moving owned String into an enum variant
+# Test: moving owned str into an enum variant
 
 enum Container:
-    Full(String)
+    Full(str)
     Empty
 
-def pack(text: own String) -> Container:
+def pack(text: own str) -> Container:
     return Container.Full(text)
 
-def unpack(c: own Container) -> String:
+def unpack(c: own Container) -> str:
     match own c:
         case Container.Full(s):
             return s

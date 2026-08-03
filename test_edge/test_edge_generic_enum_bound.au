@@ -1,17 +1,17 @@
 # Test: generic enum with trait-bounded type parameter
 
 trait Printable:
-    def to_str(self) -> String
+    def to_str(self) -> str
 
 enum Holder[T: Printable]:
     Has(T)
     Empty
 
 class Label:
-    text: String
+    text: str
 
 impl Printable for Label:
-    def to_str(self) -> String:
+    def to_str(self) -> str:
         return self.text
 
 def main() -> int32:

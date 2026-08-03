@@ -1,0 +1,6 @@
+error[AU2002]: `list.sort` cannot order list element type `list[int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/list_sort_rejects_non_orderable.au:3:12
+  |
+3 |     values.sort()
+  |            ^
+  = help: use an existing naturally ordered type, or implement `Ord[T].lt` returning `bool`

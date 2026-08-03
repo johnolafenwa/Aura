@@ -5,29 +5,29 @@ import same_leaf_support.bridge
 import random
 
 class User:
-    label: String
+    label: str
 
-    def associated() -> String:
+    def associated() -> str:
         return "local-associated"
 
-    def inherent(self) -> String:
+    def inherent(self) -> str:
         return f"local-inherent:{self.label}"
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return f"local:{self.label}"
 
 class Holder[T]:
     value: T
 
-    def source(self) -> String:
+    def source(self) -> str:
         return "local-holder"
 
 impl[T] Describe for Holder[T]:
-    def describe(self) -> String:
+    def describe(self) -> str:
         return "local-generic-trait"
 
-def describe[T: Describe](value: T) -> String:
+def describe[T: Describe](value: T) -> str:
     return value.describe()
 
 enum Envelope[T]:

@@ -4,7 +4,7 @@ class Rng:
     def next_int(self, lo: int64, hi: int64) -> int64:
         return self.value
 
-    def next_float(self) -> String:
+    def next_float(self) -> str:
         return "local"
 
     def shuffle(self, value: int64) -> int64:

@@ -34,7 +34,7 @@ def main() -> int32:
     print(holder.counter.value)
     print(right2.value)
 
-    mut values: Vec[Counter] = [Counter(value=20)]
+    mut values: list[Counter] = [Counter(value=20)]
     mut right3 = Counter(value=4)
     values[0] += right3
     print(values[0].value)
@@ -50,6 +50,6 @@ def main() -> int32:
     negated = -negative
     print(negated.value)
 
-    map: Map[String, int32] = {"answer": 42}
+    map: dict[str, int32] = {"answer": 42}
     print(map["answer"])
     return 0

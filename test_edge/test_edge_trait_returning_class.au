@@ -8,7 +8,7 @@ trait Locatable:
     def location(self) -> Point
 
 class City:
-    name: String
+    name: str
     px: int32
     py: int32
 

@@ -1,0 +1,19 @@
+import math
+
+def main() -> int32:
+    print(math.pi)
+    print(math.e)
+    print(math.inf)
+    print(math.nan)
+    print(math.floor(-1.25))
+    print(math.ceil(-1.25))
+    print(math.trunc(-1.75))
+    print(math.pow(2.0, -3.0))
+    print(math.exp(0.0))
+    print(math.log(1.0))
+    print(math.log2(8.0))
+    print(math.log10(1000.0))
+    print(math.sin(0.0))
+    print(math.cos(0.0))
+    print(math.tan(0.0))
+    return 0

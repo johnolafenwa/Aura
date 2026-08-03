@@ -1,5 +1,5 @@
 class Resource:
-    name: String
+    name: str
 
 def main() -> int32:
     r = Resource(name="unused")

@@ -1,60 +1,60 @@
 trait Show:
-    def show(self) -> String
+    def show(self) -> str
 
 class Box[T]:
     value: T
 
 class Marker[T]:
-    label: String
+    label: str
 
 class Pair[T, U]:
     first: T
     second: U
 
 impl Show for int32:
-    def show(self) -> String:
+    def show(self) -> str:
         return "int32"
 
 impl Show for int64:
-    def show(self) -> String:
+    def show(self) -> str:
         return "int64"
 
 impl Show for Box[int32]:
-    def show(self) -> String:
+    def show(self) -> str:
         return "box-int32"
 
 impl Show for Box[int64]:
-    def show(self) -> String:
+    def show(self) -> str:
         return "box-int64"
 
 impl Show for Marker[int32]:
-    def show(self) -> String:
+    def show(self) -> str:
         return "marker-int32"
 
 impl Show for Marker[int64]:
-    def show(self) -> String:
+    def show(self) -> str:
         return "marker-int64"
 
 impl Show for Option[int32]:
-    def show(self) -> String:
+    def show(self) -> str:
         return "option-int32"
 
 impl[T] Show for Option[T]:
-    def show(self) -> String:
+    def show(self) -> str:
         return "option-generic"
 
-impl[T] Show for Option[Vec[T]]:
-    def show(self) -> String:
+impl[T] Show for Option[list[T]]:
+    def show(self) -> str:
         return "option-vec"
 
 impl[T] Show for Pair[T, None]:
-    def show(self) -> String:
+    def show(self) -> str:
         return "pair-none"
 
 def render[T: Show](value: T) -> None:
     print(value.show())
 
-def render_first[T: Show](values: Vec[T]) -> None:
+def render_first[T: Show](values: list[T]) -> None:
     match values.get(0):
         case Option.Some(value):
             print(value.show())
@@ -71,7 +71,7 @@ def main() -> int32:
     render(Marker[int64](label="wide"))
     narrow: Option[int32] = Option.Some(9)
     wide: Option[int64] = Option.Some(10)
-    nested: Option[Vec[int64]] = Option.Some([15])
+    nested: Option[list[int64]] = Option.Some([15])
     render(narrow)
     render(wide)
     render(nested)
@@ -79,16 +79,16 @@ def main() -> int32:
     render(missing)
     pair: Pair[int64, None] = Pair[int64, None](first=2147483648, second=None)
     render(pair)
-    narrow_values: Vec[int32] = [11]
-    wide_values: Vec[int64] = [12]
+    narrow_values: list[int32] = [11]
+    wide_values: list[int64] = [12]
     render_first(narrow_values)
     render_first(wide_values)
-    narrow_markers: Vec[Marker[int32]] = [Marker[int32](label="narrow")]
-    wide_markers: Vec[Marker[int64]] = [Marker[int64](label="wide")]
+    narrow_markers: list[Marker[int32]] = [Marker[int32](label="narrow")]
+    wide_markers: list[Marker[int64]] = [Marker[int64](label="wide")]
     render_first(narrow_markers)
     render_first(wide_markers)
-    narrow_options: Vec[Option[int32]] = [Option.Some(13)]
-    wide_options: Vec[Option[int64]] = [Option.Some(14)]
+    narrow_options: list[Option[int32]] = [Option.Some(13)]
+    wide_options: list[Option[int64]] = [Option.Some(14)]
     render_first(narrow_options)
     render_first(wide_options)
     return 0

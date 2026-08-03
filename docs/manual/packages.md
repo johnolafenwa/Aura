@@ -22,7 +22,7 @@ All three package fields are required:
 
 - `name` must match `[A-Za-z_][A-Za-z0-9_]*`; it is also the dependency import identifier
 - `version` must begin with an ASCII digit and otherwise contain only ASCII letters, digits, `.`, `-`, or `+`
-- `edition` must be exactly `"2026"` in Aura 0.2
+- `edition` must be exactly `"2026"` in Aura 0.3
 
 `allow_ffi = true` is an optional `[package]` field whose default is `false`.
 It authorizes that package to contain FFI declarations. It grants no ambient
@@ -74,7 +74,7 @@ from helpers.text import normalize
 
 An import path maps directly to a `.au` file below the selected source root. Import traversal cannot escape that root, including through canonicalized filesystem paths. Cyclic source imports are rejected.
 
-Imported modules contribute declarations, not runtime initialization. Their top-level executable statements do not run as import side effects in Aura 0.2. Visibility and import binding behavior are specified in [Names And Scopes](/manual/names-and-scopes#imports).
+Imported modules contribute declarations, not runtime initialization. Their top-level executable statements do not run as import side effects in Aura 0.3. Visibility and import binding behavior are specified in [Names And Scopes](/manual/names-and-scopes#imports).
 
 ## Dependency Sources
 
@@ -90,7 +90,9 @@ Each dependency table entry must choose exactly one source:
 
 `path` and `git` cannot appear together. A git entry may choose at most one of `rev`, `tag`, or `branch`; selectors without `git` are invalid.
 
-String version dependencies such as `util = "1.2.0"` and detailed `version =` dependencies are registry forms and are not implemented. Aura 0.2 has no registry resolution, publish, or install flow.
+String-valued version dependencies such as `util = "1.2.0"` and detailed
+`version =` dependencies are registry forms and are not implemented. Aura 0.3
+has no registry resolution, publish, or install flow.
 
 The dependency table key is not a free alias: it must exactly match the resolved dependency's `[package].name`. This keeps the manifest name and import root identical. A dependency package named `util` is imported with that prefix:
 
@@ -113,7 +115,7 @@ Resolution recursively loads path and git dependencies and enforces:
 - at most 4,096 packages in one resolved graph
 - every package has a readable `src/` directory and a valid package manifest
 
-Two different paths cannot both claim the same package name. The graph limits are observable Aura 0.2 limits and may be raised only with corresponding reference and conformance changes.
+Two different paths cannot both claim the same package name. The graph limits are observable Aura 0.3 limits and may be raised only with corresponding reference and conformance changes.
 
 ## Workspaces
 
@@ -180,7 +182,10 @@ An all-dependency update refreshes tag, branch, and default-`main` selectors. Ex
 
 A git source is either an explicit URL/SSH form or an existing local path relative to the declaring manifest. Empty sources, option-like sources beginning with `-`, invalid revision text, and unsafe tag/branch spellings are rejected before invoking git.
 
-Aura disables interactive git credential prompts so package commands fail rather than hang waiting for terminal input. Each git command has a 60-second default timeout. Set `AURA_GIT_TIMEOUT_MS` to a positive millisecond value to override that timeout.
+Aura disables interactive git credential prompts so package commands fail
+without waiting for terminal input. Each git command has a 60-second default
+timeout. Set `AURA_GIT_TIMEOUT_MS` to a positive millisecond value to override
+that timeout.
 
 Resolved revisions are materialized in a content-addressed cache under `$XDG_CACHE_HOME/aura/git`, otherwise `$HOME/.cache/aura/git`, with a temporary-directory fallback when needed. Cached entries are validated against their recorded revision. Aura refuses symlinked cache paths, symlinked manifests, and symlinked content in a git checkout; clones also disable symlink materialization. Concurrent cache placement uses a compatible existing checkout only when it validates to the same revision.
 
@@ -222,7 +227,14 @@ See [Current Limits](/manual/current-limits#runtime) for the broader maintained 
 
 ## Grammar
 
-Source imports have the maintained forms `import dotted.module` and `from dotted.module import name`, as specified in [Grammar](/manual/grammar#imports). Import paths are absolute within the resolved local or dependency namespace. Relative imports, wildcard imports, aliases, and package-name prefixes for the current package are not grammar.
+Source imports have the maintained forms `import dotted.module [as local]`
+and `from dotted.module import name [as local]`, as specified in
+[Grammar](/manual/grammar#imports). A from-import may contain several direct or
+aliased names. Import paths are absolute within the resolved local or
+dependency namespace. The resolver uses the path before `as`; the alias is a
+local binding and is never interpreted as a package, directory, or dependency
+key. Relative imports, wildcard imports, and package-name prefixes for the
+current package are not grammar.
 
 `Aura.toml` and `Aura.lock` use TOML as external tooling formats, not Aura source grammar. Their accepted keys, table shapes, selector combinations, identifier rules, FFI opt-in/report fields, and lockfile version are exactly the contracts documented above; unrecognized source kinds or unsupported dependency forms are rejected rather than inferred.
 
@@ -276,9 +288,13 @@ Git commands default to a 60-second timeout, disable interactive credential prom
 
 ## Status
 
-Single packages, exact-path workspaces, path dependencies, pinned and moving git selectors, deterministic lockfile version 1, package visibility, cross-package trait dispatch, editor no-lockfile analysis, package-local FFI authorization, and exact root FFI dependency reporting are implemented and maintained in Aura 0.2. No package semantics on this page are provisional.
+Single packages, exact-path workspaces, path dependencies, pinned and moving
+git selectors, deterministic lockfile version 1, package visibility, import
+aliases, cross-package trait dispatch, editor no-lockfile analysis,
+package-local FFI authorization, and exact root FFI dependency reporting are
+implemented and maintained. No package semantics on this page are
+provisional.
 
 Registry resolution, publishing, installation, alternative source roots,
-workspace globs, import aliases, wildcard or relative imports, implicit
-re-exports, and import-time initialization are outside the Aura 0.2 language
-contract.
+workspace globs, wildcard or relative imports, implicit re-exports, and
+import-time initialization are outside the Aura 0.3 language contract.

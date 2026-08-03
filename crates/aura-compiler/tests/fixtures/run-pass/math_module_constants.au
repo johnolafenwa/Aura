@@ -1,0 +1,14 @@
+import math
+from math import pi as circle
+from math import e
+
+def main() -> int32:
+    print(math.pi)
+    print(circle == math.pi)
+    print(e)
+    print(math.inf)
+    print(math.inf > math.pi)
+    print(math.nan)
+    print(math.nan == math.nan)
+    print(math.nan != math.nan)
+    return 0

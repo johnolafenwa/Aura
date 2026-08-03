@@ -58,12 +58,12 @@ The current tutorial set covers:
 - classes with fields, default values, receiver forms, mutating methods, and `public` field syntax
 - ownership, declaration-stable parameter defaults, explicit `own`, move
   semantics, copy types, and the exclusivity rule for mutable borrows
-- owned `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals,
-  storing APIs, bare-shared/`own` iteration, mutable Vec iteration, stable
-  sorting, eager callback-powered `map`/`filter`, and eager owned list/set/map
-  comprehensions with filters and nested clauses, plus owned Vec/String slices
+- owned `list[T]`, `dict[K, V]`, and `set[T]` collections with literals,
+  storing APIs, bare-shared/`own` iteration, mutable list iteration, stable
+  sorting, eager callback-powered `map`/`filter`, and eager owned list/set/dictionary
+  comprehensions with filters and nested clauses, plus owned list/str slices
   with omitted endpoints, negative normalization, loud bounds, and
-  Unicode-scalar String positions
+  Unicode-scalar str positions
 - owned contiguous numeric `Array[T]` values for the four maintained dtypes,
   with exact shapes, row-major multidimensional indexing, first-axis copy
   slices, same-dtype arithmetic, explicit wrapping/saturating integer modes,
@@ -74,22 +74,22 @@ The current tutorial set covers:
 - local file modules with `import`, `from ... import ...`, and `public` visibility at module boundaries
 - `Aura.toml` packages with `src/`, local path dependencies, git dependencies, workspaces, and local lockfiles
 - package-authorized FFI v0 with bodyless `extern "C"` declarations,
-  fixed-width scalars, pointer-length String/byte views, opaque handles, and
+  fixed-width scalars, pointer-length str/byte views, opaque handles, and
   exact root dependency reports
 - built-in `Result[T, E]`, `Option[T]`, `SendError[T]`, and bare `None`
 - `try expr`
 - conditional expressions such as `value if condition else alternative`, with
   exact-`bool` conditions and lazy selection of one arm
-- `in` and `not in` over `Vec`, `Set`, `Map` keys, and `String` substrings
+- `in` and `not in` over `list`, `set`, `dict` keys, and `str` substrings
 - Python-style chained comparisons such as `low <= value < high`, which
   evaluate each operand once and short-circuit
 - the `for ... in enumerate(seq):` and `for ... in zip(first, second):` loop
   forms, where `zip` stops at the shorter sequence
 - the builtin functions `len(value)`, delegating to the value's own `len()`,
-  and `str(value)`, producing the print rendering; `String.len()`,
-  `String.byte_len()`, `Vec.len()`, `Map.len()`, and `Set.len()` all return
-  `int64`, while still-`int32` range and Vec-index consumers require an
-  explicit checked narrowing
+  and `str(value)`, producing the print rendering; `str.len()`,
+  `str.byte_len()`, `list.len()`, `dict.len()`, and `set.len()` all return
+  `int64`, matching range bounds, list indexes, slice endpoints, enumeration
+  positions, and Array coordinates
 - `with` using `close(mut self)` and `with TaskGroup() as group:`
 - builtin `io`, `fs`, `net`, and `process` modules with scheduler-aware file I/O, maintained networking resource types, and shell-free subprocess helpers
 - `Queue[T]()`, `Task[T].result()`, `TaskGroup()`, its ordinary and
@@ -97,14 +97,18 @@ The current tutorial set covers:
   relative-Duration sources, `wait_any(...)`, `wait_all(...)`, send-result
   errors, structural `Transfer` boundaries, single-consumer task results, and
   cooperative cancellation
-- arithmetic including explicit floor division, integer-to-float conversion, and computed signed Duration values; strings, string parsing/formatting, booleans, and comparisons
-- deterministic seeded randomness, unbiased ranges, mutable-Vec shuffle, and
+- arithmetic including decimal/hexadecimal/binary/octal integer literals,
+  fixed-width bitwise and shift operations, checked power, ties-to-even
+  `round`, paired `divmod`, explicit floor division, integer-to-float
+  conversion, and computed signed Duration values; strings, string
+  parsing/formatting, booleans, and comparisons
+- deterministic seeded randomness, unbiased ranges, mutable-list shuffle, and
   the separate OS-secure integer/byte boundary
 - `control.retry` for eager `Result` workers with an attempt budget and
   exponential `Duration` backoff
 - recursive `json.Value` trees, typed parse errors, exact accessors, consuming
   payload extraction, and deterministic compact or pretty dumping
-- `Vec[uint8]` bytes, strict UTF-8 conversion, canonical hex/base64 codecs,
+- `list[uint8]` bytes, strict UTF-8 conversion, canonical hex/base64 codecs,
   typed malformed-input errors, and raw SHA-256
 - `assert condition` and `assert condition, message`, with lazy messages,
   source-located `AU4001` failures, and file-level `aura test` behavior

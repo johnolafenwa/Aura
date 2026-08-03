@@ -1,6 +1,6 @@
 # Test: enum methods via trait impl
 trait Displayable:
-    def name(self) -> String
+    def name(self) -> str
     def is_primary(self) -> bool
 
 enum Color:
@@ -9,7 +9,7 @@ enum Color:
     Blue
 
 impl Displayable for Color:
-    def name(self) -> String:
+    def name(self) -> str:
         match own self:
             case Color.Red:
                 return "red"

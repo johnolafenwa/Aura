@@ -19,6 +19,10 @@ use crate::diag::{Diagnostic, Result};
 use crate::integer::{
     integer_type_bounds as integer_type_bounds_impl, IntegerBounds, IntegerValue,
 };
+use crate::runtime_value::{parse_format_spec, validate_format_spec_for_type};
+
+const NO_IDENTITY_EQUALITY_NOTE: &str =
+    "Aura has no identity-equality fallback; equality-dependent operations require a defined value relation";
 
 #[derive(Clone, Debug)]
 pub struct Program {
@@ -28,6 +32,13 @@ pub struct Program {
     pub classes: BTreeMap<String, ClassInfo>,
     pub enums: BTreeMap<String, EnumInfo>,
     pub functions: BTreeMap<String, FunctionInfo>,
+    /// Module constants visible by their source-level local names. Imported
+    /// aliases retain the defining module and storage identity in ConstantInfo.
+    pub constants: BTreeMap<String, ConstantInfo>,
+    /// Dependency-first, import-source-order plan for eager module constant
+    /// initialization. The file loader replaces the local-only seed with the
+    /// complete transitive plan for an entry program.
+    pub constant_init_plan: Vec<ConstantInfo>,
     pub extern_functions: BTreeMap<String, ExternFunctionInfo>,
     pub opaque_handles: BTreeMap<String, OpaqueHandleInfo>,
     pub traits: BTreeMap<String, TraitInfo>,
@@ -48,6 +59,13 @@ pub struct Program {
     /// progressively scoped iterable inference.
     pub comprehensions: BTreeMap<ComprehensionId, ComprehensionInfo>,
     pub top_level_stmts: Vec<Stmt>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConstantInfo {
+    pub module_name: String,
+    pub decl: crate::ast::ConstantDecl,
+    pub ty: Type,
 }
 
 impl Program {
@@ -246,6 +264,7 @@ pub(crate) fn unary_operator_trait(op: UnaryOp) -> Option<(&'static str, &'stati
     match op {
         UnaryOp::Neg => Some(("Neg", "neg")),
         UnaryOp::Not => Some(("Not", "not")),
+        UnaryOp::BitNot => None,
     }
 }
 
@@ -261,8 +280,32 @@ pub(crate) fn binary_operator_trait(op: BinaryOp) -> Option<(&'static str, &'sta
         BinaryOp::LessEq => Some(("Ord", "le")),
         BinaryOp::Greater => Some(("Ord", "gt")),
         BinaryOp::GreaterEq => Some(("Ord", "ge")),
-        BinaryOp::And | BinaryOp::Or | BinaryOp::Eq | BinaryOp::NotEq => None,
+        BinaryOp::And
+        | BinaryOp::Or
+        | BinaryOp::Eq
+        | BinaryOp::NotEq
+        | BinaryOp::Pow
+        | BinaryOp::BitAnd
+        | BinaryOp::BitOr
+        | BinaryOp::BitXor
+        | BinaryOp::Shl
+        | BinaryOp::Shr => None,
     }
+}
+
+/// Whether a checked assertion dispatch can retain both operands for failure
+/// reporting without changing its ownership semantics.
+///
+/// `None` denotes compiler-defined comparison or membership dispatch. Custom
+/// operator dispatch supplies its resolved receiver and right-operand
+/// conventions; both must be shared. In particular, mutable or consuming
+/// contracts remain ordinary assertions and are never cloned for diagnostics.
+pub(crate) fn assertion_dispatch_is_non_consuming(
+    custom_passings: Option<(ReceiverKind, ReceiverKind)>,
+) -> bool {
+    custom_passings.is_none_or(|(receiver, rhs)| {
+        receiver == ReceiverKind::Borrow && rhs == ReceiverKind::Borrow
+    })
 }
 
 pub(crate) fn is_duration_type(ty: &Type) -> bool {
@@ -309,6 +352,7 @@ pub enum ImportedBinding {
     Class(ClassInfo),
     Enum(EnumInfo),
     Trait(TraitInfo),
+    Constant(ConstantInfo),
     Module(ModuleNamespace),
 }
 
@@ -319,6 +363,7 @@ pub struct ModuleNamespace {
     pub source_path: Option<String>,
     pub modules: BTreeMap<String, ModuleNamespace>,
     pub functions: BTreeMap<String, FunctionInfo>,
+    pub constants: BTreeMap<String, ConstantInfo>,
     pub extern_functions: BTreeMap<String, ExternFunctionInfo>,
     pub opaque_handles: BTreeMap<String, OpaqueHandleInfo>,
     pub classes: BTreeMap<String, ClassInfo>,
@@ -326,6 +371,7 @@ pub struct ModuleNamespace {
     pub traits: BTreeMap<String, TraitInfo>,
     pub trait_impls: Vec<TraitImplInfo>,
     pub all_functions: BTreeMap<String, FunctionInfo>,
+    pub all_constants: BTreeMap<String, ConstantInfo>,
     pub all_extern_functions: BTreeMap<String, ExternFunctionInfo>,
     pub all_opaque_handles: BTreeMap<String, OpaqueHandleInfo>,
     pub all_classes: BTreeMap<String, ClassInfo>,
@@ -1404,6 +1450,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
     let mut imported_modules = BTreeMap::new();
 
     let mut imported_functions = BTreeMap::new();
+    let mut constants = BTreeMap::new();
     let mut imported_extern_functions = BTreeMap::new();
     let mut imported_opaque_handles = BTreeMap::new();
     let mut imported_classes = BTreeMap::new();
@@ -1477,6 +1524,10 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                     register_module_namespace_types(namespace, &mut type_names, &mut type_arities);
                 }
                 imported_traits.insert(name.clone(), trait_info.clone());
+            }
+            ImportedBinding::Constant(constant) => {
+                item_names.insert(name.clone(), ("module constant", constant.decl.span));
+                constants.insert(name.clone(), constant.clone());
             }
             ImportedBinding::Module(namespace) => {
                 item_names.insert(name.clone(), ("module", crate::diag::Span::new(1, 1)));
@@ -2030,6 +2081,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         &classes,
         &enums,
         &empty_functions,
+        &constants,
         &traits,
         &empty_trait_impls,
         &imported_modules,
@@ -2453,6 +2505,123 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         });
     }
 
+    // Constants become visible strictly in declaration order. Items were
+    // collected above, so initializers may call functions and constructors
+    // regardless of textual position without exposing a later constant.
+    let declared_constant_spans = module
+        .constants
+        .iter()
+        .map(|constant| (constant.name.clone(), constant.span))
+        .collect::<BTreeMap<_, _>>();
+    for constant in &module.constants {
+        if let Some((kind, existing)) =
+            item_names.insert(constant.name.clone(), ("module constant", constant.span))
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2999",
+                constant.span,
+                format!(
+                    "module constant `{}` collides with an existing {}",
+                    constant.name, kind
+                ),
+            )
+            .with_secondary(existing, format!("the existing {kind} is declared here")));
+        }
+        let expected = constant
+            .annotation
+            .as_ref()
+            .map(|annotation| {
+                lower_type(
+                    annotation,
+                    &type_names,
+                    &type_arities,
+                    &canonical_type_names,
+                    &BTreeMap::new(),
+                )
+            })
+            .transpose()?;
+        let checker = FunctionChecker::new(
+            &module_name,
+            &type_names,
+            &type_arities,
+            &canonical_type_names,
+            &classes,
+            &enums,
+            &functions,
+            &constants,
+            &traits,
+            &trait_impls,
+            &imported_modules,
+            &context.module_registry,
+        )
+        .with_ffi(&extern_functions, &opaque_handles);
+        let mut scope = HashMap::new();
+        checker.seed_module_scope(&mut scope);
+        let inferred =
+            match checker.type_of_expr_hint(&constant.value, &mut scope, expected.as_ref()) {
+                Ok(ty) => ty,
+                Err(error) => {
+                    let blocked = declared_constant_spans.iter().find(|(name, span)| {
+                        (**span == constant.span || span.line > constant.span.line)
+                            && error.message.contains(&format!("unknown name `{name}`"))
+                    });
+                    if let Some((name, declaration)) = blocked {
+                        return Err(Diagnostic::coded_at(
+                            "AU2001",
+                            constant.value.span,
+                            format!("module constant `{name}` is used before initialization"),
+                        )
+                        .with_secondary(*declaration, format!("`{name}` is declared here")));
+                    }
+                    return Err(error);
+                }
+            };
+        if let Some(expected) = &expected {
+            if &inferred != expected {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    constant.value.span,
+                    format!(
+                        "initializer for module constant `{}` has type `{}`, expected `{}`",
+                        constant.name, inferred, expected
+                    ),
+                ));
+            }
+        }
+        checker.consume_value_expr(&constant.value, &mut scope)?;
+        constants.insert(
+            constant.name.clone(),
+            ConstantInfo {
+                module_name: module_name.clone(),
+                decl: constant.clone(),
+                ty: expected.unwrap_or(inferred),
+            },
+        );
+    }
+
+    let mut constant_init_plan = Vec::new();
+    let mut planned_constants = BTreeSet::new();
+    for constant in imported_modules
+        .values()
+        .flat_map(|namespace| namespace.all_constants.values())
+        .chain(
+            constants
+                .values()
+                .filter(|constant| constant.module_name != module_name),
+        )
+    {
+        let key = (constant.module_name.clone(), constant.decl.name.clone());
+        if planned_constants.insert(key) {
+            constant_init_plan.push(constant.clone());
+        }
+    }
+    let mut local_constants = constants
+        .values()
+        .filter(|constant| constant.module_name == module_name)
+        .cloned()
+        .collect::<Vec<_>>();
+    local_constants.sort_by_key(|constant| (constant.decl.span.line, constant.decl.span.column));
+    constant_init_plan.extend(local_constants);
     let mut program = Program {
         module: module.clone(),
         module_name,
@@ -2460,6 +2629,8 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         classes,
         enums,
         functions,
+        constants,
+        constant_init_plan,
         extern_functions,
         opaque_handles,
         traits,
@@ -2476,6 +2647,22 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         .functions
         .get("main")
         .filter(|function| function.module_name == program.module_name);
+    if context.is_entry_module && local_main.is_some() {
+        if let Some(Stmt::Assign(assign)) = program
+            .top_level_stmts
+            .iter()
+            .find(|stmt| matches!(stmt, Stmt::Assign(assign) if assign.mutable))
+        {
+            return Err(Diagnostic::coded_at(
+                "AU3003",
+                assign.span,
+                "module bindings are immutable; `mut` module state is not supported",
+            )
+            .with_help(
+                "put mutable state in a local value owned by `main` or another explicit owner",
+            ));
+        }
+    }
     if let (true, false, Some(main)) = (
         context.is_entry_module,
         program.top_level_stmts.is_empty(),
@@ -2531,6 +2718,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 &program.classes,
                 &program.enums,
                 &program.functions,
+                &program.constants,
                 &program.traits,
                 &program.trait_impls,
                 &program.imported_modules,
@@ -2861,6 +3049,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 &program.classes,
                 &program.enums,
                 &program.functions,
+                &program.constants,
                 &program.traits,
                 &program.trait_impls,
                 &program.imported_modules,
@@ -2987,6 +3176,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         &program.classes,
         &program.enums,
         &program.functions,
+        &program.constants,
         &program.traits,
         &program.trait_impls,
         &program.imported_modules,
@@ -3135,7 +3325,7 @@ fn lower_type_with_self(
         crate::ast::TypeRefKind::Named { name, args } => (name, args),
     };
     let type_name = match name.as_str() {
-        "str" => "String",
+        "str" => "str",
         "int" => "int64",
         name => name,
     };
@@ -3220,8 +3410,8 @@ fn lower_type_with_self(
         || type_name == "TaskResult"
         || type_name == "WaitAny"
         || type_name == "WaitAll"
-        || type_name == "Vec"
-        || type_name == "Set"
+        || type_name == "list"
+        || type_name == "set"
         || type_name == "Array"
     {
         if args.len() != 1 {
@@ -3253,21 +3443,11 @@ fn lower_type_with_self(
         return Ok(Type::Named(type_name.to_string(), args));
     }
 
-    if type_name == "Map" {
+    if type_name == "dict" {
         if args.len() != 2 {
             return Err(Diagnostic::at(
                 type_ref.span,
-                "`Map` expects exactly two type arguments",
-            ));
-        }
-        return Ok(Type::Named(type_name.to_string(), args));
-    }
-
-    if type_name == "MapEntry" {
-        if args.len() != 2 {
-            return Err(Diagnostic::at(
-                type_ref.span,
-                "`MapEntry` expects exactly two type arguments",
+                "`dict` expects exactly two type arguments",
             ));
         }
         return Ok(Type::Named(type_name.to_string(), args));
@@ -3496,12 +3676,12 @@ fn validate_ffi_signature(
                 "AU2005",
                 param.ty.span,
                 format!(
-                    "FFI raw pointers are reserved; parameter `{}` must use a String, Vec[uint8], or opaque handle contract",
+                    "FFI raw pointers are reserved; parameter `{}` must use a str, list[uint8], or opaque handle contract",
                     param.name
                 ),
             )
             .with_help(
-                "use bare `String` or `Vec[uint8]` for a const pointer-length view, `mut Vec[uint8]` for fixed-length copy-in/out, or declare an opaque handle",
+                "use bare `str` or `list[uint8]` for a const pointer-length view, `mut list[uint8]` for fixed-length copy-in/out, or declare an opaque handle",
             ));
         }
         let ty = lower_type(
@@ -3603,29 +3783,29 @@ fn validate_ffi_parameter(
         return Ok(());
     }
 
-    if *ty == Type::named("String") {
+    if *ty == Type::named("str") {
         return match mode {
             ParamMode::Default => Ok(()),
             ParamMode::Own => Err(Diagnostic::coded_at(
                 "AU3004",
                 span,
-                format!("String view parameter `{param_name}` must use the bare capability"),
+                format!("str view parameter `{param_name}` must use the bare capability"),
             )
             .with_help(
-                "use bare `String`; it passes a temporary const UTF-8 pointer and byte length for the duration of the call",
+                "use bare `str`; it passes a temporary const UTF-8 pointer and byte length for the duration of the call",
             )),
             ParamMode::BorrowMut => Err(Diagnostic::coded_at(
                 "AU3004",
                 span,
-                format!("mutable String views are reserved for parameter `{param_name}`"),
+                format!("mutable str views are reserved for parameter `{param_name}`"),
             )
             .with_help(
-                "use `mut Vec[uint8]` for fixed-length writable bytes, or bare `String` for a const UTF-8 view",
+                "use `mut list[uint8]` for fixed-length writable bytes, or bare `str` for a const UTF-8 view",
             )),
         };
     }
 
-    if matches!(ty, Type::Named(name, args) if name == "Vec" && args == &[Type::named("uint8")]) {
+    if matches!(ty, Type::Named(name, args) if name == "list" && args == &[Type::named("uint8")]) {
         return match mode {
             ParamMode::Default | ParamMode::BorrowMut => Ok(()),
             ParamMode::Own => Err(Diagnostic::coded_at(
@@ -3634,17 +3814,17 @@ fn validate_ffi_parameter(
                 format!("owned byte views are reserved for parameter `{param_name}`"),
             )
             .with_help(
-                "use bare `Vec[uint8]` for a const view or `mut Vec[uint8]` for fixed-length copy-in/out",
+                "use bare `list[uint8]` for a const view or `mut list[uint8]` for fixed-length copy-in/out",
             )),
         };
     }
 
-    if matches!(ty, Type::Named(name, args) if name == "Vec" && args.len() == 1) {
+    if matches!(ty, Type::Named(name, args) if name == "list" && args.len() == 1) {
         return Err(Diagnostic::coded_at(
             "AU2002",
             span,
             format!(
-                "only `Vec[uint8]` is supported as an FFI byte view; parameter `{param_name}` has `{ty}`"
+                "only `list[uint8]` is supported as an FFI byte view; parameter `{param_name}` has `{ty}`"
             ),
         ));
     }
@@ -3669,7 +3849,7 @@ fn validate_ffi_parameter(
         format!("FFI v0 does not support parameter type `{ty}`"),
     )
     .with_help(
-        "use a fixed-width scalar, bare String, bare or mut Vec[uint8], or a declared opaque handle",
+        "use a fixed-width scalar, bare str, bare or mut list[uint8], or a declared opaque handle",
     ))
 }
 
@@ -3681,18 +3861,18 @@ fn validate_ffi_return(
     if *ty == Type::Unit || ffi_scalar_type(ty) || ffi_opaque_handle(ty, opaque_handles) {
         return Ok(());
     }
-    if *ty == Type::named("String") {
+    if *ty == Type::named("str") {
         return Err(Diagnostic::coded_at(
             "AU2002",
             span,
-            "FFI v0 cannot return a String view because no foreign lifetime or allocator contract exists",
+            "FFI v0 cannot return a str view because no foreign lifetime or allocator contract exists",
         ));
     }
-    if matches!(ty, Type::Named(name, args) if name == "Vec" && args == &[Type::named("uint8")]) {
+    if matches!(ty, Type::Named(name, args) if name == "list" && args == &[Type::named("uint8")]) {
         return Err(Diagnostic::coded_at(
             "AU2002",
             span,
-            "FFI v0 cannot return a Vec[uint8] view because no foreign lifetime or allocator contract exists",
+            "FFI v0 cannot return a list[uint8] view because no foreign lifetime or allocator contract exists",
         ));
     }
     Err(Diagnostic::coded_at(
@@ -3831,7 +4011,7 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
         }
         ExprKind::FString(parts) => parts.iter().find_map(|part| match part {
             crate::ast::FormatPart::Literal(_) => None,
-            crate::ast::FormatPart::Expr(expr) => {
+            crate::ast::FormatPart::Expr(expr) | crate::ast::FormatPart::Formatted { expr, .. } => {
                 default_argument_references_param(expr, param_names)
             }
         }),
@@ -4219,7 +4399,7 @@ pub(crate) fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) 
                 .iter()
                 .map(|arg| substitute_type(arg, substitutions))
                 .collect::<Vec<_>>();
-            if matches!(name.as_str(), "Vec" | "Map" | "Set") {
+            if matches!(name.as_str(), "list" | "dict" | "set") {
                 substituted_args = substituted_args
                     .iter()
                     .map(erase_type_callable_contracts)
@@ -4859,13 +5039,11 @@ fn erase_type_callable_contracts(ty: &Type) -> Type {
 /// The element, key, or substring type an `in` container compares against.
 pub(crate) fn membership_needle_type(container_ty: &Type) -> Option<Type> {
     match container_ty {
-        Type::Named(name, args) if (name == "Vec" || name == "Set") && args.len() == 1 => {
+        Type::Named(name, args) if (name == "list" || name == "set") && args.len() == 1 => {
             Some(args[0].clone())
         }
-        Type::Named(name, args) if name == "Map" && args.len() == 2 => Some(args[0].clone()),
-        Type::Named(name, args) if name == "String" && args.is_empty() => {
-            Some(Type::named("String"))
-        }
+        Type::Named(name, args) if name == "dict" && args.len() == 2 => Some(args[0].clone()),
+        Type::Named(name, args) if name == "str" && args.is_empty() => Some(Type::named("str")),
         _ => None,
     }
 }
@@ -4873,11 +5051,11 @@ pub(crate) fn membership_needle_type(container_ty: &Type) -> Option<Type> {
 /// The builtin member that `in` delegates to for a supported container.
 pub(crate) fn membership_member_name(container_ty: &Type) -> Option<&'static str> {
     match container_ty {
-        Type::Named(name, args) if name == "Map" && args.len() == 2 => Some("contains_key"),
-        Type::Named(name, args) if (name == "Vec" || name == "Set") && args.len() == 1 => {
+        Type::Named(name, args) if name == "dict" && args.len() == 2 => Some("contains_key"),
+        Type::Named(name, args) if (name == "list" || name == "set") && args.len() == 1 => {
             Some("contains")
         }
-        Type::Named(name, args) if name == "String" && args.is_empty() => Some("contains"),
+        Type::Named(name, args) if name == "str" && args.is_empty() => Some("contains"),
         _ => None,
     }
 }
@@ -4901,12 +5079,11 @@ fn is_builtin_type(name: &str) -> bool {
             | "uintsize"
             | "float32"
             | "float64"
-            | "String"
+            | "str"
             | "Array"
-            | "Vec"
-            | "Set"
-            | "Map"
-            | "MapEntry"
+            | "list"
+            | "set"
+            | "dict"
             | "Range"
             | "Queue"
             | "Task"
@@ -4969,7 +5146,7 @@ fn is_float_type(ty: &Type) -> bool {
 }
 
 fn is_string_type(ty: &Type) -> bool {
-    matches!(ty, Type::Named(name, args) if name == "String" && args.is_empty())
+    matches!(ty, Type::Named(name, args) if name == "str" && args.is_empty())
 }
 
 fn is_option_type(ty: &Type) -> bool {
@@ -5021,9 +5198,21 @@ fn render_literal_pattern_key(key: &LiteralPatternKey) -> String {
     }
 }
 
+fn pattern_contains_variant_shape(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Or(pattern) => pattern
+            .alternatives
+            .iter()
+            .any(pattern_contains_variant_shape),
+        Pattern::Tuple(pattern) => pattern.elements.iter().any(pattern_contains_variant_shape),
+        Pattern::Variant(_) => true,
+        Pattern::Binding(_) | Pattern::Literal(_) | Pattern::Wildcard(_) => false,
+    }
+}
+
 fn vec_element_type(ty: &Type) -> Option<&Type> {
     match ty {
-        Type::Named(name, args) if name == "Vec" && args.len() == 1 => Some(&args[0]),
+        Type::Named(name, args) if name == "list" && args.len() == 1 => Some(&args[0]),
         _ => None,
     }
 }
@@ -5037,14 +5226,14 @@ fn array_element_type(ty: &Type) -> Option<&Type> {
 
 fn set_element_type(ty: &Type) -> Option<&Type> {
     match ty {
-        Type::Named(name, args) if name == "Set" && args.len() == 1 => Some(&args[0]),
+        Type::Named(name, args) if name == "set" && args.len() == 1 => Some(&args[0]),
         _ => None,
     }
 }
 
 fn map_key_value_types(ty: &Type) -> Option<(&Type, &Type)> {
     match ty {
-        Type::Named(name, args) if name == "Map" && args.len() == 2 => Some((&args[0], &args[1])),
+        Type::Named(name, args) if name == "dict" && args.len() == 2 => Some((&args[0], &args[1])),
         _ => None,
     }
 }
@@ -5258,7 +5447,7 @@ struct LoopForm<'a> {
 /// The element type an index-addressable collection yields in a lockstep loop.
 pub(crate) fn lockstep_element_type(iterable_ty: &Type) -> Option<Type> {
     match iterable_ty {
-        Type::Named(name, args) if (name == "Vec" || name == "Set") && args.len() == 1 => {
+        Type::Named(name, args) if (name == "list" || name == "set") && args.len() == 1 => {
             Some(args[0].clone())
         }
         _ => None,
@@ -5314,6 +5503,7 @@ struct FunctionChecker<'a> {
     classes: &'a BTreeMap<String, ClassInfo>,
     enums: &'a BTreeMap<String, EnumInfo>,
     functions: &'a BTreeMap<String, FunctionInfo>,
+    constants: &'a BTreeMap<String, ConstantInfo>,
     extern_functions: &'a BTreeMap<String, ExternFunctionInfo>,
     opaque_handles: &'a BTreeMap<String, OpaqueHandleInfo>,
     traits: &'a BTreeMap<String, TraitInfo>,
@@ -5364,20 +5554,52 @@ enum BlockFlow {
 }
 
 impl<'a> FunctionChecker<'a> {
+    fn check_index_domain_type(
+        &self,
+        value: &Expr,
+        span: crate::diag::Span,
+        subject: &str,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Type> {
+        let expected = Type::named("int64");
+        let actual = if Self::is_integer_literal_expr(value) {
+            self.type_of_expr_hint(value, locals, Some(&expected))?
+        } else {
+            self.type_of_expr(value, locals)?
+        };
+        // Pointer-sized integer domains vary by compilation target. Keeping
+        // this exception target-stable requires an explicitly fixed-width
+        // source type, so intsize/uintsize never receive implicit widening.
+        let pointer_sized = matches!(
+            &actual,
+            Type::Named(name, args)
+                if args.is_empty() && matches!(name.as_str(), "intsize" | "uintsize")
+        );
+        let losslessly_widens = !pointer_sized
+            && match integer_type_bounds(&actual) {
+                Some(IntegerBounds::Signed { min, max }) => {
+                    min >= i64::MIN as i128 && max <= i64::MAX as i128
+                }
+                Some(IntegerBounds::Unsigned { max }) => max <= i64::MAX as u128,
+                None => false,
+            };
+        if !losslessly_widens {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                format!("{subject} must have type `int64` or a losslessly narrower integer type, found `{actual}`"),
+            ));
+        }
+        Ok(expected)
+    }
+
     fn check_vec_index_type(
         &self,
         index: &Expr,
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
-        let expected = Type::named("int32");
-        let actual = self.type_of_expr_hint(index, locals, Some(&expected))?;
-        if actual != expected {
-            return Err(Diagnostic::at(
-                span,
-                format!("vector indices must have type `int32`, found `{}`", actual),
-            ));
-        }
+        self.check_index_domain_type(index, span, "list indices", locals)?;
         Ok(())
     }
 
@@ -5390,16 +5612,8 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Tuple(elements) => elements.as_slice(),
             _ => std::slice::from_ref(index),
         };
-        let expected = Type::named("int32");
         for coordinate in coordinates {
-            let actual = self.type_of_expr_hint(coordinate, locals, Some(&expected))?;
-            if actual != expected {
-                return Err(Diagnostic::coded_at(
-                    "AU2002",
-                    coordinate.span,
-                    format!("Array indices must have type `int32`, found `{actual}`"),
-                ));
-            }
+            self.check_index_domain_type(coordinate, coordinate.span, "Array indices", locals)?;
         }
         Ok(())
     }
@@ -5409,25 +5623,7 @@ impl<'a> FunctionChecker<'a> {
         endpoint: &Expr,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Type> {
-        let expected = Type::named("int32");
-        let actual = match self.type_of_expr_hint(endpoint, locals, Some(&expected)) {
-            Ok(actual) => actual,
-            Err(error)
-                if Self::is_integer_literal_expr(endpoint)
-                    && error.message.contains("does not fit in `int32`") =>
-            {
-                return Err(Diagnostic::coded_at("AU2002", endpoint.span, error.message));
-            }
-            Err(error) => return Err(error),
-        };
-        if actual != expected {
-            return Err(Diagnostic::coded_at(
-                "AU2002",
-                endpoint.span,
-                format!("slice endpoints must have type `int32`, found `{}`", actual),
-            ));
-        }
-        Ok(actual)
+        self.check_index_domain_type(endpoint, endpoint.span, "slice endpoints", locals)
     }
 
     fn bound_argument<'b>(
@@ -5546,7 +5742,7 @@ impl<'a> FunctionChecker<'a> {
         element_ty: &Type,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Type> {
-        self.collection_callback_return_type("Vec", method_name, callback, element_ty, locals)
+        self.collection_callback_return_type("list", method_name, callback, element_ty, locals)
     }
 
     fn array_callback_return_type(
@@ -5574,7 +5770,7 @@ impl<'a> FunctionChecker<'a> {
         Err(Diagnostic::coded_at(
             "AU2002",
             span,
-            format!("`Vec.{method_name}` cannot order {subject} `{ty}`"),
+            format!("`list.{method_name}` cannot order {subject} `{ty}`"),
         )
         .with_help(
             "use an existing naturally ordered type, or implement `Ord[T].lt` returning `bool`",
@@ -5817,7 +6013,7 @@ impl<'a> FunctionChecker<'a> {
                 }
                 result
             }
-            Type::Named(name, args) if name == "String" && args.is_empty() => {
+            Type::Named(name, args) if name == "str" && args.is_empty() => {
                 TransferSummary::default()
             }
             // Range keeps its established move-only source semantics, but its
@@ -5832,14 +6028,14 @@ impl<'a> FunctionChecker<'a> {
                 TransferSummary::default()
             }
             Type::Named(name, args)
-                if matches!(name.as_str(), "Vec" | "Set" | "Array") && args.len() == 1 =>
+                if matches!(name.as_str(), "list" | "set" | "Array") && args.len() == 1 =>
             {
                 Self::prefix_transfer_summary(
                     self.transfer_shape(&args[0], formals, summaries),
                     &format!("element of `{ty}`"),
                 )
             }
-            Type::Named(name, args) if name == "Map" && args.len() == 2 => {
+            Type::Named(name, args) if name == "dict" && args.len() == 2 => {
                 let mut result = Self::prefix_transfer_summary(
                     self.transfer_shape(&args[0], formals, summaries),
                     &format!("key of `{ty}`"),
@@ -5850,22 +6046,6 @@ impl<'a> FunctionChecker<'a> {
                         Self::prefix_transfer_summary(
                             self.transfer_shape(&args[1], formals, summaries),
                             &format!("value of `{ty}`"),
-                        ),
-                    );
-                }
-                result
-            }
-            Type::Named(name, args) if name == "MapEntry" && args.len() == 2 => {
-                let mut result = Self::prefix_transfer_summary(
-                    self.transfer_shape(&args[0], formals, summaries),
-                    &format!("field `key` of `{ty}`"),
-                );
-                if result.failure.is_none() {
-                    Self::merge_transfer_summary(
-                        &mut result,
-                        Self::prefix_transfer_summary(
-                            self.transfer_shape(&args[1], formals, summaries),
-                            &format!("field `value` of `{ty}`"),
                         ),
                     );
                 }
@@ -6119,26 +6299,31 @@ impl<'a> FunctionChecker<'a> {
     /// holding non-cloneable `random.Rng` state to an `AU3007` dead end, so the
     /// guidance follows the same tri-state classification that rejection uses.
     fn indexed_read_guidance(&self, container: &str, selector: &str, ty: &Type) -> String {
+        let transfer = if container == "dict" {
+            format!("remove({selector})")
+        } else {
+            format!("pop({selector})")
+        };
         if let Some(result_ty) = self.nonrepeatable_task_result_in(ty) {
             return format!(
-                "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` cannot clone it because that would duplicate the single observation right for task result `{result_ty}`, so use `remove({selector})` to transfer ownership instead"
+                "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` cannot clone it because that would duplicate the single observation right for task result `{result_ty}`, so use `{transfer}` to transfer ownership instead"
             );
         }
         match self.rng_clone_safety(ty) {
-            RngCloneSafety::Safe if container == "map" => format!(
-                "cannot implicitly copy `{ty}` out of a map index; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership"
+            RngCloneSafety::Safe if container == "dict" => format!(
+                "cannot implicitly copy `{ty}` out of a dict index; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership"
             ),
             RngCloneSafety::Safe => format!(
-                "cannot implicitly copy `{ty}` out of a vector index; use `get(index)` for an explicit cloned read instead"
+                "cannot implicitly copy `{ty}` out of a list index; use `get(index)` for an explicit cloned read instead"
             ),
             RngCloneSafety::ContainsRng => {
                 let reason = Self::non_cloneable_rng_reason(ty);
                 format!(
-                    "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` cannot clone it because {reason}, so use `remove({selector})` to transfer ownership instead"
+                    "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` cannot clone it because {reason}, so use `{transfer}` to transfer ownership instead"
                 )
             }
             RngCloneSafety::Unknown => format!(
-                "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` requires a clone-safe `{ty}`, or use `remove({selector})` to transfer ownership"
+                "cannot implicitly copy `{ty}` out of a {container} index; `get({selector})` requires a clone-safe `{ty}`, or use `{transfer}` to transfer ownership"
             ),
         }
     }
@@ -6152,31 +6337,36 @@ impl<'a> FunctionChecker<'a> {
         selector: &str,
         ty: &Type,
     ) -> String {
-        let writeback = if container == "map" {
-            "set(key, value)"
+        let transfer = if container == "dict" {
+            format!("remove({selector})")
+        } else {
+            format!("pop({selector})")
+        };
+        let writeback = if container == "dict" {
+            "indexed assignment"
         } else {
             "insert(index, value)"
         };
         if let Some(result_ty) = self.nonrepeatable_task_result_in(ty) {
             return format!(
-                "cannot implicitly copy `{ty}` out of a {container} index for compound assignment; `get({selector})` cannot clone it because that would duplicate the single observation right for task result `{result_ty}`, so use `remove({selector})` to transfer ownership; update the selected value, then write it back with `{writeback}`"
+                "cannot implicitly copy `{ty}` out of a {container} index for compound assignment; `get({selector})` cannot clone it because that would duplicate the single observation right for task result `{result_ty}`, so use `{transfer}` to transfer ownership; update the selected value, then write it back with `{writeback}`"
             );
         }
         match self.rng_clone_safety(ty) {
-            RngCloneSafety::Safe if container == "map" => format!(
-                "cannot implicitly copy `{ty}` out of a map index for compound assignment; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership; update the selected value, then write it back with `set(key, value)`"
+            RngCloneSafety::Safe if container == "dict" => format!(
+                "cannot implicitly copy `{ty}` out of a dict index for compound assignment; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership; update the selected value, then write it back with indexed assignment"
             ),
             RngCloneSafety::Safe => format!(
-                "cannot implicitly copy `{ty}` out of a vector index for compound assignment; use `get(index)` for an explicit cloned optional read, update it, then write the result back with `set(index, value)`"
+                "cannot implicitly copy `{ty}` out of a list index for compound assignment; use `get(index)` for an explicit cloned optional read, update it, then write the result back with `set(index, value)`"
             ),
             RngCloneSafety::ContainsRng => {
                 let reason = Self::non_cloneable_rng_reason(ty);
                 format!(
-                    "cannot implicitly copy `{ty}` out of a {container} index for compound assignment; `get({selector})` cannot clone it because {reason}, so use `remove({selector})` to transfer ownership; update the selected value, then write it back with `{writeback}`"
+                    "cannot implicitly copy `{ty}` out of a {container} index for compound assignment; `get({selector})` cannot clone it because {reason}, so use `{transfer}` to transfer ownership; update the selected value, then write it back with `{writeback}`"
                 )
             }
             RngCloneSafety::Unknown => format!(
-                "cannot implicitly copy `{ty}` out of a {container} index for compound assignment; `get({selector})` requires a clone-safe `{ty}`, or use `remove({selector})` to transfer ownership; update the selected value, then write it back with `{writeback}`"
+                "cannot implicitly copy `{ty}` out of a {container} index for compound assignment; `get({selector})` requires a clone-safe `{ty}`, or use `{transfer}` to transfer ownership; update the selected value, then write it back with `{writeback}`"
             ),
         }
     }
@@ -6344,10 +6534,9 @@ impl<'a> FunctionChecker<'a> {
             Type::Named(name, args)
                 if matches!(
                     name.as_str(),
-                    "Vec"
-                        | "Set"
-                        | "Map"
-                        | "MapEntry"
+                    "list"
+                        | "set"
+                        | "dict"
                         | "Option"
                         | "Result"
                         | "SendError"
@@ -6591,6 +6780,68 @@ impl<'a> FunctionChecker<'a> {
         self.opaque_handle_in_type_inner(ty, &mut BTreeSet::new())
     }
 
+    /// Returns the first callable runtime value structurally contained in
+    /// `ty`. Callable signatures describe code, not a value relation: neither
+    /// function pointers nor closure environments acquire identity equality
+    /// merely because they are stored inside another type.
+    fn callable_in_equality_type(&self, ty: &Type) -> Option<Type> {
+        self.callable_in_equality_type_inner(ty, &mut BTreeSet::new())
+    }
+
+    fn callable_in_equality_type_inner(
+        &self,
+        ty: &Type,
+        visiting: &mut BTreeSet<String>,
+    ) -> Option<Type> {
+        match ty {
+            Type::Function { .. } | Type::Closure { .. } => Some(ty.clone()),
+            Type::Tuple(elements) => elements
+                .iter()
+                .find_map(|element| self.callable_in_equality_type_inner(element, visiting)),
+            Type::Named(name, args) => {
+                if let Some(class_info) = self.resolve_class_info(name) {
+                    debug_assert_eq!(args.len(), class_info.decl.type_params.len());
+                    let key = format!("class:{}:{}", class_info.module_name, class_info.decl.name);
+                    if !visiting.insert(key.clone()) {
+                        return None;
+                    }
+                    let substitutions =
+                        substitutions_from_decl_type_args(&class_info.decl.type_params, args);
+                    let callable = class_info.fields.values().find_map(|field| {
+                        let field_ty = substitute_type(&field.ty, &substitutions);
+                        self.callable_in_equality_type_inner(&field_ty, visiting)
+                    });
+                    visiting.remove(&key);
+                    return callable;
+                }
+
+                if let Some(enum_info) = self.resolve_enum_info(name) {
+                    debug_assert_eq!(args.len(), enum_info.decl.type_params.len());
+                    let key = format!("enum:{}:{}", enum_info.module_name, enum_info.decl.name);
+                    if !visiting.insert(key.clone()) {
+                        return None;
+                    }
+                    let substitutions =
+                        substitutions_from_decl_type_args(&enum_info.decl.type_params, args);
+                    let callable = enum_info
+                        .variants
+                        .values()
+                        .flat_map(|variant| &variant.payloads)
+                        .find_map(|payload| {
+                            let payload_ty = substitute_type(&payload.ty, &substitutions);
+                            self.callable_in_equality_type_inner(&payload_ty, visiting)
+                        });
+                    visiting.remove(&key);
+                    return callable;
+                }
+
+                args.iter()
+                    .find_map(|arg| self.callable_in_equality_type_inner(arg, visiting))
+            }
+            Type::TypeParam(_) | Type::Module(_) | Type::Unit => None,
+        }
+    }
+
     /// Returns the first structurally contained Array whose lack of equality
     /// makes `ty` unavailable to equality-bearing operations.
     fn array_in_equality_type(&self, ty: &Type) -> Option<Type> {
@@ -6734,6 +6985,42 @@ impl<'a> FunctionChecker<'a> {
         operation: impl Into<String>,
         span: crate::diag::Span,
     ) -> Result<()> {
+        let operation = operation.into();
+        if let Some(callable_ty) = self.callable_in_equality_type(ty) {
+            return Err(Diagnostic::coded_at(
+                "AU2008",
+                span,
+                format!("{operation} because `{callable_ty}` does not define equality"),
+            )
+            .with_note(NO_IDENTITY_EQUALITY_NOTE)
+            .with_help(
+                "compare explicit results or a stable discriminant; callable identity is not value equality",
+            ));
+        }
+        if self.rng_clone_safety(ty) == RngCloneSafety::ContainsRng {
+            return Err(Diagnostic::coded_at(
+                "AU2008",
+                span,
+                format!("{operation} because `random.Rng` does not define equality"),
+            )
+            .with_note(NO_IDENTITY_EQUALITY_NOTE)
+            .with_help(
+                "compare generated scalar values or an explicit stable discriminant; generator identity is not value equality",
+            ));
+        }
+        if let Some(handle_ty) = self.opaque_handle_in_type(ty) {
+            return Err(Diagnostic::coded_at(
+                "AU2008",
+                span,
+                format!(
+                    "{operation} because opaque FFI handle `{handle_ty}` does not define equality"
+                ),
+            )
+            .with_note(NO_IDENTITY_EQUALITY_NOTE)
+            .with_help(
+                "compare a stable scalar or str identifier exposed by the binding instead of foreign identity",
+            ));
+        }
         let Some(array_ty) = self.array_in_equality_type(ty) else {
             let obligations = self.array_equality_type_params(ty);
             self.array_equality_obligations
@@ -6746,7 +7033,7 @@ impl<'a> FunctionChecker<'a> {
             span,
             format!(
                 "{} because it contains `{array_ty}`, whose equality is unavailable",
-                operation.into()
+                operation
             ),
         )
         .with_help(
@@ -7025,7 +7312,7 @@ impl<'a> FunctionChecker<'a> {
             let resolved = substitutions
                 .get(type_param)
                 .cloned()
-                .unwrap_or_else(|| Type::TypeParam(type_param.clone()));
+                .unwrap_or(Type::TypeParam(type_param.clone()));
             self.reject_rng_duplication(operation, &resolved, span)?;
         }
         Ok(())
@@ -7042,7 +7329,7 @@ impl<'a> FunctionChecker<'a> {
             let resolved = substitutions
                 .get(type_param)
                 .cloned()
-                .unwrap_or_else(|| Type::TypeParam(type_param.clone()));
+                .unwrap_or(Type::TypeParam(type_param.clone()));
             self.require_array_equality_eligible(
                 &resolved,
                 format!("cannot use {operation} with `{resolved}`"),
@@ -7429,6 +7716,38 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn seed_module_constants(&self, locals: &mut HashMap<String, LocalBinding>) {
+        let constants = self
+            .current_module_namespace()
+            .map(|namespace| &namespace.all_constants)
+            .unwrap_or(self.constants);
+        for (name, constant) in constants {
+            locals.entry(name.clone()).or_insert_with(|| LocalBinding {
+                ty: constant.ty.clone(),
+                assignable: false,
+                mutable_place: false,
+                managed_resource: false,
+                passing: ReceiverKind::Borrow,
+                borrow_origin: Some(format!("module constant `{name}`")),
+                borrowed_at: Some(constant.decl.span),
+                match_borrow_place: None,
+                stale_match_borrow_place: None,
+                shared_match_scrutinee: None,
+                moved: false,
+                moved_at: None,
+                moved_fields: BTreeMap::new(),
+                frozen_places: BTreeMap::new(),
+                shared_match_places: BTreeMap::new(),
+                captured: false,
+            });
+        }
+    }
+
+    fn seed_module_scope(&self, locals: &mut HashMap<String, LocalBinding>) {
+        self.seed_imported_modules(locals);
+        self.seed_module_constants(locals);
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new(
         module_name: &'a str,
@@ -7438,6 +7757,7 @@ impl<'a> FunctionChecker<'a> {
         classes: &'a BTreeMap<String, ClassInfo>,
         enums: &'a BTreeMap<String, EnumInfo>,
         functions: &'a BTreeMap<String, FunctionInfo>,
+        constants: &'a BTreeMap<String, ConstantInfo>,
         traits: &'a BTreeMap<String, TraitInfo>,
         trait_impls: &'a [TraitImplInfo],
         imported_modules: &'a BTreeMap<String, ModuleNamespace>,
@@ -7456,6 +7776,7 @@ impl<'a> FunctionChecker<'a> {
             classes,
             enums,
             functions,
+            constants,
             extern_functions: EMPTY_EXTERN_FUNCTIONS.get_or_init(BTreeMap::new),
             opaque_handles: EMPTY_OPAQUE_HANDLES.get_or_init(BTreeMap::new),
             traits,
@@ -7496,6 +7817,7 @@ impl<'a> FunctionChecker<'a> {
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
+            constants: self.constants,
             extern_functions: self.extern_functions,
             opaque_handles: self.opaque_handles,
             traits: self.traits,
@@ -7530,6 +7852,7 @@ impl<'a> FunctionChecker<'a> {
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
+            constants: self.constants,
             extern_functions: self.extern_functions,
             opaque_handles: self.opaque_handles,
             traits: self.traits,
@@ -7560,6 +7883,7 @@ impl<'a> FunctionChecker<'a> {
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
+            constants: self.constants,
             extern_functions: self.extern_functions,
             opaque_handles: self.opaque_handles,
             traits: self.traits,
@@ -7590,6 +7914,7 @@ impl<'a> FunctionChecker<'a> {
             classes: self.classes,
             enums: self.enums,
             functions: self.functions,
+            constants: self.constants,
             extern_functions: self.extern_functions,
             opaque_handles: self.opaque_handles,
             traits: self.traits,
@@ -7787,15 +8112,34 @@ impl<'a> FunctionChecker<'a> {
         let binding = locals
             .get_mut(name)
             .ok_or_else(|| Diagnostic::at(span, format!("unknown name `{}`", name)))?;
-        let clone_supported = self.type_supports_builtin_clone(&binding.ty);
+        let duplication_member = self.builtin_duplication_member(&binding.ty);
+        let clone_supported = duplication_member.is_some();
         if binding.passing != ReceiverKind::Value {
+            if binding
+                .borrow_origin
+                .as_deref()
+                .is_some_and(|origin| origin.starts_with("module constant `"))
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU3001",
+                    span,
+                    format!("cannot move `{name}` out of immutable module storage"),
+                )
+                .with_help(if let Some(member) = duplication_member {
+                    format!("call `.{member}()` when an independent owned value is required")
+                } else {
+                    "keep shared access or construct an independent owned value".to_string()
+                }));
+            }
             if let Some(ty) = self.implicit_borrowed_params.get(name) {
                 let mut diagnostic = Diagnostic::at(
                     span,
                     if clone_supported {
                         format!(
-                            "parameter `{}` is borrowed; declare it as `own {}` to take ownership, or clone the value before consuming it",
-                            name, ty
+                            "parameter `{}` is borrowed; declare it as `own {}` to take ownership, or {} the value before consuming it",
+                            name,
+                            ty,
+                            if duplication_member == Some("copy") { "copy" } else { "clone" }
                         )
                     } else {
                         format!(
@@ -7810,8 +8154,9 @@ impl<'a> FunctionChecker<'a> {
                 }
                 diagnostic = diagnostic.with_help(if clone_supported {
                     format!(
-                        "declare the parameter as `own {}` when the function should consume it, or call `.clone()` to consume an independent copy",
-                        ty
+                        "declare the parameter as `own {}` when the function should consume it, or call `.{duplication_member}()` to consume an independent copy",
+                        ty,
+                        duplication_member = duplication_member.expect("clone-supported values have a duplication member")
                     )
                 } else {
                     format!(
@@ -7824,7 +8169,15 @@ impl<'a> FunctionChecker<'a> {
                         span.line,
                         span.column.saturating_add(name.chars().count()),
                     );
-                    diagnostic = diagnostic.with_edit(insertion, insertion, ".clone()");
+                    diagnostic = diagnostic.with_edit(
+                        insertion,
+                        insertion,
+                        format!(
+                            ".{}()",
+                            duplication_member
+                                .expect("clone-supported values have a duplication member")
+                        ),
+                    );
                 }
                 return Err(diagnostic);
             }
@@ -7842,7 +8195,8 @@ impl<'a> FunctionChecker<'a> {
                 }
                 diagnostic = diagnostic.with_help(if clone_supported {
                     format!(
-                        "write `match own {scrutinee}` to consume the scrutinee, or call `.clone()` to consume an independent copy"
+                        "write `match own {scrutinee}` to consume the scrutinee, or call `.{duplication_member}()` to consume an independent copy",
+                        duplication_member = duplication_member.expect("clone-supported values have a duplication member")
                     )
                 } else {
                     format!(
@@ -7855,7 +8209,15 @@ impl<'a> FunctionChecker<'a> {
                         span.line,
                         span.column.saturating_add(name.chars().count()),
                     );
-                    diagnostic = diagnostic.with_edit(insertion, insertion, ".clone()");
+                    diagnostic = diagnostic.with_edit(
+                        insertion,
+                        insertion,
+                        format!(
+                            ".{}()",
+                            duplication_member
+                                .expect("clone-supported values have a duplication member")
+                        ),
+                    );
                 }
                 return Err(diagnostic);
             }
@@ -7866,8 +8228,10 @@ impl<'a> FunctionChecker<'a> {
             }
             diagnostic = diagnostic.with_help(if clone_supported {
                 format!(
-                    "take `{}` as `own {}` when ownership is required, or call `.clone()` to consume an independent copy",
-                    name, binding.ty
+                    "take `{}` as `own {}` when ownership is required, or call `.{duplication_member}()` to consume an independent copy",
+                    name,
+                    binding.ty,
+                    duplication_member = duplication_member.expect("clone-supported values have a duplication member")
                 )
             } else {
                 format!(
@@ -7880,7 +8244,15 @@ impl<'a> FunctionChecker<'a> {
                     span.line,
                     span.column.saturating_add(name.chars().count()),
                 );
-                diagnostic = diagnostic.with_edit(insertion, insertion, ".clone()");
+                diagnostic = diagnostic.with_edit(
+                    insertion,
+                    insertion,
+                    format!(
+                        ".{}()",
+                        duplication_member
+                            .expect("clone-supported values have a duplication member")
+                    ),
+                );
             }
             return Err(diagnostic);
         }
@@ -7899,10 +8271,19 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
-    fn type_supports_builtin_clone(&self, ty: &Type) -> bool {
-        matches!(ty, Type::Named(name, _) if BuiltinMember::resolve(name, "clone").is_some())
+    fn builtin_duplication_member(&self, ty: &Type) -> Option<&'static str> {
+        let Type::Named(name, _) = ty else {
+            return None;
+        };
+        let member = if matches!(name.as_str(), "list" | "dict" | "set") {
+            "copy"
+        } else {
+            "clone"
+        };
+        (BuiltinMember::resolve(name, member).is_some()
             && self.rng_clone_safety(ty) == RngCloneSafety::Safe
-            && self.nonrepeatable_task_result_in(ty).is_none()
+            && self.nonrepeatable_task_result_in(ty).is_none())
+        .then_some(member)
     }
 
     fn moved_value_diagnostic(
@@ -7928,15 +8309,16 @@ impl<'a> FunctionChecker<'a> {
                     "value moved here"
                 },
             );
-            if self.type_supports_builtin_clone(&binding.ty) {
-                diagnostic = diagnostic.with_help(
-                    "pass shared access when ownership is not needed, or call `.clone()` at the move site when an independent value is required",
-                );
+            if let Some(duplication_member) = self.builtin_duplication_member(&binding.ty) {
+                diagnostic = diagnostic.with_help(format!(
+                    "pass shared access when ownership is not needed, or call `.{duplication_member}()` at the move site when an independent value is required"
+                ));
                 let insertion = crate::diag::Span::new(
                     origin.line,
                     origin.column.saturating_add(name.chars().count()),
                 );
-                diagnostic = diagnostic.with_edit(insertion, insertion, ".clone()");
+                diagnostic =
+                    diagnostic.with_edit(insertion, insertion, format!(".{duplication_member}()"));
             } else {
                 diagnostic = diagnostic.with_help(
                     "pass shared access when ownership is not needed, or transfer this non-cloneable value only once",
@@ -7993,17 +8375,26 @@ impl<'a> FunctionChecker<'a> {
                     return Ok(());
                 }
                 if let Some((module_path, function_name)) = self.qualified_module_item(expr) {
-                    if self
-                        .module_namespace(&module_path)
-                        .is_some_and(|namespace| {
-                            namespace.functions.contains_key(&function_name)
-                                || namespace.all_functions.contains_key(&function_name)
-                        })
-                    {
-                        // A module-qualified function value is an immediate
-                        // Copy code pointer, not a member borrowed from a
-                        // runtime module object.
-                        return Ok(());
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if namespace.constants.contains_key(&function_name) {
+                            let rendered = format!("{module_path}.{function_name}");
+                            return Err(Diagnostic::coded_at(
+                                "AU3001",
+                                expr.span,
+                                format!("cannot move `{rendered}` out of immutable module storage"),
+                            )
+                            .with_help(
+                                "keep shared access or construct an independent owned value",
+                            ));
+                        }
+                        if namespace.functions.contains_key(&function_name)
+                            || namespace.all_functions.contains_key(&function_name)
+                        {
+                            // A module-qualified function value is an immediate
+                            // Copy code pointer, not a member borrowed from a
+                            // runtime module object.
+                            return Ok(());
+                        }
                     }
                 }
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
@@ -8052,11 +8443,14 @@ impl<'a> FunctionChecker<'a> {
                 diagnostic =
                     diagnostic.with_secondary(origin, format!("`{}` is borrowed here", name));
             }
-            let clone_supported = self.type_supports_builtin_clone(member_ty);
+            let duplication_member = self.builtin_duplication_member(member_ty);
+            let clone_supported = duplication_member.is_some();
             diagnostic = diagnostic.with_help(if clone_supported {
                 format!(
-                    "take `{}` as `own {}` when the field should be moved, or call `.clone()` on the field to return an independent value",
-                    name, object_ty
+                    "take `{}` as `own {}` when the field should be moved, or call `.{duplication_member}()` on the field to return an independent value",
+                    name,
+                    object_ty,
+                    duplication_member = duplication_member.expect("clone-supported values have a duplication member")
                 )
             } else {
                 format!(
@@ -8069,7 +8463,15 @@ impl<'a> FunctionChecker<'a> {
                     expr.span.line,
                     expr.span.column.saturating_add(field.chars().count()),
                 );
-                diagnostic = diagnostic.with_edit(insertion, insertion, ".clone()");
+                diagnostic = diagnostic.with_edit(
+                    insertion,
+                    insertion,
+                    format!(
+                        ".{}()",
+                        duplication_member
+                            .expect("clone-supported values have a duplication member")
+                    ),
+                );
             }
             return Err(diagnostic);
         }
@@ -8128,11 +8530,6 @@ impl<'a> FunctionChecker<'a> {
                         "use `match {}:` to inspect the field without moving it",
                         rendered_place
                     ));
-                    // The old fix inserted `borrow ` before the scrutinee. The
-                    // new fix is to delete the `own` keyword, whose span this
-                    // check does not carry, so the precise help text stands
-                    // alone rather than offering an edit that would write a
-                    // retired spelling.
                     return Err(diagnostic);
                 }
             }
@@ -8424,6 +8821,7 @@ impl<'a> FunctionChecker<'a> {
                 &method_info.signature.param_passings,
             );
         let mut locals = HashMap::new();
+        checker.seed_module_scope(&mut locals);
         checker.seed_imported_modules(&mut locals);
         if let Some(receiver_kind) = method.receiver {
             locals.insert(
@@ -8523,6 +8921,7 @@ impl<'a> FunctionChecker<'a> {
             "function",
         )?;
         let mut locals = HashMap::new();
+        checker.seed_module_scope(&mut locals);
         checker.seed_imported_modules(&mut locals);
         for ((param, ty), passing) in function
             .params
@@ -8623,6 +9022,7 @@ impl<'a> FunctionChecker<'a> {
             "method",
         )?;
         let mut locals = HashMap::new();
+        checker.seed_module_scope(&mut locals);
         checker.seed_imported_modules(&mut locals);
         if let Some(receiver_kind) = method.receiver {
             locals.insert(
@@ -8794,6 +9194,7 @@ impl<'a> FunctionChecker<'a> {
             "impl method",
         )?;
         let mut locals = HashMap::new();
+        checker.seed_module_scope(&mut locals);
         checker.seed_imported_modules(&mut locals);
         if let Some(receiver_kind) = method.receiver {
             locals.insert(
@@ -8859,7 +9260,7 @@ impl<'a> FunctionChecker<'a> {
 
     fn check_top_level(&self, body: &[Stmt]) -> Result<()> {
         let mut locals = HashMap::new();
-        self.seed_imported_modules(&mut locals);
+        self.seed_module_scope(&mut locals);
         self.check_block(body, &mut locals, &Type::Unit, 0, false)?;
         Ok(())
     }
@@ -8948,7 +9349,7 @@ impl<'a> FunctionChecker<'a> {
                     "AU2002",
                     iterable.span,
                     format!(
-                        "`{}` requires a `Vec[T]` or `Set[T]` iterable, found `{}`",
+                        "`{}` requires a `list[T]` or `set[T]` iterable, found `{}`",
                         form.name, iterable_ty
                     ),
                 )
@@ -9030,7 +9431,7 @@ impl<'a> FunctionChecker<'a> {
                             "AU2002",
                             iterable.span,
                             format!(
-                                "`{}` requires a `Vec[T]` or `Set[T]` iterable, found `{}`",
+                                "`{}` requires a `list[T]` or `set[T]` iterable, found `{}`",
                                 form.name, iterable_ty
                             ),
                         )
@@ -9055,13 +9456,13 @@ impl<'a> FunctionChecker<'a> {
             let iterable_ty = self.type_of_expr(&clause.iterable, locals)?;
             let (binding_type, binding_passing, receive_owned) = match &iterable_ty {
                     Type::Named(name, _) if name == "Range" => {
-                        (Type::named("int32"), ReceiverKind::Value, false)
+                        (Type::named("int64"), ReceiverKind::Value, false)
                     }
                     Type::Named(name, args) if name == "Queue" && args.len() == 1 => {
                         (args[0].clone(), ReceiverKind::Value, true)
                     }
                     Type::Named(name, args)
-                        if matches!(name.as_str(), "Vec" | "Set") && args.len() == 1 =>
+                        if matches!(name.as_str(), "list" | "set") && args.len() == 1 =>
                     {
                         let element_ty = args[0].clone();
                         let passing = if self.is_copy_type(&element_ty) {
@@ -9076,7 +9477,7 @@ impl<'a> FunctionChecker<'a> {
                             "AU2002",
                             clause.iterable.span,
                             format!(
-                                "comprehension iteration requires a `Range`, `Queue[T]`, `Vec[T]`, or `Set[T]` iterable, found `{iterable_ty}`"
+                                "comprehension iteration requires a `Range`, `Queue[T]`, `list[T]`, or `set[T]` iterable, found `{iterable_ty}`"
                             ),
                         ))
                     }
@@ -9254,17 +9655,17 @@ impl<'a> FunctionChecker<'a> {
     ) -> Result<Type> {
         let expected_output = match (output, expected) {
             (ComprehensionOutput::List(_), Some(Type::Named(name, args)))
-                if name == "Vec" && args.len() == 1 =>
+                if name == "list" && args.len() == 1 =>
             {
                 args.clone()
             }
             (ComprehensionOutput::Set(_), Some(Type::Named(name, args)))
-                if name == "Set" && args.len() == 1 =>
+                if name == "set" && args.len() == 1 =>
             {
                 args.clone()
             }
             (ComprehensionOutput::Map { .. }, Some(Type::Named(name, args)))
-                if name == "Map" && args.len() == 2 =>
+                if name == "dict" && args.len() == 2 =>
             {
                 args.clone()
             }
@@ -9281,28 +9682,28 @@ impl<'a> FunctionChecker<'a> {
         )?;
         let result_type = match output {
             ComprehensionOutput::List(_) => Type::Named(
-                "Vec".to_string(),
+                "list".to_string(),
                 vec![erase_type_callable_contracts(&output_types[0])],
             ),
             ComprehensionOutput::Set(_) => {
                 self.require_array_equality_eligible(
                     &output_types[0],
-                    format!("cannot use `{}` as a Set element", output_types[0]),
+                    format!("cannot use `{}` as a set element", output_types[0]),
                     span,
                 )?;
                 Type::Named(
-                    "Set".to_string(),
+                    "set".to_string(),
                     vec![erase_type_callable_contracts(&output_types[0])],
                 )
             }
             ComprehensionOutput::Map { .. } => {
                 self.require_array_equality_eligible(
                     &output_types[0],
-                    format!("cannot use `{}` as a Map key", output_types[0]),
+                    format!("cannot use `{}` as a dict key", output_types[0]),
                     span,
                 )?;
                 Type::Named(
-                    "Map".to_string(),
+                    "dict".to_string(),
                     vec![
                         erase_type_callable_contracts(&output_types[0]),
                         erase_type_callable_contracts(&output_types[1]),
@@ -9464,11 +9865,11 @@ impl<'a> FunctionChecker<'a> {
                     if let Some(message) = &assert_stmt.message {
                         let mut message_locals = locals.clone();
                         let message_ty = self.type_of_expr(message, &mut message_locals)?;
-                        if message_ty != Type::named("String") {
+                        if message_ty != Type::named("str") {
                             return Err(Diagnostic::at(
                                 assert_stmt.span,
                                 format!(
-                                    "`assert` message must have type `String`, found `{}`",
+                                    "`assert` message must have type `str`, found `{}`",
                                     message_ty
                                 ),
                             ));
@@ -9621,7 +10022,7 @@ impl<'a> FunctionChecker<'a> {
                         return Err(Diagnostic::coded_at(
                             "AU3004",
                             for_stmt.span,
-                            "Range iteration yields copy `int32` values, so ownership modifiers have nothing to modify or transfer; use the bare form `for item in range(...):`",
+                            "Range iteration yields copy `int64` values, so ownership modifiers have nothing to modify or transfer; use the bare form `for item in range(...):`",
                         ));
                     }
                     if matches!(&iterable_ty, Type::Named(name, args) if name == "Queue" && args.len() == 1)
@@ -9635,7 +10036,7 @@ impl<'a> FunctionChecker<'a> {
                     let (binding_ty, binding_passing, binding_mutable_place) =
                         match (&iterable_ty, for_stmt.borrow_mode) {
                         (Type::Named(name, _), _) if name == "Range" => {
-                            (Type::named("int32"), ReceiverKind::Value, false)
+                            (Type::named("int64"), ReceiverKind::Value, false)
                         }
                         (Type::Named(name, args), borrow_mode)
                             if name == "Queue" && args.len() == 1 =>
@@ -9644,14 +10045,14 @@ impl<'a> FunctionChecker<'a> {
                             debug_assert!(borrow_mode.is_none());
                             (element_ty, ReceiverKind::Value, false)
                         }
-                        (Type::Named(name, args), borrow_mode) if name == "Vec" && args.len() == 1 => {
+                        (Type::Named(name, args), borrow_mode) if name == "list" && args.len() == 1 => {
                             if borrow_mode == Some(ReceiverKind::BorrowMut)
                                 && !self.is_mutable_place(&for_stmt.iterable, locals)?
                             {
                                 return Err(Diagnostic::coded_at(
                                     "AU3002",
                                     for_stmt.iterable.span,
-                                    "`for value in mut ...:` requires a mutable `Vec[T]` place",
+                                    "`for value in mut ...:` requires a mutable `list[T]` place",
                                 ));
                             }
                             let element_ty = args[0].clone();
@@ -9671,14 +10072,14 @@ impl<'a> FunctionChecker<'a> {
                             )
                         }
                         (Type::Named(name, args), Some(ReceiverKind::BorrowMut))
-                            if name == "Set" && args.len() == 1 =>
+                            if name == "set" && args.len() == 1 =>
                         {
                             return Err(Diagnostic::at(
                                 for_stmt.iterable.span,
-                                "`for value in mut ...:` is not supported for `Set[T]`; use `insert`/`remove` on the set directly",
+                                "`for value in mut ...:` is not supported for `set[T]`; use `add`/`remove` on the set directly",
                             ))
                         }
-                        (Type::Named(name, args), borrow_mode) if name == "Set" && args.len() == 1 => {
+                        (Type::Named(name, args), borrow_mode) if name == "set" && args.len() == 1 => {
                             let element_ty = args[0].clone();
                             let passing = match borrow_mode {
                                 None | Some(ReceiverKind::Borrow)
@@ -9694,7 +10095,7 @@ impl<'a> FunctionChecker<'a> {
                             return Err(Diagnostic::at(
                                 for_stmt.span,
                                 format!(
-                                    "`for` currently requires a `Range`, `Queue[T]`, `Vec[T]`, or `Set[T]` iterable, found `{}`",
+                                    "`for` currently requires a `Range`, `Queue[T]`, `list[T]`, or `set[T]` iterable, found `{}`",
                                     iterable_ty
                                 ),
                             ))
@@ -9708,7 +10109,7 @@ impl<'a> FunctionChecker<'a> {
                     if matches!(
                         (&iterable_ty, for_stmt.borrow_mode),
                         (Type::Named(name, args), Some(ReceiverKind::BorrowMut))
-                            if name == "Vec" && args.len() == 1
+                            if name == "list" && args.len() == 1
                     ) && !self.is_mutable_place(&for_stmt.iterable, locals)?
                     {
                         return Err(Diagnostic::coded_at(
@@ -9933,14 +10334,14 @@ impl<'a> FunctionChecker<'a> {
                     return Err(Diagnostic::coded_at(
                         "AU3006",
                         assign.span,
-                        self.indexed_compound_assignment_guidance("vector", "index", &target_ty),
+                        self.indexed_compound_assignment_guidance("list", "index", &target_ty),
                     ));
                 }
                 target_ty
             } else if let Some((key_ty, value_ty)) = map_key_value_types(&object_ty) {
                 self.require_array_equality_eligible(
                     key_ty,
-                    format!("cannot use map indexing with `{key_ty}`"),
+                    format!("cannot use dict indexing with `{key_ty}`"),
                     index.span,
                 )?;
                 let index_ty = self.type_of_expr_hint(index, locals, Some(key_ty))?;
@@ -9954,7 +10355,7 @@ impl<'a> FunctionChecker<'a> {
                     return Err(Diagnostic::coded_at(
                         "AU3006",
                         assign.span,
-                        self.indexed_compound_assignment_guidance("map", "key", value_ty),
+                        self.indexed_compound_assignment_guidance("dict", "key", value_ty),
                     ));
                 }
                 value_ty.clone()
@@ -9962,7 +10363,7 @@ impl<'a> FunctionChecker<'a> {
                 return Err(Diagnostic::at(
                     assign.span,
                     format!(
-                        "cannot index non-Array, vector, or map value `{}`",
+                        "cannot index non-Array, list, or dict value `{}`",
                         object_ty
                     ),
                 ));
@@ -10237,6 +10638,20 @@ impl<'a> FunctionChecker<'a> {
                 locals,
             )?;
             if !existing.assignable && !existing.mutable_place {
+                if existing
+                    .borrow_origin
+                    .as_deref()
+                    .is_some_and(|origin| origin.starts_with("module constant `"))
+                {
+                    return Err(Diagnostic::coded_at(
+                        "AU3003",
+                        assign.span,
+                        format!("module constant `{binding_name}` is immutable"),
+                    )
+                    .with_help(
+                        "put mutable state in a local value owned by `main` or another explicit owner",
+                    ));
+                }
                 if existing.borrow_origin.is_some() {
                     return Err(Diagnostic::coded_at(
                         "AU3003",
@@ -10612,7 +11027,7 @@ impl<'a> FunctionChecker<'a> {
                     element_ty.get_or_insert(actual);
                 }
                 Ok(Type::Named(
-                    "Vec".to_string(),
+                    "list".to_string(),
                     vec![erase_type_callable_contracts(
                         &element_ty.unwrap_or(Type::Unit),
                     )],
@@ -10626,7 +11041,7 @@ impl<'a> FunctionChecker<'a> {
                     element_ty.get_or_insert(actual);
                 }
                 Ok(Type::Named(
-                    "Set".to_string(),
+                    "set".to_string(),
                     vec![erase_type_callable_contracts(
                         &element_ty.unwrap_or(Type::Unit),
                     )],
@@ -10635,9 +11050,9 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Map(entries) => {
                 if entries.is_empty() {
                     if let Some(Type::Named(name, args)) = expected {
-                        if name == "Set" && args.len() == 1 {
+                        if name == "set" && args.len() == 1 {
                             return Ok(Type::Named(
-                                "Set".to_string(),
+                                "set".to_string(),
                                 vec![erase_type_callable_contracts(&args[0])],
                             ));
                         }
@@ -10658,7 +11073,7 @@ impl<'a> FunctionChecker<'a> {
                     value_ty.get_or_insert(actual_value);
                 }
                 Ok(Type::Named(
-                    "Map".to_string(),
+                    "dict".to_string(),
                     vec![
                         erase_type_callable_contracts(&key_ty.unwrap_or(Type::Unit)),
                         erase_type_callable_contracts(&value_ty.unwrap_or(Type::Unit)),
@@ -10981,8 +11396,12 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::FString(parts) => {
                 for part in parts {
-                    if let crate::ast::FormatPart::Expr(value) = part {
-                        Self::collect_lambda_capture_uses(value, bound, seen, captures);
+                    match part {
+                        crate::ast::FormatPart::Expr(value)
+                        | crate::ast::FormatPart::Formatted { expr: value, .. } => {
+                            Self::collect_lambda_capture_uses(value, bound, seen, captures);
+                        }
+                        crate::ast::FormatPart::Literal(_) => {}
                     }
                 }
             }
@@ -11013,6 +11432,11 @@ impl<'a> FunctionChecker<'a> {
 
     fn collect_pattern_binding_names(pattern: &Pattern, names: &mut BTreeSet<String>) {
         match pattern {
+            Pattern::Or(pattern) => {
+                for alternative in &pattern.alternatives {
+                    Self::collect_pattern_binding_names(alternative, names);
+                }
+            }
             Pattern::Binding(binding) => {
                 names.insert(binding.name.clone());
             }
@@ -11331,7 +11755,7 @@ impl<'a> FunctionChecker<'a> {
                     .collect::<Result<Vec<_>>>()?;
                 if let Some(element_ty) = element_types.first() {
                     if element_types.iter().all(|actual| actual == element_ty) {
-                        return Ok(Type::Named("Vec".to_string(), vec![element_ty.clone()]));
+                        return Ok(Type::Named("list".to_string(), vec![element_ty.clone()]));
                     }
                 }
             }
@@ -11349,7 +11773,7 @@ impl<'a> FunctionChecker<'a> {
                     .collect::<Result<Vec<_>>>()?;
                 if let Some(element_ty) = element_types.first() {
                     if element_types.iter().all(|actual| actual == element_ty) {
-                        return Ok(Type::Named("Set".to_string(), vec![element_ty.clone()]));
+                        return Ok(Type::Named("set".to_string(), vec![element_ty.clone()]));
                     }
                 }
             }
@@ -11383,7 +11807,7 @@ impl<'a> FunctionChecker<'a> {
                         actual_key == key_ty && actual_value == value_ty
                     }) {
                         return Ok(Type::Named(
-                            "Map".to_string(),
+                            "dict".to_string(),
                             vec![key_ty.clone(), value_ty.clone()],
                         ));
                     }
@@ -11617,14 +12041,32 @@ impl<'a> FunctionChecker<'a> {
                 .cloned()
                 .unwrap_or_else(|| Type::named("float64"))),
             ExprKind::Bool(_) => Ok(Type::named("bool")),
-            ExprKind::String(_) => Ok(Type::named("String")),
+            ExprKind::String(_) => Ok(Type::named("str")),
             ExprKind::FString(parts) => {
                 for part in parts {
-                    if let crate::ast::FormatPart::Expr(expr) = part {
-                        self.type_of_expr(expr, locals)?;
+                    match part {
+                        crate::ast::FormatPart::Expr(expr) => {
+                            self.type_of_expr(expr, locals)?;
+                        }
+                        crate::ast::FormatPart::Formatted {
+                            expr,
+                            spec,
+                            spec_span,
+                        } => {
+                            let value_type = self.type_of_expr(expr, locals)?;
+                            let parsed = parse_format_spec(spec).map_err(|error| {
+                                Diagnostic::coded_at("AU1101", *spec_span, error.message)
+                            })?;
+                            validate_format_spec_for_type(&parsed, &value_type).map_err(|error| {
+                                Diagnostic::coded_at("AU2002", *spec_span, error.message).with_help(
+                                    "supported codes are d, f, e, x, X, b, o, %, and s; omit the code for ordinary rendering",
+                                )
+                            })?;
+                        }
+                        crate::ast::FormatPart::Literal(_) => {}
                     }
                 }
-                Ok(Type::named("String"))
+                Ok(Type::named("str"))
             }
             ExprKind::Tuple(elements) => {
                 let expected_elements = match expected {
@@ -11686,11 +12128,11 @@ impl<'a> FunctionChecker<'a> {
                 let Some(element_ty) = element_ty else {
                     return Err(Diagnostic::at(
                         expr.span,
-                        "empty list literals require an expected `Vec[T]` type annotation in the bootstrap compiler",
+                        "empty list literals require an expected `list[T]` type annotation in the bootstrap compiler",
                     ));
                 };
                 Ok(Type::Named(
-                    "Vec".to_string(),
+                    "list".to_string(),
                     vec![erase_type_callable_contracts(&element_ty)],
                 ))
             }
@@ -11732,30 +12174,30 @@ impl<'a> FunctionChecker<'a> {
                 let Some(element_ty) = element_ty else {
                     return Err(Diagnostic::at(
                         expr.span,
-                        "empty set literals require an expected `Set[T]` type annotation in the bootstrap compiler",
+                        "empty set literals require an expected `set[T]` type annotation in the bootstrap compiler",
                     ));
                 };
                 self.require_array_equality_eligible(
                     &element_ty,
-                    format!("cannot use `{element_ty}` as a Set element"),
+                    format!("cannot use `{element_ty}` as a set element"),
                     expr.span,
                 )?;
                 Ok(Type::Named(
-                    "Set".to_string(),
+                    "set".to_string(),
                     vec![erase_type_callable_contracts(&element_ty)],
                 ))
             }
             ExprKind::Map(entries) => {
                 if entries.is_empty() {
                     if let Some(Type::Named(name, args)) = expected {
-                        if name == "Set" && args.len() == 1 {
+                        if name == "set" && args.len() == 1 {
                             self.require_array_equality_eligible(
                                 &args[0],
-                                format!("cannot use `{}` as a Set element", args[0]),
+                                format!("cannot use `{}` as a set element", args[0]),
                                 expr.span,
                             )?;
                             return Ok(Type::Named(
-                                "Set".to_string(),
+                                "set".to_string(),
                                 vec![erase_type_callable_contracts(&args[0])],
                             ));
                         }
@@ -11836,16 +12278,16 @@ impl<'a> FunctionChecker<'a> {
                 let (Some(key_ty), Some(value_ty)) = (key_ty, value_ty) else {
                     return Err(Diagnostic::at(
                         expr.span,
-                        "empty map literals require an expected `Map[K, V]` type annotation in the bootstrap compiler",
+                        "empty map literals require an expected `dict[K, V]` type annotation in the bootstrap compiler",
                     ));
                 };
                 self.require_array_equality_eligible(
                     &key_ty,
-                    format!("cannot use `{key_ty}` as a Map key"),
+                    format!("cannot use `{key_ty}` as a dict key"),
                     expr.span,
                 )?;
                 Ok(Type::Named(
-                    "Map".to_string(),
+                    "dict".to_string(),
                     vec![
                         erase_type_callable_contracts(&key_ty),
                         erase_type_callable_contracts(&value_ty),
@@ -11971,29 +12413,29 @@ impl<'a> FunctionChecker<'a> {
                     {
                         self.explicit_builtin_type(name, &lowered, expr.span)
                     }
-                    ExprKind::Name(name) if name == "Set" => {
+                    ExprKind::Name(name) if name == "set" => {
                         if lowered.len() != 1 {
                             return Err(Diagnostic::at(
                                 expr.span,
                                 format!(
-                                    "type `Set` expects exactly one type argument, found {}",
+                                    "type `set` expects exactly one type argument, found {}",
                                     lowered.len()
                                 ),
                             ));
                         }
-                        Ok(Type::Named("Set".to_string(), lowered))
+                        Ok(Type::Named("set".to_string(), lowered))
                     }
-                    ExprKind::Name(name) if name == "Map" => {
+                    ExprKind::Name(name) if name == "dict" => {
                         if lowered.len() != 2 {
                             return Err(Diagnostic::at(
                                 expr.span,
                                 format!(
-                                    "type `Map` expects exactly two type arguments, found {}",
+                                    "type `dict` expects exactly two type arguments, found {}",
                                     lowered.len()
                                 ),
                             ));
                         }
-                        Ok(Type::Named("Map".to_string(), lowered))
+                        Ok(Type::Named("dict".to_string(), lowered))
                     }
                     ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
                         let Some(class) = self.resolve_class_info(name) else {
@@ -12147,6 +12589,18 @@ impl<'a> FunctionChecker<'a> {
                             "AU2003",
                             expr.span,
                             format!("unary `-` expects a numeric value, found `{}`", value_ty),
+                        ))
+                    }
+                }
+                UnaryOp::BitNot => {
+                    let value_ty = self.type_of_expr_hint(value, locals, expected)?;
+                    if is_integer_type(&value_ty) {
+                        Ok(value_ty)
+                    } else {
+                        Err(Diagnostic::coded_at(
+                            "AU2003",
+                            expr.span,
+                            format!("unary `~` expects an integer value, found `{value_ty}`"),
                         ))
                     }
                 }
@@ -12388,6 +12842,25 @@ impl<'a> FunctionChecker<'a> {
                         || matches!(right.kind, ExprKind::Float(_)))
                 {
                     right_ty = self.type_of_expr_hint(right, locals, Some(&left_ty))?;
+                }
+                if *op == BinaryOp::Pow
+                    && is_integer_type(&left_ty)
+                    && matches!(
+                        &right.kind,
+                        ExprKind::Unary {
+                            op: UnaryOp::Neg,
+                            expr: inner,
+                        } if matches!(inner.kind, ExprKind::Int(_))
+                    )
+                {
+                    return Err(Diagnostic::coded_at(
+                        "AU2003",
+                        right.span,
+                        "integer power does not accept a negative exponent",
+                    )
+                    .with_help(
+                        "use explicit floating operands such as `base.to_float() ** exponent.to_float()` for fractional power",
+                    ));
                 }
                 let operator_access =
                     if Self::binary_uses_builtin_value_semantics(*op, &left_ty, &right_ty) {
@@ -12853,7 +13326,7 @@ impl<'a> FunctionChecker<'a> {
                         return Err(Diagnostic::coded_at(
                             "AU3005",
                             expr.span,
-                            self.indexed_read_guidance("vector", "index", &element_ty),
+                            self.indexed_read_guidance("list", "index", &element_ty),
                         ));
                     }
                     return Ok(element_ty);
@@ -12861,7 +13334,7 @@ impl<'a> FunctionChecker<'a> {
                 if let Some((key_ty, value_ty)) = map_key_value_types(&object_ty) {
                     self.require_array_equality_eligible(
                         key_ty,
-                        format!("cannot use map indexing with `{key_ty}`"),
+                        format!("cannot use dict indexing with `{key_ty}`"),
                         index.span,
                     )?;
                     let index_ty = self.type_of_expr_hint(index, locals, Some(key_ty))?;
@@ -12897,7 +13370,7 @@ impl<'a> FunctionChecker<'a> {
                         return Err(Diagnostic::coded_at(
                             "AU3005",
                             expr.span,
-                            self.indexed_read_guidance("map", "key", value_ty),
+                            self.indexed_read_guidance("dict", "key", value_ty),
                         ));
                     }
                     return Ok(value_ty.clone());
@@ -12905,7 +13378,7 @@ impl<'a> FunctionChecker<'a> {
                 Err(Diagnostic::at(
                     expr.span,
                     format!(
-                        "cannot index non-Array, vector, or map value `{}`",
+                        "cannot index non-Array, list, or dict value `{}`",
                         object_ty
                     ),
                 ))
@@ -12923,22 +13396,22 @@ impl<'a> FunctionChecker<'a> {
                 let object_expected = expected.filter(|ty| {
                     array_element_type(ty).is_some()
                         || vec_element_type(ty).is_some()
-                        || **ty == Type::named("String")
+                        || **ty == Type::named("str")
                 });
                 let object_ty = self.type_of_expr_hint(object, locals, object_expected)?;
                 let vec_element = vec_element_type(&object_ty).cloned();
                 let is_array = array_element_type(&object_ty).is_some();
-                let is_string = object_ty == Type::named("String");
+                let is_string = object_ty == Type::named("str");
                 if vec_element.is_none() && !is_array && !is_string {
                     return Err(Diagnostic::coded_at(
                         "AU2003",
                         expr.span,
                         format!(
-                            "owned slicing is available only for `Array[T]`, `Vec[T]`, and `String`, found `{object_ty}`"
+                            "owned slicing is available only for `Array[T]`, `list[T]`, and `str`, found `{object_ty}`"
                         ),
                     )
                     .with_help(
-                        "use indexing or a collection method supported by the base type, or convert the value to an Array, Vec, or String before slicing",
+                        "use indexing or a collection method supported by the base type, or convert the value to an Array, list, or str before slicing",
                     ));
                 }
 
@@ -12961,7 +13434,7 @@ impl<'a> FunctionChecker<'a> {
                 }
 
                 if let Some(element_ty) = vec_element {
-                    self.reject_rng_duplication("Vec slice", &element_ty, *colon_span)?;
+                    self.reject_rng_duplication("list slice", &element_ty, *colon_span)?;
                 }
                 Ok(object_ty)
             }
@@ -12996,13 +13469,17 @@ impl<'a> FunctionChecker<'a> {
         match op {
             BinaryOp::And | BinaryOp::Or => *left_ty == Type::named("bool"),
             BinaryOp::Add => {
-                is_integer_type(left_ty)
-                    || is_float_type(left_ty)
-                    || *left_ty == Type::named("String")
+                is_integer_type(left_ty) || is_float_type(left_ty) || *left_ty == Type::named("str")
             }
             BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Mod => {
                 is_integer_type(left_ty) || is_float_type(left_ty)
             }
+            BinaryOp::Pow => is_integer_type(left_ty) || is_float_type(left_ty),
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => is_integer_type(left_ty),
             BinaryOp::Eq | BinaryOp::NotEq => true,
             BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq => {
                 is_integer_type(left_ty) || is_float_type(left_ty)
@@ -13045,18 +13522,18 @@ impl<'a> FunctionChecker<'a> {
                 "AU2003",
                 operator_span,
                 format!(
-                    "`in` requires a `Vec[T]`, `Set[T]`, `Map[K, V]`, or `String` container, found `{}`",
+                    "`in` requires a `list[T]`, `set[T]`, `dict[K, V]`, or `str` container, found `{}`",
                     container_ty
                 ),
             )
             .with_help(
-                "membership tests read `Vec` and `Set` elements, `Map` keys, and `String` substrings",
+                "membership tests read `list` and `set` elements, `dict` keys, and `str` substrings",
             ));
         };
         if *value_ty != needle_ty {
             let subject = match container_ty {
-                Type::Named(name, _) if name == "Map" => "key",
-                Type::Named(name, _) if name == "String" => "substring",
+                Type::Named(name, _) if name == "dict" => "key",
+                Type::Named(name, _) if name == "str" => "substring",
                 _ => "element",
             };
             return Err(Diagnostic::coded_at(
@@ -13169,7 +13646,8 @@ impl<'a> FunctionChecker<'a> {
                 "AU2008",
                 span,
                 "callable equality is not supported; compare results or use an explicit discriminant",
-            ));
+            )
+            .with_note(NO_IDENTITY_EQUALITY_NOTE));
         }
         if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
             self.require_array_equality_eligible(
@@ -13233,7 +13711,7 @@ impl<'a> FunctionChecker<'a> {
                     ),
                 )
                 .with_help(
-                    "compare a stable scalar or String ordering key exposed by the binding instead of a foreign address",
+                    "compare a stable scalar or str ordering key exposed by the binding instead of a foreign address",
                 ));
             }
         }
@@ -13253,7 +13731,7 @@ impl<'a> FunctionChecker<'a> {
                     ),
                 )
                 .with_help(
-                    "compare a stable scalar or String identifier exposed by the binding instead of a foreign address",
+                    "compare a stable scalar or str identifier exposed by the binding instead of a foreign address",
                 ));
             }
         }
@@ -13297,6 +13775,44 @@ impl<'a> FunctionChecker<'a> {
                 "integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division",
             ));
         }
+        if matches!(
+            op,
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr
+        ) && (!is_integer_type(&left_ty) || !is_integer_type(&right_ty))
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2003",
+                span,
+                format!(
+                    "bitwise and shift operators require integer operands, found `{left_ty}` and `{right_ty}`"
+                ),
+            ));
+        }
+        if op == BinaryOp::Pow && (!is_numeric_type(&left_ty) || !is_numeric_type(&right_ty)) {
+            return Err(Diagnostic::coded_at(
+                "AU2003",
+                span,
+                format!("power requires numeric operands, found `{left_ty}` and `{right_ty}`"),
+            ));
+        }
+        if matches!(
+            op,
+            BinaryOp::Pow
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+        ) && left_ty != right_ty
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                format!(
+                    "binary operator operands must match exactly, found `{left_ty}` and `{right_ty}`"
+                ),
+            ));
+        }
         match (op, &left_ty, &right_ty) {
             (BinaryOp::And | BinaryOp::Or, Type::Named(name, args), _)
                 if args.is_empty() && name == "bool" && left_ty == right_ty =>
@@ -13306,9 +13822,7 @@ impl<'a> FunctionChecker<'a> {
             (BinaryOp::Add, Type::Named(name, args), _)
                 if args.is_empty()
                     && left_ty == right_ty
-                    && (is_integer_type(&left_ty)
-                        || is_float_type(&left_ty)
-                        || name == "String") =>
+                    && (is_integer_type(&left_ty) || is_float_type(&left_ty) || name == "str") =>
             {
                 Ok(left_ty)
             }
@@ -13319,6 +13833,21 @@ impl<'a> FunctionChecker<'a> {
             ) if left_ty == right_ty && (is_integer_type(&left_ty) || is_float_type(&left_ty)) => {
                 Ok(left_ty)
             }
+            (BinaryOp::Pow, _, _)
+                if left_ty == right_ty
+                    && (is_integer_type(&left_ty) || is_float_type(&left_ty)) =>
+            {
+                Ok(left_ty)
+            }
+            (
+                BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr,
+                _,
+                _,
+            ) if left_ty == right_ty && is_integer_type(&left_ty) => Ok(left_ty),
             (BinaryOp::Eq | BinaryOp::NotEq, _, _) if left_ty == right_ty => {
                 Ok(Type::named("bool"))
             }
@@ -14239,7 +14768,7 @@ impl<'a> FunctionChecker<'a> {
                 }
                 return Ok(Type::Named("Queue".to_string(), explicit_args));
             }
-            if name == "Vec" {
+            if name == "list" {
                 let explicit_args = self.lower_explicit_type_args(type_args)?;
                 if explicit_args.len() != 1 {
                     return Err(Diagnostic::at(
@@ -14254,12 +14783,12 @@ impl<'a> FunctionChecker<'a> {
                 if !args.is_empty() {
                     return Err(Diagnostic::at(
                         span,
-                        "class `Vec` does not take constructor arguments; use a list literal or `push(...)`",
+                        "class `list` does not take constructor arguments; use a list literal or `append(...)`",
                     ));
                 }
-                return Ok(Type::Named("Vec".to_string(), explicit_args));
+                return Ok(Type::Named("list".to_string(), explicit_args));
             }
-            if name == "Set" {
+            if name == "set" {
                 let explicit_args = self.lower_explicit_type_args(type_args)?;
                 if explicit_args.len() != 1 {
                     return Err(Diagnostic::at(
@@ -14273,18 +14802,18 @@ impl<'a> FunctionChecker<'a> {
                 }
                 self.require_array_equality_eligible(
                     &explicit_args[0],
-                    format!("cannot use `{}` as a Set element", explicit_args[0]),
+                    format!("cannot use `{}` as a set element", explicit_args[0]),
                     span,
                 )?;
                 if !args.is_empty() {
                     return Err(Diagnostic::at(
                         span,
-                        "class `Set` does not take constructor arguments; use a set literal or `insert(...)`",
+                        "class `set` does not take constructor arguments; use a set literal or `add(...)`",
                     ));
                 }
-                return Ok(Type::Named("Set".to_string(), explicit_args));
+                return Ok(Type::Named("set".to_string(), explicit_args));
             }
-            if name == "Map" {
+            if name == "dict" {
                 let explicit_args = self.lower_explicit_type_args(type_args)?;
                 if explicit_args.len() != 2 {
                     return Err(Diagnostic::at(
@@ -14298,16 +14827,16 @@ impl<'a> FunctionChecker<'a> {
                 }
                 self.require_array_equality_eligible(
                     &explicit_args[0],
-                    format!("cannot use `{}` as a Map key", explicit_args[0]),
+                    format!("cannot use `{}` as a dict key", explicit_args[0]),
                     span,
                 )?;
                 if !args.is_empty() {
                     return Err(Diagnostic::at(
                         span,
-                        "class `Map` does not take constructor arguments; use a map literal or `set(...)`",
+                        "class `dict` does not take constructor arguments; use a dict literal or indexed assignment",
                     ));
                 }
-                return Ok(Type::Named("Map".to_string(), explicit_args));
+                return Ok(Type::Named("dict".to_string(), explicit_args));
             }
             if name == "TaskGroup" {
                 if !type_args.is_empty() {
@@ -14377,13 +14906,13 @@ impl<'a> FunctionChecker<'a> {
                             }
                             BuiltinAssociatedFunction::StringFromBytes => {
                                 let bytes_arg = required_ordered_arg(
-                                &ordered_args,
-                                0,
-                                span,
-                                "internal error: String.from_bytes should bind one bytes argument",
-                            )?;
+                                    &ordered_args,
+                                    0,
+                                    span,
+                                    "internal error: str.from_bytes should bind one bytes argument",
+                                )?;
                                 let expected =
-                                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                                    Type::Named("list".to_string(), vec![Type::named("uint8")]);
                                 let actual = self.type_of_expr_hint(
                                     &bytes_arg.value,
                                     locals,
@@ -14393,13 +14922,13 @@ impl<'a> FunctionChecker<'a> {
                                     return Err(Diagnostic::at(
                                         bytes_arg.span,
                                         format!(
-                                        "`String.from_bytes` expects `Vec[uint8]`, found `{actual}`"
+                                        "`str.from_bytes` expects `list[uint8]`, found `{actual}`"
                                     ),
                                     ));
                                 }
                                 return Ok(Type::Named(
                                     "Result".to_string(),
-                                    vec![Type::named("String"), Type::named("bytes.Error")],
+                                    vec![Type::named("str"), Type::named("bytes.Error")],
                                 ));
                             }
                             BuiltinAssociatedFunction::ArrayZeros
@@ -14409,6 +14938,17 @@ impl<'a> FunctionChecker<'a> {
                                     "AU2005",
                                     object.span,
                                     "Array associated functions require an explicit dtype such as `Array[int32]`",
+                                ));
+                            }
+                            BuiltinAssociatedFunction::ListWithCapacity
+                            | BuiltinAssociatedFunction::DictWithCapacity
+                            | BuiltinAssociatedFunction::SetWithCapacity => {
+                                return Err(Diagnostic::coded_at(
+                                    "AU2005",
+                                    object.span,
+                                    format!(
+                                        "`{type_name}.with_capacity` requires explicit type arguments"
+                                    ),
                                 ));
                             }
                         }
@@ -14445,20 +14985,12 @@ impl<'a> FunctionChecker<'a> {
                             let Some(argument) = argument else {
                                 continue;
                             };
-                            let actual = self.type_of_expr_hint(
+                            self.check_index_domain_type(
                                 &argument.value,
+                                argument.span,
+                                "`range` arguments",
                                 locals,
-                                Some(&Type::named("int32")),
                             )?;
-                            if actual != Type::named("int32") {
-                                return Err(Diagnostic::at(
-                                    argument.span,
-                                    format!(
-                                        "`range` arguments must have type `int32`, found `{}`",
-                                        actual
-                                    ),
-                                ));
-                            }
                             self.apply_builtin_function_argument_passing(
                                 builtin, index, argument, locals,
                             )?;
@@ -14635,17 +15167,17 @@ impl<'a> FunctionChecker<'a> {
                             return Err(Diagnostic::at(
                                 tasks_arg.span,
                                 format!(
-                                    "`{}` expects `Vec[Task[T]]`, found `{}`",
+                                    "`{}` expects `list[Task[T]]`, found `{}`",
                                     builtin.name(),
                                     tasks_ty
                                 ),
                             ));
                         };
-                        if container_name != "Vec" || container_args.len() != 1 {
+                        if container_name != "list" || container_args.len() != 1 {
                             return Err(Diagnostic::at(
                                 tasks_arg.span,
                                 format!(
-                                    "`{}` expects `Vec[Task[T]]`, found `{}`",
+                                    "`{}` expects `list[Task[T]]`, found `{}`",
                                     builtin.name(),
                                     tasks_ty
                                 ),
@@ -14655,7 +15187,7 @@ impl<'a> FunctionChecker<'a> {
                             return Err(Diagnostic::at(
                                 tasks_arg.span,
                                 format!(
-                                    "`{}` expects `Vec[Task[T]]`, found `{}`",
+                                    "`{}` expects `list[Task[T]]`, found `{}`",
                                     builtin.name(),
                                     tasks_ty
                                 ),
@@ -14665,7 +15197,7 @@ impl<'a> FunctionChecker<'a> {
                             return Err(Diagnostic::at(
                                 tasks_arg.span,
                                 format!(
-                                    "`{}` expects `Vec[Task[T]]`, found `{}`",
+                                    "`{}` expects `list[Task[T]]`, found `{}`",
                                     builtin.name(),
                                     tasks_ty
                                 ),
@@ -14738,7 +15270,7 @@ impl<'a> FunctionChecker<'a> {
                                 format!("`len(...)` expects a value with a `len()` member, found `{value_ty}`"),
                             )
                             .with_help(
-                                "`len` delegates to the value's own `len()`; `String`, `Vec[T]`, `Map[K, V]`, and `Set[T]` provide it",
+                                "`len` delegates to the value's own `len()`; `str`, `list[T]`, `dict[K, V]`, and `set[T]` provide it",
                             ));
                         }
                         Ok(Type::named("int64"))
@@ -14751,7 +15283,7 @@ impl<'a> FunctionChecker<'a> {
                             "internal error: `str` should bind exactly one argument",
                         )?;
                         self.type_of_expr(&value_arg.value, locals)?;
-                        Ok(Type::named("String"))
+                        Ok(Type::named("str"))
                     }
                     BuiltinFunction::Abs => {
                         let value_arg = required_ordered_arg(
@@ -14845,6 +15377,69 @@ impl<'a> FunctionChecker<'a> {
                         }
                         Ok(value_ty)
                     }
+                    BuiltinFunction::Round => {
+                        let value_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            "internal error: `round` should bind exactly one argument",
+                        )?;
+                        let value_ty = self.type_of_expr(&value_arg.value, locals)?;
+                        if is_integer_type(&value_ty) {
+                            Ok(value_ty)
+                        } else if matches!(
+                            value_ty,
+                            Type::Named(ref name, ref args)
+                                if args.is_empty()
+                                    && matches!(name.as_str(), "float32" | "float64")
+                        ) {
+                            Ok(Type::named("int64"))
+                        } else {
+                            Err(Diagnostic::coded_at(
+                                "AU2003",
+                                value_arg.span,
+                                format!(
+                                    "`round(...)` expects an integer, `float32`, or `float64`, found `{value_ty}`"
+                                ),
+                            ))
+                        }
+                    }
+                    BuiltinFunction::Divmod => {
+                        let left_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            "internal error: `divmod` should bind a left argument",
+                        )?;
+                        let left_ty = self.type_of_expr(&left_arg.value, locals)?;
+                        if !is_numeric_type(&left_ty) {
+                            return Err(Diagnostic::coded_at(
+                                "AU2003",
+                                left_arg.span,
+                                format!(
+                                    "`divmod(...)` expects numeric arguments, found `{left_ty}`"
+                                ),
+                            ));
+                        }
+                        let right_arg = required_ordered_arg(
+                            &ordered_args,
+                            1,
+                            span,
+                            "internal error: `divmod` should bind a right argument",
+                        )?;
+                        let right_ty =
+                            self.type_of_expr_hint(&right_arg.value, locals, Some(&left_ty))?;
+                        if right_ty != left_ty {
+                            return Err(Diagnostic::coded_at(
+                                "AU2002",
+                                right_arg.span,
+                                format!(
+                                    "`divmod(...)` arguments must have one exact type, found `{left_ty}` and `{right_ty}`"
+                                ),
+                            ));
+                        }
+                        Ok(Type::Tuple(vec![left_ty.clone(), left_ty]))
+                    }
                     BuiltinFunction::ParseInt32 => {
                         let text_arg = required_ordered_arg(
                             &ordered_args,
@@ -14855,17 +15450,17 @@ impl<'a> FunctionChecker<'a> {
                         let text_ty = self.type_of_expr_hint(
                             &text_arg.value,
                             locals,
-                            Some(&Type::named("String")),
+                            Some(&Type::named("str")),
                         )?;
-                        if text_ty != Type::named("String") {
+                        if text_ty != Type::named("str") {
                             return Err(Diagnostic::at(
                                 text_arg.span,
-                                format!("`parse_int32(...)` expects `String`, found `{}`", text_ty),
+                                format!("`parse_int32(...)` expects `str`, found `{}`", text_ty),
                             ));
                         }
                         Ok(Type::Named(
                             "Result".to_string(),
-                            vec![Type::named("int32"), Type::named("String")],
+                            vec![Type::named("int32"), Type::named("str")],
                         ))
                     }
                     BuiltinFunction::ParseInt64 => {
@@ -14878,17 +15473,17 @@ impl<'a> FunctionChecker<'a> {
                         let text_ty = self.type_of_expr_hint(
                             &text_arg.value,
                             locals,
-                            Some(&Type::named("String")),
+                            Some(&Type::named("str")),
                         )?;
-                        if text_ty != Type::named("String") {
+                        if text_ty != Type::named("str") {
                             return Err(Diagnostic::at(
                                 text_arg.span,
-                                format!("`parse_int64(...)` expects `String`, found `{}`", text_ty),
+                                format!("`parse_int64(...)` expects `str`, found `{}`", text_ty),
                             ));
                         }
                         Ok(Type::Named(
                             "Result".to_string(),
-                            vec![Type::named("int64"), Type::named("String")],
+                            vec![Type::named("int64"), Type::named("str")],
                         ))
                     }
                     BuiltinFunction::ParseFloat64 => {
@@ -14901,20 +15496,17 @@ impl<'a> FunctionChecker<'a> {
                         let text_ty = self.type_of_expr_hint(
                             &text_arg.value,
                             locals,
-                            Some(&Type::named("String")),
+                            Some(&Type::named("str")),
                         )?;
-                        if text_ty != Type::named("String") {
+                        if text_ty != Type::named("str") {
                             return Err(Diagnostic::at(
                                 text_arg.span,
-                                format!(
-                                    "`parse_float64(...)` expects `String`, found `{}`",
-                                    text_ty
-                                ),
+                                format!("`parse_float64(...)` expects `str`, found `{}`", text_ty),
                             ));
                         }
                         Ok(Type::Named(
                             "Result".to_string(),
-                            vec![Type::named("float64"), Type::named("String")],
+                            vec![Type::named("float64"), Type::named("str")],
                         ))
                     }
                 }
@@ -15013,6 +15605,55 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Member { object, field } => {
                 let (base_object, object_type_args) = self.peel_specialization(object);
                 if let ExprKind::Name(type_name) = &base_object.kind {
+                    if matches!(type_name.as_str(), "list" | "dict" | "set")
+                        && !locals.contains_key(type_name)
+                    {
+                        if let Some(type_args) = object_type_args {
+                            let explicit_args = self.lower_explicit_type_args(type_args)?;
+                            let expected_arity = if type_name == "dict" { 2 } else { 1 };
+                            if explicit_args.len() != expected_arity {
+                                return Err(Diagnostic::coded_at(
+                                    "AU2002",
+                                    object.span,
+                                    format!(
+                                        "`{type_name}` expects exactly {expected_arity} type argument{}, found {}",
+                                        if expected_arity == 1 { "" } else { "s" },
+                                        explicit_args.len()
+                                    ),
+                                ));
+                            }
+                            let constructor =
+                                BuiltinAssociatedFunction::resolve(type_name, field).ok_or_else(
+                                    || {
+                                        Diagnostic::coded_at(
+                                            "AU2001",
+                                            span,
+                                            format!(
+                                                "type `{type_name}` has no associated function `{field}`"
+                                            ),
+                                        )
+                                    },
+                                )?;
+                            let ordered_args = constructor.bind_args(args, span)?;
+                            let minimum = ordered_args[0]
+                                .expect("with_capacity binding should retain its required minimum");
+                            let actual = self.type_of_expr_hint(
+                                &minimum.value,
+                                locals,
+                                Some(&Type::named("int64")),
+                            )?;
+                            if actual != Type::named("int64") {
+                                return Err(Diagnostic::coded_at(
+                                    "AU2002",
+                                    minimum.span,
+                                    format!(
+                                        "`{type_name}.with_capacity` expects `int64`, found `{actual}`"
+                                    ),
+                                ));
+                            }
+                            return Ok(Type::Named(type_name.clone(), explicit_args));
+                        }
+                    }
                     if type_name == "Array" && !locals.contains_key(type_name) {
                         if let Some(type_args) = object_type_args {
                             let explicit_args = self.lower_explicit_type_args(type_args)?;
@@ -15063,7 +15704,7 @@ impl<'a> FunctionChecker<'a> {
                                 locals,
                             )?;
                             let shape_ty =
-                                Type::Named("Vec".to_string(), vec![Type::named("int64")]);
+                                Type::Named("list".to_string(), vec![Type::named("int64")]);
                             let array_ty = Type::Named("Array".to_string(), vec![dtype.clone()]);
                             match constructor {
                                 BuiltinAssociatedFunction::ArrayZeros => {
@@ -15080,7 +15721,7 @@ impl<'a> FunctionChecker<'a> {
                                         "AU2002",
                                         shape.span,
                                         format!(
-                                            "`Array.zeros` expects `Vec[int64]` for `shape`, found `{actual}`"
+                                            "`Array.zeros` expects `list[int64]` for `shape`, found `{actual}`"
                                         ),
                                     ));
                                     }
@@ -15110,12 +15751,12 @@ impl<'a> FunctionChecker<'a> {
                                 }
                                 BuiltinAssociatedFunction::ArrayFromVec => {
                                     let values_ty =
-                                        Type::Named("Vec".to_string(), vec![dtype.clone()]);
+                                        Type::Named("list".to_string(), vec![dtype.clone()]);
                                     for (index, expected_ty, label) in
                                         [(0, &values_ty, "values"), (1, &shape_ty, "shape")]
                                     {
                                         let argument = ordered_args[index].expect(
-                                            "Array.from_vec binding should retain every argument",
+                                            "Array.from_list binding should retain every argument",
                                         );
                                         let actual = self.type_of_expr_hint(
                                             &argument.value,
@@ -15127,7 +15768,7 @@ impl<'a> FunctionChecker<'a> {
                                             "AU2002",
                                             argument.span,
                                             format!(
-                                                "`Array.from_vec` expects `{expected_ty}` for `{label}`, found `{actual}`"
+                                                "`Array.from_list` expects `{expected_ty}` for `{label}`, found `{actual}`"
                                             ),
                                         ));
                                         }
@@ -15136,7 +15777,10 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinAssociatedFunction::DurationMilliseconds
                                 | BuiltinAssociatedFunction::DurationSeconds
                                 | BuiltinAssociatedFunction::DurationMinutes
-                                | BuiltinAssociatedFunction::StringFromBytes => unreachable!(
+                                | BuiltinAssociatedFunction::StringFromBytes
+                                | BuiltinAssociatedFunction::ListWithCapacity
+                                | BuiltinAssociatedFunction::DictWithCapacity
+                                | BuiltinAssociatedFunction::SetWithCapacity => unreachable!(
                                     "Array associated lookup returned a non-Array constructor"
                                 ),
                             }
@@ -15529,12 +16173,14 @@ impl<'a> FunctionChecker<'a> {
                                     if !matches!(
                                         &actual,
                                         Type::Named(name, args)
-                                            if name == "Vec" && args.len() == 1
+                                            if name == "list" && args.len() == 1
                                     ) {
                                         return Err(Diagnostic::coded_at(
                                             "AU2002",
                                             values.span,
-                                            format!("`shuffle` expects `Vec[T]`, found `{actual}`"),
+                                            format!(
+                                                "`shuffle` expects `list[T]`, found `{actual}`"
+                                            ),
                                         ));
                                     }
                                     self.apply_builtin_argument_passing(
@@ -15556,7 +16202,7 @@ impl<'a> FunctionChecker<'a> {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
                                 BuiltinMember::ArrayShape => {
-                                    Ok(Type::Named("Vec".to_string(), vec![Type::named("int64")]))
+                                    Ok(Type::Named("list".to_string(), vec![Type::named("int64")]))
                                 }
                                 BuiltinMember::ArrayLen => Ok(Type::named("int64")),
                                 BuiltinMember::ArrayClone => Ok(receiver_ty.clone()),
@@ -15565,7 +16211,7 @@ impl<'a> FunctionChecker<'a> {
                                         "Array.get binding should retain its index argument",
                                     );
                                     let expected_index =
-                                        Type::Named("Vec".to_string(), vec![Type::named("int32")]);
+                                        Type::Named("list".to_string(), vec![Type::named("int64")]);
                                     let actual = self.type_of_expr_hint(
                                         &index.value,
                                         locals,
@@ -15576,7 +16222,7 @@ impl<'a> FunctionChecker<'a> {
                                             "AU2002",
                                             index.span,
                                             format!(
-                                                "`Array.get` expects `Vec[int32]`, found `{actual}`"
+                                                "`Array.get` expects `list[int64]`, found `{actual}`"
                                             ),
                                         ));
                                     }
@@ -15588,7 +16234,7 @@ impl<'a> FunctionChecker<'a> {
                                         "Array.set binding should retain its index argument",
                                     );
                                     let expected_index =
-                                        Type::Named("Vec".to_string(), vec![Type::named("int32")]);
+                                        Type::Named("list".to_string(), vec![Type::named("int64")]);
                                     let actual = self.type_of_expr_hint(
                                         &index.value,
                                         locals,
@@ -15599,7 +16245,7 @@ impl<'a> FunctionChecker<'a> {
                                             "AU2002",
                                             index.span,
                                             format!(
-                                                "`Array.set` expects `Vec[int32]`, found `{actual}`"
+                                                "`Array.set` expects `list[int64]`, found `{actual}`"
                                             ),
                                         ));
                                     }
@@ -15734,14 +16380,14 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
 
-                    if receiver_name == "Vec" && receiver_args.len() == 1 {
+                    if receiver_name == "list" && receiver_args.len() == 1 {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
                                 BuiltinMember::VecLen => Ok(Type::named("int64")),
                                 BuiltinMember::VecIsEmpty => Ok(Type::named("bool")),
                                 BuiltinMember::VecClone => {
-                                    self.reject_rng_duplication("Vec.clone", &receiver_ty, span)?;
+                                    self.reject_rng_duplication("list.copy", &receiver_ty, span)?;
                                     Ok(receiver_ty.clone())
                                 }
                                 BuiltinMember::VecPush => {
@@ -15750,7 +16396,7 @@ impl<'a> FunctionChecker<'a> {
                                         &ordered_args,
                                         0,
                                         span,
-                                        "`push` requires exactly one argument",
+                                        "`append` requires exactly one argument",
                                     )?;
                                     let actual = self.type_of_expr_hint(
                                         &push_arg.value,
@@ -15761,7 +16407,7 @@ impl<'a> FunctionChecker<'a> {
                                         return Err(Diagnostic::at(
                                             push_arg.span,
                                             format!(
-                                                "`push` expects `{}`, found `{}`",
+                                                "`append` expects `{}`, found `{}`",
                                                 receiver_args[0], actual
                                             ),
                                         ));
@@ -15776,10 +16422,14 @@ impl<'a> FunctionChecker<'a> {
                                 }
                                 BuiltinMember::VecPop => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
-                                    Ok(Type::Named(
-                                        "Option".to_string(),
-                                        vec![receiver_args[0].clone()],
-                                    ))
+                                    if let Some(index_arg) = ordered_args[0] {
+                                        self.check_vec_index_type(
+                                            &index_arg.value,
+                                            index_arg.span,
+                                            locals,
+                                        )?;
+                                    }
+                                    Ok(receiver_args[0].clone())
                                 }
                                 BuiltinMember::VecGet => {
                                     let index_arg = self.bound_argument(
@@ -15794,7 +16444,7 @@ impl<'a> FunctionChecker<'a> {
                                         locals,
                                     )?;
                                     self.reject_rng_duplication(
-                                        "Vec.get",
+                                        "list.get",
                                         &receiver_args[0],
                                         span,
                                     )?;
@@ -15848,28 +16498,53 @@ impl<'a> FunctionChecker<'a> {
                                         value_arg,
                                         locals,
                                     )?;
-                                    Ok(Type::Named(
-                                        "Option".to_string(),
-                                        vec![receiver_args[0].clone()],
-                                    ))
+                                    Ok(receiver_args[0].clone())
                                 }
-                                BuiltinMember::VecRemove => {
-                                    self.require_mutable_receiver(object, field, span, locals)?;
-                                    let index_arg = self.bound_argument(
+                                BuiltinMember::VecRemove
+                                | BuiltinMember::VecIndex
+                                | BuiltinMember::VecCount => {
+                                    if matches!(builtin_member, BuiltinMember::VecRemove) {
+                                        self.require_mutable_receiver(object, field, span, locals)?;
+                                    }
+                                    let value_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
                                         span,
-                                        "`remove` requires exactly one argument",
+                                        format!("`{field}` requires exactly one argument"),
                                     )?;
-                                    self.check_vec_index_type(
-                                        &index_arg.value,
-                                        index_arg.span,
+                                    let actual = self.type_of_expr_hint(
+                                        &value_arg.value,
                                         locals,
+                                        Some(&receiver_args[0]),
                                     )?;
-                                    Ok(Type::Named(
-                                        "Option".to_string(),
-                                        vec![receiver_args[0].clone()],
-                                    ))
+                                    if actual != receiver_args[0] {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            value_arg.span,
+                                            format!(
+                                                "`{field}` expects `{}`, found `{actual}`",
+                                                receiver_args[0]
+                                            ),
+                                        ));
+                                    }
+                                    self.require_array_equality_eligible(
+                                        &receiver_args[0],
+                                        format!(
+                                            "cannot use `list.{field}` with `{}`",
+                                            receiver_args[0]
+                                        ),
+                                        span,
+                                    )?;
+                                    Ok(
+                                        if matches!(
+                                            builtin_member,
+                                            BuiltinMember::VecIndex | BuiltinMember::VecCount
+                                        ) {
+                                            Type::named("int64")
+                                        } else {
+                                            Type::Unit
+                                        },
+                                    )
                                 }
                                 BuiltinMember::VecSwap => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
@@ -15901,7 +16576,7 @@ impl<'a> FunctionChecker<'a> {
                                         second_arg.span,
                                         locals,
                                     )?;
-                                    Ok(Type::named("bool"))
+                                    Ok(Type::Unit)
                                 }
                                 BuiltinMember::VecContains => {
                                     let value_arg = self.bound_argument(
@@ -15927,7 +16602,7 @@ impl<'a> FunctionChecker<'a> {
                                     self.require_array_equality_eligible(
                                         &receiver_args[0],
                                         format!(
-                                            "cannot use `Vec.contains` with `{}`",
+                                            "cannot use `list.contains` with `{}`",
                                             receiver_args[0]
                                         ),
                                         span,
@@ -16009,7 +16684,7 @@ impl<'a> FunctionChecker<'a> {
                                         value_arg,
                                         locals,
                                     )?;
-                                    Ok(Type::named("bool"))
+                                    Ok(Type::Unit)
                                 }
                                 BuiltinMember::VecClear | BuiltinMember::VecReverse => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
@@ -16017,40 +16692,49 @@ impl<'a> FunctionChecker<'a> {
                                 }
                                 BuiltinMember::VecSort => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
-                                    self.require_vec_orderable(
-                                        "sort",
-                                        "Vec element type",
-                                        &receiver_args[0],
-                                        span,
-                                    )?;
-                                    Ok(Type::Unit)
-                                }
-                                BuiltinMember::VecSortBy => {
-                                    self.require_mutable_receiver(object, field, span, locals)?;
-                                    let key_arg = self.bound_argument(
-                                        &ordered_args,
-                                        0,
-                                        span,
-                                        "`sort_by` requires a `key` argument",
-                                    )?;
-                                    let key_ty = self.vec_callback_return_type(
-                                        "sort_by",
-                                        key_arg,
-                                        &receiver_args[0],
-                                        locals,
-                                    )?;
-                                    self.require_vec_orderable(
-                                        "sort_by",
-                                        "key type",
-                                        &key_ty,
-                                        key_arg.span,
-                                    )?;
-                                    self.apply_builtin_argument_passing(
-                                        builtin_member,
-                                        0,
-                                        key_arg,
-                                        locals,
-                                    )?;
+                                    if let Some(key_arg) = ordered_args[0] {
+                                        let key_ty = self.vec_callback_return_type(
+                                            "sort",
+                                            key_arg,
+                                            &receiver_args[0],
+                                            locals,
+                                        )?;
+                                        self.require_vec_orderable(
+                                            "sort",
+                                            "key type",
+                                            &key_ty,
+                                            key_arg.span,
+                                        )?;
+                                        self.apply_builtin_argument_passing(
+                                            builtin_member,
+                                            0,
+                                            key_arg,
+                                            locals,
+                                        )?;
+                                    } else {
+                                        self.require_vec_orderable(
+                                            "sort",
+                                            "list element type",
+                                            &receiver_args[0],
+                                            span,
+                                        )?;
+                                    }
+                                    if let Some(reverse_arg) = ordered_args[1] {
+                                        let actual = self.type_of_expr_hint(
+                                            &reverse_arg.value,
+                                            locals,
+                                            Some(&Type::named("bool")),
+                                        )?;
+                                        if actual != Type::named("bool") {
+                                            return Err(Diagnostic::coded_at(
+                                                "AU2002",
+                                                reverse_arg.span,
+                                                format!(
+                                                    "`sort` expects `bool` for `reverse`, found `{actual}`"
+                                                ),
+                                            ));
+                                        }
+                                    }
                                     Ok(Type::Unit)
                                 }
                                 BuiltinMember::VecMap => {
@@ -16072,7 +16756,7 @@ impl<'a> FunctionChecker<'a> {
                                         callback,
                                         locals,
                                     )?;
-                                    Ok(Type::Named("Vec".to_string(), vec![output_ty]))
+                                    Ok(Type::Named("list".to_string(), vec![output_ty]))
                                 }
                                 BuiltinMember::VecFilter => {
                                     let callback = self.bound_argument(
@@ -16092,12 +16776,12 @@ impl<'a> FunctionChecker<'a> {
                                             "AU2002",
                                             callback.span,
                                             format!(
-                                                "`Vec.filter` callback must return `bool`, found `{output_ty}`"
+                                                "`list.filter` callback must return `bool`, found `{output_ty}`"
                                             ),
                                         ));
                                     }
                                     self.reject_rng_duplication(
-                                        "Vec.filter",
+                                        "list.filter",
                                         &receiver_args[0],
                                         span,
                                     )?;
@@ -16109,12 +16793,34 @@ impl<'a> FunctionChecker<'a> {
                                     )?;
                                     Ok(receiver_ty.clone())
                                 }
+                                BuiltinMember::VecReserve => {
+                                    self.require_mutable_receiver(object, field, span, locals)?;
+                                    let additional = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`reserve` requires an `additional` argument",
+                                    )?;
+                                    let actual = self.type_of_expr_hint(
+                                        &additional.value,
+                                        locals,
+                                        Some(&Type::named("int64")),
+                                    )?;
+                                    if actual != Type::named("int64") {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            additional.span,
+                                            format!("`reserve` expects `int64`, found `{actual}`"),
+                                        ));
+                                    }
+                                    Ok(Type::Unit)
+                                }
                                 _ => unreachable!("unexpected vector builtin member"),
                             };
                         }
                     }
 
-                    if receiver_name == "String" && receiver_args.is_empty() {
+                    if receiver_name == "str" && receiver_args.is_empty() {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
@@ -16122,7 +16828,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::named("int64"))
                                 }
                                 BuiltinMember::StringToBytes => {
-                                    Ok(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
+                                    Ok(Type::Named("list".to_string(), vec![Type::named("uint8")]))
                                 }
                                 BuiltinMember::StringContains
                                 | BuiltinMember::StringStartsWith
@@ -16136,13 +16842,13 @@ impl<'a> FunctionChecker<'a> {
                                     let actual = self.type_of_expr_hint(
                                         &text_arg.value,
                                         locals,
-                                        Some(&Type::named("String")),
+                                        Some(&Type::named("str")),
                                     )?;
-                                    if actual != Type::named("String") {
+                                    if actual != Type::named("str") {
                                         return Err(Diagnostic::at(
                                             text_arg.span,
                                             format!(
-                                                "`{}` expects `String`, found `{}`",
+                                                "`{}` expects `str`, found `{}`",
                                                 field, actual
                                             ),
                                         ));
@@ -16159,15 +16865,15 @@ impl<'a> FunctionChecker<'a> {
                                     let actual = self.type_of_expr_hint(
                                         &text_arg.value,
                                         locals,
-                                        Some(&Type::named("String")),
+                                        Some(&Type::named("str")),
                                     )?;
-                                    if actual != Type::named("String") {
+                                    if actual != Type::named("str") {
                                         return Err(Diagnostic::at(
                                             text_arg.span,
-                                            format!("`split` expects `String`, found `{}`", actual),
+                                            format!("`split` expects `str`, found `{}`", actual),
                                         ));
                                     }
-                                    Ok(Type::Named("Vec".to_string(), vec![Type::named("String")]))
+                                    Ok(Type::Named("list".to_string(), vec![Type::named("str")]))
                                 }
                                 BuiltinMember::StringReplace => {
                                     let from_arg = self.bound_argument(
@@ -16179,13 +16885,13 @@ impl<'a> FunctionChecker<'a> {
                                     let from_actual = self.type_of_expr_hint(
                                         &from_arg.value,
                                         locals,
-                                        Some(&Type::named("String")),
+                                        Some(&Type::named("str")),
                                     )?;
-                                    if from_actual != Type::named("String") {
+                                    if from_actual != Type::named("str") {
                                         return Err(Diagnostic::at(
                                             from_arg.span,
                                             format!(
-                                                "`replace` expects `String` for `from`, found `{}`",
+                                                "`replace` expects `str` for `from`, found `{}`",
                                                 from_actual
                                             ),
                                         ));
@@ -16199,23 +16905,23 @@ impl<'a> FunctionChecker<'a> {
                                     let to_actual = self.type_of_expr_hint(
                                         &to_arg.value,
                                         locals,
-                                        Some(&Type::named("String")),
+                                        Some(&Type::named("str")),
                                     )?;
-                                    if to_actual != Type::named("String") {
+                                    if to_actual != Type::named("str") {
                                         return Err(Diagnostic::at(
                                             to_arg.span,
                                             format!(
-                                                "`replace` expects `String` for `to`, found `{}`",
+                                                "`replace` expects `str` for `to`, found `{}`",
                                                 to_actual
                                             ),
                                         ));
                                     }
-                                    Ok(Type::named("String"))
+                                    Ok(Type::named("str"))
                                 }
                                 BuiltinMember::StringToLower
                                 | BuiltinMember::StringToUpper
                                 | BuiltinMember::StringTrim
-                                | BuiltinMember::StringClone => Ok(Type::named("String")),
+                                | BuiltinMember::StringClone => Ok(Type::named("str")),
                                 BuiltinMember::StringJoin => {
                                     let parts_arg = self.bound_argument(
                                         &ordered_args,
@@ -16224,7 +16930,7 @@ impl<'a> FunctionChecker<'a> {
                                         "`join` requires a `parts` argument",
                                     )?;
                                     let expected_parts =
-                                        Type::Named("Vec".to_string(), vec![Type::named("String")]);
+                                        Type::Named("list".to_string(), vec![Type::named("str")]);
                                     let actual = self.type_of_expr_hint(
                                         &parts_arg.value,
                                         locals,
@@ -16234,12 +16940,12 @@ impl<'a> FunctionChecker<'a> {
                                         return Err(Diagnostic::at(
                                             parts_arg.span,
                                             format!(
-                                                "`join` expects `Vec[String]`, found `{}`",
+                                                "`join` expects `list[str]`, found `{}`",
                                                 actual
                                             ),
                                         ));
                                     }
-                                    Ok(Type::named("String"))
+                                    Ok(Type::named("str"))
                                 }
                                 BuiltinMember::StringStripPrefix
                                 | BuiltinMember::StringStripSuffix => {
@@ -16252,28 +16958,25 @@ impl<'a> FunctionChecker<'a> {
                                     let actual = self.type_of_expr_hint(
                                         &text_arg.value,
                                         locals,
-                                        Some(&Type::named("String")),
+                                        Some(&Type::named("str")),
                                     )?;
-                                    if actual != Type::named("String") {
+                                    if actual != Type::named("str") {
                                         return Err(Diagnostic::at(
                                             text_arg.span,
                                             format!(
-                                                "`{}` expects `String`, found `{}`",
+                                                "`{}` expects `str`, found `{}`",
                                                 field, actual
                                             ),
                                         ));
                                     }
-                                    Ok(Type::Named(
-                                        "Option".to_string(),
-                                        vec![Type::named("String")],
-                                    ))
+                                    Ok(Type::Named("Option".to_string(), vec![Type::named("str")]))
                                 }
                                 _ => unreachable!("unexpected string builtin member"),
                             };
                         }
                     }
 
-                    if receiver_name == "Map" && receiver_args.len() == 2 {
+                    if receiver_name == "dict" && receiver_args.len() == 2 {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             if matches!(
@@ -16285,7 +16988,10 @@ impl<'a> FunctionChecker<'a> {
                             ) {
                                 self.require_array_equality_eligible(
                                     &receiver_args[0],
-                                    format!("cannot use `Map.{field}` with `{}`", receiver_args[0]),
+                                    format!(
+                                        "cannot use `dict.{field}` with `{}`",
+                                        receiver_args[0]
+                                    ),
                                     span,
                                 )?;
                             }
@@ -16293,7 +16999,7 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::MapLen => Ok(Type::named("int64")),
                                 BuiltinMember::MapIsEmpty => Ok(Type::named("bool")),
                                 BuiltinMember::MapClone => {
-                                    self.reject_rng_duplication("Map.clone", &receiver_ty, span)?;
+                                    self.reject_rng_duplication("dict.copy", &receiver_ty, span)?;
                                     Ok(receiver_ty.clone())
                                 }
                                 BuiltinMember::MapGet => {
@@ -16318,7 +17024,7 @@ impl<'a> FunctionChecker<'a> {
                                         ));
                                     }
                                     self.reject_rng_duplication(
-                                        "Map.get",
+                                        "dict.get",
                                         &receiver_args[1],
                                         span,
                                     )?;
@@ -16418,7 +17124,7 @@ impl<'a> FunctionChecker<'a> {
                                         &ordered_args,
                                         0,
                                         span,
-                                        "`contains_key` requires exactly one key argument",
+                                        "`contains` requires exactly one key argument",
                                     )?;
                                     let actual = self.type_of_expr_hint(
                                         &key_arg.value,
@@ -16429,7 +17135,7 @@ impl<'a> FunctionChecker<'a> {
                                         return Err(Diagnostic::at(
                                             key_arg.span,
                                             format!(
-                                                "`contains_key` expects `{}`, found `{}`",
+                                                "`contains` expects `{}`, found `{}`",
                                                 receiver_args[0], actual
                                             ),
                                         ));
@@ -16438,41 +17144,33 @@ impl<'a> FunctionChecker<'a> {
                                 }
                                 BuiltinMember::MapKeys => {
                                     self.reject_rng_duplication(
-                                        "Map.keys",
+                                        "dict.keys",
                                         &receiver_args[0],
                                         span,
                                     )?;
                                     Ok(Type::Named(
-                                        "Vec".to_string(),
+                                        "list".to_string(),
                                         vec![receiver_args[0].clone()],
                                     ))
                                 }
                                 BuiltinMember::MapValues => {
                                     self.reject_rng_duplication(
-                                        "Map.values",
+                                        "dict.values",
                                         &receiver_args[1],
                                         span,
                                     )?;
                                     Ok(Type::Named(
-                                        "Vec".to_string(),
+                                        "list".to_string(),
                                         vec![receiver_args[1].clone()],
                                     ))
                                 }
-                                BuiltinMember::MapItems | BuiltinMember::MapEntries => {
-                                    let entry_type = Type::Named(
-                                        "MapEntry".to_string(),
-                                        vec![receiver_args[0].clone(), receiver_args[1].clone()],
-                                    );
-                                    self.reject_rng_duplication(
-                                        if matches!(builtin_member, BuiltinMember::MapItems) {
-                                            "Map.items"
-                                        } else {
-                                            "Map.entries"
-                                        },
-                                        &entry_type,
-                                        span,
-                                    )?;
-                                    Ok(Type::Named("Vec".to_string(), vec![entry_type]))
+                                BuiltinMember::MapItems => {
+                                    let entry_type = Type::Tuple(vec![
+                                        receiver_args[0].clone(),
+                                        receiver_args[1].clone(),
+                                    ]);
+                                    self.reject_rng_duplication("dict.items", &entry_type, span)?;
+                                    Ok(Type::Named("list".to_string(), vec![entry_type]))
                                 }
                                 BuiltinMember::MapClear => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
@@ -16484,7 +17182,7 @@ impl<'a> FunctionChecker<'a> {
                                         &ordered_args,
                                         0,
                                         span,
-                                        "`extend` requires an `other` argument",
+                                        "`update` requires an `other` argument",
                                     )?;
                                     let actual = self.type_of_expr_hint(
                                         &other_arg.value,
@@ -16495,7 +17193,7 @@ impl<'a> FunctionChecker<'a> {
                                         return Err(Diagnostic::at(
                                             other_arg.span,
                                             format!(
-                                                "`extend` expects `{}`, found `{}`",
+                                                "`update` expects `{}`, found `{}`",
                                                 receiver_ty, actual
                                             ),
                                         ));
@@ -16508,12 +17206,34 @@ impl<'a> FunctionChecker<'a> {
                                     )?;
                                     Ok(Type::Unit)
                                 }
+                                BuiltinMember::MapReserve => {
+                                    self.require_mutable_receiver(object, field, span, locals)?;
+                                    let additional = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`reserve` requires an `additional` argument",
+                                    )?;
+                                    let actual = self.type_of_expr_hint(
+                                        &additional.value,
+                                        locals,
+                                        Some(&Type::named("int64")),
+                                    )?;
+                                    if actual != Type::named("int64") {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            additional.span,
+                                            format!("`reserve` expects `int64`, found `{actual}`"),
+                                        ));
+                                    }
+                                    Ok(Type::Unit)
+                                }
                                 _ => unreachable!("unexpected map builtin member"),
                             };
                         }
                     }
 
-                    if receiver_name == "Set" && receiver_args.len() == 1 {
+                    if receiver_name == "set" && receiver_args.len() == 1 {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             if matches!(
@@ -16521,10 +17241,11 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::SetContains
                                     | BuiltinMember::SetInsert
                                     | BuiltinMember::SetRemove
+                                    | BuiltinMember::SetDiscard
                             ) {
                                 self.require_array_equality_eligible(
                                     &receiver_args[0],
-                                    format!("cannot use `Set.{field}` with `{}`", receiver_args[0]),
+                                    format!("cannot use `set.{field}` with `{}`", receiver_args[0]),
                                     span,
                                 )?;
                             }
@@ -16532,7 +17253,7 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::SetLen => Ok(Type::named("int64")),
                                 BuiltinMember::SetIsEmpty => Ok(Type::named("bool")),
                                 BuiltinMember::SetClone => {
-                                    self.reject_rng_duplication("Set.clone", &receiver_ty, span)?;
+                                    self.reject_rng_duplication("set.copy", &receiver_ty, span)?;
                                     Ok(receiver_ty.clone())
                                 }
                                 BuiltinMember::SetContains => {
@@ -16558,7 +17279,9 @@ impl<'a> FunctionChecker<'a> {
                                     }
                                     Ok(Type::named("bool"))
                                 }
-                                BuiltinMember::SetInsert | BuiltinMember::SetRemove => {
+                                BuiltinMember::SetInsert
+                                | BuiltinMember::SetRemove
+                                | BuiltinMember::SetDiscard => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
                                     let value_arg = self.bound_argument(
                                         &ordered_args,
@@ -16586,7 +17309,33 @@ impl<'a> FunctionChecker<'a> {
                                         value_arg,
                                         locals,
                                     )?;
-                                    Ok(Type::named("bool"))
+                                    Ok(Type::Unit)
+                                }
+                                BuiltinMember::SetClear => {
+                                    self.require_mutable_receiver(object, field, span, locals)?;
+                                    Ok(Type::Unit)
+                                }
+                                BuiltinMember::SetReserve => {
+                                    self.require_mutable_receiver(object, field, span, locals)?;
+                                    let additional = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`reserve` requires an `additional` argument",
+                                    )?;
+                                    let actual = self.type_of_expr_hint(
+                                        &additional.value,
+                                        locals,
+                                        Some(&Type::named("int64")),
+                                    )?;
+                                    if actual != Type::named("int64") {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            additional.span,
+                                            format!("`reserve` expects `int64`, found `{actual}`"),
+                                        ));
+                                    }
+                                    Ok(Type::Unit)
                                 }
                                 _ => unreachable!("unexpected set builtin member"),
                             };
@@ -17172,13 +17921,13 @@ impl<'a> FunctionChecker<'a> {
                     if receiver_name == "fs.File" && receiver_args.is_empty() {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let bytes_ty =
-                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                                Type::Named("list".to_string(), vec![Type::named("uint8")]);
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
                                 BuiltinMember::FileReadAll => Ok(Type::Named(
                                     "Result".to_string(),
                                     vec![
-                                        Type::named("String"),
+                                        Type::named("str"),
                                         crate::builtin_modules::io_error_type(),
                                     ],
                                 )),
@@ -17197,13 +17946,13 @@ impl<'a> FunctionChecker<'a> {
                                     let actual = self.type_of_expr_hint(
                                         &text_arg.value,
                                         locals,
-                                        Some(&Type::named("String")),
+                                        Some(&Type::named("str")),
                                     )?;
-                                    if actual != Type::named("String") {
+                                    if actual != Type::named("str") {
                                         return Err(Diagnostic::at(
                                             text_arg.span,
                                             format!(
-                                                "`write_all` expects `String`, found `{}`",
+                                                "`write_all` expects `str`, found `{}`",
                                                 actual
                                             ),
                                         ));
@@ -17308,13 +18057,13 @@ impl<'a> FunctionChecker<'a> {
                     if receiver_name == "process.Pipe" && receiver_args.is_empty() {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let bytes_ty =
-                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                                Type::Named("list".to_string(), vec![Type::named("uint8")]);
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
                                 BuiltinMember::ProcessPipeReadAll => Ok(Type::Named(
                                     "Result".to_string(),
                                     vec![
-                                        Type::named("String"),
+                                        Type::named("str"),
                                         crate::builtin_modules::process_error_type(),
                                     ],
                                 )),
@@ -17330,7 +18079,7 @@ impl<'a> FunctionChecker<'a> {
                                         vec![
                                             Type::Named(
                                                 "Option".to_string(),
-                                                vec![Type::named("String")],
+                                                vec![Type::named("str")],
                                             ),
                                             crate::builtin_modules::process_error_type(),
                                         ],
@@ -17381,7 +18130,7 @@ impl<'a> FunctionChecker<'a> {
                                     )?;
                                     self.check_builtin_argument_type(
                                         text_arg,
-                                        &Type::named("String"),
+                                        &Type::named("str"),
                                         locals,
                                         "write_all",
                                     )?;
@@ -17445,12 +18194,10 @@ impl<'a> FunctionChecker<'a> {
                                 }
                                 BuiltinMember::ProcessCompletedSuccess => Ok(Type::named("bool")),
                                 BuiltinMember::ProcessCompletedStdout
-                                | BuiltinMember::ProcessCompletedStderr => {
-                                    Ok(Type::named("String"))
-                                }
+                                | BuiltinMember::ProcessCompletedStderr => Ok(Type::named("str")),
                                 BuiltinMember::ProcessCompletedStdoutBytes
                                 | BuiltinMember::ProcessCompletedStderrBytes => {
-                                    Ok(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
+                                    Ok(Type::Named("list".to_string(), vec![Type::named("uint8")]))
                                 }
                                 BuiltinMember::ProcessCompletedCheck => Ok(Type::Named(
                                     "Result".to_string(),
@@ -17473,7 +18220,7 @@ impl<'a> FunctionChecker<'a> {
                                             span,
                                             "`start` requires a `name` argument",
                                         )?,
-                                        &Type::named("String"),
+                                        &Type::named("str"),
                                         locals,
                                         "start",
                                     )?;
@@ -17484,10 +18231,7 @@ impl<'a> FunctionChecker<'a> {
                                             span,
                                             "`start` requires a `command` argument",
                                         )?,
-                                        &Type::Named(
-                                            "Vec".to_string(),
-                                            vec![Type::named("String")],
-                                        ),
+                                        &Type::Named("list".to_string(), vec![Type::named("str")]),
                                         locals,
                                         "start",
                                     )?;
@@ -17496,7 +18240,7 @@ impl<'a> FunctionChecker<'a> {
                                             argument,
                                             &Type::Named(
                                                 "Option".to_string(),
-                                                vec![Type::named("String")],
+                                                vec![Type::named("str")],
                                             ),
                                             locals,
                                             "start",
@@ -17506,8 +18250,8 @@ impl<'a> FunctionChecker<'a> {
                                         self.check_builtin_argument_type(
                                             argument,
                                             &Type::Named(
-                                                "Map".to_string(),
-                                                vec![Type::named("String"), Type::named("String")],
+                                                "dict".to_string(),
+                                                vec![Type::named("str"), Type::named("str")],
                                             ),
                                             locals,
                                             "start",
@@ -17659,7 +18403,7 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::TcpListenerLocalAddr => Ok(Type::Named(
                                     "Result".to_string(),
                                     vec![
-                                        Type::named("String"),
+                                        Type::named("str"),
                                         crate::builtin_modules::io_error_type(),
                                     ],
                                 )),
@@ -17672,7 +18416,7 @@ impl<'a> FunctionChecker<'a> {
                     if receiver_name == "net.TcpStream" && receiver_args.is_empty() {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let bytes_ty =
-                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                                Type::Named("list".to_string(), vec![Type::named("uint8")]);
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
                                 BuiltinMember::TcpStreamReadAll => {
@@ -17685,7 +18429,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![
-                                            Type::named("String"),
+                                            Type::named("str"),
                                             crate::builtin_modules::io_error_type(),
                                         ],
                                     ))
@@ -17702,7 +18446,7 @@ impl<'a> FunctionChecker<'a> {
                                         vec![
                                             Type::Named(
                                                 "Option".to_string(),
-                                                vec![Type::named("String")],
+                                                vec![Type::named("str")],
                                             ),
                                             crate::builtin_modules::io_error_type(),
                                         ],
@@ -17787,13 +18531,13 @@ impl<'a> FunctionChecker<'a> {
                                     let actual = self.type_of_expr_hint(
                                         &text_arg.value,
                                         locals,
-                                        Some(&Type::named("String")),
+                                        Some(&Type::named("str")),
                                     )?;
-                                    if actual != Type::named("String") {
+                                    if actual != Type::named("str") {
                                         return Err(Diagnostic::at(
                                             text_arg.span,
                                             format!(
-                                                "`write_all` expects `String`, found `{}`",
+                                                "`write_all` expects `str`, found `{}`",
                                                 actual
                                             ),
                                         ));
@@ -17848,7 +18592,7 @@ impl<'a> FunctionChecker<'a> {
                                     ) {
                                         Type::Unit
                                     } else {
-                                        Type::named("String")
+                                        Type::named("str")
                                     };
                                     Ok(Type::Named(
                                         "Result".to_string(),
@@ -17864,7 +18608,7 @@ impl<'a> FunctionChecker<'a> {
                     if receiver_name == "net.UdpSocket" && receiver_args.is_empty() {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let bytes_ty =
-                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                                Type::Named("list".to_string(), vec![Type::named("uint8")]);
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
                                 BuiltinMember::UdpSocketSendText => {
@@ -17876,7 +18620,7 @@ impl<'a> FunctionChecker<'a> {
                                     )?;
                                     self.check_builtin_argument_type(
                                         address_arg,
-                                        &Type::named("String"),
+                                        &Type::named("str"),
                                         locals,
                                         "send_text",
                                     )?;
@@ -17888,7 +18632,7 @@ impl<'a> FunctionChecker<'a> {
                                     )?;
                                     self.check_builtin_argument_type(
                                         text_arg,
-                                        &Type::named("String"),
+                                        &Type::named("str"),
                                         locals,
                                         "send_text",
                                     )?;
@@ -17912,7 +18656,7 @@ impl<'a> FunctionChecker<'a> {
                                     )?;
                                     self.check_builtin_argument_type(
                                         address_arg,
-                                        &Type::named("String"),
+                                        &Type::named("str"),
                                         locals,
                                         "send_bytes",
                                     )?;
@@ -18015,7 +18759,7 @@ impl<'a> FunctionChecker<'a> {
                                 | BuiltinMember::UdpSocketPeerAddr => Ok(Type::Named(
                                     "Result".to_string(),
                                     vec![
-                                        Type::named("String"),
+                                        Type::named("str"),
                                         crate::builtin_modules::io_error_type(),
                                     ],
                                 )),
@@ -18029,14 +18773,14 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             builtin_member.bind_args(args, span)?;
                             let bytes_ty =
-                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                                Type::Named("list".to_string(), vec![Type::named("uint8")]);
                             return match builtin_member {
-                                BuiltinMember::UdpDatagramAddress => Ok(Type::named("String")),
+                                BuiltinMember::UdpDatagramAddress => Ok(Type::named("str")),
                                 BuiltinMember::UdpDatagramBytes => Ok(bytes_ty),
                                 BuiltinMember::UdpDatagramText => Ok(Type::Named(
                                     "Result".to_string(),
                                     vec![
-                                        Type::named("String"),
+                                        Type::named("str"),
                                         crate::builtin_modules::io_error_type(),
                                     ],
                                 )),
@@ -18067,7 +18811,7 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::HttpListenerLocalAddr => Ok(Type::Named(
                                     "Result".to_string(),
                                     vec![
-                                        Type::named("String"),
+                                        Type::named("str"),
                                         crate::builtin_modules::io_error_type(),
                                     ],
                                 )),
@@ -18080,20 +18824,20 @@ impl<'a> FunctionChecker<'a> {
                     if receiver_name == "net.HttpExchange" && receiver_args.is_empty() {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let bytes_ty =
-                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                                Type::Named("list".to_string(), vec![Type::named("uint8")]);
                             let headers_ty = Type::Named(
-                                "Map".to_string(),
-                                vec![Type::named("String"), Type::named("String")],
+                                "dict".to_string(),
+                                vec![Type::named("str"), Type::named("str")],
                             );
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
                                 BuiltinMember::HttpExchangeMethod
-                                | BuiltinMember::HttpExchangePath => Ok(Type::named("String")),
+                                | BuiltinMember::HttpExchangePath => Ok(Type::named("str")),
                                 BuiltinMember::HttpExchangeHeaders => Ok(headers_ty),
                                 BuiltinMember::HttpExchangeBodyText => Ok(Type::Named(
                                     "Result".to_string(),
                                     vec![
-                                        Type::named("String"),
+                                        Type::named("str"),
                                         crate::builtin_modules::io_error_type(),
                                     ],
                                 )),
@@ -18125,7 +18869,7 @@ impl<'a> FunctionChecker<'a> {
                                     )?;
                                     self.check_builtin_argument_type(
                                         text_arg,
-                                        &Type::named("String"),
+                                        &Type::named("str"),
                                         locals,
                                         "respond_text",
                                     )?;
@@ -18227,19 +18971,19 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             builtin_member.bind_args(args, span)?;
                             let bytes_ty =
-                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                                Type::Named("list".to_string(), vec![Type::named("uint8")]);
                             let headers_ty = Type::Named(
-                                "Map".to_string(),
-                                vec![Type::named("String"), Type::named("String")],
+                                "dict".to_string(),
+                                vec![Type::named("str"), Type::named("str")],
                             );
                             return match builtin_member {
                                 BuiltinMember::HttpResponseStatus => Ok(Type::named("int32")),
-                                BuiltinMember::HttpResponseReason => Ok(Type::named("String")),
+                                BuiltinMember::HttpResponseReason => Ok(Type::named("str")),
                                 BuiltinMember::HttpResponseHeaders => Ok(headers_ty),
                                 BuiltinMember::HttpResponseText => Ok(Type::Named(
                                     "Result".to_string(),
                                     vec![
-                                        Type::named("String"),
+                                        Type::named("str"),
                                         crate::builtin_modules::io_error_type(),
                                     ],
                                 )),
@@ -18271,7 +19015,7 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::WebSocketListenerLocalAddr => Ok(Type::Named(
                                     "Result".to_string(),
                                     vec![
-                                        Type::named("String"),
+                                        Type::named("str"),
                                         crate::builtin_modules::io_error_type(),
                                     ],
                                 )),
@@ -18283,7 +19027,7 @@ impl<'a> FunctionChecker<'a> {
                     if receiver_name == "net.WebSocket" && receiver_args.is_empty() {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let bytes_ty =
-                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                                Type::Named("list".to_string(), vec![Type::named("uint8")]);
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
                                 BuiltinMember::WebSocketSendText => {
@@ -18295,7 +19039,7 @@ impl<'a> FunctionChecker<'a> {
                                     )?;
                                     self.check_builtin_argument_type(
                                         text_arg,
-                                        &Type::named("String"),
+                                        &Type::named("str"),
                                         locals,
                                         "send_text",
                                     )?;
@@ -18346,7 +19090,7 @@ impl<'a> FunctionChecker<'a> {
                                         vec![
                                             Type::Named(
                                                 "Option".to_string(),
-                                                vec![Type::named("String")],
+                                                vec![Type::named("str")],
                                             ),
                                             crate::builtin_modules::io_error_type(),
                                         ],
@@ -18401,7 +19145,7 @@ impl<'a> FunctionChecker<'a> {
                     if receiver_name == "net.UnixStream" && receiver_args.is_empty() {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let bytes_ty =
-                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                                Type::Named("list".to_string(), vec![Type::named("uint8")]);
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
                                 BuiltinMember::UnixStreamReadLine => {
@@ -18416,7 +19160,7 @@ impl<'a> FunctionChecker<'a> {
                                         vec![
                                             Type::Named(
                                                 "Option".to_string(),
-                                                vec![Type::named("String")],
+                                                vec![Type::named("str")],
                                             ),
                                             crate::builtin_modules::io_error_type(),
                                         ],
@@ -18461,7 +19205,7 @@ impl<'a> FunctionChecker<'a> {
                                     )?;
                                     self.check_builtin_argument_type(
                                         text_arg,
-                                        &Type::named("String"),
+                                        &Type::named("str"),
                                         locals,
                                         "write_all",
                                     )?;
@@ -18504,7 +19248,7 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::TlsListenerLocalAddr => Ok(Type::Named(
                                     "Result".to_string(),
                                     vec![
-                                        Type::named("String"),
+                                        Type::named("str"),
                                         crate::builtin_modules::io_error_type(),
                                     ],
                                 )),
@@ -18517,7 +19261,7 @@ impl<'a> FunctionChecker<'a> {
                     if receiver_name == "net.TlsStream" && receiver_args.is_empty() {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let bytes_ty =
-                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                                Type::Named("list".to_string(), vec![Type::named("uint8")]);
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
                                 BuiltinMember::TlsStreamReadLine => {
@@ -18532,7 +19276,7 @@ impl<'a> FunctionChecker<'a> {
                                         vec![
                                             Type::Named(
                                                 "Option".to_string(),
-                                                vec![Type::named("String")],
+                                                vec![Type::named("str")],
                                             ),
                                             crate::builtin_modules::io_error_type(),
                                         ],
@@ -18577,7 +19321,7 @@ impl<'a> FunctionChecker<'a> {
                                     )?;
                                     self.check_builtin_argument_type(
                                         text_arg,
-                                        &Type::named("String"),
+                                        &Type::named("str"),
                                         locals,
                                         "write_all",
                                     )?;
@@ -18776,16 +19520,26 @@ impl<'a> FunctionChecker<'a> {
                                     | "saturating_add"
                                     | "saturating_sub"
                                     | "saturating_mul"
+                                    | "wrapping_shl"
+                                    | "wrapping_shr"
+                                    | "saturating_shl"
+                                    | "saturating_shr"
                             ) =>
                     {
                         let builtin = BuiltinMember::resolve(name, method_name)
                             .expect("integer arithmetic method should resolve");
                         let ordered_args = builtin.bind_args(args, span)?;
+                        let argument_name =
+                            if method_name.ends_with("shl") || method_name.ends_with("shr") {
+                                "count"
+                            } else {
+                                "rhs"
+                            };
                         let rhs = self.bound_argument(
                             &ordered_args,
                             0,
                             span,
-                            format!("`{method_name}` requires an `rhs` argument"),
+                            format!("`{method_name}` requires a `{argument_name}` argument"),
                         )?;
                         let actual =
                             self.type_of_expr_hint(&rhs.value, locals, Some(&receiver_ty))?;
@@ -18811,22 +19565,13 @@ impl<'a> FunctionChecker<'a> {
                             && (is_numeric_type(&receiver_ty) || name == "bool") =>
                     {
                         BuiltinMember::ScalarToString.bind_args(args, span)?;
-                        Ok(Type::named("String"))
+                        Ok(Type::named("str"))
                     }
                     (Type::Named(name, type_args), "sqrt")
                         if type_args.is_empty() && name == "float64" =>
                     {
                         BuiltinMember::FloatSqrt.bind_args(args, span)?;
                         Ok(Type::named("float64"))
-                    }
-                    (Type::Named(name, type_args), "append")
-                        if name == "Vec" && type_args.len() == 1 =>
-                    {
-                        Err(Diagnostic::coded_at(
-                            "AU2005",
-                            span,
-                            "Python-style `.append(...)` is not available; use `.push(...)` today",
-                        ))
                     }
                     _ => Err(Diagnostic::at(
                         span,
@@ -19132,10 +19877,16 @@ impl<'a> FunctionChecker<'a> {
         };
 
         match bare_name {
-            Some("String") => Diagnostic::coded_at(
+            Some("set") => Diagnostic::coded_at(
                 "AU2005",
                 span,
-                "strings use quoted literals; `String(...)` is not a constructor",
+                "empty set construction requires an explicit element type",
+            )
+            .with_help("write `set[T]()` with the intended element type"),
+            Some("str") => Diagnostic::coded_at(
+                "AU2005",
+                span,
+                "strings use quoted literals; `str(...)` is not a constructor",
             ),
             Some(form @ ("enumerate" | "zip")) => Diagnostic::coded_at(
                 "AU2005",
@@ -19213,17 +19964,27 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
                     match &arm.pattern {
+                        Pattern::Or(pattern) => {
+                            self.validate_or_pattern_alternatives(pattern, &scrutinee_ty)?;
+                            self.bind_pattern_locals(
+                                &arm.pattern,
+                                &scrutinee_ty,
+                                &mut arm_locals,
+                                match_stmt.capability,
+                                active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                                shared_scrutinee.as_deref(),
+                            )?;
+                        }
                         Pattern::Wildcard(span) => {
-                            if wildcard_span.is_some() {
-                                return Err(Diagnostic::at(*span, "duplicate wildcard match arm"));
+                            if arm.guard.is_none() {
+                                if index + 1 != match_stmt.arms.len() {
+                                    return Err(Diagnostic::at(
+                                        *span,
+                                        "wildcard match arm must be the final `case`",
+                                    ));
+                                }
+                                wildcard_span = Some(*span);
                             }
-                            if index + 1 != match_stmt.arms.len() {
-                                return Err(Diagnostic::at(
-                                    *span,
-                                    "wildcard match arm must be the final `case`",
-                                ));
-                            }
-                            wildcard_span = Some(*span);
                         }
                         Pattern::Literal(pattern) => {
                             return Err(Diagnostic::at(
@@ -19236,10 +19997,23 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         }
                         Pattern::Binding(binding) => {
-                            return Err(Diagnostic::at(
-                            binding.span,
-                            "top-level binding patterns are not yet supported; use `_` or an explicit enum variant pattern",
-                        ));
+                            self.bind_pattern_locals(
+                                &arm.pattern,
+                                &scrutinee_ty,
+                                &mut arm_locals,
+                                match_stmt.capability,
+                                active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                                shared_scrutinee.as_deref(),
+                            )?;
+                            if arm.guard.is_none() {
+                                if index + 1 != match_stmt.arms.len() {
+                                    return Err(Diagnostic::at(
+                                        binding.span,
+                                        "catch-all match arm must be the final `case`",
+                                    ));
+                                }
+                                wildcard_span = Some(binding.span);
+                            }
                         }
                         Pattern::Tuple(tuple) => {
                             return Err(Diagnostic::at(
@@ -19295,8 +20069,8 @@ impl<'a> FunctionChecker<'a> {
                                 ));
                             };
 
-                            let covers_entire_variant =
-                                self.variant_pattern_covers_payloads(pattern, &variant_payload);
+                            let covers_entire_variant = arm.guard.is_none()
+                                && self.variant_pattern_covers_payloads(pattern, &variant_payload);
                             if covers_entire_variant {
                                 if let Some(previous) =
                                     covered.insert(pattern.variant_name.clone(), pattern.span)
@@ -19310,10 +20084,12 @@ impl<'a> FunctionChecker<'a> {
                                 ));
                                 }
                             }
-                            patterns_by_variant
-                                .entry(pattern.variant_name.clone())
-                                .or_default()
-                                .push(pattern.clone());
+                            if arm.guard.is_none() {
+                                patterns_by_variant
+                                    .entry(pattern.variant_name.clone())
+                                    .or_default()
+                                    .push(pattern.clone());
+                            }
 
                             if pattern.subpatterns.is_empty() && !variant_payload.is_empty() {
                                 return Err(Diagnostic::at(
@@ -19359,6 +20135,7 @@ impl<'a> FunctionChecker<'a> {
 
                     let prior_patterns = match_stmt.arms[..index]
                         .iter()
+                        .filter(|previous_arm| previous_arm.guard.is_none())
                         .map(|previous_arm| &previous_arm.pattern)
                         .collect::<Vec<_>>();
                     if self.patterns_cover_pattern(&prior_patterns, &arm.pattern, &scrutinee_ty) {
@@ -19368,6 +20145,12 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
 
+                    self.check_match_guard(
+                        arm.guard.as_ref(),
+                        &arm.pattern,
+                        match_stmt.capability,
+                        &mut arm_locals,
+                    )?;
                     let arm_flow = self.check_block(
                         &arm.body,
                         &mut arm_locals,
@@ -19404,6 +20187,7 @@ impl<'a> FunctionChecker<'a> {
                 let pattern_refs = match_stmt
                     .arms
                     .iter()
+                    .filter(|arm| arm.guard.is_none())
                     .map(|arm| &arm.pattern)
                     .collect::<Vec<_>>();
                 let missing = self.missing_patterns_for_type(&pattern_refs, &scrutinee_ty);
@@ -19429,17 +20213,37 @@ impl<'a> FunctionChecker<'a> {
                 };
             }
 
+            let class_scrutinee = match &scrutinee_ty {
+                Type::Named(name, _) => self.resolve_class_info(name).is_some(),
+                _ => false,
+            };
+            if class_scrutinee {
+                if let Some(pattern) = match_stmt
+                    .arms
+                    .iter()
+                    .map(|arm| &arm.pattern)
+                    .find(|pattern| pattern_contains_variant_shape(pattern))
+                {
+                    return Err(Diagnostic::coded_at(
+                        "AU2999",
+                        self.pattern_span(pattern),
+                        "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code",
+                    ));
+                }
+            }
+
             if !matches!(scrutinee_ty, Type::Tuple(_) | Type::Named(_, _))
                 || !(matches!(scrutinee_ty, Type::Tuple(_))
                     || is_integer_type(&scrutinee_ty)
                     || is_float_type(&scrutinee_ty)
                     || matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
-                    || is_string_type(&scrutinee_ty))
+                    || is_string_type(&scrutinee_ty)
+                    || class_scrutinee)
             {
                 return Err(Diagnostic::at(
                 match_stmt.span,
                 format!(
-                    "`match` currently requires a tuple, enum, bool, integer, float, or String scrutinee, found `{}`",
+                    "`match` currently requires a tuple, enum, bool, integer, float, or str scrutinee, found `{}`",
                     scrutinee_ty
                 ),
             ));
@@ -19459,21 +20263,36 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 match &arm.pattern {
+                    Pattern::Or(pattern) => {
+                        self.validate_or_pattern_alternatives(pattern, &scrutinee_ty)?;
+                        self.bind_pattern_locals(
+                            &arm.pattern,
+                            &scrutinee_ty,
+                            &mut arm_locals,
+                            match_stmt.capability,
+                            active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                            shared_scrutinee.as_deref(),
+                        )?;
+                    }
                     Pattern::Wildcard(span) => {
-                        if wildcard_span.is_some() {
-                            return Err(Diagnostic::at(*span, "duplicate wildcard match arm"));
+                        if arm.guard.is_none() {
+                            if index + 1 != match_stmt.arms.len() {
+                                return Err(Diagnostic::at(
+                                    *span,
+                                    "wildcard match arm must be the final `case`",
+                                ));
+                            }
+                            wildcard_span = Some(*span);
                         }
-                        if index + 1 != match_stmt.arms.len() {
-                            return Err(Diagnostic::at(
-                                *span,
-                                "wildcard match arm must be the final `case`",
-                            ));
-                        }
-                        wildcard_span = Some(*span);
                     }
                     Pattern::Literal(pattern) => {
                         let key = self.literal_pattern_key(pattern, &scrutinee_ty)?;
-                        if let Some(previous) = covered_literals.insert(key.clone(), pattern.span) {
+                        if let Some(previous) = arm
+                            .guard
+                            .is_none()
+                            .then(|| covered_literals.insert(key.clone(), pattern.span))
+                            .flatten()
+                        {
                             return Err(Diagnostic::at(
                                 pattern.span,
                                 format!(
@@ -19483,8 +20302,10 @@ impl<'a> FunctionChecker<'a> {
                             ),
                             ));
                         }
-                        if let LiteralPatternKey::Bool(value) = key {
-                            covered_bools.insert(value);
+                        if arm.guard.is_none() {
+                            if let LiteralPatternKey::Bool(value) = key {
+                                covered_bools.insert(value);
+                            }
                         }
                     }
                     Pattern::Variant(pattern) => {
@@ -19497,10 +20318,23 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     Pattern::Binding(binding) => {
-                        return Err(Diagnostic::at(
-                        binding.span,
-                        "top-level binding patterns are not yet supported; use `_` or a literal pattern",
-                    ));
+                        self.bind_pattern_locals(
+                            &arm.pattern,
+                            &scrutinee_ty,
+                            &mut arm_locals,
+                            match_stmt.capability,
+                            active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                            shared_scrutinee.as_deref(),
+                        )?;
+                        if arm.guard.is_none() {
+                            if index + 1 != match_stmt.arms.len() {
+                                return Err(Diagnostic::at(
+                                    binding.span,
+                                    "catch-all match arm must be the final `case`",
+                                ));
+                            }
+                            wildcard_span = Some(binding.span);
+                        }
                     }
                     Pattern::Tuple(tuple) => {
                         if !matches!(scrutinee_ty, Type::Tuple(_)) {
@@ -19525,6 +20359,7 @@ impl<'a> FunctionChecker<'a> {
 
                 let prior_patterns = match_stmt.arms[..index]
                     .iter()
+                    .filter(|previous_arm| previous_arm.guard.is_none())
                     .map(|previous_arm| &previous_arm.pattern)
                     .collect::<Vec<_>>();
                 if self.patterns_cover_pattern(&prior_patterns, &arm.pattern, &scrutinee_ty) {
@@ -19534,6 +20369,12 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
 
+                self.check_match_guard(
+                    arm.guard.as_ref(),
+                    &arm.pattern,
+                    match_stmt.capability,
+                    &mut arm_locals,
+                )?;
                 let arm_flow = self.check_block(
                     &arm.body,
                     &mut arm_locals,
@@ -19568,6 +20409,7 @@ impl<'a> FunctionChecker<'a> {
                     let patterns = match_stmt
                         .arms
                         .iter()
+                        .filter(|arm| arm.guard.is_none())
                         .map(|arm| &arm.pattern)
                         .collect::<Vec<_>>();
                     if !self
@@ -19657,6 +20499,47 @@ impl<'a> FunctionChecker<'a> {
         shared_match_scrutinee: Option<&str>,
     ) -> Result<()> {
         match pattern {
+            Pattern::Or(pattern) => {
+                let original = locals.clone();
+                let mut canonical: Option<HashMap<String, LocalBinding>> = None;
+                for alternative in &pattern.alternatives {
+                    let mut alternative_locals = original.clone();
+                    self.bind_pattern_locals(
+                        alternative,
+                        expected_ty,
+                        &mut alternative_locals,
+                        borrow_mode,
+                        match_borrow_place,
+                        shared_match_scrutinee,
+                    )?;
+                    let added = alternative_locals
+                        .iter()
+                        .filter(|(name, _)| !original.contains_key(*name))
+                        .map(|(name, binding)| (name.clone(), binding.clone()))
+                        .collect::<HashMap<_, _>>();
+                    if let Some(expected) = &canonical {
+                        if expected.len() != added.len()
+                            || expected.iter().any(|(name, binding)| {
+                                added.get(name).is_none_or(|actual| {
+                                    actual.ty != binding.ty || actual.passing != binding.passing
+                                })
+                            })
+                        {
+                            return Err(Diagnostic::coded_at(
+                                "AU2999",
+                                pattern.span,
+                                "every alternative in an or-pattern must bind the same names with identical types and capabilities",
+                            ));
+                        }
+                    } else {
+                        canonical = Some(added);
+                    }
+                }
+                if let Some(bindings) = canonical {
+                    locals.extend(bindings);
+                }
+                Ok(())
+            }
             Pattern::Wildcard(_) => Ok(()),
             Pattern::Literal(pattern) => {
                 let _ = self.literal_pattern_key(pattern, expected_ty)?;
@@ -19920,20 +20803,27 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
                     match &arm.pattern {
+                        Pattern::Or(pattern) => {
+                            self.validate_or_pattern_alternatives(pattern, &scrutinee_ty)?;
+                            self.bind_pattern_locals(
+                                &arm.pattern,
+                                &scrutinee_ty,
+                                &mut arm_locals,
+                                borrow_mode,
+                                active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                                shared_scrutinee.as_deref(),
+                            )?;
+                        }
                         Pattern::Wildcard(wildcard_span) => {
-                            if wildcard_seen {
-                                return Err(Diagnostic::at(
-                                    *wildcard_span,
-                                    "duplicate wildcard match arm",
-                                ));
+                            if arm.guard.is_none() {
+                                if index + 1 != arms.len() {
+                                    return Err(Diagnostic::at(
+                                        *wildcard_span,
+                                        "wildcard match arm must be the final `case`",
+                                    ));
+                                }
+                                wildcard_seen = true;
                             }
-                            if index + 1 != arms.len() {
-                                return Err(Diagnostic::at(
-                                    *wildcard_span,
-                                    "wildcard match arm must be the final `case`",
-                                ));
-                            }
-                            wildcard_seen = true;
                         }
                         Pattern::Literal(pattern) => {
                             return Err(Diagnostic::at(
@@ -19946,10 +20836,23 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         }
                         Pattern::Binding(binding) => {
-                            return Err(Diagnostic::at(
-                            binding.span,
-                            "top-level binding patterns are not yet supported; use `_` or an explicit enum variant pattern",
-                        ));
+                            self.bind_pattern_locals(
+                                &arm.pattern,
+                                &scrutinee_ty,
+                                &mut arm_locals,
+                                borrow_mode,
+                                active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                                shared_scrutinee.as_deref(),
+                            )?;
+                            if arm.guard.is_none() {
+                                if index + 1 != arms.len() {
+                                    return Err(Diagnostic::at(
+                                        binding.span,
+                                        "catch-all match arm must be the final `case`",
+                                    ));
+                                }
+                                wildcard_seen = true;
+                            }
                         }
                         Pattern::Tuple(tuple) => {
                             return Err(Diagnostic::at(
@@ -20004,13 +20907,17 @@ impl<'a> FunctionChecker<'a> {
                                     ),
                                 ));
                             };
-                            if self.variant_pattern_covers_payloads(pattern, &variant_payload) {
+                            if arm.guard.is_none()
+                                && self.variant_pattern_covers_payloads(pattern, &variant_payload)
+                            {
                                 covered.insert(pattern.variant_name.clone());
                             }
-                            patterns_by_variant
-                                .entry(pattern.variant_name.clone())
-                                .or_default()
-                                .push(pattern.clone());
+                            if arm.guard.is_none() {
+                                patterns_by_variant
+                                    .entry(pattern.variant_name.clone())
+                                    .or_default()
+                                    .push(pattern.clone());
+                            }
 
                             if pattern.subpatterns.is_empty() && !variant_payload.is_empty() {
                                 return Err(Diagnostic::at(
@@ -20056,6 +20963,7 @@ impl<'a> FunctionChecker<'a> {
 
                     let prior_patterns = arms[..index]
                         .iter()
+                        .filter(|previous_arm| previous_arm.guard.is_none())
                         .map(|previous_arm| &previous_arm.pattern)
                         .collect::<Vec<_>>();
                     if self.patterns_cover_pattern(&prior_patterns, &arm.pattern, &scrutinee_ty) {
@@ -20065,6 +20973,12 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
 
+                    self.check_match_guard(
+                        arm.guard.as_ref(),
+                        &arm.pattern,
+                        borrow_mode,
+                        &mut arm_locals,
+                    )?;
                     let arm_ty = self.type_of_match_arm_value(
                         &arm.value,
                         &mut arm_locals,
@@ -20111,7 +21025,11 @@ impl<'a> FunctionChecker<'a> {
                 let branch_states = arm_states.iter().collect::<Vec<_>>();
                 self.merge_control_flow_moves(locals, &branch_states);
 
-                let pattern_refs = arms.iter().map(|arm| &arm.pattern).collect::<Vec<_>>();
+                let pattern_refs = arms
+                    .iter()
+                    .filter(|arm| arm.guard.is_none())
+                    .map(|arm| &arm.pattern)
+                    .collect::<Vec<_>>();
                 let missing = self.missing_patterns_for_type(&pattern_refs, &scrutinee_ty);
                 if !wildcard_seen && !missing.is_empty() {
                     return Err(Diagnostic::at(
@@ -20131,17 +21049,36 @@ impl<'a> FunctionChecker<'a> {
                 return Ok(result_ty.unwrap_or(Type::Unit));
             }
 
+            let class_scrutinee = match &scrutinee_ty {
+                Type::Named(name, _) => self.resolve_class_info(name).is_some(),
+                _ => false,
+            };
+            if class_scrutinee {
+                if let Some(pattern) = arms
+                    .iter()
+                    .map(|arm| &arm.pattern)
+                    .find(|pattern| pattern_contains_variant_shape(pattern))
+                {
+                    return Err(Diagnostic::coded_at(
+                        "AU2999",
+                        self.pattern_span(pattern),
+                        "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code",
+                    ));
+                }
+            }
+
             if !matches!(scrutinee_ty, Type::Tuple(_) | Type::Named(_, _))
                 || !(matches!(scrutinee_ty, Type::Tuple(_))
                     || is_integer_type(&scrutinee_ty)
                     || is_float_type(&scrutinee_ty)
                     || matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
-                    || is_string_type(&scrutinee_ty))
+                    || is_string_type(&scrutinee_ty)
+                    || class_scrutinee)
             {
                 return Err(Diagnostic::at(
                 span,
                 format!(
-                    "`match` currently requires a tuple, enum, bool, integer, float, or String scrutinee, found `{}`",
+                    "`match` currently requires a tuple, enum, bool, integer, float, or str scrutinee, found `{}`",
                     scrutinee_ty
                 ),
             ));
@@ -20160,26 +21097,35 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 match &arm.pattern {
+                    Pattern::Or(pattern) => {
+                        self.validate_or_pattern_alternatives(pattern, &scrutinee_ty)?;
+                        self.bind_pattern_locals(
+                            &arm.pattern,
+                            &scrutinee_ty,
+                            &mut arm_locals,
+                            borrow_mode,
+                            active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                            shared_scrutinee.as_deref(),
+                        )?;
+                    }
                     Pattern::Wildcard(wildcard_span) => {
-                        if wildcard_seen {
-                            return Err(Diagnostic::at(
-                                *wildcard_span,
-                                "duplicate wildcard match arm",
-                            ));
+                        if arm.guard.is_none() {
+                            if index + 1 != arms.len() {
+                                return Err(Diagnostic::at(
+                                    *wildcard_span,
+                                    "wildcard match arm must be the final `case`",
+                                ));
+                            }
+                            wildcard_seen = true;
                         }
-                        if index + 1 != arms.len() {
-                            return Err(Diagnostic::at(
-                                *wildcard_span,
-                                "wildcard match arm must be the final `case`",
-                            ));
-                        }
-                        wildcard_seen = true;
                     }
                     Pattern::Literal(pattern) => {
                         let key = self.literal_pattern_key(pattern, &scrutinee_ty)?;
-                        covered_literals.insert(key.clone());
-                        if let LiteralPatternKey::Bool(value) = key {
-                            covered_bools.insert(value);
+                        if arm.guard.is_none() {
+                            covered_literals.insert(key.clone());
+                            if let LiteralPatternKey::Bool(value) = key {
+                                covered_bools.insert(value);
+                            }
                         }
                     }
                     Pattern::Variant(pattern) => {
@@ -20192,10 +21138,23 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     Pattern::Binding(binding) => {
-                        return Err(Diagnostic::at(
-                        binding.span,
-                        "top-level binding patterns are not yet supported; use `_` or a literal pattern",
-                    ));
+                        self.bind_pattern_locals(
+                            &arm.pattern,
+                            &scrutinee_ty,
+                            &mut arm_locals,
+                            borrow_mode,
+                            active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                            shared_scrutinee.as_deref(),
+                        )?;
+                        if arm.guard.is_none() {
+                            if index + 1 != arms.len() {
+                                return Err(Diagnostic::at(
+                                    binding.span,
+                                    "catch-all match arm must be the final `case`",
+                                ));
+                            }
+                            wildcard_seen = true;
+                        }
                     }
                     Pattern::Tuple(tuple) => {
                         if !matches!(scrutinee_ty, Type::Tuple(_)) {
@@ -20220,6 +21179,7 @@ impl<'a> FunctionChecker<'a> {
 
                 let prior_patterns = arms[..index]
                     .iter()
+                    .filter(|previous_arm| previous_arm.guard.is_none())
                     .map(|previous_arm| &previous_arm.pattern)
                     .collect::<Vec<_>>();
                 if self.patterns_cover_pattern(&prior_patterns, &arm.pattern, &scrutinee_ty) {
@@ -20229,6 +21189,12 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
 
+                self.check_match_guard(
+                    arm.guard.as_ref(),
+                    &arm.pattern,
+                    borrow_mode,
+                    &mut arm_locals,
+                )?;
                 let arm_ty = self.type_of_match_arm_value(
                     &arm.value,
                     &mut arm_locals,
@@ -20287,7 +21253,11 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
             if !wildcard_seen && matches!(scrutinee_ty, Type::Tuple(_)) {
-                let patterns = arms.iter().map(|arm| &arm.pattern).collect::<Vec<_>>();
+                let patterns = arms
+                    .iter()
+                    .filter(|arm| arm.guard.is_none())
+                    .map(|arm| &arm.pattern)
+                    .collect::<Vec<_>>();
                 if !self
                     .missing_patterns_for_type(&patterns, &scrutinee_ty)
                     .is_empty()
@@ -20401,6 +21371,9 @@ impl<'a> FunctionChecker<'a> {
                 if let Some(child) = namespace.modules.get(field) {
                     return Ok(Type::Module(child.path.clone()));
                 }
+                if let Some(constant) = namespace.constants.get(field) {
+                    return Ok(constant.ty.clone());
+                }
                 if namespace.functions.contains_key(field) {
                     return Err(Diagnostic::at(
                         span,
@@ -20489,17 +21462,6 @@ impl<'a> FunctionChecker<'a> {
                     field, object_ty
                 ),
             ));
-        }
-
-        if name == "MapEntry" && args.len() == 2 {
-            return match field {
-                "key" => Ok(args[0].clone()),
-                "value" => Ok(args[1].clone()),
-                _ => Err(Diagnostic::at(
-                    span,
-                    format!("type `{}` has no field `{}`", name, field),
-                )),
-            };
         }
 
         let Some(class_info) = self.resolve_class_info(name) else {
@@ -21014,8 +21976,12 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::FString(parts) => {
                 for part in parts {
-                    if let crate::ast::FormatPart::Expr(value) = part {
-                        self.collect_expr_call_places(value, locals, places, include_consumed)?;
+                    match part {
+                        crate::ast::FormatPart::Expr(value)
+                        | crate::ast::FormatPart::Formatted { expr: value, .. } => {
+                            self.collect_expr_call_places(value, locals, places, include_consumed)?;
+                        }
+                        crate::ast::FormatPart::Literal(_) => {}
                     }
                 }
                 Ok(())
@@ -21139,8 +22105,12 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::FString(parts) => {
                 for part in parts {
-                    if let crate::ast::FormatPart::Expr(value) = part {
-                        self.collect_expr_place_reads(value, locals, label, places);
+                    match part {
+                        crate::ast::FormatPart::Expr(value)
+                        | crate::ast::FormatPart::Formatted { expr: value, .. } => {
+                            self.collect_expr_place_reads(value, locals, label, places);
+                        }
+                        crate::ast::FormatPart::Literal(_) => {}
                     }
                 }
             }
@@ -21761,6 +22731,25 @@ impl<'a> FunctionChecker<'a> {
         if self.is_shared_self_place(object, locals) {
             return Err(self.shared_self_mutation_diagnostic(span, locals));
         }
+        if let Some(place) = self.borrow_call_place(object) {
+            if locals
+                .get(&place.root)
+                .and_then(|binding| binding.borrow_origin.as_deref())
+                .is_some_and(|origin| origin.starts_with("module constant `"))
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU3003",
+                    span,
+                    format!(
+                        "module constant `{}` cannot provide a mutable receiver for method `{method_name}`",
+                        place.root
+                    ),
+                )
+                .with_help(
+                    "put mutable state in a local value owned by `main` or another explicit owner",
+                ));
+            }
+        }
         Err(Diagnostic::coded_at(
             "AU3003",
             span,
@@ -22106,11 +23095,18 @@ impl<'a> FunctionChecker<'a> {
         };
         let mut grouped = BTreeMap::<String, Vec<&VariantPattern>>::new();
         for pattern in patterns {
-            if let Pattern::Variant(variant_pattern) = pattern {
-                grouped
-                    .entry(variant_pattern.variant_name.clone())
-                    .or_default()
-                    .push(variant_pattern);
+            let mut pending = vec![*pattern];
+            while let Some(pattern) = pending.pop() {
+                match pattern {
+                    Pattern::Or(or_pattern) => pending.extend(or_pattern.alternatives.iter()),
+                    Pattern::Variant(variant_pattern) => {
+                        grouped
+                            .entry(variant_pattern.variant_name.clone())
+                            .or_default()
+                            .push(variant_pattern);
+                    }
+                    _ => {}
+                }
             }
         }
         let mut missing = Vec::new();
@@ -22146,12 +23142,85 @@ impl<'a> FunctionChecker<'a> {
 
     fn pattern_span(&self, pattern: &Pattern) -> crate::diag::Span {
         match pattern {
+            Pattern::Or(pattern) => pattern.span,
             Pattern::Wildcard(span) => *span,
             Pattern::Literal(pattern) => pattern.span,
             Pattern::Binding(binding) => binding.span,
             Pattern::Variant(variant) => variant.span,
             Pattern::Tuple(tuple) => tuple.span,
         }
+    }
+
+    fn check_match_guard(
+        &self,
+        guard: Option<&Expr>,
+        pattern: &Pattern,
+        borrow_mode: ReceiverKind,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let Some(guard) = guard else {
+            return Ok(());
+        };
+        let mut candidate_locals;
+        let guard_locals = if borrow_mode == ReceiverKind::Value {
+            candidate_locals = locals.clone();
+            let mut names = BTreeSet::new();
+            Self::collect_pattern_binding_names(pattern, &mut names);
+            for name in names {
+                if let Some(binding) = candidate_locals.get_mut(&name) {
+                    if !self.is_copy_type(&binding.ty) {
+                        binding.passing = ReceiverKind::Borrow;
+                        binding.borrowed_at = Some(guard.span);
+                    }
+                }
+            }
+            &mut candidate_locals
+        } else {
+            locals
+        };
+        let actual = match self.type_of_expr(guard, guard_locals) {
+            Ok(actual) => actual,
+            Err(mut diagnostic)
+                if borrow_mode == ReceiverKind::Value
+                    && diagnostic.code == "AU3002"
+                    && diagnostic.message.starts_with("cannot move borrowed value") =>
+            {
+                diagnostic.code = "AU3001".to_string();
+                diagnostic.message =
+                    "cannot move an owned match candidate before its guard commits the arm"
+                        .to_string();
+                return Err(diagnostic);
+            }
+            Err(diagnostic) => return Err(diagnostic),
+        };
+        let expected = Type::named("bool");
+        if actual != expected {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                guard.span,
+                format!("match guard expects exactly `bool`, found `{actual}`"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_or_pattern_alternatives(
+        &self,
+        pattern: &crate::ast::OrPattern,
+        expected_ty: &Type,
+    ) -> Result<()> {
+        let mut prior = Vec::<&Pattern>::new();
+        for alternative in &pattern.alternatives {
+            if self.patterns_cover_pattern(&prior, alternative, expected_ty) {
+                return Err(Diagnostic::coded_at(
+                    "AU2999",
+                    self.pattern_span(alternative),
+                    "duplicate or subsumed alternative in or-pattern",
+                ));
+            }
+            prior.push(alternative);
+        }
+        Ok(())
     }
 
     fn patterns_cover_pattern(
@@ -22161,6 +23230,10 @@ impl<'a> FunctionChecker<'a> {
         expected_ty: &Type,
     ) -> bool {
         match pattern {
+            Pattern::Or(or_pattern) => or_pattern
+                .alternatives
+                .iter()
+                .all(|alternative| self.patterns_cover_pattern(patterns, alternative, expected_ty)),
             Pattern::Wildcard(_) | Pattern::Binding(_) => {
                 if self.patterns_cover_type_union(patterns, expected_ty) {
                     return true;
@@ -22170,6 +23243,17 @@ impl<'a> FunctionChecker<'a> {
                     let mut covered = BTreeSet::new();
                     for previous in patterns {
                         match previous {
+                            Pattern::Or(or_pattern) => {
+                                for alternative in &or_pattern.alternatives {
+                                    if let Pattern::Literal(literal) = alternative {
+                                        if let Ok(LiteralPatternKey::Bool(value)) =
+                                            self.literal_pattern_key(literal, expected_ty)
+                                        {
+                                            covered.insert(value);
+                                        }
+                                    }
+                                }
+                            }
                             Pattern::Wildcard(_) | Pattern::Binding(_) => return true,
                             Pattern::Literal(literal) => {
                                 if let Ok(LiteralPatternKey::Bool(value)) =
@@ -22266,6 +23350,12 @@ impl<'a> FunctionChecker<'a> {
             return true;
         }
         match (previous, current) {
+            (Pattern::Or(previous), _) => previous.alternatives.iter().any(|alternative| {
+                self.pattern_is_covered_by_pattern(alternative, current, expected_ty)
+            }),
+            (_, Pattern::Or(current)) => current.alternatives.iter().all(|alternative| {
+                self.pattern_is_covered_by_pattern(previous, alternative, expected_ty)
+            }),
             (Pattern::Literal(previous), Pattern::Literal(current)) => {
                 self.literal_pattern_key(previous, expected_ty).ok()
                     == self.literal_pattern_key(current, expected_ty).ok()
@@ -22318,6 +23408,10 @@ impl<'a> FunctionChecker<'a> {
 
     fn pattern_covers_entire_type(&self, pattern: &Pattern, expected_ty: &Type) -> bool {
         match pattern {
+            Pattern::Or(pattern) => {
+                let alternatives = pattern.alternatives.iter().collect::<Vec<_>>();
+                self.patterns_cover_type_union(&alternatives, expected_ty)
+            }
             Pattern::Wildcard(_) | Pattern::Binding(_) => true,
             Pattern::Literal(_) => false,
             Pattern::Tuple(tuple) => {
@@ -22383,11 +23477,18 @@ impl<'a> FunctionChecker<'a> {
         };
         let mut grouped = BTreeMap::<String, Vec<&VariantPattern>>::new();
         for pattern in patterns {
-            if let Pattern::Variant(variant_pattern) = pattern {
-                grouped
-                    .entry(variant_pattern.variant_name.clone())
-                    .or_default()
-                    .push(variant_pattern);
+            let mut pending = vec![*pattern];
+            while let Some(pattern) = pending.pop() {
+                match pattern {
+                    Pattern::Or(or_pattern) => pending.extend(or_pattern.alternatives.iter()),
+                    Pattern::Variant(variant_pattern) => {
+                        grouped
+                            .entry(variant_pattern.variant_name.clone())
+                            .or_default()
+                            .push(variant_pattern);
+                    }
+                    _ => {}
+                }
             }
         }
         variants.into_iter().all(|(variant_name, payloads)| {
@@ -22405,11 +23506,19 @@ impl<'a> FunctionChecker<'a> {
     ) -> bool {
         let rows = patterns
             .iter()
-            .filter_map(|pattern| match pattern {
-                Pattern::Tuple(tuple) if tuple.elements.len() == element_types.len() => {
-                    Some(tuple.elements.clone())
-                }
-                _ => None,
+            .flat_map(|pattern| {
+                let alternatives: Vec<&Pattern> = match pattern {
+                    Pattern::Or(or_pattern) => or_pattern.alternatives.iter().collect(),
+                    pattern => vec![*pattern],
+                };
+                alternatives
+                    .into_iter()
+                    .filter_map(|pattern| match pattern {
+                        Pattern::Tuple(tuple) if tuple.elements.len() == element_types.len() => {
+                            Some(tuple.elements.clone())
+                        }
+                        _ => None,
+                    })
             })
             .collect::<Vec<_>>();
         self.pattern_rows_cover_type_union(&rows, element_types)
@@ -24204,18 +25313,18 @@ impl<'a> FunctionChecker<'a> {
             ]),
             Type::Named(name, args) if name == "TaskResult" && args.len() == 1 => Some(vec![
                 ("Ready".to_string(), vec![args[0].clone()]),
-                ("Error".to_string(), vec![Type::named("String")]),
+                ("Error".to_string(), vec![Type::named("str")]),
                 ("TimedOut".to_string(), Vec::new()),
                 ("Cancelled".to_string(), Vec::new()),
             ]),
             Type::Named(name, args) if name == "WaitAny" && args.len() == 1 => Some(vec![
                 (
                     "Ready".to_string(),
-                    vec![Type::named("int32"), args[0].clone()],
+                    vec![Type::named("int64"), args[0].clone()],
                 ),
                 (
                     "Error".to_string(),
-                    vec![Type::named("int32"), Type::named("String")],
+                    vec![Type::named("int64"), Type::named("str")],
                 ),
                 ("TimedOut".to_string(), Vec::new()),
                 ("Cancelled".to_string(), Vec::new()),
@@ -24223,11 +25332,11 @@ impl<'a> FunctionChecker<'a> {
             Type::Named(name, args) if name == "WaitAll" && args.len() == 1 => Some(vec![
                 (
                     "Ready".to_string(),
-                    vec![Type::Named("Vec".to_string(), vec![args[0].clone()])],
+                    vec![Type::Named("list".to_string(), vec![args[0].clone()])],
                 ),
                 (
                     "Error".to_string(),
-                    vec![Type::named("int32"), Type::named("String")],
+                    vec![Type::named("int64"), Type::named("str")],
                 ),
                 ("TimedOut".to_string(), Vec::new()),
                 ("Cancelled".to_string(), Vec::new()),
@@ -24236,18 +25345,18 @@ impl<'a> FunctionChecker<'a> {
                 (
                     "Queue".to_string(),
                     vec![
-                        Type::named("int32"),
+                        Type::named("int64"),
                         Type::Named("QueueReceive".to_string(), vec![args[0].clone()]),
                     ],
                 ),
                 (
                     "Task".to_string(),
                     vec![
-                        Type::named("int32"),
+                        Type::named("int64"),
                         Type::Named("TaskResult".to_string(), vec![args[1].clone()]),
                     ],
                 ),
-                ("Deadline".to_string(), vec![Type::named("int32")]),
+                ("Deadline".to_string(), vec![Type::named("int64")]),
                 ("Cancelled".to_string(), Vec::new()),
             ]),
             Type::Named(name, args) => self.resolve_enum_info(name).map(|enum_info| {
@@ -24301,23 +25410,23 @@ impl<'a> FunctionChecker<'a> {
             ("QueueReceive", "Item", [value]) => Some(vec![value.clone()]),
             ("QueueReceive", "Closed" | "TimedOut" | "Cancelled", [_]) => Some(Vec::new()),
             ("TaskResult", "Ready", [value]) => Some(vec![value.clone()]),
-            ("TaskResult", "Error", [_]) => Some(vec![Type::named("String")]),
+            ("TaskResult", "Error", [_]) => Some(vec![Type::named("str")]),
             ("TaskResult", "TimedOut" | "Cancelled", [_]) => Some(Vec::new()),
-            ("WaitAny", "Ready", [value]) => Some(vec![Type::named("int32"), value.clone()]),
-            ("WaitAny", "Error", [_]) => Some(vec![Type::named("int32"), Type::named("String")]),
+            ("WaitAny", "Ready", [value]) => Some(vec![Type::named("int64"), value.clone()]),
+            ("WaitAny", "Error", [_]) => Some(vec![Type::named("int64"), Type::named("str")]),
             ("WaitAny", "TimedOut" | "Cancelled", [_]) => Some(Vec::new()),
             ("WaitAll", "Ready", [values]) => Some(vec![values.clone()]),
-            ("WaitAll", "Error", [_]) => Some(vec![Type::named("int32"), Type::named("String")]),
+            ("WaitAll", "Error", [_]) => Some(vec![Type::named("int64"), Type::named("str")]),
             ("WaitAll", "TimedOut" | "Cancelled", [_]) => Some(Vec::new()),
             ("SelectOutcome", "Queue", [queue, _]) => Some(vec![
-                Type::named("int32"),
+                Type::named("int64"),
                 Type::Named("QueueReceive".to_string(), vec![queue.clone()]),
             ]),
             ("SelectOutcome", "Task", [_, task]) => Some(vec![
-                Type::named("int32"),
+                Type::named("int64"),
                 Type::Named("TaskResult".to_string(), vec![task.clone()]),
             ]),
-            ("SelectOutcome", "Deadline", [_, _]) => Some(vec![Type::named("int32")]),
+            ("SelectOutcome", "Deadline", [_, _]) => Some(vec![Type::named("int64")]),
             ("SelectOutcome", "Cancelled", [_, _]) => Some(Vec::new()),
             _ => None,
         }

@@ -26,7 +26,7 @@ test("extension manifest and listing are ready for both public marketplaces", ()
   assert.equal(manifest.name, "vscode-aura-lang");
   assert.equal(manifest.publisher, "JohnOlafenwa");
   assert.equal(manifest.displayName, "Aura Programming Language");
-  assert.equal(manifest.version, "0.2.0");
+  assert.equal(manifest.version, "0.3.0");
   assert.equal(manifest.preview, true);
   assert.equal(manifest.private, undefined);
   assert.equal(manifest.icon, "images/aura.png");
@@ -74,6 +74,28 @@ test("extension package includes the assertion-aware Aura grammar", () => {
     "utf8"
   );
   assert.match(packagedGrammar, /assert/);
+});
+
+test("extension grammar and snippets cover Aura 0.3 string forms", () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const grammar = JSON.parse(
+    fs.readFileSync(path.join(extensionRoot, "syntaxes", "aura.tmLanguage.json"), "utf8")
+  );
+  const names = grammar.repository.strings.patterns.map((pattern) => pattern.name);
+  assert.ok(names.includes("string.quoted.triple.double.aura"));
+  assert.ok(names.includes("string.quoted.triple.single.aura"));
+  assert.ok(names.includes("string.quoted.raw.double.aura"));
+  assert.ok(names.includes("string.quoted.raw.single.aura"));
+  const fstring = grammar.repository.strings.patterns.find(
+    (pattern) => pattern.name === "string.interpolated.double.aura"
+  );
+  assert.match(JSON.stringify(fstring), /meta\.format-spec\.aura/);
+
+  const snippets = JSON.parse(
+    fs.readFileSync(path.join(extensionRoot, "snippets", "aura.json"), "utf8")
+  );
+  assert.ok(snippets["Multiline string"]);
+  assert.ok(snippets["Formatted string"]);
 });
 
 test("language configuration indents block headers on enter without blank-line dedent", () => {
@@ -180,24 +202,18 @@ test("extension highlights and snippets the maintained extern C surface", () => 
   ]);
 });
 
-test("syntax grammar treats mut and own as Aura storage modifiers without retired borrow", () => {
+test("syntax grammar highlights the current storage modifiers", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const grammarPath = path.join(extensionRoot, "syntaxes", "aura.tmLanguage.json");
   const grammar = JSON.parse(fs.readFileSync(grammarPath, "utf8"));
   const modifierRule = grammar.repository.keywords.patterns.find(
     (pattern) => pattern.name === "storage.modifier.aura"
   );
-  const retiredRule = grammar.repository.keywords.patterns.find(
-    (pattern) => pattern.name === "invalid.deprecated.aura"
-  );
 
   assert.ok(modifierRule);
   const modifierPattern = new RegExp(modifierRule.match);
   assert.equal(modifierPattern.test("mut"), true);
   assert.equal(modifierPattern.test("own"), true);
-  assert.equal(modifierPattern.test("borrow"), false);
-  assert.ok(retiredRule);
-  assert.equal(new RegExp(retiredRule.match).test("borrow"), true);
 });
 
 test("syntax grammar distinguishes ordinary quotes and nests strings in f-string interpolation", () => {
@@ -274,9 +290,10 @@ test("syntax grammar tracks maintained builtin types", () => {
     "SelectOutcome",
     "WaitAny",
     "WaitAll",
-    "Map",
-    "MapEntry",
-    "Set",
+    "list",
+    "dict",
+    "set",
+    "str",
     "Array",
     "process.Child",
     "fs.File",

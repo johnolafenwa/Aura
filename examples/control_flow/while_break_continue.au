@@ -1,18 +1,19 @@
-mut n: int32 = 0
-mut total: int32 = 0
+def main():
+    mut n: int32 = 0
+    mut total: int32 = 0
 
-while n < 10:
-    n += 1
+    while n < 10:
+        n += 1
 
-    if n % 2 == 0:
-        continue
+        if n % 2 == 0:
+            continue
 
-    if n > 7:
-        break
+        if n > 7:
+            break
 
-    total += n
+        total += n
 
-if total == 16:
-    print("ok")
-else:
-    print("bad")
+    if total == 16:
+        print("ok")
+    else:
+        print("bad")

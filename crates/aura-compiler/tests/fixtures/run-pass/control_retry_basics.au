@@ -1,7 +1,7 @@
 import control
 
 enum RetryError:
-    Failed(String)
+    Failed(str)
 
 def first_success() -> Result[int32, RetryError]:
     print("first-success")
@@ -11,7 +11,7 @@ def always_fails() -> Result[int32, RetryError]:
     print("default-attempt")
     return Result.Err(RetryError.Failed("last-error"))
 
-def vector_success() -> Result[Vec[String], RetryError]:
+def vector_success() -> Result[list[str], RetryError]:
     return Result.Ok(["owned", "payload"])
 
 def main() -> int32:
@@ -29,7 +29,7 @@ def main() -> int32:
         case Result.Err(_):
             print("unexpected")
 
-    match own control.retry[Vec[String], RetryError](worker=vector_success):
+    match own control.retry[list[str], RetryError](worker=vector_success):
         case Result.Ok(values):
             print(values.len())
             for value in own values:

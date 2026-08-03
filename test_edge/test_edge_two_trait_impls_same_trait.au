@@ -2,20 +2,20 @@
 # then calling a trait-bounded function with each
 
 trait Greet:
-    def hello(self) -> String
+    def hello(self) -> str
 
 class English:
-    name: String
+    name: str
 
 class Spanish:
-    nombre: String
+    nombre: str
 
 impl Greet for English:
-    def hello(self) -> String:
+    def hello(self) -> str:
         return "Hello " + self.name
 
 impl Greet for Spanish:
-    def hello(self) -> String:
+    def hello(self) -> str:
         return "Hola " + self.nombre
 
 def greet[T: Greet](person: T):

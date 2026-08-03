@@ -4,7 +4,7 @@ copy class Color:
     b: int32
 
 class Shape:
-    name: String
+    name: str
     color: Color
 
     def describe(self):

@@ -1,9 +1,9 @@
 # Test: generic class with default field value
 class Container[T]:
     value: T
-    label: String = "default"
+    label: str = "default"
 
-    def get_label(self) -> String:
+    def get_label(self) -> str:
         return self.label
 
 def main() -> int32:

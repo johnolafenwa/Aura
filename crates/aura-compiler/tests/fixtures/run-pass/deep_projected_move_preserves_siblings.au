@@ -1,12 +1,12 @@
 class Payload:
-    value: String
-    sibling: String
+    value: str
+    sibling: str
 
 class Envelope:
     payload: Payload
-    label: String
+    label: str
 
-def take(value: own String) -> String:
+def take(value: own str) -> str:
     return value
 
 def main() -> int32:

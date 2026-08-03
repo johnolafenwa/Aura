@@ -1,0 +1,2 @@
+def reject(values: list[def(int64) -> int64], value: def(int64) -> int64):
+    print(value in values)

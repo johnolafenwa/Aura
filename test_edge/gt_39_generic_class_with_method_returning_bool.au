@@ -11,6 +11,6 @@ class OptionalVal[T]:
 def main() -> int32:
     v1: OptionalVal[int32] = OptionalVal(has_value=true, value=42)
     print(v1.present())
-    v2: OptionalVal[String] = OptionalVal(has_value=false, value="none")
+    v2: OptionalVal[str] = OptionalVal(has_value=false, value="none")
     print(v2.present())
     return 0

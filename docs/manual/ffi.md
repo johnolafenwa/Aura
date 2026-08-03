@@ -48,8 +48,8 @@ Only bodyless C declarations are accepted:
 ```aura
 public extern "C" opaque class ProcessHandle
 public extern "C" def getpid() -> int32
-extern "C" def inspect(label: String, data: Vec[uint8]) -> uint64
-extern "C" def update(data: mut Vec[uint8]) -> None
+extern "C" def inspect(label: str, data: list[uint8]) -> uint64
+extern "C" def update(data: mut list[uint8]) -> None
 extern "C" def close(handle: own ProcessHandle) -> None
 
 def main() -> int32:
@@ -96,19 +96,19 @@ The three pointer-length parameter forms are:
 
 | Aura parameter | C parameters in order | Contract |
 | --- | --- | --- |
-| `text: String` | `const uint8_t *`, `size_t` | UTF-8 bytes; not NUL-terminated |
-| `data: Vec[uint8]` | `const uint8_t *`, `size_t` | read-only bytes |
-| `data: mut Vec[uint8]` | `uint8_t *`, `size_t` | fixed-length writable bytes |
+| `text: str` | `const uint8_t *`, `size_t` | UTF-8 bytes; not NUL-terminated |
+| `data: list[uint8]` | `const uint8_t *`, `size_t` | read-only bytes |
+| `data: mut list[uint8]` | `uint8_t *`, `size_t` | fixed-length writable bytes |
 
 The pointer is valid only during the synchronous foreign call. The native
-callee must not retain it. An empty String or byte view passes a null pointer
+callee must not retain it. An empty str or byte view passes a null pointer
 and length zero; a non-empty view passes a valid pointer and its exact byte
 length. A mutable byte view uses a same-length scratch buffer: Aura copies
-the vector's initial bytes in, then copies exactly that length back after the
+the list's initial bytes in, then copies exactly that length back after the
 foreign function returns. The writeback happens even if subsequent result
 validation reports an Aura error. Its length and capacity cannot be changed
-by foreign code. `own String`, `mut String`, and `own Vec[uint8]` are rejected.
-String or byte views cannot be returned because v0 has no foreign allocator or
+by foreign code. `own str`, `mut str`, and `own list[uint8]` are rejected.
+Text or byte views cannot be returned because v0 has no foreign allocator or
 lifetime contract.
 
 An opaque handle is one non-null foreign pointer with no Aura-visible
@@ -127,11 +127,11 @@ transfer operations such as `pop`, `remove`, and replacement remain allowed.
 Equality and inequality are also rejected for an opaque handle or any value
 that structurally contains one. FFI v0 deliberately does not expose foreign
 addresses or assume that address identity is the native API's semantic
-identity; a binding should expose a stable scalar or String identifier when
+identity; a binding should expose a stable scalar or str identifier when
 callers need to compare foreign objects. Arithmetic and ordering operators on
 the handle itself are rejected with dedicated diagnostics: raw pointer
 arithmetic and foreign-address ordering are not language capabilities. A
-binding must expose reviewed extern operations or stable scalar/String keys
+binding must expose reviewed extern operations or stable scalar/str keys
 instead.
 
 ## Runtime Semantics
@@ -162,9 +162,9 @@ declaration.
 
 ## Ownership And Evaluation Order
 
-Ordinary scalar arguments are copied into ABI slots. Bare `String`,
-`Vec[uint8]`, and opaque-handle arguments remain owned by the caller and are
-available after the call. `mut Vec[uint8]` requires an exclusive mutable place
+Ordinary scalar arguments are copied into ABI slots. Bare `str`,
+`list[uint8]`, and opaque-handle arguments remain owned by the caller and are
+available after the call. `mut list[uint8]` requires an exclusive mutable place
 and exposes in-place byte updates after return. An `own` opaque-handle
 argument moves the handle before the call and cannot be used afterward.
 
@@ -189,7 +189,7 @@ is never part of source-visible rendering or diagnostics.
   guidance for a foreign body, defaults, type parameters, callbacks,
   variadics, and raw-pointer spelling recognized by the parser.
 - `AU2002` rejects types outside the fixed scalar, view, and opaque-handle
-  table, including returned `String` or `Vec[uint8]` views.
+  table, including returned `str` or `list[uint8]` views.
 - `AU2003` rejects equality or inequality on an opaque handle or a value that
   structurally contains one.
 - `AU2005` rejects reserved FFI forms, constructing an opaque handle, and
@@ -245,7 +245,7 @@ terminate the process; no backend can make such a declaration safe.
 
 FFI v0, its package opt-in and root dependency report, bodyless
 `extern "C"` functions, opaque handles, fixed-width scalars, pointer-length
-views, and Unix process-global lookup are implemented in Aura 0.2.
+views, and Unix process-global lookup are implemented in Aura 0.3.
 
 Callbacks, raw pointers, variadics, returned views, nullable handles, explicit
 library loading/link configuration, and foreign aggregate layout are reserved

@@ -17,6 +17,7 @@ fn public_object_codegen_infers_host_and_wait_result_types() {
     let task_type = Type::Named("Task".to_string(), vec![Type::named("int32")]);
     let tasks_type = Type::Named("Vec".to_string(), vec![task_type.clone()]);
     let module = MirModule {
+        constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
             module_name: "<native-codegen-acceptance>".to_string(),

@@ -1,10 +1,10 @@
 class Message:
-    text: String
+    text: str
 
 def length(message: Message) -> int32:
     return message.text.len() as int32
 
-def consume(message: own Message) -> String:
+def consume(message: own Message) -> str:
     return message.text
 
 def main() -> int32:

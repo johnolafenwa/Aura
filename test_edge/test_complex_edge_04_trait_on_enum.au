@@ -1,7 +1,7 @@
 # Edge test: Implementing a trait for an enum (not a class)
 
 trait Describe:
-    def describe(self) -> String
+    def describe(self) -> str
 
 enum Color:
     Red
@@ -9,7 +9,7 @@ enum Color:
     Blue
 
 impl Describe for Color:
-    def describe(self) -> String:
+    def describe(self) -> str:
         match own self:
             case Color.Red:
                 return "red"

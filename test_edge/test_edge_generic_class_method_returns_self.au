@@ -13,8 +13,8 @@ def main() -> int32:
     s2: Stack[int32] = s1.replace(new_value=20)
     print(s2.get())
 
-    s3: Stack[String] = Stack(value="old")
-    s4: Stack[String] = s3.replace(new_value="new")
+    s3: Stack[str] = Stack(value="old")
+    s4: Stack[str] = s3.replace(new_value="new")
     print(s4.get())
 
     return 0

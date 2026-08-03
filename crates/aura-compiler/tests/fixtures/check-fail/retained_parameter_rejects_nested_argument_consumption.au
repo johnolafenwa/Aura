@@ -1,10 +1,10 @@
-def consume_and_measure(values: own Vec[int32]) -> int32:
+def consume_and_measure(values: own list[int32]) -> int32:
     return 2 as int32
 
-def inspect(values: Vec[int32], measured: int32):
+def inspect(values: list[int32], measured: int32):
     print(values.len())
     print(measured)
 
 def main():
-    values: Vec[int32] = [1, 2]
+    values: list[int32] = [1, 2]
     inspect(values, consume_and_measure(values))

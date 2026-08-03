@@ -1,11 +1,11 @@
 class Pair:
-    left: String
-    right: String
+    left: str
+    right: str
 
-def keep(value: own String) -> String:
+def keep(value: own str) -> str:
     return value
 
-def use(left: String, right: own String):
+def use(left: str, right: own str):
     print(left)
     print(right)
 

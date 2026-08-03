@@ -1,10 +1,10 @@
 # Test: can main return Result and use try?
-def risky(x: int32) -> Result[int32, String]:
+def risky(x: int32) -> Result[int32, str]:
     if x == 0:
         return Result.Err("zero!")
     return Result.Ok(x * 2)
 
-def process() -> Result[int32, String]:
+def process() -> Result[int32, str]:
     a = try risky(5)
     b = try risky(a)
     c = try risky(b)
@@ -26,7 +26,7 @@ def main() -> int32:
 
     return 0
 
-def process_fail() -> Result[int32, String]:
+def process_fail() -> Result[int32, str]:
     a = try risky(5)
     b = try risky(0)
     c = try risky(b)

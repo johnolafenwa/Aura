@@ -2,7 +2,7 @@ import io
 import net
 
 
-def read_control(expected: String) -> bool:
+def read_control(expected: str) -> bool:
     match io.read_line():
         case Result.Ok(Option.Some(line)):
             return line == expected
@@ -20,7 +20,7 @@ def flush_stdout() -> bool:
             return false
 
 
-def serve(addresses: Queue[String]) -> Result[int32, io.Error]:
+def serve(addresses: Queue[str]) -> Result[int32, io.Error]:
     with server = try net.http_listen("127.0.0.1:0"):
         addresses.put(try server.local_addr())
         mut request_index: int32 = 0
@@ -61,7 +61,7 @@ def retry_delay(kind: int32, attempt: int32) -> Duration:
     return 5ms
 
 
-def request_with_retry(address: String, path: String, kind: int32, max_attempts: int32) -> Result[int32, io.Error]:
+def request_with_retry(address: str, path: str, kind: int32, max_attempts: int32) -> Result[int32, io.Error]:
     mut attempt: int32 = 1
 
     while true:
@@ -85,7 +85,7 @@ def request_with_retry(address: String, path: String, kind: int32, max_attempts:
     return Result.Ok(500)
 
 
-def run_worker(address: own String) -> Result[int32, io.Error]:
+def run_worker(address: own str) -> Result[int32, io.Error]:
     mut checksum: int32 = 0
     for cycle in range(16):
         checksum += try request_with_retry(
@@ -112,7 +112,7 @@ def run_worker(address: own String) -> Result[int32, io.Error]:
 
 def run() -> Result[int32, io.Error]:
     with TaskGroup() as group:
-        addresses = Queue[String](capacity=1)
+        addresses = Queue[str](capacity=1)
         server_task = group.start(serve, addresses)
         mut address = ""
 

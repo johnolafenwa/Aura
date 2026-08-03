@@ -1,8 +1,8 @@
 class Payload:
-    label: String
-    values: Vec[int32]
-    groups: Map[String, Set[int32]]
-    pair: (String, int32)
+    label: str
+    values: list[int32]
+    groups: dict[str, set[int32]]
+    pair: (str, int32)
 
 enum Envelope:
     Payload(Payload)
@@ -16,9 +16,9 @@ def relay_range(values: own Range, output: Queue[Range]) -> Range:
 
 def summarize(
     envelope: own Envelope,
-    output: Queue[String],
+    output: Queue[str],
     completed: Task[int32]
-) -> String:
+) -> str:
     mut total: int32 = 0
     match completed.result():
         case TaskResult.Ready(value):
@@ -37,7 +37,7 @@ def summarize(
             return f"{pair_name}:{payload.values.len()}:{payload.groups.len()}:{total + pair_value}"
 
 def main() -> int32:
-    output = Queue[String]()
+    output = Queue[str]()
     ranges = Queue[Range]()
     payload = Payload(
         label="transfer",
@@ -87,7 +87,7 @@ def main() -> int32:
 
         match range_task.result():
             case TaskResult.Ready(values):
-                mut total: int32 = 0
+                mut total: int64 = 0
                 for value in values:
                     total += value
                 print(total)

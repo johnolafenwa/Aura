@@ -13,7 +13,7 @@ def main() -> int32:
         case Maybe.Nothing:
             print("nothing")
 
-    empty: Maybe[String] = Maybe.Nothing
+    empty: Maybe[str] = Maybe.Nothing
     match own empty:
         case Maybe.Some(inner):
             print(inner)

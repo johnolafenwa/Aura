@@ -1,19 +1,19 @@
 # Test class with string field and various methods
 
 class NamedCounter:
-    name: String
+    name: str
     count: int32
 
-    def new(name: own String) -> NamedCounter:
+    def new(name: own str) -> NamedCounter:
         return NamedCounter(name=name, count=0)
 
     def increment(mut self):
         self.count += 1
 
-    def describe(self) -> String:
+    def describe(self) -> str:
         return f"{self.name}: {self.count}"
 
-    def get_name(self) -> String:
+    def get_name(self) -> str:
         return self.name.clone()
 
 def main() -> int32:

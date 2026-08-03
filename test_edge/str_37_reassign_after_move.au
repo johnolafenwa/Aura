@@ -1,10 +1,10 @@
 # Test: reassignment after move should revive the variable
 
-def consume(text: String):
+def consume(text: str):
     print(text)
 
 def main() -> int32:
-    mut s: String = "first"
+    mut s: str = "first"
     consume(text=s)
     # s is moved, but we reassign
     s = "second"

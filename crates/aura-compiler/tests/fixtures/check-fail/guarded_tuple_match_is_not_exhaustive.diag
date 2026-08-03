@@ -1,0 +1,5 @@
+error[AU2999]: non-exhaustive match over `(bool, bool)`: add a covering tuple pattern or final `case _:`
+ --> crates/aura-compiler/tests/fixtures/check-fail/guarded_tuple_match_is_not_exhaustive.au:3:5
+  |
+3 |     match value:
+  |     ^

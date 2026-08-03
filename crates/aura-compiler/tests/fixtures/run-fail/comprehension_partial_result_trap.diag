@@ -1,4 +1,4 @@
-error[AU4003]: vector index `0` is out of bounds for length `0`
+error[AU4003]: list index `0` is out of bounds for length `0`
  --> crates/aura-compiler/tests/fixtures/run-fail/comprehension_partial_result_trap.au:11:28
    |
 11 |         impossible = empty[0]

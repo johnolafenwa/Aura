@@ -1,13 +1,13 @@
 # Test: generic enum holding a class instance
 class Item:
-    name: String
+    name: str
     value: int32
 
 enum Holder[T]:
     Holding(T)
     Nothing
 
-def show_item(h: own Holder[Item]) -> String:
+def show_item(h: own Holder[Item]) -> str:
     match own h:
         case Holder.Holding(item):
             print(item.value)

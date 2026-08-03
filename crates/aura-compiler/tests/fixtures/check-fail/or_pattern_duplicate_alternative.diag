@@ -1,0 +1,5 @@
+error[AU2999]: duplicate or subsumed alternative in or-pattern
+ --> crates/aura-compiler/tests/fixtures/check-fail/or_pattern_duplicate_alternative.au:4:18
+  |
+4 |         case 1 | 1:
+  |                  ^

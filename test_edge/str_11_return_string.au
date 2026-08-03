@@ -1,13 +1,13 @@
-def make_greeting(name: str) -> String:
+def make_greeting(name: str) -> str:
     return f"Hello, {name}!"
 
-def concat_three(a: str, b: str, c: str) -> String:
+def concat_three(a: str, b: str, c: str) -> str:
     return a + b + c
 
-def empty_string() -> String:
+def empty_string() -> str:
     return ""
 
-def conditional_string(flag: bool) -> String:
+def conditional_string(flag: bool) -> str:
     if flag:
         return "true_branch"
     return "false_branch"

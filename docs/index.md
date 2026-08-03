@@ -89,9 +89,9 @@ connect them.
 ```python
 class Job:
     id: int32
-    label: String
+    label: str
 
-def render(job: Job) -> String:
+def render(job: Job) -> str:
     return f"#{job.id} {job.label}"
 
 jobs = [Job(id=1, label="embed"), Job(id=2, label="infer")]
@@ -102,7 +102,7 @@ for job in jobs:
 
 The `Job` fields are statically typed. The bare `job: Job` parameter grants
 shared access, so `render` can read the job while the caller keeps ownership.
-The loop also reads the vector through shared access. The compiler checks these
+The loop also reads the list through shared access. The compiler checks these
 rules before execution.
 
 ## Start Building

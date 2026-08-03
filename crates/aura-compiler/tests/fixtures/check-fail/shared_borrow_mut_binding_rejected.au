@@ -1,5 +1,5 @@
 class User:
-    name: String
+    name: str
 
 def invalid(user: User) -> None:
     mut alias = user

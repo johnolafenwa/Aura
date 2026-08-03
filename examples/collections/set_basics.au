@@ -5,23 +5,31 @@ def print_bool(value: bool):
         case false:
             print("false")
 
-def sum_set(values: Set[int32]) -> int32:
+def sum_set(values: set[int32]) -> int32:
     mut total: int32 = 0
     for value in values:
         total += value
     return total
 
 def main() -> int32:
-    mut seen: Set[int32] = {1, 2, 2, 3}
+    mut seen: set[int32] = {1, 2, 2, 3}
     print(seen.len())
-    print_bool(seen.contains(2))
-    print_bool(seen.insert(2))
-    print_bool(seen.insert(4))
-    print_bool(seen.remove(1))
+    print_bool((2 in seen))
+    inserted_existing = 2 not in seen
+    seen.add(2)
+    print_bool(inserted_existing)
+    inserted_four = 4 not in seen
+    seen.add(4)
+    print_bool(inserted_four)
+    removed_one = 1 in seen
+    seen.discard(1)
+    print_bool(removed_one)
     print(sum_set(seen))
 
-    mut names: Set[String] = Set[String]()
+    mut names: set[str] = set[str]()
     print_bool(names.is_empty())
-    print_bool(names.insert("aura"))
+    inserted_name = "aura" not in names
+    names.add("aura")
+    print_bool(inserted_name)
     print(names.len())
     return 0

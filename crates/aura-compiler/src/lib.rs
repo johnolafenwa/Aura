@@ -30,9 +30,9 @@ pub use analysis::{
     AnalysisCompletion, AnalysisOutput,
 };
 pub use diag::{
-    Diagnostic, Result, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span,
-    StructuredDiagnostic, StructuredEdit, StructuredRuntimeCallFrame, StructuredRuntimeSourceSpan,
-    StructuredRuntimeTaskFrame, StructuredSpan,
+    AssertionOperand, Diagnostic, Result, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame,
+    Span, StructuredDiagnostic, StructuredEdit, StructuredRuntimeCallFrame,
+    StructuredRuntimeSourceSpan, StructuredRuntimeTaskFrame, StructuredSpan,
 };
 pub use mir::{lower as lower_to_mir, MirModule};
 pub use mir_runtime::{
@@ -45,6 +45,13 @@ pub use native_codegen::{
     emit_host_object_with_metadata as emit_host_native_object_with_metadata,
 };
 pub use runtime_value::{RunOutput, Value};
+
+/// MIR whose imports, package graph, and FFI permissions were checked through
+/// the manifest-rooted path loader.
+///
+/// The inner module is deliberately private so caller-supplied MIR cannot be
+/// promoted into the trusted runtime route.
+pub struct CheckedMirModule(MirModule);
 
 #[cfg(test)]
 fn timing_limit_for_hosted_ci(
@@ -77,7 +84,7 @@ pub const MAX_INTERNAL_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
 /// Every persisted artifact or long-lived tooling cache that can contain
 /// compiler semantic metadata must bind this value. Bump it whenever the
 /// meaning or representation of checked source changes incompatibly.
-pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 3;
+pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 5;
 
 /// Lowercase hexadecimal SHA-256 of `bytes`, for content-addressed identities.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -98,6 +105,7 @@ use package::PackageGraph;
 #[doc(hidden)]
 pub mod native_runtime_coverage {
     pub use super::native_runtime::aura_direct_tag_value_type;
+    pub use super::native_runtime::DIRECT_VALUE_LIVE_COUNT;
     pub use super::native_runtime::{
         aura_direct_arg_buffer_new, aura_direct_arg_buffer_store_owned, aura_direct_array_binary,
         aura_direct_array_clone, aura_direct_array_fill_in_place, aura_direct_array_from_vec,
@@ -123,12 +131,11 @@ pub mod native_runtime_coverage {
         aura_direct_http_response_text, aura_direct_instance_get_field, aura_direct_instance_new,
         aura_direct_integer_to_float, aura_direct_integer_width_binary, aura_direct_io_flush,
         aura_direct_io_write, aura_direct_map_clear_in_place, aura_direct_map_contains_key,
-        aura_direct_map_empty, aura_direct_map_entries, aura_direct_map_extend_in_place,
-        aura_direct_map_get, aura_direct_map_index, aura_direct_map_is_empty,
-        aura_direct_map_items, aura_direct_map_keys, aura_direct_map_len,
-        aura_direct_map_remove_in_place, aura_direct_map_set_in_place,
-        aura_direct_map_set_index_in_place, aura_direct_map_values, aura_direct_monotonic_time_ms,
-        aura_direct_net_connect, aura_direct_net_http_listen,
+        aura_direct_map_empty, aura_direct_map_extend_in_place, aura_direct_map_get,
+        aura_direct_map_index, aura_direct_map_is_empty, aura_direct_map_items,
+        aura_direct_map_keys, aura_direct_map_len, aura_direct_map_remove_in_place,
+        aura_direct_map_set_in_place, aura_direct_map_set_index_in_place, aura_direct_map_values,
+        aura_direct_monotonic_time_ms, aura_direct_net_connect, aura_direct_net_http_listen,
         aura_direct_net_http_request_bytes_timeout, aura_direct_net_listen,
         aura_direct_net_udp_bind, aura_direct_net_unix_connect, aura_direct_net_unix_listen,
         aura_direct_net_websocket_connect, aura_direct_net_websocket_listen,
@@ -259,23 +266,34 @@ fn builtin_imports(module: &ast::Module) -> Result<BTreeMap<String, ImportedBind
     let mut bindings = BTreeMap::new();
     for import in &module.imports {
         match &import.kind {
-            ImportKind::Module { path } => {
+            ImportKind::Module { path, alias } => {
                 if let Some(namespace) = builtin_modules::builtin_module_namespace(path) {
-                    insert_namespace_import(&mut bindings, path, namespace, import.span)?;
+                    if let Some(alias) = alias {
+                        insert_aliased_namespace_import(
+                            &mut bindings,
+                            alias,
+                            namespace,
+                            import.span,
+                        )?;
+                    } else {
+                        insert_namespace_import(&mut bindings, path, namespace, import.span)?;
+                    }
                 }
             }
             ImportKind::From { module_path, names } => {
                 if builtin_modules::builtin_module_namespace(module_path).is_some() {
-                    for name in names {
+                    for imported_name in names {
                         let binding = builtin_modules::builtin_imported_binding(
                             module_path,
-                            name,
+                            &imported_name.name,
                             import.span,
                         )?;
-                        if bindings.insert(name.clone(), binding).is_some() {
+                        let local_name =
+                            imported_name.alias.as_ref().unwrap_or(&imported_name.name);
+                        if bindings.insert(local_name.clone(), binding).is_some() {
                             return Err(Diagnostic::at(
-                                import.span,
-                                format!("duplicate import binding `{}`", name),
+                                imported_name.span,
+                                format!("duplicate import binding `{}`", local_name),
                             ));
                         }
                     }
@@ -358,13 +376,7 @@ pub fn run_path_with_stdout_sink_and_program_args(
     stdout_sink: StdoutSink,
     program_args: Vec<String>,
 ) -> Result<RunOutput> {
-    let program = check_path(path)?;
-    let mir = lower_to_mir(&program);
-    mir_runtime::run_with_stdout_sink_and_program_args_trusted(
-        &mir,
-        Some(stdout_sink),
-        program_args,
-    )
+    run_path_entry_with_stdout_sink_and_program_args(path, None, Some(stdout_sink), program_args)
 }
 
 /// Runs one parameterless top-level entry from a manifest-checked path.
@@ -386,6 +398,32 @@ pub fn run_path_entry_with_stdout_sink_and_program_args(
         stdout_sink,
         program_args,
     )
+}
+
+/// Runs one parameterless entry from a previously path-checked MIR module.
+///
+/// This is the reusable form of [`run_path_entry_with_stdout_sink_and_program_args`]:
+/// package loading and semantic checking happen once, while multiple entries
+/// may execute through the same trusted module.
+pub fn run_checked_mir_entry_with_stdout_sink_and_program_args(
+    module: &CheckedMirModule,
+    entry: Option<&str>,
+    stdout_sink: Option<StdoutSink>,
+    program_args: Vec<String>,
+) -> Result<RunOutput> {
+    mir_runtime::run_entry_with_stdout_sink_and_program_args_trusted(
+        &module.0,
+        entry,
+        stdout_sink,
+        program_args,
+    )
+}
+
+/// Loads, manifest-checks, semantically checks, and lowers a path into opaque
+/// MIR that is eligible for repeated trusted entry execution.
+pub fn lower_path_to_checked_mir(path: &Path) -> Result<CheckedMirModule> {
+    let program = check_path(path)?;
+    Ok(CheckedMirModule(lower_to_mir(&program)))
 }
 
 pub fn lower_path_to_mir(path: &Path) -> Result<MirModule> {
@@ -511,8 +549,74 @@ impl ModuleLoader {
                 program: program.clone(),
             },
         );
+        if is_entry_module {
+            program.constant_init_plan = self.build_constant_init_plan(&path)?;
+            self.cache.insert(
+                path.clone(),
+                LoadedModule {
+                    program: program.clone(),
+                },
+            );
+        }
         self.stack.pop();
         Ok(program)
+    }
+
+    fn build_constant_init_plan(&self, entry_path: &Path) -> Result<Vec<sema::ConstantInfo>> {
+        fn visit(
+            loader: &ModuleLoader,
+            path: &Path,
+            visited: &mut BTreeSet<PathBuf>,
+            plan: &mut Vec<sema::ConstantInfo>,
+        ) -> Result<()> {
+            let path = absolutize(path);
+            if !visited.insert(path.clone()) {
+                return Ok(());
+            }
+            let loaded = loader.cache.get(&path).ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "module constant initialization plan is missing loaded module `{}`",
+                    path.display()
+                ))
+            })?;
+            for import in &loaded.program.module.imports {
+                let (module_path, selected_names) = match &import.kind {
+                    ImportKind::From { module_path, names } => (module_path, Some(names)),
+                    ImportKind::Module { path, .. } => (path, None),
+                };
+                if let Some(namespace) = builtin_modules::builtin_module_namespace(module_path) {
+                    if let Some(names) = selected_names {
+                        plan.extend(names.iter().filter_map(|imported| {
+                            namespace.constants.get(&imported.name).cloned()
+                        }));
+                    } else {
+                        plan.extend(namespace.all_constants.into_values());
+                    }
+                    continue;
+                }
+                let dependency = loader.resolve_import_path(&path, module_path)?;
+                visit(loader, &dependency, visited, plan)?;
+            }
+            let mut local = loaded
+                .program
+                .constants
+                .values()
+                .filter(|constant| constant.module_name == loaded.program.module_name)
+                .cloned()
+                .collect::<Vec<_>>();
+            local.sort_by_key(|constant| (constant.decl.span.line, constant.decl.span.column));
+            plan.extend(local);
+            Ok(())
+        }
+
+        let mut visited = BTreeSet::new();
+        let mut plan = Vec::new();
+        visit(self, entry_path, &mut visited, &mut plan)?;
+        let mut seen = BTreeSet::new();
+        plan.retain(|constant| {
+            seen.insert((constant.module_name.clone(), constant.decl.name.clone()))
+        });
+        Ok(plan)
     }
 
     fn resolve_imports(
@@ -525,16 +629,18 @@ impl ModuleLoader {
             match &import.kind {
                 ImportKind::From { module_path, names } => {
                     if builtin_modules::builtin_module_namespace(module_path).is_some() {
-                        for name in names {
+                        for imported_name in names {
                             let binding = builtin_modules::builtin_imported_binding(
                                 module_path,
-                                name,
+                                &imported_name.name,
                                 import.span,
                             )?;
-                            if bindings.insert(name.clone(), binding).is_some() {
+                            let local_name =
+                                imported_name.alias.as_ref().unwrap_or(&imported_name.name);
+                            if bindings.insert(local_name.clone(), binding).is_some() {
                                 return Err(Diagnostic::at(
-                                    import.span,
-                                    format!("duplicate import binding `{}`", name),
+                                    imported_name.span,
+                                    format!("duplicate import binding `{}`", local_name),
                                 ));
                             }
                         }
@@ -542,43 +648,59 @@ impl ModuleLoader {
                     }
                     let imported =
                         self.load_imported_module(current_path, module_path, import.span)?;
-                    for name in names {
-                        let binding = exported_binding(&imported, name).ok_or_else(|| {
-                            let logical_name = module_path.join(".");
-                            if local_item_exists(&imported, name) {
-                                Diagnostic::at(
-                                    import.span,
-                                    format!(
-                                        "item `{}` is private in module `{}`",
-                                        name, logical_name
-                                    ),
-                                )
-                            } else {
-                                Diagnostic::at(
-                                    import.span,
-                                    format!(
-                                        "module `{}` has no export named `{}`",
-                                        logical_name, name
-                                    ),
-                                )
-                            }
-                        })?;
-                        if bindings.insert(name.clone(), binding).is_some() {
+                    for imported_name in names {
+                        let binding =
+                            exported_binding(&imported, &imported_name.name).ok_or_else(|| {
+                                let logical_name = module_path.join(".");
+                                if local_item_exists(&imported, &imported_name.name) {
+                                    Diagnostic::at(
+                                        imported_name.span,
+                                        format!(
+                                            "item `{}` is private in module `{}`",
+                                            imported_name.name, logical_name
+                                        ),
+                                    )
+                                } else {
+                                    Diagnostic::at(
+                                        imported_name.span,
+                                        format!(
+                                            "module `{}` has no export named `{}`",
+                                            logical_name, imported_name.name
+                                        ),
+                                    )
+                                }
+                            })?;
+                        let local_name =
+                            imported_name.alias.as_ref().unwrap_or(&imported_name.name);
+                        if bindings.insert(local_name.clone(), binding).is_some() {
                             return Err(Diagnostic::at(
-                                import.span,
-                                format!("duplicate import binding `{}`", name),
+                                imported_name.span,
+                                format!("duplicate import binding `{}`", local_name),
                             ));
                         }
                     }
                 }
-                ImportKind::Module { path } => {
+                ImportKind::Module { path, alias } => {
                     if let Some(leaf) = builtin_modules::builtin_module_namespace(path) {
-                        insert_namespace_import(&mut bindings, path, leaf, import.span)?;
+                        if let Some(alias) = alias {
+                            insert_aliased_namespace_import(
+                                &mut bindings,
+                                alias,
+                                leaf,
+                                import.span,
+                            )?;
+                        } else {
+                            insert_namespace_import(&mut bindings, path, leaf, import.span)?;
+                        }
                         continue;
                     }
                     let imported = self.load_imported_module(current_path, path, import.span)?;
                     let leaf = exported_namespace(path, &imported);
-                    insert_namespace_import(&mut bindings, path, leaf, import.span)?;
+                    if let Some(alias) = alias {
+                        insert_aliased_namespace_import(&mut bindings, alias, leaf, import.span)?;
+                    } else {
+                        insert_namespace_import(&mut bindings, path, leaf, import.span)?;
+                    }
                 }
             }
         }
@@ -645,10 +767,28 @@ impl ModuleLoader {
             return;
         };
         let dependency_aliases = graph.dependency_aliases_for_path(path);
+        let dependency_bindings = program
+            .module
+            .imports
+            .iter()
+            .filter_map(|import| {
+                let ImportKind::Module {
+                    path: imported_path,
+                    alias,
+                } = &import.kind
+                else {
+                    return None;
+                };
+                let root = imported_path.first()?;
+                dependency_aliases
+                    .contains(root)
+                    .then(|| alias.as_ref().unwrap_or(root).clone())
+            })
+            .collect::<BTreeSet<_>>();
         qualify_imported_module_namespaces(
             &mut program.imported_modules,
             prefix,
-            &dependency_aliases,
+            &dependency_bindings,
         );
     }
 
@@ -708,7 +848,7 @@ fn infer_package_root(entry_path: &Path, source_override: Option<&str>) -> Resul
             .iter()
             .map(|import| match &import.kind {
                 ImportKind::From { module_path, .. } => module_path.clone(),
-                ImportKind::Module { path } => path.clone(),
+                ImportKind::Module { path, .. } => path.clone(),
             })
             .collect::<Vec<_>>();
 
@@ -817,6 +957,11 @@ fn qualify_namespace_path(namespace: &mut ModuleNamespace, prefix: &str) {
 
 fn local_item_exists(program: &Program, name: &str) -> bool {
     program.module.items.iter().any(|item| item.name() == name)
+        || program
+            .module
+            .constants
+            .iter()
+            .any(|item| item.name == name)
 }
 
 fn is_builtin_export_type(name: &str) -> bool {
@@ -838,7 +983,7 @@ fn is_builtin_export_type(name: &str) -> bool {
             | "uintsize"
             | "float32"
             | "float64"
-            | "String"
+            | "str"
             | "Range"
             | "Option"
             | "Result"
@@ -1227,7 +1372,25 @@ fn qualify_trait_impl_info_for_export(
     qualified
 }
 
+fn qualify_constant_info_for_export(
+    program: &Program,
+    info: &sema::ConstantInfo,
+) -> sema::ConstantInfo {
+    let mut qualified = info.clone();
+    qualified.ty = qualify_export_type(program, &qualified.ty);
+    qualified
+}
+
 fn exported_binding(program: &Program, name: &str) -> Option<ImportedBinding> {
+    if let Some(constant) = program
+        .constants
+        .get(name)
+        .filter(|constant| constant.module_name == program.module_name && constant.decl.public)
+    {
+        return Some(ImportedBinding::Constant(qualify_constant_info_for_export(
+            program, constant,
+        )));
+    }
     for item in &program.module.items {
         match item {
             Item::ExternFunction(decl) if decl.name == name && decl.public => {
@@ -1284,6 +1447,28 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
         .cloned()
         .unwrap_or_else(|| program.module_name.clone());
     let mut namespace = ModuleNamespace {
+        constants: program
+            .constants
+            .iter()
+            .filter(|(_, info)| info.module_name == program.module_name && info.decl.public)
+            .map(|(name, info)| {
+                (
+                    name.clone(),
+                    qualify_constant_info_for_export(program, info),
+                )
+            })
+            .collect(),
+        all_constants: program
+            .constants
+            .iter()
+            .filter(|(_, info)| info.module_name == program.module_name)
+            .map(|(name, info)| {
+                (
+                    name.clone(),
+                    qualify_constant_info_for_export(program, info),
+                )
+            })
+            .collect(),
         name,
         path: path.join("."),
         source_path: program.source_path.clone(),
@@ -1453,6 +1638,8 @@ fn insert_namespace_import(
     let root_name = path[0].clone();
     let root = bindings.entry(root_name.clone()).or_insert_with(|| {
         ImportedBinding::Module(ModuleNamespace {
+            constants: BTreeMap::new(),
+            all_constants: BTreeMap::new(),
             name: root_name.clone(),
             path: root_name.clone(),
             source_path: None,
@@ -1495,6 +1682,8 @@ fn insert_namespace_import(
             .modules
             .entry(segment.clone())
             .or_insert_with(|| ModuleNamespace {
+                constants: BTreeMap::new(),
+                all_constants: BTreeMap::new(),
                 name: segment.clone(),
                 path: prefix.clone(),
                 source_path: None,
@@ -1519,6 +1708,24 @@ fn insert_namespace_import(
     }
     let last = path[path.len() - 1].clone();
     current.modules.insert(last, leaf);
+    Ok(())
+}
+
+fn insert_aliased_namespace_import(
+    bindings: &mut BTreeMap<String, ImportedBinding>,
+    alias: &str,
+    namespace: ModuleNamespace,
+    span: Span,
+) -> Result<()> {
+    if bindings
+        .insert(alias.to_string(), ImportedBinding::Module(namespace))
+        .is_some()
+    {
+        return Err(Diagnostic::at(
+            span,
+            format!("duplicate import binding `{alias}`"),
+        ));
+    }
     Ok(())
 }
 

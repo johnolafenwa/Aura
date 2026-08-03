@@ -1,4 +1,4 @@
-error[AU2003]: cannot compare `Vec[Array[int32]]` because it contains `Array[int32]`, whose equality is unavailable
+error[AU2003]: cannot compare `list[Array[int32]]` because it contains `Array[int32]`, whose equality is unavailable
  --> crates/aura-compiler/tests/fixtures/check-fail/array_nested_equality_unavailable.au:4:11
   |
 4 |     print(left == right)

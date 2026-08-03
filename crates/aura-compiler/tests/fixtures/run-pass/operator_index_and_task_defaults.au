@@ -5,7 +5,7 @@ copy class Counter:
     value: int32
 
 class Holder:
-    text: String
+    text: str
 
 impl Add[Counter, Counter] for Counter:
     def add(mut self, rhs: own Counter) -> Counter:
@@ -21,7 +21,7 @@ def main() -> int32:
     direct += Counter(value=2)
     print(direct.value)
 
-    mut counters: Vec[Counter] = [Counter(value=4)]
+    mut counters: list[Counter] = [Counter(value=4)]
     counters[0] += Counter(value=5)
     print(counters[0].value)
 

@@ -1,7 +1,7 @@
 public class Rng:
     public value: int64
 
-    public def label(self) -> String:
+    public def label(self) -> str:
         return f"imported:{self.value}"
 
     public def clone(self) -> Rng:

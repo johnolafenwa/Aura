@@ -1,5 +1,5 @@
-def sum_to(limit: int32) -> int32:
-    mut total: int32 = 0
+def sum_to(limit: int32) -> int64:
+    mut total: int64 = 0
     for value in range(limit):
         total += value
     return total

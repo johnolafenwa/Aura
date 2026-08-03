@@ -3,3 +3,4 @@ error[AU2008]: callable equality is not supported; compare results or use an exp
   |
 4 |     print(left != right)
   |           ^
+  = note: Aura has no identity-equality fallback; equality-dependent operations require a defined value relation

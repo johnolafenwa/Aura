@@ -1,0 +1,3 @@
+def main():
+    values: dict[str, int32] = {"present": 1}
+    print(values["missing"])

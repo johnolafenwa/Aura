@@ -1,0 +1,7 @@
+import random
+
+def main():
+    mut generators = list[random.Rng]()
+    generators.append(random.Rng(seed=1))
+    chosen = generators[0]
+    print(chosen.next_float())

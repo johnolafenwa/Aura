@@ -1,0 +1,13 @@
+def main() -> int32:
+    values: list[int32] = [10, 20, 30]
+
+    print(values[values.len() - 1])
+
+    for index in range(values.len()):
+        print(values[index])
+
+    for index, value in enumerate(values):
+        print(values[index])
+        print(value)
+
+    return 0

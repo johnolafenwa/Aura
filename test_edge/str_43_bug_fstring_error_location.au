@@ -1,7 +1,7 @@
 class Holder:
-    text: String
+    text: str
 
-def show_fstring(h: Holder) -> String:
+def show_fstring(h: Holder) -> str:
     return f"value: {h.text}"
 
 def main() -> int32:

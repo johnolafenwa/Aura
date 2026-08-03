@@ -1,11 +1,11 @@
 enum Chain[T]:
     End(T)
-    Link(indirect Chain[Vec[T]])
+    Link(indirect Chain[list[T]])
 
-def duplicate[T](values: Vec[Chain[T]]) -> Vec[Chain[T]]:
-    return values.clone()
+def duplicate[T](values: list[Chain[T]]) -> list[Chain[T]]:
+    return values.copy()
 
-def accept(values: Vec[Chain[int64]]) -> Vec[Chain[int64]]:
+def accept(values: list[Chain[int64]]) -> list[Chain[int64]]:
     return duplicate(values)
 
 def main() -> int32:

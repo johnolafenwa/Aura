@@ -1,8 +1,8 @@
-def make_message() -> String:
+def make_message() -> str:
     sleep(1ms)
     return "one-shot payload"
 
-def consume_message(message: own String):
+def consume_message(message: own str):
     print(message)
 
 def main():

@@ -1,10 +1,10 @@
 enum Response:
     Success(int32)
-    Failure(String)
+    Failure(str)
     Timeout
     Data(float64)
 
-def describe(r: own Response) -> String:
+def describe(r: own Response) -> str:
     match own r:
         case Response.Success(code):
             print(code)

@@ -1,0 +1,4 @@
+def main():
+    narrow: int32 = 1
+    wide: int64 = narrow
+    print(wide)

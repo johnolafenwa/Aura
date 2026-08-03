@@ -1,15 +1,15 @@
 def main():
-    mut hosts = Vec[String]()
-    hosts.push("alpha")
-    hosts.push("beta")
+    mut hosts = list[str]()
+    hosts.append("alpha")
+    hosts.append("beta")
 
     for index, host in enumerate(hosts):
         print(f"{index}: {host}")
 
-    mut ports = Vec[int32]()
-    ports.push(80)
-    ports.push(443)
-    ports.push(8080)
+    mut ports = list[int32]()
+    ports.append(80)
+    ports.append(443)
+    ports.append(8080)
 
     for host, port in zip(hosts, ports):
         print(f"{host}:{port}")

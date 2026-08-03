@@ -1,0 +1,2 @@
+def reject(values: mut list[def(int64) -> int64], value: def(int64) -> int64):
+    values.remove(value)

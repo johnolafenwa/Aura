@@ -31,18 +31,18 @@ never return one.
 
 ## Shuffling In Place
 
-`shuffle` mutably borrows a vector and rearranges its existing elements:
+`shuffle` mutably borrows a list and rearranges its existing elements:
 
 ```python
 import random
 
 mut rng = random.Rng(42)
-mut values: Vec[int64] = [0, 1, 2, 3, 4, 5]
+mut values: list[int64] = [0, 1, 2, 3, 4, 5]
 rng.shuffle(values)
 print(values)
 ```
 
-The result is `[3, 5, 4, 1, 2, 0]`. The vector stays owned by the caller. The
+The result is `[3, 5, 4, 1, 2, 0]`. The list stays owned by the caller. The
 method neither clones nor moves its elements, so it works with move-only
 element types too. Empty and one-element vectors are unchanged and do not
 advance the stream.
@@ -76,7 +76,7 @@ def roll(rng: mut random.Rng) -> int64:
 This makes state flow visible at the same call boundary as any other mutation.
 
 Wrapping the generator does not make it cloneable. Aura rejects collection
-clones and cloned collection reads that would duplicate an `Rng`, even when it
+copies and cloned collection reads that would duplicate an `Rng`, even when it
 is nested inside a class or enum. Moving or removing a generator from a
 collection within one owning task remains valid. An `Rng` is not `Transfer`,
 so it cannot be a task result or Queue payload: those boundaries fail with
@@ -84,7 +84,7 @@ so it cannot be a task result or Queue payload: those boundaries fail with
 Task handle is copyable only when its result is repeatable.
 
 Generic code is not rejected merely because its element type is unresolved.
-If a body clones `Vec[T]` or performs another clone-producing operation, Aura
+If a body copies `list[T]` or performs another clone-producing operation, Aura
 infers that `T` must be clone-safe. The requirement propagates through other
 generic calls and imports, then a concrete `random.Rng` specialization fails
 with `AU3007`. A trait default body can establish the same contract; an
@@ -107,10 +107,10 @@ print(token_bytes.len())
 Secure calls have no seed and no reproducible sequence. They use only the
 operating system's cryptographically secure source; Aura never falls back to
 `random.Rng`, a clock, or a process identifier. `secure_bytes(0)` returns an
-empty vector without requesting entropy.
+empty list without requesting entropy.
 
 The `secure_bytes` count is `int64`. Each call accepts at most `2147483647`
-bytes as a fixed resource and safety ceiling independent of the public `Vec`
+bytes as a fixed resource and safety ceiling independent of the public `list`
 length domain. A larger count traps with `AU4005` before Aura requests either
 allocation or entropy.
 

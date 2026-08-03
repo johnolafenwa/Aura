@@ -1,15 +1,15 @@
 trait Named:
-    def name(self) -> String
+    def name(self) -> str
 
 trait Labelled: Named:
-    def label(self) -> String:
+    def label(self) -> str:
         return "name=" + self.name()
 
 class User:
-    name: String
+    name: str
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.name.clone()
 
 impl Labelled for User:

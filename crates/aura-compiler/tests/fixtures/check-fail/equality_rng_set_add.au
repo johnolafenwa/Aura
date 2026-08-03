@@ -1,0 +1,4 @@
+import random
+
+def reject(values: mut set[random.Rng], value: own random.Rng):
+    values.add(value)

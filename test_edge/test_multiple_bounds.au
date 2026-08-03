@@ -1,19 +1,19 @@
 trait Named:
-    def name(self) -> String
+    def name(self) -> str
 
 trait Aged:
     def age(self) -> int32
 
 trait Tagged:
-    def tag(self) -> String
+    def tag(self) -> str
 
 class Person:
-    n: String
+    n: str
     a: int32
-    t: String
+    t: str
 
 impl Named for Person:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.n
 
 impl Aged for Person:
@@ -21,7 +21,7 @@ impl Aged for Person:
         return self.a
 
 impl Tagged for Person:
-    def tag(self) -> String:
+    def tag(self) -> str:
         return self.t
 
 # Two bounds

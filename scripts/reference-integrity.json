@@ -94,6 +94,9 @@
     "docs/manual/lexical-structure.md": {
       "kind": "feature"
     },
+    "docs/manual/math.md": {
+      "kind": "feature"
+    },
     "docs/manual/names-and-scopes.md": {
       "kind": "feature"
     },
@@ -144,7 +147,7 @@
       "reason": "Benchmark orchestration command that requires the pinned measurement host and a clean detached checkout."
     },
     "docs/manual/assertions.md#aura-1": {
-      "sha256": "0dc68e0a09781c0c434ce0f2a5a84c30592f9c8687e66aa901668f783a9c755d",
+      "sha256": "0d9e541caf7e08e73d098ddb3e77795743be6c4d9a0dbf7fde4d365ea7611acc",
       "mode": "run",
       "stdout": "before\nafter\n",
       "stderr": ""
@@ -155,9 +158,9 @@
       "reason": "Pinned standard output from the preceding verified Aura program."
     },
     "docs/manual/bytes.md#aura-1": {
-      "sha256": "d1a9c6cae950b1d59389cc055335825961da9c3152a67c3f5a95e3942f4d8b5c",
+      "sha256": "7372253544a5893db4dcfd2bcf97218842aa6362a19b0815596ea4e25a357f89",
       "mode": "run",
-      "stdout": "4175726120f09f8c8c\nAura \ud83c\udf0c\nAAH+/w==\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n4175726120f09f8c8c\n",
+      "stdout": "4175726120f09f8c8c\nAura 🌌\nAAH+/w==\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n4175726120f09f8c8c\n",
       "stderr": ""
     },
     "docs/manual/classes.md#aura-1": {
@@ -167,13 +170,13 @@
       "stderr": ""
     },
     "docs/manual/classes.md#aura-10": {
-      "sha256": "dca3ca20399f6939943160d14189e8fc8fe17c731794a09117113471b0803184",
+      "sha256": "1af92eef4bdbb6ae8269f6b7a6102e516c29cf01cee10825330881e0b3064164",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/classes.md#aura-11": {
-      "sha256": "8b33a428ad83333f2d691d63959106c5a92a823a9bce6c586892917738f828fd",
+      "sha256": "68d5ef484f7202188206109253ceb47d059e668730dd90490e77652a7f1ec67b",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -197,7 +200,7 @@
       "stderr": ""
     },
     "docs/manual/classes.md#aura-15": {
-      "sha256": "0ff8867c257a484de2132f6c5e6788956c681f0cdc907df80040309ca7b1b644",
+      "sha256": "352d126717ed0d4d46b8dad8d5e31edde31f68b7e6fee8996724a7e76dfe6331",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -208,7 +211,7 @@
       "reason": "Scoped-cleanup fragment: Resource is declared in the preceding class example."
     },
     "docs/manual/classes.md#aura-2": {
-      "sha256": "129694be3fa5a78f00cdb98e7024dc8724e5b6acd22e1a55664b5eb20d9d3c44",
+      "sha256": "fc391094a921b335ff01727abd07dc1a30b6985cc69621adfa19c69e1409d971",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -251,19 +254,19 @@
       "reason": "Mutation fragment: Counter is declared in the preceding class example."
     },
     "docs/manual/closures.md#aura-1": {
-      "sha256": "388609eba4fdccbe76592be02447117f05347f43ae8f9844213f7573021712a4",
+      "sha256": "958eb9ca22ee8d259e2024c423c77e1a5ccd3d13b6f8444125e2658f5a922841",
       "mode": "run",
       "stdout": "42\n12\n4\n4\nowned\n",
       "stderr": ""
     },
     "docs/manual/closures.md#aura-2": {
-      "sha256": "5ce936871688d5ce2bd04e9dca68babc057193d75ead8d2cb9fb95bbed6d42b6",
+      "sha256": "5417ee506fbad57e87e48b215aee86fc72bca7a12fa153d3362d8dc29c2e989a",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/closures.md#aura-3": {
-      "sha256": "e4541b34b53f6529f48c1151f30b08001f05a575e376993edb7e4f62bd7aaab2",
+      "sha256": "a114f89b8c82ea558ed71a568e035ba0158511b9d3b82596cfdb3b11cd32c396",
       "mode": "run",
       "stdout": "Aura\n4\n",
       "stderr": ""
@@ -300,7 +303,7 @@
       "reason": "Installed-CLI invocation that depends on a caller-supplied app.au file."
     },
     "docs/manual/cli-and-tooling.md#bash-3": {
-      "sha256": "ccbd13c95f79a92dbbfd3c3e51b935c982d89274a7deb70c08bf323c82c06bba",
+      "sha256": "33224146024dc2f697306318514ac57cc7b7f140e303826590de8f9408557df0",
       "mode": "command",
       "stdout": "ok\n",
       "stderr": ""
@@ -342,31 +345,31 @@
       "reason": "Two-line analysis-service request transcript, not a single executable JSON document."
     },
     "docs/manual/collections.md#aura-1": {
-      "sha256": "de3e3c3e950a38cdd43d755a8d4cb43427ec2ac975920818c2256b23a090f3af",
+      "sha256": "4c09aed33a23d2d2311852f4e299181b32bccd1677423b32aaac66def2fef089",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/collections.md#aura-10": {
-      "sha256": "9a2a0fe68456802fafbcbf45a0fa8dc55a1e589f005f8734ef56e821bf1dd907",
+      "sha256": "4e3d7612030ffb0b6c9143f319263d885add35653a745d32d5309acb0f3fec60",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/collections.md#aura-11": {
-      "sha256": "a3daaebbed4197a8b7e2758d32bab81d90be320447f31e2d9734c0e958dff2fb",
+      "sha256": "c54c4711eee066ac95a3ddcbeb591b40c56adca49cbf528e5e34b426155a7459",
       "mode": "run",
-      "stdout": "[1, 2]\n[3, 1]\n[2, 4]\n[3, 1, 2, 4]\n🎉\n[6, 2, 4, 8]\n[2, 4]\n[1, 2, 3, 4]\n[4, 3, 2, 1]\n[3, 1, 2, 4]\n[9, 1, 4, 16]\n[4, 16]\n{3: 30, 4: 40}\n[11, 12, 21, 22]\n",
+      "stdout": "[1, 2]\n[6, 2, 4, 8]\n[2, 4]\n[1, 2, 3, 4]\n[4, 3, 2, 1]\n[3, 1, 2, 4]\n[9, 1, 4, 16]\n[4, 16]\n{3: 30, 4: 40}\n[11, 12, 21, 22]\n",
       "stderr": ""
     },
     "docs/manual/collections.md#aura-2": {
-      "sha256": "5836222a180ddea5a127020b4d9e1991829ffe44290b020248ceb9c291220a67",
+      "sha256": "449552b4bc446d48251da0695f60d895942ea5cfb67597299d5c9896cab99912",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/collections.md#aura-3": {
-      "sha256": "dc354602b56c3669d71ad7cb8b8b3b21a4f3393b9f432da9aad6aeb0ea96c894",
+      "sha256": "a548f4402d92d81794a2cbd9dfb03a904c79e3df94198491ec9979431ae7b522",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -377,7 +380,7 @@
       "reason": "Iteration-form catalog: the three alternatives use a placeholder collection and are independent examples, not one sequential program."
     },
     "docs/manual/collections.md#aura-5": {
-      "sha256": "8491695394e0fbf4cf80a88e261ef94482079a9ea8321c5c179b8a955a134a2d",
+      "sha256": "3f615fb89dc34f8f45a4693cc1287e1e97b2f718af5e9dddd18c8ca5119c200b",
       "mode": "illustrative",
       "reason": "Map-iteration fragment: counts is the collection introduced by the surrounding example."
     },
@@ -387,19 +390,19 @@
       "reason": "Index-lookup fragment: values and index are placeholders supplied by the surrounding prose."
     },
     "docs/manual/collections.md#aura-7": {
-      "sha256": "605635d991cd84bb7a4e38949b98a2eef2eed3cbb12d45fc0303cfc55feac1e4",
+      "sha256": "336b883aaf9491c9aad150684dea1c7a76e6c05682700565db990606ac65b912",
       "mode": "run",
       "stdout": "30\nOption.Some(20)\n",
       "stderr": ""
     },
     "docs/manual/collections.md#aura-8": {
-      "sha256": "11ba60aabbdb119a87f521f18c667d19956c47804e63a77a04be492c295dab54",
+      "sha256": "79a8dfea5a00afa1ebcc64e8a311ba9e5129bac2b4d2f9195a999480577b9842",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/collections.md#aura-9": {
-      "sha256": "e185b53ab07aa11d773ba7764bc5d2501c176d821551aafa0ff00b2458cd8435",
+      "sha256": "bc8b4967bb68492014e5a6106e9a92cf5e55b989869519315366e6dc208f53f2",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -421,7 +424,7 @@
       "reason": "Explicit-stack task-start fragment: parse_document, deep_worker, source, and jobs are application declarations supplied by the surrounding program."
     },
     "docs/manual/concurrency.md#aura-4": {
-      "sha256": "edf125ae0bbd0b2d73db0dcfca4cc4413be4dda2b9768aea59fb21b45dcdcfcd",
+      "sha256": "968c52aaf4f929321d3d5456661436392fa30b131bba3bb1eacbba3f8a90f01d",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -432,7 +435,7 @@
       "reason": "Queue-iteration fragment: jobs is the queue established by the surrounding example."
     },
     "docs/manual/concurrency.md#aura-6": {
-      "sha256": "e7be39c5b333fda8ad0ca4d4dfc0f3eae7decd74b0625bdd04af148b23abed89",
+      "sha256": "1b9f4d1b9b13b6adfbd50ccee84c1c7f445ac30177864f157f033c218c6f096c",
       "mode": "run",
       "stdout": "SelectOutcome.Queue(0, QueueReceive.Item(ready))\n",
       "stderr": ""
@@ -449,7 +452,7 @@
       "stderr": ""
     },
     "docs/manual/control-plane.md#aura-2": {
-      "sha256": "501be2219fbd4037c37bbf4e1696507a890c5a4831dc7fbecbfab54613650373",
+      "sha256": "80ff3759574eaa9a6db2fad03ef5e1e5139deae8a987e94d1244f588387929d5",
       "mode": "run",
       "stdout": "42\n3\n",
       "stderr": ""
@@ -470,7 +473,7 @@
       "reason": "Human-rendered diagnostic excerpt with synthetic path and source context."
     },
     "docs/manual/enums-and-match.md#aura-1": {
-      "sha256": "ce63951ced4abf5401f9c9959ea1deb7d8e9820d640932a2f49e3924ae13d073",
+      "sha256": "0bc9115127b8e41ef7a391a1b00b392f37fc9ae481770f214badcb8f32472193",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -481,13 +484,13 @@
       "reason": "Short-pattern fragment: result is an input supplied by the surrounding example."
     },
     "docs/manual/enums-and-match.md#aura-11": {
-      "sha256": "b3479d0c6dab57aa9a7863eba3f5e693f9ba40563a4c221babe2a9d4521c08cd",
+      "sha256": "ddbda25d8204ae6bd5b82611d899ceeb065562892c1235be179d2eb81ec58135",
       "mode": "run",
       "stdout": "hello\n",
       "stderr": ""
     },
     "docs/manual/enums-and-match.md#aura-12": {
-      "sha256": "2dced8d417b85a872c645c9de27c121567b89b346b08895e668579d3c1071b61",
+      "sha256": "20c7c5eebf504ca6507908d9939f49572018c12dbd8e83735368344958ac24e9",
       "mode": "run",
       "stdout": "hello\nresult is still owned\n",
       "stderr": ""
@@ -498,7 +501,7 @@
       "reason": "Literal-pattern fragment: code is an input supplied by the surrounding example."
     },
     "docs/manual/enums-and-match.md#aura-2": {
-      "sha256": "49375d969068f80c5fdfb6d4de230de62e2a8f2b580ce2e86f39308476542155",
+      "sha256": "f5078a080e2da2040f93683b46dab224d21438b661b9d253c7702144957ac5a8",
       "mode": "illustrative",
       "reason": "Bound-enum declaration fragment: Named is a trait declared outside this block."
     },
@@ -508,13 +511,13 @@
       "reason": "Construction fragment: Status is declared in the preceding enum example."
     },
     "docs/manual/enums-and-match.md#aura-4": {
-      "sha256": "d37f91578106dfca89b333feb49b74921755d4b4b638bc4e665a630613ba98bd",
+      "sha256": "3e08c84ffbd90830b7f4cacad29b7856afbe2942469b82eb7610e8411524e922",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/enums-and-match.md#aura-5": {
-      "sha256": "04e64ee92d0efefe450f7b675578c0a3d99eed7524f224a655afc1a8f254e6e7",
+      "sha256": "dbe800e2069dd18eefd1d52d280c1342126b1a0d13b4c10ba0b05b804a39777f",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -530,7 +533,7 @@
       "reason": "Wildcard-match fragment: ready and Status are established by preceding examples."
     },
     "docs/manual/enums-and-match.md#aura-8": {
-      "sha256": "f2920adbf604ddff8f2e79508aff2a27a8cd322c2ee2baabcdb088dbef7f074d",
+      "sha256": "468f80018ca3c3ab4df8c7717ffe7043c49311b5383016bc572166655ae3fba9",
       "mode": "illustrative",
       "reason": "Function fragment: Status is declared elsewhere on the page."
     },
@@ -545,7 +548,7 @@
       "reason": "Expression-form catalog: the lines are independent grammar examples and include placeholder names, not one program."
     },
     "docs/manual/expressions.md#aura-10": {
-      "sha256": "de832b5ea4407554b4ac7d2fa9406b5c5256eef5e85063449637e214258bcedc",
+      "sha256": "1106d68dab6dd6df342485bc4e3235f58152cac70f61435885fe279f037b4a55",
       "mode": "illustrative",
       "reason": "Specialization catalog: Box and identity are declarations from other feature examples."
     },
@@ -566,13 +569,13 @@
       "stderr": ""
     },
     "docs/manual/expressions.md#aura-14": {
-      "sha256": "ea4f045829fa961f7e49837d2274bf31a62ef63ff4b9297c1a6eda12e09d8694",
+      "sha256": "82b2a293b8f260fd84e9f6fcc0f8dfb8adfea3e6016f89e2b038162dcfc9ae74",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/expressions.md#aura-15": {
-      "sha256": "0c377ad9366ce37b72f097e492a7d2d27209e3982342a546e77b97ea54484806",
+      "sha256": "ca14eb57270f871e280e2ed7279720212ec6dc7be742f3378a17d585dfb0fcd8",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -588,13 +591,13 @@
       "reason": "Multiline match-expression fragment: code is an input supplied by the surrounding example."
     },
     "docs/manual/expressions.md#aura-18": {
-      "sha256": "88bb3a54b02bfe83f57f5cf277137b5328730b4634afe2958d820f8e97d1e64d",
+      "sha256": "793eddcd12be62dafa74556b0d2977fee8b174ef5ebde58c0d48e729073842d5",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/expressions.md#aura-19": {
-      "sha256": "4e65195fd6eecb27de3050339dd6993b31b11ac7bf5cedcb8cd3937322ef65eb",
+      "sha256": "7a168043c90676706f86659fe519efa38b6ea95fd1f9a431ad63e1d59c62d222",
       "mode": "illustrative",
       "reason": "Enum-construction catalog: Status is a user enum declared on another feature page."
     },
@@ -602,6 +605,12 @@
       "sha256": "e4de88e702c1dcc196496f6851d69a0c6fac5102fe9f1f88156b3d1f3cbd0681",
       "mode": "illustrative",
       "reason": "Precedence illustration over undeclared operand names."
+    },
+    "docs/manual/expressions.md#aura-20": {
+      "sha256": "5cb0c0be52fc6a228c7921da3f599968a012920428214439cd97c7bb687e3e26",
+      "mode": "run",
+      "stdout": "16744448\n255\n128\n0\n81\n2\n-4\n3\n",
+      "stderr": ""
     },
     "docs/manual/expressions.md#aura-3": {
       "sha256": "d5e33904f0422182735c0dd37ee2aa8215f42aba3e62480e8b247b928fd6806f",
@@ -633,7 +642,7 @@
       "reason": "Cast catalog: the final expression uses left and right placeholders, so the block is not standalone."
     },
     "docs/manual/expressions.md#aura-8": {
-      "sha256": "ba24084af6bc4048e642c10c687a47c4e372ef44bfe54280da742fac689d1eff",
+      "sha256": "33b7afea4ace9944624c6fc0f383ca34878b6323f1fa062e816bc4994fa3422c",
       "mode": "illustrative",
       "reason": "Postfix-form catalog: users, value, and the result context are placeholders rather than a complete program."
     },
@@ -643,7 +652,7 @@
       "reason": "Call-form catalog: replace and process calls are independent examples with application context omitted."
     },
     "docs/manual/expressions.md#text-1": {
-      "sha256": "ae9c457879d8fd24cbf15dd5bab9b33ca0126d5f1b29839dd1c444d91f2ad011",
+      "sha256": "52e31c0f038488ac41e2d86b3f7527286a779a943174b996a22cad7c13040a12",
       "mode": "illustrative",
       "reason": "Precedence-equivalence notation used to explain grouping, not Aura source."
     },
@@ -653,7 +662,7 @@
       "reason": "Numeric type-name catalog used by the cast matrix, not Aura source."
     },
     "docs/manual/ffi.md#aura-1": {
-      "sha256": "56c96f2122f04d6bab30fb59387236e7ca72eff086b23c3745c2ce55b281b1cf",
+      "sha256": "87253d9f080125541a1b5993027ab64e9758bbc7c90f5111299d958c8b1d82c4",
       "mode": "package-check",
       "entry": "src/main.au",
       "files": {
@@ -684,7 +693,7 @@
       "reason": "Filesystem function fragment: it relies on the fs and io imports shown in the page-level setup block."
     },
     "docs/manual/filesystem.md#aura-3": {
-      "sha256": "2b66fa780065c362af17009ac1111a28786e3bead57c4b3b7d120d8922bea15a",
+      "sha256": "b4296879ed6b76043cd616b6fa4eacdf50868e6719043a06cd73bc7f372336bf",
       "mode": "illustrative",
       "reason": "Filesystem function fragment: it relies on the fs and io imports shown in the page-level setup block."
     },
@@ -694,7 +703,7 @@
       "reason": "Filesystem function fragment: it relies on the fs and io imports shown in the page-level setup block."
     },
     "docs/manual/filesystem.md#aura-5": {
-      "sha256": "f06dc492d111ed23b5282cf0c29ef90cf4a5ac8a62ad5b3a5285f139240975a5",
+      "sha256": "c49e0d56f047e84a66827f36959542cc24e49309de994f874d6f18c10990c0e6",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -717,19 +726,19 @@
       "stderr": ""
     },
     "docs/manual/functions.md#aura-11": {
-      "sha256": "d6e2c27ff79c4ede90ecf0e0f7413e4200da3ade223a56e0c70d4e1b9894d158",
+      "sha256": "7ea81eff6bd22d8432f3fdd0e21d3c64822fc51f35168b6a4db6dd82e048e27f",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/functions.md#aura-12": {
-      "sha256": "bcaf5816eff5d27b50defc8208ffc976fb235411b63947d0196888e2b33d3d93",
+      "sha256": "74aa29b51437f20b85b2afef67aa9bb53ea6802504ba303c1a52760b4f21bca3",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/functions.md#aura-13": {
-      "sha256": "5b92b8d8732e9f5613eac1b4b9b8113034644c80272efaed59c8fbf1ba2ebe97",
+      "sha256": "6815a0f3245e19e2d617aa35c2c0da687b42d50a26d0567b87254c5b755ad980",
       "mode": "illustrative",
       "reason": "Owned-return patterns: this fragment depends on the User declaration in the preceding verified block."
     },
@@ -740,7 +749,7 @@
       "stderr": ""
     },
     "docs/manual/functions.md#aura-15": {
-      "sha256": "616c1e22c303b4d9e6b7095fbc8989b160404abc81574139ccb0f8b11a6cada0",
+      "sha256": "fc3193fbb535d88ed415b1db5b0822f130cfbf5a1da2d72380a66424a73de3ee",
       "mode": "illustrative",
       "reason": "Bound-function catalog: Greeter, First, and Second are traits declared outside this block."
     },
@@ -768,13 +777,13 @@
       "stderr": ""
     },
     "docs/manual/functions.md#aura-2": {
-      "sha256": "9e87df12c0c3125167394eac6a1ade4ecf40972f4dd4ea02a49c0cec10a8c1b6",
+      "sha256": "e9a1e82adafd40a72e31507d07bb289cca4e56bccf1a0b63d7fb84e1fdd434de",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/functions.md#aura-3": {
-      "sha256": "b73e61260f5f1c29a8bae566cc20b877c8b01fba61de2eb16077377b02ee9128",
+      "sha256": "c8812ce82534bb448a5141cb4452e602bb2ccdd01e97fdcc0b14c17be04e468d",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -786,24 +795,24 @@
       "stderr": ""
     },
     "docs/manual/functions.md#aura-5": {
-      "sha256": "c207a1bfe45f0c7655f8504d92af37e19a080b357125334c34151f158d369620",
+      "sha256": "e22cd33d5aba07a730dbc65debc08f13dca27c5dc39e94bba77d98fc0e855893",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/functions.md#aura-6": {
-      "sha256": "93172d7977e0f11a0659afff47d9cd02b82a95b052bb2e04538b88894f395a12",
+      "sha256": "04e34b04afcd9297cbddf49ed91ca3054489e846293a348517ff39ab1adad1e9",
       "mode": "illustrative",
       "reason": "Call-site fragment: push_name is declared in the preceding function block."
     },
     "docs/manual/functions.md#aura-7": {
-      "sha256": "0eef1776fe93da233107fd111c35b13051bd833978cdddc8caf9cdf9353ef9b0",
+      "sha256": "b7d4c01067123a7dd562ca275fb5d03307e0b1c6c5b8f5c7d0755567e648b4b5",
       "mode": "run",
       "stdout": "Aura\nAura\nAura\n",
       "stderr": ""
     },
     "docs/manual/functions.md#aura-8": {
-      "sha256": "59fa863dbcad447753b8f8593a753e1add65ba46d71981f0f68345d45b9aa1a7",
+      "sha256": "ea4decb87d01b596768b5e53a12e789645d9c994ea45144574d741dd5ae7ebad",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -827,7 +836,7 @@
       "stderr": ""
     },
     "docs/manual/generics-and-traits.md#aura-11": {
-      "sha256": "049ee3f7c236728197b6ea745351fb0aa38da4bce52423a7cb5e04b9874751b3",
+      "sha256": "4a6b6ada08a974291f24e1513ce66362f08c39d73c85f2a91fd7dd781d134037",
       "mode": "illustrative",
       "reason": "Implementation fragment: Greeter is declared in a preceding block."
     },
@@ -842,7 +851,7 @@
       "reason": "Generic implementation fragment: Mapper and Box are declared in preceding blocks."
     },
     "docs/manual/generics-and-traits.md#aura-14": {
-      "sha256": "0b354531a57794839b35e86b3a75eeb67dce76bcf5f56cde2b127d02a9cab45f",
+      "sha256": "b23583f8dcda874d255fcfa0873c6aa0f6f35f8d872e0b61f0b3d7b62b30b446",
       "mode": "illustrative",
       "reason": "Specialized implementation fragment: Displayable and Box are declared outside this block."
     },
@@ -862,7 +871,7 @@
       "reason": "Static-method fragment: Widget is an application type intentionally omitted from the trait example."
     },
     "docs/manual/generics-and-traits.md#aura-18": {
-      "sha256": "e1740c0692a5596820547d37ab54a987568d9e22a4d0402f44ac75de1c0732cf",
+      "sha256": "41c3b3545852cd2b70c0d18c5d89f28dbfada1823d2065fc0a38f9d7ab66fb44",
       "mode": "illustrative",
       "reason": "Supertrait fragment: Named is declared in a preceding block."
     },
@@ -884,37 +893,37 @@
       "stderr": ""
     },
     "docs/manual/generics-and-traits.md#aura-21": {
-      "sha256": "a94a29447331b8defb0f901a8693a42438e152da697db1fec9c4bcb3c484728e",
+      "sha256": "8f47643bfe6d7db2bb009efd2e0fcf7d414dabb2c34ec7448f6a07db2da3c341",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/generics-and-traits.md#aura-22": {
-      "sha256": "356027832527b1c4f18bd195660c6bd5d6f3a0c05c021b648230d856296b0936",
+      "sha256": "ffa3f5e55021c2220a6edbbcf8c39db0e864bee21c0187058222e45d908b58e6",
       "mode": "check-fail",
       "exit_code": 1,
       "stderr_contains": "AU3007"
     },
     "docs/manual/generics-and-traits.md#aura-23": {
-      "sha256": "c23ab882245b0675df52b37b9b2cf48e86d2ecf3062d7628c7d30764377c0a9c",
+      "sha256": "a76ab7cbebc842bf43e5e7b51df78d3e1c3faaa5ae5b64621c9d2de37757857f",
       "mode": "check-fail",
       "exit_code": 1,
       "stderr_contains": "AU3007"
     },
     "docs/manual/generics-and-traits.md#aura-24": {
-      "sha256": "b98b7484ba92e4723c7888d2b16285fab8a00a831cb25909ba4d247e1983c60a",
+      "sha256": "79e50379e5b9af3f14a85051eeb57cfda861b563982c7f95e30b5993ff0dbbf7",
       "mode": "check-fail",
       "exit_code": 1,
       "stderr_contains": "AU3007"
     },
     "docs/manual/generics-and-traits.md#aura-25": {
-      "sha256": "45bf1339cff495905c337c1b3fbac9a8108662fdb56a6a5f969901caf1ce3a14",
+      "sha256": "e93ce5924eb38c6e027d9da01f447b3e852f007e7bc0fe49cef81188c3da7b3f",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/generics-and-traits.md#aura-26": {
-      "sha256": "f5b88efc4f796fb65b512b9f36542d54d0b97bf3c31999c408146a808b49a316",
+      "sha256": "5a37b876aeab870b18f01f5540988ec87ffff89f57e988972e5875f2870bc9b8",
       "mode": "check-fail",
       "exit_code": 1,
       "stderr_contains": "AU3007"
@@ -925,23 +934,23 @@
       "reason": "Bound type-declaration fragment: Named is a trait declared outside this block."
     },
     "docs/manual/generics-and-traits.md#aura-4": {
-      "sha256": "c29e289ff2de583af66c9aa707fc25caca2069624e84655490688256cfc65711",
+      "sha256": "65abec727fd65a325cb28f4dc8a6015b18605e5a8a184b9788e1eebc3563c833",
       "mode": "illustrative",
       "reason": "Inference fragment: Box and identity are declared in the preceding generic-declaration block."
     },
     "docs/manual/generics-and-traits.md#aura-5": {
-      "sha256": "61352fb57225b82505e290cd6c91f767ca223747a9a92c0d51462903296c4774",
+      "sha256": "9b086987d7fd274bb1768c2fac64d8f9d4d2237d5d87411d2fce6314ab07a46f",
       "mode": "illustrative",
       "reason": "Specialization fragment: Box and identity are declared in the preceding generic-declaration block."
     },
     "docs/manual/generics-and-traits.md#aura-6": {
-      "sha256": "d0802d2603ca9c9ad9a311d09d888fec5055274fd731e695e4a509caa7e94182",
+      "sha256": "6804bbec326139c2d1e679c721dfba0b074d13d83454430439b199cbfc8004ee",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/generics-and-traits.md#aura-7": {
-      "sha256": "b18fde731c6220e5e94e7fe572077c42116dd402b70adb6b9d18522f5d7e74cb",
+      "sha256": "f2e720ccae2c8baabb2a0530654dc1a3753d4c59b63c51152b651c33aa8d2aea",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -959,7 +968,7 @@
       "stderr": ""
     },
     "docs/manual/grammar.md#ebnf-1": {
-      "sha256": "83aaefa8f4ccfb58870aa90bcae6672c0a0dabbaa477b06f98ffff8d8c1ca549",
+      "sha256": "f8246e634ab048fb72d04d976f5d2afe1b4311de0cc99e93b62ec7ab561ab762",
       "mode": "illustrative",
       "reason": "Normative lexical EBNF production fragment interpreted by the grammar prose, not Aura source."
     },
@@ -974,17 +983,17 @@
       "reason": "Normative with-statement EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-12": {
-      "sha256": "fb8fc13d66240818f6b312b23dc8cbc637316989471a226df611f9fd70065c84",
+      "sha256": "d2f492e70f12f59aa101517863715ff9d2c9035a00636291bb24eeb211b62a5b",
       "mode": "illustrative",
       "reason": "Normative match-statement-and-pattern EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-13": {
-      "sha256": "7646e6d30347786b9124e96769a6b43c375872e964d9dd126dc48b281908e08c",
+      "sha256": "9a2436e7ee7c641abd08af478f3085689b5529feda1ef96c93bca39cd215a2b2",
       "mode": "illustrative",
       "reason": "Normative EBNF expression grammar, not an executable Aura program."
     },
     "docs/manual/grammar.md#ebnf-14": {
-      "sha256": "0ad0aa021a2f79f1e38fc1fc963a4d3c291e1ee600c7ac54e04295b440b80940",
+      "sha256": "c332714261a2e07478ebd9d3e9646ccf06b300a3bdce4a529e1bb4621771c70a",
       "mode": "illustrative",
       "reason": "Normative primary, collection-literal, and comprehension EBNF fragment interpreted by the grammar prose, not Aura source."
     },
@@ -994,12 +1003,12 @@
       "reason": "Normative generic-specialization EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-16": {
-      "sha256": "034af1ca46340e1c478772cc5a44ba08c5d42a0f775a12ebd1a9eac17b8798ef",
+      "sha256": "616aeaac97979166fe667497eb26b66e7b42938ece747279ecfb37ee02a0efc3",
       "mode": "illustrative",
       "reason": "Normative match-expression EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-2": {
-      "sha256": "60a41c14204e2e7d8130c67df44d0ea219020e2908d0fd55f9e24735a7dde4d0",
+      "sha256": "af11a160ea7c4a9ee1b7b69036aa71090a129dc063b675aabd8032793dd546d5",
       "mode": "illustrative",
       "reason": "Normative module-and-import EBNF fragment interpreted by the grammar prose, not Aura source."
     },
@@ -1034,17 +1043,22 @@
       "reason": "Normative trait-and-implementation EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-9": {
-      "sha256": "c31d79602c7a2b62a36684811f3055d2f2047f18b1aea29d3c4a0ee1eee21cb7",
+      "sha256": "44bdd30487d5be8a6ce10962f0db8541737c51a608e3f6b6705edc1b61bc7421",
       "mode": "illustrative",
       "reason": "Normative statement-and-assignment EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#text-1": {
-      "sha256": "f4e8b50a0e6a4d77248f9f497ce210f4a539c172cd2139b9a79a18ba8ad2ae6b",
+      "sha256": "c3417874210a03bf4aec17e7e9994a2bfc55a49bb1a7fafb77123a686758c110",
       "mode": "illustrative",
       "reason": "Reserved-keyword catalog, not an Aura compilation unit."
     },
     "docs/manual/grammar.md#text-2": {
-      "sha256": "1c45742ae878120a0d4107b39104709ef515452b51dc99b6eb730df119da934a",
+      "sha256": "953ca189239297b7ff2e8b211fd112b4a86e8aff8b1e6d371670bf0118f375ea",
+      "mode": "illustrative",
+      "reason": "Normative closed f-string format grammar interpreted by the surrounding prose, not an Aura compilation unit."
+    },
+    "docs/manual/grammar.md#text-3": {
+      "sha256": "ec4646480bc146251e723c11048879bae30efc57d274f5274180a5493271511e",
       "mode": "illustrative",
       "reason": "Punctuation-and-operator token catalog, not an Aura compilation unit."
     },
@@ -1072,7 +1086,7 @@
       "stderr": ""
     },
     "docs/manual/lexical-structure.md#aura-1": {
-      "sha256": "058419e9919341faad2fd19579c794e9f77081cf190d0cdbb57173249e39546d",
+      "sha256": "d8fbfa3fc77b1adeb1b8e29eadc4ac35ab211cd284e317cc64f7e2e7e3fc0b02",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1101,15 +1115,33 @@
       "stderr": ""
     },
     "docs/manual/lexical-structure.md#aura-6": {
+      "sha256": "81e1e4d52d9deb52cd79c5d598d7eafc65e4bc6d17e2839694d5c010ed520ce7",
+      "mode": "check",
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/lexical-structure.md#aura-7": {
+      "sha256": "38a104227bf19eb3bba5b0a8e175384ed70ad87d78f917ca15b5300fc97f076a",
+      "mode": "check",
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/lexical-structure.md#aura-8": {
       "sha256": "cd45c33e224f546fc3d3fd91b85326ad0056ba422fcb410abfda9899ecf5a384",
       "mode": "run",
       "stdout": "hello aura\n",
       "stderr": ""
     },
-    "docs/manual/lexical-structure.md#aura-7": {
+    "docs/manual/lexical-structure.md#aura-9": {
       "sha256": "1da1248f109187333679251f8a4c4f44bb89a7cac3950538ecfdec5c0310b14a",
       "mode": "illustrative",
       "reason": "Escaped-brace fragment: name is an interpolation value supplied by the surrounding example."
+    },
+    "docs/manual/lexical-structure.md#aura-10": {
+      "sha256": "9c2610b6a412d0510f9e6cb83ff87cd0ec63863cf5f087feb2b70feeb48a8286",
+      "mode": "run",
+      "stdout": "   1,234,567\n+87.50%\n······Aura······\n",
+      "stderr": ""
     },
     "docs/manual/lexical-structure.md#ebnf-1": {
       "sha256": "b2f4a4344b8e16c0ba22d558b9ed9019a1a8d23f6b50b59051b187e6efa59dc6",
@@ -1117,29 +1149,40 @@
       "reason": "Normative identifier EBNF production interpreted by the lexical prose, not Aura source."
     },
     "docs/manual/lexical-structure.md#ebnf-2": {
-      "sha256": "dc9dbb1ea16dcb90e6d8da704376a4592e84fba8e4bb32fdf2215838d258b733",
+      "sha256": "7b4634efe4f32b6ee2af0e1ac2c141b01c00e1d7929edfaa9555c1c82be9fec1",
       "mode": "illustrative",
       "reason": "Normative integer-literal EBNF production interpreted by the lexical prose, not Aura source."
     },
     "docs/manual/lexical-structure.md#ebnf-3": {
-      "sha256": "da6e40bdd52f41374eef3df808e3184dd57ec759993ad0c509ab804b44b6944a",
+      "sha256": "d48be2a9168987935547ca4d3629534319e1d234dacc46f28367294abf035edf",
       "mode": "illustrative",
       "reason": "Normative float-and-exponent EBNF production interpreted by the lexical prose, not Aura source."
     },
     "docs/manual/lexical-structure.md#ebnf-4": {
-      "sha256": "529a44c840210d36e3fe85a26a63fee932a4f65a72028198224e35471b30186b",
+      "sha256": "dc69eed091e965648c37f684fd827cfba5bb95ffb41abeb5947bc6c966749511",
       "mode": "illustrative",
       "reason": "Normative duration-literal EBNF production interpreted by the lexical prose, not Aura source."
     },
     "docs/manual/lexical-structure.md#text-1": {
-      "sha256": "f4e8b50a0e6a4d77248f9f497ce210f4a539c172cd2139b9a79a18ba8ad2ae6b",
+      "sha256": "c3417874210a03bf4aec17e7e9994a2bfc55a49bb1a7fafb77123a686758c110",
       "mode": "illustrative",
-      "reason": "Reserved-keyword catalog, not an Aura compilation unit."
+      "reason": "Keyword catalog, not an Aura compilation unit."
     },
     "docs/manual/lexical-structure.md#text-2": {
-      "sha256": "1c45742ae878120a0d4107b39104709ef515452b51dc99b6eb730df119da934a",
+      "sha256": "ec4646480bc146251e723c11048879bae30efc57d274f5274180a5493271511e",
       "mode": "illustrative",
       "reason": "Punctuation-and-operator token catalog, not an Aura compilation unit."
+    },
+    "docs/manual/math.md#aura-1": {
+      "sha256": "b46394d5ee3d25e5257baa88b456782882b5de3222c941829c70b0d1a0b25cfd",
+      "mode": "run",
+      "stdout": "3.141592653589793\n2.718281828459045\ninf\nNaN\n-2\n-1\n-1\n0.125\n1.0\n0.0\n3.0\n3.0\n0.0\n1.0\n0.0\n",
+      "stderr": ""
+    },
+    "docs/manual/math.md#text-1": {
+      "sha256": "6ff86c846ca5d16439ab8992cae61661a67d2bf2cef57eafdaac8745c561c2c9",
+      "mode": "illustrative",
+      "reason": "Pinned standard output from the preceding verified Aura program."
     },
     "docs/manual/names-and-scopes.md#aura-1": {
       "sha256": "0c8e3f3b79692555e5c13c417a9a08285fbf173d146bf48dd3c8fb701145d016",
@@ -1147,17 +1190,27 @@
       "reason": "Module-resolution example: it requires the multi-file tools.text module tree described by the surrounding page."
     },
     "docs/manual/names-and-scopes.md#aura-2": {
+      "sha256": "7b370f9ea5ebacafecdae8da75d10e0ea2b7467acc86380599624b6e84b478c8",
+      "mode": "illustrative",
+      "reason": "Module-alias example: it requires the multi-file tools.text module tree described by the surrounding page."
+    },
+    "docs/manual/names-and-scopes.md#aura-3": {
       "sha256": "2a99c8fbf377ad8fe8961a38d7b5cb9041577ecb4c8e7b60b948ff5d791cf358",
       "mode": "illustrative",
       "reason": "Import-form example: it requires the multi-file tools.text module tree described by the surrounding page."
     },
-    "docs/manual/names-and-scopes.md#aura-3": {
-      "sha256": "1713ed781b5bd377b0e4d1df2df52e4b46973f9f9fa043b42717a09bbbe38d83",
+    "docs/manual/names-and-scopes.md#aura-4": {
+      "sha256": "9bcf83aed8f30b9481eab36807d9182c41ea8b1c3d052c7d9bb7b172f76012d3",
+      "mode": "illustrative",
+      "reason": "From-import alias example: it requires the multi-file tools.text module tree described by the surrounding page."
+    },
+    "docs/manual/names-and-scopes.md#aura-5": {
+      "sha256": "2a627748c0382d4c030dc38e5786fd4e5b578806264bd10d7705a2b481201adf",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/names-and-scopes.md#aura-4": {
+    "docs/manual/names-and-scopes.md#aura-6": {
       "sha256": "53753d6d347a01a32f3bd83ec7f21d897e3e507a4b098f5517b3eb3f0cd5c15a",
       "mode": "illustrative",
       "reason": "Pattern-scope fragment: result is an input supplied by the surrounding example."
@@ -1181,7 +1234,7 @@
       "stderr": ""
     },
     "docs/manual/numeric-arrays.md#aura-1": {
-      "sha256": "1775f6aa3bb993372837e7e264fca1b8a33829b814b95ae8ca7a2b6046bd919c",
+      "sha256": "6cfdfbe54e25fe80abbfd469931aca0d2d47e3ba86e180a216e83a99d24c6887",
       "mode": "run",
       "stdout": "[2, 2]\n3.5\n4.0\n3.0\n",
       "stderr": ""
@@ -1198,7 +1251,7 @@
       "stderr": ""
     },
     "docs/manual/ownership-and-borrowing.md#aura-10": {
-      "sha256": "a30da493f78eddee17608306b62e3d7cbe4d8308188508aff9f202002047bdd3",
+      "sha256": "f559ccd5e1d312169572c193c2ed70a0a82b8c04a1dd04a2b86cc40f20f8740d",
       "mode": "run",
       "stdout": "ready\n",
       "stderr": ""
@@ -1210,7 +1263,7 @@
       "stderr": ""
     },
     "docs/manual/ownership-and-borrowing.md#aura-12": {
-      "sha256": "5f8112b076305425d38da9be3599aaa507914e9d30663302a41301291cb8431b",
+      "sha256": "455bdd7a6d5e86e94498e6e4c654c947f0bda91cc1258627dda70a26bb54ea05",
       "mode": "run",
       "stdout": "compile\ncompile\n",
       "stderr": ""
@@ -1222,47 +1275,47 @@
       "stderr": ""
     },
     "docs/manual/ownership-and-borrowing.md#aura-2": {
-      "sha256": "b5ce2b004dada707e2577c394d653b7ae0f551d1aa049ff2739340e54abcff83",
+      "sha256": "d44a1df5a412671f304e6a20a6306342b210fe4749f567574bb7110e39110205",
       "mode": "run",
       "stdout": "aura\n",
       "stderr": ""
     },
     "docs/manual/ownership-and-borrowing.md#aura-3": {
-      "sha256": "fc83c20344dc8862241279bc446d4a13de4e74d93f198f1121d8444ae8836633",
+      "sha256": "41ad070b1708e525acf29a293838c8cf5fb7834ab00ecff11a6564346572b9c4",
       "mode": "run",
       "stdout": "AURA\naura\n",
       "stderr": ""
     },
     "docs/manual/ownership-and-borrowing.md#aura-4": {
-      "sha256": "18c120fe62cbb864420a659e09769a4abdefdf6678f3222fc7fe69a204d69d36",
+      "sha256": "f899cbf11d9cfbfa383f1d94a61617890416f7b71633461f13479c929b8252ff",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/ownership-and-borrowing.md#aura-5": {
-      "sha256": "1bcacfdcbf3dc282a71d99921fb97a0a13e48b42d7e072262c1284eaabd30f6d",
+      "sha256": "7332e94cc5ddb6fb6224c813b5879b54752b92415b52cb7778dd9f05366fbce2",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/ownership-and-borrowing.md#aura-6": {
-      "sha256": "c35fc1b2a326cecd4c5792f2baab0752cc9d92bf85dd78f03265a81d13217ea5",
+      "sha256": "d73b600a78dc0a1e37e3678bbe51bf197ad89edb3fb47ca20b4582134d4aeb64",
       "mode": "run",
       "stdout": "1\nGrace\n",
       "stderr": ""
     },
     "docs/manual/ownership-and-borrowing.md#aura-7": {
-      "sha256": "9cc4dafdb99c06b772f3c5cfa459f8f5e2f8a2f3ace3faaf67f9f276beddf62f",
+      "sha256": "420b74697cff35d841bf5075cd2dc71ec6068716f4e95e1a9ca760e1ca4e5eec",
       "mode": "illustrative",
       "reason": "Rejected owned-return fragment: it depends on the User declaration shown in the preceding example."
     },
     "docs/manual/ownership-and-borrowing.md#aura-8": {
-      "sha256": "df79f45482d7535f9fa56f7a5b129839a9c55b223b5cb8b8ebe6e3a86ea9bea5",
+      "sha256": "98f0cb97286a5bccdeada6323610070557b47cbd1ebf73dd27402c12799a9217",
       "mode": "illustrative",
       "reason": "Owned-return repair fragment: it depends on the User declaration shown in the preceding example."
     },
     "docs/manual/ownership-and-borrowing.md#aura-9": {
-      "sha256": "b0a84c69ebd6def9912574d3ca29e142cb003a74c85ed4a4c8d874c3d3739fb7",
+      "sha256": "59fd51f32e29cebce80e2f985944bccc892dcaea2ae04b3a21f7cf1a32b44af1",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1273,7 +1326,7 @@
       "entry": "src/main.au",
       "files": {
         "Aura.toml": "[package]\nname = \"reference_docs\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
-        "src/helpers/text.au": "public def normalize(value: String) -> String:\n    return value.clone()\n"
+        "src/helpers/text.au": "public def normalize(value: str) -> str:\n    return value.clone()\n"
       },
       "stdout": "ok\n",
       "stderr": ""
@@ -1360,7 +1413,7 @@
       "reason": "Supervisor function fragment: it relies on process types and host process behavior from the surrounding page."
     },
     "docs/manual/randomness.md#aura-1": {
-      "sha256": "fa4e80f7f7e9731df653ceaa84369500f065569f84bab3dd9667293d21c363da",
+      "sha256": "1a2fae0e5e1bfc11c1cebca990fac31cb3d6b15ba1b8e8ffd28e5a6fd1599716",
       "mode": "run",
       "stdout": "2\n2\n[3, 5, 4, 1, 2, 0]\n",
       "stderr": ""
@@ -1382,7 +1435,7 @@
       "reason": "Conditional-chain fragment: value is an input supplied by the surrounding example."
     },
     "docs/manual/statements.md#aura-12": {
-      "sha256": "52093c57956a970ce1b93c43d493d90f01b8a04da634eca7be96b275340c29f2",
+      "sha256": "40318713f9ede6c89185afd0c13bba2111769e7ae81709a68b354a30edd6cab9",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1432,24 +1485,24 @@
       "stderr": ""
     },
     "docs/manual/statements.md#aura-20": {
-      "sha256": "d63a1e020a553e28b35cc2f7b3dd3c4b447ca77ae53cac0b79b3e249b5c95c0a",
+      "sha256": "c3fdabbe2eb8947c4b55a029849087b10a382b07112d680cffac64c77f7c14cc",
       "mode": "illustrative",
       "reason": "Module-import example: it requires the multi-file util.math module tree described by the surrounding page."
     },
     "docs/manual/statements.md#aura-21": {
-      "sha256": "37edb6ce3a2558aca196dd0cdca5a6e3e02721488a7529ae5b29c7d622a0b57d",
+      "sha256": "c04397028c36cdadf9a6c5b679382799fa2568dc9208907bea8c51fa028d3da7",
       "mode": "run",
       "stdout": "hello\n",
       "stderr": ""
     },
     "docs/manual/statements.md#aura-3": {
-      "sha256": "2ac9a639477819d57495784ad4d72fedec8c93011b3e19e83748d46e31b5ae1d",
+      "sha256": "70a3948498098c6d64b0a709fc52be94de774c8506386101e7d310dfbbc92ebd",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/statements.md#aura-4": {
-      "sha256": "a7086a57f0ffe2edf1e18214528f548498f83bee282d90ab06ebc52b22406112",
+      "sha256": "f30b00710c43417c453e5421320a35d40d624e1d6303c38b24700f916e522155",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1486,19 +1539,19 @@
       "reason": "Exact integer-division diagnostic-message excerpt, not Aura source."
     },
     "docs/manual/tuples.md#aura-1": {
-      "sha256": "9c96231d22ff3b4ae72894e75ab3449e148f4034be8a9454d88696bf6f21d250",
+      "sha256": "d6bd7f2804db039c85a3b48849e06c3832294158d341279d32ac89ccef9d15a2",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/tuples.md#aura-2": {
-      "sha256": "fa88ece2d79ca1cdc7c5fa65cc2aa9c56ac30a0f7460641afaf1841e99e9d4b4",
+      "sha256": "350df4c99a7553376e44aab3edebd190c3cbfcf61aaa5949f8af076437c080d3",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/tuples.md#aura-3": {
-      "sha256": "27787493fb83c7ab3ded6c94b8dd74383cad491e36c7b488a73e1f21421f581d",
+      "sha256": "5eeef92978f868c5bc4aab8851f8e5a20afb3a6f45155a063511c958f5014bed",
       "mode": "run",
       "stdout": "Aura\n7\n20\nready:2\ndone:3\n3\ntrue\n",
       "stderr": ""
@@ -1514,7 +1567,7 @@
       "reason": "Pinned standard output from the preceding verified Aura tuple program."
     },
     "docs/manual/types.md#aura-1": {
-      "sha256": "5d277af4d74059396e0e46d944701d6c6c1a2cdfdac7b3fb040c690bb0d3e999",
+      "sha256": "28f198affd9cc6de0ab66d2c4a774bc620a75edbdb6ce21d9c86aca74d749543",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1526,31 +1579,31 @@
       "stderr": ""
     },
     "docs/manual/types.md#aura-11": {
-      "sha256": "95d2b682a7a4cfee9693bde9f7c4c3ca48c09062535f6b496c37dc16c906a2bf",
+      "sha256": "c5c324b3ad893dfe528d5a622c7595469f64d559d7a7b1c55e0a6124ca9370d1",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/types.md#aura-2": {
-      "sha256": "ae44133fbff8e3cfc8056b801f809f4b139f263547a454bb2a77c197c2963d22",
+      "sha256": "f7f8488db9521aa0aaad687ddaf884953deb0e4d7ff7b0dfebc7e2e7a9455560",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/types.md#aura-3": {
-      "sha256": "2237efacb63331e3fc74de3ab5b51a1f96e717d9b99f44a99628d58fe86e6e6e",
+      "sha256": "c185dafa6cff6b822db6fdebe80507ceeeaa0e4a7f77db26dc9d9a2352fce8f9",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/types.md#aura-4": {
-      "sha256": "c7378d300054b2a777ba963098b955eba14b3dcf4152b1e2ce96fb319ab18709",
+      "sha256": "26c4089f6edf050c45821f1e3a9d0927199bad5a8c2968745f789e070ca401b1",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/types.md#aura-5": {
-      "sha256": "68c7bd15a714583bce98660126fd12007fa9f4142d0f13041411fab7cb78310d",
+      "sha256": "4c0f11f5d29d568b10570e006409400c778e2e74f0a408766fa04ac250cc4ac1",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
@@ -1567,13 +1620,13 @@
       "stderr": ""
     },
     "docs/manual/types.md#aura-8": {
-      "sha256": "b75fe3d4eb18db2f7462942688bcc1bcc19c444e48e6e71778b76f038cb13a55",
+      "sha256": "8f15a8f4d5419673eecf28e0a4c4129652d8112c8e367cafededbe4849efb738",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/types.md#aura-9": {
-      "sha256": "fd3c1b8f43a3bb5c546e83737132e967f358429829e1c4ebe0786a338afa5ea0",
+      "sha256": "2e5a2f801efb936dd71602303d815f8d6e7502a08b91d1b16c5186a595f1ffef",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""

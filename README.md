@@ -71,7 +71,7 @@ Current compiler workflow:
 - `cargo run -p aura -- run examples/classes/methods.au`
   - execute user-defined instance and associated methods
 - `cargo run -p aura -- run examples/control_flow/match_literals.au`
-  - execute statement-form `match` over literal `bool`, integer, and `String` cases
+  - execute statement-form `match` over literal `bool`, integer, and `str` cases
 - `cargo run -p aura -- run examples/control_flow/conditional_expressions.au`
   - execute lazy Python-style conditional expressions with one unified result type
 - `cargo run -p aura -- run examples/enums/result_match.au`
@@ -88,30 +88,30 @@ Current compiler workflow:
   - execute contextually typed expression closures with by-value captures
 - `cargo run -p aura -- run examples/basics/len_and_str.au`
   - execute `int64` member lengths, `len(value) == value.len()`, Unicode-scalar
-    String length versus UTF-8 byte length, and `str(value)`
-- `cargo run -p aura -- run examples/collections/vec_basics.au`
-  - execute list literals, `Vec[T]` methods, and indexed element access
-- `cargo run -p aura -- run examples/collections/vec_polish.au`
-  - execute negative Vec indexing, checked `int64`-length to `int32`-index
-    narrowing, non-copy cloned reads, mutable Vec iteration, `insert(...)`,
-    `swap(...)`, `reverse()`, `clear()`, richer Vec methods, and Vec equality
-- `cargo run -p aura -- run examples/collections/vec_algorithms.au`
+    str length versus UTF-8 byte length, and `str(value)`
+- `cargo run -p aura -- run examples/collections/list_basics.au`
+  - execute list literals, `list[T]` methods, and indexed element access
+- `cargo run -p aura -- run examples/collections/list_polish.au`
+  - execute negative list indexing, cast-free length-driven indexing,
+    non-copy cloned reads, mutable list iteration, `insert(...)`,
+    `swap(...)`, `reverse()`, `clear()`, richer list methods, and list equality
+- `cargo run -p aura -- run examples/collections/list_algorithms.au`
   - execute stable natural/key sorting plus eager, source-retaining
-    `Vec.map(...)` and `Vec.filter(...)`
+    `list.map(...)` and `list.filter(...)`
 - `cargo run -p aura -- run examples/collections/comprehensions.au`
-  - execute eager owned list, set, and map comprehensions with filters and
+  - execute eager owned list, set, and dictionary comprehensions with filters and
     nested outer-major clauses
 - `cargo run -p aura -- run examples/collections/slices.au`
-  - execute owned Vec and Unicode-scalar String slices, omitted and negative
+  - execute owned list and Unicode-scalar str slices, omitted and negative
     endpoints, and source/result independence
-- `cargo run -p aura -- run examples/collections/map_basics.au`
-  - execute `Map[K, V]` literals, `items()` / `entries()`, `extend(...)`, and the maintained map method surface
+- `cargo run -p aura -- run examples/collections/dict_basics.au`
+  - execute `dict[K, V]` literals, tuple-valued `items()`, `update(...)`, and the maintained dictionary method surface
 - `cargo run -p aura -- run examples/collections/set_basics.au`
-  - execute `Set[T]` literals, shared-borrow set iteration, and the maintained set method surface
+  - execute `set[T]` literals, shared set iteration, membership, and the maintained set method surface
 - `cargo run -p aura -- run examples/basics/pass_keyword.au`
   - execute the `pass` no-op statement in intentionally empty blocks
 - `cargo run -p aura -- run examples/basics/assertions.au`
-  - execute default/custom assertions with lazy messages and source-located failures
+  - execute introspectable comparisons and membership with lazy messages and source-located failures
 - `cargo run -p aura -- run examples/basics/multiline_expressions.au`
   - continue calls, signatures, grouping, indexes, and collection literals
     across physical lines while a source delimiter remains open
@@ -165,10 +165,13 @@ Current compiler workflow:
     exact-shape/scalar kernels, and explicit wrapping/saturating integer modes
 - `cargo run -p aura -- run examples/strings/string_methods.au`
   - execute single-quoted strings, `int64` Unicode-scalar `len()`, `int64`
-    UTF-8 `byte_len()`, and the maintained `String` method surface including
+    UTF-8 `byte_len()`, and the maintained `str` method surface including
     `split`, `replace`, case conversion, and prefix/suffix stripping
 - `cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au`
-  - execute parsing builtins, scalar/boolean `.to_string()`, and `String.join(...)`
+  - execute parsing builtins, scalar/boolean `.to_string()`, and `str.join(...)`
+- `cargo run -p aura -- run examples/strings/literal_forms_and_formatting.au`
+  - execute exact multiline/raw strings and statically checked Unicode-aware
+    f-string formatting
 - `cargo run -p aura -- run examples/io/read_text_file.au`
   - execute the maintained builtin file I/O surface through `fs.exists(...)`, `fs.read_to_string(...)`, and `io.write(...)`
 - `cargo run -p aura -- run examples/io/bytes_file_io.au`
@@ -255,7 +258,7 @@ Current compiler workflow:
   - `--line` and `--character` are zero-based
   - member completion expects the cursor positioned just after `.`
   - the CLI tolerates the common incomplete-editor state where the current buffer contains one or more dangling member accesses such as `counter.` or `helpers.math.`, including when they appear at EOF
-  - stdin-backed completion now also resolves local imported modules relative to the supplied file path, including imported trait methods
+  - stdin-backed completion resolves local imported modules relative to the supplied file path, including imported trait methods
 - `cat examples/modules/simple_import.au | cargo run -p aura -- run --stdin "$(pwd)/examples/modules/simple_import.au"`
   - execute an editor-style buffer while still resolving local imports relative to the supplied path
 - `cargo run -p aura -- check examples/packages/local_path_dependencies/app/src/main.au`
@@ -304,24 +307,24 @@ GitHub Actions:
 
 Current `build` status:
 
-- `aura build` now accepts `--backend auto|direct`
+- `aura build` accepts `--backend auto|direct`
 - `aura build` defaults to `auto`
 - `auto` first tries the direct native backend and may fall back to a standalone embedded-MIR launcher when direct emission is unavailable
-- `direct` now performs true low-level native code generation for the full currently implemented Aura language surface
-- the built binary no longer reparses source or compiles a generated Rust runner at build time
-- the built binary no longer depends on the original `.au` source files at runtime
-- built binaries now render runtime failures with file, line, caret, typed
+- `direct` performs true low-level native code generation for the full currently implemented Aura language surface
+- a built binary runs without reparsing source or compiling a generated Rust runner
+- a built binary runs without the original `.au` source files
+- built binaries render runtime failures with file, line, caret, typed
   Aura call-chain, and child-task ancestry context from embedded source
 - release archives include the Aura native runtime and do not require Cargo or a source checkout; `aura build` still requires a host C compiler
-- manifest-aware commands now resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aura.toml`
+- manifest-aware commands resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aura.toml`
 - git dependencies support `git = "..."` with `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
 - the current package-system milestone writes a local `Aura.lock` at the package root or workspace root, pinning resolved git revisions and recording relative paths for local path dependencies
-- both maintained execution paths now cover the builtin `io`, `fs`, `net`, and `process` module surface for scheduler-aware text/binary file I/O, reactor-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, shell-free subprocess execution with captured pipes, and supervised child processes with restart policy support
+- both maintained execution paths cover the builtin `io`, `fs`, `net`, and `process` module surface for scheduler-aware text/binary file I/O, reactor-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, shell-free subprocess execution with captured pipes, and supervised child processes with restart policy support
 
 Current `run` status:
 
 - `aura run` defaults to the MIR runtime for the current implemented Aura surface; `--backend direct` requires native execution and `--backend auto` prefers it with visible fallback
-- queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, the maintained reactor-driven socket networking surface, and the shell-free `process` module now run through the same MIR-backed public execution path
+- queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, the maintained reactor-driven socket networking surface, and the shell-free `process` module run through the same MIR-backed public execution path
 - task bodies use pinned scheduler workers: the default worker count is the
   available parallelism reported by the host, and the provisional
   `AURA_WORKERS=<positive integer>` override selects an explicit count; each
@@ -365,7 +368,7 @@ Current `run` status:
 - every loop backedge includes a compiler-inserted cooperative scheduling
   check; native concurrent code amortizes it with function-local fuel, while
   sequential native code elides checks when no sibling task can exist
-- the maintained execution architecture is now the MIR runtime for `run` plus native direct codegen for `build`
+- the maintained execution architecture uses the MIR runtime for `run` and native direct codegen for `build`
 
 ## VS Code install
 

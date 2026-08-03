@@ -1,10 +1,10 @@
-def greet(name: String) -> String:
+def greet(name: str) -> str:
     return "hello " + name
 
-def shout(msg: String) -> String:
+def shout(msg: str) -> str:
     return msg + "!"
 
-def chain(a: String, b: String) -> String:
+def chain(a: str, b: str) -> str:
     return a + " and " + b
 
 def main() -> int32:

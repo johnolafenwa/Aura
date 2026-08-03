@@ -2,14 +2,14 @@
 ## Expects: Compile error about incomplete implementation
 
 trait Displayable:
-    def label(self) -> String
-    def icon(self) -> String
+    def label(self) -> str
+    def icon(self) -> str
 
 class Button:
-    text: String
+    text: str
 
 impl Displayable for Button:
-    def label(self) -> String:
+    def label(self) -> str:
         return self.text.clone()
     ## Note: icon() is NOT implemented
 

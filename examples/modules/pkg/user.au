@@ -1,8 +1,8 @@
 from pkg.named import Named
 
 public class User:
-    public label: String
+    public label: str
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.label.clone()

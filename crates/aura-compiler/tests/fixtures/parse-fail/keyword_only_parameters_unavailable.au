@@ -1,0 +1,2 @@
+def configure(path: str, *, retries: int32):
+    return

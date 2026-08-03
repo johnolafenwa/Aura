@@ -2,7 +2,7 @@ def answer() -> int32:
     return 42
 
 def main() -> int32:
-    messages = Queue[String]()
+    messages = Queue[str]()
     messages.put("queued")
 
     print(select(messages, 0ms))

@@ -1,20 +1,20 @@
 class Resource:
-    name: String
+    name: str
 
     def close(mut self):
         print("close " + self.name)
 
-def build_value(index: int64) -> String:
+def build_value(index: int64) -> str:
     print(f"build {index}")
     if index == 2:
-        empty: Vec[int64] = []
+        empty: list[int64] = []
         impossible = empty[0]
         return f"value-{impossible}"
     return f"value-{index}"
 
 def main():
     with resource = Resource(name="outer"):
-        result: Vec[String] = [
+        result: list[str] = [
             build_value(index)
             for index in [1, 2, 3]
         ]

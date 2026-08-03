@@ -1,8 +1,8 @@
-def consume(value: own String):
+def consume(value: own str):
     print(value)
 
 def main() -> int32:
-    jobs = Queue[String]()
+    jobs = Queue[str]()
     jobs.put("one")
     jobs.close()
 

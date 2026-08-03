@@ -1,13 +1,13 @@
-# Test: reassigning String field in borrow mut method
+# Test: reassigning str field in borrow mut method
 
 class Config:
-    host: String
+    host: str
     port: int32
 
     def set_host(mut self, new_host: str):
         self.host = new_host + ""
 
-    def describe(self) -> String:
+    def describe(self) -> str:
         return f"{self.host}:{self.port}"
 
 def main() -> int32:

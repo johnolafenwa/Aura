@@ -18,7 +18,7 @@ Every field has an explicit type. A field may have a default expression of exact
 
 ```python
 class Server:
-    host: String = "127.0.0.1"
+    host: str = "127.0.0.1"
     port: int32 = 8080
 ```
 
@@ -159,9 +159,9 @@ A consuming receiver may return an owned field because it owns the class value:
 
 ```python
 class User:
-    name: String
+    name: str
 
-    def into_name(own self) -> String:
+    def into_name(own self) -> str:
         return self.name
 ```
 
@@ -170,9 +170,9 @@ supports cloning, clone to produce an owned result:
 
 ```python
 class User:
-    name: String
+    name: str
 
-    def name_copy(self) -> String:
+    def name_copy(self) -> str:
         return self.name.clone()
 ```
 
@@ -198,7 +198,7 @@ copy class Pair:
     right: int32
 ```
 
-A `copy class` value is duplicated by assignment and by-value use. The declaration is valid only when every field is statically copyable. A `String`, collection, resource, ordinary class, or enum with move payloads therefore prevents copy-class declaration.
+A `copy class` value is duplicated by assignment and by-value use. The declaration is valid only when every field is statically copyable. A `str`, collection, resource, ordinary class, or enum with move payloads therefore prevents copy-class declaration.
 
 Copyability is structural through copy classes and eligible enum payloads, but generic type parameters are not assumed copyable merely because one later instantiation happens to use a copy type. The complete current categories are listed in [Types](/manual/types#copy-and-move-categories).
 
@@ -222,13 +222,13 @@ A non-generic user class may be managed by `with` when it declares this exact in
 
 ```python
 class Resource:
-    name: String
+    name: str
 
     def close(mut self) -> None:
         print("closing " + self.name)
 ```
 
-The method must be named `close`, use `mut self`, take no ordinary parameters, and return `None`. Generic user resource classes are not supported by `with` in Aura 0.2.
+The method must be named `close`, use `mut self`, take no ordinary parameters, and return `None`. Generic user resource classes are not supported by `with` in Aura 0.3.
 
 ```python
 with resource = Resource(name="db"):
@@ -315,7 +315,7 @@ resolution and signatures.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 has no class inheritance, overloads, property syntax, custom
+Aura 0.3 has no class inheritance, overloads, property syntax, custom
 constructor hook, or general destructor hook. Generic user classes cannot be
 managed directly by `with`. A class field default cannot call a user-defined
 function in the current compiler; compute that value before construction and

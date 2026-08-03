@@ -1,6 +1,6 @@
 # Grammar
 
-This chapter defines the complete source grammar of Aura 0.2. The grammar is normative after lexical token formation. Static restrictions—types, visibility, ownership, exhaustiveness, valid receivers, and API-specific rules—are defined by [Static Semantics](/manual/static-semantics).
+This chapter defines the complete source grammar of Aura 0.3. The grammar is normative after lexical token formation. Static restrictions—types, visibility, ownership, exhaustiveness, valid receivers, and API-specific rules—are defined by [Static Semantics](/manual/static-semantics).
 
 ## Notation
 
@@ -31,28 +31,44 @@ productions; it does not add a trailing comma to any list form.
 ```ebnf
 ascii-letter = "A" … "Z" | "a" … "z" ;
 digit        = "0" … "9" ;
+binary-digit = "0" | "1" ;
+octal-digit  = "0" … "7" ;
 hex-digit    = digit | "a" … "f" | "A" … "F" ;
 
 IDENT = (ascii-letter | "_"), { ascii-letter | digit | "_" } ;
 
-INTEGER  = digit, { digit } ;
+decimal-digits  = digit, { digit } ;
+decimal-integer = digit, { digit | ("_", digit) } ;
+hex-integer     = ("0x" | "0X"), hex-digit,
+                  { hex-digit | ("_", hex-digit) } ;
+binary-integer  = ("0b" | "0B"), binary-digit,
+                  { binary-digit | ("_", binary-digit) } ;
+octal-integer   = ("0o" | "0O"), octal-digit,
+                  { octal-digit | ("_", octal-digit) } ;
+INTEGER  = decimal-integer | hex-integer | binary-integer | octal-integer ;
 EXPONENT = ("e" | "E"), [ "+" | "-" ], digit, { digit } ;
-FLOAT    = INTEGER, ".", digit, { digit }, [ EXPONENT ]
-         | INTEGER, EXPONENT ;
-DURATION = INTEGER, ("ms" | "s" | "m") ;
+FLOAT    = decimal-digits, ".", decimal-digits, [ EXPONENT ]
+         | decimal-digits, EXPONENT ;
+DURATION = decimal-digits, ("ms" | "s" | "m") ;
 BOOLEAN  = "true" | "false" ;
 ```
 
-Identifiers are ASCII and case-sensitive. Unicode is allowed in string contents. Integers are decimal and must fit the lexer’s unsigned 128-bit literal representation before contextual typing. Floats must be finite `f64` values at lexing time. Duration literals represent non-negative integral milliseconds, seconds, or minutes and must fit signed 128-bit nanoseconds after scaling.
-
-There are no hexadecimal, octal, binary, underscored, leading-dot, or trailing-dot numeric forms. A negative number is unary `-` applied to a positive literal, not one lexical token.
+Identifiers are ASCII and case-sensitive. Unicode is allowed in string
+contents. Integers may be decimal, hexadecimal, binary, or octal and must fit
+the lexer’s unsigned 128-bit literal representation before contextual typing.
+An underscore is accepted only between digits valid for the selected base.
+Floats must be finite `f64` values at lexing time. Duration literals represent
+non-negative integral decimal milliseconds, seconds, or minutes and must fit
+signed 128-bit nanoseconds after scaling. A negative number is unary `-`
+applied to a positive literal, not one lexical token. Leading-dot and
+trailing-dot float forms are not accepted.
 
 ## Keywords And Contextual Words
 
 The reserved token words are:
 
 ```text
-class enum def trait impl import from mut borrow own indirect public extern opaque
+class enum def trait impl import from mut own indirect public extern opaque
 return assert if elif else and or not match case for in while break
 continue pass try with as true false
 ```
@@ -61,14 +77,15 @@ continue pass try with as true false
 be used as an identifier where the grammar expects one. `lambda` is lexed as
 an identifier but introduces a lambda at the start of an expression; member
 and named-argument positions may still use that spelling. `copy`, `self`,
-`None`, `Set`, `Self`, and `_` are lexed as identifiers and acquire special
+`None`, `set`, `Self`, and `_` are lexed as identifiers and acquire special
 meaning only in the positions defined below.
 
 ## Strings And F-Strings
 
-`STRING` is a single-line ordinary string delimited by a matching pair of
-single quotes or double quotes. Both forms produce the same token value and
-accept the same escapes:
+`STRING` is an ordinary, triple-quoted, or raw string. Ordinary strings use a
+matching pair of single or double quotes. Triple-quoted strings use three
+matching single or double quotes and may span physical lines. Ordinary and
+triple-quoted strings accept the same escapes:
 
 | Escape | Meaning |
 | --- | --- |
@@ -82,19 +99,40 @@ accept the same escapes:
 | `\u{H...}` | Unicode scalar from one or more hexadecimal digits |
 
 An invalid scalar, unknown escape, missing digit, or missing or mismatched
-closing quote is a lexical error. Triple-quoted, raw, and byte-string literals
-are not part of Aura 0.2. There is no separate character-literal token.
+closing quote is a lexical error. Triple-quoted values preserve every scalar
+between their delimiters. Aura does not trim the first or last newline, remove
+indentation, or normalize whitespace.
+
+Raw strings use lowercase `r` immediately followed by one single or double
+quote. Backslashes are content. A backslash may retain the active quote inside
+the value, with both characters preserved. A raw string cannot span a physical
+line or end in an odd run of backslashes. Raw triple strings, raw f-strings,
+and byte strings are not tokens. There is no separate character-literal token.
 
 `FSTRING` begins with `f"` and ends at the matching double quote.
 `{ expression }` interpolates an ordinary Aura expression. Two opening braces insert one
 literal opening brace, and two closing braces insert one literal closing brace.
-A lone closing brace outside an interpolation is also literal in Aura 0.2.
+A lone closing brace outside an interpolation is also literal in Aura 0.3.
 Interpolations may contain nested braces and ordinary single- or double-quoted
 strings; braces inside those strings do not change interpolation depth. Empty
-or invalid interpolations are rejected. Single-quoted f-strings, conversion
-flags, and format-specifier mini-languages are not supported.
+or invalid interpolations are rejected. An interpolation may end with one
+top-level `:` followed by this static format grammar:
 
-Although `\t` creates a tab in a decoded string, a literal physical tab character anywhere in a source line is rejected before tokenization, including inside a comment or string.
+```text
+[[fill]align] [sign] [width] [","] ["." precision] [type]
+```
+
+`align` is `<`, `^`, or `>`; `sign` is `+`, `-`, or a space; and `type` is
+`d`, `f`, `e`, `x`, `X`, `b`, `o`, `%`, or `s`. Width and precision are
+decimal values through `1_000_000`. The parser accepts a complete expression
+before looking for the separator, so colons inside slices, calls, dictionaries,
+and other nested delimiters remain expression syntax. Nested fields and dynamic
+specifications are rejected. Single-quoted f-strings and conversion flags are
+not supported.
+
+Although `\t` creates a tab in a decoded ordinary string, a physical tab is
+rejected outside a triple-quoted string. A physical tab inside a triple-quoted
+string is exact string content.
 
 ## Comments, Physical Lines, And Indentation
 
@@ -127,41 +165,60 @@ kind. A delimited expression-form `match` is a layout island: its header and
 arms retain the layout tokens required by the match productions even though an
 outer delimiter remains open.
 
-Backslash continuation is not part of Aura 0.2. Ordinary strings and
-f-strings remain single-line, and existing comma-separated forms do not gain a
-trailing comma.
+Backslash continuation is unavailable. Ordinary, raw, and f-strings remain
+single-line. Triple-quoted ordinary strings may span physical lines without
+creating layout tokens. Existing comma-separated forms do not gain a trailing
+comma.
 
 ## Punctuation And Operators
 
 ```text
 ( ) [ ] { } : , . ?
 = == != < <= > >=
-+ += - -= * *= / /= // //= % %=
++ += - -= * *= ** **= / /= // //= % %=
+& &= | |= ^ ^= ~ << <<= >> >>=
 ->
 ```
 
-There is no semicolon, assignment expression, exponentiation, unary plus,
-bitwise operator, or lambda arrow.
+There is no semicolon, assignment expression, unary plus, or lambda arrow.
 
 ## Modules And Imports
 
 ```ebnf
 module = { module-element }, EOF ;
 
-module-element = import-declaration | item | statement ;
+module-element = import-declaration | module-constant | item | statement ;
+
+module-constant
+    = [ "public" ], IDENT, [ ":", type ], "=", expression, NEWLINE ;
 
 import-declaration
-    = "import", identifier-path, NEWLINE
+    = "import", identifier-path, [ "as", import-alias ], NEWLINE
     | "from", identifier-path, "import",
-      identifier, { ",", identifier }, NEWLINE ;
+      import-name, { ",", import-name }, NEWLINE ;
+
+import-name  = identifier, [ "as", import-alias ] ;
+import-alias = IDENT ;
 
 identifier-path = identifier, { ".", identifier } ;
 identifier      = IDENT | "from" ;
 ```
 
-Imports, items, and executable top-level statements may be interleaved syntactically. The compiled module represents imports, items, and top-level statements as separate categories; programs MUST NOT depend on their original cross-category interleaving as an execution order.
+Imports, module constants, items, and executable top-level statements may be
+interleaved syntactically. Imports resolve before initializer checking. Module
+constants initialize after their dependencies and in declaration source order.
+Executable entry statements run only after constant initialization completes.
+The compiled module represents these as separate categories; programs MUST use
+the defined category ordering and MUST NOT infer another execution order from
+cross-category interleaving.
 
-There are no import aliases, wildcard imports, relative-dot imports, parenthesized import lists, or trailing import commas.
+An `as` clause binds the complete imported module or declaration under the
+written local alias. A from-import may mix direct and aliased names in one
+declaration. Aliasing does not change the target module identity, visibility,
+type identity, or package resolution path.
+
+Wildcard imports, relative-dot imports, parenthesized import lists, and
+trailing import commas are not part of the grammar.
 
 ## Items
 
@@ -225,7 +282,7 @@ bounded-type-parameter
 ```
 
 A function type contains parameter modes and types, but no names or default
-expressions: `def(int32, mut Counter, own String) -> bool`. A bare parameter
+expressions: `def(int32, mut Counter, own str) -> bool`. A bare parameter
 is shared, `mut` requires caller-visible mutable access, and `own` transfers
 the argument. Parameter names are not accepted inside the list. `indirect` is
 invalid on a function type because the value is already a code pointer.
@@ -321,10 +378,6 @@ A receiver, when present, is the first method parameter. Bare `self` is the shar
 
 Bare means shared access for every type, including declaration-known copy types. Return annotations carry no capability: every return is an ordinary owned return.
 
-`borrow` is reserved and is not part of the accepted capability grammar. It is
-parsed only far enough to emit a diagnostic naming the accepted bare, `mut`,
-or `own` spelling.
-
 Parameter lists, calls, and return annotations do not accept trailing commas. Static checking further restricts duplicate names, default placement/availability, and mutable task targets.
 
 ## Traits And Implementations
@@ -410,7 +463,9 @@ binding-target
     = identifier
     | "(", binding-target-list, ")" ;
 
-assignment-operator = "=" | "+=" | "-=" | "*=" | "/=" | "//=" | "%=" ;
+assignment-operator
+    = "=" | "+=" | "-=" | "*=" | "**=" | "/=" | "//=" | "%="
+    | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
 
 return-statement     = "return", [ expression ], statement-end ;
 assert-statement     = "assert", non-tuple-expression,
@@ -455,7 +510,7 @@ target is rejected with `mut` iteration because the minimal tuple
 surface has no recursive writeback. Loop `else` clauses are not supported.
 For collection-place traversal, an absent modifier is shared iteration. Queue
 and Range use their iterable-specific bare defaults instead: Queue receives
-owned items, while Range yields independent copy `int32` values. Explicit
+owned items, while Range yields independent copy `int64` values. Explicit
 modifiers are rejected for Queue because it is a receive operation and for
 Range because there is no place or ownership transfer to modify.
 
@@ -488,9 +543,13 @@ match-statement
       { match-statement-arm }, DEDENT ;
 
 match-statement-arm
-    = "case", pattern, ":", NEWLINE, suite ;
+    = "case", pattern, [ "if", expression ],
+      ":", NEWLINE, suite ;
 
 pattern
+    = closed-pattern, { "|", closed-pattern } ;
+
+closed-pattern
     = "_"
     | BOOLEAN
     | STRING
@@ -508,7 +567,8 @@ variant-pattern
       [ "(", [ pattern, { ",", pattern } ], ")" ] ;
 
 tuple-pattern
-    = "(", pattern, ",", ")"
+    = "(", pattern, ")"
+    | "(", pattern, ",", ")"
     | "(", pattern, ",", pattern,
       { ",", pattern }, ")" ;
 ```
@@ -520,9 +580,16 @@ Pattern parsing uses these contextual rules:
 - a dotted name, a capitalized name, or any name followed by parentheses is a variant pattern
 - payload patterns are positional even when the variant declaration used named payload fields
 - a parenthesized comma form is a fixed-arity recursive tuple pattern
+- `|` has the lowest pattern precedence and joins alternatives
+- parentheses group one pattern when no comma is present
 
-There are no guards, alternatives, ranges, collection destructuring, rest
-patterns, named-payload patterns, duration patterns, or f-string patterns.
+Every or-pattern alternative must bind the same names with identical exact
+types and capabilities. A guard is an ordinary expression checked as exactly
+`bool`; its pattern bindings are in scope. A top-level binding is an
+irrefutable catch-all when unguarded and must be the final arm. A guarded
+top-level binding does not contribute to exhaustiveness. There are no ranges, collection
+destructuring, rest patterns, named-payload patterns, duration patterns, or
+f-string patterns.
 `match mut` rejects a tuple pattern because mutable tuple
 reconstruction/writeback is not part of the minimal surface. Statement match
 arms always contain suites; `case pattern: statement` is not valid.
@@ -537,12 +604,17 @@ From lowest to highest precedence:
 | 2 | `or` | left |
 | 3 | `and` | left |
 | 4 | prefix `not` | right |
-| 5 | `==`, `!=`, `<`, `<=`, `>`, `>=` | non-associative in 0.2 |
-| 6 | `+`, `-` | left |
-| 7 | `*`, `/`, `//`, `%` | left |
-| 8 | prefix `match`, `try`, unary `-` | right/prefix |
-| 9 | specialization, indexing, slicing, member access, call, numeric cast | left-to-right postfix chain |
-| 10 | primary | — |
+| 5 | `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `not in` | chained left to right |
+| 6 | `|` | left |
+| 7 | `^` | left |
+| 8 | `&` | left |
+| 9 | `<<`, `>>` | left |
+| 10 | `+`, `-` | left |
+| 11 | `*`, `/`, `//`, `%` | left |
+| 12 | prefix `match`, `try`, unary `-`, unary `~` | right/prefix |
+| 13 | `**` | right |
+| 14 | specialization, indexing, slicing, member access, call, numeric cast | left-to-right postfix chain |
+| 15 | primary | — |
 
 ```ebnf
 expression           = lambda-expression | non-tuple-expression ;
@@ -569,11 +641,23 @@ not-expression
     = { "not" }, comparison-expression ;
 
 comparison-expression
-    = additive-expression,
-      { comparison-operator, additive-expression } ;
+    = bitwise-or-expression,
+      { comparison-operator, bitwise-or-expression } ;
 
 comparison-operator
     = "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" | "not", "in" ;
+
+bitwise-or-expression
+    = bitwise-xor-expression, { "|", bitwise-xor-expression } ;
+
+bitwise-xor-expression
+    = bitwise-and-expression, { "^", bitwise-and-expression } ;
+
+bitwise-and-expression
+    = shift-expression, { "&", shift-expression } ;
+
+shift-expression
+    = additive-expression, { ("<<" | ">>"), additive-expression } ;
 
 additive-expression
     = multiplicative-expression,
@@ -587,7 +671,11 @@ prefix-expression
     = match-expression
     | "try", prefix-expression
     | "-", prefix-expression
-    | postfix-expression ;
+    | "~", prefix-expression
+    | power-expression ;
+
+power-expression
+    = postfix-expression, [ "**", prefix-expression ] ;
 
 postfix-expression
     = primary-expression,
@@ -614,17 +702,20 @@ numeric-type
 
 Conditional expressions associate to the right, their condition is an
 `or-expression`, and their two value arms may contain nested conditional
-expressions through grouping or the recursive alternative arm. Arithmetic and
-Boolean chains are left-folded. Equality, ordering, and membership share the
+expressions through grouping or the recursive alternative arm. Arithmetic,
+shift, bitwise, and Boolean chains are left-folded except for power, which
+associates to the right. Power binds more tightly than a unary operator on its
+left, while its right operand may begin with unary `-` or `~`. Equality,
+ordering, and membership share the
 one comparison level and chain the Python way rather than left-folding, so
 `a < b <= c` is one chain of two links over three operands. A chain of `n`
 operators means the conjunction of its `n` adjacent comparisons, with each
 operand evaluated at most once. `not a == b` means `not (a == b)`, because
 prefix `not` binds looser than the comparison level, while `a not in b` is one
-comparison operator. Casts bind more tightly than arithmetic.
+comparison operator. Casts bind more tightly than power and arithmetic.
 
 Comma-separated index expressions are accepted only for `Array[T]`, where
-one exact `int32` coordinate is required per runtime axis. Other indexable
+one `int64` coordinate is required per runtime axis. Other indexable
 types retain one index expression.
 
 The one-colon bracket forms are owned slices. Each endpoint is optional, so
@@ -648,10 +739,9 @@ primary-expression
     | parenthesized-expression
     | list-literal
     | brace-literal
-    | explicit-set-literal
     | list-comprehension
     | set-comprehension
-    | map-comprehension ;
+    | dictionary-comprehension ;
 
 list-literal
     = "[", [ expression, { ",", expression } ], "]" ;
@@ -662,16 +752,13 @@ brace-literal
     | "{", expression, ":", expression,
       { ",", expression, ":", expression }, "}" ;
 
-explicit-set-literal
-    = "Set", "{", [ expression, { ",", expression } ], "}" ;
-
 list-comprehension
     = "[", expression, comprehension-clauses, "]" ;
 
 set-comprehension
     = "{", expression, comprehension-clauses, "}" ;
 
-map-comprehension
+dictionary-comprehension
     = "{", expression, ":", expression,
       comprehension-clauses, "}" ;
 
@@ -708,9 +795,8 @@ comma.
 expressions require parentheses; an unparenthesized comma is accepted only in
 an unpack target. `()` and a trailing comma on a multi-element tuple are
 rejected. A nonempty brace literal is a set when its first element is not
-followed by `:`, otherwise it is a map. `{}` parses as an empty map but may be
-contextually typed as an empty `Set[T]`; `Set{}` is the unambiguous empty-set
-form.
+followed by `:`, otherwise it is a dictionary. `{}` is an empty dictionary.
+An empty set uses the typed `set[T]()` constructor.
 
 A comprehension has one or more `for` clauses. A clause may be followed by
 zero or more `if` filters before another `for` clause. Clause targets use
@@ -720,7 +806,7 @@ contract. The non-conditional `or-expression` alternative keeps a following
 comprehension `if` distinct from a conditional expression; use parentheses when
 an iterable or filter itself needs a conditional expression. A lambda remains
 syntactically admissible as a component and is then subject to the ordinary
-iterable or exact-Boolean static rule. The result expression, or the map key
+iterable or exact-Boolean static rule. The result expression, or the dictionary key
 and value expressions, may be any expression. A comma after comprehension
 clauses, or a mixture of comma-separated literal entries and clauses, is
 invalid. Generator expressions are not part of this grammar.
@@ -742,7 +828,7 @@ A bare bracket suffix is initially an index expression. Static resolution
 reinterprets `function[Types]` as explicit specialization when `function`
 resolves to a generic named function and the complete expression is used as a
 function value. Otherwise the brackets remain indexing. Consequently,
-`Box[int32](value)` and `Result[int32, String].Ok(1)` specialize,
+`Box[int32](value)` and `Result[int32, str].Ok(1)` specialize,
 `show[int32]` may produce one concrete function value, and `value[index]`
 indexes.
 
@@ -761,7 +847,7 @@ match-expression
       { match-expression-arm }, DEDENT ;
 
 match-expression-arm
-    = "case", pattern, ":",
+    = "case", pattern, [ "if", expression ], ":",
       ( expression, match-expression-arm-end
       | NEWLINE, INDENT, expression, statement-end, DEDENT ) ;
 
@@ -786,24 +872,22 @@ The implementation rejects source that exceeds the maintained parser complexity 
 - one comprehension rejects a 128th combined `for` clause or `if` filter
 - f-string interpolation brace nesting is limited to 128
 
-These are observable implementation limits of Aura 0.2. Inputs that exceed
+These are observable implementation limits of Aura 0.3. Inputs that exceed
 them must be rejected cleanly.
 
-## Syntax Not In Aura 0.2
+## Syntax Not In Aura 0.3
 
 The grammar intentionally excludes:
 
 - semicolons and multiple statements on one physical line
 - backslash line continuation
-- multiline ordinary strings and f-strings
+- multiline f-strings; multiline ordinary text uses triple quotes
 - local item declarations, decorators, and attributes
 - wildcard/aliased/relative import syntax
 - ordinary trailing commas other than the required singleton-tuple comma
-- match guards, alternative patterns, and collection patterns
+- collection, range, rest, and class patterns
 - call-site capability annotations
 - exception statements, `raise`, and `yield`
 - generator expressions and generator functions
-- detached `spawn`, statement-form `select`, and proposal-only concurrency
-  syntax; the maintained `select(source, ...)` is an ordinary call expression
 
 If a form is absent from this grammar, examples and books must not present it as implemented Aura.

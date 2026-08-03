@@ -1,0 +1,35 @@
+def print_int_option(value: Option[int32]):
+    match own value:
+        case Some(inner):
+            print(inner)
+        case None:
+            print(-1)
+
+def main() -> int32:
+    mut counts: dict[str, int32] = {"aura": 1}
+    other: dict[str, int32] = {"codex": 2, "repo": 3}
+    counts.update(other)
+    print(counts.len())
+    print(("aura" in counts))
+    print_int_option(counts.get("aura"))
+    previous_aura = counts.get("aura")
+    counts["aura"] = 5
+    print_int_option(previous_aura)
+    print(counts["aura"])
+    items = counts.items()
+    match items.get(0):
+        case Some(entry):
+            print(entry)
+        case None:
+            pass
+    match items.get(2):
+        case Some(entry):
+            print(entry)
+        case None:
+            pass
+    print(counts.keys().len())
+    print(counts.values().len())
+    print(counts.items().len())
+    counts.clear()
+    print(counts.is_empty())
+    return 0

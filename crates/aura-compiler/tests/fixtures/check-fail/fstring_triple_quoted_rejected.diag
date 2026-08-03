@@ -1,0 +1,5 @@
+error[AU1002]: triple-quoted f-strings are not supported; use single-line `f"..."` or an ordinary triple-quoted string
+ --> crates/aura-compiler/tests/fixtures/check-fail/fstring_triple_quoted_rejected.au:2:12
+  |
+2 |     text = f"""value {1}"""
+  |            ^

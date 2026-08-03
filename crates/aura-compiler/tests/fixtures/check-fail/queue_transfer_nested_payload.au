@@ -1,7 +1,7 @@
 import random
 
 class Job:
-    name: String
+    name: str
     generator: random.Rng
 
 def main() -> int32:

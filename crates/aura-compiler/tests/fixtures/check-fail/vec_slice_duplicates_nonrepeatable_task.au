@@ -1,2 +1,0 @@
-def duplicate(values: Vec[Task[String]]) -> Vec[Task[String]]:
-    return values[:]

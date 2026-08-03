@@ -82,7 +82,7 @@ after extracting the payload.
 
 `json.is_null`, `json.as_bool`, `json.as_int`, and `json.as_float` use the
 ordinary bare parameter default: shared access, so the JSON value
-remains available. Owned String, Array, and
+remains available. Owned `String`, `Array`, and
 Object payloads use the consuming module functions `json.into_string`,
 `json.into_array`, and `json.into_object`:
 
@@ -105,7 +105,7 @@ nested tree.
 ## Build And Dump Deterministically
 
 Construct Values with ordinary qualified enum constructors. One Object can
-contain different JSON kinds because every map value has the same
+contain different JSON kinds because every dictionary value has the same
 `json.Value` type:
 
 ```python
@@ -127,7 +127,7 @@ Pretty output uses LF line endings, two spaces for each nesting level, one
 space after each colon, and no final newline. Empty arrays and objects remain
 `[]` and `{}`.
 
-Sorting is a dump rule, not a mutation. The Object's underlying Map keeps its
+Sorting is a dump rule, not a mutation. The Object's underlying dict keeps its
 insertion order. Parsing duplicate object keys keeps the key's first insertion
 slot but replaces it with the last value.
 
@@ -136,7 +136,7 @@ slot but replaces it with the last value.
 Malformed input is normal at a service boundary, so parse returns
 `json.Error`. Match it and decide whether to reject, log, or retry.
 
-`json.dumps` has the roadmap-mandated return type `String`, not `Result`.
+`json.dumps` has the roadmap-mandated return type `str`, not `Result`.
 Failures therefore trap:
 
 - invalid indent or depth greater than 128 uses `AU4003`
@@ -165,10 +165,9 @@ application code.
 Derived class/enum schemas and generated codecs remain deferred beyond Phase 6.
 Aura also has no streaming JSON API or arbitrary-precision number type.
 
-The older `json.is_valid`, `json.stringify_map`, and
-`json.parse_string_map` helpers remain available for existing flat
-`Map[String, String]` boundaries. They are compatibility helpers, not aliases
-for the dynamic API.
+`json.is_valid`, `json.stringify_map`, and `json.parse_string_map` provide
+typed operations for flat `dict[str, str]` data. They are distinct from the
+dynamic `json.Value` API.
 
 ## Full Contract
 

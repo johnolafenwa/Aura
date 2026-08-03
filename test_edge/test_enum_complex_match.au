@@ -3,7 +3,7 @@ enum Shape:
     Circle(float64)
     Empty
 
-def describe(s: Shape) -> String:
+def describe(s: Shape) -> str:
     match own s:
         case Shape.Circle(r):
             return f"circle with radius {r}"

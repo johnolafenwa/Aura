@@ -1,4 +1,4 @@
-def render(code: int32) -> String:
+def render(code: int32) -> str:
     match own code:
         case 0:
             return "zero"

@@ -1,0 +1,6 @@
+error[AU2001]: module constant `later` is used before initialization
+ --> crates/aura-compiler/tests/fixtures/check-fail/module_constant_later_read.au:1:9
+  |
+1 | first = later + 1
+  |         ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/module_constant_later_read.au:2:1: `later` is declared here

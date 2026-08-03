@@ -1,6 +1,6 @@
 def main() -> int32:
     # Mutable string reassignment
-    mut s: String = "first"
+    mut s: str = "first"
     print(s)
     s = "second"
     print(s)
@@ -8,12 +8,12 @@ def main() -> int32:
     print(s)
 
     # Mutable from concat
-    mut greeting: String = "Hello"
+    mut greeting: str = "Hello"
     greeting = greeting + " World"
     print(greeting)
 
     # Reassign to empty
-    mut text: String = "content"
+    mut text: str = "content"
     text = ""
     if text == "":
         print("cleared: pass")
@@ -21,7 +21,7 @@ def main() -> int32:
         print("cleared: FAIL")
 
     # Multiple reassignments
-    mut counter_str: String = "a"
+    mut counter_str: str = "a"
     counter_str = "b"
     counter_str = "c"
     counter_str = "d"

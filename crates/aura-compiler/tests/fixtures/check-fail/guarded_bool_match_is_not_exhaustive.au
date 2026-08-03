@@ -1,0 +1,8 @@
+def main() -> int32:
+    value: bool = true
+    match value:
+        case true if value:
+            pass
+        case false:
+            pass
+    return 0

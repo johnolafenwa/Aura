@@ -1,5 +1,5 @@
-error[AU2002]: argument type mismatch for function `retry`: expected `def() -> Result[String, String]`, found `consuming closure def() -> Result[String, String]`
+error[AU2002]: argument type mismatch for function `retry`: expected `def() -> Result[str, str]`, found `consuming closure def() -> Result[str, str]`
  --> crates/aura-compiler/tests/fixtures/check-fail/lambda_consuming_retry_callback.au:6:9
   |
-6 |         lambda: Result[String, String].Ok(payload),
+6 |         lambda: Result[str, str].Ok(payload),
   |         ^

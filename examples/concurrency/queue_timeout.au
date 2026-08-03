@@ -1,5 +1,5 @@
 def main() -> int32:
-    jobs = Queue[String]()
+    jobs = Queue[str]()
     print(jobs.get_or("timeout", timeout=1ms))
 
     return 0

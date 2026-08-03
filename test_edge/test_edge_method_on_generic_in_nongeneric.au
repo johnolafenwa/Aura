@@ -10,7 +10,7 @@ class Box[T]:
 def extract_int(box: Box[int32]) -> int32:
     return box.get()
 
-def extract_str(box: Box[String]) -> String:
+def extract_str(box: Box[str]) -> str:
     return box.get()
 
 def main() -> int32:

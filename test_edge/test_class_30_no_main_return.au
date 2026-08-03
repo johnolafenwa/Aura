@@ -1,6 +1,6 @@
 # Edge: main without return type using classes
 class Msg:
-    text: String
+    text: str
 
     def show(self):
         print(self.text)

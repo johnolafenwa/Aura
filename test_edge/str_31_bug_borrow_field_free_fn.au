@@ -1,11 +1,11 @@
-# BUG: Free function cannot access String field on borrow param
+# BUG: Free function cannot access str field on borrow param
 # Expected: should work same as borrow self methods
 # Actual: "cannot move non-copy field out of borrowed value"
 
 class Holder:
-    text: String
+    text: str
 
-def get_text(h: Holder) -> String:
+def get_text(h: Holder) -> str:
     return h.text
 
 def main() -> int32:

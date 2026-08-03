@@ -1,0 +1,7 @@
+import random
+
+class Holder:
+    generator: random.Rng
+
+def duplicate(values: list[Holder]) -> list[Holder]:
+    return values[:]

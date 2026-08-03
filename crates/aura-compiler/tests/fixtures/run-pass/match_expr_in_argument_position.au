@@ -1,4 +1,4 @@
-def print_text(text: String) -> None:
+def print_text(text: str) -> None:
     print(text)
 
 def main() -> int32:

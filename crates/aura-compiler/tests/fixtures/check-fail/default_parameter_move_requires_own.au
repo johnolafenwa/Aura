@@ -1,2 +1,2 @@
-def take(value: String) -> String:
+def take(value: str) -> str:
     return value

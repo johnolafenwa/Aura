@@ -45,6 +45,8 @@ fn analysis_resolves_canonical_enums_from_the_module_registry() {
     program.module_registry.insert(
         "json".to_string(),
         crate::sema::ModuleNamespace {
+            constants: BTreeMap::new(),
+            all_constants: BTreeMap::new(),
             name: "json".to_string(),
             path: "json".to_string(),
             source_path: None,
@@ -190,7 +192,7 @@ fn typed_select_analysis_exposes_inferred_outcomes_and_builtin_surface() {
     let scope = BTreeMap::from([
         binding(
             "jobs",
-            Type::Named("Queue".to_string(), vec![Type::named("String")]),
+            Type::Named("Queue".to_string(), vec![Type::named("str")]),
         ),
         binding(
             "task",
@@ -210,7 +212,7 @@ fn typed_select_analysis_exposes_inferred_outcomes_and_builtin_surface() {
         ),
         Some(Type::Named(
             "SelectOutcome".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            vec![Type::named("str"), Type::named("int32")],
         ))
     );
     assert_eq!(
@@ -245,10 +247,14 @@ fn typed_select_analysis_exposes_inferred_outcomes_and_builtin_surface() {
     assert_eq!(variants.len(), 4);
     assert!(variants
         .get("Queue")
-        .is_some_and(|detail| detail.contains("QueueReceive[Q]")));
+        .is_some_and(|detail| detail == "Queue(own int64, own QueueReceive[Q]) -> SelectOutcome"));
     assert!(variants
         .get("Task")
-        .is_some_and(|detail| detail.contains("TaskResult[T]")));
+        .is_some_and(|detail| detail == "Task(own int64, own TaskResult[T]) -> SelectOutcome"));
+    assert_eq!(
+        variants.get("Deadline"),
+        Some(&"Deadline(own int64) -> SelectOutcome".to_string())
+    );
     for variant in ["Queue", "Task", "Deadline", "Cancelled"] {
         assert!(
             builder
@@ -286,7 +292,7 @@ fn typed_select_analysis_withholds_types_for_invalid_or_ambiguous_sources() {
         ),
         binding(
             "text_jobs",
-            Type::Named("Queue".to_string(), vec![Type::named("String")]),
+            Type::Named("Queue".to_string(), vec![Type::named("str")]),
         ),
         binding(
             "int_task",
@@ -294,7 +300,7 @@ fn typed_select_analysis_withholds_types_for_invalid_or_ambiguous_sources() {
         ),
         binding(
             "text_task",
-            Type::Named("Task".to_string(), vec![Type::named("String")]),
+            Type::Named("Task".to_string(), vec![Type::named("str")]),
         ),
     ]);
     let select = expr(ExprKind::Name("select".to_string()));
@@ -412,7 +418,7 @@ fn random_analysis_exposes_single_rng_binding_and_stateful_members() {
         .iter()
         .find(|item| item.name == "secure_bytes")
         .expect("secure_bytes completion");
-    assert_eq!(secure_bytes.detail, "secure_bytes(n: int64) -> Vec[uint8]");
+    assert_eq!(secure_bytes.detail, "secure_bytes(n: int64) -> list[uint8]");
     assert!(!module_items.iter().any(|item| item.name == "secure_float"));
 
     let random_namespace =
@@ -428,7 +434,7 @@ fn random_analysis_exposes_single_rng_binding_and_stateful_members() {
     for (name, detail) in [
         ("next_int", "next_int(lo: int64, hi: int64) -> int64"),
         ("next_float", "next_float() -> float64"),
-        ("shuffle", "shuffle(values: mut Vec[T]) -> None"),
+        ("shuffle", "shuffle(values: mut list[T]) -> None"),
     ] {
         let matches = members
             .iter()
@@ -492,13 +498,91 @@ def main() -> int32:
 }
 
 #[test]
+fn math_analysis_completes_and_hovers_the_exact_public_surface() {
+    let member_source = "import math\n\ndef main():\n    math.\n";
+    let completions = complete_source(member_source, 3, 9, Some('.'))
+        .expect("math member completion should recover");
+    let names = completions
+        .iter()
+        .filter(|completion| completion.kind == "function")
+        .map(|completion| completion.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        names,
+        std::collections::BTreeSet::from([
+            "ceil", "cos", "exp", "floor", "log", "log10", "log2", "pow", "sin", "tan", "trunc",
+        ])
+    );
+    let pow = completions
+        .iter()
+        .find(|completion| completion.name == "pow")
+        .expect("math.pow completion should exist");
+    assert_eq!(
+        pow.detail,
+        "pow(base: float64, exponent: float64) -> float64"
+    );
+
+    let source = "import math\n\ndef main():\n    print(math.pow(2.0, 3.0))\n";
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 3
+            && occurrence.hover.contains("function pow")
+            && occurrence.hover.contains("float64")
+    }));
+}
+
+#[test]
+fn math_analysis_exposes_qualified_and_aliased_constant_details() {
+    let member_source = "import math\n\ndef main():\n    math.\n";
+    let completions = complete_source(member_source, 3, 9, Some('.'))
+        .expect("math member completion should recover");
+    for name in ["pi", "e", "inf", "nan"] {
+        let completion = completions
+            .iter()
+            .find(|completion| completion.name == name)
+            .unwrap_or_else(|| panic!("missing math.{name} completion"));
+        assert_eq!(completion.kind, "constant");
+        assert_eq!(completion.detail, "float64");
+    }
+
+    let source = concat!(
+        "import math\n",
+        "from math import pi as circle\n\n",
+        "def main():\n",
+        "    print(math.e)\n",
+        "    print(circle)\n",
+    );
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 4
+            && occurrence.hover.contains("module constant e")
+            && occurrence.hover.contains("float64")
+    }));
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 5
+            && occurrence.hover.contains("module constant circle")
+            && occurrence.hover.contains("float64")
+    }));
+}
+
+#[test]
 fn user_defined_rng_completion_uses_only_its_declared_surface() {
     let source = r#"import random
 
 class Rng:
     value: int64
 
-    def next_int(self) -> String:
+    def next_int(self) -> str:
         return "local"
 
 def main() -> int32:
@@ -514,7 +598,7 @@ def main() -> int32:
         .filter(|item| item.name == "next_int")
         .collect::<Vec<_>>();
     assert_eq!(next_int.len(), 1, "the local method must not be duplicated");
-    assert_eq!(next_int[0].detail, "next_int(self) -> String");
+    assert_eq!(next_int[0].detail, "next_int(self) -> str");
     assert!(!members.iter().any(|item| item.name == "next_float"));
     assert!(!members.iter().any(|item| item.name == "shuffle"));
 }
@@ -553,15 +637,15 @@ fn path_named_random_keeps_user_rng_analysis_distinct_from_the_builtin() {
 fn d6_analysis_renders_source_parameter_and_transfer_ownership() {
     let source = r#"
 class Box:
-    value: String
+    value: str
 
 enum Message:
-    Text(String)
+    Text(str)
 
-def inspect(value: String):
+def inspect(value: str):
     print(value)
 
-def consume(value: own String):
+def consume(value: own str):
     print(value)
 "#;
     let completions = complete_source(source, 0, 0, None).expect("D6 source should complete");
@@ -570,28 +654,28 @@ def consume(value: own String):
             .iter()
             .find(|item| item.name == "inspect")
             .map(|item| item.detail.as_str()),
-        Some("inspect(value: String) -> None")
+        Some("inspect(value: str) -> None")
     );
     assert_eq!(
         completions
             .iter()
             .find(|item| item.name == "consume")
             .map(|item| item.detail.as_str()),
-        Some("consume(value: own String) -> None")
+        Some("consume(value: own str) -> None")
     );
     assert_eq!(
         completions
             .iter()
             .find(|item| item.name == "Box")
             .map(|item| item.detail.as_str()),
-        Some("Box(value: own String)")
+        Some("Box(value: own str)")
     );
 
     let vec_members =
-        builtin_member_completions(&Type::Named("Vec".to_string(), vec![Type::named("String")]));
+        builtin_member_completions(&Type::Named("list".to_string(), vec![Type::named("str")]));
     assert!(vec_members
         .iter()
-        .any(|item| item.name == "push" && item.detail.contains("own T")));
+        .any(|item| item.name == "append" && item.detail.contains("own T")));
     let message_members = builtin_enum_variant_completions("Option");
     assert!(message_members
         .iter()
@@ -617,7 +701,7 @@ def main() -> int32:
 
     for expected_hover in [
         "binding scalar: int64",
-        "binding numbers: Vec[int64]",
+        "binding numbers: list[int64]",
         "binding maybe: Option[int64]",
     ] {
         assert!(
@@ -635,16 +719,16 @@ def main() -> int32:
 fn phase6_analysis_specializes_vec_map_and_explicit_generic_module_results() {
     let source = r#"import control
 
-def render(value: int64) -> String:
+def render(value: int64) -> str:
     return str(value)
 
-def worker() -> Result[int32, String]:
+def worker() -> Result[int32, str]:
     return Result.Ok(7)
 
 def main():
     values = [1, 2]
     mapped = values.map(render)
-    retried = control.retry[int32, String](worker)
+    retried = control.retry[int32, str](worker)
     print(mapped)
     print(retried)
 "#;
@@ -652,8 +736,8 @@ def main():
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
 
     for expected_hover in [
-        "binding mapped: Vec[String]",
-        "binding retried: Result[int32, String]",
+        "binding mapped: list[str]",
+        "binding retried: Result[int32, str]",
     ] {
         assert!(
             output
@@ -675,8 +759,8 @@ def widen(value: int32) -> float64:
 def main():
     zeros = Array[int32].zeros(shape=[2, 2])
     full = Array[int32].full(shape=[2, 2], value=1)
-    source: Vec[int32] = [1, 2, 3, 4]
-    mut values = Array[int32].from_vec(values=source, shape=[2, 2])
+    source: list[int32] = [1, 2, 3, 4]
+    mut values = Array[int32].from_list(values=source, shape=[2, 2])
     mapped = values.map[float64](f=widen)
     average = values.mean()
     count = values.len()
@@ -733,7 +817,7 @@ def main():
         "def main():\n    values = Array[int32].zeros(shape=[1])\n    Array[int32].\n";
     let constructors = complete_source(constructor_source, 2, 17, Some('.'))
         .expect("Array associated completion should recover");
-    for name in ["zeros", "full", "from_vec"] {
+    for name in ["zeros", "full", "from_list"] {
         assert!(
             constructors.iter().any(|item| item.name == name),
             "missing Array constructor completion `{name}`"
@@ -787,6 +871,97 @@ def main():
 }
 
 #[test]
+fn s1_frontend_specialized_collection_completion_reports_the_concrete_result_type() {
+    for (receiver, expected_detail) in [
+        (
+            "list[int64]",
+            "with_capacity(minimum: int64) -> list[int64]",
+        ),
+        (
+            "dict[str, int64]",
+            "with_capacity(minimum: int64) -> dict[str, int64]",
+        ),
+        ("set[str]", "with_capacity(minimum: int64) -> set[str]"),
+    ] {
+        let source = format!("def main():\n    {receiver}.\n");
+        let line = source.lines().nth(1).expect("completion line");
+        let character = line.find('.').expect("receiver dot") + 1;
+        let completions = complete_source(&source, 1, character, Some('.'))
+            .expect("specialized collection completion should recover");
+        let with_capacity = completions
+            .iter()
+            .find(|item| item.name == "with_capacity")
+            .expect("with_capacity completion should exist");
+        assert_eq!(with_capacity.detail, expected_detail, "{receiver}");
+    }
+}
+
+#[test]
+fn s1_frontend_analysis_resolves_trait_symbols_and_integer_round_results() {
+    let source = "trait Show:\n    def show(self) -> str\n\nclass Item:\n    value: int64\n\nimpl Show for Item:\n    def show(self) -> str:\n        return self.value.to_string()\n\ndef main():\n    rounded = round(7)\n    print(rounded)\n";
+    let program = checked_program(source);
+    let builder = AnalysisBuilder::new(source, &program, Vec::new());
+    let resolved = builder
+        .resolve_name("Show", &BTreeMap::new())
+        .expect("trait names must resolve for hover and definition");
+    assert_eq!(resolved.hover, "```aura\ntrait Show\n```");
+    assert_eq!(
+        resolved.definition.expect("trait definition"),
+        range_from_span(Span::new(1, 1), "Show".len())
+    );
+
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("binding rounded: int64")));
+}
+
+#[test]
+fn s1_frontend_range_loop_analysis_matches_the_int64_index_domain() {
+    let source = concat!(
+        "def main():\n",
+        "    for index in range(0, 3):\n",
+        "        checked: int64 = index\n",
+        "        advanced = index.wrapping_add(1)\n",
+        "        print(checked)\n",
+        "        print(advanced)\n",
+    );
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "the checker must accept range bindings as int64: {:?}",
+        analysis.diagnostics
+    );
+    for expected_hover in ["local index: int64", "binding advanced: int64"] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected_hover)),
+            "missing range-loop hover `{expected_hover}` in {:?}",
+            analysis.occurrences
+        );
+    }
+
+    let completion_source = "def main():\n    for index in range(0, 3):\n        index.\n";
+    let member_line = completion_source.lines().nth(2).unwrap();
+    let completions = complete_source(completion_source, 2, member_line.len(), Some('.'))
+        .expect("range binding completion should recover from a dangling member");
+    assert!(
+        completions
+            .iter()
+            .any(|completion| completion.name == "wrapping_add"),
+        "range bindings must expose the fixed-width int64 member surface: {completions:?}"
+    );
+}
+
+#[test]
 fn incomplete_expression_inference_preserves_stable_editor_types() {
     let program = checked_program("def main():\n    pass\n");
     let builder = AnalysisBuilder::new("", &program, Vec::new());
@@ -804,17 +979,14 @@ fn incomplete_expression_inference_preserves_stable_editor_types() {
     let scope = BTreeMap::from([
         ("unit".to_string(), binding(Type::Unit)),
         ("number".to_string(), binding(Type::named("int32"))),
-        ("text".to_string(), binding(Type::named("String"))),
+        ("text".to_string(), binding(Type::named("str"))),
         (
             "pair".to_string(),
-            binding(Type::Tuple(vec![
-                Type::named("int32"),
-                Type::named("String"),
-            ])),
+            binding(Type::Tuple(vec![Type::named("int32"), Type::named("str")])),
         ),
         (
             "vector".to_string(),
-            binding(Type::Named("Vec".to_string(), vec![Type::named("int32")])),
+            binding(Type::Named("list".to_string(), vec![Type::named("int32")])),
         ),
         (
             "array".to_string(),
@@ -1116,9 +1288,178 @@ fn p64_path_analysis_exposes_imported_extern_members_and_handle_types() {
 }
 
 #[test]
+fn import_alias_analysis_preserves_visible_names_and_canonical_definitions() {
+    let temp_dir = TempDir::new("aura-analysis-import-aliases");
+    let source_dir = temp_dir.path().join("src");
+    let package_dir = source_dir.join("pkg");
+    fs::create_dir_all(&package_dir).expect("failed to create package source directories");
+    fs::write(
+        temp_dir.path().join("Aura.toml"),
+        concat!(
+            "[package]\n",
+            "name = \"alias_analysis\"\n",
+            "version = \"0.1.0\"\n",
+            "edition = \"2026\"\n",
+        ),
+    )
+    .expect("failed to write package manifest");
+    let math_path = package_dir.join("math.au");
+    fs::write(
+        &math_path,
+        concat!(
+            "public def double(value: int32) -> int32:\n",
+            "    return value * 2\n",
+        ),
+    )
+    .expect("failed to write imported module");
+    let canonical_math_path = fs::canonicalize(&math_path)
+        .expect("imported module path should canonicalize")
+        .display()
+        .to_string();
+    let main_path = source_dir.join("main.au");
+
+    let module_alias_source = concat!(
+        "import pkg.math as numbers\n",
+        "\n",
+        "def main() -> int32:\n",
+        "    return numbers.double(21)\n",
+    );
+    fs::write(&main_path, module_alias_source).expect("failed to write module-alias source");
+    let analysis = analyze_path_source(&main_path, module_alias_source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 0
+            && occurrence.hover.contains("module numbers = pkg.math")
+            && occurrence
+                .definition
+                .as_ref()
+                .and_then(|definition| definition.file_path.as_deref())
+                == Some(canonical_math_path.as_str())
+    }));
+    for hover in ["module numbers = pkg.math", "function double"] {
+        assert!(analysis.occurrences.iter().any(|occurrence| {
+            occurrence.line == 3
+                && occurrence.hover.contains(hover)
+                && occurrence
+                    .definition
+                    .as_ref()
+                    .and_then(|definition| definition.file_path.as_deref())
+                    == Some(canonical_math_path.as_str())
+        }));
+    }
+
+    let top_level = complete_path_source(&main_path, module_alias_source, 2, 0, None)
+        .expect("module alias should participate in completion");
+    assert!(top_level
+        .iter()
+        .any(|completion| completion.name == "numbers" && completion.kind == "module"));
+    assert!(!top_level.iter().any(|completion| completion.name == "math"));
+
+    let member_source = concat!(
+        "import pkg.math as numbers\n",
+        "\n",
+        "def main() -> int32:\n",
+        "    numbers.\n",
+        "    return 0\n",
+    );
+    let members = complete_path_source(&main_path, member_source, 3, 12, Some('.'))
+        .expect("module alias should retain its imported namespace");
+    assert!(members
+        .iter()
+        .any(|completion| completion.name == "double" && completion.kind == "function"));
+
+    let binding_alias_source = concat!(
+        "from pkg.math import double as twice\n",
+        "\n",
+        "def main() -> int32:\n",
+        "    return twice(21)\n",
+    );
+    fs::write(&main_path, binding_alias_source).expect("failed to write binding-alias source");
+    let binding_analysis = analyze_path_source(&main_path, binding_alias_source);
+    assert!(
+        binding_analysis.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        binding_analysis.diagnostics
+    );
+    assert!(binding_analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 0
+            && occurrence
+                .hover
+                .contains("Alias `twice` for `pkg.math.double`")
+            && occurrence
+                .definition
+                .as_ref()
+                .and_then(|definition| definition.file_path.as_deref())
+                == Some(canonical_math_path.as_str())
+    }));
+    assert!(binding_analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 3
+            && occurrence.hover.contains("function double")
+            && occurrence
+                .definition
+                .as_ref()
+                .and_then(|definition| definition.file_path.as_deref())
+                == Some(canonical_math_path.as_str())
+    }));
+    let binding_completions = complete_path_source(&main_path, binding_alias_source, 2, 0, None)
+        .expect("from-import alias should participate in completion");
+    assert!(binding_completions
+        .iter()
+        .any(|completion| completion.name == "twice" && completion.kind == "function"));
+    assert!(!binding_completions
+        .iter()
+        .any(|completion| completion.name == "double"));
+}
+
+#[test]
+fn builtin_module_alias_analysis_uses_the_visible_name_and_canonical_members() {
+    let source = concat!(
+        "import path as paths\n",
+        "\n",
+        "def main() -> int32:\n",
+        "    print(paths.join(\"root\", \"item.au\"))\n",
+        "    return 0\n",
+    );
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 0 && occurrence.hover.contains("module paths = path")
+    }));
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 3 && occurrence.hover.contains("module paths = path")
+    }));
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| { occurrence.line == 3 && occurrence.hover.contains("function join") }));
+
+    let top_level = complete_source(source, 2, 0, None).expect("builtin alias completion");
+    assert!(top_level
+        .iter()
+        .any(|completion| completion.name == "paths" && completion.kind == "module"));
+    assert!(!top_level.iter().any(|completion| completion.name == "path"));
+
+    let member_source =
+        source.replace("    print(paths.join(\"root\", \"item.au\"))", "    paths.");
+    let members =
+        complete_source(&member_source, 3, 10, Some('.')).expect("builtin alias member completion");
+    assert!(members
+        .iter()
+        .any(|completion| completion.name == "join" && completion.kind == "function"));
+}
+
+#[test]
 fn d3_assert_analysis_visits_condition_and_lazy_message_without_defining_scope() {
     let source = r#"
-def verify(ready: bool, message: String):
+def verify(ready: bool, message: str):
     assert ready, message
     assert ready
 "#;
@@ -1133,7 +1474,7 @@ def verify(ready: bool, message: String):
     // three and four, not the parameter declarations on source line two.
     for (line, start, end, hover) in [
         (2, 11, 16, "param ready: bool"),
-        (2, 18, 25, "param message: String"),
+        (2, 18, 25, "param message: str"),
         (3, 11, 16, "param ready: bool"),
     ] {
         assert!(
@@ -1163,7 +1504,7 @@ def verify(ready: bool, message: String):
 
 #[test]
 fn conditional_expression_analysis_visits_all_operands_and_keeps_result_type() {
-    let source = r#"def choose(ready: bool, left: String, right: String) -> String:
+    let source = r#"def choose(ready: bool, left: str, right: str) -> str:
     selected = left.clone() if ready else right.clone()
     return selected
 "#;
@@ -1175,9 +1516,9 @@ fn conditional_expression_analysis_visits_all_operands_and_keeps_result_type() {
     );
 
     for (start, end, hover) in [
-        (15, 19, "param left: String"),
+        (15, 19, "param left: str"),
         (31, 36, "param ready: bool"),
-        (42, 47, "param right: String"),
+        (42, 47, "param right: str"),
     ] {
         assert!(
             analysis.occurrences.iter().any(|occurrence| {
@@ -1192,7 +1533,7 @@ fn conditional_expression_analysis_visits_all_operands_and_keeps_result_type() {
     assert!(analysis
         .occurrences
         .iter()
-        .any(|occurrence| occurrence.hover.contains("binding selected: String")));
+        .any(|occurrence| occurrence.hover.contains("binding selected: str")));
 }
 
 #[test]
@@ -1203,9 +1544,9 @@ fn conditional_expression_analysis_uses_the_contextual_arm_type() {
     reverse_float: float32,
     exact_integer: int32,
     reverse_integer: int32,
-    values: own Vec[int32],
-    reverse_values: own Vec[int32],
-    tuple_values: own Vec[int32]
+    values: own list[int32],
+    reverse_values: own list[int32],
+    tuple_values: own list[int32]
 ):
     decimal = (1.5) if ready else exact_float
     reverse_decimal = reverse_float if ready else (2.5)
@@ -1233,9 +1574,9 @@ fn conditional_expression_analysis_uses_the_contextual_arm_type() {
         "binding reverse_promoted_integer: float32",
         "binding negative_integer: int32",
         "binding reverse_negative_integer: int32",
-        "binding integers: Vec[int32]",
-        "binding reverse_integers: Vec[int32]",
-        "binding nested_integers: (Vec[int32], int64)",
+        "binding integers: list[int32]",
+        "binding reverse_integers: list[int32]",
+        "binding nested_integers: (list[int32], int64)",
         "binding optional: Option[int32]",
         "binding reverse_optional: Option[int32]",
     ] {
@@ -1253,7 +1594,7 @@ fn conditional_expression_analysis_uses_the_contextual_arm_type() {
 #[test]
 fn membership_and_comparison_chain_operands_keep_analysis_coverage() {
     let source = r#"
-def probe(ports: Vec[int32], port: int32, low: int32, high: int32):
+def probe(ports: list[int32], port: int32, low: int32, high: int32):
     present = port in ports
     absent = port not in ports
     bounded = low <= port < high
@@ -1272,7 +1613,7 @@ def probe(ports: Vec[int32], port: int32, low: int32, high: int32):
         "binding present: bool",
         "binding absent: bool",
         "binding bounded: bool",
-        "param ports: Vec[int32]",
+        "param ports: list[int32]",
         "param port: int32",
         "param low: int32",
         "param high: int32",
@@ -1291,8 +1632,8 @@ def probe(ports: Vec[int32], port: int32, low: int32, high: int32):
 #[test]
 fn conditional_expression_result_type_drives_member_completion() {
     for source in [
-        "def inspect(flag: bool, values: own Vec[int32]):\n    selected = [] if flag else values\n    selected.\n",
-        "def inspect(flag: bool, values: own Vec[int32]):\n    selected = values if flag else []\n    selected.\n",
+        "def inspect(flag: bool, values: own list[int32]):\n    selected = [] if flag else values\n    selected.\n",
+        "def inspect(flag: bool, values: own list[int32]):\n    selected = values if flag else []\n    selected.\n",
     ] {
         let line_index = source
             .lines()
@@ -1302,8 +1643,8 @@ fn conditional_expression_result_type_drives_member_completion() {
         let completions = complete_source(source, line_index, character, Some('.'))
             .expect("conditional result member completion should work");
         assert!(
-            completions.iter().any(|item| item.name == "push"),
-            "Vec completion should be preserved through either conditional arm"
+            completions.iter().any(|item| item.name == "append"),
+            "list completion should be preserved through either conditional arm"
         );
         assert!(completions.iter().any(|item| item.name == "len"));
     }
@@ -1341,7 +1682,7 @@ fn machine_readable_analysis_reports_diagnostics() {
 #[test]
 fn machine_readable_analysis_preserves_zero_based_runtime_frames() {
     let mut diagnostic =
-        Diagnostic::coded_at("AU4003", Span::new(9, 18), "vector index is out of bounds");
+        Diagnostic::coded_at("AU4003", Span::new(9, 18), "list index is out of bounds");
     assert!(diagnostic.capture_runtime_frames_once(
         vec![
             RuntimeCallFrame {
@@ -1501,20 +1842,20 @@ fn analysis_and_completion_report_public_length_members_as_int64() {
     let program = checked_program("def main():\n    pass\n");
     let builder = AnalysisBuilder::new("", &program, Vec::new());
     let cases = [
-        (Type::named("String"), vec!["len", "byte_len"]),
+        (Type::named("str"), vec!["len", "byte_len"]),
         (
-            Type::Named("Vec".to_string(), vec![Type::named("String")]),
+            Type::Named("list".to_string(), vec![Type::named("str")]),
             vec!["len"],
         ),
         (
             Type::Named(
-                "Map".to_string(),
-                vec![Type::named("String"), Type::named("int32")],
+                "dict".to_string(),
+                vec![Type::named("str"), Type::named("int32")],
             ),
             vec!["len"],
         ),
         (
-            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            Type::Named("set".to_string(), vec![Type::named("str")]),
             vec!["len"],
         ),
     ];
@@ -1558,9 +1899,86 @@ fn analysis_and_completion_report_public_length_members_as_int64() {
 }
 
 #[test]
+fn analysis_reports_collection_search_and_projection_result_types() {
+    let program = checked_program("def main():\n    pass\n");
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    let values = Type::Named("list".to_string(), vec![Type::named("int64")]);
+    let mapping = Type::Named(
+        "dict".to_string(),
+        vec![Type::named("str"), Type::named("int64")],
+    );
+
+    for member_name in ["index", "count"] {
+        let member = builder
+            .resolve_member_type(&values, member_name)
+            .unwrap_or_else(|| panic!("list.{member_name} should resolve for editor analysis"));
+        assert_eq!(member.ty, Some(Type::named("int64")), "list.{member_name}");
+    }
+    assert_eq!(
+        builder
+            .resolve_member_type(&mapping, "keys")
+            .expect("dict.keys should resolve for editor analysis")
+            .ty,
+        Some(Type::Named("list".to_string(), vec![Type::named("str")]))
+    );
+    assert_eq!(
+        builder
+            .resolve_member_type(&mapping, "values")
+            .expect("dict.values should resolve for editor analysis")
+            .ty,
+        Some(Type::Named("list".to_string(), vec![Type::named("int64")]))
+    );
+    assert_eq!(
+        builder
+            .resolve_member_type(&mapping, "items")
+            .expect("dict.items should resolve for editor analysis")
+            .ty,
+        Some(Type::Named(
+            "list".to_string(),
+            vec![Type::Tuple(vec![Type::named("str"), Type::named("int64")])]
+        ))
+    );
+}
+
+#[test]
+fn analysis_infers_enumerate_and_zip_loop_binding_types() {
+    let source = concat!(
+        "def main():\n",
+        "    names = [\"Aura\"]\n",
+        "    values = [7]\n",
+        "    for index, name in enumerate(names):\n",
+        "        print(index)\n",
+        "        print(name)\n",
+        "    for name, value in zip(names, values):\n",
+        "        print(name)\n",
+        "        print(value)\n",
+    );
+    let analysis = analyze_source(source);
+
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "valid lockstep loops should analyze without diagnostics: {:?}",
+        analysis.diagnostics
+    );
+    for expected_hover in [
+        "local index: int64",
+        "local name: str",
+        "local value: int64",
+    ] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected_hover)),
+            "analysis should expose `{expected_hover}`"
+        );
+    }
+}
+
+#[test]
 fn compiler_string_byte_tooling_separates_static_decode_from_instance_encode() {
-    let static_source = "def main() -> int32:\n    String.\n    return 0\n";
-    let static_names = completion_names_after_marker(static_source, "String.");
+    let static_source = "def main() -> int32:\n    str.\n    return 0\n";
+    let static_names = completion_names_after_marker(static_source, "str.");
     assert!(static_names.contains(&"from_bytes".to_string()));
     assert!(!static_names.contains(&"to_bytes".to_string()));
 
@@ -1568,10 +1986,10 @@ fn compiler_string_byte_tooling_separates_static_decode_from_instance_encode() {
         r#"
 import bytes
 
-def decode(value: Vec[uint8]) -> Result[String, bytes.Error]:
+def decode(value: list[uint8]) -> Result[str, bytes.Error]:
     encoded = "Aura".to_bytes()
     digest = bytes.sha256(encoded)
-    return String.from_bytes(value)
+    return str.from_bytes(value)
 
 def main() -> int32:
     return 0
@@ -1585,11 +2003,11 @@ def main() -> int32:
     assert!(analysis
         .occurrences
         .iter()
-        .any(|occurrence| occurrence.hover.contains("to_bytes() -> Vec[uint8]")));
+        .any(|occurrence| occurrence.hover.contains("to_bytes() -> list[uint8]")));
     assert!(analysis.occurrences.iter().any(|occurrence| {
         occurrence
             .hover
-            .contains("from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]")
+            .contains("from_bytes(bytes: list[uint8]) -> Result[str, bytes.Error]")
     }));
 
     let shadowed = analyze_source(
@@ -1614,7 +2032,7 @@ def main():
     assert!(shadowed.occurrences.iter().all(|occurrence| {
         !occurrence
             .hover
-            .contains("from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]")
+            .contains("from_bytes(bytes: list[uint8]) -> Result[str, bytes.Error]")
     }));
 }
 
@@ -1678,7 +2096,7 @@ fn analysis_ignores_builtin_omitted_defaults_outside_source_inference() {
 #[test]
 fn compiler_member_completion_for_map_exposes_map_methods() {
     let source =
-        "def main() -> int32:\n    mut counts = Map[String, int32]()\n    counts.\n    return 0\n";
+        "def main() -> int32:\n    mut counts: dict[str, int32] = {}\n    counts.\n    return 0\n";
     let line_index = source
         .lines()
         .position(|line| line.contains("counts."))
@@ -1695,17 +2113,18 @@ fn compiler_member_completion_for_map_exposes_map_methods() {
 
     assert!(names.contains(&"len".to_string()));
     assert!(names.contains(&"is_empty".to_string()));
-    assert!(names.contains(&"clone".to_string()));
+    assert!(names.contains(&"copy".to_string()));
     assert!(names.contains(&"get".to_string()));
-    assert!(names.contains(&"set".to_string()));
     assert!(names.contains(&"remove".to_string()));
-    assert!(names.contains(&"contains_key".to_string()));
     assert!(names.contains(&"keys".to_string()));
     assert!(names.contains(&"values".to_string()));
+    assert!(names.contains(&"items".to_string()));
+    assert!(names.contains(&"update".to_string()));
+    assert!(names.contains(&"reserve".to_string()));
 }
 
 #[test]
-fn compiler_member_completion_for_vec_reports_insert_bool_detail() {
+fn compiler_member_completion_for_list_reports_insert_unit_detail() {
     let source = "def main() -> int32:\n    mut values = [1, 2, 3]\n    values.\n    return 0\n";
     let line_index = source
         .lines()
@@ -1721,7 +2140,7 @@ fn compiler_member_completion_for_vec_reports_insert_bool_detail() {
         .find(|item| item.name == "insert")
         .expect("insert completion should exist");
 
-    assert_eq!(insert.detail, "insert(index: int32, value: own T) -> bool");
+    assert_eq!(insert.detail, "insert(index: int64, value: own T) -> None");
 }
 
 #[test]
@@ -1763,6 +2182,8 @@ fn compiler_top_level_completion_includes_keywords_and_builtins() {
     assert!(names.contains(&"min".to_string()));
     assert!(names.contains(&"max".to_string()));
     assert!(names.contains(&"sqrt".to_string()));
+    assert!(names.contains(&"round".to_string()));
+    assert!(names.contains(&"divmod".to_string()));
     let yield_now = completions
         .iter()
         .find(|item| item.name == "yield_now")
@@ -1772,7 +2193,97 @@ fn compiler_top_level_completion_includes_keywords_and_builtins() {
         .iter()
         .find(|item| item.name == "range")
         .expect("range builtin should appear in completions");
-    assert!(range.detail.contains("start: int32"));
+    assert!(range.detail.contains("start: int64"));
+}
+
+#[test]
+fn module_constants_are_symbols_hover_targets_and_completions() {
+    let source = "answer: int64 = 42\n\ndef main():\n    print(answer)\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert!(output
+        .symbols
+        .iter()
+        .any(|symbol| symbol.name == "answer" && symbol.kind == "constant"));
+    let occurrence = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 3 && occurrence.hover.contains("answer"))
+        .expect("constant use occurrence");
+    assert!(occurrence.hover.contains("module constant"));
+    assert_eq!(
+        occurrence.definition.as_ref().map(|range| range.line),
+        Some(0)
+    );
+
+    let completions = complete_source(source, 3, 4, None).expect("constant completion");
+    assert!(completions.iter().any(|completion| {
+        completion.name == "answer" && completion.kind == "constant" && completion.detail == "int64"
+    }));
+}
+
+#[test]
+fn top_level_completion_scope_respects_constant_initialization_phase() {
+    let source = [
+        "first: int64 = 1",
+        "second: int64 = first + 1",
+        "print(second)",
+        "third: int64 = 3",
+    ]
+    .join("\n");
+    let program = checked_program(&source);
+    let builder = AnalysisBuilder::new(&source, &program, Vec::new());
+
+    let second_initializer = builder.scope_for_line(1);
+    assert!(second_initializer.contains_key("first"));
+    assert!(!second_initializer.contains_key("second"));
+    assert!(!second_initializer.contains_key("third"));
+
+    let initializer_completions =
+        complete_source(&source, 1, 25, None).expect("completion in second initializer");
+    assert!(initializer_completions
+        .iter()
+        .any(|completion| completion.name == "first" && completion.kind == "constant"));
+    assert!(!initializer_completions
+        .iter()
+        .any(|completion| completion.name == "second"));
+    assert!(!initializer_completions
+        .iter()
+        .any(|completion| completion.name == "third"));
+
+    // Executable top-level statements run after the complete module constant
+    // initialization phase, even when statement and declaration text is
+    // interleaved.
+    let executable_scope = builder.scope_for_line(2);
+    assert!(executable_scope.contains_key("first"));
+    assert!(executable_scope.contains_key("second"));
+    assert!(executable_scope.contains_key("third"));
+}
+
+#[test]
+fn compiler_analysis_infers_round_and_divmod_results_and_builtin_hover() {
+    let analysis = analyze_source(
+        r#"
+def main():
+    rounded: int64 = round(2.5)
+    pair: (int64, int64) = divmod(-7, 3)
+    print(rounded)
+    print(pair)
+"#,
+    );
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("round(value:")));
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("divmod(left:")));
 }
 
 fn completion_names_after_marker(source: &str, marker: &str) -> Vec<String> {
@@ -1794,18 +2305,18 @@ fn completion_names_after_marker(source: &str, marker: &str) -> Vec<String> {
 fn compiler_completion_uses_nested_scopes_for_methods_match_for_and_trait_bounds() {
     let source = [
         "trait Show:",
-        "    def show(self) -> String",
+        "    def show(self) -> str",
         "",
         "class Label:",
         "    value: int32",
         "    def collect(self) -> int32:",
-        "        mut items: Vec[String] = [\"ready\"]",
+        "        mut items: list[str] = [\"ready\"]",
         "        for item in items:",
         "            item.len()",
         "        self.value",
         "        return 0",
         "",
-        "def unwrap(value: own Option[String]) -> String:",
+        "def unwrap(value: own Option[str]) -> str:",
         "    match own value:",
         "        case Option.Some(text):",
         "            text.len()",
@@ -1820,7 +2331,7 @@ fn compiler_completion_uses_nested_scopes_for_methods_match_for_and_trait_bounds
         "    with TaskGroup() as group:",
         "        group.start_soon(noop)",
         "",
-        "def render[T: Show](value: T) -> String:",
+        "def render[T: Show](value: T) -> str:",
         "    value.show()",
         "    return value.show()",
         "",
@@ -1857,7 +2368,7 @@ fn compiler_completion_uses_nested_scopes_for_methods_match_for_and_trait_bounds
 #[test]
 fn comprehension_analysis_uses_execution_scope_and_exact_target_spans() {
     let source = [
-        "def collect_lengths(groups: Vec[Vec[String]]) -> Vec[int64]:",
+        "def collect_lengths(groups: list[list[str]]) -> list[int64]:",
         "    lengths = [",
         "        entry.len()",
         "        for group in groups",
@@ -1887,7 +2398,7 @@ fn comprehension_analysis_uses_execution_scope_and_exact_target_spans() {
                 && occurrence.end_character == 17
         })
         .expect("the outer comprehension target should have an exact definition occurrence");
-    assert_eq!(group_target.hover, "```aura\nlocal group: Vec[String]\n```");
+    assert_eq!(group_target.hover, "```aura\nlocal group: list[str]\n```");
     assert_eq!(
         group_target.definition.as_ref(),
         Some(&super::AnalysisRange {
@@ -1907,7 +2418,7 @@ fn comprehension_analysis_uses_execution_scope_and_exact_target_spans() {
                 && occurrence.end_character == 17
         })
         .expect("the inner comprehension target should have an exact definition occurrence");
-    assert_eq!(entry_target.hover, "```aura\nlocal entry: String\n```");
+    assert_eq!(entry_target.hover, "```aura\nlocal entry: str\n```");
     assert_eq!(
         entry_target.definition.as_ref(),
         Some(&super::AnalysisRange {
@@ -1955,7 +2466,7 @@ fn comprehension_analysis_uses_execution_scope_and_exact_target_spans() {
     assert!(analysis
         .occurrences
         .iter()
-        .any(|occurrence| occurrence.hover == "```aura\nbinding lengths: Vec[int64]\n```"));
+        .any(|occurrence| occurrence.hover == "```aura\nbinding lengths: list[int64]\n```"));
 
     let completion_names = |line: usize, character: usize, trigger| {
         complete_source(&source, line, character, trigger)
@@ -1988,7 +2499,7 @@ fn comprehension_analysis_uses_execution_scope_and_exact_target_spans() {
 #[test]
 fn phase72_slice_analysis_visits_bounds_and_preserves_owned_result_types() {
     let source = concat!(
-        "def take_slice(values: Vec[String], text: String, start: int32, end: int32) -> Vec[String]:\n",
+        "def take_slice(values: list[str], text: str, start: int32, end: int32) -> list[str]:\n",
         "    selected = values[start:end]\n",
         "    label = text[:end]\n",
         "    print(label)\n",
@@ -2002,12 +2513,12 @@ fn phase72_slice_analysis_visits_bounds_and_preserves_owned_result_types() {
     );
 
     for expected_hover in [
-        "param values: Vec[String]",
+        "param values: list[str]",
         "param start: int32",
         "param end: int32",
-        "binding selected: Vec[String]",
-        "param text: String",
-        "binding label: String",
+        "binding selected: list[str]",
+        "param text: str",
+        "binding label: str",
     ] {
         assert!(
             analysis
@@ -2023,13 +2534,13 @@ fn phase72_slice_analysis_visits_bounds_and_preserves_owned_result_types() {
 #[test]
 fn phase72_slice_result_type_drives_member_completion_during_an_incomplete_edit() {
     let source = concat!(
-        "def take_slice(values: Vec[String], start: int32, end: int32):\n",
+        "def take_slice(values: list[str], start: int32, end: int32):\n",
         "    selected = values[start:end]\n",
         "    selected.\n",
     );
     let completions = complete_source(source, 2, 13, Some('.'))
         .expect("slice result completion should recover from a dangling member");
-    assert!(completions.iter().any(|item| item.name == "push"));
+    assert!(completions.iter().any(|item| item.name == "append"));
     assert!(completions.iter().any(|item| item.name == "len"));
 }
 
@@ -2050,25 +2561,25 @@ fn phase72_slice_completion_recovers_call_bases_and_delimiters_inside_strings() 
         let source = format!(
             "{}{}",
             concat!(
-                "def make_values() -> Vec[String]:\n",
+                "def make_values() -> list[str]:\n",
                 "    return [\"Ada\", \"Grace\"]\n",
                 "\n",
-                "def endpoint(text: String) -> int32:\n",
+                "def endpoint(text: str) -> int32:\n",
                 "    return 0\n",
                 "\n",
-                "def inspect(values: Vec[String]):\n",
+                "def inspect(values: list[str]):\n",
             ),
             line,
         );
         let completions = complete_source(&source, 7, character, Some('.'))
             .unwrap_or_else(|error| panic!("completion should recover `{receiver}`: {error:?}"));
         assert!(
-            completions.iter().any(|item| item.name == "push"),
-            "missing Vec completion for `{receiver}`: {completions:?}"
+            completions.iter().any(|item| item.name == "append"),
+            "missing list completion for `{receiver}`: {completions:?}"
         );
         assert!(
             completions.iter().any(|item| item.name == "len"),
-            "missing Vec completion for `{receiver}`: {completions:?}"
+            "missing list completion for `{receiver}`: {completions:?}"
         );
     }
 }
@@ -2076,11 +2587,11 @@ fn phase72_slice_completion_recovers_call_bases_and_delimiters_inside_strings() 
 #[test]
 fn comprehension_analysis_infers_every_builtin_iterable_target_and_result_shape() {
     let source = r#"def inspect(
-    names: Vec[String],
-    tags: Set[String],
-    left: Vec[int32],
-    right: Vec[int32],
-    jobs: Queue[String]
+    names: list[str],
+    tags: set[str],
+    left: list[int32],
+    right: list[int32],
+    jobs: Queue[str]
 ):
     indexed = [name.len() + index for index, name in enumerate(names)]
     paired = [number + delta for number, delta in zip(left, right)]
@@ -2097,16 +2608,16 @@ fn comprehension_analysis_infers_every_builtin_iterable_target_and_result_shape(
     );
     for expected_hover in [
         "local index: int64",
-        "local name: String",
+        "local name: str",
         "local number: int32",
         "local delta: int32",
-        "local tag: String",
-        "local item: String",
-        "binding indexed: Vec[int64]",
-        "binding paired: Vec[int32]",
-        "binding ranged: Vec[int32]",
-        "binding tagged: Set[int64]",
-        "binding received: Map[String, int64]",
+        "local tag: str",
+        "local item: str",
+        "binding indexed: list[int64]",
+        "binding paired: list[int32]",
+        "binding ranged: list[int64]",
+        "binding tagged: set[int64]",
+        "binding received: dict[str, int64]",
     ] {
         assert!(
             analysis
@@ -2122,7 +2633,7 @@ fn comprehension_analysis_infers_every_builtin_iterable_target_and_result_shape(
 #[test]
 fn comprehension_scope_composes_with_contextual_lambda_scope() {
     let source = [
-        "def apply(values: Vec[int32]) -> Vec[int32]:",
+        "def apply(values: list[int32]) -> list[int32]:",
         "    results = [values.map(lambda delta: item + delta).len() as int32 for item in values]",
         "    return results",
         "",
@@ -2152,7 +2663,7 @@ fn comprehension_scope_composes_with_contextual_lambda_scope() {
     assert!(analysis
         .occurrences
         .iter()
-        .any(|occurrence| occurrence.hover == "```aura\nbinding results: Vec[int32]\n```"));
+        .any(|occurrence| occurrence.hover == "```aura\nbinding results: list[int32]\n```"));
 
     let body_character = source.lines().nth(1).unwrap().find("item +").unwrap() + 2;
     let completions = complete_source(&source, 1, body_character, None)
@@ -2168,7 +2679,7 @@ fn comprehension_scope_composes_with_contextual_lambda_scope() {
 #[test]
 fn comprehension_completion_respects_token_boundaries_and_map_output_scope() {
     let source = [
-        "def inspect(groups: Vec[Vec[String]], gift: Vec[String]):",
+        "def inspect(groups: list[list[str]], gift: list[str]):",
         "    plain = [name.len() for name in gift]",
         "    projected = {",
         "        outer.len():",
@@ -2294,7 +2805,7 @@ fn comprehension_completion_respects_token_boundaries_and_map_output_scope() {
 #[test]
 fn comprehension_completion_finds_the_filter_keyword_by_source_token_position() {
     let commented_source = [
-        "def inspect(values: Vec[String]):",
+        "def inspect(values: list[str]):",
         "    selected = [",
         "        item.len()",
         "        for item in values",
@@ -2339,7 +2850,7 @@ fn comprehension_completion_finds_the_filter_keyword_by_source_token_position() 
     );
 
     let fstring_source = [
-        "def inspect(values: Vec[int64]):",
+        "def inspect(values: list[int64]):",
         "    rendered = f\"{[item for item in values if item > 0]}\"",
         "",
     ]
@@ -2360,7 +2871,7 @@ fn comprehension_completion_finds_the_filter_keyword_by_source_token_position() 
 #[test]
 fn completion_keeps_function_scope_through_a_multiline_final_statement() {
     let source = [
-        "def inspect(values: Vec[String]):",
+        "def inspect(values: list[str]):",
         "    selected = [",
         "        item.len()",
         "        for item in values",
@@ -2427,7 +2938,7 @@ fn completion_uses_expression_and_nested_block_extents_for_final_statements() {
     }
 
     let nested_source = [
-        "def inspect(values: Vec[String], enabled: bool):",
+        "def inspect(values: list[str], enabled: bool):",
         "    if enabled:",
         "        selected = [",
         "            item.len()",
@@ -2449,7 +2960,7 @@ fn completion_uses_expression_and_nested_block_extents_for_final_statements() {
     assert!(names.contains("item"));
 
     let indexed_assignment_source = [
-        "def replace(values: mut Vec[String], index: int32, replacement: own String):",
+        "def replace(values: mut list[str], index: int32, replacement: own str):",
         "    values[",
         "        index",
         "    ] = (",
@@ -2614,7 +3125,7 @@ fn analysis_recovery_replaces_the_multiline_statement_owning_a_dangling_member()
         complete_source(&source, 4, 13, Some('.')).expect("member completion should recover");
     assert!(
         completions.iter().any(|item| item.name == "len"),
-        "the recovered receiver should retain its String type"
+        "the recovered receiver should retain its str type"
     );
 }
 
@@ -2622,10 +3133,10 @@ fn analysis_recovery_replaces_the_multiline_statement_owning_a_dangling_member()
 fn analysis_trait_impl_helpers_cover_generic_bound_resolution() {
     let source = [
         "trait Show:",
-        "    def show(self) -> String",
+        "    def show(self) -> str",
         "",
         "trait Named:",
-        "    def label(self) -> String",
+        "    def label(self) -> str",
         "",
         "trait Mapper[T]:",
         "    def map(self) -> T",
@@ -2634,11 +3145,11 @@ fn analysis_trait_impl_helpers_cover_generic_bound_resolution() {
         "    value: T",
         "",
         "impl Show for int32:",
-        "    def show(self) -> String:",
+        "    def show(self) -> str:",
         "        return f\"{self}\"",
         "",
         "impl[T: Show] Named for Box[T]:",
-        "    def label(self) -> String:",
+        "    def label(self) -> str:",
         "        return self.value.show()",
         "",
         "impl Mapper[int32] for Box[int32]:",
@@ -2663,7 +3174,7 @@ fn analysis_trait_impl_helpers_cover_generic_bound_resolution() {
             trait_impl,
             &Type::Named("Box".to_string(), vec![Type::named("int32")]),
         )
-        .expect("Box[String] should satisfy Named impl");
+        .expect("Box[str] should satisfy Named impl");
     assert_eq!(substitutions.get("T"), Some(&Type::named("int32")));
 
     let bound_substitutions = builder
@@ -2680,7 +3191,7 @@ fn analysis_trait_impl_helpers_cover_generic_bound_resolution() {
         &bound,
     ));
     assert!(!builder.type_implements_trait_bound(
-        &Type::Named("Box".to_string(), vec![Type::named("String")]),
+        &Type::Named("Box".to_string(), vec![Type::named("str")]),
         &bound,
     ));
     let mapper_impl = program
@@ -2690,7 +3201,7 @@ fn analysis_trait_impl_helpers_cover_generic_bound_resolution() {
         .expect("Mapper impl should exist");
     let mismatched_mapper_bound = TraitBound {
         trait_name: "Mapper".to_string(),
-        trait_args: vec![Type::named("String")],
+        trait_args: vec![Type::named("str")],
     };
     assert!(
         builder
@@ -2721,7 +3232,7 @@ fn analysis_trait_impl_helpers_cover_generic_bound_resolution() {
             "label",
         )
         .expect("trait method should resolve for Box[int32]");
-    assert_eq!(method.signature.return_type, Type::named("String"));
+    assert_eq!(method.signature.return_type, Type::named("str"));
     assert_eq!(resolved.get("T"), Some(&Type::named("int32")));
 }
 
@@ -2810,13 +3321,13 @@ fn analysis_scope_and_call_inference_helpers_cover_methods_assignments_and_built
     assert_eq!(
         builder.infer_call_type(
             &expr(ExprKind::Specialize {
-                expr: Box::new(expr(ExprKind::Name("Vec".to_string()))),
+                expr: Box::new(expr(ExprKind::Name("list".to_string()))),
                 type_args: vec![type_ref("int32")],
             }),
             &[],
             &BTreeMap::new(),
         ),
-        Some(Type::Named("Vec".to_string(), vec![Type::named("int32")]))
+        Some(Type::Named("list".to_string(), vec![Type::named("int32")]))
     );
     assert_eq!(
         builder.infer_call_type(
@@ -2838,14 +3349,14 @@ fn analysis_infers_canonical_concrete_type_for_user_generic_specialization() {
     let builder = AnalysisBuilder::new(source, &program, Vec::new());
     let specialized = expr(ExprKind::Specialize {
         expr: Box::new(expr(ExprKind::Name("Parcel".to_string()))),
-        type_args: vec![type_ref("String")],
+        type_args: vec![type_ref("str")],
     });
 
     assert_eq!(
         builder.infer_expr_type(&specialized, &BTreeMap::new()),
         Some(Type::Named(
             "inventory.Parcel".to_string(),
-            vec![Type::named("String")],
+            vec![Type::named("str")],
         )),
         "analysis clients must see both the canonical class identity and its concrete type argument"
     );
@@ -2893,44 +3404,44 @@ fn completion_scope_walks_past_if_else_and_while_blocks() {
 fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_surfaces() {
     let source = [
         "trait Show:",
-        "    def show(self) -> String",
+        "    def show(self) -> str",
         "",
         "trait Greeter:",
-        "    def greet(self) -> String",
+        "    def greet(self) -> str",
         "",
         "class User:",
-        "    label: String",
+        "    label: str",
         "",
-        "    def greet(self) -> String:",
+        "    def greet(self) -> str:",
         "        return self.label.clone()",
         "",
         "impl Show for User:",
-        "    def show(self) -> String:",
+        "    def show(self) -> str:",
         "        return self.label.clone()",
         "",
         "impl Greeter for User:",
-        "    def greet(self) -> String:",
+        "    def greet(self) -> str:",
         "        return self.label.clone()",
         "",
         "enum Status:",
         "    Ready",
-        "    Failed(code: int32, reason: String)",
+        "    Failed(code: int32, reason: str)",
         "",
         "def helper() -> int32:",
         "    return 1",
         "",
-        "def resultify(value: int32) -> Result[int32, String]:",
+        "def resultify(value: int32) -> Result[int32, str]:",
         "    return Result.Ok(value)",
     ]
     .join("\n");
     let mut program = checked_program(&source);
     let remote_source = [
         "trait RemoteTrait:",
-        "    def render(self) -> String",
+        "    def render(self) -> str",
         "",
         "enum RemoteStatus:",
         "    Ready",
-        "    Failed(code: int32, reason: String)",
+        "    Failed(code: int32, reason: str)",
         "",
         "class Remote:",
         "    value: int32",
@@ -2941,6 +3452,8 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     .join("\n");
     let remote_program = checked_program(&remote_source);
     let mut tools_namespace = crate::sema::ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "tools".to_string(),
         path: "pkg.tools".to_string(),
         source_path: None,
@@ -2965,6 +3478,8 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     tools_namespace.modules.insert(
         "inner".to_string(),
         crate::sema::ModuleNamespace {
+            constants: BTreeMap::new(),
+            all_constants: BTreeMap::new(),
             name: "inner".to_string(),
             path: "pkg.tools.inner".to_string(),
             source_path: None,
@@ -2990,6 +3505,8 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            constants: BTreeMap::new(),
+            all_constants: BTreeMap::new(),
             name: "pkg".to_string(),
             path: "pkg".to_string(),
             source_path: None,
@@ -3115,7 +3632,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             .into_iter()
             .find(|completion| completion.name == "Failed")
             .map(|completion| completion.detail),
-        Some("Failed(code: own int32, reason: own String) -> Status".to_string())
+        Some("Failed(code: own int32, reason: own str) -> Status".to_string())
     );
     let ready_member = builder
         .resolve_member_type(&Type::named("Status"), "Ready")
@@ -3169,7 +3686,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         .expect("qualified imported enum variants should resolve in match patterns");
     assert!(imported_variant
         .hover
-        .contains("variant Failed(code: own int32, reason: own String) -> pkg.tools.RemoteStatus"));
+        .contains("variant Failed(code: own int32, reason: own str) -> pkg.tools.RemoteStatus"));
     assert!(imported_variant.definition.is_some());
     assert_eq!(
         builder
@@ -3177,13 +3694,13 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             .into_iter()
             .find(|completion| completion.name == "Failed")
             .map(|completion| completion.detail),
-        Some("Failed(code: own int32, reason: own String) -> pkg.tools.RemoteStatus".to_string())
+        Some("Failed(code: own int32, reason: own str) -> pkg.tools.RemoteStatus".to_string())
     );
     assert!(builder
         .resolve_member_type(&Type::named("pkg.tools.RemoteStatus"), "Failed")
         .expect("qualified imported enum variants should resolve as static members")
         .hover
-        .contains("variant Failed(code: own int32, reason: own String) -> pkg.tools.RemoteStatus"));
+        .contains("variant Failed(code: own int32, reason: own str) -> pkg.tools.RemoteStatus"));
     let remote_status = builder
         .resolve_match_variant_enum("pkg.tools.RemoteStatus")
         .expect("qualified imported enum should resolve as a match variant enum");
@@ -3198,68 +3715,45 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         .resolve_member_type(&Type::named("WaitAny"), "Ready")
         .expect("WaitAny.Ready should resolve")
         .hover
-        .contains("variant Ready(own int32, own T) -> WaitAny"));
+        .contains("variant Ready(own int64, own T) -> WaitAny"));
     assert!(builder
         .resolve_member_type(&Type::named("WaitAny"), "Error")
         .expect("WaitAny.Error should resolve")
         .hover
-        .contains("variant Error(own int32, own String) -> WaitAny"));
+        .contains("variant Error(own int64, own str) -> WaitAny"));
     assert!(builder
         .resolve_member_type(&Type::named("WaitAll"), "Ready")
         .expect("WaitAll.Ready should resolve")
         .hover
-        .contains("variant Ready(own Vec[T]) -> WaitAll"));
+        .contains("variant Ready(own list[T]) -> WaitAll"));
     assert!(builder
         .resolve_member_type(&Type::named("WaitAll"), "Error")
         .expect("WaitAll.Error should resolve")
         .hover
-        .contains("variant Error(own int32, own String) -> WaitAll"));
+        .contains("variant Error(own int64, own str) -> WaitAll"));
     assert_eq!(
         builtin_enum_variant_completions("WaitAny")
             .into_iter()
             .find(|completion| completion.name == "Ready")
             .map(|completion| completion.detail),
-        Some("Ready(own int32, own T) -> WaitAny".to_string())
+        Some("Ready(own int64, own T) -> WaitAny".to_string())
     );
     assert_eq!(
         builtin_enum_variant_completions("WaitAll")
             .into_iter()
             .find(|completion| completion.name == "Error")
             .map(|completion| completion.detail),
-        Some("Error(own int32, own String) -> WaitAll".to_string())
+        Some("Error(own int64, own str) -> WaitAll".to_string())
     );
 
     let string_member_names = builder
-        .member_completions(&Type::named("String"))
+        .member_completions(&Type::named("str"))
         .into_iter()
         .map(|completion| completion.name)
         .collect::<Vec<_>>();
     assert!(string_member_names.contains(&"split".to_string()));
     assert!(string_member_names.contains(&"trim".to_string()));
     assert!(string_member_names.contains(&"strip_prefix".to_string()));
-
-    let map_entry_member_names = builder
-        .member_completions(&Type::Named(
-            "MapEntry".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
-        ))
-        .into_iter()
-        .map(|completion| completion.name)
-        .collect::<Vec<_>>();
-    assert!(map_entry_member_names.contains(&"key".to_string()));
-    assert!(map_entry_member_names.contains(&"value".to_string()));
-    assert!(
-        builder
-            .resolve_member_type(
-                &Type::Named(
-                    "MapEntry".to_string(),
-                    vec![Type::named("String"), Type::named("int32")],
-                ),
-                "missing",
-            )
-            .is_none(),
-        "unknown MapEntry fields should not resolve"
-    );
 
     let task_group_member_names = builder
         .member_completions(&Type::named("TaskGroup"))
@@ -3389,7 +3883,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         (
             "numbers".to_string(),
             super::BindingInfo {
-                ty: Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                ty: Type::Named("list".to_string(), vec![Type::named("int32")]),
                 trait_bounds: Vec::new(),
                 definition: super::AnalysisRange {
                     file_path: None,
@@ -3397,15 +3891,15 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
                     start_character: 0,
                     end_character: 7,
                 },
-                hover: "binding numbers: Vec[int32]".to_string(),
+                hover: "binding numbers: list[int32]".to_string(),
             },
         ),
         (
             "mapping".to_string(),
             super::BindingInfo {
                 ty: Type::Named(
-                    "Map".to_string(),
-                    vec![Type::named("String"), Type::named("int32")],
+                    "dict".to_string(),
+                    vec![Type::named("str"), Type::named("int32")],
                 ),
                 trait_bounds: Vec::new(),
                 definition: super::AnalysisRange {
@@ -3414,7 +3908,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
                     start_character: 0,
                     end_character: 7,
                 },
-                hover: "binding mapping: Map[String, int32]".to_string(),
+                hover: "binding mapping: dict[str, int32]".to_string(),
             },
         ),
         (
@@ -3435,7 +3929,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             "tasks".to_string(),
             super::BindingInfo {
                 ty: Type::Named(
-                    "Vec".to_string(),
+                    "list".to_string(),
                     vec![Type::Named("Task".to_string(), vec![Type::named("int32")])],
                 ),
                 trait_bounds: Vec::new(),
@@ -3445,7 +3939,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
                     start_character: 0,
                     end_character: 5,
                 },
-                hover: "binding tasks: Vec[Task[int32]]".to_string(),
+                hover: "binding tasks: list[Task[int32]]".to_string(),
             },
         ),
     ]);
@@ -3458,7 +3952,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             ])),
             &scope,
         ),
-        Some(Type::Named("Vec".to_string(), vec![Type::named("int64")]))
+        Some(Type::Named("list".to_string(), vec![Type::named("int64")]))
     );
     assert_eq!(
         builder.infer_expr_type(
@@ -3468,7 +3962,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             ])),
             &scope,
         ),
-        Some(Type::Named("Set".to_string(), vec![Type::named("String")]))
+        Some(Type::Named("set".to_string(), vec![Type::named("str")]))
     );
     assert_eq!(
         builder.infer_expr_type(
@@ -3479,8 +3973,8 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             &scope,
         ),
         Some(Type::Named(
-            "Map".to_string(),
-            vec![Type::named("String"), Type::named("int64")],
+            "dict".to_string(),
+            vec![Type::named("str"), Type::named("int64")],
         ))
     );
     assert_eq!(
@@ -3575,11 +4069,11 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         builder.infer_expr_type(
             &expr(ExprKind::Cast {
                 expr: Box::new(expr(ExprKind::Int(1))),
-                ty: type_ref("String"),
+                ty: type_ref("str"),
             }),
             &scope,
         ),
-        Some(Type::named("String"))
+        Some(Type::named("str"))
     );
     assert_eq!(
         builder.infer_expr_type(
@@ -3640,10 +4134,10 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     }
     for (builtin_name, args) in [
         ("SendError", vec![type_ref("int32")]),
-        ("Queue", vec![type_ref("String")]),
-        ("Vec", vec![type_ref("int32")]),
-        ("Set", vec![type_ref("String")]),
-        ("Map", vec![type_ref("String"), type_ref("int32")]),
+        ("Queue", vec![type_ref("str")]),
+        ("list", vec![type_ref("int32")]),
+        ("set", vec![type_ref("str")]),
+        ("dict", vec![type_ref("str"), type_ref("int32")]),
         ("Task", vec![type_ref("int32")]),
     ] {
         assert_eq!(
@@ -3693,6 +4187,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
                 scrutinee: Box::new(expr(ExprKind::Name("numbers".to_string()))),
                 capability: ReceiverKind::Borrow,
                 arms: vec![crate::ast::MatchExprArm {
+                    guard: None,
                     pattern: crate::ast::Pattern::Wildcard(Span::new(1, 1)),
                     value: expr(ExprKind::Int(4)),
                     span: Span::new(1, 1),
@@ -3820,7 +4315,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         ),
         Some(Type::Named(
             "Result".to_string(),
-            vec![Type::Unit, Type::named("String")],
+            vec![Type::Unit, Type::named("str")],
         ))
     );
     assert_eq!(
@@ -3854,18 +4349,18 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             &expr(ExprKind::Set(vec![expr(ExprKind::String("a".to_string()))])),
             &scope,
         ),
-        Some(Type::named("String"))
+        Some(Type::named("str"))
     );
     assert_eq!(
         builder.match_binding_type(
             Some(&Type::Named(
                 "Result".to_string(),
-                vec![Type::named("int32"), Type::named("String")],
+                vec![Type::named("int32"), Type::named("str")],
             )),
             None,
             "Err",
         ),
-        Some(Type::named("String"))
+        Some(Type::named("str"))
     );
     assert_eq!(
         builder.match_binding_type(
@@ -3882,7 +4377,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         builder.match_binding_type(
             Some(&Type::Named(
                 "Result".to_string(),
-                vec![Type::named("int32"), Type::named("String")],
+                vec![Type::named("int32"), Type::named("str")],
             )),
             None,
             "Ok",
@@ -3893,12 +4388,12 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         builder.match_binding_type(
             Some(&Type::Named(
                 "SendError".to_string(),
-                vec![Type::named("String")],
+                vec![Type::named("str")],
             )),
             None,
             "Closed",
         ),
-        Some(Type::named("String"))
+        Some(Type::named("str"))
     );
 }
 
@@ -3909,7 +4404,7 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
         "",
         "enum Status:",
         "    Ready",
-        "    Failed(String)",
+        "    Failed(str)",
         "",
         "def inspect(status: own Status, value: Option[int32]) -> int32:",
         "    match status:",
@@ -3929,6 +4424,8 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            constants: BTreeMap::new(),
+            all_constants: BTreeMap::new(),
             name: "pkg".to_string(),
             path: "pkg".to_string(),
             source_path: None,
@@ -3937,6 +4434,8 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
             modules: std::collections::BTreeMap::from([(
                 "types".to_string(),
                 crate::sema::ModuleNamespace {
+                    constants: BTreeMap::new(),
+                    all_constants: BTreeMap::new(),
                     name: "types".to_string(),
                     path: "pkg.types".to_string(),
                     source_path: None,
@@ -4050,7 +4549,7 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
         .expect("named enum variant should resolve");
     assert!(named_variant.definition.is_some());
     assert!(named_variant.hover.contains("Failed"));
-    assert!(named_variant.hover.contains("String"));
+    assert!(named_variant.hover.contains("str"));
 
     let inferred_named_variant = builder
         .resolve_match_variant(
@@ -4069,7 +4568,7 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
         .resolve_match_variant(
             Some(&Type::Named(
                 "Result".to_string(),
-                vec![Type::named("int32"), Type::named("String")],
+                vec![Type::named("int32"), Type::named("str")],
             )),
             &VariantPattern {
                 enum_name: None,
@@ -4079,7 +4578,7 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
             },
         )
         .expect("builtin Result.Err should resolve");
-    assert!(result_err_variant.hover.contains("String"));
+    assert!(result_err_variant.hover.contains("str"));
 
     let send_cancelled_variant = builder
         .resolve_match_variant(
@@ -4122,11 +4621,11 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
         "import pkg",
         "",
         "trait Show:",
-        "    def show(self) -> String",
+        "    def show(self) -> str",
         "",
         "enum Status:",
         "    Ready",
-        "    Failed(String)",
+        "    Failed(str)",
         "",
         "class Local:",
         "    value: int32",
@@ -4138,7 +4637,7 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     let mut program = checked_program(&source);
     let remote_source = [
         "trait RemoteTrait:",
-        "    def show(self) -> String",
+        "    def show(self) -> str",
         "",
         "enum RemoteStatus:",
         "    Ready",
@@ -4152,6 +4651,8 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     .join("\n");
     let remote_program = checked_program(&remote_source);
     let tools_namespace = crate::sema::ModuleNamespace {
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
         name: "tools".to_string(),
         path: "pkg.tools".to_string(),
         source_path: None,
@@ -4176,6 +4677,8 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            constants: BTreeMap::new(),
+            all_constants: BTreeMap::new(),
             name: "pkg".to_string(),
             path: "pkg".to_string(),
             source_path: None,
@@ -4242,7 +4745,7 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
 
     assert_eq!(
         builder.match_binding_type(None, Some("Status"), "Failed"),
-        Some(Type::named("String"))
+        Some(Type::named("str"))
     );
     assert_eq!(
         builder.match_binding_type(
@@ -4291,7 +4794,7 @@ fn complete_path_source_recovers_imported_module_member_completion() {
 fn completion_scope_tracks_nested_statement_bindings() {
     let source = [
         "class FileHandle:",
-        "    name: String",
+        "    name: str",
         "",
         "    def close(mut self):",
         "        pass",
@@ -4376,18 +4879,18 @@ fn compiler_analysis_accepts_builtin_named_arguments() {
 
 #[test]
 fn compiler_analysis_handles_named_wait_any_timeout() {
-    let source = "def worker(value: int32) -> int32:\n    return value\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        mut tasks = Vec[Task[int32]]()\n        tasks.push(group.start(worker, 1))\n        print(wait_any(tasks, timeout=5ms))\n    return 0\n";
+    let source = "def worker(value: int32) -> int32:\n    return value\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        mut tasks = list[Task[int32]]()\n        tasks.append(group.start(worker, 1))\n        print(wait_any(tasks, timeout=5ms))\n    return 0\n";
     let analysis = analyze_source(source);
 
     assert!(analysis.diagnostics.is_empty());
     assert!(analysis.occurrences.iter().any(|occurrence| occurrence
         .hover
-        .contains("wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]")));
+        .contains("wait_any(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAny[T]")));
 }
 
 #[test]
 fn compiler_analysis_preserves_real_ownership_diagnostic_metadata() {
-    let source = "def take(value: String) -> String:\n    return value\n";
+    let source = "def take(value: str) -> str:\n    return value\n";
     let analysis = analyze_source(source);
 
     assert_eq!(analysis.diagnostics.len(), 1);
@@ -4405,7 +4908,7 @@ fn compiler_analysis_preserves_real_ownership_diagnostic_metadata() {
     );
     assert_eq!(
         diagnostic.help,
-        ["declare the parameter as `own String` when the function should consume it, or call `.clone()` to consume an independent copy"]
+        ["declare the parameter as `own str` when the function should consume it, or call `.clone()` to consume an independent copy"]
     );
     assert_eq!(diagnostic.edits.len(), 1);
     assert_eq!(
@@ -4419,8 +4922,7 @@ fn compiler_analysis_preserves_real_ownership_diagnostic_metadata() {
         (1, 16, 16, ".clone()", "machine-applicable")
     );
     assert!(
-        crate::check_source("def take(value: String) -> String:\n    return value.clone()\n")
-            .is_ok()
+        crate::check_source("def take(value: str) -> str:\n    return value.clone()\n").is_ok()
     );
 }
 
@@ -4428,7 +4930,7 @@ fn compiler_analysis_preserves_real_ownership_diagnostic_metadata() {
 fn compiler_analysis_reports_provenance_for_representative_ownership_paths() {
     let cases = [
         (
-            "def consume(value: own String):\n    pass\n\ndef main() -> int32:\n    value = \"x\"\n    consume(value)\n    print(value)\n    return 0\n",
+            "def consume(value: own str):\n    pass\n\ndef main() -> int32:\n    value = \"x\"\n    consume(value)\n    print(value)\n    return 0\n",
             "AU3001",
             "use of moved value",
             true,
@@ -4658,7 +5160,7 @@ fn path_aware_analysis_tracks_imported_function_field_and_trait_method_definitio
     .expect("failed to write math module");
     fs::write(
         &named_path,
-        "public trait Named:\n    def name(self) -> String\n",
+        "public trait Named:\n    def name(self) -> str\n",
     )
     .expect("failed to write named module");
     fs::write(
@@ -4667,10 +5169,10 @@ fn path_aware_analysis_tracks_imported_function_field_and_trait_method_definitio
             "from pkg.named import Named",
             "",
             "public class User:",
-            "    public label: String",
+            "    public label: str",
             "",
             "impl Named for User:",
-            "    def name(self) -> String:",
+            "    def name(self) -> str:",
             "        return self.label.clone()",
         ]
         .join("\n"),
@@ -4718,7 +5220,7 @@ fn path_aware_analysis_tracks_imported_function_field_and_trait_method_definitio
                 == Some(user_path.as_str())
     }));
     assert!(analysis.occurrences.iter().any(|occurrence| {
-        occurrence.hover.contains("field label: String")
+        occurrence.hover.contains("field label: str")
             && occurrence
                 .definition
                 .as_ref()
@@ -4726,7 +5228,7 @@ fn path_aware_analysis_tracks_imported_function_field_and_trait_method_definitio
                 == Some(user_path.as_str())
     }));
     assert!(analysis.occurrences.iter().any(|occurrence| {
-        occurrence.hover.contains("method name(self) -> String")
+        occurrence.hover.contains("method name(self) -> str")
             && occurrence
                 .definition
                 .as_ref()
@@ -4754,7 +5256,7 @@ class Holder[T]:
 
 def main() -> int32:
     local = Holder[int64](1)
-    imported: remote.Holder[String] = remote.Holder[String]("remote")
+    imported: remote.Holder[str] = remote.Holder[str]("remote")
     print(local.value)
     print(imported.value)
     return 0
@@ -4774,7 +5276,7 @@ def main() -> int32:
     assert!(analysis.occurrences.iter().any(|occurrence| {
         occurrence
             .hover
-            .contains("binding imported: remote.Holder[String]")
+            .contains("binding imported: remote.Holder[str]")
     }));
     assert!(analysis.occurrences.iter().any(|occurrence| {
         occurrence.hover.contains("field value: T")
@@ -4869,7 +5371,7 @@ fn analysis_records_variant_occurrences_inside_match_patterns() {
 #[test]
 fn analysis_records_recursive_tuple_match_bindings_and_body_uses() {
     let source = [
-        "def inspect(pair: (int32, (bool, String))):",
+        "def inspect(pair: (int32, (bool, str))):",
         "    match pair:",
         "        case (left, (ready, text)):",
         "            print(left)",
@@ -4888,7 +5390,7 @@ fn analysis_records_recursive_tuple_match_bindings_and_body_uses() {
     for (name, ty, use_line) in [
         ("left", "int32", 3),
         ("ready", "bool", 4),
-        ("text", "String", 5),
+        ("text", "str", 5),
     ] {
         let definition = analysis
             .occurrences
@@ -4960,11 +5462,11 @@ fn analysis_records_enum_occurrences_nested_inside_tuple_patterns() {
 #[test]
 fn analysis_tracks_annotated_tuple_destructuring_index_types_and_completion_scope() {
     let source = [
-        "def make() -> (int32, String):",
+        "def make() -> (int32, str):",
         "    return (1, \"one\")",
         "",
         "def inspect():",
-        "    pair: (int32, String) = make()",
+        "    pair: (int32, str) = make()",
         "    left, text = pair",
         "    coords: (int32, int32) = (2, 3)",
         "    chosen = coords[1]",
@@ -4984,9 +5486,9 @@ fn analysis_tracks_annotated_tuple_destructuring_index_types_and_completion_scop
     );
     for (name, ty, use_line) in [
         ("left", "int32", 9),
-        ("text", "String", 10),
+        ("text", "str", 10),
         ("chosen", "int32", 11),
-        ("inferred", "(int64, String)", 12),
+        ("inferred", "(int64, str)", 12),
     ] {
         let occurrence = analysis
             .occurrences
@@ -5009,7 +5511,7 @@ fn analysis_tracks_annotated_tuple_destructuring_index_types_and_completion_scop
     let member_line = source
         .lines()
         .position(|line| line.contains("text.len"))
-        .expect("source should contain String member access");
+        .expect("source should contain str member access");
     let character = source
         .lines()
         .nth(member_line)
@@ -5017,7 +5519,7 @@ fn analysis_tracks_annotated_tuple_destructuring_index_types_and_completion_scop
         .map(|index| index + 1)
         .expect("source should contain a member dot");
     let completions = complete_source(&source, member_line, character, Some('.'))
-        .expect("tuple-destructured String completion should succeed");
+        .expect("tuple-destructured str completion should succeed");
     assert!(
         completions
             .iter()
@@ -5025,11 +5527,11 @@ fn analysis_tracks_annotated_tuple_destructuring_index_types_and_completion_scop
         "tuple destructuring must place element types in the completion scope"
     );
 
-    let tuple_type = Type::Tuple(vec![Type::named("int32"), Type::named("String")]);
+    let tuple_type = Type::Tuple(vec![Type::named("int32"), Type::named("str")]);
     assert_eq!(base_type_name(&tuple_type), "tuple");
     assert_eq!(
         tuple_type.type_arguments(),
-        &[Type::named("int32"), Type::named("String")]
+        &[Type::named("int32"), Type::named("str")]
     );
 }
 
@@ -5083,7 +5585,7 @@ fn analysis_exposes_structural_tuple_equality_without_consuming_operands() {
                     occurrence.line == use_line
                         && occurrence
                             .hover
-                            .contains(&format!("binding {name}: (String, int64)"))
+                            .contains(&format!("binding {name}: (str, int64)"))
                 })
                 .unwrap_or_else(|| {
                     panic!("missing reusable tuple occurrence for `{name}` on line {use_line}")
@@ -5103,7 +5605,7 @@ fn analysis_exposes_structural_tuple_equality_without_consuming_operands() {
 #[test]
 fn analysis_maps_tuple_ordering_diagnostic() {
     let source = [
-        "def compare(left: (String, int64), right: (String, int64)):",
+        "def compare(left: (str, int64), right: (str, int64)):",
         "    ordered = left < right",
     ]
     .join("\n");
@@ -5285,14 +5787,14 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
     );
 
     assert_eq!(lower_type_ref(&type_ref("None")), Type::Unit);
-    assert_eq!(lower_type_ref(&type_ref("str")), Type::named("String"));
+    assert_eq!(lower_type_ref(&type_ref("str")), Type::named("str"));
     assert_eq!(
         base_type_name(&Type::Module("pkg.types".to_string())),
         "pkg.types"
     );
     assert!(format_value_hover("let", "count", &Type::named("int32")).contains("count: int32"));
     assert!(format_function_hover(&function_decl("total", "int32")).contains("function total"));
-    assert!(format_method_hover(&function_decl("name", "String")).contains("method name"));
+    assert!(format_method_hover(&function_decl("name", "str")).contains("method name"));
 
     let class_info = ClassInfo {
         module_name: "<test>".to_string(),
@@ -5343,8 +5845,8 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
     assert!(builtin_enum_hover("Option[T]", "docs").contains("docs"));
     assert!(builtin_function_hover("print(value)", "docs").contains("print(value)"));
     assert!(
-        format_variant_hover("Option", "Some", Some(&Type::named("String")))
-            .contains("variant Some(own String) -> Option")
+        format_variant_hover("Option", "Some", Some(&Type::named("str")))
+            .contains("variant Some(own str) -> Option")
     );
 
     let option_variants = builtin_enum_variant_completions("Option");
@@ -5369,11 +5871,11 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
         .any(|item| item.name == "Cancelled"));
     assert!(builtin_enum_variant_completions("Unknown").is_empty());
     assert!(builtin_member_completions(&Type::Named(
-        "Set".to_string(),
+        "set".to_string(),
         vec![Type::named("int32")],
     ))
     .iter()
-    .any(|item| item.name == "insert"));
+    .any(|item| item.name == "add"));
     assert!(builtin_member_completions(&Type::Named(
         "Queue".to_string(),
         vec![Type::named("int32")],
@@ -5401,7 +5903,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
         builtin_function_return_type("parse_float64"),
         Some(Type::Named(
             "Result".to_string(),
-            vec![Type::named("float64"), Type::named("String")],
+            vec![Type::named("float64"), Type::named("str")],
         ))
     );
     assert_eq!(builtin_function_return_type("min"), None);
@@ -5443,12 +5945,10 @@ fn builtin_variant_inference_helpers_cover_builtin_constructors_and_unknowns() {
         ))
     );
     assert_eq!(
-        infer_builtin_variant_call("Result", "Err", &string_arg, |_| Some(Type::named(
-            "String"
-        ))),
+        infer_builtin_variant_call("Result", "Err", &string_arg, |_| Some(Type::named("str"))),
         Some(Type::Named(
             "Result".to_string(),
-            vec![Type::Unit, Type::named("String")],
+            vec![Type::Unit, Type::named("str")],
         ))
     );
     assert_eq!(
@@ -5520,11 +6020,11 @@ fn analysis_recovery_helpers_cover_placeholders_and_receiver_extraction() {
         Some("return false".to_string())
     );
     assert_eq!(
-        placeholder_stmt_for_return_type("Option[String]"),
+        placeholder_stmt_for_return_type("Option[str]"),
         Some("return Option.None".to_string())
     );
     assert_eq!(
-        placeholder_stmt_for_return_type("String"),
+        placeholder_stmt_for_return_type("str"),
         Some("return \"\"".to_string())
     );
     assert_eq!(placeholder_stmt_for_return_type("Counter"), None);
@@ -5582,30 +6082,23 @@ fn analysis_recovery_helpers_cover_placeholders_and_receiver_extraction() {
 #[test]
 fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() {
     let vec_completions =
-        builtin_member_completions(&Type::Named("Vec".to_string(), vec![Type::named("int32")]));
-    assert!(vec_completions.iter().any(|item| item.name == "push"));
+        builtin_member_completions(&Type::Named("list".to_string(), vec![Type::named("int32")]));
+    assert!(vec_completions.iter().any(|item| item.name == "append"));
     assert!(vec_completions.iter().any(|item| item.name == "reverse"));
     for (name, detail) in [
-        ("sort", "sort() -> None"),
-        ("sort_by", "sort_by(key: def(T) -> K) -> None"),
-        ("map", "map(f: def(T) -> U) -> Vec[U]"),
-        ("filter", "filter(f: def(T) -> bool) -> Vec[T]"),
+        (
+            "sort",
+            "sort(key: def(T) -> K = ..., reverse: bool = false) -> None",
+        ),
+        ("map", "map(f: def(T) -> U) -> list[U]"),
+        ("filter", "filter(f: def(T) -> bool) -> list[T]"),
     ] {
         let completion = vec_completions
             .iter()
             .find(|item| item.name == name)
-            .unwrap_or_else(|| panic!("Vec.{name} completion should exist"));
+            .unwrap_or_else(|| panic!("list.{name} completion should exist"));
         assert_eq!(completion.detail, detail);
     }
-
-    let map_entry_completions = builtin_member_completions(&Type::Named(
-        "MapEntry".to_string(),
-        vec![Type::named("String"), Type::named("int32")],
-    ));
-    assert!(map_entry_completions.iter().any(|item| item.name == "key"));
-    assert!(map_entry_completions
-        .iter()
-        .any(|item| item.name == "value"));
 
     let queue_completions = builtin_member_completions(&Type::Named(
         "Queue".to_string(),
@@ -5639,45 +6132,47 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
             .definition,
         range_from_span(method_decl.span, method_decl.name.len())
     );
-    let vec_receiver = Type::Named("Vec".to_string(), vec![Type::named("int32")]);
+    let vec_receiver = Type::Named("list".to_string(), vec![Type::named("int32")]);
     assert_eq!(
         builder
-            .resolve_member_type(&vec_receiver, "clone")
-            .expect("Vec.clone should resolve")
+            .resolve_member_type(&vec_receiver, "copy")
+            .expect("list.copy should resolve")
             .ty,
         Some(vec_receiver.clone())
     );
     for (name, signature) in [
-        ("sort", "sort() -> None"),
-        ("sort_by", "sort_by(key: def(T) -> K) -> None"),
-        ("map", "map(f: def(T) -> U) -> Vec[U]"),
-        ("filter", "filter(f: def(T) -> bool) -> Vec[T]"),
+        (
+            "sort",
+            "sort(key: def(T) -> K = ..., reverse: bool = false) -> None",
+        ),
+        ("map", "map(f: def(T) -> U) -> list[U]"),
+        ("filter", "filter(f: def(T) -> bool) -> list[T]"),
     ] {
         let member = builder
             .resolve_member_type(&vec_receiver, name)
-            .unwrap_or_else(|| panic!("Vec.{name} should resolve for hover"));
+            .unwrap_or_else(|| panic!("list.{name} should resolve for hover"));
         assert!(
             member.hover.contains(signature),
-            "Vec.{name} hover should contain `{signature}`, got `{}`",
+            "list.{name} hover should contain `{signature}`, got `{}`",
             member.hover
         );
     }
     let map_receiver = Type::Named(
-        "Map".to_string(),
-        vec![Type::named("String"), Type::named("int32")],
+        "dict".to_string(),
+        vec![Type::named("str"), Type::named("int32")],
     );
     assert_eq!(
         builder
-            .resolve_member_type(&map_receiver, "clone")
-            .expect("Map.clone should resolve")
+            .resolve_member_type(&map_receiver, "copy")
+            .expect("dict.copy should resolve")
             .ty,
         Some(map_receiver.clone())
     );
-    let set_receiver = Type::Named("Set".to_string(), vec![Type::named("String")]);
+    let set_receiver = Type::Named("set".to_string(), vec![Type::named("str")]);
     assert_eq!(
         builder
-            .resolve_member_type(&set_receiver, "clone")
-            .expect("Set.clone should resolve")
+            .resolve_member_type(&set_receiver, "copy")
+            .expect("set.copy should resolve")
             .ty,
         Some(set_receiver.clone())
     );
@@ -5705,21 +6200,21 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         builtin_function_return_type("parse_int32"),
         Some(Type::Named(
             "Result".to_string(),
-            vec![Type::named("int32"), Type::named("String")],
+            vec![Type::named("int32"), Type::named("str")],
         ))
     );
     assert_eq!(
         builtin_function_return_type("parse_int64"),
         Some(Type::Named(
             "Result".to_string(),
-            vec![Type::named("int64"), Type::named("String")],
+            vec![Type::named("int64"), Type::named("str")],
         ))
     );
     assert_eq!(
         builtin_function_return_type("parse_float64"),
         Some(Type::Named(
             "Result".to_string(),
-            vec![Type::named("float64"), Type::named("String")],
+            vec![Type::named("float64"), Type::named("str")],
         ))
     );
 
@@ -5747,6 +6242,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         },
         capability: ReceiverKind::Borrow,
         arms: vec![crate::ast::MatchArm {
+            guard: None,
             pattern: crate::ast::Pattern::Wildcard(Span::new(7, 9)),
             body: vec![crate::ast::Stmt::Pass(PassStmt {
                 span: Span::new(8, 9),
@@ -5919,6 +6415,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
 
     let mut scope = BTreeMap::new();
     let no_payload_arm = crate::ast::MatchArm {
+        guard: None,
         pattern: crate::ast::Pattern::Variant(VariantPattern {
             enum_name: Some("Option".to_string()),
             variant_name: "None".to_string(),
@@ -5938,6 +6435,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
     );
     assert!(scope.is_empty());
     let non_binding_payload_arm = crate::ast::MatchArm {
+        guard: None,
         pattern: crate::ast::Pattern::Variant(VariantPattern {
             enum_name: Some("Option".to_string()),
             variant_name: "Some".to_string(),
@@ -6004,8 +6502,8 @@ fn analysis_builtin_member_types_cover_io_network_and_process_surfaces() {
     let named = |name: &str| Type::Named(name.to_string(), Vec::new());
     let option = |payload: Type| Type::Named("Option".to_string(), vec![payload]);
     let result = |ok: Type, err: Type| Type::Named("Result".to_string(), vec![ok, err]);
-    let vec_of = |payload: Type| Type::Named("Vec".to_string(), vec![payload]);
-    let string = Type::named("String");
+    let vec_of = |payload: Type| Type::Named("list".to_string(), vec![payload]);
+    let string = Type::named("str");
     let uint8 = Type::named("uint8");
     let io_error = named("io.Error");
     let process_error = named("process.Error");
@@ -6021,8 +6519,8 @@ fn analysis_builtin_member_types_cover_io_network_and_process_surfaces() {
         assert_eq!(member.ty, Some(expected), "{receiver}.{field}");
     };
 
-    assert_member_type("String", "len", Type::named("int64"));
-    assert_member_type("String", "byte_len", Type::named("int64"));
+    assert_member_type("str", "len", Type::named("int64"));
+    assert_member_type("str", "byte_len", Type::named("int64"));
     assert_member_type("process.Child", "stdin", option(named("process.Pipe")));
     assert_member_type("process.Child", "stdout", option(named("process.Pipe")));
     assert_member_type("process.Child", "stderr", option(named("process.Pipe")));
@@ -6213,7 +6711,7 @@ fn analysis_builtin_member_types_cover_io_network_and_process_surfaces() {
     assert_member_type(
         "net.HttpExchange",
         "headers",
-        Type::Named("Map".to_string(), vec![string.clone(), string.clone()]),
+        Type::Named("dict".to_string(), vec![string.clone(), string.clone()]),
     );
     assert_member_type(
         "net.HttpExchange",
@@ -6233,7 +6731,7 @@ fn analysis_builtin_member_types_cover_io_network_and_process_surfaces() {
     assert_member_type(
         "net.HttpResponse",
         "headers",
-        Type::Named("Map".to_string(), vec![string.clone(), string.clone()]),
+        Type::Named("dict".to_string(), vec![string.clone(), string.clone()]),
     );
     assert_member_type(
         "net.HttpResponse",
@@ -6322,7 +6820,7 @@ fn analysis_builtin_member_types_cover_io_network_and_process_surfaces() {
 #[test]
 fn function_value_analysis_preserves_symbol_contract_and_indirect_call_result() {
     let source = [
-        "def decorate(prefix: String, value: String = \"world\") -> String:",
+        "def decorate(prefix: str, value: str = \"world\") -> str:",
         "    return prefix + value",
         "",
         "def main() -> int32:",
@@ -6343,11 +6841,11 @@ fn function_value_analysis_preserves_symbol_contract_and_indirect_call_result() 
         .filter_map(|occurrence| occurrence["hover"].as_str())
         .collect::<Vec<_>>();
     assert!(
-        hovers.contains(&"```aura\nbinding selected: def(String, String) -> String\n```"),
+        hovers.contains(&"```aura\nbinding selected: def(str, str) -> str\n```"),
         "the inferred function-value binding must expose its callable type: {hovers:?}"
     );
     assert!(
-        hovers.contains(&"```aura\nbinding outcome: String\n```"),
+        hovers.contains(&"```aura\nbinding outcome: str\n```"),
         "an indirect function-value call must expose its declared return type: {hovers:?}"
     );
 
@@ -6364,7 +6862,7 @@ fn function_value_analysis_preserves_symbol_contract_and_indirect_call_result() 
     else {
         panic!("a function symbol should infer to a full callable type");
     };
-    assert_eq!(*return_type, Type::named("String"));
+    assert_eq!(*return_type, Type::named("str"));
     assert_eq!(params.len(), 2);
     assert_eq!(params[0].name, "prefix");
     assert!(!params[0].has_default);
@@ -6379,17 +6877,17 @@ fn function_value_analysis_preserves_symbol_contract_and_indirect_call_result() 
 #[test]
 fn nested_written_function_types_drive_completion_scope_and_json_schema() {
     let source = [
-        "def passthrough(callback: def(mut String, own String) -> (String, int32)) -> def(mut String, own String) -> (String, int32):",
+        "def passthrough(callback: def(mut str, own str) -> (str, int32)) -> def(mut str, own str) -> (str, int32):",
         "    return callback",
         "",
         "def main() -> int32:",
-        "    selected: def(def(mut String, own String) -> (String, int32)) -> def(mut String, own String) -> (String, int32) = passthrough",
+        "    selected: def(def(mut str, own str) -> (str, int32)) -> def(mut str, own str) -> (str, int32) = passthrough",
         "    print(selected)",
         "    return 0",
     ]
     .join("\n");
     let expected_type =
-        "def(def(mut String, own String) -> (String, int32)) -> def(mut String, own String) -> (String, int32)";
+        "def(def(mut str, own str) -> (str, int32)) -> def(mut str, own str) -> (str, int32)";
 
     let analysis = analyze_source(&source);
     let analysis_json = serde_json::to_value(&analysis).expect("analysis should serialize");
@@ -6427,7 +6925,7 @@ fn nested_written_function_types_drive_completion_scope_and_json_schema() {
     assert_eq!(nested_params[1]["passing"], serde_json::json!("Value"));
     assert_eq!(
         outer_param["ty"]["Function"]["return_type"]["Tuple"][0],
-        serde_json::json!({"Named": ["String", []]})
+        serde_json::json!({"Named": ["str", []]})
     );
     assert_eq!(
         type_json["Function"]["return_type"]["Function"]["return_type"]["Tuple"][1],
@@ -6458,9 +6956,7 @@ fn written_function_type_aliases_are_canonical_in_completion_scope() {
             .iter()
             .any(|occurrence| {
                 occurrence["hover"]
-                    == serde_json::json!(
-                        "```aura\nbinding selected: def(String, int64) -> None\n```"
-                    )
+                    == serde_json::json!("```aura\nbinding selected: def(str, int64) -> None\n```")
             }),
         "written callable aliases must be canonicalized in semantic JSON"
     );
@@ -6474,7 +6970,7 @@ fn written_function_type_aliases_are_canonical_in_completion_scope() {
             .expect("the written function binding should enter completion scope")
             .ty
             .to_string(),
-        "def(String, int64) -> None"
+        "def(str, int64) -> None"
     );
 }
 
@@ -6554,7 +7050,7 @@ fn lambda_analysis_displays_consuming_closure_bindings() {
     let source = [
         "def main():",
         "    text = \"captured\"",
-        "    take: def() -> String = lambda: text",
+        "    take: def() -> str = lambda: text",
         "    print(take())",
     ]
     .join("\n");
@@ -6570,7 +7066,7 @@ fn lambda_analysis_displays_consuming_closure_bindings() {
             occurrence.line == 3
                 && occurrence
                     .hover
-                    .contains("binding take: consuming closure def() -> String")
+                    .contains("binding take: consuming closure def() -> str")
         }),
         "a moved non-Copy capture should display its consuming call contract"
     );
@@ -6773,6 +7269,7 @@ fn lambda_scope_navigation_follows_every_expression_container_to_its_structural_
                     scrutinee: Box::new(leaf(4)),
                     capability: ReceiverKind::Borrow,
                     arms: vec![crate::ast::MatchExprArm {
+                        guard: None,
                         pattern: crate::ast::Pattern::Wildcard(wrapper_span),
                         value: lambda.clone(),
                         span: wrapper_span,
@@ -6910,12 +7407,12 @@ fn closure_types_preserve_analysis_shape_unknown_detection_and_call_results() {
     };
     let concrete = closure_type(
         Type::named("int64"),
-        Type::named("String"),
+        Type::named("str"),
         Type::named("int64"),
     );
     let unknown_param = closure_type(
         Type::named("Unknown"),
-        Type::named("String"),
+        Type::named("str"),
         Type::named("int64"),
     );
     let unknown_return = closure_type(
@@ -6925,7 +7422,7 @@ fn closure_types_preserve_analysis_shape_unknown_detection_and_call_results() {
     );
     let unknown_capture = closure_type(
         Type::named("int64"),
-        Type::named("String"),
+        Type::named("str"),
         Type::named("Unknown"),
     );
 
@@ -6933,7 +7430,7 @@ fn closure_types_preserve_analysis_shape_unknown_detection_and_call_results() {
     assert!(concrete.type_arguments().is_empty());
     assert_eq!(
         concrete.to_string(),
-        "closure def(int64) -> String",
+        "closure def(int64) -> str",
         "analysis hovers should expose the closure call contract without capture internals"
     );
     assert!(!analysis_type_contains_unknown(&concrete));
@@ -6977,7 +7474,7 @@ fn closure_types_preserve_analysis_shape_unknown_detection_and_call_results() {
             &[arg(expr(ExprKind::Int(1)))],
             &scope,
         ),
-        Some(Type::named("String"))
+        Some(Type::named("str"))
     );
     assert_eq!(
         builder.infer_expr_type(
@@ -7002,9 +7499,9 @@ fn lambda_analysis_preserves_parameter_modes_and_vec_map_result_types() {
     let source = [
         "def main():",
         "    offset: int64 = 2",
-        "    mut values: Vec[int64] = [1, 2]",
-        "    consume: def(own String) -> String = lambda own text: text",
-        "    measure: def(mut Vec[int64]) -> int64 = lambda mut items: items.len()",
+        "    mut values: list[int64] = [1, 2]",
+        "    consume: def(own str) -> str = lambda own text: text",
+        "    measure: def(mut list[int64]) -> int64 = lambda mut items: items.len()",
         "    mapped = values.map(lambda value: value + offset)",
         "    print(mapped)",
     ]
@@ -7017,9 +7514,9 @@ fn lambda_analysis_preserves_parameter_modes_and_vec_map_result_types() {
         analysis.diagnostics
     );
     for expected in [
-        "param text: own String",
-        "param items: mut Vec[int64]",
-        "binding mapped: Vec[int64]",
+        "param text: own str",
+        "param items: mut list[int64]",
+        "binding mapped: list[int64]",
     ] {
         assert!(
             analysis
@@ -7040,11 +7537,11 @@ fn lambda_analysis_preserves_parameter_modes_and_vec_map_result_types() {
         source.lines().nth(mapped_line).unwrap().len(),
         None,
     )
-    .expect("completion inside Vec.map lambda should succeed");
+    .expect("completion inside list.map lambda should succeed");
     for name in ["value", "offset"] {
         assert!(
             completions.iter().any(|completion| completion.name == name),
-            "`{name}` should be visible inside the Vec.map lambda"
+            "`{name}` should be visible inside the list.map lambda"
         );
     }
 }
@@ -7057,7 +7554,7 @@ fn path_analysis_infers_imported_function_values_and_member_call_results() {
     fs::write(
         &helper_path,
         [
-            "public def decorate(prefix: String, value: String = \"world\") -> String:",
+            "public def decorate(prefix: str, value: str = \"world\") -> str:",
             "    return prefix + value",
         ]
         .join("\n"),
@@ -7087,16 +7584,16 @@ fn path_analysis_infers_imported_function_values_and_member_call_results() {
         .filter_map(|occurrence| occurrence["hover"].as_str())
         .collect::<Vec<_>>();
     assert!(
-        hovers.contains(&"```aura\nbinding selected: def(String, String) -> String\n```"),
+        hovers.contains(&"```aura\nbinding selected: def(str, str) -> str\n```"),
         "an imported function member must retain its full callable type: {hovers:?}"
     );
     for expected in [
-        "```aura\nbinding direct: String\n```",
-        "```aura\nbinding outcome: String\n```",
+        "```aura\nbinding direct: str\n```",
+        "```aura\nbinding outcome: str\n```",
     ] {
         assert!(
             hovers.contains(&expected),
-            "direct and indirect imported calls must infer String: {hovers:?}"
+            "direct and indirect imported calls must infer str: {hovers:?}"
         );
     }
 }
@@ -7143,6 +7640,24 @@ fn completion_preserves_array_types_through_group_call_index_and_slice_receivers
 }
 
 #[test]
+fn fixed_width_integer_completion_exposes_all_shift_arithmetic_modes() {
+    let completions = builtin_member_completions(&Type::named("int32"));
+    for (name, detail) in [
+        ("wrapping_shl", "wrapping_shl(count: Self) -> Self"),
+        ("wrapping_shr", "wrapping_shr(count: Self) -> Self"),
+        ("saturating_shl", "saturating_shl(count: Self) -> Self"),
+        ("saturating_shr", "saturating_shr(count: Self) -> Self"),
+    ] {
+        assert!(
+            completions
+                .iter()
+                .any(|completion| completion.name == name && completion.detail == detail),
+            "missing `{name}` completion with `{detail}`: {completions:?}"
+        );
+    }
+}
+
+#[test]
 fn conditional_function_type_inference_prefers_concrete_nested_contracts() {
     let program = checked_program("def main():\n    pass\n");
     let builder = AnalysisBuilder::new("", &program, Vec::new());
@@ -7157,12 +7672,12 @@ fn conditional_function_type_inference_prefers_concrete_nested_contracts() {
         return_type: Box::new(return_type),
     };
     let concrete = function_type(
-        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
-        Type::named("String"),
+        Type::Named("list".to_string(), vec![Type::named("int32")]),
+        Type::named("str"),
     );
     let unknown_param = function_type(
-        Type::Named("Vec".to_string(), vec![Type::named("Unknown")]),
-        Type::named("String"),
+        Type::Named("list".to_string(), vec![Type::named("Unknown")]),
+        Type::named("str"),
     );
     let unknown_return = function_type(Type::named("int32"), Type::named("Unknown"));
     let binding = |ty: Type| super::BindingInfo {

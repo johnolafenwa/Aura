@@ -61,7 +61,7 @@ connection.onInitialize((params) => {
   return {
     serverInfo: {
       name: "aura-language-server",
-      version: "0.2.0"
+      version: "0.3.0"
     },
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,
@@ -247,6 +247,8 @@ function completionKind(kind) {
       return CompletionItemKind.Enum;
     case "variant":
       return CompletionItemKind.EnumMember;
+    case "constant":
+      return CompletionItemKind.Constant;
     case "keyword":
       return CompletionItemKind.Keyword;
     default:

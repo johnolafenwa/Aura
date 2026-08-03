@@ -1,6 +1,174 @@
 # Task Board
 
-Last updated: 2026-08-02
+Last updated: 2026-08-03
+
+## Batch S1: Aura 0.3 Python-surface program (in progress)
+
+- Authorized target: complete the coordinated 0.3 breaking migration in the
+  ratified order S2 → S1 → S3 → S4 → five design-only ADRs, obtain the required
+  local and hosted evidence, report the checkpoint, and stop before ADR-0038
+  loans, the P1 performance batch, or any 0.4 implementation.
+- Preconditions are verified. Hosted runs `30738666230`, `30738666191`, and
+  `30738666169` each passed Ubuntu 24.04 and macOS 15 at `cd93f221`; extension
+  publication is complete. Batch work is isolated on the local-only
+  `codex/batch-s1-python-surface` branch and will not be pushed without the
+  user's authorization.
+- The workspace, compiler, CLI, language server, VS Code extension, locks,
+  Manual stamp, and CLI version output are moving to Aura 0.3.0 development
+  identity before semantic migration. The published 0.2.0 preview release and
+  its historical packaging checks remain intact.
+- Compiler coverage floors stayed frozen during implementation at 96.28%
+  lines, 97.20% functions, and 94.62% regions. The one-time checkpoint
+  re-ratchet is complete at 96.30% lines, 97.21% functions, and 94.71%
+  regions.
+- User amendment: Aura has no users and carries no backward-compatibility
+  burden. The prior surface is treated as though it never existed: no aliases,
+  shims, reserved spellings, specialized retirement diagnostics, fix-its,
+  grace periods, or public migration guidance. `list.remove(x)` activates for
+  integer lists in the same migration as every other element type; the
+  internal repository rewrite changes old index-removal calls to `pop(index)`.
+  Focused tests run continuously, while the expensive full local gate is
+  reserved for completed migration families and checkpoint. The user confirmed
+  this as the standing policy on 2026-08-03; Accepted ADR-0057 is binding.
+- Current phase: S2's unified `int64` index domain and S1's canonical
+  `list`/`dict`/`set`/`str` surface are implemented across the compiler, both
+  backends, fixtures, diagnostics, examples, tutorials, Manual, LSP, and editor
+  tooling. The coordinated S1/S2 family is committed and merged locally with
+  the landed documentation/CI pull request. S3 is implemented: the 17-test
+  runner suite covers discovery, filtering, JSON, lifecycle hooks, and
+  parametrized registration; assertion introspection now preserves once-only
+  evaluation and produces typed, bounded operand records with byte-identical
+  focused MIR/direct human output. The focused compiler assertion partition is
+  11/11 green, the MIR-runtime and native-runtime partitions are 130/130 and
+  182/182 green, the complete compiler library suite is 1,512/1,512 green, and
+  the CLI once-only/backend-parity and JSON-runner tests pass. Both new
+  run-fail fixtures are byte-identical across forced MIR/direct execution. The
+  LSP is 102/102 at 100% coverage, the extension is 21/21, and the 38-page
+  executable reference gate is green.
+  The checkpoint-wide forced-backend matrix and full local/hosted gates have not
+  run for S3. S4 feature implementation is otherwise substantially complete.
+  Import aliases and focused keyword-only rejection, integer bases/separators,
+  power, bitwise and checked/wrapping/saturating shifts, `round`, `divmod`, raw
+  and triple-quoted strings, practical static f-string specifications, match
+  guards, or-patterns, and generic module constants are implemented across the
+  applicable checker, analysis, MIR, direct backend, fixtures, examples,
+  tutorials, Manual, LSP, and editor surfaces. Float power executes at its
+  destination width; exact wide-integer formatting does not round through
+  binary64; mutable match guards write back on false, trap, propagation, and
+  selected-arm exits; non-Copy module constants retain one shared defining
+  storage identity. The semantic tooling/cache schema is version 5. The public
+  example and fixture path inventory uses canonical list/dict/set/shared/mut
+  names with a permanent clean-slate filename gate. ADR-0052 through ADR-0056
+  contain implementation-adoption sections with no compatibility or migration
+  surface. The `math` module's eleven exact float64 functions and four exact
+  constants are implemented over the generic constant foundation. The testing
+  reference freeze, robust wrapped reference assertions, and focused
+  warning-denied Clippy are complete. ADR-0045 remains Provisional until its
+  P1-P6 answers pass the final matrix/gates, and ADR-0049's class-pattern
+  disposition remains provisional;
+  guards and or-patterns themselves are accepted and implemented. Generated
+  `llms.txt`/`llms-full.txt`, combined reference/editor/cache verification, and
+  the pre-closure forced-parity/documentation gates are green. The exact
+  closure-tree coverage gate passes 361 CLI and 1,659 compiler tests. The
+  final exact-tree `npm run ci` gate is green at `5ee64cd`, including forced
+  backend parity, editor tooling, reference integrity, docs, audits, Clippy,
+  hygiene, and coverage at 96.304488163144% lines, 97.216796875% functions,
+  and 94.717811553593% regions. No synthetic tests were added. Remaining work
+  is the S1.1 checkpoint-findings closure and one complete green hosted run on
+  both operating systems. The user authorized pushes and pull requests on
+  2026-08-03, and later made one complete hosted run the standing completion
+  policy in place of repeated consecutive reruns.
+- Protected user files remain untouched: `personal/file_ops.au`, the untracked
+  ADR-0022 draft, and `fc2_direct.out`.
+- Work note: `work/2026-08-02-batch-s1-python-surface.md`.
+
+## Batch S1.1: checkpoint findings closure (complete; awaiting sign-off)
+
+- Authorized target: close equality gating, format zero-padding and literal
+  diagnostics, root match binding patterns, the 0.3 reference restamp,
+  ADR-0045's example, bounded-blocking-pool classification, and the Aug 3
+  Safety workflow failures before the S1 merge.
+- Standing clean-slate policy is confirmed and recorded in Accepted ADR-0057.
+- S1.1-a equality gating is implemented at the common equality-obligation
+  boundary. AU2008 now blocks callables, `random.Rng`, opaque FFI handles, and
+  containing aggregates across list search, membership, set insertion,
+  dictionary-key use, and direct equality. Twelve closure/Rng surface fixtures
+  and the forced MIR/direct diagnostic-parity test are green; the complete
+  semantic checker partition is 331/331 green. The stale Rng identity run-pass
+  fixture is replaced by a rendering fixture and a direct AU2008 rejection.
+- S1.1-b implements Python-compatible sign-aware numeric zero padding. Focused
+  runtime tests and the MIR/direct fixture are green. Raw `rf`/`fr` and
+  triple-quoted f-string prefixes now receive precise AU1002 diagnostics, and
+  the reference records the explicit-type requirement for comma grouping.
+- S1.1-c implements root binding patterns for statement and expression
+  matches. Guarded bindings expose the whole scrutinee without contributing to
+  exhaustiveness; unguarded bindings are final catch-alls. Copy, shared,
+  `own`, and `mut` capabilities execute identically in MIR and direct mode.
+- S1.1-d inspected all 39 Manual pages and migrated all 91 stale 0.2
+  references across 32 affected pages to the 0.3 development contract. The
+  CLI version example now matches `aura 0.3.0-dev`, generated LLM artifacts
+  are current, and the identity gate pins the 39-page inventory plus absence
+  of stale 0.2 Manual prose without misclassifying third-party versions.
+- S1.1-e's ADR-0045 trailing-comma example is corrected. The two bounded-pool
+  watchdogs passed three independent isolated reruns apiece across MIR,
+  direct, and standalone paths, classifying the checkpoint reports as mutual
+  host-contention flakes rather than product failures; the established
+  narrow shared guard remains the correct disposition.
+- The Aug 3 Safety failure is locally dispositioned. Fuzz now selects its
+  pinned nightly and explicit GNU target; ASan/TSan sanitizer flags apply to
+  target crates without contaminating host build tools; and a coverage-only
+  live-value guard found and closed the test-only 18-value and 53-value FFI
+  harness leaks. Hosted repair run `30802829724` proved the directly
+  instrumented TSan scheduler partition 274/274 and the ASan native-runtime
+  FFI partition 7/7, then exposed nested Aura/Cargo integration builds
+  inheriting the parent sanitizer ABI without its `-Zbuild-std` contract. The
+  final scripts retain those complete directly instrumented boundaries and no
+  longer launch a second Cargo process. Both fuzz targets explicitly use the
+  installed `x86_64-unknown-linux-gnu` target. Hosted run `30819818749` proved
+  all four fuzz/sanitizer jobs and exposed an independent workflow-budget
+  defect: the stress job reached iteration 16/50 before its 45-minute timeout,
+  while one stale exact filter ran zero tests. The filter now resolves to the
+  maintained one-worker fairness regression, the hosted count is ten complete
+  repetitions of all three tests, and a regression pins both the resolved
+  names and budget. Focused metadata, shell-syntax, and workflow checks are
+  green. Hosted Safety run `30823933687` is fully green, including ASan, TSan,
+  both fuzz targets, scheduler stress, the scheduler model, and the benchmark.
+- The final local gate is green. It covers 31 Aura unit tests, 362 CLI tests,
+  1,663 compiler tests, the complete forced MIR/direct parity matrix, 107 LSP
+  tests at 100% coverage, 22 extension tests, all 39 Manual pages and 270
+  fenced blocks, the documentation build, both dependency audits,
+  warnings-denied Clippy, and hygiene. Exact compiler coverage is
+  96.303181376484% lines (91,176/94,676), 97.23532281671817% functions
+  (5,979/6,149), and 94.722310489708% regions (134,141/141,615). Hosted CI
+  attempt 2 of run `30823914449` then found macOS's variable runtime profile
+  two lines below the 96.30% floor after every behavioral test passed. Two
+  observable runtime-value regressions now pin exact Duration-to-binary64 carry
+  normalization and the `Array` numeric-cast diagnostic source type. The exact
+  corrected coverage gate is green at 96.306350078161302% lines
+  (91,179/94,676), 97.235322816718167% functions (5,979/6,149), and
+  94.723722769480631% regions (134,143/141,615). No synthetic coverage test or
+  justified exclusion was added; the frozen floors did not change. Hosted run
+  `30841047064` proved the correction on macOS at 96.305293844268874% lines,
+  then encountered newly published npm advisories at the later audit stage.
+  The lockfile now selects fixed transitive releases `brace-expansion` 5.0.9
+  and `postcss` 8.5.25; a clean `npm ci` and complete npm/Rust audit gate are
+  green with zero npm vulnerabilities.
+- The one required complete hosted proof, run `30846511697`, is green at final
+  code/lock commit `b5831ab`. Ubuntu 24.04 completed in 1:40:17 with
+  96.306350078161302% lines (91,179/94,676), 97.235322816718167% functions
+  (5,979/6,149), and 94.725135049253268% regions (134,145/141,615). macOS 15
+  completed in 1:06:21 with 96.304237610376447% lines (91,177/94,676),
+  97.235322816718167% functions (5,979/6,149), and 94.722310489708008% regions
+  (134,141/141,615). Both full gates and the companion Docs run `30846511698`
+  are green with zero npm vulnerabilities. No consecutive reruns were
+  requested under the user's one-run policy.
+- Push and pull-request authorization is explicit. The user's standing policy
+  now requires one complete green hosted CI run on both operating systems;
+  repeated consecutive reruns are not required. That run is complete. Merge
+  waits for checkpoint sign-off.
+- Protected user files remain untouched: `personal/file_ops.au`, the untracked
+  ADR-0022 draft, and `fc2_direct.out`.
+- Work note: `work/2026-08-03-s1.1-checkpoint-findings-closure.md`.
 
 ## Hosted CI path filtering (complete)
 

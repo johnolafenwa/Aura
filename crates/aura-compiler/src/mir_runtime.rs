@@ -9,14 +9,16 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
-use crate::ast::UnaryOp;
+use crate::ast::{BinaryOp, UnaryOp};
 use crate::builtin_modules::host_builtin_metadata;
 use crate::call::{BuiltinAssociatedFunction, BuiltinMember};
 use crate::diag::{
     Diagnostic, Result, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span,
 };
 use crate::ffi::{FfiError, FfiSignature, FfiType, FfiValue};
-use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
+use crate::integer::{
+    IntegerKind, IntegerPowerError, IntegerRepresentation, IntegerShiftError, IntegerValue,
+};
 use crate::json_codec;
 use crate::mir::{
     CallTarget, Instruction, MirArg, MirClass, MirExternCall, MirExternParam, MirFormatPart,
@@ -25,26 +27,27 @@ use crate::mir::{
 };
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
-    cast_numeric_value, catch_lightweight_task_failure, claim_task_result_observations,
-    clone_json_codec_source, decode_process_restart_policy, decode_process_stdio,
+    append_string_checked, cast_numeric_value, catch_lightweight_task_failure,
+    claim_task_result_observations, clone_json_codec_source, concat_strings_checked,
+    decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
     duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
     evaluate_bytes_host_builtin_ref, evaluate_host_builtin_with_program_args,
-    evaluate_string_to_bytes_host_ref, float_floor_divmod, host_process_args, io_error,
-    io_read_line, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
-    json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_owned_to_runtime,
-    nominal_runtime_base_name, option_none, option_some, poll_cancellation,
-    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
-    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
-    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    evaluate_string_to_bytes_host_ref, float_floor_divmod, float_power, format_runtime_value,
+    host_process_args, io_error, io_read_line, json_array_metadata_is_exact,
+    json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
+    json_parse_owned_to_runtime, nominal_runtime_base_name, option_none, option_some,
+    poll_cancellation, prepare_json_codec_source, process_error_cancelled, process_error_io,
+    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
+    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
     queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
-    render_float32, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
-    runtime_value_to_json, select_runtime_values, send_error_cancelled, send_error_closed,
-    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned,
-    slice_vec_owned, spawn_lightweight_task,
+    render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
+    run_lightweight_root_task, runtime_value_to_json, select_runtime_values, send_error_cancelled,
+    send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
+    slice_string_owned, slice_vec_owned, spawn_lightweight_task,
     spawn_lightweight_task_with_result_repeatability_registered,
     spawn_lightweight_task_with_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
@@ -53,14 +56,14 @@ use crate::runtime_value::{
     wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
     CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
-    FfiHandleValue, FileValue, FunctionValue, HttpExchangeValue, HttpListenerValue,
-    HttpResponseValue, InstanceValue, IntegerArithmeticMode, MapValue, ProcessChildValue,
-    ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue, ProcessRestartPolicy,
-    ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue,
-    RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskCancelledSignal,
-    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
-    TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue,
-    UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, HttpExchangeValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode, MapValue,
+    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
+    ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
+    RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
+    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
+    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
     NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
 };
 use crate::sema::{substitute_type, Type};
@@ -304,12 +307,12 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
         Rvalue::Closure { captures, .. } => captures
             .iter()
             .any(|capture| operand_is_process_run_function(&capture.value)),
-        Rvalue::FormatString { parts } => parts.iter().any(|part| {
-            matches!(
-                part,
-                crate::mir::MirFormatPart::Value(value)
-                    if operand_is_process_run_function(value)
-            )
+        Rvalue::FormatString { parts } => parts.iter().any(|part| match part {
+            crate::mir::MirFormatPart::Value(value)
+            | crate::mir::MirFormatPart::Formatted { value, .. } => {
+                operand_is_process_run_function(value)
+            }
+            crate::mir::MirFormatPart::Literal(_) => false,
         }),
         // `rvalue_uses_lightweight_tasks` recognizes every `StartTask` before
         // consulting this recursive materialization helper. Inspecting its
@@ -340,7 +343,7 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
         Rvalue::Construct { fields, .. } => fields
             .iter()
             .any(|field| operand_is_process_run_function(&field.value)),
-        Rvalue::TupleTakeElement { .. } => false,
+        Rvalue::TupleTakeElement { .. } | Rvalue::ModuleConstant { .. } => false,
     }
 }
 
@@ -618,6 +621,14 @@ struct MirRuntime {
     call_stack: Vec<RuntimeCallFrame>,
     task_ancestry: Vec<RuntimeTaskFrame>,
     return_type_stack: Vec<Type>,
+    constant_states: Arc<Mutex<HashMap<String, MirConstantState>>>,
+}
+
+#[derive(Clone)]
+enum MirConstantState {
+    Initializing,
+    Ready(Arc<Value>),
+    Failed(Diagnostic),
 }
 
 struct CallOutcome {
@@ -658,6 +669,7 @@ fn mir_function_value(name: &str, signature: &Type) -> Value {
 
 enum RvalueOutcome {
     Value(Value),
+    SharedModuleConstant(Arc<Value>),
     Return(Value),
 }
 
@@ -668,6 +680,7 @@ fn try_clone_mir_value(value: &Value) -> Result<Value> {
 #[derive(Default)]
 struct Env {
     values: HashMap<String, Value>,
+    shared_values: HashMap<String, Arc<Value>>,
     types: HashMap<String, Type>,
 }
 
@@ -691,6 +704,7 @@ impl Env {
     fn define_typed(&mut self, name: impl Into<String>, ty: Type, value: Value) {
         let name = name.into();
         self.types.insert(name.clone(), ty);
+        self.shared_values.remove(&name);
         self.values.insert(name, value);
     }
 
@@ -699,9 +713,12 @@ impl Env {
         let (root, rest) = segments
             .split_first()
             .expect("split_place_segments rejects empty MIR places");
-        let mut current = match self.values.get(root) {
-            Some(value) => value,
-            None => return Err(Diagnostic::new(format!("unknown MIR place `{}`", place))),
+        let mut current = if let Some(value) = self.shared_values.get(root) {
+            value.as_ref()
+        } else {
+            self.values
+                .get(root)
+                .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?
         };
         let mut index = 0usize;
         while index < rest.len() {
@@ -743,9 +760,12 @@ impl Env {
         let (root, rest) = segments
             .split_first()
             .expect("split_place_segments rejects empty MIR places");
-        let mut value = match self.values.get(root) {
-            Some(value) => value,
-            None => return Err(Diagnostic::new(format!("unknown MIR place `{}`", place))),
+        let mut value = if let Some(value) = self.shared_values.get(root) {
+            value.as_ref()
+        } else {
+            self.values
+                .get(root)
+                .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?
         };
         let mut index = 0usize;
         while index < rest.len() {
@@ -787,15 +807,23 @@ impl Env {
             .split_first()
             .expect("split_place_segments rejects empty MIR places");
         if rest.is_empty() {
+            if self.shared_values.contains_key(root) {
+                return Err(Diagnostic::new(format!(
+                    "shared MIR place `{place}` reached a consuming context"
+                )));
+            }
             return self
                 .values
                 .remove(root)
                 .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)));
         }
-        let value = self
-            .values
-            .get_mut(root)
-            .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?;
+        let value = self.values.get_mut(root).ok_or_else(|| {
+            if self.shared_values.contains_key(root) {
+                Diagnostic::new(format!("shared MIR place `{place}` cannot be mutated"))
+            } else {
+                Diagnostic::new(format!("unknown MIR place `{}`", place))
+            }
+        })?;
         take_nested_place(value, rest, place)
     }
 
@@ -804,10 +832,13 @@ impl Env {
         let (root, rest) = segments
             .split_first()
             .expect("split_place_segments rejects empty MIR places");
-        let value = self
-            .values
-            .get_mut(root)
-            .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{place}`")))?;
+        let value = self.values.get_mut(root).ok_or_else(|| {
+            if self.shared_values.contains_key(root) {
+                Diagnostic::new(format!("shared MIR place `{place}` cannot be mutated"))
+            } else {
+                Diagnostic::new(format!("unknown MIR place `{place}`"))
+            }
+        })?;
         nested_place_mut(value, rest, place)
     }
 
@@ -888,6 +919,7 @@ impl Env {
             .expect("split_place_segments rejects empty MIR places");
 
         if rest.is_empty() {
+            self.shared_values.remove(root);
             self.values.insert((*root).to_string(), value);
             return Ok(());
         }
@@ -901,6 +933,17 @@ impl Env {
             .map(|segment| segment.as_str())
             .collect::<Vec<_>>();
         write_nested_place(root_value, &rest_refs, value, place)
+    }
+
+    fn write_shared_place(&mut self, place: &str, value: Arc<Value>) -> Result<()> {
+        if place.contains('.') {
+            return Err(Diagnostic::new(format!(
+                "module constant reference cannot be assigned to nested MIR place `{place}`"
+            )));
+        }
+        self.values.remove(place);
+        self.shared_values.insert(place.to_string(), value);
+        Ok(())
     }
 
     fn place_type(&self, place: &str) -> Option<&Type> {
@@ -1144,7 +1187,7 @@ fn borrow_mir_string<'a>(operand: &'a Operand, env: &'a Env, call: &str) -> Resu
             Value::String(value) => Ok(value),
             other => Err(Diagnostic::coded(
                 "AU4001",
-                format!("`{call}` expects `String`, found `{}`", other.render()),
+                format!("`{call}` expects `str`, found `{}`", other.render()),
             )),
         },
         Operand::MovePlace(place) => Err(Diagnostic::new(format!(
@@ -1156,7 +1199,7 @@ fn borrow_mir_string<'a>(operand: &'a Operand, env: &'a Env, call: &str) -> Resu
             Err(Diagnostic::coded(
                 "AU4001",
                 format!(
-                    "`{call}` expects `String`, found `{}`",
+                    "`{call}` expects `str`, found `{}`",
                     value.as_value().render()
                 ),
             ))
@@ -1476,18 +1519,16 @@ fn evaluate_json_mir_host_call(
 
 fn evaluate_bytes_mir_host_call(name: &str, args: &[MirArg], env: &Env) -> Option<Result<Value>> {
     let expected_name = match name {
-        "bytes::hex_encode" | "bytes::base64_encode" | "bytes::sha256" | "String.to_bytes" => {
-            "value"
-        }
+        "bytes::hex_encode" | "bytes::base64_encode" | "bytes::sha256" | "str.to_bytes" => "value",
         "bytes::hex_decode" | "bytes::base64_decode" | "bytes::sha256_string" => "text",
-        "String.from_bytes" => "bytes",
+        "str.from_bytes" => "bytes",
         _ => return None,
     };
     let bound = match bind_mir_arg_refs(&[expected_name], args) {
         Ok(bound) => bound,
         Err(error) => return Some(Err(error)),
     };
-    if name == "String.to_bytes" {
+    if name == "str.to_bytes" {
         if let Operand::String(text) = &bound[0].value {
             return Some(evaluate_string_to_bytes_host_ref(text));
         }
@@ -1594,6 +1635,72 @@ impl MirRuntime {
             call_stack: Vec::new(),
             task_ancestry: Vec::new(),
             return_type_stack: Vec::new(),
+            constant_states: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn read_module_constant(&mut self, key: &str, initializer: &str) -> Result<Arc<Value>> {
+        {
+            let states = self
+                .constant_states
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match states.get(key) {
+                Some(MirConstantState::Ready(value)) => return Ok(value.clone()),
+                Some(MirConstantState::Failed(error)) => return Err(error.clone()),
+                Some(MirConstantState::Initializing) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        format!(
+                        "module constant `{key}` was read while its module was still initializing"
+                    ),
+                    ))
+                }
+                None => {}
+            }
+        }
+        self.constant_states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(key.to_string(), MirConstantState::Initializing);
+        let function = self.functions.get(initializer).cloned().ok_or_else(|| {
+            Diagnostic::new(format!(
+                "missing MIR initializer `{initializer}` for module constant `{key}`"
+            ))
+        })?;
+        match self.call_function(&function, None, Vec::new()) {
+            Ok(outcome) => {
+                let stored = Arc::new(outcome.value);
+                self.constant_states
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(key.to_string(), MirConstantState::Ready(stored.clone()));
+                Ok(stored)
+            }
+            Err(error) => {
+                self.constant_states
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(key.to_string(), MirConstantState::Failed(error.clone()));
+                Err(error)
+            }
+        }
+    }
+
+    fn initialize_module_constants(&mut self) -> Result<()> {
+        for constant in self.module.constants.clone() {
+            let _ = self.read_module_constant(&constant.key, &constant.initializer)?;
+        }
+        Ok(())
+    }
+
+    fn cleanup_module_constants(&mut self) {
+        let mut states = self
+            .constant_states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for constant in self.module.constants.iter().rev() {
+            states.remove(&constant.key);
         }
     }
 
@@ -1818,15 +1925,23 @@ impl MirRuntime {
     /// Enters the module at `entry`, or at its ordinary entry point when
     /// `entry` is absent.
     fn run_entry(&mut self, entry: Option<&str>) -> Result<Value> {
-        let Some(entry) = entry else {
-            return self.run_main();
+        if let Err(error) = self.initialize_module_constants() {
+            self.cleanup_module_constants();
+            return Err(error);
+        }
+        let result = if let Some(entry) = entry {
+            let function = self.functions.get(entry).cloned().ok_or_else(|| {
+                Diagnostic::new(format!("no entry function named `{entry}` was found"))
+            });
+            function.and_then(|function| {
+                self.call_function(&function, None, Vec::new())
+                    .map(|outcome| outcome.value)
+            })
+        } else {
+            self.run_main()
         };
-        let Some(function) = self.functions.get(entry).cloned() else {
-            return Err(Diagnostic::new(format!(
-                "no entry function named `{entry}` was found"
-            )));
-        };
-        Ok(self.call_function(&function, None, Vec::new())?.value)
+        self.cleanup_module_constants();
+        result
     }
 
     fn run_main(&mut self) -> Result<Value> {
@@ -1847,21 +1962,21 @@ impl MirRuntime {
             Value::Int(value) => Some(Type::named(value.runtime_type_name().unwrap_or("int64"))),
             Value::Float(_) => Some(Type::named("float64")),
             Value::Bool(_) => Some(Type::named("bool")),
-            Value::String(_) => Some(Type::named("String")),
+            Value::String(_) => Some(Type::named("str")),
             Value::Tuple(tuple) => Some(Type::Tuple(tuple.element_types.clone())),
             Value::Vec(vector) => Some(Type::Named(
-                "Vec".to_string(),
+                "list".to_string(),
                 vec![vector.element_type.clone()],
             )),
             Value::Array(array) => {
                 Some(Type::Named("Array".to_string(), vec![array.element_type()]))
             }
             Value::Set(set) => Some(Type::Named(
-                "Set".to_string(),
+                "set".to_string(),
                 vec![set.element_type.clone()],
             )),
             Value::Map(map) => Some(Type::Named(
-                "Map".to_string(),
+                "dict".to_string(),
                 vec![map.key_type.clone(), map.value_type.clone()],
             )),
             Value::Duration(_) => Some(Type::named("Duration")),
@@ -2108,7 +2223,7 @@ impl MirRuntime {
             Operand::Duration(_) => Some(Type::named("Duration")),
             Operand::Float(_) => Some(Type::named("float64")),
             Operand::Bool(_) => Some(Type::named("bool")),
-            Operand::String(_) => Some(Type::named("String")),
+            Operand::String(_) => Some(Type::named("str")),
             Operand::Unit => Some(Type::Unit),
         }
     }
@@ -2237,7 +2352,7 @@ impl MirRuntime {
                 let receiver_ty = receiver_type
                     .cloned()
                     .or_else(|| self.infer_runtime_value_type(&receiver))
-                    .unwrap_or_else(|| Type::named("Unknown"));
+                    .unwrap_or(Type::named("Unknown"));
                 env.define_typed("self", receiver_ty, receiver);
             }
 
@@ -2471,6 +2586,15 @@ impl MirRuntime {
                         env.write_place(target, evaluated)?;
                         Ok(None)
                     }
+                    RvalueOutcome::SharedModuleConstant(evaluated) => {
+                        if let Some(target_ty) = target_ty {
+                            if !target.contains('.') {
+                                env.set_place_type(target, target_ty);
+                            }
+                        }
+                        env.write_shared_place(target, evaluated)?;
+                        Ok(None)
+                    }
                     RvalueOutcome::Return(value) => Ok(Some(value)),
                 }
             }
@@ -2567,7 +2691,52 @@ impl MirRuntime {
                 }
                 Ok(BlockOutcome::Goto(otherwise.clone()))
             }
-            Terminator::AssertFail { message, span } => {
+            Terminator::AssertFail {
+                message,
+                captures,
+                span,
+            } => {
+                if !matches!(captures.len(), 0 | 2) {
+                    return Err(Diagnostic::coded_at(
+                        "AU4001",
+                        *span,
+                        format!(
+                            "MIR assertion captures must contain zero or two operands, found {}",
+                            captures.len()
+                        ),
+                    ));
+                }
+                if let [left, right] = captures.as_slice() {
+                    let labels = (left.label.as_str(), right.label.as_str());
+                    if !matches!(labels, ("left", "right") | ("item", "collection")) {
+                        return Err(Diagnostic::coded_at(
+                            "AU4001",
+                            *span,
+                            format!(
+                                "MIR assertion captures use invalid labels `{}` and `{}`",
+                                left.label, right.label,
+                            ),
+                        ));
+                    }
+                }
+                let mut rendered_captures = Vec::with_capacity(captures.len());
+                for capture in captures {
+                    let rendered = match self.evaluate_owned_operand(&capture.value, env)? {
+                        Value::String(rendered) => rendered,
+                        other => {
+                            return Err(Diagnostic::coded_at(
+                                "AU4001",
+                                *span,
+                                format!(
+                                    "MIR assertion capture `{}` must evaluate to rendered `str`, found `{}`",
+                                    capture.label,
+                                    other.render()
+                                ),
+                            ))
+                        }
+                    };
+                    rendered_captures.push((capture, rendered));
+                }
                 let message = match message {
                     Some(message) => match self.evaluate_owned_operand(message, env)? {
                         Value::String(message) => message,
@@ -2576,7 +2745,7 @@ impl MirRuntime {
                                 "AU4001",
                                 *span,
                                 format!(
-                                    "MIR assertion message must evaluate to `String`, found `{}`",
+                                    "MIR assertion message must evaluate to `str`, found `{}`",
                                     other.render()
                                 ),
                             ))
@@ -2584,7 +2753,15 @@ impl MirRuntime {
                     },
                     None => "assertion failed".to_string(),
                 };
-                Err(Diagnostic::coded_at("AU4001", *span, message))
+                let mut diagnostic = Diagnostic::coded_at("AU4001", *span, message);
+                for (capture, rendered) in rendered_captures {
+                    diagnostic = diagnostic.with_assertion_operand(
+                        capture.label.clone(),
+                        capture.ty.to_string(),
+                        rendered,
+                    );
+                }
+                Err(diagnostic)
             }
             Terminator::Unreachable => Err(Diagnostic::new("reached unreachable MIR block")),
         }
@@ -2754,6 +2931,9 @@ impl MirRuntime {
             Rvalue::Use(operand) => Ok(RvalueOutcome::Value(
                 self.evaluate_owned_operand(operand, env)?,
             )),
+            Rvalue::ModuleConstant { key, initializer } => Ok(RvalueOutcome::SharedModuleConstant(
+                self.read_module_constant(key, initializer)?,
+            )),
             Rvalue::Closure {
                 function,
                 signature,
@@ -2776,7 +2956,7 @@ impl MirRuntime {
                         source_path: metadata.and_then(|function| function.source_path.clone()),
                         entry_span: metadata
                             .map(|function| function.span)
-                            .unwrap_or_else(|| Span::new(0, 0)),
+                            .unwrap_or(Span::new(0, 0)),
                         direct_thunk: None,
                         direct_default_binder: None,
                         closure_environment: Some(Arc::new(ClosureEnvironment::new(
@@ -2789,24 +2969,47 @@ impl MirRuntime {
                 let mut rendered = String::new();
                 for part in parts {
                     match part {
-                        MirFormatPart::Literal(text) => rendered.push_str(text),
+                        MirFormatPart::Literal(text) => append_string_checked(&mut rendered, text)?,
                         MirFormatPart::Value(value) => {
-                            rendered.push_str(&self.evaluate_operand(value, env)?.render())
+                            let value = self.evaluate_operand(value, env)?.render();
+                            append_string_checked(&mut rendered, &value)?;
+                        }
+                        MirFormatPart::Formatted {
+                            value,
+                            spec,
+                            value_type,
+                        } => {
+                            let value = self.evaluate_operand(value, env)?;
+                            let formatted = format_runtime_value(&value, value_type, spec)?;
+                            append_string_checked(&mut rendered, &formatted)?;
                         }
                     }
                 }
                 Ok(RvalueOutcome::Value(Value::String(rendered)))
             }
-            Rvalue::Unary { op, value, .. } => {
+            Rvalue::Unary { op, value, span } => {
                 let value = self.evaluate_operand(value, env)?;
+                let value = if *op == UnaryOp::BitNot {
+                    match expected_type {
+                        Some(expected) => {
+                            self.coerce_value_to_type(value, expected, Some(*span))?
+                        }
+                        None => value,
+                    }
+                } else {
+                    value
+                };
                 let result = match (op, value) {
                     (UnaryOp::Not, Value::Bool(value)) => Value::Bool(!value),
                     (UnaryOp::Neg, Value::Int(value)) => Value::Int(
                         value
                             .checked_neg()
-                            .ok_or_else(|| Diagnostic::new("integer overflow"))?,
+                            .ok_or(Diagnostic::new("integer overflow"))?,
                     ),
                     (UnaryOp::Neg, Value::Float(value)) => Value::Float(-value),
+                    (UnaryOp::BitNot, Value::Int(value)) => Value::Int(value.bitnot().ok_or(
+                        Diagnostic::coded("AU4001", "invalid typed integer for unary `~`"),
+                    )?),
                     (UnaryOp::Not, other) => {
                         return Err(Diagnostic::new(format!(
                             "`not` expects `bool`, found `{}`",
@@ -2818,6 +3021,15 @@ impl MirRuntime {
                             "unary `-` expects a numeric value, found `{}`",
                             other.render()
                         )))
+                    }
+                    (UnaryOp::BitNot, other) => {
+                        return Err(Diagnostic::coded(
+                            "AU2003",
+                            format!(
+                                "unary `~` expects an integer value, found `{}`",
+                                other.render()
+                            ),
+                        ))
                     }
                 };
                 Ok(RvalueOutcome::Value(result))
@@ -2868,7 +3080,7 @@ impl MirRuntime {
                     "Err" => {
                         let source_ty = source_error_ty
                             .or_else(|| self.infer_runtime_value_type(&payload))
-                            .unwrap_or_else(|| Type::named("Unknown"));
+                            .unwrap_or(Type::named("Unknown"));
                         let payload = self.convert_try_error_via_from(payload, &source_ty)?;
                         Ok(RvalueOutcome::Return(Value::EnumVariant(
                             EnumVariantValue {
@@ -2925,8 +3137,39 @@ impl MirRuntime {
                         Some(*span),
                     )?));
                 }
-                let left = self.evaluate_operand(left, env)?;
-                let right = self.evaluate_operand(right, env)?;
+                let mut left = self.evaluate_operand(left, env)?;
+                let mut right = self.evaluate_operand(right, env)?;
+                let coerce_operands = matches!(
+                    op,
+                    BinaryOp::Pow
+                        | BinaryOp::BitAnd
+                        | BinaryOp::BitOr
+                        | BinaryOp::BitXor
+                        | BinaryOp::Shl
+                        | BinaryOp::Shr
+                );
+                if coerce_operands {
+                    if let Some(expected) = expected_type {
+                        left = self.coerce_value_to_type(left, expected, Some(*span))?;
+                        right = self.coerce_value_to_type(right, expected, Some(*span))?;
+                    }
+                }
+                if *op == BinaryOp::Pow {
+                    if let (Value::Float(left), Value::Float(right)) = (&left, &right) {
+                        let width = match expected_type {
+                            Some(Type::Named(name, args))
+                                if name == "float32" && args.is_empty() =>
+                            {
+                                FloatPowerWidth::Float32
+                            }
+                            _ => FloatPowerWidth::Float64,
+                        };
+                        return float_power(*left, *right, width)
+                            .map(Value::Float)
+                            .map(RvalueOutcome::Value)
+                            .map_err(|error| with_optional_diagnostic_span(error, Some(*span)));
+                    }
+                }
                 Ok(RvalueOutcome::Value(self.eval_binary(
                     *op,
                     left,
@@ -3186,7 +3429,7 @@ impl MirRuntime {
                     }));
                 }
 
-                if name == "Vec" {
+                if name == "list" {
                     let values = evaluate_named_args(args, env)?;
                     bind_builtin_args(&[], values)?;
                     return Ok(Value::Vec(VecValue {
@@ -3195,7 +3438,7 @@ impl MirRuntime {
                     }));
                 }
 
-                if name == "Set" {
+                if name == "set" {
                     let values = evaluate_named_args(args, env)?;
                     bind_builtin_args(&[], values)?;
                     return Ok(Value::Set(SetValue {
@@ -3204,7 +3447,7 @@ impl MirRuntime {
                     }));
                 }
 
-                if name == "Map" {
+                if name == "dict" {
                     let values = evaluate_named_args(args, env)?;
                     bind_builtin_args(&[], values)?;
                     return Ok(Value::Map(MapValue {
@@ -3274,7 +3517,7 @@ impl MirRuntime {
                         let shape = array_shape_from_runtime(&bound[0].value)?;
                         ArrayValue::full(dtype, shape, &bound[1].value)?
                     } else {
-                        debug_assert_eq!(member_name, "from_vec");
+                        debug_assert_eq!(member_name, "from_list");
                         let bound = bind_builtin_args(&["values", "shape"], values)?;
                         let vector = checked_mir_vec_ref(&bound[0].value);
                         debug_assert_eq!(ArrayDType::from_type(&vector.element_type), Some(dtype));
@@ -3319,11 +3562,59 @@ impl MirRuntime {
                             debug_assert_eq!(member_name, "minutes");
                             NANOS_PER_MINUTE
                         };
-                        return value
-                            .checked_mul(scale)
-                            .map(Value::Duration)
-                            .ok_or_else(|| Diagnostic::new("duration overflow"));
+                        // `value` is int64 and the largest scale is 60e9, so the
+                        // product is strictly inside the i128 Duration range.
+                        return Ok(Value::Duration(value * scale));
                     }
+                }
+
+                if let Some((type_name, "with_capacity")) = name
+                    .split_once('.')
+                    .filter(|(type_name, _)| matches!(*type_name, "list" | "dict" | "set"))
+                {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(&["minimum"], values)?;
+                    let minimum = expect_i64_value(
+                        &bound[0].value,
+                        &format!("{type_name}.with_capacity(...)"),
+                    )?;
+                    let minimum = usize::try_from(minimum).map_err(|_| {
+                        Diagnostic::coded("AU4003", "collection capacity cannot be negative")
+                    })?;
+                    return match (type_name, expected_return_type) {
+                        ("list", Some(Type::Named(_, args))) if args.len() == 1 => {
+                            let mut elements = Vec::new();
+                            elements.try_reserve(minimum).map_err(|_| {
+                                Diagnostic::coded("AU4005", "list capacity allocation failed")
+                            })?;
+                            Ok(Value::Vec(VecValue {
+                                element_type: args[0].clone(),
+                                elements,
+                            }))
+                        }
+                        ("dict", Some(Type::Named(_, args))) if args.len() == 2 => {
+                            let mut entries = Vec::new();
+                            entries.try_reserve(minimum).map_err(|_| {
+                                Diagnostic::coded("AU4005", "dictionary capacity allocation failed")
+                            })?;
+                            Ok(Value::Map(MapValue {
+                                key_type: args[0].clone(),
+                                value_type: args[1].clone(),
+                                entries,
+                            }))
+                        }
+                        ("set", Some(Type::Named(_, args))) if args.len() == 1 => {
+                            let mut elements = Vec::new();
+                            elements.try_reserve(minimum).map_err(|_| {
+                                Diagnostic::coded("AU4005", "set capacity allocation failed")
+                            })?;
+                            Ok(Value::Set(SetValue {
+                                element_type: args[0].clone(),
+                                elements,
+                            }))
+                        }
+                        _ => Err(Diagnostic::new("invalid collection capacity constructor")),
+                    };
                 }
 
                 if name == "cancelled" {
@@ -3390,11 +3681,9 @@ impl MirRuntime {
                                         "`abs(...)` overflowed the signed integer range",
                                     ));
                                 }
-                                value.checked_neg().map(Value::Int).ok_or_else(|| {
-                                    Diagnostic::new(
-                                        "`abs(...)` overflowed the signed integer range",
-                                    )
-                                })
+                                value.checked_neg().map(Value::Int).ok_or(Diagnostic::new(
+                                    "`abs(...)` overflowed the signed integer range",
+                                ))
                             }
                             IntegerRepresentation::Signed(_)
                             | IntegerRepresentation::Unsigned(_) => Ok(Value::Int(value)),
@@ -3446,6 +3735,14 @@ impl MirRuntime {
                     };
                 }
 
+                if name == "round" {
+                    return evaluate_round_builtin(args, env);
+                }
+
+                if name == "divmod" {
+                    return evaluate_divmod_builtin(args, env);
+                }
+
                 if name == "parse_int32" {
                     let values = evaluate_named_args(args, env)?;
                     let bound = bind_builtin_args(&["text"], values)?;
@@ -3457,7 +3754,7 @@ impl MirRuntime {
                             Err(error) => Ok(result_err(Value::String(error.to_string()))),
                         },
                         other => Err(Diagnostic::new(format!(
-                            "`parse_int32(...)` expects `String`, found `{}`",
+                            "`parse_int32(...)` expects `str`, found `{}`",
                             other.render()
                         ))),
                     };
@@ -3474,7 +3771,7 @@ impl MirRuntime {
                             Err(error) => Ok(result_err(Value::String(error.to_string()))),
                         },
                         other => Err(Diagnostic::new(format!(
-                            "`parse_int64(...)` expects `String`, found `{}`",
+                            "`parse_int64(...)` expects `str`, found `{}`",
                             other.render()
                         ))),
                     };
@@ -3492,7 +3789,7 @@ impl MirRuntime {
                             Err(error) => Ok(result_err(Value::String(error.to_string()))),
                         },
                         other => Err(Diagnostic::new(format!(
-                            "`parse_float64(...)` expects `String`, found `{}`",
+                            "`parse_float64(...)` expects `str`, found `{}`",
                             other.render()
                         ))),
                     };
@@ -3512,7 +3809,7 @@ impl MirRuntime {
                             Ok(result_ok(Value::Unit))
                         }
                         other => Err(Diagnostic::new(format!(
-                            "`io.write(...)` expects `String`, found `{}`",
+                            "`io.write(...)` expects `str`, found `{}`",
                             other.render()
                         ))),
                     };
@@ -3540,7 +3837,7 @@ impl MirRuntime {
                     return match &bound[0].value {
                         Value::String(path) => Ok(Value::Bool(std::path::Path::new(path).exists())),
                         other => Err(Diagnostic::new(format!(
-                            "`fs.exists(...)` expects `String`, found `{}`",
+                            "`fs.exists(...)` expects `str`, found `{}`",
                             other.render()
                         ))),
                     };
@@ -3758,7 +4055,7 @@ impl MirRuntime {
                             _ => None,
                         };
                         if builtin_name
-                            .and_then(|name| BuiltinMember::resolve(name, field))
+                            .and_then(|name| BuiltinMember::resolve_runtime(name, field))
                             .is_none()
                         {
                             if let Some(method) = self
@@ -3842,13 +4139,17 @@ impl MirRuntime {
                     {
                         let values = evaluate_named_args(args, env)?;
                         let bound = bind_builtin_args(&["rhs"], values)?;
-                        let mismatch = || {
-                            Diagnostic::coded(
-                                "AU4001",
-                                format!("`{field}` expects matching fixed-width integer operands"),
-                            )
-                        };
-                        let receiver_kind = receiver_static_ty
+                        macro_rules! mismatch {
+                            () => {
+                                Diagnostic::coded(
+                                    "AU4001",
+                                    format!(
+                                        "`{field}` expects matching fixed-width integer operands"
+                                    ),
+                                )
+                            };
+                        }
+                        let Some(receiver_kind) = receiver_static_ty
                             .as_ref()
                             .and_then(|ty| match ty {
                                 Type::Named(name, args) if args.is_empty() => {
@@ -3857,18 +4158,24 @@ impl MirRuntime {
                                 _ => None,
                             })
                             .or_else(|| value.runtime_kind())
-                            .ok_or_else(mismatch)?;
+                        else {
+                            return Err(mismatch!());
+                        };
                         // Call checking has already made `rhs` exactly the receiver type, but a
                         // contextual integer literal can still arrive through a materialized MIR
                         // place carrying its default `int64` runtime tag. Direct emission loads
                         // that operand as the checked receiver type; mirror that coercion here.
                         let with_receiver_kind =
                             |operand: IntegerValue| operand.with_runtime_kind(receiver_kind);
-                        let left = with_receiver_kind(*value).ok_or_else(mismatch)?;
-                        let Value::Int(rhs) = &bound[0].value else {
-                            return Err(mismatch());
+                        let Some(left) = with_receiver_kind(*value) else {
+                            return Err(mismatch!());
                         };
-                        let rhs = with_receiver_kind(*rhs).ok_or_else(mismatch)?;
+                        let Value::Int(rhs) = &bound[0].value else {
+                            return Err(mismatch!());
+                        };
+                        let Some(rhs) = with_receiver_kind(*rhs) else {
+                            return Err(mismatch!());
+                        };
                         let result = match field.as_str() {
                             "wrapping_add" => left.wrapping_add(rhs),
                             "wrapping_sub" => left.wrapping_sub(rhs),
@@ -3880,7 +4187,64 @@ impl MirRuntime {
                                 left.saturating_mul(rhs)
                             }
                         };
-                        result.map(Value::Int).ok_or_else(mismatch)
+                        let Some(result) = result else {
+                            return Err(mismatch!());
+                        };
+                        Ok(Value::Int(result))
+                    }
+                    Value::Int(value)
+                        if matches!(
+                            field.as_str(),
+                            "wrapping_shl" | "wrapping_shr" | "saturating_shl" | "saturating_shr"
+                        ) =>
+                    {
+                        let values = evaluate_named_args(args, env)?;
+                        let bound = bind_builtin_args(&["count"], values)?;
+                        macro_rules! mismatch {
+                            () => {
+                                Diagnostic::coded(
+                                    "AU4001",
+                                    format!(
+                                        "`{field}` expects matching fixed-width integer operands"
+                                    ),
+                                )
+                            };
+                        }
+                        let Some(receiver_kind) = receiver_static_ty
+                            .as_ref()
+                            .and_then(|ty| match ty {
+                                Type::Named(name, args) if args.is_empty() => {
+                                    IntegerKind::from_runtime_type_name(name)
+                                }
+                                _ => None,
+                            })
+                            .or_else(|| value.runtime_kind())
+                        else {
+                            return Err(mismatch!());
+                        };
+                        let with_receiver_kind =
+                            |operand: IntegerValue| operand.with_runtime_kind(receiver_kind);
+                        let Some(left) = with_receiver_kind(*value) else {
+                            return Err(mismatch!());
+                        };
+                        let Value::Int(count) = &bound[0].value else {
+                            return Err(mismatch!());
+                        };
+                        let Some(count) = with_receiver_kind(*count) else {
+                            return Err(mismatch!());
+                        };
+                        let result = match field.as_str() {
+                            "wrapping_shl" => left.wrapping_shl(count),
+                            "wrapping_shr" => left.wrapping_shr(count),
+                            "saturating_shl" => left.saturating_shl(count),
+                            _ => {
+                                debug_assert_eq!(field, "saturating_shr");
+                                left.saturating_shr(count)
+                            }
+                        };
+                        result
+                            .map(Value::Int)
+                            .map_err(|error| integer_shift_diagnostic(error, None))
                     }
                     Value::Float(value) if field == "to_string" => {
                         if !args.is_empty() {
@@ -3971,7 +4335,7 @@ impl MirRuntime {
                     Value::Instance(instance) => {
                         let resolved_receiver_ty = receiver_static_ty
                             .clone()
-                            .unwrap_or_else(|| Type::named(&instance.class_name));
+                            .unwrap_or(Type::named(&instance.class_name));
                         let class =
                             self.classes
                                 .get(&instance.class_name)
@@ -4049,68 +4413,13 @@ impl MirRuntime {
                         )?;
                         Ok(outcome.value)
                     }
-                    other => {
-                        let resolved_receiver_ty = receiver_static_ty
-                            .clone()
-                            .or_else(|| self.infer_runtime_value_type(other));
-                        if let Some(resolved_receiver_ty) = resolved_receiver_ty {
-                            if let Some(method) = self
-                                .find_trait_impl_method(&resolved_receiver_ty, field)
-                                .cloned()
-                            {
-                                let function = self
-                                    .functions
-                                    .get(&method.function_name)
-                                    .cloned()
-                                    .ok_or_else(|| {
-                                    Diagnostic::new(format!(
-                                        "unknown MIR method body `{}`",
-                                        method.function_name
-                                    ))
-                                })?;
-                                let evaluated_args = evaluate_named_args(args, env)?;
-                                let writeback_places = evaluated_args
-                                    .iter()
-                                    .map(|argument| argument.writeback_place.clone())
-                                    .collect::<Vec<_>>();
-                                let outcome = self.call_function_with_receiver_type(
-                                    &function,
-                                    Some(if method.receiver == Some(MirReceiverKind::Value) {
-                                        std::mem::replace(&mut receiver, Value::Unit)
-                                    } else {
-                                        try_clone_mir_value(&receiver)?
-                                    }),
-                                    evaluated_args,
-                                    expected_return_type,
-                                    None,
-                                    Some(&resolved_receiver_ty),
-                                )?;
-                                if method.receiver == Some(MirReceiverKind::BorrowMut) {
-                                    let updated = outcome.updated_receiver.ok_or_else(|| {
-                                        Diagnostic::new(format!(
-                                            "mutable MIR method `{}` did not return an updated receiver",
-                                            field
-                                        ))
-                                    })?;
-                                    if let Some(place) = receiver_place {
-                                        env.write_place(place, updated)?;
-                                    }
-                                }
-                                self.apply_borrowed_param_writebacks(
-                                    &function.params,
-                                    &writeback_places,
-                                    outcome.updated_params,
-                                    env,
-                                )?;
-                                return Ok(outcome.value);
-                            }
-                        }
-                        Err(Diagnostic::new(format!(
-                            "unsupported MIR member call `{}` on `{}`",
-                            field,
-                            receiver.render()
-                        )))
-                    }
+                    // Checked non-instance trait calls return through the trait-dispatch
+                    // block above before reaching this exhaustive runtime-value match.
+                    other => Err(Diagnostic::new(format!(
+                        "unsupported MIR member call `{}` on `{}`",
+                        field,
+                        other.render()
+                    ))),
                 }
             }
         }
@@ -4356,6 +4665,7 @@ impl MirRuntime {
         let stdout = self.stdout.clone();
         let stdout_sink = self.stdout_sink.clone();
         let program_args = self.program_args.clone();
+        let constant_states = self.constant_states.clone();
         let function_for_task = function.clone();
         let function_signature = function_value.signature.clone();
         let mut task_ancestry = self.task_ancestry.clone();
@@ -4377,6 +4687,7 @@ impl MirRuntime {
                 cancellation,
                 program_args,
             );
+            runtime.constant_states = constant_states;
             runtime.task_ancestry = task_ancestry;
             if is_closure {
                 runtime
@@ -4525,13 +4836,13 @@ impl MirRuntime {
                     Value::Vec(vector) => vector.clone(),
                     other => {
                         return Err(Diagnostic::new(format!(
-                            "`Rng.shuffle(...)` expects `Vec[T]`, found `{}`",
+                            "`Rng.shuffle(...)` expects `list[T]`, found `{}`",
                             other.render()
                         )))
                     }
                 };
                 let place = bound[0].writeback_place.as_deref().ok_or_else(|| {
-                    Diagnostic::new("`Rng.shuffle(...)` requires a mutable vector place")
+                    Diagnostic::new("`Rng.shuffle(...)` requires a mutable list place")
                 })?;
                 rng.shuffle(&mut vector.elements);
                 env.write_place(place, Value::Vec(vector))?;
@@ -4885,40 +5196,54 @@ impl MirRuntime {
                 }
                 Ok(Value::Bool(vector.elements.is_empty()))
             }
-            "clone" => {
+            "copy" => {
                 if !args.is_empty() {
-                    return Err(Diagnostic::new("`clone` does not take arguments"));
+                    return Err(Diagnostic::new("`copy` does not take arguments"));
                 }
                 Ok(Value::Vec(vector))
             }
-            "push" => {
+            "append" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["value"], values)?;
                 let mut updated = vector;
                 let Some(value) = bound.into_iter().next().map(|arg| arg.value) else {
                     return Err(Diagnostic::new(
-                        "internal error: `push` should bind one argument",
+                        "internal error: `append` should bind one argument",
                     ));
                 };
                 updated.elements.push(value);
                 let updated_value = Value::Vec(updated);
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`push` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`append` requires a mutable list place"));
                 };
                 env.write_place(place, updated_value)?;
                 Ok(Value::Unit)
             }
             "pop" => {
-                if !args.is_empty() {
-                    return Err(Diagnostic::new("`pop` does not take arguments"));
-                }
+                let values = evaluate_named_args(args, env)?;
                 let mut updated = vector;
-                let value = updated.elements.pop();
+                let index_value = if values.is_empty() {
+                    Value::Int(IntegerValue::from_signed(-1))
+                } else {
+                    bind_builtin_args(&["index"], values)?[0].value.clone()
+                };
+                let (supplied_index, index) =
+                    self.mir_vec_index_from_value(index_value, updated.elements.len())?;
+                let Some(index) = index.filter(|index| *index < updated.elements.len()) else {
+                    return Err(Diagnostic::coded(
+                        "AU4003",
+                        format!(
+                            "list pop index `{supplied_index}` is out of bounds for length `{}`",
+                            updated.elements.len()
+                        ),
+                    ));
+                };
+                let value = updated.elements.remove(index);
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`pop` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`pop` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(value.map(option_some).unwrap_or_else(option_none))
+                Ok(value)
             }
             "get" | "__index_option" => {
                 let values = evaluate_named_args(args, env)?;
@@ -4964,7 +5289,7 @@ impl MirRuntime {
                         Diagnostic::at(
                             crate::diag::Span::new(line, column),
                             format!(
-                                "vector index `{}` is out of bounds for length `{}`",
+                                "list index `{}` is out of bounds for length `{}`",
                                 supplied_index,
                                 vector.elements.len()
                             ),
@@ -4998,17 +5323,17 @@ impl MirRuntime {
                     self.mir_vec_index_from_value(index_value, updated.elements.len())?;
                 let Some(index) = index.filter(|index| *index < updated.elements.len()) else {
                     return Err(Diagnostic::new(format!(
-                        "vector set index `{}` is out of bounds for length `{}`",
+                        "list set index `{}` is out of bounds for length `{}`",
                         supplied_index,
                         updated.elements.len()
                     )));
                 };
                 let previous = std::mem::replace(&mut updated.elements[index], value);
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`set` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`set` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(option_some(previous))
+                Ok(previous)
             }
             "__set_index" => {
                 let values = evaluate_named_args(args, env)?;
@@ -5031,7 +5356,7 @@ impl MirRuntime {
                     return Err(Diagnostic::at(
                         crate::diag::Span::new(line, column),
                         format!(
-                            "vector index `{}` is out of bounds for length `{}`",
+                            "list index `{}` is out of bounds for length `{}`",
                             supplied_index,
                             updated.elements.len()
                         ),
@@ -5040,7 +5365,7 @@ impl MirRuntime {
                 updated.elements[index] = value;
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new(
-                        "indexed assignment requires a mutable vector place",
+                        "indexed assignment requires a mutable list place",
                     ));
                 };
                 env.write_place(place, Value::Vec(updated))?;
@@ -5048,23 +5373,49 @@ impl MirRuntime {
             }
             "remove" => {
                 let values = evaluate_named_args(args, env)?;
-                let bound = bind_builtin_args(&["index"], values)?;
+                let bound = bind_builtin_args(&["value"], values)?;
                 let mut updated = vector;
-                let (supplied_index, index) =
-                    self.mir_vec_index_from_value(bound[0].value.clone(), updated.elements.len())?;
-                let Some(index) = index.filter(|index| *index < updated.elements.len()) else {
-                    return Err(Diagnostic::new(format!(
-                        "vector remove index `{}` is out of bounds for length `{}`",
-                        supplied_index,
-                        updated.elements.len()
-                    )));
+                let Some(index) = updated
+                    .elements
+                    .iter()
+                    .position(|candidate| *candidate == bound[0].value)
+                else {
+                    return Err(
+                        Diagnostic::coded("AU4008", "collection value was not found").with_help(
+                            "check `value in values` before removing when absence is expected",
+                        ),
+                    );
                 };
-                let previous = updated.elements.remove(index);
+                updated.elements.remove(index);
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`remove` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`remove` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(option_some(previous))
+                Ok(Value::Unit)
+            }
+            "index" | "count" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["value"], values)?;
+                if field == "count" {
+                    let count = vector
+                        .elements
+                        .iter()
+                        .filter(|candidate| **candidate == bound[0].value)
+                        .count();
+                    return Ok(Value::Int(IntegerValue::from_literal(count as u128)));
+                }
+                let Some(index) = vector
+                    .elements
+                    .iter()
+                    .position(|candidate| *candidate == bound[0].value)
+                else {
+                    return Err(
+                        Diagnostic::coded("AU4008", "collection value was not found").with_help(
+                            "check `value in values` before searching when absence is expected",
+                        ),
+                    );
+                };
+                Ok(Value::Int(IntegerValue::from_literal(index as u128)))
             }
             "swap" => {
                 let values = evaluate_named_args(args, env)?;
@@ -5079,7 +5430,7 @@ impl MirRuntime {
                     second.filter(|index| *index < updated.elements.len()),
                 ) else {
                     return Err(Diagnostic::new(format!(
-                        "vector swap indices `{}` and `{}` are out of bounds for length `{}`",
+                        "list swap indices `{}` and `{}` are out of bounds for length `{}`",
                         supplied_first,
                         supplied_second,
                         updated.elements.len()
@@ -5087,10 +5438,10 @@ impl MirRuntime {
                 };
                 updated.elements.swap(first, second);
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`swap` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`swap` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(Value::Bool(true))
+                Ok(Value::Unit)
             }
             "contains" => {
                 let values = evaluate_named_args(args, env)?;
@@ -5114,21 +5465,20 @@ impl MirRuntime {
                     .expect("bound Vec.insert value should exist")
                     .value;
                 let mut updated = vector;
-                let (supplied_index, index) =
-                    self.mir_vec_index_from_value(index_value, updated.elements.len())?;
-                let Some(index) = index.filter(|index| *index <= updated.elements.len()) else {
-                    return Err(Diagnostic::new(format!(
-                        "vector insert index `{}` is out of bounds for length `{}`",
-                        supplied_index,
-                        updated.elements.len()
-                    )));
+                let supplied_index = expect_i64_value(&index_value, "list.insert index")? as i128;
+                let len = updated.elements.len() as i128;
+                let adjusted = if supplied_index < 0 {
+                    len.saturating_add(supplied_index)
+                } else {
+                    supplied_index
                 };
+                let index = adjusted.clamp(0, len) as usize;
                 updated.elements.insert(index, value);
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`insert` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`insert` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(Value::Bool(true))
+                Ok(Value::Unit)
             }
             "clear" => {
                 if !args.is_empty() {
@@ -5137,7 +5487,7 @@ impl MirRuntime {
                 let mut updated = vector;
                 updated.elements.clear();
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`clear` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`clear` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
                 Ok(Value::Unit)
@@ -5149,7 +5499,7 @@ impl MirRuntime {
                 let mut updated = vector;
                 updated.elements.reverse();
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`reverse` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`reverse` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
                 Ok(Value::Unit)
@@ -5163,12 +5513,30 @@ impl MirRuntime {
                     .expect("bound Vec.extend value should exist")
                     .value
                 else {
-                    return Err(Diagnostic::new("`extend` requires another `Vec[T]` value"));
+                    return Err(Diagnostic::new("`extend` requires another `list[T]` value"));
                 };
                 let mut updated = vector;
                 updated.elements.extend(other.elements);
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`extend` requires a mutable vector place"));
+                    return Err(Diagnostic::new("`extend` requires a mutable list place"));
+                };
+                env.write_place(place, Value::Vec(updated))?;
+                Ok(Value::Unit)
+            }
+            "reserve" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["additional"], values)?;
+                let additional = expect_i64_value(&bound[0].value, "list.reserve(...)")?;
+                let additional = usize::try_from(additional).map_err(|_| {
+                    Diagnostic::coded("AU4003", "collection capacity cannot be negative")
+                })?;
+                let mut updated = vector;
+                updated
+                    .elements
+                    .try_reserve(additional)
+                    .map_err(|_| Diagnostic::coded("AU4005", "list capacity allocation failed"))?;
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`reserve` requires a mutable list place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
                 Ok(Value::Unit)
@@ -5203,9 +5571,9 @@ impl MirRuntime {
                 }
                 Ok(Value::Bool(map.entries.is_empty()))
             }
-            "clone" => {
+            "copy" => {
                 if !args.is_empty() {
-                    return Err(Diagnostic::new("`clone` does not take arguments"));
+                    return Err(Diagnostic::new("`copy` does not take arguments"));
                 }
                 Ok(Value::Map(map))
             }
@@ -5240,7 +5608,7 @@ impl MirRuntime {
                         Diagnostic::coded_at(
                             "AU4003",
                             crate::diag::Span::new(line, column),
-                            format!("map key `{}` was not present", key.render()),
+                            format!("dict key `{}` was not present", key.render()),
                         )
                     })?;
                 try_clone_mir_value(value)
@@ -5265,7 +5633,9 @@ impl MirRuntime {
                     None
                 };
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`set` requires a mutable map place"));
+                    return Err(Diagnostic::new(
+                        "indexed assignment requires a mutable dict place",
+                    ));
                 };
                 env.write_place(place, Value::Map(updated))?;
                 Ok(previous.map(option_some).unwrap_or_else(option_none))
@@ -5292,7 +5662,7 @@ impl MirRuntime {
                 }
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new(
-                        "indexed assignment requires a mutable map place",
+                        "indexed assignment requires a mutable dict place",
                     ));
                 };
                 env.write_place(place, Value::Map(updated))?;
@@ -5312,7 +5682,7 @@ impl MirRuntime {
                     None
                 };
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`remove` requires a mutable map place"));
+                    return Err(Diagnostic::new("`remove` requires a mutable dict place"));
                 };
                 env.write_place(place, Value::Map(updated))?;
                 Ok(removed.map(option_some).unwrap_or_else(option_none))
@@ -5352,7 +5722,7 @@ impl MirRuntime {
                     elements,
                 }))
             }
-            "items" | "entries" => {
+            "items" => {
                 if !args.is_empty() {
                     return Err(Diagnostic::new(format!(
                         "`{}` does not take arguments",
@@ -5362,19 +5732,13 @@ impl MirRuntime {
                 let mut elements =
                     try_array_buffer(map.entries.len(), "Array-containing Map entry copy")?;
                 for (key, value) in &map.entries {
-                    elements.push(Value::Instance(InstanceValue {
-                        class_name: "MapEntry".to_string(),
-                        fields: BTreeMap::from([
-                            ("key".to_string(), try_clone_mir_value(key)?),
-                            ("value".to_string(), try_clone_mir_value(value)?),
-                        ]),
+                    elements.push(Value::Tuple(TupleValue {
+                        element_types: vec![map.key_type.clone(), map.value_type.clone()],
+                        elements: vec![try_clone_mir_value(key)?, try_clone_mir_value(value)?],
                     }));
                 }
                 Ok(Value::Vec(VecValue {
-                    element_type: Type::Named(
-                        "MapEntry".to_string(),
-                        vec![map.key_type.clone(), map.value_type.clone()],
-                    ),
+                    element_type: Type::Tuple(vec![map.key_type.clone(), map.value_type.clone()]),
                     elements,
                 }))
             }
@@ -5390,17 +5754,17 @@ impl MirRuntime {
                 env.write_place(place, Value::Map(updated))?;
                 Ok(Value::Unit)
             }
-            "extend" => {
+            "update" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["other"], values)?;
                 let Value::Map(other) = bound
                     .into_iter()
                     .next()
-                    .expect("bound Map.extend value should exist")
+                    .expect("bound dict.update value should exist")
                     .value
                 else {
                     return Err(Diagnostic::new(
-                        "`extend` requires another `Map[K, V]` value",
+                        "`update` requires another `dict[K, V]` value",
                     ));
                 };
                 let mut updated = map;
@@ -5416,13 +5780,30 @@ impl MirRuntime {
                     }
                 }
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`extend` requires a mutable map place"));
+                    return Err(Diagnostic::new("`update` requires a mutable dict place"));
+                };
+                env.write_place(place, Value::Map(updated))?;
+                Ok(Value::Unit)
+            }
+            "reserve" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["additional"], values)?;
+                let additional = expect_i64_value(&bound[0].value, "dict.reserve(...)")?;
+                let additional = usize::try_from(additional).map_err(|_| {
+                    Diagnostic::coded("AU4003", "collection capacity cannot be negative")
+                })?;
+                let mut updated = map;
+                updated.entries.try_reserve(additional).map_err(|_| {
+                    Diagnostic::coded("AU4005", "dictionary capacity allocation failed")
+                })?;
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`reserve` requires a mutable dict place"));
                 };
                 env.write_place(place, Value::Map(updated))?;
                 Ok(Value::Unit)
             }
             _ => Err(Diagnostic::new(format!(
-                "unsupported map method `{}`",
+                "unsupported dict method `{}`",
                 field
             ))),
         }
@@ -5464,7 +5845,7 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["text"], values)?;
                 let Value::String(needle) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new("`contains` requires a `String` argument"));
+                    return Err(Diagnostic::new("`contains` requires a `str` argument"));
                 };
                 Ok(Value::Bool(text.contains(&needle)))
             }
@@ -5472,9 +5853,7 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["text"], values)?;
                 let Value::String(prefix) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new(
-                        "`starts_with` requires a `String` argument",
-                    ));
+                    return Err(Diagnostic::new("`starts_with` requires a `str` argument"));
                 };
                 Ok(Value::Bool(text.starts_with(&prefix)))
             }
@@ -5482,7 +5861,7 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["text"], values)?;
                 let Value::String(suffix) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new("`ends_with` requires a `String` argument"));
+                    return Err(Diagnostic::new("`ends_with` requires a `str` argument"));
                 };
                 Ok(Value::Bool(text.ends_with(&suffix)))
             }
@@ -5490,10 +5869,10 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["text"], values)?;
                 let Value::String(separator) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new("`split` requires a `String` argument"));
+                    return Err(Diagnostic::new("`split` requires a `str` argument"));
                 };
                 Ok(Value::Vec(VecValue {
-                    element_type: Type::named("String"),
+                    element_type: Type::named("str"),
                     elements: text
                         .split(&separator)
                         .map(|part| Value::String(part.to_string()))
@@ -5504,10 +5883,10 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["from", "to"], values)?;
                 let Value::String(from) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new("`replace` requires `String` for `from`"));
+                    return Err(Diagnostic::new("`replace` requires `str` for `from`"));
                 };
                 let Value::String(to) = bound[1].value.clone() else {
-                    return Err(Diagnostic::new("`replace` requires `String` for `to`"));
+                    return Err(Diagnostic::new("`replace` requires `str` for `to`"));
                 };
                 Ok(Value::String(text.replace(&from, &to)))
             }
@@ -5527,12 +5906,12 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["parts"], values)?;
                 let Value::Vec(parts) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new("`join` requires `Vec[String]`"));
+                    return Err(Diagnostic::new("`join` requires `list[str]`"));
                 };
                 let mut rendered_parts = Vec::new();
                 for value in parts.elements {
                     let Value::String(part) = value else {
-                        return Err(Diagnostic::new("`join` requires `Vec[String]`"));
+                        return Err(Diagnostic::new("`join` requires `list[str]`"));
                     };
                     rendered_parts.push(part);
                 }
@@ -5542,7 +5921,7 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["other"], values)?;
                 let Value::String(other) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new("`add` requires a `String` argument"));
+                    return Err(Diagnostic::new("`add` requires a `str` argument"));
                 };
                 Ok(Value::String(text + &other))
             }
@@ -5550,9 +5929,7 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["text"], values)?;
                 let Value::String(prefix) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new(
-                        "`strip_prefix` requires a `String` argument",
-                    ));
+                    return Err(Diagnostic::new("`strip_prefix` requires a `str` argument"));
                 };
                 Ok(text
                     .strip_prefix(&prefix)
@@ -5563,9 +5940,7 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["text"], values)?;
                 let Value::String(suffix) = bound[0].value.clone() else {
-                    return Err(Diagnostic::new(
-                        "`strip_suffix` requires a `String` argument",
-                    ));
+                    return Err(Diagnostic::new("`strip_suffix` requires a `str` argument"));
                 };
                 Ok(text
                     .strip_suffix(&suffix)
@@ -5577,14 +5952,6 @@ impl MirRuntime {
                     return Err(Diagnostic::new("`trim` does not take arguments"));
                 }
                 Ok(Value::String(text.trim().to_string()))
-            }
-            "to_bytes" => {
-                if !args.is_empty() {
-                    return Err(Diagnostic::new("`to_bytes` does not take arguments"));
-                }
-                let value = Value::String(text);
-                evaluate_bytes_host_builtin_ref("String.to_bytes", &value)
-                    .expect("String.to_bytes should be a registered byte host builtin")
             }
             "clone" => {
                 if !args.is_empty() {
@@ -5622,9 +5989,9 @@ impl MirRuntime {
                 }
                 Ok(Value::Bool(set.elements.is_empty()))
             }
-            "clone" => {
+            "copy" => {
                 if !args.is_empty() {
-                    return Err(Diagnostic::new("`clone` does not take arguments"));
+                    return Err(Diagnostic::new("`copy` does not take arguments"));
                 }
                 Ok(Value::Set(set))
             }
@@ -5637,12 +6004,12 @@ impl MirRuntime {
                         .any(|candidate| *candidate == bound[0].value),
                 ))
             }
-            "insert" => {
+            "add" => {
                 let values = evaluate_named_args(args, env)?;
                 let value = bind_builtin_args(&["value"], values)?
                     .into_iter()
                     .next()
-                    .expect("bound Set.insert value should exist")
+                    .expect("bound set.add value should exist")
                     .value;
                 let mut updated = set;
                 let inserted = if updated.elements.contains(&value) {
@@ -5652,12 +6019,13 @@ impl MirRuntime {
                     true
                 };
                 let Some(place) = receiver_place else {
-                    return Err(Diagnostic::new("`insert` requires a mutable set place"));
+                    return Err(Diagnostic::new("`add` requires a mutable set place"));
                 };
                 env.write_place(place, Value::Set(updated))?;
-                Ok(Value::Bool(inserted))
+                let _ = inserted;
+                Ok(Value::Unit)
             }
-            "remove" => {
+            "remove" | "discard" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["value"], values)?;
                 let mut updated = set;
@@ -5671,11 +6039,48 @@ impl MirRuntime {
                 } else {
                     false
                 };
+                if !removed && field == "remove" {
+                    return Err(
+                        Diagnostic::coded("AU4008", "collection value was not found").with_help(
+                            "check `value in values` before removing when absence is expected",
+                        ),
+                    );
+                }
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`remove` requires a mutable set place"));
                 };
                 env.write_place(place, Value::Set(updated))?;
-                Ok(Value::Bool(removed))
+                Ok(Value::Unit)
+            }
+            "clear" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`clear` does not take arguments"));
+                }
+                let mut updated = set;
+                updated.elements.clear();
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`clear` requires a mutable set place"));
+                };
+                env.write_place(place, Value::Set(updated))?;
+                Ok(Value::Unit)
+            }
+            "reserve" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["additional"], values)?;
+                let additional = expect_i64_value(&bound[0].value, "set.reserve(...)")?;
+                let additional = usize::try_from(additional).map_err(|_| {
+                    Diagnostic::coded("AU4003", "collection capacity cannot be negative")
+                })?;
+                let mut updated = set;
+                updated
+                    .elements
+                    .try_reserve(additional)
+                    .map_err(|_| Diagnostic::coded("AU4005", "set capacity allocation failed"))?;
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`reserve` requires a mutable set place"));
+                };
+                env.write_place(place, Value::Set(updated))?;
+                Ok(Value::Unit)
             }
             "__index_option" => {
                 let values = evaluate_named_args(args, env)?;
@@ -5756,28 +6161,32 @@ impl MirRuntime {
 
     fn mir_index_from_value(&self, value: Value) -> Result<usize> {
         let Value::Int(value) = value else {
-            return Err(Diagnostic::new("vector indices must be integers"));
+            return Err(Diagnostic::new("list indices must be integers"));
         };
-        let index = value
-            .as_i128()
-            .ok_or_else(|| Diagnostic::new("vector index is outside the supported signed range"))?;
+        let Some(index) = value.as_i128() else {
+            return Err(Diagnostic::new(
+                "list index is outside the supported signed range",
+            ));
+        };
         if index < 0 {
             return Err(Diagnostic::new(format!(
-                "vector index `{}` cannot be negative",
+                "list index `{}` cannot be negative",
                 index
             )));
         }
         usize::try_from(index)
-            .map_err(|_| Diagnostic::new("vector index does not fit in the MIR address space"))
+            .map_err(|_| Diagnostic::new("list index does not fit in the MIR address space"))
     }
 
     fn mir_vec_index_from_value(&self, value: Value, len: usize) -> Result<(i128, Option<usize>)> {
         let Value::Int(value) = value else {
-            return Err(Diagnostic::new("vector indices must be integers"));
+            return Err(Diagnostic::new("list indices must be integers"));
         };
-        let supplied = value
-            .as_i128()
-            .ok_or_else(|| Diagnostic::new("vector index is outside the supported signed range"))?;
+        let Some(supplied) = value.as_i128() else {
+            return Err(Diagnostic::new(
+                "list index is outside the supported signed range",
+            ));
+        };
         // Rust's supported pointer widths fit losslessly in i128, so this conversion
         // has no runtime failure case to defend or cover.
         let len = len as i128;
@@ -6077,13 +6486,13 @@ impl MirRuntime {
                     (Value::String(path), Value::String(text)) => (path, text),
                     (other, _) if !matches!(other, Value::String(_)) => {
                         return Err(Diagnostic::new(format!(
-                            "`{}` expects `String` for `path`",
+                            "`{}` expects `str` for `path`",
                             name
                         )))
                     }
                     (_, other) => {
                         return Err(Diagnostic::new(format!(
-                            "`{}` expects `String` for `text`, found `{}`",
+                            "`{}` expects `str` for `text`, found `{}`",
                             name,
                             other.render()
                         )))
@@ -6163,7 +6572,7 @@ impl MirRuntime {
                     Some(&self.cancellation),
                 ) {
                     Ok(names) => Ok(result_ok(Value::Vec(VecValue {
-                        element_type: Type::named("String"),
+                        element_type: Type::named("str"),
                         elements: names.into_iter().map(Value::String).collect(),
                     }))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -6196,7 +6605,7 @@ impl MirRuntime {
                         }
                     }
                     other => Err(Diagnostic::new(format!(
-                        "`{}` expects `String`, found `{}`",
+                        "`{}` expects `str`, found `{}`",
                         name,
                         other.render()
                     ))),
@@ -6212,7 +6621,7 @@ impl MirRuntime {
                         }
                     }
                     other => Err(Diagnostic::new(format!(
-                        "`net.connect(...)` expects `String`, found `{}`",
+                        "`net.connect(...)` expects `str`, found `{}`",
                         other.render()
                     ))),
                 }
@@ -6235,7 +6644,7 @@ impl MirRuntime {
                         Err(error) => Ok(result_err(io_error(error))),
                     },
                     other => Err(Diagnostic::new(format!(
-                        "`net.listen(...)` expects `String`, found `{}`",
+                        "`net.listen(...)` expects `str`, found `{}`",
                         other.render()
                     ))),
                 }
@@ -6448,7 +6857,7 @@ impl MirRuntime {
                                 ))
                             }),
                         other => Err(Diagnostic::new(format!(
-                            "process {} capture returned `{}` inside `Vec[uint8]`",
+                            "process {} capture returned `{}` inside `list[uint8]`",
                             label,
                             other.render()
                         ))),
@@ -6456,7 +6865,7 @@ impl MirRuntime {
                     .collect()
             }
             TaskWaitStatus::Ready(Ok(other)) => Err(Diagnostic::new(format!(
-                "process {} capture returned `{}` instead of `Vec[uint8]`",
+                "process {} capture returned `{}` instead of `list[uint8]`",
                 label,
                 other.render()
             ))),
@@ -6502,7 +6911,7 @@ impl MirRuntime {
                         Err(error) => Ok(result_err(io_error(error))),
                     },
                     other => Err(Diagnostic::new(format!(
-                        "`write_all(...)` expects `String`, found `{}`",
+                        "`write_all(...)` expects `str`, found `{}`",
                         other.render()
                     ))),
                 }
@@ -7067,7 +7476,7 @@ impl MirRuntime {
                         }
                     }
                     other => Err(Diagnostic::new(format!(
-                        "`write_all(...)` expects `String`, found `{}`",
+                        "`write_all(...)` expects `str`, found `{}`",
                         other.render()
                     ))),
                 }
@@ -7646,7 +8055,7 @@ impl MirRuntime {
     fn expect_task_list(&self, value: &Value, label: &str) -> Result<Vec<TaskValue>> {
         let Value::Vec(tasks) = value else {
             return Err(Diagnostic::new(format!(
-                "`{label}` expects `Vec[Task[T]]`, found `{}`",
+                "`{label}` expects `list[Task[T]]`, found `{}`",
                 value.render()
             )));
         };
@@ -7654,7 +8063,7 @@ impl MirRuntime {
         for task in &tasks.elements {
             let Value::Task(task) = task else {
                 return Err(Diagnostic::new(format!(
-                    "`{label}` expects `Vec[Task[T]]`, found `{}`",
+                    "`{label}` expects `list[Task[T]]`, found `{}`",
                     value.render()
                 )));
             };
@@ -7691,9 +8100,9 @@ impl MirRuntime {
         loop {
             for (index, task) in tasks.iter().enumerate() {
                 if let Some(result) = task.completed_result_observed() {
-                    let index = i32::try_from(index).map_err(|_| {
-                        Diagnostic::new("wait_any result index exceeds int32 range")
-                    })?;
+                    // Rust allocations cannot contain more than isize::MAX elements, so
+                    // every real list index is representable as Aura's int64.
+                    let index = i64::try_from(index).expect("task-list index must fit int64");
                     return match result {
                         crate::runtime_value::TaskExecutionResult::Ready(result) => match result {
                             Ok(value) => Ok(wait_any_ready(index, value)),
@@ -7738,9 +8147,9 @@ impl MirRuntime {
                 TaskWaitStatus::Ready(result) => match result {
                     Ok(value) => results.push(value),
                     Err(error) => {
-                        let index = i32::try_from(index).map_err(|_| {
-                            Diagnostic::new("wait_all result index exceeds int32 range")
-                        })?;
+                        // Rust allocations cannot contain more than isize::MAX elements, so
+                        // every real list index is representable as Aura's int64.
+                        let index = i64::try_from(index).expect("task-list index must fit int64");
                         return Ok(wait_all_error(index, error.message));
                     }
                 },
@@ -7878,7 +8287,9 @@ impl MirRuntime {
                     }),
                 },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left + right)),
-                (Value::String(left), Value::String(right)) => Ok(Value::String(left + &right)),
+                (Value::String(left), Value::String(right)) => {
+                    Ok(Value::String(concat_strings_checked(left, &right)?))
+                }
                 (Value::Duration(left), Value::Duration(right)) => left
                     .checked_add(right)
                     .map(Value::Duration)
@@ -7915,9 +8326,11 @@ impl MirRuntime {
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left * right)),
                 (Value::Duration(duration), Value::Int(multiplier))
                 | (Value::Int(multiplier), Value::Duration(duration)) => {
-                    let multiplier = duration_int64_scalar(multiplier).ok_or_else(|| {
-                        arithmetic_error("Duration multiplication requires an int64 scalar")
-                    })?;
+                    let Some(multiplier) = duration_int64_scalar(multiplier) else {
+                        return Err(arithmetic_error(
+                            "Duration multiplication requires an int64 scalar",
+                        ));
+                    };
                     duration
                         .checked_mul(multiplier)
                         .map(Value::Duration)
@@ -7965,9 +8378,11 @@ impl MirRuntime {
                     Err(arithmetic_error("division by zero"))
                 }
                 (Value::Duration(duration), Value::Int(divisor)) => {
-                    let divisor = duration_int64_scalar(divisor).ok_or_else(|| {
-                        arithmetic_error("Duration floor division requires an int64 divisor")
-                    })?;
+                    let Some(divisor) = duration_int64_scalar(divisor) else {
+                        return Err(arithmetic_error(
+                            "Duration floor division requires an int64 divisor",
+                        ));
+                    };
                     checked_duration_floor_div(duration, divisor)
                         .map(Value::Duration)
                         .ok_or_else(|| arithmetic_error("duration overflow"))
@@ -7994,11 +8409,98 @@ impl MirRuntime {
                     "MIR binary remainder requires matching numeric operands",
                 )),
             },
+            BinaryOp::Pow => match (left, right) {
+                (Value::Int(left), Value::Int(right)) => left
+                    .checked_pow(right)
+                    .map(Value::Int)
+                    .map_err(|error| integer_power_diagnostic(error, span)),
+                (Value::Float(left), Value::Float(right)) => {
+                    match float_power(left, right, FloatPowerWidth::Float64) {
+                        Ok(value) => Ok(Value::Float(value)),
+                        Err(error) => Err(with_optional_diagnostic_span(error, span)),
+                    }
+                }
+                _ => Err(Diagnostic::coded(
+                    "AU2003",
+                    "MIR power requires matching numeric operands",
+                )),
+            },
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => match (left, right) {
+                (Value::Int(left), Value::Int(right)) => {
+                    let result = match op {
+                        BinaryOp::BitAnd => left.checked_bitand(right),
+                        BinaryOp::BitOr => left.checked_bitor(right),
+                        BinaryOp::BitXor => left.checked_bitxor(right),
+                        _ => unreachable!(),
+                    };
+                    let Some(result) = result else {
+                        return Err(Diagnostic::coded(
+                            "AU2002",
+                            "bitwise integer operand types must match",
+                        ));
+                    };
+                    Ok(Value::Int(result))
+                }
+                _ => Err(Diagnostic::coded(
+                    "AU2003",
+                    "bitwise operators require matching integer operands",
+                )),
+            },
+            BinaryOp::Shl | BinaryOp::Shr => match (left, right) {
+                (Value::Int(left), Value::Int(right)) => {
+                    let result = if op == BinaryOp::Shl {
+                        left.checked_shl(right)
+                    } else {
+                        left.checked_shr(right)
+                    };
+                    result
+                        .map(Value::Int)
+                        .map_err(|error| integer_shift_diagnostic(error, span))
+                }
+                _ => Err(Diagnostic::coded(
+                    "AU2003",
+                    "shift operators require matching integer operands",
+                )),
+            },
             BinaryOp::Less => eval_ordering(BinaryOp::Less, left, right),
             BinaryOp::LessEq => eval_ordering(BinaryOp::LessEq, left, right),
             BinaryOp::Greater => eval_ordering(BinaryOp::Greater, left, right),
             BinaryOp::GreaterEq => eval_ordering(BinaryOp::GreaterEq, left, right),
         }
+    }
+}
+
+fn integer_power_diagnostic(error: IntegerPowerError, span: Option<Span>) -> Diagnostic {
+    let (code, message) = match error {
+        IntegerPowerError::MismatchedKinds => {
+            ("AU2002", "integer power operand types must match")
+        }
+        IntegerPowerError::NegativeExponent => (
+            "AU4001",
+            "runtime negative integer exponent; use explicit floating operands for fractional power",
+        ),
+        IntegerPowerError::Overflow => ("AU4002", "integer power overflow"),
+    };
+    match span {
+        Some(span) => Diagnostic::coded_at(code, span, message),
+        None => Diagnostic::coded(code, message),
+    }
+}
+
+fn integer_shift_diagnostic(error: IntegerShiftError, span: Option<Span>) -> Diagnostic {
+    let (code, message) = match error {
+        IntegerShiftError::MismatchedKinds => {
+            ("AU2002", "shift operand types must match".to_string())
+        }
+        IntegerShiftError::InvalidCount { count, width } => (
+            "AU4002",
+            format!("integer shift count `{count}` is outside the required range `0..{width}`"),
+        ),
+        IntegerShiftError::Overflow => ("AU4002", "integer left shift overflow".to_string()),
+    };
+    match span {
+        Some(span) => Diagnostic::coded_at(code, span, message),
+        None => Diagnostic::coded(code, message),
     }
 }
 
@@ -8029,7 +8531,7 @@ enum BlockOutcome {
 fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
     match (&param.ty, param.passing) {
         (Type::Named(name, args), MirReceiverKind::BorrowMut)
-            if name == "Vec" && args.as_slice() == [Type::named("uint8")] =>
+            if name == "list" && args.as_slice() == [Type::named("uint8")] =>
         {
             Ok(FfiType::BytesViewMut)
         }
@@ -8052,12 +8554,12 @@ fn ffi_type_for_extern_result(ty: &Type) -> Result<FfiType> {
             "uint64" => FfiType::U64,
             "float32" => FfiType::F32,
             "float64" => FfiType::F64,
-            "String" => FfiType::StringView,
+            "str" => FfiType::StringView,
             // Every other argument-less nominal admitted by semantic analysis
             // is a declared extern opaque handle.
             _ => FfiType::OpaqueHandle,
         },
-        Type::Named(name, args) if name == "Vec" && args.as_slice() == [Type::named("uint8")] => {
+        Type::Named(name, args) if name == "list" && args.as_slice() == [Type::named("uint8")] => {
             FfiType::BytesView
         }
         other => {
@@ -8129,13 +8631,13 @@ fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
                 Value::Float(value) => Ok(FfiValue::F64(*value)),
                 _ => Err(mismatch()),
             },
-            "String" => match value {
+            "str" => match value {
                 Value::String(value) => Ok(FfiValue::String(value.clone())),
                 _ => Err(mismatch()),
             },
             _ => opaque_handle_from_runtime(value).ok_or_else(mismatch),
         },
-        Type::Named(name, args) if name == "Vec" && args.as_slice() == [Type::named("uint8")] => {
+        Type::Named(name, args) if name == "list" && args.as_slice() == [Type::named("uint8")] => {
             let Value::Vec(vector) = value else {
                 return Err(mismatch());
             };
@@ -8301,26 +8803,26 @@ fn array_shape_from_runtime(value: &Value) -> Result<Box<[usize]>> {
         .map(Vec::into_boxed_slice)
 }
 
-fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i32]>> {
-    fn coordinate(value: &Value) -> i32 {
+fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i64]>> {
+    fn coordinate(value: &Value) -> i64 {
         let value = checked_mir_integer_ref(value);
         debug_assert!(matches!(
             value.runtime_kind(),
-            None | Some(IntegerKind::Int32)
+            None | Some(IntegerKind::Int64)
         ));
-        i32::try_from(
+        i64::try_from(
             value
                 .as_i128()
-                .expect("int32 runtime values always fit i128"),
+                .expect("int64 runtime values always fit i128"),
         )
-        .expect("semantic analysis validates int32 coordinate literal bounds")
+        .expect("semantic analysis validates int64 coordinate literal bounds")
     }
 
     if matches!(value, Value::Int(_)) {
         return Ok(vec![coordinate(value)].into_boxed_slice());
     }
     let elements = if let Value::Vec(vector) = value {
-        debug_assert_eq!(vector.element_type, Type::named("int32"));
+        debug_assert_eq!(vector.element_type, Type::named("int64"));
         vector.elements.as_slice()
     } else {
         let tuple = checked_mir_tuple_ref(value);
@@ -8328,7 +8830,7 @@ fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i32]>> {
         debug_assert!(tuple
             .element_types
             .iter()
-            .all(|ty| *ty == Type::named("int32")));
+            .all(|ty| *ty == Type::named("int64")));
         tuple.elements.as_slice()
     };
     Ok(elements
@@ -8348,7 +8850,7 @@ fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMi
                 Operand::Duration(_) => Some(Type::named("Duration")),
                 Operand::Float(_) => Some(Type::named("float64")),
                 Operand::Bool(_) => Some(Type::named("bool")),
-                Operand::String(_) => Some(Type::named("String")),
+                Operand::String(_) => Some(Type::named("str")),
                 Operand::Unit => Some(Type::Unit),
             };
             let value = match &arg.value {
@@ -8370,6 +8872,28 @@ fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMi
             })
         })
         .collect()
+}
+
+#[inline(never)]
+fn evaluate_round_builtin(args: &[MirArg], env: &mut Env) -> Result<Value> {
+    let values = evaluate_named_args(args, env)?;
+    let bound = bind_builtin_args(&["value"], values)?;
+    round_numeric_value(&bound[0].value)
+}
+
+#[inline(never)]
+fn evaluate_divmod_builtin(args: &[MirArg], env: &mut Env) -> Result<Value> {
+    let values = evaluate_named_args(args, env)?;
+    let bound = bind_builtin_args(&["left", "right"], values)?;
+    let operand_type = match bound[0].ty.clone() {
+        Some(ty) => ty,
+        None => match &bound[0].value {
+            Value::Int(value) => Type::named(value.runtime_type_name().unwrap_or("int64")),
+            Value::Float(_) => Type::named("float64"),
+            _ => Type::named("Unknown"),
+        },
+    };
+    divmod_numeric_values(&bound[0].value, &bound[1].value, &operand_type)
 }
 
 fn validate_mir_select_sources(args: Vec<EvaluatedMirArg>) -> Result<Vec<Value>> {
@@ -8707,7 +9231,7 @@ fn expect_string_value(value: &Value, label: &str) -> Result<String> {
     match value {
         Value::String(text) => Ok(text.clone()),
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `String`, found `{}`",
+            "`{}` expects `str`, found `{}`",
             label,
             other.render()
         ))),
@@ -8718,7 +9242,7 @@ fn expect_owned_string_value(value: Value, label: &str) -> Result<String> {
     match value {
         Value::String(text) => Ok(text),
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `String`, found `{}`",
+            "`{}` expects `str`, found `{}`",
             label,
             other.render()
         ))),
@@ -8727,13 +9251,13 @@ fn expect_owned_string_value(value: Value, label: &str) -> Result<String> {
 
 fn expect_command_vec(value: &Value, label: &str) -> Result<Vec<String>> {
     match value {
-        Value::Vec(vector) if vector.element_type == Type::named("String") => vector
+        Value::Vec(vector) if vector.element_type == Type::named("str") => vector
             .elements
             .iter()
             .map(|element| expect_string_value(element, label))
             .collect(),
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Vec[String]`, found `{}`",
+            "`{}` expects `list[str]`, found `{}`",
             label,
             other.render()
         ))),
@@ -8742,13 +9266,13 @@ fn expect_command_vec(value: &Value, label: &str) -> Result<Vec<String>> {
 
 fn expect_owned_command_vec(value: Value, label: &str) -> Result<Vec<String>> {
     match value {
-        Value::Vec(vector) if vector.element_type == Type::named("String") => vector
+        Value::Vec(vector) if vector.element_type == Type::named("str") => vector
             .elements
             .into_iter()
             .map(|element| expect_owned_string_value(element, label))
             .collect(),
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Vec[String]`, found `{}`",
+            "`{}` expects `list[str]`, found `{}`",
             label,
             other.render()
         ))),
@@ -8772,15 +9296,15 @@ fn expect_bytes_value(value: &Value, label: &str) -> Result<Vec<u8>> {
                 };
                 let byte = value
                     .as_i128()
-                    .ok_or_else(|| Diagnostic::new(format!("`{}` expects `Vec[uint8]`", label)))?;
+                    .ok_or_else(|| Diagnostic::new(format!("`{}` expects `list[uint8]`", label)))?;
                 let byte = u8::try_from(byte)
-                    .map_err(|_| Diagnostic::new(format!("`{}` expects `Vec[uint8]`", label)))?;
+                    .map_err(|_| Diagnostic::new(format!("`{}` expects `list[uint8]`", label)))?;
                 bytes.push(byte);
             }
             Ok(bytes)
         }
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Vec[uint8]`, found `{}`",
+            "`{}` expects `list[uint8]`, found `{}`",
             label,
             other.render()
         ))),
@@ -8804,15 +9328,15 @@ fn expect_owned_bytes_value(value: Value, label: &str) -> Result<Vec<u8>> {
                 };
                 let byte = value
                     .as_i128()
-                    .ok_or_else(|| Diagnostic::new(format!("`{}` expects `Vec[uint8]`", label)))?;
+                    .ok_or_else(|| Diagnostic::new(format!("`{}` expects `list[uint8]`", label)))?;
                 let byte = u8::try_from(byte)
-                    .map_err(|_| Diagnostic::new(format!("`{}` expects `Vec[uint8]`", label)))?;
+                    .map_err(|_| Diagnostic::new(format!("`{}` expects `list[uint8]`", label)))?;
                 bytes.push(byte);
             }
             Ok(bytes)
         }
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Vec[uint8]`, found `{}`",
+            "`{}` expects `list[uint8]`, found `{}`",
             label,
             other.render()
         ))),
@@ -8844,13 +9368,13 @@ fn expect_optional_string_value(value: &Value, label: &str) -> Result<Option<Str
             match variant.payloads.as_slice() {
                 [text] => Ok(Some(expect_string_value(text, label)?)),
                 _ => Err(Diagnostic::new(format!(
-                    "`{}` expects `Option[String]`, found malformed option payload",
+                    "`{}` expects `Option[str]`, found malformed option payload",
                     label
                 ))),
             }
         }
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Option[String]`, found `{}`",
+            "`{}` expects `Option[str]`, found `{}`",
             label,
             other.render()
         ))),
@@ -8870,7 +9394,7 @@ fn expect_owned_optional_string_value(value: Value, label: &str) -> Result<Optio
         {
             if variant.payloads.len() != 1 {
                 return Err(Diagnostic::new(format!(
-                    "`{}` expects `Option[String]`, found malformed option payload",
+                    "`{}` expects `Option[str]`, found malformed option payload",
                     label
                 )));
             }
@@ -8880,7 +9404,7 @@ fn expect_owned_optional_string_value(value: Value, label: &str) -> Result<Optio
             )?))
         }
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Option[String]`, found `{}`",
+            "`{}` expects `Option[str]`, found `{}`",
             label,
             other.render()
         ))),
@@ -9039,8 +9563,7 @@ fn process_error_from_io(error: std::io::Error) -> Value {
 fn expect_headers_map(value: &Value, label: &str) -> Result<Vec<(String, String)>> {
     match value {
         Value::Map(map)
-            if (map.key_type == Type::named("String")
-                && map.value_type == Type::named("String"))
+            if (map.key_type == Type::named("str") && map.value_type == Type::named("str"))
                 || map.entries.is_empty() =>
         {
             let mut headers = Vec::with_capacity(map.entries.len());
@@ -9053,7 +9576,7 @@ fn expect_headers_map(value: &Value, label: &str) -> Result<Vec<(String, String)
             Ok(headers)
         }
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Map[String, String]`, found `{}`",
+            "`{}` expects `dict[str, str]`, found `{}`",
             label,
             other.render()
         ))),
@@ -9063,8 +9586,7 @@ fn expect_headers_map(value: &Value, label: &str) -> Result<Vec<(String, String)
 fn expect_owned_headers_map(value: Value, label: &str) -> Result<Vec<(String, String)>> {
     match value {
         Value::Map(map)
-            if (map.key_type == Type::named("String")
-                && map.value_type == Type::named("String"))
+            if (map.key_type == Type::named("str") && map.value_type == Type::named("str"))
                 || map.entries.is_empty() =>
         {
             let mut headers = Vec::with_capacity(map.entries.len());
@@ -9077,7 +9599,7 @@ fn expect_owned_headers_map(value: Value, label: &str) -> Result<Vec<(String, St
             Ok(headers)
         }
         other => Err(Diagnostic::new(format!(
-            "`{}` expects `Map[String, String]`, found `{}`",
+            "`{}` expects `dict[str, str]`, found `{}`",
             label,
             other.render()
         ))),
@@ -9086,8 +9608,8 @@ fn expect_owned_headers_map(value: Value, label: &str) -> Result<Vec<(String, St
 
 fn headers_map_value(headers: Vec<(String, String)>) -> Value {
     Value::Map(MapValue {
-        key_type: Type::named("String"),
-        value_type: Type::named("String"),
+        key_type: Type::named("str"),
+        value_type: Type::named("str"),
         entries: headers
             .into_iter()
             .map(|(key, value)| (Value::String(key), Value::String(value)))

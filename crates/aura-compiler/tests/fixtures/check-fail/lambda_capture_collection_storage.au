@@ -1,5 +1,5 @@
 def main() -> int32:
     offset: int64 = 4
-    callbacks: Vec[def() -> int64] = [lambda: offset]
+    callbacks: list[def() -> int64] = [lambda: offset]
     print(callbacks.len())
     return 0

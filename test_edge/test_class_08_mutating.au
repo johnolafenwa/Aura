@@ -1,7 +1,7 @@
 class Stats:
     count: int32
     total: float64
-    label: String
+    label: str
 
     def bump(mut self):
         self.count += 1
@@ -14,7 +14,7 @@ class Stats:
         self.count = 0
         self.total = 0.0
 
-    def rename(mut self, new_label: own String):
+    def rename(mut self, new_label: own str):
         self.label = new_label
 
     def get_total(self) -> float64:

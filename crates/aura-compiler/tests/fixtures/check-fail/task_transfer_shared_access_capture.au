@@ -1,5 +1,5 @@
-def consume(value: own String):
+def consume(value: own str):
     print(value)
 
-def launch(group: TaskGroup, value: String):
+def launch(group: TaskGroup, value: str):
     group.start_soon(consume, value)

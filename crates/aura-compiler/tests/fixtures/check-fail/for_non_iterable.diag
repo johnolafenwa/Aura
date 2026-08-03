@@ -1,4 +1,4 @@
-error[AU2999]: `for` currently requires a `Range`, `Queue[T]`, `Vec[T]`, or `Set[T]` iterable, found `int32`
+error[AU2999]: `for` currently requires a `Range`, `Queue[T]`, `list[T]`, or `set[T]` iterable, found `int32`
  --> crates/aura-compiler/tests/fixtures/check-fail/for_non_iterable.au:3:5
   |
 3 |     for item in value:

@@ -2,13 +2,13 @@
 ## Expects: "Hello, Aura"
 
 trait Greetable:
-    def greet(self) -> String
+    def greet(self) -> str
 
 class Person:
-    name: String
+    name: str
 
 impl Greetable for Person:
-    def greet(self) -> String:
+    def greet(self) -> str:
         return "Hello, " + self.name
 
 def main() -> int32:

@@ -1,4 +1,4 @@
-def eat(value: own String) -> String:
+def eat(value: own str) -> str:
     return value
 
 def main():

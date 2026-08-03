@@ -1,4 +1,4 @@
-def always_none() -> Option[String]:
+def always_none() -> Option[str]:
     return Option.None
 
 def main() -> int32:

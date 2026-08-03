@@ -5,7 +5,7 @@ source commits, raw observations, and content hashes. The current measurements
 show where the compiler and runtime are already competitive and where later
 releases need focused optimization.
 
-This page is the performance record for the Aura 0.2 technical preview. It is
+This page is the performance record for the Aura 0.3 development channel. It is
 separate from the language's semantic guarantees.
 
 ## Current Measurements
@@ -28,7 +28,7 @@ record. Lower is faster. “Aura / CPython” is the ratio of medians.
 | 20-client delayed loopback TCP fan-out | 104.505375 ms | 108.605459 ms | 0.962248 |
 | 16-cycle retrying HTTP worker | 429.291292 ms | 520.447791 ms | 0.824850 |
 
-The TCP shape uses 20 pre-bound loopback listeners. Aura 0.2 rejects transfer
+The TCP shape uses 20 pre-bound loopback listeners. Aura 0.3 rejects transfer
 of an accepted `TcpStream` into a handler task (`AU3008`), and a single listener
 would serialize the handlers. The task measurement includes creation and join
 of all 10,000 tasks after `GO`. The retry measurement executes the same status

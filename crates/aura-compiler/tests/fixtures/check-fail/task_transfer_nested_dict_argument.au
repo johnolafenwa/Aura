@@ -1,0 +1,7 @@
+import random
+
+def consume(values: own dict[str, random.Rng]):
+    print(values.len())
+
+def launch(group: TaskGroup, values: own dict[str, random.Rng]):
+    group.start_soon(consume, values)

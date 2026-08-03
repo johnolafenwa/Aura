@@ -2,36 +2,36 @@
 # Tests: class composition, methods at each level, borrow, mutation
 
 class Address:
-    city: String
+    city: str
     zip: int32
 
-    def format(self) -> String:
+    def format(self) -> str:
         return f"{self.city} {self.zip}"
 
 class Department:
-    name: String
+    name: str
     floor: int32
     location: Address
 
-    def summary(self) -> String:
+    def summary(self) -> str:
         return f"{self.name} on floor {self.floor} at {self.location.format()}"
 
 class Employee:
-    name: String
+    name: str
     id: int32
     department: Department
 
-    def full_info(self) -> String:
+    def full_info(self) -> str:
         return f"Employee {self.name} (#{self.id}) in {self.department.summary()}"
 
-    def get_city(self) -> String:
+    def get_city(self) -> str:
         return self.department.location.city.clone()
 
 class Company:
-    name: String
+    name: str
     ceo: Employee
 
-    def describe(self) -> String:
+    def describe(self) -> str:
         return f"{self.name} led by {self.ceo.name}"
 
 def main() -> int32:

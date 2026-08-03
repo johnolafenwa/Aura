@@ -1,0 +1,5 @@
+error[AU1101]: keyword-only parameters are not part of Aura 0.3's structural callable model
+ --> crates/aura-compiler/tests/fixtures/parse-fail/keyword_only_parameters_unavailable.au:1:26
+  |
+1 | def configure(path: str, *, retries: int32):
+  |                          ^

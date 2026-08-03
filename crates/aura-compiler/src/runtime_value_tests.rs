@@ -1,36 +1,573 @@
 use super::{
-    cancel_current_lightweight_task_boundary, cast_numeric_value, claim_task_result_observations,
-    create_dir_once, decode_process_restart_policy, decode_process_stdio, finalize_task_execution,
-    float_floor_divmod, io_decode_utf8, io_error, lock_mutex, next_retry_runtime_backoff,
-    non_unix_tls_listener_wait_timeout, option_none, option_some, process_error_cancelled,
-    process_error_no_command, process_error_other, process_error_spawn, process_error_timed_out,
-    process_supervisor_event_failed, process_supervisor_wait_cancelled,
-    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
-    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, recv_for_task_group_iteration,
-    remove_file_checked, render_float, render_float32, result_err, result_ok, run_blocking_io,
-    run_lightweight_root_task, run_protocol_step, select_runtime_values, send_error_cancelled,
-    send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
-    slice_string_owned, slice_vec_owned, spawn_lightweight_task,
-    spawn_lightweight_task_with_cancellation,
+    append_string_with_limit, cancel_current_lightweight_task_boundary, cast_numeric_value,
+    claim_task_result_observations, create_dir_once, decode_process_restart_policy,
+    decode_process_stdio, divmod_numeric_values, finalize_task_execution, float_floor_divmod,
+    float_power, format_runtime_value, io_decode_utf8, io_error, lock_mutex,
+    next_retry_runtime_backoff, non_unix_tls_listener_wait_timeout, option_none, option_some,
+    parse_format_spec, process_error_cancelled, process_error_no_command, process_error_other,
+    process_error_spawn, process_error_timed_out, process_supervisor_event_failed,
+    process_supervisor_wait_cancelled, process_supervisor_wait_event,
+    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_failed,
+    process_wait_timed_out, queue_receive_cancelled, queue_receive_closed, queue_receive_item,
+    queue_receive_timed_out, recv_for_task_group_iteration, remove_file_checked, render_float,
+    render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
+    run_lightweight_root_task, run_protocol_step, select_outcome_deadline, select_outcome_queue,
+    select_outcome_task, select_runtime_values, send_error_cancelled, send_error_closed,
+    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned,
+    slice_vec_owned, spawn_lightweight_task, spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
     spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
-    task_result_error, task_result_ready, task_result_timed_out, validate_read_line_capacity,
-    validate_requested_read_size, validate_retry_runtime_policy, wait_all_cancelled,
-    wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
-    wait_any_ready, wait_any_timed_out, wait_condvar, wait_for_runtime_scheduler,
+    task_result_error, task_result_ready, task_result_timed_out, validate_format_spec_for_type,
+    validate_read_line_capacity, validate_requested_read_size, validate_retry_runtime_policy,
+    wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled,
+    wait_any_error, wait_any_ready, wait_any_timed_out, wait_condvar, wait_for_runtime_scheduler,
     wait_timeout_condvar, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayStorage, ArrayValue,
     BlockingIoPool, CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment,
-    EnumVariantValue, FfiHandleValue, FileValue, FunctionValue, HttpListenerValue,
-    HttpResponseValue, InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal,
-    MapValue, ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus,
-    ProcessCompletedValue, ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue,
-    ProcessSupervisorWaitStatus, RangeValue, ReactorSubscription, RecvValueResult, RngValue,
-    SetValue, TaskCancelledSignal, TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus,
-    TcpListenerValue, TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue,
-    Value, VecValue, WebSocketListenerValue, MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
+    EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FormatSpecErrorKind,
+    FunctionValue, HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode,
+    LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
+    ProcessChildWaitStatus, ProcessCompletedValue, ProcessRestartPolicy, ProcessStdioConfig,
+    ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, ReactorSubscription,
+    RecvValueResult, RngValue, SetValue, TaskCancelledSignal, TaskExecutionResult, TaskGroupValue,
+    TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TryRecvResult, TupleValue,
+    UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
+    MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
+use crate::integer::IntegerKind;
+
+fn math_call(name: &str, values: &[f64]) -> super::Result<Value> {
+    super::evaluate_host_builtin(
+        &format!("math::{name}"),
+        values.iter().copied().map(Value::Float).collect(),
+    )
+}
+
+fn expect_math_float(name: &str, values: &[f64]) -> f64 {
+    let Value::Float(value) = math_call(name, values).expect("math call should succeed") else {
+        panic!("math.{name} should return float64");
+    };
+    value
+}
+
+fn expect_math_int(name: &str, value: f64) -> i64 {
+    let Value::Int(value) = math_call(name, &[value]).expect("math call should succeed") else {
+        panic!("math.{name} should return int64");
+    };
+    i64::try_from(value.as_i128().expect("math integer should be signed"))
+        .expect("math integer should fit int64")
+}
+
+#[test]
+fn math_host_builtins_follow_the_ratified_finite_contract() {
+    assert_eq!(expect_math_int("floor", -1.25), -2);
+    assert_eq!(expect_math_int("ceil", -1.25), -1);
+    assert_eq!(expect_math_int("trunc", -1.75), -1);
+    assert_eq!(expect_math_float("pow", &[2.0, -3.0]), 0.125);
+    assert_eq!(expect_math_float("exp", &[0.0]), 1.0);
+    assert_eq!(expect_math_float("log", &[1.0]), 0.0);
+    assert_eq!(expect_math_float("log2", &[8.0]), 3.0);
+    assert_eq!(expect_math_float("log10", &[1000.0]), 3.0);
+    assert_eq!(expect_math_float("sin", &[0.0]), 0.0);
+    assert_eq!(expect_math_float("cos", &[0.0]), 1.0);
+    assert_eq!(expect_math_float("tan", &[0.0]), 0.0);
+}
+
+#[test]
+fn math_host_builtins_classify_every_exception_family() {
+    for name in ["floor", "ceil", "trunc"] {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.0e20] {
+            let error = math_call(name, &[value]).expect_err("conversion must fail");
+            assert_eq!(error.code, "AU4002", "{name}({value})");
+        }
+    }
+
+    assert!(expect_math_float("exp", &[f64::NAN]).is_nan());
+    assert_eq!(expect_math_float("exp", &[f64::INFINITY]), f64::INFINITY);
+    assert_eq!(expect_math_float("exp", &[f64::NEG_INFINITY]), 0.0);
+    assert_eq!(
+        math_call("exp", &[1000.0])
+            .expect_err("finite exponential overflow must trap")
+            .code,
+        "AU4002"
+    );
+
+    for name in ["log", "log2", "log10"] {
+        assert!(expect_math_float(name, &[f64::NAN]).is_nan());
+        assert_eq!(expect_math_float(name, &[f64::INFINITY]), f64::INFINITY);
+        for value in [0.0, -0.0, -1.0] {
+            let error = math_call(name, &[value]).expect_err("log domain must fail");
+            assert_eq!(error.code, "AU4001", "{name}({value})");
+        }
+    }
+
+    for name in ["sin", "cos", "tan"] {
+        assert!(expect_math_float(name, &[f64::NAN]).is_nan());
+        for value in [f64::INFINITY, f64::NEG_INFINITY] {
+            let error = math_call(name, &[value]).expect_err("trig infinity must fail");
+            assert_eq!(error.code, "AU4001", "{name}({value})");
+        }
+    }
+
+    assert_eq!(expect_math_float("pow", &[f64::NAN, 0.0]), 1.0);
+    assert_eq!(expect_math_float("pow", &[1.0, f64::NAN]), 1.0);
+    assert!(expect_math_float("pow", &[f64::NAN, 2.0]).is_nan());
+    for (base, exponent) in [(0.0, -1.0), (-2.0, 0.5)] {
+        let error = math_call("pow", &[base, exponent]).expect_err("pow domain must fail");
+        assert_eq!(error.code, "AU4001");
+    }
+    assert_eq!(
+        math_call("pow", &[f64::MAX, 2.0])
+            .expect_err("finite power overflow must trap")
+            .code,
+        "AU4002"
+    );
+}
+
+#[test]
+fn practical_format_specifications_are_unicode_aware_and_width_exact() {
+    let integer = Value::Int(crate::integer::IntegerValue::from_i64(-1_234_567));
+    assert_eq!(
+        format_runtime_value(&integer, &Type::named("int64"), "+15,d").unwrap(),
+        "     -1,234,567"
+    );
+    assert_eq!(
+        format_runtime_value(&integer, &Type::named("int64"), "*>12X").unwrap(),
+        "*****-12D687"
+    );
+    assert_eq!(
+        format_runtime_value(
+            &Value::String("aura✨".to_string()),
+            &Type::named("str"),
+            "·^9.4s",
+        )
+        .unwrap(),
+        "··aura···"
+    );
+}
+
+#[test]
+fn format_spec_variants_preserve_exact_output_and_teaching_diagnostics() {
+    let positive = Value::Int(crate::integer::IntegerValue::from_i64(12_345));
+    assert_eq!(
+        format_runtime_value(&positive, &Type::named("int64"), "-d").unwrap(),
+        "12345"
+    );
+    assert_eq!(
+        format_runtime_value(&positive, &Type::named("int64"), ",.2f").unwrap(),
+        "12,345.00"
+    );
+    assert_eq!(
+        format_runtime_value(
+            &Value::Int(crate::integer::IntegerValue::from_i64(999)),
+            &Type::named("int64"),
+            ".1e",
+        )
+        .unwrap(),
+        "1.0e+03"
+    );
+    assert_eq!(
+        format_runtime_value(
+            &Value::Int(crate::integer::IntegerValue::from_i64(0)),
+            &Type::named("int64"),
+            ".0e",
+        )
+        .unwrap(),
+        "0e+00"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(12_345.5), &Type::named("float64"), ",.2f",).unwrap(),
+        "12,345.50"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(0.0012), &Type::named("float64"), ".2e",).unwrap(),
+        "1.20e-03"
+    );
+    assert_eq!(
+        format_runtime_value(
+            &Value::String("Aura".to_string()),
+            &Type::named("str"),
+            "<8s",
+        )
+        .unwrap(),
+        "Aura    "
+    );
+
+    let tuple = Value::Tuple(TupleValue {
+        element_types: vec![Type::named("int64"), Type::named("str")],
+        elements: vec![
+            Value::Int(crate::integer::IntegerValue::from_i64(1)),
+            Value::String("one".to_string()),
+        ],
+    });
+    assert_eq!(
+        format_runtime_value(
+            &tuple,
+            &Type::Tuple(vec![Type::named("int64"), Type::named("str")]),
+            "",
+        )
+        .unwrap(),
+        "(1, one)"
+    );
+
+    let malformed = [
+        (".s", "format precision requires decimal digits after `.`"),
+        ("dd", "malformed format specification `dd`"),
+    ];
+    for (source, expected) in malformed {
+        let error = parse_format_spec(source).expect_err("the specification must be rejected");
+        assert_eq!(error.message, expected);
+    }
+
+    let incompatible = [
+        (
+            &positive,
+            Type::named("int64"),
+            "s",
+            "format code `s` requires `str`, found integer",
+        ),
+        (
+            &Value::Float(1.0),
+            Type::named("float64"),
+            "d",
+            "integer format code requires an integer value, found float",
+        ),
+        (
+            &tuple,
+            Type::Tuple(vec![Type::named("int64"), Type::named("str")]),
+            "f",
+            "numeric format code requires an integer or floating value, found value",
+        ),
+        (
+            &Value::String("Aura".to_string()),
+            Type::named("str"),
+            "+s",
+            "a format sign is valid only for numeric values",
+        ),
+        (
+            &positive,
+            Type::named("int64"),
+            ",x",
+            "the thousands separator is valid only with d, f, and %",
+        ),
+        (
+            &positive,
+            Type::named("int64"),
+            ".2d",
+            "precision requires s, f, e, or %; integer precision is available only through f, e, and %",
+        ),
+    ];
+    for (value, value_type, source, expected) in incompatible {
+        let error = format_runtime_value(value, &value_type, source)
+            .expect_err("the type-incompatible specification must be rejected");
+        assert_eq!(error.code, "AU2002");
+        assert_eq!(error.message, expected);
+    }
+}
+
+#[test]
+fn floating_formatting_preserves_binary32_identity_and_ieee_signs() {
+    let stored = Value::Float(1.234_567_890_123);
+    assert_eq!(
+        format_runtime_value(&stored, &Type::named("float32"), ".8f").unwrap(),
+        format!("{:.8}", 1.234_567_890_123_f64 as f32)
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(-0.0), &Type::named("float64"), "+.2f").unwrap(),
+        "-0.00"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(f64::INFINITY), &Type::named("float64"), "+f").unwrap(),
+        "+inf"
+    );
+    assert_eq!(
+        format_runtime_value(
+            &Value::Float(f64::NEG_INFINITY),
+            &Type::named("float64"),
+            " f",
+        )
+        .unwrap(),
+        "-inf"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(f64::NAN), &Type::named("float64"), " 8f").unwrap(),
+        "     nan"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(2.5), &Type::named("float64"), ".0f").unwrap(),
+        "2"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(3.5), &Type::named("float64"), ".0f").unwrap(),
+        "4"
+    );
+}
+
+#[test]
+fn python_zero_pad_shorthand_places_padding_after_the_numeric_sign() {
+    for (value, spec, expected) in [
+        (-1.25, "09.3f", "-0001.250"),
+        (1.25, "09.3f", "00001.250"),
+        (1.25, "+09.3f", "+0001.250"),
+        (1.25, " 09.3f", " 0001.250"),
+    ] {
+        assert_eq!(
+            format_runtime_value(&Value::Float(value), &Type::named("float64"), spec).unwrap(),
+            expected,
+            "format {spec}"
+        );
+    }
+}
+
+#[test]
+fn format_width_and_precision_enforce_the_ratified_boundaries() {
+    assert_eq!(
+        parse_format_spec("1000000.1000000s").unwrap().width,
+        Some(1_000_000)
+    );
+    assert!(parse_format_spec("1000001s")
+        .unwrap_err()
+        .message
+        .contains("cannot exceed 1000000"));
+    assert!(parse_format_spec(".1000001s")
+        .unwrap_err()
+        .message
+        .contains("cannot exceed 1000000"));
+    assert!(parse_format_spec(",,d").is_err());
+    assert!(parse_format_spec("{width}d").is_err());
+
+    let widest = format_runtime_value(
+        &Value::String("x".to_string()),
+        &Type::named("str"),
+        "1000000s",
+    )
+    .unwrap();
+    assert_eq!(widest.chars().count(), 1_000_000);
+
+    let mut bounded = "abcd".to_string();
+    let error = append_string_with_limit(&mut bounded, "e", 4).unwrap_err();
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        bounded, "abcd",
+        "a failed preflight must not mutate the output"
+    );
+}
+
+#[test]
+fn integer_float_style_formats_do_not_round_through_binary64() {
+    let exact = Value::Int(
+        crate::integer::IntegerValue::from_typed_unsigned(
+            9_007_199_254_740_993,
+            IntegerKind::Uint64,
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        format_runtime_value(&exact, &Type::named("uint64"), ".0f").unwrap(),
+        "9007199254740993"
+    );
+    assert_eq!(
+        format_runtime_value(&exact, &Type::named("uint64"), ".2e").unwrap(),
+        "9.01e+15"
+    );
+    assert_eq!(
+        format_runtime_value(&exact, &Type::named("uint64"), ".0%").unwrap(),
+        "900719925474099300%"
+    );
+}
+
+#[test]
+fn impossible_runtime_format_contract_mismatches_are_diagnostics() {
+    let error = format_runtime_value(
+        &Value::String("not an integer".to_string()),
+        &Type::named("int64"),
+        "d",
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "AU4001");
+    assert!(error.message.contains("internal format contract mismatch"));
+}
+
+#[test]
+fn format_matrix_pins_alignment_sign_radix_scientific_and_default_rendering() {
+    let string = Value::String("Aura".to_string());
+    for (spec, expected) in [
+        ("8s", "Aura    "),
+        (">8s", "    Aura"),
+        ("·^9s", "··Aura···"),
+        (".<7.3s", "Aur...."),
+    ] {
+        assert_eq!(
+            format_runtime_value(&string, &Type::named("str"), spec).unwrap(),
+            expected,
+            "string format {spec}"
+        );
+    }
+
+    let positive = Value::Int(crate::integer::IntegerValue::from_i64(42));
+    let negative = Value::Int(crate::integer::IntegerValue::from_i64(-42));
+    for (value, spec, expected) in [
+        (&positive, "+d", "+42"),
+        (&positive, " d", " 42"),
+        (&positive, "-d", "42"),
+        (&negative, "d", "-42"),
+        (&positive, "x", "2a"),
+        (&positive, "X", "2A"),
+        (&positive, "b", "101010"),
+        (&positive, "o", "52"),
+        (&positive, "08d", "00000042"),
+        (&positive, ".0e", "4e+01"),
+    ] {
+        assert_eq!(
+            format_runtime_value(value, &Type::named("int64"), spec).unwrap(),
+            expected,
+            "integer format {spec}"
+        );
+    }
+
+    let zero = Value::Int(crate::integer::IntegerValue::from_i64(0));
+    assert_eq!(
+        format_runtime_value(&zero, &Type::named("int64"), ".0e").unwrap(),
+        "0e+00"
+    );
+    let carries = Value::Int(crate::integer::IntegerValue::from_i64(999));
+    assert_eq!(
+        format_runtime_value(&carries, &Type::named("int64"), ".1e").unwrap(),
+        "1.0e+03"
+    );
+    let grouped = Value::Int(crate::integer::IntegerValue::from_i64(12_345));
+    assert_eq!(
+        format_runtime_value(&grouped, &Type::named("int64"), ",.2f").unwrap(),
+        "12,345.00"
+    );
+
+    assert_eq!(
+        format_runtime_value(&Value::Float(12_345.25), &Type::named("float64"), ",.2f").unwrap(),
+        "12,345.25"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(12.5), &Type::named("float64"), ".2e").unwrap(),
+        "1.25e+01"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(-0.0), &Type::named("float64"), "").unwrap(),
+        "-0.0"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Float(1.25), &Type::named("float32"), "").unwrap(),
+        "1.25"
+    );
+    assert_eq!(
+        format_runtime_value(&positive, &Type::named("int64"), "").unwrap(),
+        "42"
+    );
+    assert_eq!(
+        format_runtime_value(&Value::Bool(true), &Type::named("bool"), "").unwrap(),
+        "true"
+    );
+}
+
+#[test]
+fn format_matrix_pins_each_public_syntax_and_type_error_class() {
+    for (spec, message) in [
+        (".f", "format precision requires decimal digits after `.`"),
+        ("dd", "malformed format specification `dd`"),
+        ("q", "unsupported format type `q`"),
+        ("{width}d", "cannot contain nested replacement fields"),
+    ] {
+        let error = parse_format_spec(spec).expect_err("invalid format syntax must fail");
+        assert_eq!(error.kind, FormatSpecErrorKind::Syntax, "format {spec}");
+        assert!(error.message.contains(message), "{}", error.message);
+    }
+
+    for (spec, ty, message) in [
+        ("s", "int64", "format code `s` requires `str`"),
+        (
+            "d",
+            "float64",
+            "integer format code requires an integer value",
+        ),
+        (
+            "f",
+            "str",
+            "numeric format code requires an integer or floating value",
+        ),
+        (
+            "+s",
+            "str",
+            "a format sign is valid only for numeric values",
+        ),
+        (
+            ",x",
+            "int64",
+            "thousands separator is valid only with d, f, and %",
+        ),
+        (
+            "05s",
+            "str",
+            "zero-padding shorthand is valid only for numeric values",
+        ),
+        (".2d", "int64", "precision requires s, f, e, or %"),
+    ] {
+        let parsed = parse_format_spec(spec).expect("the spelling is syntactically valid");
+        let error = validate_format_spec_for_type(&parsed, &Type::named(ty))
+            .expect_err("the format must be rejected for this static type");
+        assert_eq!(error.kind, FormatSpecErrorKind::Type, "format {spec}");
+        assert!(error.message.contains(message), "{}", error.message);
+    }
+
+    let syntax = format_runtime_value(
+        &Value::Int(crate::integer::IntegerValue::from_i64(1)),
+        &Type::named("int64"),
+        "{width}d",
+    )
+    .expect_err("runtime formatting must preserve syntax diagnostics");
+    assert_eq!(syntax.code, "AU1101");
+
+    let wrong_type = format_runtime_value(
+        &Value::Int(crate::integer::IntegerValue::from_i64(1)),
+        &Type::named("int64"),
+        "s",
+    )
+    .expect_err("runtime formatting must preserve static type diagnostics");
+    assert_eq!(wrong_type.code, "AU2002");
+}
+
+#[test]
+fn math_host_dispatch_rejects_wrong_runtime_types_and_arities_exactly() {
+    for name in ["floor", "ceil", "trunc"] {
+        let error = super::evaluate_host_builtin(
+            &format!("math::{name}"),
+            vec![Value::Int(crate::integer::IntegerValue::from_i64(1))],
+        )
+        .expect_err("integer arguments must not masquerade as float64");
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(error.message, format!("`math.{name}` expects `float64`"));
+    }
+
+    let power_type = super::evaluate_host_builtin(
+        "math::pow",
+        vec![Value::Float(2.0), Value::String("3".to_string())],
+    )
+    .expect_err("math.pow requires two float64 arguments");
+    assert_eq!(power_type.code, "AU4001");
+    assert_eq!(
+        power_type.message,
+        "`math.pow` expects two `float64` arguments"
+    );
+
+    let power_arity = super::evaluate_host_builtin("math::pow", vec![Value::Float(2.0)])
+        .expect_err("math.pow requires two arguments");
+    assert_eq!(power_arity.code, "AU2004");
+    assert!(power_arity.message.contains("expects 2 argument"));
+
+    for name in ["exp", "log", "log2", "log10", "sin", "cos", "tan"] {
+        let error = super::evaluate_host_builtin(&format!("math::{name}"), vec![Value::Bool(true)])
+            .expect_err("non-float arguments must be diagnosed");
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(error.message, format!("`math.{name}` expects `float64`"));
+    }
+}
 
 #[test]
 fn dense_arrays_validate_shape_storage_and_deep_clone() {
@@ -294,7 +831,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
         },
         None,
     )
-    .expect("Array[int64].from_vec should infer a one-dimensional shape");
+    .expect("Array[int64].from_list should infer a one-dimensional shape");
     assert_eq!(int64_array.shape.as_ref(), &[3]);
     assert_eq!(
         int64_array
@@ -328,7 +865,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
         },
         Some(&[3]),
     )
-    .expect("Array[float32].from_vec should retain float32 storage");
+    .expect("Array[float32].from_list should retain float32 storage");
     assert_eq!(
         float32_array.set(&[1], Value::Float(3.5)).unwrap(),
         Value::Float(-2.5)
@@ -357,7 +894,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
         },
         Some(&[3]),
     )
-    .expect("Array[float64].from_vec should retain float64 storage");
+    .expect("Array[float64].from_list should retain float64 storage");
     assert_eq!(
         float64_array.set(&[0], Value::Float(-4.5)).unwrap(),
         Value::Float(1.5)
@@ -378,6 +915,45 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
         "Array[float64](shape=[3], values=[8.5, 8.5, 8.5])"
     );
     assert_independent_clone(&float64_array);
+}
+
+#[test]
+fn array_slices_report_storage_allocation_failure_for_every_dtype_without_mutation() {
+    let arrays = [
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Int32(vec![1, 2].into_boxed_slice()),
+        )
+        .unwrap(),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Int64(vec![1, 2].into_boxed_slice()),
+        )
+        .unwrap(),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Float32(vec![1.0, 2.0].into_boxed_slice()),
+        )
+        .unwrap(),
+        ArrayValue::new(
+            vec![2].into_boxed_slice(),
+            ArrayStorage::Float64(vec![1.0, 2.0].into_boxed_slice()),
+        )
+        .unwrap(),
+    ];
+
+    for array in arrays {
+        let before = array.clone();
+        let error =
+            super::with_array_allocation_budget(1, || array.slice_first_axis(Some(0), Some(1)))
+                .expect_err("the storage copy after the shape copy must remain fallible");
+        assert_eq!(error.code, "AU4005");
+        assert_eq!(
+            error.message,
+            "array slice could not allocate storage for 1 array elements"
+        );
+        assert_eq!(array, before, "a failed slice must not mutate its source");
+    }
 }
 
 #[test]
@@ -411,7 +987,7 @@ fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
     assert_eq!(valid_allocation_error.code, "AU4005");
     assert_eq!(
         valid_allocation_error.message,
-        "Array.from_vec shape could not allocate storage for 1 array elements"
+        "Array.from_list shape could not allocate storage for 1 array elements"
     );
 
     let conversion_error = ArrayValue::from_vec(&malformed_source, Some(&[1]))
@@ -426,15 +1002,15 @@ fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
 #[test]
 fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
     let unsupported = VecValue {
-        element_type: Type::named("String"),
+        element_type: Type::named("str"),
         elements: vec![Value::String("one".to_string())],
     };
     let from_vec_error = ArrayValue::from_vec(&unsupported, None)
-        .expect_err("Array.from_vec must reject non-numeric element types");
+        .expect_err("Array.from_list must reject non-numeric element types");
     assert_eq!(from_vec_error.code, "AU4007");
     assert_eq!(
         from_vec_error.message,
-        "Array values require int32, int64, float32, or float64 elements, found `String`"
+        "Array values require int32, int64, float32, or float64 elements, found `str`"
     );
 
     let from_values_error = ArrayValue::from_values(
@@ -450,10 +1026,7 @@ fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
     );
 
     assert_eq!(
-        ArrayDType::from_type(&Type::Named(
-            "int32".to_string(),
-            vec![Type::named("String")]
-        )),
+        ArrayDType::from_type(&Type::Named("int32".to_string(), vec![Type::named("str")])),
         None,
         "numeric Array dtypes are exact non-generic scalar types"
     );
@@ -537,11 +1110,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
             elements: vec![source_array(&[4, 9]), source_array(&[1, 7])],
         }),
         Value::Tuple(TupleValue {
-            element_types: vec![
-                Type::named("String"),
-                array_type.clone(),
-                Type::named("int32"),
-            ],
+            element_types: vec![Type::named("str"), array_type.clone(), Type::named("int32")],
             elements: vec![
                 Value::String("before".to_string()),
                 source_array(&[2, 5]),
@@ -549,7 +1118,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
             ],
         }),
         Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: array_type.clone(),
             entries: vec![
                 (Value::String("second".to_string()), source_array(&[6, 3])),
@@ -644,11 +1213,11 @@ fn array_containing_language_copies_preserve_empty_containers() {
             elements: Vec::new(),
         }),
         Value::Set(SetValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: Vec::new(),
         }),
         Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: array_type,
             entries: Vec::new(),
         }),
@@ -676,7 +1245,7 @@ fn array_containing_language_copies_preserve_empty_containers() {
 #[test]
 fn array_aware_language_copy_preserves_reachable_scalar_set_order() {
     let source = Value::Set(SetValue {
-        element_type: Type::named("String"),
+        element_type: Type::named("str"),
         elements: vec![
             Value::String("third".to_string()),
             Value::String("first".to_string()),
@@ -689,7 +1258,7 @@ fn array_aware_language_copy_preserves_reachable_scalar_set_order() {
     let Value::Set(copy) = copy else {
         panic!("copying a Set must retain its runtime variant");
     };
-    assert_eq!(copy.element_type, Type::named("String"));
+    assert_eq!(copy.element_type, Type::named("str"));
     assert_eq!(
         copy.elements,
         vec![
@@ -748,7 +1317,7 @@ fn array_containing_language_copy_reports_outer_shape_and_storage_allocation_fai
     let (Value::Array(source_array), Value::Array(slice_array)) =
         (&source_vector.elements[0], &slice.elements[0])
     else {
-        panic!("Vec[Array[T]] slices should retain their element values");
+        panic!("list[Array[T]] slices should retain their element values");
     };
     let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(slice_storage)) =
         (&source_array.storage, &slice_array.storage)
@@ -1495,7 +2064,7 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
 #[test]
 fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() {
     let vector = VecValue {
-        element_type: Type::named("String"),
+        element_type: Type::named("str"),
         elements: ["zero", "one", "two", "three"]
             .into_iter()
             .map(|value| Value::String(value.to_string()))
@@ -1504,7 +2073,7 @@ fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() 
 
     let middle = slice_vec_owned(&vector, Some(-3), Some(-1))
         .expect("negative bounds should normalize once");
-    assert_eq!(middle.element_type, Type::named("String"));
+    assert_eq!(middle.element_type, Type::named("str"));
     assert_eq!(
         middle.elements,
         vec![
@@ -1529,11 +2098,11 @@ fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() 
     let unicode = "aé🎉e\u{301}";
     assert_eq!(
         slice_string_owned(unicode, Some(1), Some(-1))
-            .expect("String bounds should count Unicode scalar values"),
+            .expect("str bounds should count Unicode scalar values"),
         "é🎉e"
     );
     assert_eq!(
-        slice_string_owned(unicode, None, None).expect("full String slice should succeed"),
+        slice_string_owned(unicode, None, None).expect("full str slice should succeed"),
         unicode
     );
 
@@ -1742,14 +2311,14 @@ fn function_signature(parameter_name: &str, has_default: bool, default_erased: b
         params: vec![
             FunctionParamContract {
                 name: parameter_name.to_string(),
-                ty: Type::named("String"),
+                ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
                 has_default,
                 default_erased,
             },
             FunctionParamContract {
                 name: "items".to_string(),
-                ty: Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                ty: Type::Named("list".to_string(), vec![Type::named("int32")]),
                 passing: ReceiverKind::BorrowMut,
                 has_default: false,
                 default_erased: false,
@@ -1780,7 +2349,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
     let signature = function_signature("label", true, false);
     assert_eq!(
         signature.to_string(),
-        "def(String, mut Vec[int32], own def(own bool) -> None) -> (int64,)"
+        "def(str, mut list[int32], own def(own bool) -> None) -> (int64,)"
     );
 
     let function = Value::Function(Box::new(FunctionValue {
@@ -1859,7 +2428,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
         .expect_err("function values are not numeric cast sources");
     assert_eq!(
         cast_error.message,
-        "casts are only supported between numeric types, found `def(String, mut Vec[int32], own def(own bool) -> None) -> (int64,)` and `int32`"
+        "casts are only supported between numeric types, found `def(str, mut list[int32], own def(own bool) -> None) -> (int64,)` and `int32`"
     );
     assert_eq!(cast_error.span, Some(Span::new(19, 8)));
 }
@@ -2032,7 +2601,7 @@ fn p63_embedded_nominal_types_preserve_base_value_identity_and_rendering() {
     };
 
     let integer = instance("Packet\0pkg.Packet[int64]", "pkg.Packet[int64]");
-    let string = instance("Packet\0pkg.Packet[String]", "pkg.Packet[String]");
+    let string = instance("Packet\0pkg.Packet[str]", "pkg.Packet[str]");
     let other = instance("Envelope\0pkg.Envelope[int64]", "pkg.Envelope[int64]");
 
     assert_eq!(
@@ -2055,7 +2624,7 @@ fn p63_embedded_nominal_types_preserve_base_value_identity_and_rendering() {
 #[test]
 fn tuple_values_preserve_type_metadata_equality_and_rendering() {
     let pair = Value::Tuple(TupleValue {
-        element_types: vec![Type::named("int64"), Type::named("String")],
+        element_types: vec![Type::named("int64"), Type::named("str")],
         elements: vec![
             Value::Int(IntegerValue::from_signed(7)),
             Value::String("seven".to_string()),
@@ -2129,7 +2698,7 @@ fn runtime_bytes(bytes: &[u8]) -> Value {
 
 fn expect_runtime_bytes(value: &Value) -> Vec<u8> {
     super::host_bytes_from_runtime(value, "test byte value")
-        .expect("runtime byte value should carry exact Vec[uint8] metadata")
+        .expect("runtime byte value should carry exact list[uint8] metadata")
 }
 
 #[test]
@@ -2146,7 +2715,7 @@ fn bytes_runtime_materialization_is_fallible_exact_and_non_consuming() {
     let materialized = super::runtime_bytes_from_host(&[0, 1, 127, 128, 255])
         .expect("host bytes should materialize");
     let Value::Vec(materialized_vec) = &materialized else {
-        panic!("host bytes should materialize as Vec[uint8]");
+        panic!("host bytes should materialize as list[uint8]");
     };
     assert_eq!(materialized_vec.element_type, Type::named("uint8"));
     assert_eq!(
@@ -2199,15 +2768,15 @@ fn bytes_runtime_conversion_rejects_malformed_vec_uint8_values() {
     assert_eq!(error.code, "AU4001");
     assert_eq!(
         error.message,
-        "`bytes::hex_encode` expects a runtime `Vec[uint8]` value"
+        "`bytes::hex_encode` expects a runtime `list[uint8]` value"
     );
 
     for value in [&wrong_type, &wrong_metadata, &wrong_element] {
         let error = super::host_bytes_from_runtime(value, "bytes::hex_encode")
-            .expect_err("malformed Vec[uint8] runtime values must be rejected");
+            .expect_err("malformed list[uint8] runtime values must be rejected");
         assert_eq!(error.code, "AU4001");
         assert!(error.message.contains("`bytes::hex_encode`"));
-        assert!(error.message.contains("`Vec[uint8]`"));
+        assert!(error.message.contains("`list[uint8]`"));
     }
 }
 
@@ -2218,26 +2787,26 @@ fn bytes_adapter_rejects_wrong_runtime_types_without_consuming_inputs() {
         "bytes::hex_decode",
         "bytes::base64_decode",
         "bytes::sha256_string",
-        "String.to_bytes",
+        "str.to_bytes",
     ] {
         let error = super::evaluate_bytes_host_builtin_ref(name, &wrong)
             .expect("the byte builtin should be recognized")
-            .expect_err("String-taking byte builtins must reject non-String values");
+            .expect_err("str-taking byte builtins must reject non-str values");
         assert_eq!(error.code, "AU2004", "{name}");
         assert_eq!(
             error.message,
-            format!("`{name}` expects argument 1 to be `String`, found `true`"),
+            format!("`{name}` expects argument 1 to be `str`, found `true`"),
             "{name}"
         );
     }
 
-    let error = super::evaluate_bytes_host_builtin_ref("String.from_bytes", &wrong)
-        .expect("String.from_bytes should be recognized")
-        .expect_err("String.from_bytes must reject non-byte-vector runtime values");
+    let error = super::evaluate_bytes_host_builtin_ref("str.from_bytes", &wrong)
+        .expect("str.from_bytes should be recognized")
+        .expect_err("str.from_bytes must reject non-byte-vector runtime values");
     assert_eq!(error.code, "AU4001");
     assert_eq!(
         error.message,
-        "`String.from_bytes` expects a runtime `Vec[uint8]` value"
+        "`str.from_bytes` expects a runtime `list[uint8]` value"
     );
     assert_eq!(wrong, Value::Bool(true));
 }
@@ -2368,10 +2937,10 @@ fn bytes_host_builtin_adapter_covers_codecs_hashes_and_strict_utf8() {
     assert_eq!(expect_runtime_bytes(&digest).len(), 32);
     let text = Value::String("abc".to_string());
     assert_eq!(call("bytes::sha256_string", &[&text]), digest);
-    let encoded = call("String.to_bytes", &[&text]);
+    let encoded = call("str.to_bytes", &[&text]);
     assert_eq!(expect_runtime_bytes(&encoded), b"abc");
-    let Value::EnumVariant(decoded) = call("String.from_bytes", &[&encoded]) else {
-        panic!("String.from_bytes should return Result");
+    let Value::EnumVariant(decoded) = call("str.from_bytes", &[&encoded]) else {
+        panic!("str.from_bytes should return Result");
     };
     assert_eq!(decoded.variant_name, "Ok");
     assert_eq!(decoded.payloads, vec![Value::String("abc".to_string())]);
@@ -2409,7 +2978,7 @@ fn bytes_host_builtin_adapter_returns_typed_data_errors_and_au4005_resources() {
     }
 
     assert_eq!(
-        error_variant("String.from_bytes", &runtime_bytes(&[b'a', 0xff, b'b'])),
+        error_variant("str.from_bytes", &runtime_bytes(&[b'a', 0xff, b'b'])),
         "InvalidUtf8"
     );
     assert_eq!(
@@ -2455,13 +3024,13 @@ fn bytes_string_from_bytes_classifies_invalid_utf8_before_runtime_materializatio
     // Any eager copy of the Vec[uint8] would consume a seventh checkpoint and
     // incorrectly replace this typed data error with AU4005.
     let value = super::with_bytes_runtime_allocation_budget(6, || {
-        super::evaluate_bytes_host_builtin_ref("String.from_bytes", &malformed)
-            .expect("String.from_bytes should be recognized")
+        super::evaluate_bytes_host_builtin_ref("str.from_bytes", &malformed)
+            .expect("str.from_bytes should be recognized")
     })
     .expect("the allocation budget needed for bytes.Error must not be spent copying the input");
 
     let Value::EnumVariant(result) = value else {
-        panic!("String.from_bytes should return Result");
+        panic!("str.from_bytes should return Result");
     };
     assert_eq!(result.variant_name, "Err");
     let [Value::EnumVariant(error)] = result.payloads.as_slice() else {
@@ -2485,8 +3054,8 @@ fn bytes_string_from_bytes_reports_materialization_failure_without_consuming_inp
     let snapshot = source.clone();
 
     let error = super::with_bytes_runtime_allocation_budget(0, || {
-        super::evaluate_bytes_host_builtin_ref("String.from_bytes", &source)
-            .expect("String.from_bytes should be recognized")
+        super::evaluate_bytes_host_builtin_ref("str.from_bytes", &source)
+            .expect("str.from_bytes should be recognized")
     })
     .expect_err("runtime byte materialization failure must remain an AU4005 trap");
 
@@ -4371,6 +4940,11 @@ fn duration_helpers_preserve_nanoseconds_rendering_conversions_and_host_limits()
             "Duration.to_seconds must resolve exact binary64 midpoints toward an even significand",
         );
     }
+    assert_eq!(
+        super::duration_to_seconds(33_554_431_999_999_999).to_bits(),
+        0x4180_0000_0000_0000,
+        "Duration.to_seconds must carry a rounded significand into the next binary64 exponent",
+    );
 
     let timer = super::duration_to_host_timer(1_500_001, "test timeout")
         .expect("a small positive duration should fit the host timer");
@@ -4429,6 +5003,227 @@ fn float_floor_divmod_matches_python_sign_precision_and_zero_rules() {
     let (negative_zero_quotient, negative_zero_remainder) = float_floor_divmod(0.0, -3.0);
     assert_eq!(negative_zero_quotient.to_bits(), (-0.0_f64).to_bits());
     assert_eq!(negative_zero_remainder.to_bits(), (-0.0_f64).to_bits());
+}
+
+#[test]
+fn float_power_uses_destination_width_and_shared_exception_rules() {
+    assert_eq!(
+        float_power(1.5, 2.0, FloatPowerWidth::Float32).expect("float32 power should succeed"),
+        (1.5_f32.powf(2.0)) as f64
+    );
+    assert_eq!(
+        float_power(1.5, 2.0, FloatPowerWidth::Float64).expect("float64 power should succeed"),
+        1.5_f64.powf(2.0)
+    );
+
+    let float32_overflow = float_power(100.0, 100.0, FloatPowerWidth::Float32)
+        .expect_err("destination-width overflow must be diagnosed");
+    assert_eq!(float32_overflow.code, "AU4002");
+    assert!(float_power(100.0, 100.0, FloatPowerWidth::Float64).is_ok());
+
+    assert_eq!(
+        float_power(f64::NAN, 0.0, FloatPowerWidth::Float64).unwrap(),
+        1.0
+    );
+    assert!(
+        float_power(-2.0, 0.5, FloatPowerWidth::Float64)
+            .expect_err("fractional power of a negative base is a domain error")
+            .code
+            == "AU4001"
+    );
+}
+
+#[test]
+fn numeric_round_preserves_integers_and_uses_checked_ties_to_even_int64_results() {
+    let mut integer_values = [
+        IntegerKind::Int8,
+        IntegerKind::Int16,
+        IntegerKind::Int32,
+        IntegerKind::Int64,
+        IntegerKind::Int128,
+        IntegerKind::IntSize,
+    ]
+    .map(|kind| IntegerValue::from_typed_signed(-7, kind).unwrap())
+    .to_vec();
+    integer_values.extend(
+        [
+            IntegerKind::Uint8,
+            IntegerKind::Uint16,
+            IntegerKind::Uint32,
+            IntegerKind::Uint64,
+            IntegerKind::Uint128,
+            IntegerKind::UintSize,
+        ]
+        .map(|kind| IntegerValue::from_typed_unsigned(7, kind).unwrap()),
+    );
+    integer_values.push(IntegerValue::from_i64(i64::MAX));
+    for value in integer_values {
+        assert_eq!(
+            round_numeric_value(&Value::Int(value)).expect("integer round is identity"),
+            Value::Int(value)
+        );
+    }
+
+    for (value, expected) in [
+        (0.0, 0),
+        (-0.0, 0),
+        (1.5, 2),
+        (2.5, 2),
+        (-1.5, -2),
+        (-2.5, -2),
+        (3.499_999_999, 3),
+    ] {
+        assert_eq!(
+            round_numeric_value(&Value::Float(value)).expect("finite round should succeed"),
+            Value::Int(IntegerValue::from_i64(expected)),
+        );
+    }
+
+    for value in [
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        9_223_372_036_854_775_808.0,
+        -9_223_372_036_854_777_856.0,
+    ] {
+        let error = round_numeric_value(&Value::Float(value))
+            .expect_err("invalid float-to-int64 round must trap");
+        assert_eq!(error.code, "AU4002");
+        assert!(error.message.contains("`round(...)`"));
+    }
+
+    let unsupported = round_numeric_value(&Value::String("1".to_string()))
+        .expect_err("round's private runtime helper must validate its domain");
+    assert_eq!(unsupported.code, "AU4001");
+}
+
+#[test]
+fn numeric_divmod_returns_matching_typed_pairs_and_classifies_failures() {
+    for kind in [
+        IntegerKind::Int8,
+        IntegerKind::Int16,
+        IntegerKind::Int32,
+        IntegerKind::Int64,
+        IntegerKind::Int128,
+        IntegerKind::IntSize,
+    ] {
+        let ty = Type::named(kind.runtime_type_name());
+        let result = divmod_numeric_values(
+            &Value::Int(IntegerValue::from_typed_signed(-7, kind).unwrap()),
+            &Value::Int(IntegerValue::from_typed_signed(3, kind).unwrap()),
+            &ty,
+        )
+        .expect("every signed integer width should use floor divmod");
+        assert_eq!(
+            result,
+            Value::Tuple(TupleValue {
+                element_types: vec![ty.clone(), ty],
+                elements: vec![
+                    Value::Int(IntegerValue::from_typed_signed(-3, kind).unwrap()),
+                    Value::Int(IntegerValue::from_typed_signed(2, kind).unwrap()),
+                ],
+            })
+        );
+    }
+    for kind in [
+        IntegerKind::Uint8,
+        IntegerKind::Uint16,
+        IntegerKind::Uint32,
+        IntegerKind::Uint64,
+        IntegerKind::Uint128,
+        IntegerKind::UintSize,
+    ] {
+        let ty = Type::named(kind.runtime_type_name());
+        let result = divmod_numeric_values(
+            &Value::Int(IntegerValue::from_typed_unsigned(7, kind).unwrap()),
+            &Value::Int(IntegerValue::from_typed_unsigned(3, kind).unwrap()),
+            &ty,
+        )
+        .expect("every unsigned integer width should preserve its exact kind");
+        assert_eq!(
+            result,
+            Value::Tuple(TupleValue {
+                element_types: vec![ty.clone(), ty],
+                elements: vec![
+                    Value::Int(IntegerValue::from_typed_unsigned(2, kind).unwrap()),
+                    Value::Int(IntegerValue::from_typed_unsigned(1, kind).unwrap()),
+                ],
+            })
+        );
+    }
+
+    for (left, right, quotient, remainder) in [
+        (-7, 3, -3, 2),
+        (7, -3, -3, -2),
+        (-7, -3, 2, -1),
+        (7, 3, 2, 1),
+    ] {
+        let ty = Type::named("int32");
+        let result = divmod_numeric_values(
+            &Value::Int(IntegerValue::from_typed_signed(left, IntegerKind::Int32).unwrap()),
+            &Value::Int(IntegerValue::from_typed_signed(right, IntegerKind::Int32).unwrap()),
+            &ty,
+        )
+        .expect("matching non-zero integers should produce a pair");
+        assert_eq!(
+            result,
+            Value::Tuple(TupleValue {
+                element_types: vec![ty.clone(), ty],
+                elements: vec![
+                    Value::Int(
+                        IntegerValue::from_typed_signed(quotient, IntegerKind::Int32).unwrap()
+                    ),
+                    Value::Int(
+                        IntegerValue::from_typed_signed(remainder, IntegerKind::Int32).unwrap()
+                    ),
+                ],
+            })
+        );
+    }
+
+    let float_ty = Type::named("float32");
+    let floating = divmod_numeric_values(&Value::Float(-7.0), &Value::Float(3.0), &float_ty)
+        .expect("matching floats should produce the corrected floor-divmod pair");
+    assert_eq!(
+        floating,
+        Value::Tuple(TupleValue {
+            element_types: vec![float_ty.clone(), float_ty],
+            elements: vec![Value::Float(-3.0), Value::Float(2.0)],
+        })
+    );
+
+    for (left, right, ty) in [
+        (
+            Value::Int(IntegerValue::from_i64(1)),
+            Value::Int(IntegerValue::from_i64(0)),
+            Type::named("int64"),
+        ),
+        (
+            Value::Float(1.0),
+            Value::Float(-0.0),
+            Type::named("float64"),
+        ),
+    ] {
+        let error = divmod_numeric_values(&left, &right, &ty)
+            .expect_err("zero divisor must be classified uniformly");
+        assert_eq!(error.code, "AU4004");
+    }
+
+    let min_overflow = divmod_numeric_values(
+        &Value::Int(IntegerValue::from_i64(i64::MIN)),
+        &Value::Int(IntegerValue::from_i64(-1)),
+        &Type::named("int64"),
+    )
+    .expect_err("minimum divided by negative one must not panic");
+    assert_eq!(min_overflow.code, "AU4002");
+
+    let mismatch = divmod_numeric_values(
+        &Value::Int(IntegerValue::from_i64(1)),
+        &Value::Float(1.0),
+        &Type::named("int64"),
+    )
+    .expect_err("the private helper must reject mismatched runtime domains");
+    assert_eq!(mismatch.code, "AU4001");
 }
 
 #[test]
@@ -4533,14 +5328,14 @@ fn async_and_process_result_helpers_render_expected_variants() {
         wait_any_ready(2, ready.clone()),
         "WaitAny",
         "Ready",
-        vec![Value::Int(IntegerValue::from_signed(2)), ready.clone()],
+        vec![Value::Int(IntegerValue::from_i64(2)), ready.clone()],
     );
     assert_variant(
         wait_any_error(3, "failed".to_string()),
         "WaitAny",
         "Error",
         vec![
-            Value::Int(IntegerValue::from_signed(3)),
+            Value::Int(IntegerValue::from_i64(3)),
             Value::String("failed".to_string()),
         ],
     );
@@ -4562,12 +5357,29 @@ fn async_and_process_result_helpers_render_expected_variants() {
         "WaitAll",
         "Error",
         vec![
-            Value::Int(IntegerValue::from_signed(4)),
+            Value::Int(IntegerValue::from_i64(4)),
             Value::String("bad".to_string()),
         ],
     );
     assert_variant(wait_all_timed_out(), "WaitAll", "TimedOut", Vec::new());
     assert_variant(wait_all_cancelled(), "WaitAll", "Cancelled", Vec::new());
+
+    for outcome in [
+        wait_any_ready(0, Value::Unit),
+        wait_any_error(0, "failed".to_string()),
+        wait_all_error(0, "failed".to_string()),
+        select_outcome_queue(0, queue_receive_closed()),
+        select_outcome_task(0, task_result_cancelled()),
+        select_outcome_deadline(0),
+    ] {
+        let Value::EnumVariant(variant) = outcome else {
+            panic!("expected indexed concurrency outcome")
+        };
+        let Some(Value::Int(index)) = variant.payloads.first() else {
+            panic!("expected indexed concurrency outcome payload")
+        };
+        assert_eq!(index.runtime_type_name(), Some("int64"));
+    }
 
     assert_variant(process_wait_timed_out(), "Wait", "TimedOut", Vec::new());
     assert_variant(process_wait_cancelled(), "Wait", "Cancelled", Vec::new());
@@ -4759,23 +5571,23 @@ fn cast_numeric_value_covers_success_and_failure_paths() {
 
     let integer_to_non_numeric = cast_numeric_value(
         Value::Int(IntegerValue::from_signed(5)),
-        &Type::named("String"),
+        &Type::named("str"),
         None,
     )
     .expect_err("integer casts to nonnumeric targets should fail");
     assert!(
         integer_to_non_numeric
             .message
-            .contains("found `integer` and `String`"),
+            .contains("found `integer` and `str`"),
         "unexpected integer cast diagnostic: {}",
         integer_to_non_numeric.message
     );
 
-    let float_to_non_numeric = cast_numeric_value(Value::Float(1.5), &Type::named("String"), None)
+    let float_to_non_numeric = cast_numeric_value(Value::Float(1.5), &Type::named("str"), None)
         .expect_err("float casts to nonnumeric targets should fail");
     assert!(float_to_non_numeric
         .message
-        .contains("found `float64` and `String`"));
+        .contains("found `float64` and `str`"));
 
     let non_finite = cast_numeric_value(Value::Float(f64::INFINITY), &Type::named("int32"), None)
         .expect_err("non-finite float casts to integers should fail");
@@ -4849,28 +5661,35 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
     }
 
     assert_source_type(Value::Bool(true), "bool");
-    assert_source_type(Value::String("Aura".to_string()), "String");
+    assert_source_type(Value::String("Aura".to_string()), "str");
     assert_source_type(
         Value::Vec(VecValue {
             element_type: Type::named("int32"),
             elements: vec![],
         }),
-        "Vec",
+        "list",
     );
     assert_source_type(
         Value::Set(SetValue {
-            element_type: Type::named("String"),
+            element_type: Type::named("str"),
             elements: vec![],
         }),
-        "Set",
+        "set",
     );
     assert_source_type(
         Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![],
         }),
-        "Map",
+        "dict",
+    );
+    assert_source_type(
+        Value::Array(
+            ArrayValue::zeros(ArrayDType::Int32, vec![1].into_boxed_slice())
+                .expect("a cast diagnostic test array should be constructible"),
+        ),
+        "Array",
     );
     assert_source_type(Value::Duration(5), "Duration");
     assert_source_type(Value::Range(RangeValue { start: 1, end: 3 }), "Range");
@@ -5476,9 +6295,9 @@ fn dynamic_json_runtime_conversion_round_trips_every_variant_and_preserves_objec
     assert_eq!(root.enum_name, "json.Value");
     assert_eq!(root.variant_name, "Object");
     let [Value::Map(object)] = root.payloads.as_slice() else {
-        panic!("json.Value.Object should carry Map[String, json.Value]");
+        panic!("json.Value.Object should carry dict[str, json.Value]");
     };
-    assert_eq!(object.key_type, Type::named("String"));
+    assert_eq!(object.key_type, Type::named("str"));
     assert_eq!(object.value_type, Type::named("json.Value"));
     assert_eq!(
         object
@@ -5539,7 +6358,7 @@ fn dynamic_json_shared_parse_adapter_borrows_the_source_allocation() {
     let args = vec![Value::String(source)];
 
     let borrowed = super::host_string_ref_arg(&args, 0, "json::parse")
-        .expect("json.parse should borrow a String argument");
+        .expect("json.parse should borrow a str argument");
 
     assert_eq!(borrowed.as_ptr(), source_ptr);
 }
@@ -5562,7 +6381,7 @@ fn dynamic_json_parse_materializes_a_structurally_dense_valid_input() {
         panic!("Result.Ok should contain json.Value.Array");
     };
     let [Value::Vec(values)] = array.payloads.as_slice() else {
-        panic!("json.Value.Array should contain Vec[json.Value]");
+        panic!("json.Value.Array should contain list[json.Value]");
     };
     assert_eq!(values.element_type, Type::named("json.Value"));
     assert_eq!(values.elements.len(), ELEMENTS);
@@ -5834,11 +6653,11 @@ fn dynamic_json_runtime_conversion_rejects_noncanonical_payload_metadata() {
             json_variant(
                 "Array",
                 Value::Vec(VecValue {
-                    element_type: Type::named("String"),
+                    element_type: Type::named("str"),
                     elements: Vec::new(),
                 }),
             ),
-            "exactly `Vec[json.Value]`",
+            "exactly `list[json.Value]`",
         ),
         (
             "wrong Object key metadata",
@@ -5850,19 +6669,19 @@ fn dynamic_json_runtime_conversion_rejects_noncanonical_payload_metadata() {
                     entries: Vec::new(),
                 }),
             ),
-            "exactly `Map[String, json.Value]`",
+            "exactly `dict[str, json.Value]`",
         ),
         (
             "wrong Object value metadata",
             json_variant(
                 "Object",
                 Value::Map(MapValue {
-                    key_type: Type::named("String"),
-                    value_type: Type::named("String"),
+                    key_type: Type::named("str"),
+                    value_type: Type::named("str"),
                     entries: Vec::new(),
                 }),
             ),
-            "exactly `Map[String, json.Value]`",
+            "exactly `dict[str, json.Value]`",
         ),
     ];
 
@@ -5906,7 +6725,7 @@ fn dynamic_json_accessors_reject_noncanonical_payload_metadata() {
             json_variant(
                 "Array",
                 Value::Vec(VecValue {
-                    element_type: Type::named("String"),
+                    element_type: Type::named("str"),
                     elements: Vec::new(),
                 }),
             ),
@@ -5927,8 +6746,8 @@ fn dynamic_json_accessors_reject_noncanonical_payload_metadata() {
             json_variant(
                 "Object",
                 Value::Map(MapValue {
-                    key_type: Type::named("String"),
-                    value_type: Type::named("String"),
+                    key_type: Type::named("str"),
+                    value_type: Type::named("str"),
                     entries: Vec::new(),
                 }),
             ),
@@ -6039,7 +6858,7 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
         "json.Value",
         "Object",
         vec![Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("json.Value"),
             entries: vec![(
                 Value::Int(IntegerValue::from_i64(1)),
@@ -6048,9 +6867,9 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
         })],
     );
     let diagnostic = super::runtime_value_to_json(&wrong_key)
-        .expect_err("runtime object keys must be String values, not merely String metadata");
+        .expect_err("runtime object keys must be str values, not merely str metadata");
     assert_eq!(diagnostic.code, "AU4001");
-    assert!(diagnostic.message.contains("Object key must be `String`"));
+    assert!(diagnostic.message.contains("Object key must be `str`"));
 
     for (label, value, expected) in [
         (
@@ -6081,7 +6900,7 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
         "json.Value",
         "Object",
         vec![Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("json.Value"),
             entries: vec![
                 (
@@ -6101,7 +6920,7 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
     assert!(
         diagnostic
             .message
-            .contains("Object key must be `String`, found `2`"),
+            .contains("Object key must be `str`, found `2`"),
         "unexpected later-key diagnostic: {diagnostic}"
     );
 
@@ -6595,7 +7414,7 @@ fn dynamic_json_host_builtins_parse_dump_and_expose_exact_typed_accessors() {
     let string_payload_ptr = match &string {
         Value::EnumVariant(variant) => match variant.payloads.as_slice() {
             [Value::String(value)] => value.as_ptr(),
-            _ => panic!("json.Value.String should contain one String"),
+            _ => panic!("json.Value.String should contain one str"),
         },
         _ => panic!("json.Value.String should be an enum variant"),
     };
@@ -6807,7 +7626,7 @@ fn legacy_json_validity_walks_nested_arrays_and_objects() {
     ] {
         assert_eq!(
             super::evaluate_host_builtin("json::is_valid", vec![Value::String(source.to_string())])
-                .expect("json.is_valid should accept a String"),
+                .expect("json.is_valid should accept a str"),
             Value::Bool(true),
             "valid nested JSON should remain valid: {source}"
         );
@@ -6831,8 +7650,8 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
     }
     fn string_map(entries: &[(&str, &str)]) -> Value {
         Value::Map(MapValue {
-            key_type: Type::named("String"),
-            value_type: Type::named("String"),
+            key_type: Type::named("str"),
+            value_type: Type::named("str"),
             entries: entries
                 .iter()
                 .map(|(key, value)| {
@@ -7172,14 +7991,11 @@ fn task_and_cancellation_helpers_cover_current_runtime_contract() {
 
     let channel = ChannelValue::new();
     assert_eq!(channel.runtime_type_name(), None);
-    channel.set_runtime_type_name("Queue[String]".to_string());
-    assert_eq!(
-        channel.runtime_type_name().as_deref(),
-        Some("Queue[String]")
-    );
+    channel.set_runtime_type_name("Queue[str]".to_string());
+    assert_eq!(channel.runtime_type_name().as_deref(), Some("Queue[str]"));
     assert_eq!(
         channel.clone().runtime_type_name().as_deref(),
-        Some("Queue[String]"),
+        Some("Queue[str]"),
         "Queue aliases must observe the same native-runtime type metadata"
     );
 }
@@ -9775,10 +10591,18 @@ fn value_equality_and_render_cover_collection_shapes() {
             ],
         })
     );
-    assert_eq!(set_a.render(), "Set{1, 2}");
+    assert_eq!(set_a.render(), "{1, 2}");
+    assert_eq!(
+        Value::Set(SetValue {
+            element_type: Type::named("int64"),
+            elements: Vec::new(),
+        })
+        .render(),
+        "set()"
+    );
 
     let map_a = Value::Map(MapValue {
-        key_type: Type::named("String"),
+        key_type: Type::named("str"),
         value_type: Type::named("int32"),
         entries: vec![
             (
@@ -9792,7 +10616,7 @@ fn value_equality_and_render_cover_collection_shapes() {
         ],
     });
     let map_b = Value::Map(MapValue {
-        key_type: Type::named("String"),
+        key_type: Type::named("str"),
         value_type: Type::named("int32"),
         entries: vec![
             (
@@ -9809,7 +10633,7 @@ fn value_equality_and_render_cover_collection_shapes() {
     assert_ne!(
         map_a,
         Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![(
                 Value::String("a".to_string()),
@@ -9820,7 +10644,7 @@ fn value_equality_and_render_cover_collection_shapes() {
     assert_ne!(
         map_a,
         Value::Map(MapValue {
-            key_type: Type::named("String"),
+            key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![
                 (
@@ -10206,6 +11030,184 @@ fn process_child_helpers_cover_empty_command_and_cancellation_edges() {
         .kill()
         .expect("killing an already exited process should be a no-op");
     completed_child.close();
+}
+
+#[cfg(unix)]
+#[test]
+fn process_completed_values_preserve_output_status_and_check_semantics() {
+    let success = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .status()
+        .expect("successful status should be observable");
+    let completed = ProcessCompletedValue::new(
+        super::process_exit_status(success),
+        b"standard output".to_vec(),
+        b"standard error".to_vec(),
+    );
+    assert!(completed.success());
+    completed
+        .check()
+        .expect("zero exit status should satisfy check");
+    assert_eq!(
+        completed.stdout().expect("stdout should decode"),
+        "standard output"
+    );
+    assert_eq!(
+        completed.stderr().expect("stderr should decode"),
+        "standard error"
+    );
+    assert_eq!(completed.stdout_bytes(), b"standard output");
+    assert_eq!(completed.stderr_bytes(), b"standard error");
+
+    let failure = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 7"])
+        .status()
+        .expect("failing status should be observable");
+    let failed =
+        ProcessCompletedValue::new(super::process_exit_status(failure), vec![0xff], vec![0xfe]);
+    assert!(!failed.success());
+    assert_eq!(
+        failed
+            .stdout()
+            .expect_err("invalid stdout UTF-8 must fail")
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert_eq!(
+        failed
+            .stderr()
+            .expect_err("invalid stderr UTF-8 must fail")
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert_eq!(failed.stdout_bytes(), [0xff]);
+    assert_eq!(failed.stderr_bytes(), [0xfe]);
+    assert!(failed
+        .check()
+        .expect_err("non-zero exit status must fail check")
+        .render()
+        .contains("process exited with ExitStatus.Exited(7)"));
+}
+
+#[cfg(unix)]
+#[test]
+fn process_stdout_supports_line_then_byte_reads() {
+    let child = ProcessChildValue::spawn(
+        vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "printf 'outline\\nrest'".to_string(),
+        ],
+        None,
+        Vec::new(),
+        ProcessStdioConfig::Null,
+        ProcessStdioConfig::Pipe,
+        ProcessStdioConfig::Null,
+        false,
+    )
+    .expect("stdout-producing child should spawn");
+    let stdout = child.stdout().expect("stdout pipe should be captured");
+    assert_eq!(
+        stdout
+            .read_line(
+                Some(StdDuration::from_secs(2)),
+                Some(&CancellationContext::default())
+            )
+            .expect("stdout line should read")
+            .as_deref(),
+        Some("outline")
+    );
+    assert_eq!(
+        stdout
+            .read_bytes(
+                4,
+                Some(StdDuration::from_secs(2)),
+                Some(&CancellationContext::default())
+            )
+            .expect("stdout bytes should read")
+            .as_deref(),
+        Some(&b"rest"[..])
+    );
+    assert!(matches!(
+        child.wait(Some(StdDuration::from_secs(2)), None),
+        ProcessChildWaitStatus::Exited(status) if status.success()
+    ));
+    child.close();
+}
+
+#[cfg(unix)]
+#[test]
+fn process_supervisor_wait_or_none_and_stop_cover_public_outcomes() {
+    let empty = ProcessSupervisorValue::new();
+    assert!(empty
+        .wait_or_none(Some(StdDuration::ZERO), None)
+        .expect("empty supervisor wait should not fail")
+        .is_none());
+
+    let completed = ProcessSupervisorValue::new();
+    completed
+        .start(
+            "quick".to_string(),
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "exit 0".to_string(),
+            ],
+            None,
+            Vec::new(),
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessRestartPolicy::Never,
+            StdDuration::ZERO,
+            None,
+            false,
+        )
+        .expect("quick supervised process should start");
+    let event = completed
+        .wait_or_none(Some(StdDuration::from_secs(2)), None)
+        .expect("completed supervisor wait should not fail")
+        .expect("completed supervisor wait should produce an event");
+    let Value::EnumVariant(event) = event else {
+        panic!("supervisor event should be a typed enum variant");
+    };
+    assert_eq!(event.enum_name, "SupervisorEvent");
+    assert_eq!(event.variant_name, "Exited");
+    assert_eq!(event.payloads[0], Value::String("quick".to_string()));
+    assert!(completed.is_empty());
+
+    let running = ProcessSupervisorValue::new();
+    running
+        .start(
+            "slow".to_string(),
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "sleep 10".to_string(),
+            ],
+            None,
+            Vec::new(),
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessRestartPolicy::Never,
+            StdDuration::ZERO,
+            None,
+            false,
+        )
+        .expect("slow supervised process should start");
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = group.child_cancellation();
+    group.cancel();
+    let cancelled = running
+        .wait_or_none(Some(StdDuration::from_secs(2)), Some(&cancellation))
+        .expect_err("cancelled supervisor wait should return a process error");
+    assert_eq!(cancelled.render(), "Error.Cancelled");
+    running
+        .stop()
+        .expect("supervisor stop should close children");
+    assert!(running.is_empty());
+    running.close();
 }
 
 #[cfg(unix)]
@@ -10771,6 +11773,303 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
         .expect("websocket bytes should be present");
     assert_eq!(ws_reply, b"pong");
     ws_thread.join().expect("websocket thread should join");
+}
+
+#[cfg(unix)]
+#[test]
+fn udp_datagrams_preserve_bytes_and_socket_waits_report_timeout_cancellation_and_close() {
+    let timeout = StdDuration::from_secs(2);
+    let receiver = UdpSocketValue::bind("127.0.0.1:0").expect("UDP receiver should bind");
+    let receiver_address = receiver
+        .local_addr()
+        .expect("UDP receiver address should be available");
+
+    assert_eq!(
+        receiver
+            .recv(16, Some(StdDuration::ZERO), None)
+            .expect("an expired connected receive should be a timeout"),
+        None
+    );
+    assert!(receiver
+        .recv_from(16, Some(StdDuration::ZERO), None)
+        .expect("an expired addressed receive should be a timeout")
+        .is_none());
+
+    let cancellation_group = TaskGroupValue::new(&CancellationContext::default());
+    let cancellation = cancellation_group.child_cancellation();
+    cancellation_group.cancel();
+    assert_eq!(
+        receiver
+            .recv(16, Some(timeout), Some(&cancellation))
+            .expect_err("a cancelled connected receive should stop waiting")
+            .kind(),
+        io::ErrorKind::Interrupted
+    );
+    assert_eq!(
+        receiver
+            .recv_from(16, Some(timeout), Some(&cancellation))
+            .expect_err("a cancelled addressed receive should stop waiting")
+            .kind(),
+        io::ErrorKind::Interrupted
+    );
+
+    let sender = UdpSocketValue::bind("127.0.0.1:0").expect("UDP sender should bind");
+    sender
+        .send_to_bytes(&receiver_address, &[0xff], Some(timeout), None)
+        .expect("UDP bytes should send");
+    let datagram = receiver
+        .recv_from(16, Some(timeout), None)
+        .expect("UDP bytes should be received")
+        .expect("the UDP datagram should be present");
+    assert_eq!(datagram.bytes(), vec![0xff]);
+    assert!(datagram.address().starts_with("127.0.0.1:"));
+    assert_eq!(
+        datagram
+            .text()
+            .expect_err("invalid UTF-8 remains available as bytes")
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+
+    receiver.close();
+    assert_eq!(
+        receiver
+            .send_to_text("127.0.0.1:9", "closed", Some(timeout), None)
+            .expect_err("a closed UDP socket cannot send")
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+    assert_eq!(
+        receiver
+            .local_addr()
+            .expect_err("a closed UDP socket has no local address")
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+    assert_eq!(
+        receiver
+            .peer_addr()
+            .expect_err("a closed UDP socket has no peer address")
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn websocket_cross_type_messages_and_close_state_are_observable() {
+    let timeout = StdDuration::from_secs(2);
+    let listener =
+        WebSocketListenerValue::bind("127.0.0.1:0").expect("websocket listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("websocket listener address should be available");
+    let close_barrier = Arc::new(Barrier::new(2));
+    let server_close_barrier = close_barrier.clone();
+    let server = listener.clone();
+    let server_thread = thread::spawn(move || {
+        let socket = server
+            .accept(Some(timeout))
+            .expect("websocket server should accept");
+        assert_eq!(
+            socket
+                .recv_text(Some(timeout))
+                .expect("binary UTF-8 should be readable as text")
+                .as_deref(),
+            Some("binary text")
+        );
+        socket
+            .send_text("text bytes", Some(timeout))
+            .expect("websocket text should send");
+        socket
+            .send_bytes(&[0xff], Some(timeout))
+            .expect("websocket binary data should send");
+        server_close_barrier.wait();
+        assert_eq!(
+            socket
+                .recv_bytes(Some(timeout))
+                .expect("a peer close should end receive without an error"),
+            None
+        );
+    });
+
+    let client = super::WebSocketValue::connect(&format!("ws://{address}"), Some(timeout))
+        .expect("websocket client should connect");
+    client
+        .send_bytes(b"binary text", Some(timeout))
+        .expect("websocket binary data should send");
+    assert_eq!(
+        client
+            .recv_bytes(Some(timeout))
+            .expect("text should be readable as bytes"),
+        Some(b"text bytes".to_vec())
+    );
+    assert_eq!(
+        client
+            .recv_text(Some(timeout))
+            .expect_err("invalid UTF-8 binary data should not become text")
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    client.close().expect("websocket client should close");
+    close_barrier.wait();
+    assert_eq!(
+        client
+            .send_text("after close", Some(timeout))
+            .expect_err("a closed websocket cannot send")
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+    assert_eq!(
+        client
+            .recv_text(Some(timeout))
+            .expect_err("a closed websocket cannot receive")
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+    assert_eq!(
+        client
+            .close()
+            .expect_err("a websocket cannot be closed twice")
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+    server_thread.join().expect("websocket server should join");
+}
+
+#[test]
+fn tcp_stream_accessors_reads_half_shutdowns_and_closed_errors_are_consistent() {
+    let timeout = StdDuration::from_secs(2);
+    let cancellation = CancellationContext::default();
+    let listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp bind should succeed");
+    let listener_address = listener
+        .local_addr()
+        .expect("listener local address should succeed");
+    let server = listener.clone();
+    let server_listener_address = listener_address.clone();
+    let shutdown_barrier = Arc::new(Barrier::new(2));
+    let server_shutdown_barrier = shutdown_barrier.clone();
+    let server_thread = thread::spawn(move || {
+        let stream = server
+            .accept(Some(timeout), Some(&CancellationContext::default()))
+            .expect("tcp accept should succeed");
+        assert_eq!(
+            stream.local_addr().expect("accepted local address"),
+            server_listener_address
+        );
+        assert!(stream
+            .peer_addr()
+            .expect("accepted peer address")
+            .starts_with("127.0.0.1:"));
+        stream
+            .write_all(
+                "hello",
+                Some(timeout),
+                Some(&CancellationContext::default()),
+            )
+            .expect("tcp text write should succeed");
+        stream.flush().expect("tcp flush should succeed");
+        stream
+            .shutdown_write()
+            .expect("the server write half should close");
+        server_shutdown_barrier.wait();
+    });
+
+    let client = TcpStreamValue::connect(&listener_address, Some(timeout), Some(&cancellation))
+        .expect("tcp connect should succeed");
+    assert!(client
+        .local_addr()
+        .expect("client local address")
+        .starts_with("127.0.0.1:"));
+    assert_eq!(
+        client.peer_addr().expect("client peer address"),
+        listener_address
+    );
+    client
+        .shutdown_write()
+        .expect("the client write half should close while reads remain available");
+    assert_eq!(
+        client
+            .read_bytes(2, Some(timeout), Some(&cancellation))
+            .expect("partial byte read should succeed"),
+        Some(b"he".to_vec())
+    );
+    assert_eq!(
+        client
+            .read_all(Some(timeout), Some(&cancellation))
+            .expect("remaining text should read through EOF"),
+        "llo"
+    );
+    shutdown_barrier.wait();
+    server_thread.join().expect("tcp server thread should join");
+
+    let half_shutdown_barrier = Arc::new(Barrier::new(2));
+    let half_server_barrier = half_shutdown_barrier.clone();
+    let half_server = listener.clone();
+    let half_server_thread = thread::spawn(move || {
+        let stream = half_server
+            .accept(Some(timeout), Some(&CancellationContext::default()))
+            .expect("half-shutdown server should accept");
+        half_server_barrier.wait();
+        stream.close();
+    });
+    let half_client =
+        TcpStreamValue::connect(&listener_address, Some(timeout), Some(&cancellation))
+            .expect("half-shutdown client should connect");
+    half_client
+        .shutdown_read()
+        .expect("the live client read half should close");
+    half_client
+        .shutdown_write()
+        .expect("the live client write half should close");
+    half_shutdown_barrier.wait();
+    half_server_thread
+        .join()
+        .expect("half-shutdown server thread should join");
+    half_client.close();
+
+    client.close();
+    let closed_errors = [
+        client
+            .read_all(Some(timeout), Some(&cancellation))
+            .expect_err("closed text reads must fail"),
+        client
+            .read_bytes_all(Some(timeout), Some(&cancellation))
+            .expect_err("closed byte reads must fail"),
+        client
+            .read_line(Some(timeout), Some(&cancellation))
+            .expect_err("closed line reads must fail"),
+        client
+            .read_bytes(1, Some(timeout), Some(&cancellation))
+            .expect_err("closed partial reads must fail"),
+        client
+            .read_exact(1, Some(timeout), Some(&cancellation))
+            .expect_err("closed exact reads must fail"),
+        client
+            .write_bytes(b"x", Some(timeout), Some(&cancellation))
+            .expect_err("closed writes must fail"),
+        client.flush().expect_err("closed flushes must fail"),
+        client
+            .local_addr()
+            .expect_err("closed local-address access must fail"),
+        client
+            .peer_addr()
+            .expect_err("closed peer-address access must fail"),
+        client
+            .shutdown_read()
+            .expect_err("closed read shutdowns must fail"),
+        client
+            .shutdown_write()
+            .expect_err("closed write shutdowns must fail"),
+        client
+            .shutdown_both()
+            .expect_err("closed two-way shutdowns must fail"),
+    ];
+    for error in closed_errors {
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(error.to_string(), "resource is closed");
+    }
+    listener.close();
 }
 
 #[test]
@@ -14018,6 +15317,12 @@ fn http_stream_helpers_cover_response_without_content_length_and_custom_headers(
     )
     .expect("response without content-length should read until close");
     assert_eq!(response.status(), 202);
+    assert_eq!(response.reason(), "Accepted");
+    assert_eq!(
+        response.headers(),
+        vec![("Connection".to_string(), "close".to_string())]
+    );
+    assert_eq!(response.bytes(), b"body");
     assert_eq!(
         response.text().expect("response body should decode"),
         "body".to_string()
@@ -14143,6 +15448,17 @@ fn http_streams_report_truncated_chunked_messages_and_incremental_limit_overflow
         "stream closed before the chunked HTTP response body was fully received"
     );
 
+    let mut malformed_response = ScriptedHttpReader {
+        chunks: std::collections::VecDeque::from([
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nnope\r\n".to_vec(),
+        ]),
+    };
+    let error =
+        super::read_http_response_from_stream_with_limit(&mut malformed_response, None, None, 128)
+            .expect_err("a malformed response chunk size must be rejected at the stream boundary");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("invalid HTTP chunk size `nope`"));
+
     let mut incremental_overflow = ScriptedHttpReader {
         chunks: std::collections::VecDeque::from([
             b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec(),
@@ -14183,6 +15499,63 @@ fn http_streams_report_truncated_chunked_messages_and_incremental_limit_overflow
         "stream closed before the chunked HTTP request body was fully received"
     );
     client.join().expect("client thread should join");
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("server should bind");
+    let address = listener.local_addr().expect("server address should exist");
+    let client = thread::spawn(move || {
+        let mut stream = std::net::TcpStream::connect(address).expect("client should connect");
+        stream
+            .write_all(
+                b"POST /upload HTTP/1.1\r\nHost: local\r\nTransfer-Encoding: chunked\r\n\r\nnope\r\n",
+            )
+            .expect("malformed request should write");
+        stream
+            .shutdown(std::net::Shutdown::Write)
+            .expect("the client write side should close");
+    });
+    let (mut stream, _) = listener.accept().expect("server should accept");
+    let error = super::read_http_request_from_stream_with_limit(
+        &mut stream,
+        Some(Instant::now() + StdDuration::from_secs(2)),
+        Some(&CancellationContext::default()),
+        128,
+    )
+    .expect_err("a malformed request chunk size must be rejected at the stream boundary");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("invalid HTTP chunk size `nope`"));
+    client.join().expect("client thread should join");
+}
+
+#[test]
+fn http_response_writer_rejects_header_injection_before_writing() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("server should bind");
+    let address = listener.local_addr().expect("server address should exist");
+    let client = std::net::TcpStream::connect(address).expect("client should connect");
+    let (mut server, _) = listener.accept().expect("server should accept");
+
+    let error = super::write_http_response_to_stream(
+        &mut server,
+        200,
+        vec![("X-Test".to_string(), "safe\r\nX-Injected: true".to_string())],
+        b"body",
+        Some(Instant::now() + StdDuration::from_secs(2)),
+        Some(&CancellationContext::default()),
+    )
+    .expect_err("response header injection must be rejected before bytes are written");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        "HTTP header values may not contain control characters"
+    );
+
+    client
+        .set_nonblocking(true)
+        .expect("client test socket should become nonblocking");
+    let mut byte = [0u8; 1];
+    let read_error = (&client)
+        .read(&mut byte)
+        .expect_err("the rejected response must not write any bytes");
+    assert_eq!(read_error.kind(), io::ErrorKind::WouldBlock);
 }
 
 #[test]
@@ -14363,6 +15736,109 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
         "secure-close"
     );
     server.join().expect("second HTTPS server should join");
+    listener.close();
+}
+
+#[cfg(unix)]
+#[test]
+fn https_client_reports_incomplete_and_oversized_response_framing() {
+    let timeout = StdDuration::from_secs(2);
+    let temp = TempDir::new("aura-https-response-framing");
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = temp.path().join("cert.pem");
+    let key_path = temp.path().join("key.pem");
+    fs::write(&cert_path, certificate.cert.pem()).expect("certificate should write");
+    fs::write(&key_path, certificate.key_pair.serialize_pem()).expect("key should write");
+    let listener = TlsListenerValue::bind(
+        "127.0.0.1:0",
+        cert_path.to_str().expect("UTF-8 certificate path"),
+        key_path.to_str().expect("UTF-8 key path"),
+    )
+    .expect("TLS listener should bind");
+    let address = listener.local_addr().expect("TLS address should exist");
+    let port = address
+        .rsplit_once(':')
+        .expect("TLS address should contain a port")
+        .1;
+    let oversized_length = super::MAX_HTTP_MESSAGE_BYTES + 1;
+    let responses = vec![
+        "HTTP/1.1 200 OK\r\n".to_string(),
+        format!("HTTP/1.1 200 OK\r\nContent-Length: {oversized_length}\r\n\r\n"),
+        "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nab".to_string(),
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nab".to_string(),
+    ];
+    let server_listener = listener.clone();
+    let server = thread::spawn(move || {
+        for response in responses {
+            let stream = server_listener
+                .accept(Some(timeout), Some(&CancellationContext::default()))
+                .expect("TLS server should accept each request");
+            loop {
+                let line = stream
+                    .read_line(Some(timeout), Some(&CancellationContext::default()))
+                    .expect("HTTPS request line should read")
+                    .expect("HTTPS client should not close before its headers");
+                if line.is_empty() {
+                    break;
+                }
+            }
+            stream
+                .write_all(
+                    &response,
+                    Some(timeout),
+                    Some(&CancellationContext::default()),
+                )
+                .expect("malformed HTTPS response should write");
+            stream.close();
+        }
+    });
+
+    let url = format!("https://localhost:{port}/");
+    let request = || {
+        HttpResponseValue::request_text_with_ca(
+            "GET",
+            &url,
+            "",
+            Vec::new(),
+            Some(timeout),
+            Some(&CancellationContext::default()),
+            cert_path.to_str().expect("UTF-8 certificate path"),
+        )
+    };
+
+    let incomplete_head = request().expect_err("an incomplete HTTPS response head must fail");
+    assert_eq!(incomplete_head.kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(
+        incomplete_head.to_string(),
+        "stream closed before a complete HTTP response was received"
+    );
+
+    let oversized = request().expect_err("an oversized HTTPS response must fail from its head");
+    assert_eq!(oversized.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(
+        oversized.to_string(),
+        format!(
+            "HTTP message exceeds the supported size limit of {} bytes",
+            super::MAX_HTTP_MESSAGE_BYTES
+        )
+    );
+
+    let truncated_fixed = request().expect_err("a truncated fixed HTTPS body must fail");
+    assert_eq!(truncated_fixed.kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(
+        truncated_fixed.to_string(),
+        "stream closed before the HTTP response body was fully received"
+    );
+
+    let truncated_chunked = request().expect_err("a truncated chunked HTTPS body must fail");
+    assert_eq!(truncated_chunked.kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(
+        truncated_chunked.to_string(),
+        "stream closed before the chunked HTTP response body was fully received"
+    );
+
+    server.join().expect("HTTPS framing server should join");
     listener.close();
 }
 
@@ -15254,6 +16730,62 @@ fn websocket_error_mapping_preserves_io_error_kinds() {
 
     let other = super::websocket_error_to_io(tungstenite::Error::ConnectionClosed);
     assert_eq!(other.kind(), io::ErrorKind::Other);
+}
+
+#[cfg(unix)]
+#[test]
+fn websocket_handshake_rejections_are_observable_on_both_transport_roles() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind websocket test");
+    let address = listener.local_addr().expect("websocket test address");
+    let accepting = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept malformed client");
+        let error = match super::accept_websocket_stream(
+            stream,
+            Some(Instant::now() + StdDuration::from_secs(2)),
+            None,
+        ) {
+            Ok(_) => panic!("a malformed client handshake must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+    });
+    let mut malformed_client =
+        std::net::TcpStream::connect(address).expect("connect malformed client");
+    thread::sleep(StdDuration::from_millis(20));
+    malformed_client
+        .write_all(b"not an HTTP websocket request\r\n\r\n")
+        .expect("write malformed handshake");
+    malformed_client
+        .shutdown(std::net::Shutdown::Both)
+        .expect("close malformed client");
+    accepting.join().expect("malformed accept worker");
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind rejecting server");
+    let address = listener.local_addr().expect("rejecting server address");
+    let rejecting = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept websocket client");
+        stream
+            .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            .expect("write handshake rejection");
+        stream.flush().expect("flush handshake rejection");
+    });
+    let error = super::WebSocketValue::connect(
+        &format!("ws://{address}/denied"),
+        Some(StdDuration::from_secs(2)),
+    )
+    .expect_err("an HTTP rejection must fail the websocket connect operation");
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    rejecting.join().expect("rejecting server worker");
+}
+
+#[cfg(unix)]
+#[test]
+fn websocket_ipv6_host_header_retains_brackets_and_explicit_port() {
+    let parsed = url::Url::parse("ws://[::1]:8042/events").expect("valid IPv6 websocket URL");
+    assert_eq!(
+        super::websocket_host_header(&parsed).expect("IPv6 host header"),
+        "[::1]:8042"
+    );
 }
 
 #[cfg(unix)]

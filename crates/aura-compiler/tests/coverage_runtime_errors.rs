@@ -95,7 +95,7 @@ def main() -> int32:
 fn runtime_errors_unwind_with_resource_cleanups() {
     let source = r#"
 class Resource:
-    name: String
+    name: str
 
     def close(mut self):
         print("closed " + self.name)

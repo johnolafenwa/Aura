@@ -1,5 +1,5 @@
 # Test: different combinations of concat types
-# String + String, String + str literal, str literal + String, str literal + str literal
+# str + str, str + str literal, str literal + str, str literal + str literal
 
 def main() -> int32:
     # literal + literal

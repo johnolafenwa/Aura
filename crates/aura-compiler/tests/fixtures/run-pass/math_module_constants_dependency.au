@@ -1,0 +1,5 @@
+from math_module_constants_support.values import show_constants
+
+def main() -> int32:
+    show_constants()
+    return 0

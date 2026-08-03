@@ -1,5 +1,5 @@
 class Inner:
-    data: String
+    data: str
 
 class Outer:
     inner: Inner

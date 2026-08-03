@@ -1,12 +1,12 @@
 # Test: interplay between Option and Result types
-def find_item(id: int32) -> Option[String]:
+def find_item(id: int32) -> Option[str]:
     if id == 1:
         return Option.Some("apple")
     if id == 2:
         return Option.Some("banana")
     return Option.None
 
-def process_item(id: int32) -> Result[String, String]:
+def process_item(id: int32) -> Result[str, str]:
     item = find_item(id)
     match own item:
         case Option.Some(name):
@@ -14,7 +14,7 @@ def process_item(id: int32) -> Result[String, String]:
         case Option.None:
             return Result.Err("item not found")
 
-def batch_process(id1: int32, id2: int32) -> Result[String, String]:
+def batch_process(id1: int32, id2: int32) -> Result[str, str]:
     r1 = try process_item(id1)
     r2 = try process_item(id2)
     return Result.Ok(r1 + " and " + r2)

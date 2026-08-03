@@ -44,7 +44,7 @@ Builtin scalar and utility type names currently accepted by the compiler:
 - `int8`, `int16`, `int32`, `int64`, `int128`, `intsize`
 - `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize`
 - `float32`, `float64`
-- `String`
+- `str`
 - `str` in shared type positions
 - `None`
 - `Duration`
@@ -86,15 +86,14 @@ Builtin generic or runtime-facing types currently accepted:
 - `Result[T, E]`
 - `SendError[T]`
 - `Queue[T]`
-- `Vec[T]`
-- `Map[K, V]`
-- `Set[T]`
+- `list[T]`
+- `dict[K, V]`
+- `set[T]`
 - `Array[T]`, where `T` is exactly `int32`, `int64`, `float32`, or `float64`
-- `MapEntry[K, V]`
 - `Task[T]`
 - `TaskGroup`
 
-Structural tuple types such as `(String, int64)` and singleton `(bool,)` are
+Structural tuple types such as `(str, int64)` and singleton `(bool,)` are
 also accepted. A tuple is copyable exactly when every element is copyable.
 
 Capture-free named function values use `def(T1, mut T2, own T3) -> R`. They are copy
@@ -117,7 +116,7 @@ These built-in type names are reserved and cannot be reused for user-defined cla
 
 ## Packages And Workspaces
 
-Aura now supports a first local package-system milestone:
+Aura supports this local package-system surface:
 
 - `Aura.toml` package manifests with `[package]`
 - package source roots under `src/`
@@ -162,9 +161,9 @@ Current package-system limits:
 - there are still no registry or publish/install flows yet
 
 An authorized package may declare bodyless `extern "C"` functions over the
-fixed-width scalar set, temporary String/byte pointer-length views, and opaque
+fixed-width scalar set, temporary str/byte pointer-length views, and opaque
 handles. Extern functions are direct-call-only and resolve process-global
-symbols synchronously. Empty views pass `(NULL, 0)`; `mut Vec[uint8]` uses
+symbols synchronously. Empty views pass `(NULL, 0)`; `mut list[uint8]` uses
 same-length scratch copy-in/out. Opaque handles are non-Copy, non-cloneable,
 non-Transfer values and require an explicit consuming native close/free call.
 Callbacks, variadics, raw pointer arithmetic, returned views, nullable handles,
@@ -178,7 +177,7 @@ Aura uses an ownership model with no garbage collector. See [06-ownership-and-bo
 Copy types (all numeric types, `bool`, `Duration`, and `Queue[T]`) are
 duplicated on assignment. `Task[T]` is copyable only when `T` is copyable, a
 `Queue[...]` handle, or a recursively repeatable `Task[...]` handle. Move
-types (`String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `Array[T]`, `random.Rng`, `TaskGroup`,
+types (`str`, `list[T]`, `dict[K, V]`, `set[T]`, `Array[T]`, `random.Rng`, `TaskGroup`,
 opaque FFI handles, ordinary user-defined classes, and `Task[T]` for a
 non-repeatable `T`) transfer
 ownership on assignment.
@@ -201,9 +200,6 @@ capability:
 - `match value:` -- shared pattern matching
 - `match mut value:` -- mutable pattern matching with writeback
 - `match own value:` -- consuming pattern matching
-
-`borrow` is reserved and is not accepted capability syntax. A diagnostic names
-the accepted bare, `mut`, or `own` spelling for the position where it appears.
 
 Mutable arguments must be mutable places. Overlapping `mut` arguments with
 other shared access to the same value are rejected. Non-copy fields cannot be
@@ -234,7 +230,7 @@ The current compiler supports these statement forms:
 - expression statements
 
 Assertion conditions must be exactly `bool`, and optional messages must be
-`String`. A true assertion does not evaluate its message. A false assertion
+`str`. A true assertion does not evaluate its message. A false assertion
 traps with `AU4001` at the `assert` keyword, using `assertion failed` or the
 exact supplied message. Assertions are not stripped in any build mode.
 
@@ -244,10 +240,15 @@ The current compiler supports these expression forms:
 
 - names
 - parenthesized tuple values such as `(name, count)` and singleton `(value,)`
-- integer, float, string, f-string, boolean, `None`, and duration literals
+- decimal, hexadecimal, binary, and octal integer literals with digit
+  separators; float, string, f-string, boolean, `None`, and duration literals
   - ordinary strings accept matching single or double quotes with shared escapes
   - f-strings remain double-quoted as `f"..."`, while interpolations may contain either ordinary quote form
 - arithmetic, comparison, and boolean operators
+  - integer `&`, `|`, `^`, `~`, `<<`, and `>>` preserve exact widths and use
+    exact same-type operands; left shift is checked
+  - `**` is right-associative, preserves exact numeric types, and checks
+    integer overflow and exponent domain
   - `//` is builtin floor division for matching integer or floating types
   - builtin integer `/` and `/=` are rejected; floating `/` and `/=` remain true division
   - builtin `%` follows the divisor's sign for matching integer or floating types
@@ -261,43 +262,46 @@ The current compiler supports these expression forms:
 - explicit numeric casts with `expr as Type`
   - integer casts are range-checked and integer-to-float casts reject silent precision loss
 - integer `.to_float() -> float64`, which uses nearest-even conversion and may round
+- `round(value)`, which preserves integer types or rounds a float to `int64`
+  with ties-to-even, and `divmod(left, right)`, which returns the floor
+  quotient and divisor-signed remainder together
 - shortest-roundtrip `float32`/`float64` rendering through `print`, preserving integral `.0` and signed zero
 - list literals such as `[1, 2, 3]`
-- map literals such as `{"aura": 1}`
+- dictionary literals such as `{"aura": 1}`
 - set literals such as `{1, 2, 3}`
-- eager owned list, set, and map comprehensions such as
+- eager owned list, set, and dictionary comprehensions such as
   `[value * 2 for value in values if value > 0]`; nested clauses are
   outer-major, targets do not leak, and every clause uses the bare-loop
   contract (including Queue's receive-owned item carve-out)
 - member access with `.`
 - indexing with `expr[index]`
-- numeric Array indexing with comma-separated exact-`int32` coordinates such
+- numeric Array indexing with comma-separated `int64` coordinates such
   as `matrix[row, column]`, including indexed assignment
-- owned Vec/String slicing with `expr[start:end]`, `expr[:end]`,
+- owned list/str slicing with `expr[start:end]`, `expr[:end]`,
   `expr[start:]`, and `expr[:]`
 - owned first-axis Array slicing with the same one-colon forms; the result is
   a fresh Array, and views remain unavailable
 - function and method calls
-- explicit type arguments on call targets such as `Box[int32](...)` and `Result[int32, String].Ok(...)`
+- explicit type arguments on call targets such as `Box[int32](...)` and `Result[int32, str].Ok(...)`
 - enum and built-in enum variant construction
 - `try expr`
 - conditional expressions written `value if condition else alternative`; the
   condition must be exactly `bool`, is evaluated once, and selects exactly one
   lazily evaluated arm. Both arms must have one static result type. This form
   has the lowest expression precedence and associates to the right.
-- `value in container` and `value not in container` over `Vec[T]` and `Set[T]`
-  elements, `Map[K, V]` keys, and `String` substrings; both operands are read
+- `value in container` and `value not in container` over `list[T]` and `set[T]`
+  elements, `dict[K, V]` keys, and `str` substrings; both operands are read
   and neither is moved
 - comparison chains such as `low <= value < high`, where equality, ordering,
   and membership share one precedence level, every operand is evaluated at most
   once, and a false link short-circuits the rest
 - the compiler-known `for` iterable forms `enumerate(seq)`, yielding
   `(int64, element)`, and `zip(first, second)`, which stops at the shorter
-  sequence; both take `Vec[T]` or `Set[T]` operands over the bare-loop shared
+  sequence; both take `list[T]` or `set[T]` operands over the bare-loop shared
   default and are legal only as a `for` iterable
 - the builtin functions `len(value)`, which delegates to the value's `len()`
   member and produces `int64`, and `str(value)`, which produces the same
-  `String` that `print` writes; both names are reserved and cannot be redefined
+  `str` that `print` writes; both names are reserved and cannot be redefined
 - parenthesized expressions and tuple values
 - delimiter-based newline continuation while `(`, `[`, or `{` remains open
   - continuation indentation is visual and does not create a block
@@ -312,26 +316,26 @@ Comprehension clauses do not accept `mut` or `own`; use a statement loop for
 mutable or consuming source traversal.
 
 Indexed expressions remain ordinary values after parsing. Copy-typed element
-reads like `values[idx]` still work directly, while clone-safe non-copy vector
-elements such as `String` use `get(index)` for an explicit cloned read, and
-elements carrying `random.Rng` state must use `remove(index)` because they
-cannot be cloned at all. Negative Vec indexes normalize as `len + index` for
-direct access and every maintained Vec index method. Map indexing and
-interpolations such as `f"{counts['key']}"` remain supported when the Map
+reads like `values[idx]` work directly. Clone-safe non-copy list elements use
+`get(index)` for an explicit cloned read. Elements carrying `random.Rng` state
+use `pop(index)` to transfer ownership. Negative list indexes normalize as
+`len + index` for direct access and every maintained list index method.
+Dictionary indexing and
+interpolations such as `f"{counts['key']}"` remain supported when the dict
 value type is copy; clone-safe non-copy values use `get(key)` for an explicit
 cloned optional read, while `remove(key)` transfers any stored value.
 
-One-colon Vec and String slices return fresh owned copies. Written endpoints
-are exact `int32`, negatives normalize once, both effective endpoints must be
+One-colon list and str slices return fresh owned copies. Written endpoints use
+the `int64` position domain, negatives normalize once, both effective endpoints must be
 in `0..=len`, and start must not exceed end. Invalid bounds trap with `AU4003`;
 Aura never clamps them. String positions count Unicode scalar values and require
-an O(n) scan. Integer String indexing, step syntax, slice assignment, and
+an O(n) scan. Integer str indexing, step syntax, slice assignment, and
 views remain unavailable.
 
 Numeric `Array[T]` values have rank at least one, may contain zero-sized
 dimensions, and use contiguous row-major storage. The constructors are
-`zeros(shape)`, `full(shape, value)`, and `from_vec(values, shape)`;
-`from_vec` copies its shared Vec input. Members include `shape`, `len`,
+`zeros(shape)`, `full(shape, value)`, and `from_list(values, shape)`;
+`from_list` copies its shared list input. Members include `shape`, `len`,
 `clone`, `get`, mutable `set`, mutable `fill`, `map[U]`, `sum`, `min`, `max`,
 and `mean`. Array/Array arithmetic uses exact shapes and dtypes; same-dtype
 scalar arithmetic supports either operand order for `+`, `-`, and `*`, while
@@ -372,9 +376,9 @@ targets are rejected.
 Calls also reject overlapping borrowed arguments whenever a `mut` parameter
 participates, including a `mut self` receiver overlapping another borrowed
 argument in the same method call.
-Empty list literals currently require an expected `Vec[T]` type such as `values: Vec[int32] = []`, or you can use `Vec[int32]()` explicitly.
-Empty map literals currently require an expected `Map[K, V]` type such as `counts: Map[String, int32] = {}`.
-Empty set literals currently require an expected `Set[T]` type such as `seen: Set[int32] = {}`, or you can use `Set[int32]()` explicitly.
+Empty list literals currently require an expected `list[T]` type such as `values: list[int32] = []`, or you can use `list[int32]()` explicitly.
+Empty dictionary literals require an expected `dict[K, V]` type such as `counts: dict[str, int32] = {}`.
+Empty sets use a typed constructor such as `set[int32]()`.
 
 Top-level declarations may also be generic:
 
@@ -442,17 +446,17 @@ Current builtin `range(...)` notes:
 Current dynamic JSON surface:
 
 - `json.parse(...) -> Result[json.Value, json.Error]`
-- `json.dumps(..., indent=Option.None) -> String`
+- `json.dumps(..., indent=Option.None) -> str`
 - exact inspecting accessors `is_null`, `as_bool`, `as_int`, and `as_float`
 - consuming accessors `into_string`, `into_array`, and `into_object`
-- recursive Null, Boolean, Int, Float, String, Array, and Object variants
+- recursive Null, Boolean, Int, Float, str, Array, and Object variants
 - deterministic sorted-key compact or pretty output
 - typed parse failures plus fixed depth and byte limits
 
 Current bytes, text-codec, and hash surface:
 
-- `Vec[uint8]` as the bytes representation
-- `String.to_bytes()` and `String.from_bytes(...)` for strict UTF-8
+- `list[uint8]` as the bytes representation
+- `str.to_bytes()` and `str.from_bytes(...)` for strict UTF-8
 - lowercase `bytes.hex_encode(...)` and strict mixed-case
   `bytes.hex_decode(...)`
 - canonical standard-alphabet `bytes.base64_encode(...)` and
@@ -462,7 +466,7 @@ Current bytes, text-codec, and hash surface:
   lengths; required metadata above `2147483647` traps with `AU4005` and is never
   truncated or wrapped
 - a fixed 2,147,483,647-byte safety ceiling for each fresh codec destination,
-  independent of public String and `Vec` length domains; crossing it,
+  independent of public str and `list` length domains; crossing it,
   destination-size arithmetic overflow, or allocation failure traps with
   `AU4005`
 
@@ -615,59 +619,65 @@ Current builtin member methods include:
 
 - `float64.sqrt()`
 - scalar and boolean `.to_string()`
-- `String.len() -> int64` (Unicode scalar values, O(n))
-- `String.byte_len() -> int64` (UTF-8 bytes, O(1))
-- `String.to_bytes()` (fresh `Vec[uint8]`)
-- `String.from_bytes(...)` (associated strict UTF-8 conversion)
-- `String.contains(...)`
-- `String.starts_with(...)`
-- `String.ends_with(...)`
-- `String.split(...)`
-- `String.join(...)`
-- `String.replace(...)`
-- `String.to_lower()`
-- `String.to_upper()`
-- `String.strip_prefix(...)`
-- `String.strip_suffix(...)`
-- `String.trim()`
-- `String.clone()`
-- `Vec.len() -> int64`
-- `Vec.is_empty()`
-- `Vec.clone()`
-- `Vec.push(...)`
-- `Vec.pop()`
-- `Vec.get(...)`
-- `Vec.insert(...)`
-- `Vec.set(...)`
-- `Vec.remove(...)`
-- `Vec.swap(...)`
-- `Vec.contains(...)`
-- `Vec.extend(...)`
-- `Vec.clear()`
-- `Vec.reverse()`
-- `Vec.sort()`
-- `Vec.sort_by(key)`
-- `Vec.map(f)`
-- `Vec.filter(f)`
-- `Map.len() -> int64`
-- `Map.is_empty()`
-- `Map.clone()`
-- `Map.get(...)`
-- `Map.set(...)`
-- `Map.remove(...)`
-- `Map.contains_key(...)`
-- `Map.keys()`
-- `Map.values()`
-- `Map.items()`
-- `Map.entries()`
-- `Map.clear()`
-- `Map.extend(...)`
-- `Set.len() -> int64`
-- `Set.is_empty()`
-- `Set.clone()`
-- `Set.contains(...)`
-- `Set.insert(...)`
-- `Set.remove(...)`
+- `str.len() -> int64` (Unicode scalar values, O(n))
+- `str.byte_len() -> int64` (UTF-8 bytes, O(1))
+- `str.to_bytes()` (fresh `list[uint8]`)
+- `str.from_bytes(...)` (associated strict UTF-8 conversion)
+- `str.contains(...)`
+- `str.starts_with(...)`
+- `str.ends_with(...)`
+- `str.split(...)`
+- `str.join(...)`
+- `str.replace(...)`
+- `str.to_lower()`
+- `str.to_upper()`
+- `str.strip_prefix(...)`
+- `str.strip_suffix(...)`
+- `str.trim()`
+- `str.clone()`
+- `list.len() -> int64`
+- `list.is_empty()`
+- `list.copy()`
+- `list.append(...)`
+- `list.pop(index=-1)`
+- `list.get(...)`
+- `list.insert(...)`
+- `list.set(...)`
+- `list.remove(...)`
+- `list.index(...)`
+- `list.count(...)`
+- `list.swap(...)`
+- `list.extend(...)`
+- `list.clear()`
+- `list.reverse()`
+- `list.sort()`
+- `list.sort(reverse=...)`
+- `list.sort(key=..., reverse=...)`
+- `list.map(f)`
+- `list.filter(f)`
+- `list.reserve(...)`
+- `list.with_capacity(...)`
+- `dict.len() -> int64`
+- `dict.is_empty()`
+- `dict.copy()`
+- `dict.get(...)`
+- `dict.remove(...)`
+- `dict.keys()`
+- `dict.values()`
+- `dict.items()`
+- `dict.clear()`
+- `dict.update(...)`
+- `dict.reserve(...)`
+- `dict.with_capacity(...)`
+- `set.len() -> int64`
+- `set.is_empty()`
+- `set.copy()`
+- `set.add(...)`
+- `set.remove(...)`
+- `set.discard(...)`
+- `set.clear()`
+- `set.reserve(...)`
+- `set.with_capacity(...)`
 - `Queue.put(...)`
 - `Queue.try_put(...)`
 - `Queue.get(...)`
@@ -690,15 +700,15 @@ Current builtin member methods include:
 
 Import `random` for two deliberately separate surfaces. A mutable
 `random.Rng(seed)` is a deterministic, move-only xoshiro256** stream with
-half-open `next_int`, `[0.0, 1.0)` `next_float`, and in-place generic Vec
+half-open `next_int`, `[0.0, 1.0)` `next_float`, and in-place generic list
 shuffle. Seed mapping and sequences are stable throughout Aura 0.2.x and
 identical through MIR and direct execution.
 
 `random.secure_int(lo, hi)` and `random.secure_bytes(n)` use only the host
 operating system's secure source. They have no seed and never fall back to the
-deterministic generator. `secure_bytes(0)` returns an empty vector without an
+deterministic generator. `secure_bytes(0)` returns an empty list without an
 entropy request. Its count is `int64`, with a fixed per-request resource and
-safety ceiling of `2147483647` independent of the public `Vec` length domain.
+safety ceiling of `2147483647` independent of the public `list` length domain.
 Invalid bounds or a negative count traps with `AU4003`; a count above the
 ceiling traps with `AU4005` before allocation or entropy, and entropy or
 allocation failure also traps with `AU4005`. There is no `random.Error` or
@@ -720,8 +730,10 @@ The current compiler supports:
 - `Enum.Variant(name)`
 - multi-payload enum variants including named payload fields
 - unqualified variants such as `Ok(value)` and `None` when the scrutinee type is known
-- literal patterns over `bool`, integer, and `String`
+- literal patterns over `bool`, integer, and `str`
 - floating-point literal patterns
+- top-level complete-value bindings such as `case value:` and
+  `case value if condition:`
 - `match value:`
 - `match mut value:`
 - `case _:`
@@ -729,7 +741,7 @@ The current compiler supports:
 - expression-form `match` in return, binding, and argument positions
 - nested enum patterns
 
-Boolean literal matches are exhaustive when they cover both `true` and `false`. Integer and `String` literal matches still require a final wildcard arm. Expression-form arms may also evaluate nested block-form expressions.
+Boolean literal matches are exhaustive when they cover both `true` and `false`. Integer and `str` literal matches still require a final wildcard arm. Expression-form arms may also evaluate nested block-form expressions.
 
 ## Concurrency
 
@@ -760,8 +772,8 @@ work on the local worker.
 
 Every loop backedge has a compiler-inserted scheduling check, including the
 ordinary body tail and `continue`; `break` and `return` bypass it. Tight loops
-therefore no longer starve ready timers, queues, or sockets assigned to the
-same worker indefinitely, although a single long loop body can still delay
+therefore allow ready timers, queues, or sockets assigned to the same worker
+to proceed, although a single long loop body can still delay
 same-worker siblings. The check does not inspect cancellation. Ordinary tasks
 request a guarded 512 KiB coroutine stack. The two explicit stack-start
 methods accept an exact `int64` byte request from 256 KiB through 64 MiB
@@ -777,7 +789,7 @@ blocking-pool notifications; an idle scheduler blocks until an event or
 deadline without a periodic tick.
 
 Task starts require every captured argument and the target result to be
-structurally `Transfer` after generic specialization. Copy values, `String`,
+structurally `Transfer` after generic specialization. Copy values, `str`,
 recursively transferable collections, tuples, classes, enums, and
 Queue/Task handle identities pass. Shared or mutable access,
 `random.Rng`, `TaskGroup`, and live filesystem, process, pipe, supervisor,
@@ -798,7 +810,7 @@ repeatable `Task[...]`. `Task[T]` is always transferable but is copyable only
 for those repeatable results. For every other transferable `T`, `result`,
 `result_or_none`, and `result_or` consume the handle on their first attempt,
 including timeout, cancellation, failure, and fallback outcomes. `wait_any`
-and `wait_all` consume the complete task vector for such a `T`; `wait_any`
+and `wait_all` consume the complete task list for such a `T`; `wait_any`
 abandons unchosen observation rights. Boundary failures are `AU3008`,
 attempted duplication of a single-consumer right is `AU3009`, and using a
 directly observed handle again is moved-value `AU3001`.
@@ -809,7 +821,7 @@ Task results share `T`, and a missing category uses `None`. Source expressions
 run once from left to right. Current-task cancellation wins; otherwise the
 lowest original argument index wins among ready sources. Every
 non-repeatable Task right is consumed at entry and a losing right is
-abandoned. The old statement-shaped `select` remains unsupported.
+abandoned. Selection uses the ordinary builtin call.
 
 Deep HTTP, TLS, and maintained Unix WebSocket operations use a distinct bounded
 protocol-step service with deep native worker stacks. In the clean Mac14,9
@@ -847,44 +859,44 @@ worker remains stuck.
 
 Current collection notes:
 
-- `String.len()`, `String.byte_len()`, `Vec.len()`, `Map.len()`, and
-  `Set.len()` return `int64`; `len(value)` delegates to the corresponding
+- `str.len()`, `str.byte_len()`, `list.len()`, `dict.len()`, and
+  `set.len()` return `int64`; `len(value)` delegates to the corresponding
   `len()` and therefore satisfies `len(value) == value.len()`
-- `range(...)` bounds and Vec indexes remain `int32`, so length-driven
-  iteration narrows explicitly with the checked
-  `range(values.len() as int32)` form
-- bare Vec iteration is shared; `for value in own vec:`
-  consumes; `for value in mut vec:` supports writeback
-- `for value in mut vec:` requires the iterable place itself to be mutable
-- `Vec.sort()` and `Vec.sort_by(key)` are stable in-place mutations;
-  `sort_by` evaluates one shared key per element from left to right before
+- `range(...)` bounds, yielded values, list indexes, slice endpoints,
+  enumeration positions, and Array coordinates use `int64`; fixed-width
+  narrower integer values widen losslessly only at those positions
+- bare list iteration is shared; `for value in own values:` consumes;
+  `for value in mut values:` supports writeback
+- `for value in mut values:` requires the iterable place itself to be mutable
+- `list.sort()` and `list.sort(key=callback)` are stable in-place mutations;
+  keyed sorting evaluates one shared key per element from left to right before
   mutating, so a key trap leaves the source unchanged
-- built-in Vec ordering covers all integer types, `float32`, `float64`, and
-  `Duration`; `String` has no built-in `Ord[String]` in Aura 0.2, so preserve
-  insertion order, use `sort_by` with an orderable key/index, or define a
+- built-in list ordering covers all integer types, `float32`, `float64`, and
+  `Duration`; `str` has no built-in `Ord[str]`, so preserve
+  insertion order, use `sort(key=callback)` with an orderable key/index, or define a
   nominal application type with the required `Ord` behavior
-- `Vec.map(f)` and `Vec.filter(f)` are eager shared traversals that retain the
-  source and return fresh owned vectors; `filter` requires clone-safe `T`
-- Vec algorithm callbacks have exact bare/shared element parameters; `mut` and
+- `list.map(f)` and `list.filter(f)` are eager shared traversals that retain the
+  source and return fresh owned lists; `filter` requires clone-safe `T`
+- list algorithm callbacks have exact bare/shared element parameters; `mut` and
   `own` callback capabilities are rejected without adaptation
-- indexed reads from `Vec[T]` work directly only when `T` is copy; clone-safe non-copy element reads use `get(index)` for an explicit cloned read, while an element carrying `random.Rng` state is directed to `remove(index)` instead
+- indexed reads from `list[T]` work directly only when `T` is copy; clone-safe non-copy element reads use `get(index)` for an explicit cloned read, while `pop(index)` transfers any stored element
 - module-level functions cannot redefine a builtin function name such as `len`, `str`, `abs`, or `print`; that rejection is `AU2007`
-- negative Vec indexes normalize once as `len + index` for direct reads/writes, `get`, `set`, `remove`, `swap`, and `insert`
+- negative list indexes normalize once as `len + index` for direct reads/writes, `get`, `set`, `pop`, and `swap`
 - `get` returns `None` when the normalized index is invalid; direct access and mutating methods trap
-- Vec and String slices accept all four omitted-endpoint forms, return fresh
-  owned copies, and never clamp invalid or reversed bounds; String slicing
-  counts Unicode scalars in O(n), while Vec slicing requires clone-safe,
+- list and str slices accept all four omitted-endpoint forms, return fresh
+  owned copies, and never clamp invalid or reversed bounds; str slicing
+  counts Unicode scalars in O(n), while list slicing requires clone-safe,
   repeatably observable elements
 - `insert(-1, value)` inserts before the last element;
-  `insert(values.len() as int32, value)` appends through a checked narrowing,
-  and out-of-range indexes are never clamped
-- `Vec[T]` supports equality and inequality when both sides have the same `Vec[T]` type
-- `Vec.insert(index, value)`, `Vec.set(index, value)`, `Vec.remove(index)`, and `Vec.swap(first, second)` trap on out-of-bounds indices; they never ignore the operation
-- empty map literals still need an expected `Map[K, V]` type, or you can use `Map[K, V]()` explicitly
-- `Map[K, V]` supports literal construction, indexed writes for every `V`, direct indexed reads only when `V` is copy, and the maintained method surface `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, `values`, `items`, `entries`, `clear`, and `extend`; non-copy reads use `get` for an explicit clone or `remove` for ownership transfer
-- `Map.items()` and `Map.entries()` return `Vec[MapEntry[K, V]]`, where entry values expose `.key` and `.value`
-- `Set[T]` supports literal construction with `{...}` and the maintained method surface `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`
-- bare Set iteration is shared; `for value in own set:` consumes
+  `insert(values.len(), value)` appends,
+  and positions outside the range are clamped to the nearest boundary
+- `list[T]` supports equality and inequality when both sides have the same `list[T]` type
+- `list.set(index, value)`, `list.pop(index)`, and `list.swap(first, second)` trap on out-of-bounds indices; `list.remove(value)` traps with `AU4008` when no equal value exists
+- empty dictionary literals need an expected `dict[K, V]` type, or use `dict[K, V]()` explicitly
+- `dict[K, V]` supports literal construction, indexed writes for every `V`, direct indexed reads under the value ownership rule, and the methods `len`, `is_empty`, `copy`, `get`, `remove`, `keys`, `values`, `items`, `clear`, `update`, `reserve`, and `with_capacity`
+- `dict.items()` returns `list[(K, V)]` in insertion order
+- `set[T]` supports literal construction with `{...}`, membership with `in`, and the methods `len`, `is_empty`, `copy`, `add`, `remove`, `discard`, `clear`, `reserve`, and `with_capacity`
+- bare set iteration is shared; `for value in own set:` consumes
 - `for value in mut set:` is not currently supported
 - `Queue[T]` supports `Queue[T](capacity=...)` for bounded-capacity queues on
   the pinned-worker runtime scheduler; construction, `put`, and `try_put`
@@ -901,10 +913,10 @@ Current collection notes:
 - `wait_any(...)` returns `WaitAny[T]`, distinguishing `Ready(index, value)`,
   `Error(index, message)`, `TimedOut`, and `Cancelled`; `wait_any([])` returns
   `TimedOut` immediately, and a non-repeatable `T` makes the call consume the
-  entire task vector and abandon unchosen rights
+  entire task list and abandon unchosen rights
 - `wait_all(...)` returns `WaitAll[T]`, distinguishing `Ready(results)`,
   `Error(index, message)`, `TimedOut`, and `Cancelled`; a non-repeatable `T`
-  makes the call consume the entire task vector
+  makes the call consume the entire task list
 - `Task.result_or_none(timeout=...)` returns `Option[T]` for the common case
   where task failure, timeout, and cancellation all map to “no result yet”;
   without a timeout it performs an immediate non-blocking check, and for
@@ -931,9 +943,9 @@ Current backend/tooling notes:
 
 - `build` accepts `--backend auto|direct`
 - `auto` is the default
-- `direct` now covers the full currently implemented Aura language surface
+- `direct` covers the full currently implemented Aura language surface
 - compiler-backed editor state is invalidated across open documents when imported files change
-- `file://` URI handling now preserves both Windows drive-letter paths and UNC workspaces
+- `file://` URI handling preserves both Windows drive-letter paths and UNC workspaces
 
 The current VS Code tooling is compiler-backed for:
 
@@ -955,20 +967,20 @@ The current compiler does not support:
 Current module/import limitations:
 
 - imports resolve local `.au` files relative to the current package root
-- directly checking or analyzing a nested package file now infers the nearest package root that satisfies its imports
+- directly checking or analyzing a nested package file infers the nearest package root that satisfies its imports
 - `import a.b` exposes module namespaces for calls like `a.b.func(...)`, `a.b.Type(...)`, and `a.b.Enum.Variant`
 - type annotations may use namespace-imported types such as `a.b.Type`
 - both maintained execution paths stop with a friendly recursion-depth diagnostic after 256 nested Aura calls
 - MIR and direct-native runtime failures preserve matching typed Aura call
   frames and child-task ancestry; JSON tooling receives them as always-present
   `call_frames` and `task_ancestry` arrays
-- package manifests, local path dependencies, and git dependencies are now implemented
+- package manifests, local path dependencies, and git dependencies are implemented
 
 Current expression/ergonomics limitations:
 
-- empty list literals still require an expected `Vec[T]` type such as `values: Vec[int32] = []`
-- strings use quoted literals; `String(...)` is not a constructor
-- enum variants may be called by bare built-in name when an expected type is available, for example `ok: Result[int32, String] = Ok(7)`
+- empty list literals still require an expected `list[T]` type such as `values: list[int32] = []`
+- strings use quoted literals; `str(...)` is not a constructor
+- enum variants may be called by bare built-in name when an expected type is available, for example `ok: Result[int32, str] = Ok(7)`
 - `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, and their explicit-stack
   variants support capture-free function values, Transfer closure values, and
   the existing direct named-function and associated-method-without-`self`

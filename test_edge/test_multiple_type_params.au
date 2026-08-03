@@ -14,12 +14,12 @@ class Triple[A, B, C]:
     z: C
 
 def main() -> int32:
-    # Pair of int32 and String
+    # Pair of int32 and str
     p1 = Pair(first=42, second="hello")
     print(p1.get_first())
     print(p1.get_second())
 
-    # Pair of String and bool
+    # Pair of str and bool
     p2 = Pair(first="ok", second=true)
     print(p2.get_first())
     print(p2.get_second())

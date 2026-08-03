@@ -1,11 +1,11 @@
 class Person:
-    first: String
-    last: String
+    first: str
+    last: str
 
-    def full_name(self) -> String:
+    def full_name(self) -> str:
         return self.first + " " + self.last
 
-    def greet(self) -> String:
+    def greet(self) -> str:
         return "Hello, " + self.full_name()
 
 def borrow_person(p: Person):

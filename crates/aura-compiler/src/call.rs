@@ -280,6 +280,8 @@ const ARRAY_CALLBACK_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "f", ReceiverKind::Borrow)];
 const ARITHMETIC_RHS_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "rhs", ReceiverKind::Borrow)];
+const SHIFT_COUNT_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "count", ReceiverKind::Borrow)];
 const FILE_WRITE_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "text", ReceiverKind::Borrow)];
 const FILE_WRITE_BYTES_PARAMS: [BuiltinParam; 1] =
@@ -298,6 +300,7 @@ const TIMEOUT_ONLY_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(optional, "timeout", ReceiverKind::Borrow)];
 const VEC_INDEX_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "index", ReceiverKind::Borrow)];
+const VEC_POP_PARAMS: [BuiltinParam; 1] = [builtin_param!(optional, "index", ReceiverKind::Borrow)];
 const VEC_PUSH_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "value", ReceiverKind::Value)];
 const VALUE_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "value", ReceiverKind::Borrow)];
 const VEC_SET_PARAMS: [BuiltinParam; 2] = [
@@ -314,7 +317,10 @@ const VEC_INSERT_PARAMS: [BuiltinParam; 2] = [
 ];
 const VEC_EXTEND_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "other", ReceiverKind::Value)];
-const VEC_KEY_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "key", ReceiverKind::Borrow)];
+const VEC_SORT_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(optional, "key", ReceiverKind::Borrow),
+    builtin_param!(optional, "reverse", ReceiverKind::Borrow),
+];
 const VEC_CALLBACK_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "f", ReceiverKind::Borrow)];
 const STRING_TEXT_PARAMS: [BuiltinParam; 1] =
@@ -336,6 +342,10 @@ const SET_VALUE_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "value", ReceiverKind::Borrow)];
 const SET_INSERT_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "value", ReceiverKind::Value)];
+const CAPACITY_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "minimum", ReceiverKind::Borrow)];
+const RESERVE_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "additional", ReceiverKind::Borrow)];
 const COUNT_TIMEOUT_PARAMS: [BuiltinParam; 2] = [
     builtin_param!(required, "count", ReceiverKind::Borrow),
     builtin_param!(optional, "timeout", ReceiverKind::Borrow),
@@ -412,6 +422,8 @@ pub enum BuiltinFunction {
     Min,
     Max,
     Sqrt,
+    Round,
+    Divmod,
     ParseInt32,
     ParseInt64,
     ParseFloat64,
@@ -434,6 +446,8 @@ pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
     BuiltinFunction::Min,
     BuiltinFunction::Max,
     BuiltinFunction::Sqrt,
+    BuiltinFunction::Round,
+    BuiltinFunction::Divmod,
     BuiltinFunction::ParseInt32,
     BuiltinFunction::ParseInt64,
     BuiltinFunction::ParseFloat64,
@@ -454,6 +468,8 @@ impl BuiltinFunction {
             "min" => Some(Self::Min),
             "max" => Some(Self::Max),
             "sqrt" => Some(Self::Sqrt),
+            "round" => Some(Self::Round),
+            "divmod" => Some(Self::Divmod),
             "parse_int32" => Some(Self::ParseInt32),
             "parse_int64" => Some(Self::ParseInt64),
             "parse_float64" => Some(Self::ParseFloat64),
@@ -477,6 +493,8 @@ impl BuiltinFunction {
             Self::Min => "min",
             Self::Max => "max",
             Self::Sqrt => "sqrt",
+            Self::Round => "round",
+            Self::Divmod => "divmod",
             Self::ParseInt32 => "parse_int32",
             Self::ParseInt64 => "parse_int64",
             Self::ParseFloat64 => "parse_float64",
@@ -488,7 +506,7 @@ impl BuiltinFunction {
     pub const fn detail(self) -> &'static str {
         match self {
             Self::Print => "print(value) -> None",
-            Self::Range => "range(stop: int32) -> Range; range(start: int32, stop: int32) -> Range",
+            Self::Range => "range(stop: int64) -> Range; range(start: int64, stop: int64) -> Range",
             Self::Cancelled => "cancelled() -> bool",
             Self::YieldNow => "yield_now() -> None",
             Self::Sleep => "sleep(duration: Duration) -> None",
@@ -496,20 +514,22 @@ impl BuiltinFunction {
                 "select(source, ...) -> SelectOutcome[Q, T] [Queue[Q], Task[T], or Duration sources]"
             }
             Self::WaitAny => {
-                "wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T] [consumes tasks when T is non-repeatable]"
+                "wait_any(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAny[T] [consumes tasks when T is non-repeatable]"
             }
             Self::WaitAll => {
-                "wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T] [consumes tasks when T is non-repeatable]"
+                "wait_all(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAll[T] [consumes tasks when T is non-repeatable]"
             }
             Self::Abs => "abs(value: number) -> number",
             Self::Min => "min(left: number, right: number) -> number",
             Self::Max => "max(left: number, right: number) -> number",
             Self::Sqrt => "sqrt(value: float32|float64) -> float32|float64",
-            Self::ParseInt32 => "parse_int32(text: String) -> Result[int32, String]",
-            Self::ParseInt64 => "parse_int64(text: String) -> Result[int64, String]",
-            Self::ParseFloat64 => "parse_float64(text: String) -> Result[float64, String]",
-            Self::Len => "len(value: String|Vec[T]|Map[K, V]|Set[T]) -> int64",
-            Self::Str => "str(value) -> String",
+            Self::Round => "round(value: integer|float32|float64) -> integer|int64",
+            Self::Divmod => "divmod(left: number, right: number) -> (number, number)",
+            Self::ParseInt32 => "parse_int32(text: str) -> Result[int32, str]",
+            Self::ParseInt64 => "parse_int64(text: str) -> Result[int64, str]",
+            Self::ParseFloat64 => "parse_float64(text: str) -> Result[float64, str]",
+            Self::Len => "len(value: str|list[T]|dict[K, V]|set[T]) -> int64",
+            Self::Str => "str(value) -> str",
         }
     }
 
@@ -528,18 +548,20 @@ impl BuiltinFunction {
                 "Waits atomically for one Queue receive, Task result, or relative Duration deadline. Queue payloads share one `Q`, task results share one `T`, and non-repeatable Task sources are consumed at call entry."
             }
             Self::WaitAny => {
-                "Waits for the first task to complete and reports either the ready index/value pair, the failing task index/error message, a timeout, or cancellation. Observing non-repeatable `T` consumes the whole `Vec[Task[T]]` observation right; repeatable `T` leaves the vector reusable."
+                "Waits for the first task to complete and reports either the ready index/value pair, the failing task index/error message, a timeout, or cancellation. Observing non-repeatable `T` consumes the whole `list[Task[T]]` observation right; repeatable `T` leaves the list reusable."
             }
             Self::WaitAll => {
-                "Waits for every task to complete and reports either the collected results, the failing task index/error message, a timeout, or cancellation. Observing non-repeatable `T` consumes the whole `Vec[Task[T]]` observation right; repeatable `T` leaves the vector reusable."
+                "Waits for every task to complete and reports either the collected results, the failing task index/error message, a timeout, or cancellation. Observing non-repeatable `T` consumes the whole `list[Task[T]]` observation right; repeatable `T` leaves the list reusable."
             }
             Self::Abs => "Returns the absolute value of an integer or float.",
             Self::Min => "Returns the smaller of two numeric values of the same type.",
             Self::Max => "Returns the larger of two numeric values of the same type.",
             Self::Sqrt => "Returns the square root of a `float32` or `float64` value.",
-            Self::ParseInt32 => "Parses a `String` into an `int32`, returning `Result.Err(String)` on failure.",
-            Self::ParseInt64 => "Parses a `String` into an `int64`, returning `Result.Err(String)` on failure.",
-            Self::ParseFloat64 => "Parses a `String` into a `float64`, returning `Result.Err(String)` on failure.",
+            Self::Round => "Returns an integer unchanged, or rounds a float to the nearest `int64` using ties-to-even.",
+            Self::Divmod => "Returns the paired floor quotient and divisor-signed remainder for two values of one exact numeric type.",
+            Self::ParseInt32 => "Parses a `str` into an `int32`, returning `Result.Err(str)` on failure.",
+            Self::ParseInt64 => "Parses a `str` into an `int64`, returning `Result.Err(str)` on failure.",
+            Self::ParseFloat64 => "Parses a `str` into a `float64`, returning `Result.Err(str)` on failure.",
             Self::Len => "Returns the length of a value that has a `len()` member, delegating to that member.",
             Self::Str => "Renders a value the way `print` and f-string interpolation render it.",
         }
@@ -631,8 +653,10 @@ impl BuiltinFunction {
                 &TASK_LIST_TIMEOUT_PARAMS,
                 CallConvention::PositionalOrNamed,
             ),
-            Self::Abs => BuiltinCallShape::fixed(&ABS_PARAMS, CallConvention::PositionalOrNamed),
-            Self::Min | Self::Max => {
+            Self::Abs | Self::Round => {
+                BuiltinCallShape::fixed(&ABS_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::Min | Self::Max | Self::Divmod => {
                 BuiltinCallShape::fixed(&MIN_MAX_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::Sqrt => BuiltinCallShape::fixed(&SQRT_PARAMS, CallConvention::PositionalOrNamed),
@@ -652,6 +676,9 @@ pub enum BuiltinAssociatedFunction {
     ArrayZeros,
     ArrayFull,
     ArrayFromVec,
+    ListWithCapacity,
+    DictWithCapacity,
+    SetWithCapacity,
 }
 
 pub const ALL_BUILTIN_ASSOCIATED_FUNCTIONS: &[BuiltinAssociatedFunction] = &[
@@ -662,6 +689,9 @@ pub const ALL_BUILTIN_ASSOCIATED_FUNCTIONS: &[BuiltinAssociatedFunction] = &[
     BuiltinAssociatedFunction::ArrayZeros,
     BuiltinAssociatedFunction::ArrayFull,
     BuiltinAssociatedFunction::ArrayFromVec,
+    BuiltinAssociatedFunction::ListWithCapacity,
+    BuiltinAssociatedFunction::DictWithCapacity,
+    BuiltinAssociatedFunction::SetWithCapacity,
 ];
 
 impl BuiltinAssociatedFunction {
@@ -670,10 +700,13 @@ impl BuiltinAssociatedFunction {
             ("Duration", "ms") => Some(Self::DurationMilliseconds),
             ("Duration", "seconds") => Some(Self::DurationSeconds),
             ("Duration", "minutes") => Some(Self::DurationMinutes),
-            ("String", "from_bytes") => Some(Self::StringFromBytes),
+            ("str", "from_bytes") => Some(Self::StringFromBytes),
             ("Array", "zeros") => Some(Self::ArrayZeros),
             ("Array", "full") => Some(Self::ArrayFull),
-            ("Array", "from_vec") => Some(Self::ArrayFromVec),
+            ("Array", "from_list") => Some(Self::ArrayFromVec),
+            ("list", "with_capacity") => Some(Self::ListWithCapacity),
+            ("dict", "with_capacity") => Some(Self::DictWithCapacity),
+            ("set", "with_capacity") => Some(Self::SetWithCapacity),
             _ => None,
         }
     }
@@ -683,8 +716,11 @@ impl BuiltinAssociatedFunction {
             Self::DurationMilliseconds | Self::DurationSeconds | Self::DurationMinutes => {
                 "Duration"
             }
-            Self::StringFromBytes => "String",
+            Self::StringFromBytes => "str",
             Self::ArrayZeros | Self::ArrayFull | Self::ArrayFromVec => "Array",
+            Self::ListWithCapacity => "list",
+            Self::DictWithCapacity => "dict",
+            Self::SetWithCapacity => "set",
         }
     }
 
@@ -696,7 +732,10 @@ impl BuiltinAssociatedFunction {
             Self::StringFromBytes => "from_bytes",
             Self::ArrayZeros => "zeros",
             Self::ArrayFull => "full",
-            Self::ArrayFromVec => "from_vec",
+            Self::ArrayFromVec => "from_list",
+            Self::ListWithCapacity | Self::DictWithCapacity | Self::SetWithCapacity => {
+                "with_capacity"
+            }
         }
     }
 
@@ -705,10 +744,13 @@ impl BuiltinAssociatedFunction {
             Self::DurationMilliseconds => "ms(value: int64) -> Duration",
             Self::DurationSeconds => "seconds(value: int64) -> Duration",
             Self::DurationMinutes => "minutes(value: int64) -> Duration",
-            Self::StringFromBytes => "from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]",
-            Self::ArrayZeros => "zeros(shape: Vec[int64]) -> Array[T]",
-            Self::ArrayFull => "full(shape: Vec[int64], value: T) -> Array[T]",
-            Self::ArrayFromVec => "from_vec(values: Vec[T], shape: Vec[int64]) -> Array[T]",
+            Self::StringFromBytes => "from_bytes(bytes: list[uint8]) -> Result[str, bytes.Error]",
+            Self::ArrayZeros => "zeros(shape: list[int64]) -> Array[T]",
+            Self::ArrayFull => "full(shape: list[int64], value: T) -> Array[T]",
+            Self::ArrayFromVec => "from_list(values: list[T], shape: list[int64]) -> Array[T]",
+            Self::ListWithCapacity => "with_capacity(minimum: int64) -> list[T]",
+            Self::DictWithCapacity => "with_capacity(minimum: int64) -> dict[K, V]",
+            Self::SetWithCapacity => "with_capacity(minimum: int64) -> set[T]",
         }
     }
 
@@ -733,7 +775,10 @@ impl BuiltinAssociatedFunction {
                 "Constructs a numeric Array filled with one value using the requested shape."
             }
             Self::ArrayFromVec => {
-                "Copies numeric vector values into an Array with the requested shape."
+                "Copies numeric list values into an Array with the requested shape."
+            }
+            Self::ListWithCapacity | Self::DictWithCapacity | Self::SetWithCapacity => {
+                "Creates an empty collection with at least the requested capacity."
             }
         }
     }
@@ -781,6 +826,9 @@ impl BuiltinAssociatedFunction {
             }
             Self::ArrayFromVec => {
                 BuiltinCallShape::fixed(&ARRAY_FROM_VEC_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::ListWithCapacity | Self::DictWithCapacity | Self::SetWithCapacity => {
+                BuiltinCallShape::fixed(&CAPACITY_PARAMS, CallConvention::PositionalOrNamed)
             }
         }
     }
@@ -867,6 +915,10 @@ pub enum BuiltinMember {
     IntegerSaturatingAdd,
     IntegerSaturatingSub,
     IntegerSaturatingMul,
+    IntegerWrappingShl,
+    IntegerWrappingShr,
+    IntegerSaturatingShl,
+    IntegerSaturatingShr,
     DurationToMilliseconds,
     DurationToSeconds,
     StringLen,
@@ -909,6 +961,8 @@ pub enum BuiltinMember {
     VecGet,
     VecSet,
     VecRemove,
+    VecIndex,
+    VecCount,
     VecSwap,
     VecContains,
     VecExtend,
@@ -916,9 +970,9 @@ pub enum BuiltinMember {
     VecClear,
     VecReverse,
     VecSort,
-    VecSortBy,
     VecMap,
     VecFilter,
+    VecReserve,
     MapLen,
     MapIsEmpty,
     MapClone,
@@ -929,15 +983,18 @@ pub enum BuiltinMember {
     MapKeys,
     MapValues,
     MapItems,
-    MapEntries,
     MapClear,
     MapExtend,
+    MapReserve,
     SetLen,
     SetIsEmpty,
     SetClone,
     SetContains,
     SetInsert,
     SetRemove,
+    SetDiscard,
+    SetClear,
+    SetReserve,
     StringClone,
     QueuePut,
     QueueTryPut,
@@ -1054,7 +1111,39 @@ pub enum BuiltinMember {
     RngShuffle,
 }
 
+fn is_builtin_integer_name(name: &str) -> bool {
+    matches!(
+        name,
+        "int8"
+            | "int16"
+            | "int32"
+            | "int64"
+            | "int128"
+            | "intsize"
+            | "uint8"
+            | "uint16"
+            | "uint32"
+            | "uint64"
+            | "uint128"
+            | "uintsize"
+    )
+}
+
 impl BuiltinMember {
+    /// Resolves private operations emitted by checked MIR as well as public
+    /// source methods. Private operations never participate in source member
+    /// lookup or editor completion.
+    pub fn resolve_runtime(receiver_base: &str, name: &str) -> Option<Self> {
+        match (receiver_base, name) {
+            // These spellings are private MIR operations. Public source lookup
+            // is handled by `resolve` below.
+            ("dict", "contains_key") => Some(Self::MapContainsKey),
+            ("dict", "set") => Some(Self::MapSet),
+            ("set", "contains") => Some(Self::SetContains),
+            _ => Self::resolve(receiver_base, name),
+        }
+    }
+
     pub fn resolve(receiver_base: &str, name: &str) -> Option<Self> {
         match (receiver_base, name) {
             ("float64", "sqrt") => Some(Self::FloatSqrt),
@@ -1142,6 +1231,18 @@ impl BuiltinMember {
             | ("uint64", "saturating_mul")
             | ("uint128", "saturating_mul")
             | ("uintsize", "saturating_mul") => Some(Self::IntegerSaturatingMul),
+            (receiver, "wrapping_shl") if is_builtin_integer_name(receiver) => {
+                Some(Self::IntegerWrappingShl)
+            }
+            (receiver, "wrapping_shr") if is_builtin_integer_name(receiver) => {
+                Some(Self::IntegerWrappingShr)
+            }
+            (receiver, "saturating_shl") if is_builtin_integer_name(receiver) => {
+                Some(Self::IntegerSaturatingShl)
+            }
+            (receiver, "saturating_shr") if is_builtin_integer_name(receiver) => {
+                Some(Self::IntegerSaturatingShr)
+            }
             ("Duration", "to_ms") => Some(Self::DurationToMilliseconds),
             ("Duration", "to_seconds") => Some(Self::DurationToSeconds),
             ("bool", "to_string") => Some(Self::ScalarToString),
@@ -1176,58 +1277,60 @@ impl BuiltinMember {
             ("Array", "saturating_add") => Some(Self::ArraySaturatingAdd),
             ("Array", "saturating_sub") => Some(Self::ArraySaturatingSub),
             ("Array", "saturating_mul") => Some(Self::ArraySaturatingMul),
-            ("Vec", "len") => Some(Self::VecLen),
-            ("Vec", "is_empty") => Some(Self::VecIsEmpty),
-            ("Vec", "clone") => Some(Self::VecClone),
-            ("Vec", "push") => Some(Self::VecPush),
-            ("Vec", "pop") => Some(Self::VecPop),
-            ("Vec", "get") => Some(Self::VecGet),
-            ("Vec", "set") => Some(Self::VecSet),
-            ("Vec", "remove") => Some(Self::VecRemove),
-            ("Vec", "swap") => Some(Self::VecSwap),
-            ("Vec", "contains") => Some(Self::VecContains),
-            ("Vec", "extend") => Some(Self::VecExtend),
-            ("Vec", "insert") => Some(Self::VecInsert),
-            ("Vec", "clear") => Some(Self::VecClear),
-            ("Vec", "reverse") => Some(Self::VecReverse),
-            ("Vec", "sort") => Some(Self::VecSort),
-            ("Vec", "sort_by") => Some(Self::VecSortBy),
-            ("Vec", "map") => Some(Self::VecMap),
-            ("Vec", "filter") => Some(Self::VecFilter),
-            ("Map", "len") => Some(Self::MapLen),
-            ("Map", "is_empty") => Some(Self::MapIsEmpty),
-            ("Map", "clone") => Some(Self::MapClone),
-            ("Map", "get") => Some(Self::MapGet),
-            ("Map", "set") => Some(Self::MapSet),
-            ("Map", "remove") => Some(Self::MapRemove),
-            ("Map", "contains_key") => Some(Self::MapContainsKey),
-            ("Map", "keys") => Some(Self::MapKeys),
-            ("Map", "values") => Some(Self::MapValues),
-            ("Map", "items") => Some(Self::MapItems),
-            ("Map", "entries") => Some(Self::MapEntries),
-            ("Map", "clear") => Some(Self::MapClear),
-            ("Map", "extend") => Some(Self::MapExtend),
-            ("Set", "len") => Some(Self::SetLen),
-            ("Set", "is_empty") => Some(Self::SetIsEmpty),
-            ("Set", "clone") => Some(Self::SetClone),
-            ("Set", "contains") => Some(Self::SetContains),
-            ("Set", "insert") => Some(Self::SetInsert),
-            ("Set", "remove") => Some(Self::SetRemove),
-            ("String", "len") => Some(Self::StringLen),
-            ("String", "byte_len") => Some(Self::StringByteLen),
-            ("String", "contains") => Some(Self::StringContains),
-            ("String", "starts_with") => Some(Self::StringStartsWith),
-            ("String", "ends_with") => Some(Self::StringEndsWith),
-            ("String", "split") => Some(Self::StringSplit),
-            ("String", "replace") => Some(Self::StringReplace),
-            ("String", "to_lower") => Some(Self::StringToLower),
-            ("String", "to_upper") => Some(Self::StringToUpper),
-            ("String", "strip_prefix") => Some(Self::StringStripPrefix),
-            ("String", "strip_suffix") => Some(Self::StringStripSuffix),
-            ("String", "trim") => Some(Self::StringTrim),
-            ("String", "join") => Some(Self::StringJoin),
-            ("String", "to_bytes") => Some(Self::StringToBytes),
-            ("String", "clone") => Some(Self::StringClone),
+            ("list", "len") => Some(Self::VecLen),
+            ("list", "is_empty") => Some(Self::VecIsEmpty),
+            ("list", "copy") => Some(Self::VecClone),
+            ("list", "append") => Some(Self::VecPush),
+            ("list", "pop") => Some(Self::VecPop),
+            ("list", "get") => Some(Self::VecGet),
+            ("list", "set") => Some(Self::VecSet),
+            ("list", "remove") => Some(Self::VecRemove),
+            ("list", "index") => Some(Self::VecIndex),
+            ("list", "count") => Some(Self::VecCount),
+            ("list", "swap") => Some(Self::VecSwap),
+            ("list", "contains") => Some(Self::VecContains),
+            ("list", "extend") => Some(Self::VecExtend),
+            ("list", "insert") => Some(Self::VecInsert),
+            ("list", "clear") => Some(Self::VecClear),
+            ("list", "reverse") => Some(Self::VecReverse),
+            ("list", "sort") => Some(Self::VecSort),
+            ("list", "map") => Some(Self::VecMap),
+            ("list", "filter") => Some(Self::VecFilter),
+            ("list", "reserve") => Some(Self::VecReserve),
+            ("dict", "len") => Some(Self::MapLen),
+            ("dict", "is_empty") => Some(Self::MapIsEmpty),
+            ("dict", "copy") => Some(Self::MapClone),
+            ("dict", "get") => Some(Self::MapGet),
+            ("dict", "remove") => Some(Self::MapRemove),
+            ("dict", "keys") => Some(Self::MapKeys),
+            ("dict", "values") => Some(Self::MapValues),
+            ("dict", "items") => Some(Self::MapItems),
+            ("dict", "clear") => Some(Self::MapClear),
+            ("dict", "update") => Some(Self::MapExtend),
+            ("dict", "reserve") => Some(Self::MapReserve),
+            ("set", "len") => Some(Self::SetLen),
+            ("set", "is_empty") => Some(Self::SetIsEmpty),
+            ("set", "copy") => Some(Self::SetClone),
+            ("set", "add") => Some(Self::SetInsert),
+            ("set", "remove") => Some(Self::SetRemove),
+            ("set", "discard") => Some(Self::SetDiscard),
+            ("set", "clear") => Some(Self::SetClear),
+            ("set", "reserve") => Some(Self::SetReserve),
+            ("str", "len") => Some(Self::StringLen),
+            ("str", "byte_len") => Some(Self::StringByteLen),
+            ("str", "contains") => Some(Self::StringContains),
+            ("str", "starts_with") => Some(Self::StringStartsWith),
+            ("str", "ends_with") => Some(Self::StringEndsWith),
+            ("str", "split") => Some(Self::StringSplit),
+            ("str", "replace") => Some(Self::StringReplace),
+            ("str", "to_lower") => Some(Self::StringToLower),
+            ("str", "to_upper") => Some(Self::StringToUpper),
+            ("str", "strip_prefix") => Some(Self::StringStripPrefix),
+            ("str", "strip_suffix") => Some(Self::StringStripSuffix),
+            ("str", "trim") => Some(Self::StringTrim),
+            ("str", "join") => Some(Self::StringJoin),
+            ("str", "to_bytes") => Some(Self::StringToBytes),
+            ("str", "clone") => Some(Self::StringClone),
             ("Queue", "put") => Some(Self::QueuePut),
             ("Queue", "try_put") => Some(Self::QueueTryPut),
             ("Queue", "get") => Some(Self::QueueGet),
@@ -1355,6 +1458,10 @@ impl BuiltinMember {
             Self::IntegerSaturatingAdd | Self::ArraySaturatingAdd => "saturating_add",
             Self::IntegerSaturatingSub | Self::ArraySaturatingSub => "saturating_sub",
             Self::IntegerSaturatingMul | Self::ArraySaturatingMul => "saturating_mul",
+            Self::IntegerWrappingShl => "wrapping_shl",
+            Self::IntegerWrappingShr => "wrapping_shr",
+            Self::IntegerSaturatingShl => "saturating_shl",
+            Self::IntegerSaturatingShr => "saturating_shr",
             Self::DurationToMilliseconds => "to_ms",
             Self::DurationToSeconds => "to_seconds",
             Self::ScalarToString => "to_string",
@@ -1385,12 +1492,15 @@ impl BuiltinMember {
             Self::ArrayMean => "mean",
             Self::VecLen => "len",
             Self::VecIsEmpty => "is_empty",
-            Self::VecClone | Self::MapClone | Self::StringClone => "clone",
-            Self::VecPush => "push",
+            Self::VecClone | Self::MapClone => "copy",
+            Self::StringClone => "clone",
+            Self::VecPush => "append",
             Self::VecPop => "pop",
             Self::VecGet => "get",
             Self::VecSet => "set",
             Self::VecRemove => "remove",
+            Self::VecIndex => "index",
+            Self::VecCount => "count",
             Self::VecSwap => "swap",
             Self::VecContains => "contains",
             Self::VecExtend => "extend",
@@ -1398,27 +1508,30 @@ impl BuiltinMember {
             Self::VecClear => "clear",
             Self::VecReverse => "reverse",
             Self::VecSort => "sort",
-            Self::VecSortBy => "sort_by",
             Self::VecMap => "map",
             Self::VecFilter => "filter",
+            Self::VecReserve => "reserve",
             Self::MapLen => "len",
             Self::MapIsEmpty => "is_empty",
             Self::MapGet => "get",
             Self::MapSet => "set",
             Self::MapRemove => "remove",
-            Self::MapContainsKey => "contains_key",
+            Self::MapContainsKey => "contains",
             Self::MapKeys => "keys",
             Self::MapValues => "values",
             Self::MapItems => "items",
-            Self::MapEntries => "entries",
             Self::MapClear => "clear",
-            Self::MapExtend => "extend",
+            Self::MapExtend => "update",
+            Self::MapReserve => "reserve",
             Self::SetLen => "len",
             Self::SetIsEmpty => "is_empty",
-            Self::SetClone => "clone",
+            Self::SetClone => "copy",
             Self::SetContains => "contains",
-            Self::SetInsert => "insert",
+            Self::SetInsert => "add",
             Self::SetRemove => "remove",
+            Self::SetDiscard => "discard",
+            Self::SetClear => "clear",
+            Self::SetReserve => "reserve",
             Self::QueuePut => "put",
             Self::QueueTryPut => "try_put",
             Self::QueueGet => "get",
@@ -1545,28 +1658,32 @@ impl BuiltinMember {
             Self::IntegerSaturatingAdd => "saturating_add(rhs: Self) -> Self",
             Self::IntegerSaturatingSub => "saturating_sub(rhs: Self) -> Self",
             Self::IntegerSaturatingMul => "saturating_mul(rhs: Self) -> Self",
+            Self::IntegerWrappingShl => "wrapping_shl(count: Self) -> Self",
+            Self::IntegerWrappingShr => "wrapping_shr(count: Self) -> Self",
+            Self::IntegerSaturatingShl => "saturating_shl(count: Self) -> Self",
+            Self::IntegerSaturatingShr => "saturating_shr(count: Self) -> Self",
             Self::DurationToMilliseconds => "to_ms() -> float64",
             Self::DurationToSeconds => "to_seconds() -> float64",
-            Self::ScalarToString => "to_string() -> String",
+            Self::ScalarToString => "to_string() -> str",
             Self::StringLen => "len() -> int64",
             Self::StringByteLen => "byte_len() -> int64",
-            Self::StringContains => "contains(text: String) -> bool",
-            Self::StringStartsWith => "starts_with(text: String) -> bool",
-            Self::StringEndsWith => "ends_with(text: String) -> bool",
-            Self::StringSplit => "split(text: String) -> Vec[String]",
-            Self::StringReplace => "replace(from: String, to: String) -> String",
-            Self::StringToLower => "to_lower() -> String",
-            Self::StringToUpper => "to_upper() -> String",
-            Self::StringStripPrefix => "strip_prefix(text: String) -> Option[String]",
-            Self::StringStripSuffix => "strip_suffix(text: String) -> Option[String]",
-            Self::StringTrim => "trim() -> String",
-            Self::StringJoin => "join(parts: Vec[String]) -> String",
-            Self::StringToBytes => "to_bytes() -> Vec[uint8]",
-            Self::ArrayShape => "shape() -> Vec[int64]",
+            Self::StringContains => "contains(text: str) -> bool",
+            Self::StringStartsWith => "starts_with(text: str) -> bool",
+            Self::StringEndsWith => "ends_with(text: str) -> bool",
+            Self::StringSplit => "split(text: str) -> list[str]",
+            Self::StringReplace => "replace(from: str, to: str) -> str",
+            Self::StringToLower => "to_lower() -> str",
+            Self::StringToUpper => "to_upper() -> str",
+            Self::StringStripPrefix => "strip_prefix(text: str) -> Option[str]",
+            Self::StringStripSuffix => "strip_suffix(text: str) -> Option[str]",
+            Self::StringTrim => "trim() -> str",
+            Self::StringJoin => "join(parts: list[str]) -> str",
+            Self::StringToBytes => "to_bytes() -> list[uint8]",
+            Self::ArrayShape => "shape() -> list[int64]",
             Self::ArrayLen => "len() -> int64",
             Self::ArrayClone => "clone() -> Array[T]",
-            Self::ArrayGet => "get(index: Vec[int32]) -> Option[T]",
-            Self::ArraySet => "set(index: Vec[int32], value: T) -> Option[T]",
+            Self::ArrayGet => "get(index: list[int64]) -> Option[T]",
+            Self::ArraySet => "set(index: list[int64], value: T) -> Option[T]",
             Self::ArrayFill => "fill(value: T) -> None",
             Self::ArrayMap => "map[U](f: def(T) -> U) -> Array[U]",
             Self::ArraySum => "sum() -> T",
@@ -1581,42 +1698,47 @@ impl BuiltinMember {
             Self::ArraySaturatingMul => "saturating_mul(rhs: Array[T] | T) -> Array[T]",
             Self::VecLen => "len() -> int64",
             Self::VecIsEmpty => "is_empty() -> bool",
-            Self::VecClone => "clone() -> Vec[T]",
-            Self::VecPush => "push(value: own T) -> None",
-            Self::VecPop => "pop() -> Option[T]",
-            Self::VecGet => "get(index: int32) -> Option[T]",
-            Self::VecSet => "set(index: int32, value: own T) -> Option[T]",
-            Self::VecRemove => "remove(index: int32) -> Option[T]",
-            Self::VecSwap => "swap(first: int32, second: int32) -> bool",
+            Self::VecClone => "copy() -> list[T]",
+            Self::VecPush => "append(value: own T) -> None",
+            Self::VecPop => "pop(index: int64 = -1) -> T",
+            Self::VecGet => "get(index: int64) -> Option[T]",
+            Self::VecSet => "set(index: int64, value: own T) -> T",
+            Self::VecRemove => "remove(value: T) -> None",
+            Self::VecIndex => "index(value: T) -> int64",
+            Self::VecCount => "count(value: T) -> int64",
+            Self::VecSwap => "swap(first: int64, second: int64) -> None",
             Self::VecContains => "contains(value: T) -> bool",
-            Self::VecExtend => "extend(other: own Vec[T]) -> None",
-            Self::VecInsert => "insert(index: int32, value: own T) -> bool",
+            Self::VecExtend => "extend(other: own list[T]) -> None",
+            Self::VecInsert => "insert(index: int64, value: own T) -> None",
             Self::VecClear => "clear() -> None",
             Self::VecReverse => "reverse() -> None",
-            Self::VecSort => "sort() -> None",
-            Self::VecSortBy => "sort_by(key: def(T) -> K) -> None",
-            Self::VecMap => "map(f: def(T) -> U) -> Vec[U]",
-            Self::VecFilter => "filter(f: def(T) -> bool) -> Vec[T]",
+            Self::VecSort => "sort(key: def(T) -> K = ..., reverse: bool = false) -> None",
+            Self::VecMap => "map(f: def(T) -> U) -> list[U]",
+            Self::VecFilter => "filter(f: def(T) -> bool) -> list[T]",
+            Self::VecReserve => "reserve(additional: int64) -> None",
             Self::MapLen => "len() -> int64",
             Self::MapIsEmpty => "is_empty() -> bool",
-            Self::MapClone => "clone() -> Map[K, V]",
+            Self::MapClone => "copy() -> dict[K, V]",
             Self::MapGet => "get(key: K) -> Option[V]",
             Self::MapSet => "set(key: own K, value: own V) -> Option[V]",
             Self::MapRemove => "remove(key: K) -> Option[V]",
-            Self::MapContainsKey => "contains_key(key: K) -> bool",
-            Self::MapKeys => "keys() -> Vec[K]",
-            Self::MapValues => "values() -> Vec[V]",
-            Self::MapItems => "items() -> Vec[MapEntry[K, V]]",
-            Self::MapEntries => "entries() -> Vec[MapEntry[K, V]]",
+            Self::MapContainsKey => "contains(key: K) -> bool",
+            Self::MapKeys => "keys() -> list[K]",
+            Self::MapValues => "values() -> list[V]",
+            Self::MapItems => "items() -> list[(K, V)]",
             Self::MapClear => "clear() -> None",
-            Self::MapExtend => "extend(other: own Map[K, V]) -> None",
+            Self::MapExtend => "update(other: own dict[K, V]) -> None",
+            Self::MapReserve => "reserve(additional: int64) -> None",
             Self::SetLen => "len() -> int64",
             Self::SetIsEmpty => "is_empty() -> bool",
-            Self::SetClone => "clone() -> Set[T]",
+            Self::SetClone => "copy() -> set[T]",
             Self::SetContains => "contains(value: T) -> bool",
-            Self::SetInsert => "insert(value: own T) -> bool",
-            Self::SetRemove => "remove(value: T) -> bool",
-            Self::StringClone => "clone() -> String",
+            Self::SetInsert => "add(value: own T) -> None",
+            Self::SetRemove => "remove(value: T) -> None",
+            Self::SetDiscard => "discard(value: T) -> None",
+            Self::SetClear => "clear() -> None",
+            Self::SetReserve => "reserve(additional: int64) -> None",
+            Self::StringClone => "clone() -> str",
             Self::QueuePut => {
                 "put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]] [T must be Transfer]"
             }
@@ -1651,72 +1773,72 @@ impl BuiltinMember {
                 "start_soon_with_stack(bytes: int64, function, own ...) -> None"
             }
             Self::TaskGroupCancel => "cancel() -> None",
-            Self::FileReadAll => "read_all() -> Result[String, io.Error]",
-            Self::FileReadBytes => "read_bytes() -> Result[Vec[uint8], io.Error]",
-            Self::FileWriteAll => "write_all(text: String) -> Result[None, io.Error]",
-            Self::FileWriteBytes => "write_bytes(bytes: Vec[uint8]) -> Result[None, io.Error]",
+            Self::FileReadAll => "read_all() -> Result[str, io.Error]",
+            Self::FileReadBytes => "read_bytes() -> Result[list[uint8], io.Error]",
+            Self::FileWriteAll => "write_all(text: str) -> Result[None, io.Error]",
+            Self::FileWriteBytes => "write_bytes(bytes: list[uint8]) -> Result[None, io.Error]",
             Self::FileFlush => "flush() -> Result[None, io.Error]",
             Self::FileClose => "close() -> None",
             Self::TcpListenerAccept => "accept(timeout: Duration = ...) -> Result[net.TcpStream, io.Error]",
-            Self::TcpListenerLocalAddr => "local_addr() -> Result[String, io.Error]",
+            Self::TcpListenerLocalAddr => "local_addr() -> Result[str, io.Error]",
             Self::TcpListenerClose => "close() -> None",
-            Self::TcpStreamReadAll => "read_all(timeout: Duration = ...) -> Result[String, io.Error]",
-            Self::TcpStreamReadLine => "read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]",
-            Self::TcpStreamReadBytes => "read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]",
-            Self::TcpStreamReadExact => "read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]",
-            Self::TcpStreamWriteAll => "write_all(text: String, timeout: Duration = ...) -> Result[None, io.Error]",
-            Self::TcpStreamWriteBytes => "write_bytes(bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::TcpStreamReadAll => "read_all(timeout: Duration = ...) -> Result[str, io.Error]",
+            Self::TcpStreamReadLine => "read_line(timeout: Duration = ...) -> Result[Option[str], io.Error]",
+            Self::TcpStreamReadBytes => "read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[list[uint8]], io.Error]",
+            Self::TcpStreamReadExact => "read_exact(count: int32, timeout: Duration = ...) -> Result[list[uint8], io.Error]",
+            Self::TcpStreamWriteAll => "write_all(text: str, timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::TcpStreamWriteBytes => "write_bytes(bytes: list[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
             Self::TcpStreamFlush => "flush() -> Result[None, io.Error]",
-            Self::TcpStreamLocalAddr => "local_addr() -> Result[String, io.Error]",
-            Self::TcpStreamPeerAddr => "peer_addr() -> Result[String, io.Error]",
+            Self::TcpStreamLocalAddr => "local_addr() -> Result[str, io.Error]",
+            Self::TcpStreamPeerAddr => "peer_addr() -> Result[str, io.Error]",
             Self::TcpStreamShutdownRead => "shutdown_read() -> Result[None, io.Error]",
             Self::TcpStreamShutdownWrite => "shutdown_write() -> Result[None, io.Error]",
             Self::TcpStreamShutdownBoth => "shutdown_both() -> Result[None, io.Error]",
             Self::TcpStreamClose => "close() -> None",
-            Self::UdpSocketSendText => "send_text(address: String, text: String, timeout: Duration = ...) -> Result[None, io.Error]",
-            Self::UdpSocketSendBytes => "send_bytes(address: String, bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
-            Self::UdpSocketRecv => "recv(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]",
+            Self::UdpSocketSendText => "send_text(address: str, text: str, timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::UdpSocketSendBytes => "send_bytes(address: str, bytes: list[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::UdpSocketRecv => "recv(max_bytes: int32, timeout: Duration = ...) -> Result[Option[list[uint8]], io.Error]",
             Self::UdpSocketRecvFrom => "recv_from(max_bytes: int32, timeout: Duration = ...) -> Result[Option[net.UdpDatagram], io.Error]",
-            Self::UdpSocketLocalAddr => "local_addr() -> Result[String, io.Error]",
-            Self::UdpSocketPeerAddr => "peer_addr() -> Result[String, io.Error]",
+            Self::UdpSocketLocalAddr => "local_addr() -> Result[str, io.Error]",
+            Self::UdpSocketPeerAddr => "peer_addr() -> Result[str, io.Error]",
             Self::UdpSocketClose => "close() -> None",
-            Self::UdpDatagramAddress => "address() -> String",
-            Self::UdpDatagramBytes => "bytes() -> Vec[uint8]",
-            Self::UdpDatagramText => "text() -> Result[String, io.Error]",
+            Self::UdpDatagramAddress => "address() -> str",
+            Self::UdpDatagramBytes => "bytes() -> list[uint8]",
+            Self::UdpDatagramText => "text() -> Result[str, io.Error]",
             Self::HttpListenerAccept => "accept(timeout: Duration = ...) -> Result[net.HttpExchange, io.Error]",
-            Self::HttpListenerLocalAddr => "local_addr() -> Result[String, io.Error]",
+            Self::HttpListenerLocalAddr => "local_addr() -> Result[str, io.Error]",
             Self::HttpListenerClose => "close() -> None",
-            Self::HttpExchangeMethod => "method() -> String",
-            Self::HttpExchangePath => "path() -> String",
-            Self::HttpExchangeHeaders => "headers() -> Map[String, String]",
-            Self::HttpExchangeBodyText => "body_text() -> Result[String, io.Error]",
-            Self::HttpExchangeBodyBytes => "body_bytes() -> Vec[uint8]",
-            Self::HttpExchangeRespondText => "respond_text(status: int32, text: own String, headers: own Map[String, String]) -> Result[None, io.Error]",
-            Self::HttpExchangeRespondBytes => "respond_bytes(status: int32, bytes: own Vec[uint8], headers: own Map[String, String]) -> Result[None, io.Error]",
+            Self::HttpExchangeMethod => "method() -> str",
+            Self::HttpExchangePath => "path() -> str",
+            Self::HttpExchangeHeaders => "headers() -> dict[str, str]",
+            Self::HttpExchangeBodyText => "body_text() -> Result[str, io.Error]",
+            Self::HttpExchangeBodyBytes => "body_bytes() -> list[uint8]",
+            Self::HttpExchangeRespondText => "respond_text(status: int32, text: own str, headers: own dict[str, str]) -> Result[None, io.Error]",
+            Self::HttpExchangeRespondBytes => "respond_bytes(status: int32, bytes: own list[uint8], headers: own dict[str, str]) -> Result[None, io.Error]",
             Self::HttpResponseStatus => "status() -> int32",
-            Self::HttpResponseReason => "reason() -> String",
-            Self::HttpResponseHeaders => "headers() -> Map[String, String]",
-            Self::HttpResponseText => "text() -> Result[String, io.Error]",
-            Self::HttpResponseBytes => "bytes() -> Vec[uint8]",
+            Self::HttpResponseReason => "reason() -> str",
+            Self::HttpResponseHeaders => "headers() -> dict[str, str]",
+            Self::HttpResponseText => "text() -> Result[str, io.Error]",
+            Self::HttpResponseBytes => "bytes() -> list[uint8]",
             Self::WebSocketListenerAccept => "accept(timeout: Duration = ...) -> Result[net.WebSocket, io.Error]",
-            Self::WebSocketListenerLocalAddr => "local_addr() -> Result[String, io.Error]",
-            Self::WebSocketSendText => "send_text(text: String, timeout: Duration = ...) -> Result[None, io.Error]",
-            Self::WebSocketSendBytes => "send_bytes(bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
-            Self::WebSocketRecvText => "recv_text(timeout: Duration = ...) -> Result[Option[String], io.Error]",
-            Self::WebSocketRecvBytes => "recv_bytes(timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]",
+            Self::WebSocketListenerLocalAddr => "local_addr() -> Result[str, io.Error]",
+            Self::WebSocketSendText => "send_text(text: str, timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::WebSocketSendBytes => "send_bytes(bytes: list[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::WebSocketRecvText => "recv_text(timeout: Duration = ...) -> Result[Option[str], io.Error]",
+            Self::WebSocketRecvBytes => "recv_bytes(timeout: Duration = ...) -> Result[Option[list[uint8]], io.Error]",
             Self::WebSocketClose => "close() -> None",
             Self::UnixListenerAccept => "accept(timeout: Duration = ...) -> Result[net.UnixStream, io.Error]",
             Self::UnixListenerClose => "close() -> None",
-            Self::UnixStreamReadLine => "read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]",
-            Self::UnixStreamReadExact => "read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]",
-            Self::UnixStreamWriteAll => "write_all(text: String, timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::UnixStreamReadLine => "read_line(timeout: Duration = ...) -> Result[Option[str], io.Error]",
+            Self::UnixStreamReadExact => "read_exact(count: int32, timeout: Duration = ...) -> Result[list[uint8], io.Error]",
+            Self::UnixStreamWriteAll => "write_all(text: str, timeout: Duration = ...) -> Result[None, io.Error]",
             Self::UnixStreamClose => "close() -> None",
             Self::TlsListenerAccept => "accept(timeout: Duration = ...) -> Result[net.TlsStream, io.Error]",
-            Self::TlsListenerLocalAddr => "local_addr() -> Result[String, io.Error]",
+            Self::TlsListenerLocalAddr => "local_addr() -> Result[str, io.Error]",
             Self::TlsListenerClose => "close() -> None",
-            Self::TlsStreamReadLine => "read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]",
-            Self::TlsStreamReadExact => "read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]",
-            Self::TlsStreamWriteAll => "write_all(text: String, timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::TlsStreamReadLine => "read_line(timeout: Duration = ...) -> Result[Option[str], io.Error]",
+            Self::TlsStreamReadExact => "read_exact(count: int32, timeout: Duration = ...) -> Result[list[uint8], io.Error]",
+            Self::TlsStreamWriteAll => "write_all(text: str, timeout: Duration = ...) -> Result[None, io.Error]",
             Self::TlsStreamClose => "close() -> None",
             Self::ProcessChildStdin => "stdin() -> Option[process.Pipe]",
             Self::ProcessChildStdout => "stdout() -> Option[process.Pipe]",
@@ -1731,29 +1853,29 @@ impl BuiltinMember {
             Self::ProcessChildKill => "kill() -> Result[None, process.Error]",
             Self::ProcessChildTerminate => "terminate() -> Result[None, process.Error]",
             Self::ProcessChildClose => "close() -> None",
-            Self::ProcessPipeReadAll => "read_all() -> Result[String, process.Error]",
+            Self::ProcessPipeReadAll => "read_all() -> Result[str, process.Error]",
             Self::ProcessPipeReadLine => {
-                "read_line(timeout: Duration = ...) -> Result[Option[String], process.Error]"
+                "read_line(timeout: Duration = ...) -> Result[Option[str], process.Error]"
             }
             Self::ProcessPipeReadBytes => {
-                "read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], process.Error]"
+                "read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[list[uint8]], process.Error]"
             }
             Self::ProcessPipeWriteAll => {
-                "write_all(text: String, timeout: Duration = ...) -> Result[None, process.Error]"
+                "write_all(text: str, timeout: Duration = ...) -> Result[None, process.Error]"
             }
             Self::ProcessPipeWriteBytes => {
-                "write_bytes(bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, process.Error]"
+                "write_bytes(bytes: list[uint8], timeout: Duration = ...) -> Result[None, process.Error]"
             }
             Self::ProcessPipeFlush => "flush() -> Result[None, process.Error]",
             Self::ProcessPipeClose => "close() -> None",
             Self::ProcessCompletedStatus => "status() -> process.ExitStatus",
             Self::ProcessCompletedSuccess => "success() -> bool",
-            Self::ProcessCompletedStdout => "stdout() -> String",
-            Self::ProcessCompletedStdoutBytes => "stdout_bytes() -> Vec[uint8]",
-            Self::ProcessCompletedStderr => "stderr() -> String",
-            Self::ProcessCompletedStderrBytes => "stderr_bytes() -> Vec[uint8]",
+            Self::ProcessCompletedStdout => "stdout() -> str",
+            Self::ProcessCompletedStdoutBytes => "stdout_bytes() -> list[uint8]",
+            Self::ProcessCompletedStderr => "stderr() -> str",
+            Self::ProcessCompletedStderrBytes => "stderr_bytes() -> list[uint8]",
             Self::ProcessCompletedCheck => "check() -> Result[None, process.Error]",
-            Self::ProcessSupervisorStart => "start(name: own String, command: own Vec[String], cwd: own Option[String] = ..., env: own Map[String, String] = ..., stdin: own process.Stdio = ..., stdout: own process.Stdio = ..., stderr: own process.Stdio = ..., restart: own process.RestartPolicy = ..., backoff: own Duration = ..., max_restarts: own int32 = ..., group: own bool = ...) -> Result[None, process.Error]",
+            Self::ProcessSupervisorStart => "start(name: own str, command: own list[str], cwd: own Option[str] = ..., env: own dict[str, str] = ..., stdin: own process.Stdio = ..., stdout: own process.Stdio = ..., stderr: own process.Stdio = ..., restart: own process.RestartPolicy = ..., backoff: own Duration = ..., max_restarts: own int32 = ..., group: own bool = ...) -> Result[None, process.Error]",
             Self::ProcessSupervisorWait => {
                 "wait(timeout: Duration = ...) -> process.SupervisorWait"
             }
@@ -1765,7 +1887,7 @@ impl BuiltinMember {
             Self::ProcessSupervisorClose => "close() -> None",
             Self::RngNextInt => "next_int(lo: int64, hi: int64) -> int64",
             Self::RngNextFloat => "next_float() -> float64",
-            Self::RngShuffle => "shuffle(values: mut Vec[T]) -> None",
+            Self::RngShuffle => "shuffle(values: mut list[T]) -> None",
         }
     }
 
@@ -1785,13 +1907,25 @@ impl BuiltinMember {
             | Self::IntegerSaturatingMul => {
                 "Performs fixed-width integer arithmetic clamped to the receiver type's range."
             }
+            Self::IntegerWrappingShl => {
+                "Performs fixed-width integer arithmetic by shifting left and discarding high bits after validating the count."
+            }
+            Self::IntegerWrappingShr => {
+                "Performs fixed-width integer arithmetic by shifting right after validating the count, preserving signed arithmetic or unsigned logical semantics."
+            }
+            Self::IntegerSaturatingShl => {
+                "Performs fixed-width integer arithmetic by shifting left and clamping overflow to the receiver type's range after validating the count."
+            }
+            Self::IntegerSaturatingShr => {
+                "Performs fixed-width integer arithmetic by shifting right after validating the count, preserving signed arithmetic or unsigned logical semantics."
+            }
             Self::DurationToMilliseconds => {
                 "Converts the Duration to the nearest representable number of milliseconds as `float64`."
             }
             Self::DurationToSeconds => {
                 "Converts the Duration to the nearest representable number of seconds as `float64`."
             }
-            Self::ScalarToString => "Returns a `String` rendering of a numeric or `bool` value.",
+            Self::ScalarToString => "Returns a `str` rendering of a numeric or `bool` value.",
             Self::StringLen => {
                 "Returns the number of Unicode scalar values in the string in O(n) time."
             }
@@ -1802,33 +1936,33 @@ impl BuiltinMember {
             Self::StringStartsWith => "Returns true when the string starts with `text`.",
             Self::StringEndsWith => "Returns true when the string ends with `text`.",
             Self::StringSplit => {
-                "Splits the string on each occurrence of `text` and returns the pieces as `Vec[String]`."
+                "Splits the string on each occurrence of `text` and returns the pieces as `list[str]`."
             }
             Self::StringReplace => {
-                "Returns a new `String` with each occurrence of `from` replaced by `to`."
+                "Returns a new `str` with each occurrence of `from` replaced by `to`."
             }
             Self::StringToLower => {
-                "Returns a new `String` with Unicode lowercase conversion applied."
+                "Returns a new `str` with Unicode lowercase conversion applied."
             }
             Self::StringToUpper => {
-                "Returns a new `String` with Unicode uppercase conversion applied."
+                "Returns a new `str` with Unicode uppercase conversion applied."
             }
             Self::StringStripPrefix => {
-                "Removes `text` from the front of the string and returns the remaining `String`, or `Option.None` when it does not match."
+                "Removes `text` from the front of the string and returns the remaining `str`, or `Option.None` when it does not match."
             }
             Self::StringStripSuffix => {
-                "Removes `text` from the end of the string and returns the remaining `String`, or `Option.None` when it does not match."
+                "Removes `text` from the end of the string and returns the remaining `str`, or `Option.None` when it does not match."
             }
             Self::StringTrim => {
-                "Returns a new `String` with surrounding Unicode whitespace removed."
+                "Returns a new `str` with surrounding Unicode whitespace removed."
             }
             Self::StringJoin => {
-                "Joins the `Vec[String]` parts using the receiver string as the separator."
+                "Joins the `list[str]` parts using the receiver string as the separator."
             }
             Self::StringToBytes => {
-                "Returns a fresh `Vec[uint8]` containing the string's exact UTF-8 encoding."
+                "Returns a fresh `list[uint8]` containing the string's exact UTF-8 encoding."
             }
-            Self::ArrayShape => "Returns a fresh vector containing every Array dimension.",
+            Self::ArrayShape => "Returns a fresh list containing every Array dimension.",
             Self::ArrayLen => "Returns the total number of scalar elements in the Array.",
             Self::ArrayClone => "Creates an independent copy of the Array.",
             Self::ArrayGet => {
@@ -1855,11 +1989,11 @@ impl BuiltinMember {
             | Self::ArraySaturatingMul => {
                 "Performs elementwise integer Array arithmetic clamped to the dtype range."
             }
-            Self::VecLen => "Returns the current number of elements in the vector.",
-            Self::VecIsEmpty => "Returns true when the vector contains no elements.",
-            Self::VecClone => "Creates a new owned `Vec[T]` with cloned element values.",
-            Self::VecPush => "Appends a value to the end of the vector.",
-            Self::VecPop => "Removes and returns the final element, or `Option.None` when empty.",
+            Self::VecLen => "Returns the current number of elements in the list.",
+            Self::VecIsEmpty => "Returns true when the list contains no elements.",
+            Self::VecClone => "Creates a new owned `list[T]` with copied element values.",
+            Self::VecPush => "Appends a value to the end of the list.",
+            Self::VecPop => "Removes and returns the element at `index`.",
             Self::VecGet => {
                 "Returns the element at `index`, or `Option.None` when the index is out of bounds."
             }
@@ -1867,33 +2001,33 @@ impl BuiltinMember {
                 "Replaces the element at `index` and returns the previous element. Out-of-bounds indices raise a runtime error."
             }
             Self::VecRemove => {
-                "Removes the element at `index` and returns it. Out-of-bounds indices raise a runtime error."
+                "Removes the first element equal to `value`. Missing values raise AU4008."
             }
+            Self::VecIndex => "Returns the first index containing `value`.",
+            Self::VecCount => "Returns the number of elements equal to `value`.",
             Self::VecSwap => {
-                "Swaps the elements at `first` and `second` and returns `true`. Out-of-bounds indices raise a runtime error."
+                "Swaps the elements at `first` and `second`. Out-of-bounds indices raise a runtime error."
             }
-            Self::VecContains => "Returns true when the vector contains `value`.",
-            Self::VecExtend => "Appends the elements of `other` to the end of the vector.",
+            Self::VecContains => "Returns true when the list contains `value`.",
+            Self::VecExtend => "Appends the elements of `other` to the end of the list.",
             Self::VecInsert => {
-                "Inserts `value` at `index` and returns `true`. Out-of-bounds indices raise a runtime error."
+                "Inserts `value` at a Python-clamped `index`."
             }
-            Self::VecClear => "Removes all elements from the vector.",
-            Self::VecReverse => "Reverses the vector elements in place.",
+            Self::VecClear => "Removes all elements from the list.",
+            Self::VecReverse => "Reverses the list elements in place.",
             Self::VecSort => {
-                "Stably sorts the vector in place using the element type's natural ordering."
-            }
-            Self::VecSortBy => {
-                "Evaluates `key` once for each element from left to right, then stably sorts the vector in place by those keys."
+                "Stably sorts the list in place, optionally using a key function and reverse order."
             }
             Self::VecMap => {
-                "Calls `f` with shared access to each element and eagerly returns the owned results as a new vector."
+                "Calls `f` with shared access to each element and eagerly returns the owned results as a new list."
             }
             Self::VecFilter => {
-                "Calls `f` with shared access to each element and eagerly clones retained elements into a new vector."
+                "Calls `f` with shared access to each element and eagerly copies retained elements into a new list."
             }
+            Self::VecReserve => "Reserves room for additional list elements.",
             Self::MapLen => "Returns the current number of entries in the map.",
             Self::MapIsEmpty => "Returns true when the map contains no entries.",
-            Self::MapClone => "Creates a new owned `Map[K, V]` with cloned keys and values.",
+            Self::MapClone => "Creates a new owned `dict[K, V]` with copied keys and values.",
             Self::MapGet => {
                 "Returns the value for `key`, or `Option.None` when the key is absent."
             }
@@ -1903,20 +2037,23 @@ impl BuiltinMember {
             Self::MapRemove => {
                 "Removes `key` and returns its previous value, or `Option.None` when absent."
             }
-            Self::MapContainsKey => "Returns true when the map contains `key`.",
-            Self::MapKeys => "Returns the current keys as a `Vec[K]`.",
-            Self::MapValues => "Returns the current values as a `Vec[V]`.",
-            Self::MapItems => "Returns the current entries as `Vec[MapEntry[K, V]]` in insertion order.",
-            Self::MapEntries => "Returns the current entries as `Vec[MapEntry[K, V]]` in insertion order.",
+            Self::MapContainsKey => "Returns true when the dict contains `key`.",
+            Self::MapKeys => "Returns the current keys as a `list[K]`.",
+            Self::MapValues => "Returns the current values as a `list[V]`.",
+            Self::MapItems => "Returns the current entries as `list[(K, V)]` in insertion order.",
             Self::MapClear => "Removes all entries from the map.",
             Self::MapExtend => "Inserts the entries from `other`, replacing matching keys.",
+            Self::MapReserve => "Reserves room for additional dictionary entries.",
             Self::SetLen => "Returns the current number of elements in the set.",
             Self::SetIsEmpty => "Returns true when the set contains no elements.",
-            Self::SetClone => "Creates a new owned `Set[T]` with cloned element values.",
+            Self::SetClone => "Creates a new owned `set[T]` with copied element values.",
             Self::SetContains => "Returns true when the set contains `value`.",
-            Self::SetInsert => "Inserts `value`, returning false when it is already present.",
-            Self::SetRemove => "Removes `value`, returning false when it is absent.",
-            Self::StringClone => "Creates a new owned `String` with the same contents.",
+            Self::SetInsert => "Adds `value` when it is not already present.",
+            Self::SetRemove => "Removes `value`. Missing values raise AU4008.",
+            Self::SetDiscard => "Removes `value` when present.",
+            Self::SetClear => "Removes all set elements.",
+            Self::SetReserve => "Reserves room for additional set elements.",
+            Self::StringClone => "Creates a new owned `str` with the same contents.",
             Self::QueuePut => {
                 "Puts a value into the queue, waiting for capacity when needed, or returns `SendError.Closed(value)`, `SendError.Cancelled(value)`, or `SendError.TimedOut(value)` if the send cannot complete. Queue payload type `T` must be Transfer so values are safe to transport between tasks."
             }
@@ -1957,8 +2094,8 @@ impl BuiltinMember {
             Self::TaskGroupCancel => {
                 "Signals cancellation to child tasks in the current task group."
             }
-            Self::FileReadAll => "Reads the remaining file contents into a `String`.",
-            Self::FileReadBytes => "Reads the remaining file contents into `Vec[uint8]`.",
+            Self::FileReadAll => "Reads the remaining file contents into a `str`.",
+            Self::FileReadBytes => "Reads the remaining file contents into `list[uint8]`.",
             Self::FileWriteAll => "Writes all of `text` to the file, returning an `io.Error` on failure.",
             Self::FileWriteBytes => "Writes all of `bytes` to the file, returning an `io.Error` on failure.",
             Self::FileFlush => "Flushes pending file writes to the operating system.",
@@ -1966,7 +2103,7 @@ impl BuiltinMember {
             Self::TcpListenerAccept => "Accepts the next incoming TCP connection, optionally timing out.",
             Self::TcpListenerLocalAddr => "Returns the bound local address for the listener.",
             Self::TcpListenerClose => "Closes the TCP listener handle.",
-            Self::TcpStreamReadAll => "Reads the remaining TCP stream contents into a `String` until the peer closes.",
+            Self::TcpStreamReadAll => "Reads the remaining TCP stream contents into a `str` until the peer closes.",
             Self::TcpStreamReadLine => "Reads a UTF-8 line from the TCP stream, returning `Option.None` on EOF.",
             Self::TcpStreamReadBytes => "Reads up to `max_bytes` raw bytes from the TCP stream.",
             Self::TcpStreamReadExact => "Reads exactly `count` raw bytes from the TCP stream or returns an `io.Error`.",
@@ -2037,7 +2174,7 @@ impl BuiltinMember {
             Self::ProcessChildKill => "Immediately kills the child process.",
             Self::ProcessChildTerminate => "Requests graceful child-process termination.",
             Self::ProcessChildClose => "Closes the child resource, terminating it if it is still running.",
-            Self::ProcessPipeReadAll => "Reads the remaining piped output into a String until EOF.",
+            Self::ProcessPipeReadAll => "Reads the remaining piped output into a str until EOF.",
             Self::ProcessPipeReadLine => "Reads a UTF-8 line from the process pipe, returning `Option.None` on EOF.",
             Self::ProcessPipeReadBytes => "Reads up to `max_bytes` raw bytes from the process pipe.",
             Self::ProcessPipeWriteAll => "Writes all of `text` to the process pipe.",
@@ -2098,19 +2235,17 @@ impl BuiltinMember {
             | Self::VecClone
             | Self::VecClear
             | Self::VecReverse
-            | Self::VecSort
             | Self::MapLen
             | Self::MapIsEmpty
             | Self::MapClone
             | Self::MapKeys
             | Self::MapValues
             | Self::MapItems
-            | Self::MapEntries
             | Self::MapClear
             | Self::SetLen
             | Self::SetIsEmpty
             | Self::SetClone
-            | Self::VecPop
+            | Self::SetClear
             | Self::StringClone
             | Self::QueueClose
             | Self::TaskGroupCancel
@@ -2194,6 +2329,12 @@ impl BuiltinMember {
             | Self::ArraySaturatingMul => {
                 BuiltinCallShape::fixed(&ARITHMETIC_RHS_PARAMS, CallConvention::PositionalOrNamed)
             }
+            Self::IntegerWrappingShl
+            | Self::IntegerWrappingShr
+            | Self::IntegerSaturatingShl
+            | Self::IntegerSaturatingShr => {
+                BuiltinCallShape::fixed(&SHIFT_COUNT_PARAMS, CallConvention::PositionalOrNamed)
+            }
             Self::ArrayGet => {
                 BuiltinCallShape::fixed(&ARRAY_INDEX_PARAMS, CallConvention::PositionalOrNamed)
             }
@@ -2234,8 +2375,14 @@ impl BuiltinMember {
             Self::QueueGetOr | Self::TaskResultOr => {
                 BuiltinCallShape::fixed(&DEFAULT_TIMEOUT_PARAMS, CallConvention::PositionalOrNamed)
             }
-            Self::VecGet | Self::VecRemove => {
+            Self::VecGet => {
                 BuiltinCallShape::fixed(&VEC_INDEX_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::VecPop => {
+                BuiltinCallShape::fixed(&VEC_POP_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::VecRemove | Self::VecIndex | Self::VecCount => {
+                BuiltinCallShape::fixed(&VALUE_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::VecPush | Self::QueueTryPut => {
                 BuiltinCallShape::fixed(&VEC_PUSH_PARAMS, CallConvention::PositionalOrNamed)
@@ -2255,8 +2402,8 @@ impl BuiltinMember {
             Self::VecInsert => {
                 BuiltinCallShape::fixed(&VEC_INSERT_PARAMS, CallConvention::PositionalOrNamed)
             }
-            Self::VecSortBy => {
-                BuiltinCallShape::fixed(&VEC_KEY_PARAMS, CallConvention::PositionalOrNamed)
+            Self::VecSort => {
+                BuiltinCallShape::fixed(&VEC_SORT_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::VecMap | Self::VecFilter => {
                 BuiltinCallShape::fixed(&VEC_CALLBACK_PARAMS, CallConvention::PositionalOrNamed)
@@ -2284,7 +2431,10 @@ impl BuiltinMember {
             Self::MapExtend => {
                 BuiltinCallShape::fixed(&MAP_EXTEND_PARAMS, CallConvention::PositionalOrNamed)
             }
-            Self::SetContains | Self::SetRemove => {
+            Self::VecReserve | Self::MapReserve | Self::SetReserve => {
+                BuiltinCallShape::fixed(&RESERVE_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::SetContains | Self::SetRemove | Self::SetDiscard => {
                 BuiltinCallShape::fixed(&SET_VALUE_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::SetInsert => {
@@ -2392,13 +2542,17 @@ impl BuiltinMember {
                 | Self::VecClear
                 | Self::VecReverse
                 | Self::VecSort
-                | Self::VecSortBy
+                | Self::VecReserve
                 | Self::MapSet
                 | Self::MapRemove
                 | Self::MapClear
                 | Self::MapExtend
+                | Self::MapReserve
                 | Self::SetInsert
                 | Self::SetRemove
+                | Self::SetDiscard
+                | Self::SetClear
+                | Self::SetReserve
                 | Self::QueuePut
                 | Self::QueueTryPut
                 | Self::QueueClose

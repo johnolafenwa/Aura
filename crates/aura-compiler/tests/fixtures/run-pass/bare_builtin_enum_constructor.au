@@ -1,6 +1,6 @@
 def main() -> int32:
-    ok: Result[int32, String] = Ok(7)
-    err: Result[int32, String] = Err("bad")
+    ok: Result[int32, str] = Ok(7)
+    err: Result[int32, str] = Err("bad")
     some: Option[int32] = Some(3)
     none: Option[int32] = None
 

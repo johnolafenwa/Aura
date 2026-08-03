@@ -1,7 +1,7 @@
 class Logger:
-    prefix: String
+    prefix: str
 
-    def log(self, msg: String, level: int32 = 0):
+    def log(self, msg: str, level: int32 = 0):
         if level == 0:
             print(self.prefix + ": " + msg)
         else:

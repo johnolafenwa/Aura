@@ -6,7 +6,7 @@ enum Status:
     Pending
 
 class Task:
-    name: String
+    name: str
     status: Status
     priority: int32
 
@@ -17,7 +17,7 @@ class Task:
             case _:
                 return false
 
-    def describe(self) -> String:
+    def describe(self) -> str:
         match self.status:
             case Status.Active:
                 return f"{self.name}: active (p{self.priority})"

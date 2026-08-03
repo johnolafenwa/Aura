@@ -1,0 +1,31 @@
+enum Boxed:
+    Filled(int32)
+    Empty
+
+class Resource:
+    state: Boxed
+
+    def close(mut self):
+        match self.state:
+            case Filled(value):
+                print(value)
+            case Empty:
+                print(-1)
+
+def mutate(value: mut int32) -> bool:
+    value += 5
+    return true
+
+def trap() -> bool:
+    zero: int32 = 0
+    return 1 // zero == 0
+
+def main():
+    with resource = Resource(state=Boxed.Filled(1)):
+        match mut resource.state:
+            case Filled(value) if mutate(value) and trap():
+                pass
+            case Filled(_):
+                pass
+            case Empty:
+                pass

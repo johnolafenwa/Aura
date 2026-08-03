@@ -1,15 +1,15 @@
 trait Show:
-    def show(self) -> String
+    def show(self) -> str
 
 enum Status:
     Ready
 
 impl Show for int32:
-    def show(self) -> String:
+    def show(self) -> str:
         return "int"
 
 impl Show for Status:
-    def show(self) -> String:
+    def show(self) -> str:
         return "ready"
 
 def main() -> int32:

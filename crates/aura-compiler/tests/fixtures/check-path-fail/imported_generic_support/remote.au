@@ -1,15 +1,15 @@
 public trait Named:
-    def name(self) -> String
+    def name(self) -> str
 
 public class NamedValue:
-    public label: String
+    public label: str
 
 impl Named for NamedValue:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.label.clone()
 
 public class UnnamedValue:
-    public label: String
+    public label: str
 
 public class BoundBox[T: Named]:
     public value: T

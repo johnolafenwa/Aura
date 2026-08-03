@@ -5,6 +5,24 @@ trap 'echo "reference check failed: $BASH_COMMAND" >&2' ERR
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+assert_wrapped_text() {
+  local path="$1"
+  local expected="$2"
+
+  python3 - "$path" "$expected" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+expected = " ".join(sys.argv[2].split())
+actual = " ".join(path.read_text(encoding="utf-8").split())
+if expected not in actual:
+    raise SystemExit(f"missing reference text in {path}: {expected}")
+PY
+}
+
+python3 scripts/generate_llms.py --check
+
 proposal_stem="auro""ra_language_proposal"
 proposal_md="docs/${proposal_stem}.md"
 proposal_html="docs/${proposal_stem}.html"
@@ -21,6 +39,7 @@ required_pages=(
   bytes
   json
   numeric-arrays
+  math
   randomness
   diagnostics
   conformance
@@ -42,6 +61,15 @@ for page in "${required_pages[@]}"; do
   fi
 done
 
+test -s examples/numbers/scalar_math.au
+grep -Fq '`scalar_math.au`' examples/README.md
+grep -Fq 'math.pow(2.0, -3.0)' examples/numbers/scalar_math.au
+grep -Fq 'math.pi' examples/numbers/scalar_math.au
+grep -Fq '0x7ff8000000000000' docs/manual/math.md
+grep -Fq 'compiler bridge exposes the complete math module function surface' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq '| `math.pow` | `pow(base: float64, exponent: float64) -> float64`' docs/manual/api-index.md
+grep -Fq 'the executable [Math Module](/manual/math) block' docs/manual/conformance.md
+
 grep -Fq 'module = { module-element }' docs/manual/grammar.md
 grep -Fq 'postfix-expression' docs/manual/grammar.md
 grep -Fq 'left-to-right' docs/manual/execution-model.md
@@ -50,7 +78,7 @@ grep -Fq 'MUST' docs/manual/language-specification.md
 grep -Fq '`AU4006` means invalid runtime configuration; and `AU4007` means a numeric Array shape or reduction violation.' docs/manual/cli-and-tooling.md
 grep -Fq '`int` is an alias for `int64`' docs/manual/types.md
 grep -Fq 'contracts remain `int32`, including `main()` exit statuses' docs/manual/types.md
-grep -Fq 'otherwise the literal defaults to `int64`' docs/manual/lexical-structure.md
+assert_wrapped_text docs/manual/lexical-structure.md 'otherwise the literal defaults to `int64`'
 grep -Fq 'otherwise it defaults to `int64`' docs/manual/static-semantics.md
 grep -Fq 'assert-statement' docs/manual/grammar.md
 grep -Fq 'A failed assertion is `AU4001` at the `assert` keyword location.' docs/manual/diagnostics.md
@@ -75,7 +103,7 @@ grep -Fq 'retrying_network_worker_runs_with_computed_backoff_on_both_backends' d
 grep -Fq 'fn retrying_network_worker_runs_with_computed_backoff_on_both_backends()' crates/aura/tests/cli.rs
 grep -Fq 'Inside an unmatched `(`, `[`, or `{`, an ordinary physical newline does not' docs/manual/lexical-structure.md
 grep -Fq 'Backslash continuation is not implemented.' docs/manual/lexical-structure.md
-grep -Fq 'Ordinary strings and f-strings remain single-line' docs/manual/lexical-structure.md
+grep -Fq 'Ordinary, raw, and f-strings remain' docs/manual/lexical-structure.md
 grep -Fq 'it does not add a trailing comma to any list form' docs/manual/grammar.md
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0025-newline-continuation-and-delimited-layout.md
 grep -Fq '0025-newline-continuation-and-delimited-layout.md' architecture_docs/decisions/README.md
@@ -115,20 +143,20 @@ grep -Fq 'trace_text' crates/aura-compiler/tests/fixtures/run-pass/tuple_structu
 
 # B3.0-e: `AU3005` guidance is classified the same way the rejection is, so the
 # recommended recovery is never something `AU3007` rejects in turn.
-test -s crates/aura-compiler/tests/fixtures/check-fail/random_vec_index_requires_transfer.diag
-test -s crates/aura-compiler/tests/fixtures/check-fail/random_transitive_map_index_requires_transfer.diag
-test -s crates/aura-compiler/tests/fixtures/check-fail/generic_vec_index_clone_safety_guidance.diag
-test -s crates/aura-compiler/tests/fixtures/check-fail/generic_map_index_clone_safety_guidance.diag
+test -s crates/aura-compiler/tests/fixtures/check-fail/random_list_index_requires_transfer.diag
+test -s crates/aura-compiler/tests/fixtures/check-fail/random_transitive_dict_index_requires_transfer.diag
+test -s crates/aura-compiler/tests/fixtures/check-fail/generic_list_index_clone_safety_guidance.diag
+test -s crates/aura-compiler/tests/fixtures/check-fail/generic_dict_index_clone_safety_guidance.diag
 test -s crates/aura-compiler/tests/fixtures/run-pass/random_index_remove_transfers_ownership.stdout
-grep -Fq 'cannot clone it because' crates/aura-compiler/tests/fixtures/check-fail/random_vec_index_requires_transfer.diag
-grep -Fq 'cannot clone it because' crates/aura-compiler/tests/fixtures/check-fail/random_transitive_map_index_requires_transfer.diag
-grep -Fq 'requires a clone-safe' crates/aura-compiler/tests/fixtures/check-fail/generic_vec_index_clone_safety_guidance.diag
-grep -Fq 'requires a clone-safe' crates/aura-compiler/tests/fixtures/check-fail/generic_map_index_clone_safety_guidance.diag
+grep -Fq 'cannot clone it because' crates/aura-compiler/tests/fixtures/check-fail/random_list_index_requires_transfer.diag
+grep -Fq 'cannot clone it because' crates/aura-compiler/tests/fixtures/check-fail/random_transitive_dict_index_requires_transfer.diag
+grep -Fq 'requires a clone-safe' crates/aura-compiler/tests/fixtures/check-fail/generic_list_index_clone_safety_guidance.diag
+grep -Fq 'requires a clone-safe' crates/aura-compiler/tests/fixtures/check-fail/generic_dict_index_clone_safety_guidance.diag
 grep -Fq 'clone-safety' docs/manual/diagnostics.md
 grep -Fq 'clone-safety' docs/manual/conformance.md
 grep -Fq 'clone-safety classification' architecture_docs/decisions/0014-map-literals-and-indexing.md
-grep -Fq 'remove(index)' tutorials/02-bindings-and-types.md
-grep -Fq 'remove(index)' tutorials/14-current-language-surface.md
+grep -Fq 'pop(index)' tutorials/02-bindings-and-types.md
+grep -Fq 'pop(index)' tutorials/14-current-language-surface.md
 
 # B3.0-e: builtin function redefinition owns `AU2007` instead of the `AU2999`
 # catch-all.
@@ -187,21 +215,21 @@ grep -Fq '0029-enumerate-and-zip-loop-forms.md' architecture_docs/decisions/READ
 grep -Fq 'distinct typed binding identities' architecture_docs/decisions/0029-enumerate-and-zip-loop-forms.md
 grep -Fq 'ADR-0028, and ADR-0029.' docs/manual/status-and-compatibility.md
 grep -Fq 'function-wide per-loop binding-slot isolation' docs/manual/conformance.md
-grep -Fq 'mut numbers = Vec[int64]()' crates/aura-compiler/tests/fixtures/run-pass/enumerate_and_zip.au
+grep -Fq 'mut numbers = list[int64]()' crates/aura-compiler/tests/fixtures/run-pass/enumerate_and_zip.au
 grep -Fq 'for number, word in zip(numbers, words):' crates/aura-compiler/tests/fixtures/run-pass/enumerate_and_zip.au
 grep -Fq 'for number, word in zip(words, numbers):' crates/aura-compiler/tests/fixtures/run-pass/enumerate_and_zip.au
 grep -Fxq 'one=1' crates/aura-compiler/tests/fixtures/run-pass/enumerate_and_zip.stdout
 grep -Fxq 'two=2' crates/aura-compiler/tests/fixtures/run-pass/enumerate_and_zip.stdout
 grep -Fq 'fn every_ordinary_for_form_uses_a_fresh_scoped_target_slot()' crates/aura-compiler/src/mir_tests.rs
 grep -Fq 'for label, value in jobs:' crates/aura-compiler/tests/fixtures/run-pass/tuple_for_pattern_queue.au
-grep -Fq 'def update_first(values: mut Vec[int64]) -> int64:' crates/aura-compiler/tests/fixtures/run-pass/vec_borrow_mut_iteration.au
-test "$(grep -Fxc '24' crates/aura-compiler/tests/fixtures/run-pass/vec_borrow_mut_iteration.stdout)" -eq 3
+grep -Fq 'def update_first(values: mut list[int64]) -> int64:' crates/aura-compiler/tests/fixtures/run-pass/list_mut_iteration.au
+test "$(grep -Fxc '24' crates/aura-compiler/tests/fixtures/run-pass/list_mut_iteration.stdout)" -eq 3
 grep -Fq '= "int" | "int8"' docs/manual/grammar.md
 grep -Fq 'Integer literals default to `int64`' tutorials/02-bindings-and-types.md
 grep -Fq '`int` is an alias for `int64`' "$proposal_md"
 grep -Fq '<code>int</code> is an alias for <code>int64</code>' "$proposal_html"
-grep -Fq '+ += - -= * *= / /= // //= % %=' docs/manual/lexical-structure.md
-grep -Fq 'assignment-operator = "=" | "+=" | "-=" | "*=" | "/=" | "//=" | "%=" ;' docs/manual/grammar.md
+assert_wrapped_text docs/manual/lexical-structure.md '+ += - -= * *= ** **= / /= // //= % %= & &= | |= ^ ^= ~ << <<= >> >>='
+assert_wrapped_text docs/manual/grammar.md 'assignment-operator = "=" | "+=" | "-=" | "*=" | "**=" | "/=" | "//=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" ;'
 grep -Fq '{ ("*" | "/" | "//" | "%"), prefix-expression } ;' docs/manual/grammar.md
 grep -Fq 'integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division' docs/manual/static-semantics.md
 grep -Fq 'CPython-compatible divmod correction' docs/manual/execution-model.md
@@ -223,7 +251,7 @@ grep -Fq '| `random.Rng.next_int` | `next_int(lo: int64, hi: int64) -> int64`' d
 grep -Fq 'result = rotl(s1 * 5, 7) * 9' docs/manual/randomness.md
 grep -Fq 'threshold = 2^64 mod span' docs/manual/randomness.md
 grep -Fq 'secure_bytes(0)' docs/manual/randomness.md
-grep -Fq 'stable throughout the Aura 0.2.x' docs/manual/randomness.md
+grep -Fq 'stable throughout the Aura 0.3.x' docs/manual/randomness.md
 grep -Fq '3321214725393783201' docs/manual/randomness.md
 grep -Fq 'The no-clone rule is transitive.' docs/manual/randomness.md
 grep -Fq '`AU3007` rejects an operation that would duplicate non-cloneable state.' docs/manual/diagnostics.md
@@ -236,8 +264,8 @@ grep -Fq 'unsafe concrete specialization' docs/manual/diagnostics.md
 grep -Fq 'code: "AU3007"' crates/aura-compiler/src/diag.rs
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md
 grep -Fq '0020-randomness-algorithm-and-security-boundary.md' architecture_docs/decisions/README.md
-grep -Fq '| `json.parse` | `parse(text: String) -> Result[json.Value, json.Error]` |' docs/manual/api-index.md
-grep -Fq '| `json.dumps` | `dumps(value: json.Value, indent: Option[int64] = None) -> String` |' docs/manual/api-index.md
+grep -Fq '| `json.parse` | `parse(text: str) -> Result[json.Value, json.Error]` |' docs/manual/api-index.md
+grep -Fq '| `json.dumps` | `dumps(value: json.Value, indent: Option[int64] = None) -> str` |' docs/manual/api-index.md
 grep -Fq '`json.Value` is a move type' docs/manual/types.md
 grep -Fq 'JSON input-data failures are typed `json.Error` values' docs/manual/diagnostics.md
 grep -Fq 'recursive JSON parse/dump semantics' docs/manual/conformance.md
@@ -249,10 +277,10 @@ grep -Fq 'Derived class/enum schemas and generated codecs remain deferred beyond
 test -s examples/json/dynamic_values.au
 grep -Fq '`dynamic_values.au`' examples/README.md
 grep -Fq '[21-json.md]' tutorials/README.md
-grep -Fq '| `String.to_bytes` | `to_bytes() -> Vec[uint8]`' docs/manual/api-index.md
-grep -Fq '| `String.from_bytes` | `from_bytes(bytes: Vec[uint8]) -> Result[String, bytes.Error]`' docs/manual/api-index.md
-grep -Fq '| `bytes.base64_decode` | `base64_decode(text: String) -> Result[Vec[uint8], bytes.Error]`' docs/manual/api-index.md
-grep -Fq '| `bytes.sha256_string` | `sha256_string(text: String) -> Vec[uint8]`' docs/manual/api-index.md
+grep -Fq '| `str.to_bytes` | `to_bytes() -> list[uint8]`' docs/manual/api-index.md
+grep -Fq '| `str.from_bytes` | `from_bytes(bytes: list[uint8]) -> Result[str, bytes.Error]`' docs/manual/api-index.md
+grep -Fq '| `bytes.base64_decode` | `base64_decode(text: str) -> Result[list[uint8], bytes.Error]`' docs/manual/api-index.md
+grep -Fq '| `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]`' docs/manual/api-index.md
 grep -Fq 'ordinary shared-borrow default' docs/manual/bytes.md
 grep -Fq 'standard alphabet and canonical padding' docs/manual/bytes.md
 grep -Fq 'InvalidHexDigit(index: int32, byte: uint8)' architecture_docs/decisions/0023-byte-vector-codecs-and-hashing-policy.md
@@ -277,34 +305,31 @@ test -s examples/basics/numbers.au
 grep -Fq '`numbers.au`' examples/README.md
 grep -Fq '[examples/basics/numbers.au]' tutorials/07-strings-and-numbers.md
 grep -Fq 'Ordinary string literals use matching single or double quote delimiters' docs/manual/lexical-structure.md
-grep -Fq 'F-strings themselves' docs/manual/lexical-structure.md
+assert_wrapped_text docs/manual/lexical-structure.md 'F-strings support the same escapes as ordinary strings and remain double-quoted.'
 grep -Fq 'Counts Unicode scalar values in O(n)' docs/manual/api-index.md
 grep -Fq 'Returns the UTF-8 byte count in O(1)' docs/manual/api-index.md
-grep -Fq 'negative index `i` is' docs/manual/collections.md
-grep -Fq 'normalized once as `len + i`' docs/manual/collections.md
-grep -Fq 'does not clamp' docs/manual/collections.md
+grep -Fq 'normalize a negative position' docs/manual/collections.md
+grep -Fq 'once as `len() + index`' docs/manual/collections.md
+grep -Fq '`insert` applies Python clamping.' docs/manual/collections.md
 grep -Fq "unicode = 'A🎉'" examples/strings/string_methods.au
 grep -Fq 'unicode.len()' examples/strings/string_methods.au
 grep -Fq 'unicode.byte_len()' examples/strings/string_methods.au
-grep -Fq 'values.insert(index=-1, value=2)' examples/collections/vec_polish.au
+grep -Fq 'values.insert(index=-1, value=2)' examples/collections/list_polish.au
 grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0030-len-and-str-builtins.md
 grep -Fq '## B3.0-d amendment and ratification' architecture_docs/decisions/0030-len-and-str-builtins.md
 grep -Fq '`len(value)` and `value.len()` are the same operation with the same static' architecture_docs/decisions/0030-len-and-str-builtins.md
 grep -Fq 'result type, value, and ownership behavior: both produce `int64`' architecture_docs/decisions/0030-len-and-str-builtins.md
 grep -Fq '0030-len-and-str-builtins.md' architecture_docs/decisions/README.md
-grep -Fq -- '- Amended: 2026-07-26 (B3.0-d int64 String length results)' architecture_docs/decisions/0004-string-semantics.md
-grep -Fq '`String.len() -> int64` returns the number of Unicode scalar values' architecture_docs/decisions/0004-string-semantics.md
-grep -Fq '`String.byte_len() -> int64` returns the number of' architecture_docs/decisions/0004-string-semantics.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0004-string-semantics.md
 grep -Fq -- '- Amended: 2026-07-26 (B3.0-d codec output safety ceiling clarification)' architecture_docs/decisions/0023-byte-vector-codecs-and-hashing-policy.md
 grep -Fq 'The 2026-07-26 B3.0-d amendment preserves both the exact codec destination' architecture_docs/decisions/0023-byte-vector-codecs-and-hashing-policy.md
-grep -Fq 'neither narrows the public String or `Vec` length domain.' architecture_docs/decisions/0023-byte-vector-codecs-and-hashing-policy.md
-grep -Fq '| `String.len` | `len() -> int64` | Counts Unicode scalar values in O(n). |' docs/manual/api-index.md
-grep -Fq '| `String.byte_len` | `byte_len() -> int64` | Returns the UTF-8 byte count in O(1). |' docs/manual/api-index.md
-grep -Fq '| `Vec.len` | `len() -> int64` | Element count. |' docs/manual/api-index.md
-grep -Fq '| `Map.len` | `len() -> int64` | Entry count. |' docs/manual/api-index.md
-grep -Fq '| `Set.len` | `len() -> int64` | Unique value count. |' docs/manual/api-index.md
+grep -Fq '| `str.len` | `len() -> int64` | Counts Unicode scalar values in O(n). |' docs/manual/api-index.md
+grep -Fq '| `str.byte_len` | `byte_len() -> int64` | Returns the UTF-8 byte count in O(1). |' docs/manual/api-index.md
+grep -Fq '| `list.len` | `len() -> int64` | Element count. |' docs/manual/api-index.md
+grep -Fq '| `dict.len` | `len() -> int64` | Entry count. |' docs/manual/api-index.md
+grep -Fq '| `set.len` | `len() -> int64` | Unique value count. |' docs/manual/api-index.md
 grep -Fq 'so `len(value)` and `value.len()` have the' docs/manual/expressions.md
-grep -Fq 'same static type and value. `String.byte_len()` likewise produces `int64`' docs/manual/expressions.md
+grep -Fq 'same static type and value. `str.byte_len()` likewise produces `int64`' docs/manual/expressions.md
 grep -Fq 'Self::StringLen => "len() -> int64"' crates/aura-compiler/src/call.rs
 grep -Fq 'Self::StringByteLen => "byte_len() -> int64"' crates/aura-compiler/src/call.rs
 grep -Fq 'Self::VecLen => "len() -> int64"' crates/aura-compiler/src/call.rs
@@ -321,35 +346,36 @@ grep -Fq 'fn mir_types_public_length_members_as_int64()' crates/aura-compiler/sr
 grep -Fq 'fn analysis_and_completion_report_public_length_members_as_int64()' crates/aura-compiler/src/analysis_tests.rs
 grep -Fq 'test("compiler bridge exposes all public length members as int64"' tools/aura-language-server/test/compiler_bridge.test.js
 grep -Fq '"free len(...) and the corresponding member length must have the same int64 type"' tools/aura-language-server/test/compiler_bridge.test.js
-grep -Fq '"```aura\nlen(value: String|Vec[T]|Map[K, V]|Set[T]) -> int64\n```"' tools/aura-language-server/test/compiler_bridge.test.js
-grep -Fq 'test("compiler bridge includes Vec collection members in completions"' tools/aura-language-server/test/compiler_bridge.test.js
-grep -Fq 'test("compiler bridge includes String and Map builtin members in completions"' tools/aura-language-server/test/compiler_bridge.test.js
-grep -Fq 'test("compiler bridge includes Set collection members and MapEntry fields"' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq '"```aura\nlen(value: str|list[T]|dict[K, V]|set[T]) -> int64\n```"' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'test("compiler bridge includes list collection members in completions"' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'test("compiler bridge includes str and dict builtin members in completions"' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'test("compiler bridge exposes canonical set members and tuple-shaped dict items"' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'test("compiler bridge exposes collection with_capacity constructors"' tools/aura-language-server/test/compiler_bridge.test.js
 grep -Fq 'assert.equal(details.get("len"), "len() -> int64");' tools/aura-language-server/test/compiler_bridge.test.js
 grep -Fq '"byte_len() -> int64"' tools/aura-language-server/test/compiler_bridge.test.js
 test "$(grep -Fc '"len() -> int64"' tools/aura-language-server/test/compiler_bridge.test.js)" -ge 4
-grep -Fq 'end_index = values.len() as int32' docs/manual/collections.md
-grep -Fq 'end_index: int32 = items.len() as int32' tutorials/02-bindings-and-types.md
-grep -Fq 'for index in range(values.len() as int32):' examples/collections/vec_polish.au
-test -s crates/aura-compiler/tests/fixtures/run-pass/vec_len_range.au
-grep -Fq 'for index in range(values.len() as int32):' crates/aura-compiler/tests/fixtures/run-pass/vec_len_range.au
+for builtin in list dict set str; do
+  grep -Fq "  \"${builtin}\"," tools/aura-language-server/src/recovery.js
+done
+grep -Fq 'float64|str|list|dict|set|Duration' tools/vscode-aura/syntaxes/aura.tmLanguage.json
+grep -Fq 'List positions and written slice endpoints use the `int64` index domain.' docs/manual/collections.md
+grep -Fq 'end_index: int64 = items.len()' tutorials/02-bindings-and-types.md
+grep -Fq 'for index in range(values.len()):' examples/collections/list_polish.au
+test -s crates/aura-compiler/tests/fixtures/run-pass/list_len_range.au
+grep -Fq 'for index in range(values.len()):' crates/aura-compiler/tests/fixtures/run-pass/list_len_range.au
 grep -Fq 'fn direct_member_length_explicit_int32_cast_keeps_checked_narrowing()' crates/aura-compiler/src/native_codegen_tests.rs
 grep -Fq 'execute `int64` member lengths, `len(value) == value.len()`' README.md
-grep -Fq 'checked `int64`-length to `int32`-index' README.md
-grep -Fq 'the `int64` results of `String.len()`, `String.byte_len()`, `Vec.len()`' examples/README.md
-grep -Fq '`Map.len()`, and `Set.len()`; `len(value) == value.len()`' examples/README.md
-grep -Fq 'an explicit checked `as int32` conversion from `Vec.len()`' examples/README.md
-grep -Fq '`String.byte_len()`, `Vec.len()`, `Map.len()`, and `Set.len()` all return' tutorials/README.md
+grep -Fq 'cast-free length-driven indexing' README.md
+grep -Fq 'the `int64` results of `str.len()`, `str.byte_len()`, `list.len()`' examples/README.md
+grep -Fq '`dict.len()`, and `set.len()`; `len(value) == value.len()`' examples/README.md
+grep -Fq '`str.byte_len()`, `list.len()`, `dict.len()`, and `set.len()` all return' tutorials/README.md
 grep -Fq 'host_count: int64 = hosts.len()' examples/basics/len_and_str.au
 grep -Fq 'assert len(hosts) == host_count' examples/basics/len_and_str.au
 grep -Fq 'byte_count: int64 = text.byte_len()' examples/basics/len_and_str.au
-grep -Fq '`Vec.len()`, `Map.len()`, and `Set.len()` all return `int64`.' tutorials/02-bindings-and-types.md
+grep -Fq '`list.len()`, `dict.len()`, and `set.len()` all return `int64`.' tutorials/02-bindings-and-types.md
 grep -Fq '`len()` and therefore satisfies `len(value) == value.len()`' tutorials/14-current-language-surface.md
-grep -Fq '## Lengths Are `int64`' docs/learn/collections.md
-grep -Fq 'All five maintained length members return `int64`:' docs/learn/collections.md
-grep -Fq 'The free builtin delegates to the member, so `len(value) == value.len()`' docs/learn/collections.md
-grep -Fq 'values.insert(values.len() as int32, 40)' docs/learn/collections.md
-grep -Fq 'for index in range(values.len() as int32):' docs/learn/collections.md
+grep -Fq 'Positions use `int64`. Negative positions count from the end:' docs/learn/collections.md
+grep -Fq 'values.append(40)' docs/learn/collections.md
 grep -Fq 'pub(crate) const MAX_CODEC_OUTPUT_LEN: usize = i32::MAX as usize;' crates/aura-compiler/src/bytes_codec.rs
 grep -Fq 'fn checked_codec_output_len(output_len: Option<usize>) -> Result<usize, BytesResourceError>' crates/aura-compiler/src/bytes_codec.rs
 grep -Fq 'Some(output_len) if output_len <= MAX_CODEC_OUTPUT_LEN => Ok(output_len)' crates/aura-compiler/src/bytes_codec.rs
@@ -371,12 +397,12 @@ grep -Fq 'byte-codec error metadata exceeds the `bytes.Error` int32 payload rang
 grep -Fq 'Required malformed-data metadata above the `int32` maximum traps with' docs/manual/bytes.md
 grep -Fq 'whose exact reported offset or length exceeds `2147483647` also traps with' docs/manual/bytes.md
 grep -Fq 'secure-random request and resource ceiling. This ceiling bounds allocation' architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md
-grep -Fq 'or narrow the public `Vec` length domain or the result of `Vec.len()`.' docs/manual/randomness.md
-grep -Fq 'independent of the public String and `Vec` length domains.' docs/manual/bytes.md
+grep -Fq 'or narrow the public `list` length domain or the result of `list.len()`.' docs/manual/randomness.md
+grep -Fq 'independent of the public str and `list` length domains.' docs/manual/bytes.md
 grep -Fq 'Its offsets and lengths remain `int32` as the current error-payload' docs/manual/bytes.md
 grep -Fq 'Crossing this codec output/resource cap' docs/manual/current-limits.md
-grep -Fq 'the public String and `Vec` length domains.' docs/manual/current-limits.md
-grep -Fq 'resource and safety ceiling, independently of the public `Vec` length' docs/manual/current-limits.md
+grep -Fq 'the public str and `list` length domains.' docs/manual/current-limits.md
+grep -Fq 'resource and safety ceiling, independently of the public `list` length' docs/manual/current-limits.md
 
 if rg -n '(byte_)?len\(\) (->|-&gt;) int32' \
   architecture_docs/decisions \
@@ -407,7 +433,7 @@ fi
 # Historical work notes and the explicitly historical language proposal retain
 # superseded wording. Maintained surfaces must use operation-specific names and
 # describe these numeric ceilings as resource boundaries, never as the maximum
-# representable Vec/collection size.
+# representable list/collection size.
 if rg -n 'MAX_(VEC|VECTOR|COLLECTION)(_OUTPUT)?_(LEN|LENGTH|SIZE)|checked_(vec|vector|collection)(_output)?_(len|length|size)|SecureRandomError::(LengthTooLarge|RequestTooLarge)|Self::(LengthTooLarge|RequestTooLarge)|BytesResourceError::((Vec|Vector|Collection)(Length|Output)?TooLarge)' \
   crates/aura-compiler/src \
   crates/aura-compiler/tests; then
@@ -415,7 +441,7 @@ if rg -n 'MAX_(VEC|VECTOR|COLLECTION)(_OUTPUT)?_(LEN|LENGTH|SIZE)|checked_(vec|v
   exit 1
 fi
 
-if rg -U -n -i 'maximum (representable )?(Vec|collection) (length|size)|(?:maximum|largest)[^.\n]{0,80}(?:Vec|collection)[^.\n]{0,50}(?:length|size)|(?:Vec|collection) (?:length|size)[^\n]{0,100}(?:is |are )?(?:capped|limited|bounded) (?:at|to|by) (?:2,147,483,647|2147483647)|(?:Vec|collection)[^.\n]{0,50}(?:length|size)[^.\n]{0,80}(?:i32::MAX|int32 maximum)|(?:2,147,483,647|2147483647)[^\n]{0,80}(?:maximum|representable)[^\n]{0,50}(?:Vec|collection)' \
+if rg -U -n -i 'maximum (representable )?(list|collection) (length|size)|(?:maximum|largest)[^.\n]{0,80}(?:list|collection)[^.\n]{0,50}(?:length|size)|(?:list|collection) (?:length|size)[^\n]{0,100}(?:is |are )?(?:capped|limited|bounded) (?:at|to|by) (?:2,147,483,647|2147483647)|(?:list|collection)[^.\n]{0,50}(?:length|size)[^.\n]{0,80}(?:i32::MAX|int32 maximum)|(?:2,147,483,647|2147483647)[^\n]{0,80}(?:maximum|representable)[^\n]{0,50}(?:list|collection)' \
   architecture_docs/decisions \
   docs/manual \
   docs/learn \
@@ -424,10 +450,10 @@ if rg -U -n -i 'maximum (representable )?(Vec|collection) (length|size)|(?:maxim
   README.md \
   examples/README.md \
   tutorials/README.md; then
-  echo "maintained reference still derives a Vec or collection-length limit from a resource ceiling" >&2
+  echo "maintained reference still derives a list or collection-length limit from a resource ceiling" >&2
   exit 1
 fi
-grep -Fq 'mut borrow own indirect' docs/manual/lexical-structure.md
+grep -Fq 'class enum def trait impl import from mut own indirect public extern opaque' docs/manual/lexical-structure.md
 grep -Fq '| "own", "self"' docs/manual/grammar.md
 grep -Fq 'Bare `self` is the shared receiver, `mut self` is mutable, and `own self` is consuming' docs/manual/grammar.md
 grep -Fq '| `own self` | Consuming receiver.' docs/manual/classes.md
@@ -488,7 +514,7 @@ grep -Fq 'Accepted ADR-0032 guarded 512 KiB default task stacks' docs/manual/con
 grep -Fq 'consuming a bare shared parameter reports that parameter `x` is' docs/manual/diagnostics.md
 grep -Fq 'the current compiler emits at most one' docs/manual/diagnostics.md
 grep -Fq 'constant tuple indexing that selects a non-copy element' docs/manual/diagnostics.md
-grep -Fq 'corresponding `Vec` or `Map` indexed compound assignment' docs/manual/diagnostics.md
+grep -Fq 'corresponding `list` or `dict` indexed compound assignment' docs/manual/diagnostics.md
 grep -Fq 'code: "AU3005"' crates/aura-compiler/src/diag.rs
 grep -Fq 'code: "AU3006"' crates/aura-compiler/src/diag.rs
 grep -Fq 'or: aura build -o <output>' crates/aura/src/main.rs
@@ -541,18 +567,17 @@ for namespace in io fs net process bytes json sys path toml log trace metrics ra
   grep -Fq -- "- \`${namespace}\`" tutorials/14-current-language-surface.md
 done
 grep -Fq 'default temporary lives until the call completes' docs/manual/execution-model.md
-grep -Fq 'push(value: own T)' docs/manual/api-index.md
-grep -Fq 'set(key: own K, value: own V)' docs/manual/api-index.md
+grep -Fq 'append(value: own T)' docs/manual/api-index.md
+grep -Fq 'update(other: own dict[K, V])' docs/manual/api-index.md
 grep -Fq 'put(value: own T' docs/manual/api-index.md
 grep -Fq 'result_or(default: own T' docs/manual/api-index.md
 grep -Fq 'start(function, own ...) -> Task[T]' docs/manual/api-index.md
 grep -Fq 'restart: own process.RestartPolicy' docs/manual/api-index.md
 grep -Fq 'bare `for value in queue:` form' architecture_docs/decisions/0006-parameter-and-loop-ownership-defaults.md
-grep -Fq 'borrow mut' architecture_docs/decisions/0006-parameter-and-loop-ownership-defaults.md
 grep -Fq 'for name in own names' tutorials/06-ownership-and-borrowing.md
 grep -Fq 'def handle(stream: own net.TcpStream)' docs/manual/network.md
 grep -Fq 'def handle(stream: own net.TcpStream)' docs/learn/io-process-networking.md
-grep -Fq 'def serve(addresses: Queue[String])' tutorials/19-io-and-networking.md
+grep -Fq 'def serve(addresses: Queue[str])' tutorials/19-io-and-networking.md
 grep -Fq 'Listeners and other live network resources are not `Transfer`' tutorials/19-io-and-networking.md
 grep -Fq 'def process_file(handle: own FileHandle)' tutorials/12-error-propagation.md
 grep -Fq '`Queue[T]` is a copy handle to shared runtime state.' tutorials/06-ownership-and-borrowing.md
@@ -690,6 +715,18 @@ if rg -n 'Strings use double quotes|Strings are double-quoted|`STRING` is a doub
   exit 1
 fi
 
+# Batch S1 S4.1/S4.6: exact string forms and the closed static formatting
+# grammar move with the compiler, both backends, teaching track, and editor.
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0046-string-literals-and-format-specifications.md
+grep -Fq 'Three matching quotes create an exact multiline string' docs/manual/lexical-structure.md
+grep -Fq 'The grammar is `[[fill]align][sign][width][,][.precision][type]`' docs/manual/lexical-structure.md
+grep -Fq 'Accepted ADR-0046 exact triple-quoted and raw string forms' docs/manual/conformance.md
+test -s examples/strings/literal_forms_and_formatting.au
+test -s crates/aura-compiler/tests/fixtures/run-pass/string_literal_forms_and_format_specs.au
+test -s crates/aura-compiler/tests/fixtures/check-fail/fstring_spec_type_mismatch.diag
+grep -Fq 'compiler bridge analyzes exact string forms and typed format specifications' tools/aura-language-server/test/compiler_bridge.test.js
+grep -Fq 'extension grammar and snippets cover Aura 0.3 string forms' tools/vscode-aura/test/package.test.js
+
 if rg -n '`self` -- by-value|plain `self` receiver|`self` consumes|\| `self` \| Consume' \
   docs/manual \
   tutorials \
@@ -698,7 +735,7 @@ if rg -n '`self` -- by-value|plain `self` receiver|`self` consumes|\| `self` \| 
   exit 1
 fi
 
-if rg -n 'for x in expr:` consumes|for value in vec:` \| Consumes|`for value in names` iterates by value|Map\.get[^\n]*(takes|consumes) (its )?key by value|Every task target parameter must be by value|target.s ordinary parameters must be by value|TaskGroup[^\n]*(do not|does not) yet support borrowed parameters' \
+if rg -n 'for x in expr:` consumes|for value in values:` \| Consumes|`for value in names` iterates by value|dict\.get[^\n]*(takes|consumes) (its )?key by value|Every task target parameter must be by value|target.s ordinary parameters must be by value|TaskGroup[^\n]*(do not|does not) yet support shared parameters' \
   docs/manual \
   tutorials \
   docs/learn \
@@ -790,7 +827,7 @@ fi
 # repeatable-closure contract at the two compiler-known callback families.
 rg -U -q 'The worker may be a capture-free function value or a repeatable\s+value-capturing closure\.' docs/manual/control-plane.md
 rg -U -q 'The helper can therefore reuse one repeatable capturing closure across all\s+attempts without consuming its environment\.' docs/manual/control-plane.md
-grep -Fq 'Every Vec algorithm callback must be repeatable.' docs/manual/collections.md
+grep -Fq 'The callback must be repeatable.' docs/manual/collections.md
 rg -U -q 'An inner lambda cannot capture a bare parameter of its enclosing lambda,\s+even\s+when the parameter type is Copy\.' docs/manual/closures.md
 
 # Phase 5.8: Accepted ADR-0034 is an implemented builtin call, not the
@@ -876,12 +913,11 @@ grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0039-comprehensions
 grep -Fq '0039-comprehensions.md) — Accepted for Aura 0.2 in Batch 6, Phase 7.1' architecture_docs/decisions/README.md
 grep -Fq 'list-comprehension' docs/manual/grammar.md
 grep -Fq 'comprehension-clauses' docs/manual/grammar.md
-grep -Fq 'Evaluation is outer-major.' docs/manual/collections.md
-grep -Fq 'Although the output expression is written first' docs/manual/collections.md
-grep -Fq 'Queue keeps its receive carve-out' docs/manual/collections.md
+grep -Fq 'Nested clauses execute in outer-major order.' docs/manual/collections.md
+grep -Fq 'Filters run from left to right.' docs/manual/collections.md
+grep -Fq 'A dictionary comprehension evaluates its key before its value.' docs/manual/collections.md
 grep -Fq 'No comprehension target is visible after the closing' docs/manual/names-and-scopes.md
-grep -Fq 'A map comprehension key and value must have exactly `K` and `V`.' docs/manual/collections.md
-grep -Fq 'A map captures its key before evaluating its value.' docs/manual/execution-model.md
+grep -Fq 'A dictionary captures its key before evaluating its value.' docs/manual/execution-model.md
 grep -Fq 'generator expressions are unavailable; use an eager owned list comprehension or an explicit loop' docs/manual/diagnostics.md
 grep -Fq 'comprehensions use bare iteration; remove `mut` or `own` and write `for name in values`' docs/manual/diagnostics.md
 grep -Fq 'Accepted ADR-0039 eager owned comprehensions' docs/manual/conformance.md
@@ -894,7 +930,7 @@ grep -Fq 'examples/collections/comprehensions.au' tutorials/04-control-flow.md
 grep -Fq 'Comprehensions use the bare form' tutorials/06-ownership-and-borrowing.md
 grep -Fq 'comprehensions with filters and nested clauses' tutorials/README.md
 
-# Phase 7.2: Accepted ADR-0040 keeps the owned Vec/String slice contract
+# Phase 7.2: Accepted ADR-0040 keeps the owned list/str slice contract
 # synchronized across syntax, diagnostics, runtime fixtures, reference, and
 # maintained teaching material.
 test -s architecture_docs/decisions/0040-owned-vec-and-string-slices.md
@@ -905,12 +941,12 @@ grep -Fq 'both endpoints must be in the' architecture_docs/decisions/0040-owned-
 grep -Fq 'slice steps are unavailable; use an explicit loop to select a stride' docs/manual/diagnostics.md
 grep -Fq 'slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value' docs/manual/diagnostics.md
 grep -Fq 'Aura deliberately differs from Python here: slice endpoints are **not' docs/manual/expressions.md
-grep -Fq 'so slicing is O(n)' docs/manual/collections.md
-grep -Fq 'Accepted ADR-0040 owned Vec/String slices' docs/manual/conformance.md
+grep -Fq 'One-colon slices return fresh owned lists.' docs/manual/collections.md
+grep -Fq 'Accepted ADR-0040 owned list/str slices' docs/manual/conformance.md
 test -s crates/aura-compiler/tests/fixtures/parse-pass/owned_slices.au
 test -s crates/aura-compiler/tests/fixtures/check-pass/slice_static_semantics.au
-test -s crates/aura-compiler/tests/fixtures/run-pass/owned_vec_string_slices.au
-test -s crates/aura-compiler/tests/fixtures/run-pass/owned_vec_string_slices.stdout
+test -s crates/aura-compiler/tests/fixtures/run-pass/owned_list_string_slices.au
+test -s crates/aura-compiler/tests/fixtures/run-pass/owned_list_string_slices.stdout
 for fixture in \
   slice_step_explicit \
   slice_step_fully_omitted \
@@ -930,9 +966,9 @@ for fixture in \
     "crates/aura-compiler/tests/fixtures/parse-fail/${fixture}.diag"
 done
 for fixture in \
-  vec_slice_start_out_of_bounds \
-  vec_slice_end_out_of_bounds \
-  vec_slice_reversed_bounds \
+  list_slice_start_out_of_bounds \
+  list_slice_end_out_of_bounds \
+  list_slice_reversed_bounds \
   string_slice_start_out_of_bounds \
   string_slice_end_out_of_bounds \
   string_slice_reversed_bounds; do
@@ -946,9 +982,9 @@ grep -Fq 'celebration = text[1:2]' examples/collections/slices.au
 grep -Fq '`slices.au`' examples/README.md
 grep -Fq 'examples/collections/slices.au' README.md
 grep -Fq 'examples/collections/slices.au' tutorials/02-bindings-and-types.md
-grep -Fq 'owned Vec/String slices' tutorials/README.md
+grep -Fq 'owned list/str slices' tutorials/README.md
 
-if rg -n 'slicing waits for Phase 7|slice surface is reserved for Phase 7|Collection slicing is reserved|integer indexing or slicing (is|are) not supported on `String`|integer indexing and slicing are not defined for `String`' \
+if rg -n 'slicing waits for Phase 7|slice surface is reserved for Phase 7|Collection slicing is reserved|integer indexing or slicing (is|are) not supported on `str`|integer indexing and slicing are not defined for `str`' \
   architecture_docs/decisions \
   docs/manual \
   docs/learn \
@@ -966,7 +1002,7 @@ grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0041-contiguous-num
 grep -Fq '0041-contiguous-numeric-arrays.md) — Accepted for Aura 0.2 in Batch 6, Phase 7.3' architecture_docs/decisions/README.md
 grep -Fq 'array [ expression { , expression } ]' docs/manual/numeric-arrays.md
 grep -Fq 'copies its scalar elements, and leaves the' docs/manual/numeric-arrays.md
-grep -Fq 'shared source Vec usable' docs/manual/numeric-arrays.md
+grep -Fq 'shared source list usable' docs/manual/numeric-arrays.md
 grep -Fq 'method `set`, direct indexed read, and direct indexed assignment' docs/manual/numeric-arrays.md
 grep -Fq '`Some(old_value)` on success and traps on an invalid coordinate or rank.' docs/manual/expressions.md
 grep -Fq 'Floating reductions visit elements' docs/manual/numeric-arrays.md
@@ -985,7 +1021,7 @@ grep -Fq 'error[AU4004]: array division has a zero divisor at flat index 0' \
   crates/aura-compiler/tests/fixtures/run-fail/array_division_by_zero.diag
 grep -Fq 'Phase 7.3 adds global contiguous `Array[T]` values under Accepted ADR-0041.' docs/manual/status-and-compatibility.md
 test -s examples/numbers/numeric_arrays.au
-grep -Fq 'Array[int32].from_vec' examples/numbers/numeric_arrays.au
+grep -Fq 'Array[int32].from_list' examples/numbers/numeric_arrays.au
 grep -Fq '`numeric_arrays.au`' examples/README.md
 grep -Fq 'examples/numbers/numeric_arrays.au' README.md
 grep -Fq 'examples/numbers/numeric_arrays.au' tutorials/02-bindings-and-types.md
@@ -1017,7 +1053,5 @@ fi
 
 python3 scripts/test_reference_integrity.py
 python3 scripts/reference_integrity.py
-python3 scripts/test_capability_migrate.py
-python3 scripts/capability_migrate.py check
 python3 -m unittest scripts/test_release_metadata.py
 node --test docs/.vitepress/release-metadata.test.mjs

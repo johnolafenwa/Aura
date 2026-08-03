@@ -1,0 +1,6 @@
+def negative_exponent() -> int8:
+    return -1
+
+def main():
+    base: int8 = 2
+    print(base ** negative_exponent())

@@ -1,4 +1,4 @@
-def consume(value: own String) -> String:
+def consume(value: own str) -> str:
     return value
 
 def main():

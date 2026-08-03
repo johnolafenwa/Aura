@@ -1,0 +1,6 @@
+error[AU4002]: integer power overflow
+ --> crates/aura-compiler/tests/fixtures/run-fail/integer_power_overflow.au:4:11
+  |
+4 |     print(base ** exponent)
+  |           ^
+  = note: Aura call chain (innermost first): main at 1:1

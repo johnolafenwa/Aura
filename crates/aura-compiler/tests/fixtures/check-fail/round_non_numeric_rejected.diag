@@ -1,0 +1,5 @@
+error[AU2003]: `round(...)` expects an integer, `float32`, or `float64`, found `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/round_non_numeric_rejected.au:2:19
+  |
+2 |     value = round("1")
+  |                   ^

@@ -1,11 +1,11 @@
-def string_sender(ch: Channel[String]):
+def string_sender(ch: Channel[str]):
     ch.send("hello")
     ch.send("aura")
     ch.send("world")
     ch.close()
 
 def main() -> int32:
-    ch: Channel[String] = channel()
+    ch: Channel[str] = channel()
     task = spawn string_sender(ch.clone())
 
     mut count: int32 = 0

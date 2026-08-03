@@ -2,14 +2,14 @@
 ## Expects: "on" then "off"
 
 trait Describable:
-    def describe(self) -> String
+    def describe(self) -> str
 
 enum Switch:
     On
     Off
 
 impl Describable for Switch:
-    def describe(self) -> String:
+    def describe(self) -> str:
         match own self:
             case Switch.On:
                 return "on"

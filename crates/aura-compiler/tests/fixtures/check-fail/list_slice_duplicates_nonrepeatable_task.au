@@ -1,0 +1,2 @@
+def duplicate(values: list[Task[str]]) -> list[Task[str]]:
+    return values[:]

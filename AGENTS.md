@@ -118,6 +118,12 @@ consume the workstation indefinitely.
   `Cargo.lock`, `package-lock.json`, or dependency caches outside this
   repository as disposable build output.
 
+## Hosted CI Completion
+
+One complete green hosted CI run is sufficient evidence for a change. Do not
+require repeated or consecutive reruns unless the user explicitly requests
+them for a particular task.
+
 ## Tutorials And Examples
 
 The `tutorials/` directory should track the implemented subset of Aura, not just the proposal.

@@ -47,9 +47,9 @@ count += 1
 Aura infers the type of most bindings from their initial value. Add an explicit annotation when the compiler cannot work it out on its own — especially for empty collection literals, which have no elements to guess from:
 
 ```python
-values: Vec[int32] = []
-counts: Map[String, int32] = {}
-seen: Set[String] = {}
+values: list[int32] = []
+counts: dict[str, int32] = {}
+seen = set[str]()
 ```
 
 Annotations are also useful at module boundaries and in function signatures,
@@ -60,7 +60,7 @@ where the type forms part of the program's public contract.
 A function declares its parameters and its return type:
 
 ```python
-def classify(value: int32) -> String:
+def classify(value: int32) -> str:
     if value < 0:
         return "negative"
     elif value == 0:
@@ -81,7 +81,7 @@ def log_value(value: int32):
 Parameters may have defaults, so callers can omit them:
 
 ```python
-def classify_with_limit(value: int32, limit: int32 = 10) -> String:
+def classify_with_limit(value: int32, limit: int32 = 10) -> str:
     if value < 0:
         return "negative"
     elif value < limit:
@@ -171,7 +171,7 @@ for value in range(10):
 `match` is the tool for decisions with a shape. It can be used as a statement or as an expression that produces a value.
 
 ```python
-def status_name(code: int32) -> String:
+def status_name(code: int32) -> str:
     return match code:
         case 0:
             "ok"
@@ -183,10 +183,10 @@ def status_name(code: int32) -> String:
             "failed"
 ```
 
-Integer and `String` matches use `_` as a wildcard because their value spaces are open. Boolean matches are exhaustive when both `true` and `false` are covered:
+Integer and `str` matches use `_` as a wildcard because their value spaces are open. Boolean matches are exhaustive when both `true` and `false` are covered:
 
 ```python
-def enabled_name(enabled: bool) -> String:
+def enabled_name(enabled: bool) -> str:
     return match enabled:
         case true:
             "enabled"
@@ -202,7 +202,7 @@ Aura expresses parsing with `Result`, so a bad input becomes explicit control
 flow:
 
 ```python
-def parse_count(text: String) -> int32:
+def parse_count(text: str) -> int32:
     match parse_int32(text):
         case Result.Ok(value):
             return value
@@ -221,7 +221,7 @@ print(parse_count("forty-two"))
 This program classifies a list of numbers, counts how often each category appears, and prints the totals.
 
 ```python
-def classify(value: int32) -> String:
+def classify(value: int32) -> str:
     if value < 0:
         return "negative"
     elif value == 0:
@@ -231,31 +231,31 @@ def classify(value: int32) -> String:
     else:
         return "large"
 
-def bump(counts: mut Map[String, int32], key: own String):
+def bump(counts: mut dict[str, int32], key: own str):
     match counts.get(key):
         case Some(value):
-            counts.set(key, value + 1)
+            counts[key] = value + 1
         case None:
-            counts.set(key, 1)
+            counts[key] = 1
 
 values = [-3, 0, 1, 2, 10, 18, 21]
-mut counts: Map[String, int32] = {}
+mut counts: dict[str, int32] = {}
 
 for value in values:
     label = classify(value)
     bump(counts, label)
 
-for entry in counts.items():
-    print(f"{entry.key}: {entry.value}")
+for key, value in counts.items():
+    print(f"{key}: {value}")
 ```
 
 There are two details in `bump` worth slowing down for.
 
-`counts: mut Map[String, int32]` says the helper will mutate a map owned by its
+`counts: mut dict[str, int32]` says the helper will mutate a dictionary owned by its
 caller. The parameter declaration selects mutable access; the caller writes no
 capability prefix at the call site.
 
-`Map.get` borrows its key, so the same owned `key` can be moved into the later
+`dict.get` borrows its key, so the same owned `key` can be moved into the later
 `counts.set`. The `own` annotation says `bump` takes responsibility for storing
 the category string.
 

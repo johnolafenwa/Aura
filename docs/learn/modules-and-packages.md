@@ -42,6 +42,28 @@ print(double(21))
 
 Both styles are useful. A quick rule: when a file imports many names from a module, keep the module prefix; when the imported name is the central concept of the file, drop it.
 
+## Choosing Local Import Names
+
+Use `as` when the complete module path is too long for repeated use or when
+two modules export the same concise name:
+
+```python
+import helpers.math as integer_math
+from helpers.counter import Counter as ReadableCounter
+
+print(integer_math.double(21))
+counter = ReadableCounter(value=2)
+```
+
+The alias is the only local name introduced by that import entry. It changes
+how the importer spells the name, while the declaration keeps its original
+module identity, type, visibility, and behavior. A from-import may mix direct
+and aliased entries:
+
+```python
+from helpers.math import double as twice, empty
+```
+
 Both styles also preserve the full callable contract. If a public generic
 helper performs a clone-producing operation, its inferred clone-safety
 obligation follows the import and is checked where the helper is specialized.

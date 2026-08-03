@@ -69,7 +69,7 @@ def transition(state: State, event: Event) -> State:
                 case _:
                     return State.TimeWait
 
-def state_name(state: State) -> String:
+def state_name(state: State) -> str:
     match own state:
         case State.Closed:
             return "Closed"

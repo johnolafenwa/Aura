@@ -1,6 +1,9 @@
 # Language Specification
 
-This Manual is the normative specification of the implemented Aura 0.2 language. It defines the source language, static rules, ownership model, execution behavior, maintained runtime APIs, package model, and tool contracts that a conforming implementation must provide.
+This Manual is the normative specification of the implemented Aura 0.3
+development language. It defines the source language, static rules, ownership
+model, execution behavior, maintained runtime APIs, package model, and tool
+contracts that a conforming implementation must provide.
 
 The specification describes exactly the language implemented in this repository.
 
@@ -31,10 +34,14 @@ Ordinary present-tense statements are normative when they describe accepted synt
 
 ## Specification Version
 
-This reference describes Aura 0.2 as implemented by the repository containing it. Aura 0.2 is an advanced technical preview, so source and API compatibility may still change before a tagged stable release. Any behavior change MUST update the relevant reference page, conformance tests, examples, tutorials, and work record in the same pass.
+This reference describes Aura 0.3 as implemented by the repository containing
+it. Aura is an advanced technical preview, so source and API contracts may
+change before a tagged stable release. Any behavior change MUST update the
+relevant reference page, conformance tests, examples, tutorials, and work
+record in the same pass.
 
 The repository commit identifies the precise revision of the specification.
-The rendered Manual is stamped with source version 0.2.0 (technical preview)
+The rendered Manual is stamped with source version 0.3.0 (development channel)
 and its implementation baseline commit. Release builds supply that commit
 without writing a self-referential hash into this source page; see the
 [Manual overview](/manual/) for the exact precedence and local fallback.
@@ -90,12 +97,12 @@ A failure in phases 1–4 is a compile-time diagnostic. A checked program may st
 
 **Clone-producing operation**
 : An operation that creates a second owned structural value while retaining the
-  original, including explicit collection clones, cloned collection reads, and
+  original, including explicit collection copies, cloned collection reads, and
   task-result observations.
 
 **Clone-safety obligation**
 : An inferred callable requirement that a substituted type must not duplicate
-  non-cloneable state through a clone-producing operation. Aura 0.2 protects
+  non-cloneable state through a clone-producing operation. Aura 0.3 protects
   `random.Rng` state under this contract.
 
 **Borrow**
@@ -127,7 +134,7 @@ Some behavior is intentionally platform-dependent:
 - `intsize` and `uintsize` follow the host pointer width.
 - filesystem paths, process behavior, Unix sockets, available address families, and host error messages depend on the platform.
 - ordering of external events and concurrently ready tasks is not a deterministic language guarantee unless an API states otherwise.
-- map and set iteration follow the maintained runtime's insertion-oriented representation today, but programs should rely only on ordering explicitly promised by the relevant API contract.
+- dictionary and set iteration follow the maintained runtime's insertion-oriented representation today, but programs should rely only on ordering explicitly promised by the relevant API contract.
 
 Implementation-defined or platform-dependent behavior MUST remain within the constraints documented by the relevant Manual page. Behavior not granted by the specification, especially dependence on object layout, task scheduling order, hash identity, native symbol names, or diagnostic byte offsets, is unspecified and must not be required for portable Aura programs.
 

@@ -1,7 +1,7 @@
 class NoClose:
     value: int32
 
-def test() -> Result[String, String]:
+def test() -> Result[str, str]:
     with r = NoClose(value=1):
         return Result.Ok("done")
 

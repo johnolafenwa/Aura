@@ -3,7 +3,7 @@ import user_rng_origin_support.random
 class Rng:
     value: int64
 
-    def label(self) -> String:
+    def label(self) -> str:
         return f"entry:{self.value}"
 
     def clone(self) -> Rng:

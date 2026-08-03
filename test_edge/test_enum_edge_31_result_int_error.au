@@ -1,4 +1,4 @@
-# Test: Result with non-String error type (int32 error code)
+# Test: Result with non-str error type (int32 error code)
 def divide_or_code(a: int32, b: int32) -> Result[int32, int32]:
     if b == 0:
         return Result.Err(-1)

@@ -56,7 +56,7 @@ host-unrepresentable wait is invalid and never means “wait forever.”
 When the program does not need a handle to a child's result, use `start_soon`:
 
 ```python
-def say(label: String):
+def say(label: str):
     print(label)
 
 with group = TaskGroup():
@@ -110,7 +110,7 @@ When both the parent and the child want the same clone-safe move value, clone
 before starting:
 
 ```python
-def worker(label: String):
+def worker(label: str):
     print(label)
 
 with group = TaskGroup():
@@ -125,7 +125,7 @@ task-owned capture, `own` parameters consume it, and `mut` targets are rejected
 because detached capture has no caller-visible writeback.
 
 Every captured argument and the target result must be structurally `Transfer`
-after generic specialization. Copy data, `String`, structurally transferable
+after generic specialization. Copy data, `str`, structurally transferable
 collections and user data, and Queue/Task handle identities can cross.
 Capability views, `random.Rng`, `TaskGroup`, and live file, process, or network
 resources cannot. The compiler derives `Transfer`; user code cannot implement
@@ -168,7 +168,7 @@ program can often rely on normal exit to drain the queue; explicitly calling
 `Queue[T]()` creates an unbounded queue. An unbounded queue is convenient but risky: a fast producer and a slow consumer will let memory grow without limit. A **bounded** queue says how many values are allowed in flight:
 
 ```python
-jobs = Queue[String](capacity=2)
+jobs = Queue[str](capacity=2)
 ```
 
 When a bounded queue is full, `put` waits until space is available, a timeout expires, the queue closes, or the task is cancelled. The failure shape is `SendError[T]`, which carries the unsent value back to the caller:
@@ -194,7 +194,7 @@ match jobs.put("compile", timeout=50ms):
 A common shape has one producer and several workers. Each worker reads the same queue until the producer closes it:
 
 ```python
-def worker(name: String, jobs: Queue[int32]):
+def worker(name: str, jobs: Queue[int32]):
     for job in jobs:
         print(f"{name}: {job}")
 
@@ -243,19 +243,18 @@ The runtime registers one composite wait and removes every loser when a source
 wins. A losing Queue remains unchanged. A non-repeatable Task right is
 consumed at entry and abandoned if another source wins.
 
-This is an ordinary builtin call. Aura still has no statement-form
-`select:` syntax.
+Selection uses the ordinary builtin call shown above.
 
 ## Waiting For Several Tasks
 
 Sometimes a program needs to wait on a batch of tasks at once. `wait_any` returns when the first one finishes:
 
 ```python
-tasks: Vec[Task[int32]] = []
+tasks: list[Task[int32]] = []
 
 with group = TaskGroup():
-    tasks.push(group.start(double, 10))
-    tasks.push(group.start(double, 20))
+    tasks.append(group.start(double, 10))
+    tasks.append(group.start(double, 20))
 
     match wait_any(tasks, timeout=1s):
         case WaitAny.Ready(index, value):
@@ -287,7 +286,7 @@ The `Error(index, message)` variant reports **which** task failed. That is usual
 
 With repeatable `T`, the handles and observations remain reusable. With a
 non-repeatable but transferable `T`, either helper consumes the complete task
-vector on its first attempt, including timeout, cancellation, and failure.
+list on its first attempt, including timeout, cancellation, and failure.
 `wait_any` deliberately abandons the observation rights of unchosen tasks. A
 Queue receive transfers one owned item; it never observes task-result storage.
 
@@ -344,9 +343,9 @@ workload.
 Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a bounded
 protocol-step service with deep native worker stacks. Each step is bounded and
 nonblocking; the child gets ownership of its protocol state back before
-observing cancellation or returning to reactor readiness waiting. This is why
-ordinary application tasks no longer need to reserve enough coroutine stack
-for the deepest maintained third-party protocol frame.
+observing cancellation or returning to reactor readiness waiting. Ordinary
+application tasks use the guarded 512 KiB default stack; protocol workers
+carry the deepest maintained third-party library frames.
 
 The protocol-step pool starts lazily and lives until the Aura process exits;
 there is no 0.2 shutdown or join call. File reads, resolver work, and listener

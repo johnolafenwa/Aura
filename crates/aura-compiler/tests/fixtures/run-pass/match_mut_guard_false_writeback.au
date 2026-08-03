@@ -1,0 +1,18 @@
+enum Boxed:
+    Filled(int32)
+    Empty
+
+def mutate_and_reject(value: mut int32) -> bool:
+    value += 5
+    return false
+
+def main() -> int32:
+    mut boxed = Boxed.Filled(1)
+    match mut boxed:
+        case Filled(value) if mutate_and_reject(value):
+            print(0)
+        case Filled(value):
+            print(value)
+        case Empty:
+            print(-1)
+    return 0

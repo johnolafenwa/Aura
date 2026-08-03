@@ -1,7 +1,7 @@
 class Label:
-    text: String
+    text: str
 
-def combine(a: Label, b: Label) -> String:
+def combine(a: Label, b: Label) -> str:
     return a.text + " " + b.text
 
 def main():

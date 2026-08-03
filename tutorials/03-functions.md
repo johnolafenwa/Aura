@@ -111,6 +111,9 @@ print(subtract(left=10, right=3))
 print(subtract(10, right=3))
 ```
 
+Function parameters remain positionally bindable. A `*` keyword-only marker
+is not part of Aura 0.3's structural callable model and receives `AU1101`.
+
 Rules:
 
 - positional arguments come before named arguments
@@ -122,7 +125,7 @@ Rules:
 Parameters can have defaults, which must come after required parameters:
 
 ```python
-def greet(name: String = "world"):
+def greet(name: str = "world"):
     print("hello " + name)
 
 greet()               # "hello world"
@@ -226,7 +229,7 @@ def apply(transform: def(int32) -> int32, value: int32) -> int32:
 
 selected = double
 pipeline = Pipeline(transform=selected)
-transforms: Vec[def(int32) -> int32] = [selected]
+transforms: list[def(int32) -> int32] = [selected]
 
 print(apply(pipeline.transform, 3))
 print(transforms[0](4))
@@ -239,8 +242,8 @@ you can also write it explicitly:
 
 ```python
 mutate: def(mut Counter) -> None = increment
-consume: def(own String) -> String = take
-callbacks: Vec[def(mut Counter) -> None] = [mutate]
+consume: def(own str) -> str = take
+callbacks: list[def(mut Counter) -> None] = [mutate]
 ```
 
 Calling `mutate` requires a mutable place; calling `consume` moves a non-copy
@@ -265,9 +268,9 @@ Function values are code pointers, so they are copy values and satisfy
 expected type may come from an annotation, argument, field, collection
 element, or function-typed parameter default.
 
-Bound instance methods, associated-method values, and trait-method values
-remain unavailable. The task API keeps its older direct
-associated-method-without-`self` target form.
+Bound instance methods, associated-method values, and trait-method values are
+unavailable. Task targets may be direct associated methods without `self`;
+that task-target form does not create a general associated-method value.
 
 See [examples/basics/function_values.au](../examples/basics/function_values.au).
 

@@ -5,6 +5,7 @@
 // cannot be started at all.
 
 const KEYWORDS = [
+  "as",
   "assert",
   "break",
   "case",
@@ -40,24 +41,24 @@ const KEYWORDS = [
 
 const BUILTINS = [
   "Array",
-  "Map",
   "Option",
   "Queue",
   "Result",
   "SelectOutcome",
-  "Set",
-  "String",
   "TaskGroup",
-  "Vec",
   "bool",
+  "dict",
   "float32",
   "float64",
   "int",
   "int32",
   "int64",
+  "list",
   "print",
   "range",
   "select",
+  "set",
+  "str",
   "yield_now"
 ];
 

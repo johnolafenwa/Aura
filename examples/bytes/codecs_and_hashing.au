@@ -5,13 +5,13 @@ def main():
     encoded = text.to_bytes()
     print(bytes.hex_encode(encoded))
 
-    match String.from_bytes(encoded):
+    match str.from_bytes(encoded):
         case Result.Ok(decoded):
             print(decoded)
         case Result.Err(error):
             print(error)
 
-    payload: Vec[uint8] = [0, 1, 254, 255]
+    payload: list[uint8] = [0, 1, 254, 255]
     encoded_base64 = bytes.base64_encode(payload)
     print(encoded_base64)
 

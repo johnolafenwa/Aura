@@ -1,6 +1,0 @@
-error[AU3009]: cannot use `Vec.get` because duplicating `Task[String]` would create a second observation right for non-repeatable task result `String`
- --> crates/aura-compiler/tests/fixtures/check-fail/task_result_vec_get_duplicates_observation.au:7:24
-  |
-7 |         _alias = tasks.get(0)
-  |                        ^
-  = help: transfer the unique Task handle instead; only copy-result tasks and synchronized Queue or repeatable Task results may have multiple observers

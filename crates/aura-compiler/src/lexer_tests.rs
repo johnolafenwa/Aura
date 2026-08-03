@@ -23,7 +23,7 @@ fn lexes_keywords_operators_and_delimiters() {
     assert!(tokens.contains(&TokenKind::KwImport));
     assert!(tokens.contains(&TokenKind::KwFrom));
     assert!(tokens.contains(&TokenKind::KwMut));
-    assert!(tokens.contains(&TokenKind::KwBorrow));
+    assert!(tokens.contains(&TokenKind::Identifier("borrow".to_string())));
     assert!(tokens.contains(&TokenKind::KwOwn));
     assert!(tokens.contains(&TokenKind::KwIndirect));
     assert!(tokens.contains(&TokenKind::KwPublic));
@@ -105,6 +105,214 @@ fn lexes_strings_fstrings_numbers_and_durations() {
     assert!(tokens.contains(&TokenKind::DurationLiteral(5_000_000)));
     assert!(tokens.contains(&TokenKind::DurationLiteral(2_000_000_000)));
     assert!(tokens.contains(&TokenKind::DurationLiteral(60_000_000_000)));
+}
+
+#[test]
+fn lexes_exact_triple_quoted_and_raw_string_values() {
+    let tokens = kinds(concat!(
+        "double = \"\"\"\n  first\\n\n\tsecond \"\" pair\n  \"\"\"\n",
+        "single = '''alpha ' and '' remain\nomega'''\n",
+        "raw_double = r\"C:\\agents\\run\"\n",
+        "raw_single = r'\\d+\\.\\d+'\n",
+        "raw_quote = r\"keep \\\" both\"\n",
+    ));
+    assert!(tokens.contains(&TokenKind::StringLiteral(
+        "\n  first\n\n\tsecond \"\" pair\n  ".to_string()
+    )));
+    assert!(tokens.contains(&TokenKind::StringLiteral(
+        "alpha ' and '' remain\nomega".to_string()
+    )));
+    assert!(tokens.contains(&TokenKind::StringLiteral("C:\\agents\\run".to_string())));
+    assert!(tokens.contains(&TokenKind::StringLiteral("\\d+\\.\\d+".to_string())));
+    assert!(tokens.contains(&TokenKind::StringLiteral("keep \\\" both".to_string())));
+}
+
+#[test]
+fn rejects_unterminated_triple_and_odd_terminal_raw_backslashes() {
+    let triple = lex("value = \"\"\"never closes\nsecond line\n")
+        .expect_err("unterminated triple strings must fail");
+    assert_eq!(triple.code, "AU1001");
+    assert!(triple.message.contains("unterminated triple-quoted string"));
+
+    let raw = lex(r#"value = r"ends with \"#)
+        .expect_err("a raw string cannot end in an odd backslash run");
+    assert_eq!(raw.code, "AU1001");
+    assert!(raw.message.contains("odd run of backslashes"));
+}
+
+#[test]
+fn physical_tabs_are_content_only_inside_triple_quoted_strings() {
+    let blank_tab = lex("def main():\n\t\n    pass\n")
+        .expect_err("a whitespace-only physical tab line must not bypass validation");
+    assert_eq!(blank_tab.code, "AU1001");
+    assert!(blank_tab.message.contains("tabs are not supported"));
+
+    let comment_tab =
+        lex("# comment\ttext\n").expect_err("comments do not make physical tabs valid");
+    assert_eq!(comment_tab.code, "AU1001");
+
+    let trailing_comment_tab = lex("value = 1 # comment\ttext\n")
+        .expect_err("trailing comments do not make physical tabs valid");
+    assert_eq!(trailing_comment_tab.code, "AU1001");
+
+    let triple = lex("value = \"\"\"first\n\tsecond\n\"\"\"\n")
+        .expect("a physical tab inside a triple string is exact content");
+    assert!(triple.iter().any(|token| {
+        matches!(&token.kind, TokenKind::StringLiteral(value) if value == "first\n\tsecond\n")
+    }));
+}
+
+#[test]
+fn s1_frontend_physical_tabs_in_single_line_string_forms_report_the_same_source_error() {
+    for source in [
+        "value = \"left\tright\"\n",
+        "value = r\"left\tright\"\n",
+        "value = f\"left\tright\"\n",
+    ] {
+        let error = lex(source).expect_err("single-line strings must reject physical tabs");
+        assert_eq!(error.code, "AU1001");
+        assert_eq!(error.span, Some(Span::new(1, 9)));
+        assert_eq!(
+            error.message,
+            "physical tabs are allowed only inside triple-quoted strings"
+        );
+    }
+}
+
+#[test]
+fn s1_frontend_fstring_interpolation_keeps_braces_inside_triple_quoted_arguments() {
+    let tokens = kinds("message = f\"{echo('''left } right''')}\"\n");
+    assert!(tokens.contains(&TokenKind::FStringLiteral(
+        "{echo('''left } right''')}".to_string()
+    )));
+}
+
+#[test]
+fn s1_frontend_raw_string_diagnostics_distinguish_unsupported_triples_and_missing_terminators() {
+    let triple = lex("value = r\"\"\"text\"\"\"\n")
+        .expect_err("raw triple-quoted strings are outside the string surface");
+    assert_eq!(triple.code, "AU1001");
+    assert_eq!(
+        triple.message,
+        "raw triple-quoted strings are not supported"
+    );
+
+    let unterminated = lex("value = r\"never closes\n")
+        .expect_err("raw strings cannot contain a physical newline");
+    assert_eq!(unterminated.code, "AU1001");
+    assert_eq!(
+        unterminated.message,
+        "unterminated raw string literal; raw strings cannot contain a physical newline"
+    );
+}
+
+#[test]
+fn s1_frontend_fstrings_preserve_escaped_braces_and_decode_ordinary_escapes() {
+    let tokens = kinds("message = f\"{{left}}\\n{right}\"\n");
+    assert!(tokens.contains(&TokenKind::FStringLiteral("{{left}}\n{right}".to_string())));
+}
+
+#[test]
+fn fstring_prefix_diagnostics_teach_the_supported_single_line_form() {
+    for source in ["value = rf\"{name}\\n\"\n", "value = fr\"{name}\\n\"\n"] {
+        let raw = lex(source).expect_err("raw f-strings are outside the language surface");
+        assert_eq!(raw.code, "AU1002");
+        assert_eq!(
+            raw.message,
+            "raw f-strings are not supported; use `f\"...\"` and escape backslashes explicitly"
+        );
+    }
+
+    let triple = lex("value = f\"\"\"hello {name}\"\"\"\n")
+        .expect_err("triple-quoted f-strings are outside the language surface");
+    assert_eq!(triple.code, "AU1002");
+    assert_eq!(
+        triple.message,
+        "triple-quoted f-strings are not supported; use single-line `f\"...\"` or an ordinary triple-quoted string"
+    );
+}
+
+#[test]
+fn s1_frontend_numeric_literal_failures_name_overflow_and_duration_separator_rules() {
+    let integer = lex("value = 0xfffffffffffffffffffffffffffffffff\n")
+        .expect_err("an integer larger than u128 must fail during lexical conversion");
+    assert_eq!(integer.code, "AU1001");
+    assert_eq!(integer.message, "invalid integer literal");
+
+    let duration =
+        lex("value = 1_0s\n").expect_err("duration literals do not accept integer separators");
+    assert_eq!(duration.code, "AU1001");
+    assert_eq!(
+        duration.message,
+        "integer separators do not apply to duration literals"
+    );
+}
+
+#[test]
+fn multiline_triple_string_escape_errors_point_at_the_later_physical_line() {
+    let error = lex("value = \"\"\"first\nnext \\q\n\"\"\"\n")
+        .expect_err("an invalid escape inside multiline content must fail");
+    assert_eq!(error.code, "AU1001");
+    assert_eq!(error.span, Some(Span::new(2, 6)));
+    assert!(error.message.contains("unsupported escape sequence"));
+}
+
+#[test]
+fn lexes_integer_base_prefixes_and_between_digit_separators() {
+    let tokens = kinds(concat!(
+        "decimal = 1_000_000\n",
+        "hex_lower = 0xdead_BEEF\n",
+        "hex_upper = 0XCAFE\n",
+        "binary_lower = 0b1010_0110\n",
+        "binary_upper = 0B1111\n",
+        "octal_lower = 0o755\n",
+        "octal_upper = 0O7_7\n",
+        "negative = -0x80\n",
+    ));
+
+    for value in [
+        1_000_000,
+        0xdead_beef,
+        0xcafe,
+        0b1010_0110,
+        0b1111,
+        0o755,
+        0o77,
+    ] {
+        assert!(tokens.contains(&TokenKind::IntLiteral(value)));
+    }
+    assert!(tokens
+        .windows(2)
+        .any(|pair| pair == [TokenKind::Minus, TokenKind::IntLiteral(0x80)]));
+}
+
+#[test]
+fn invalid_integer_base_digits_and_separator_positions_are_au1001() {
+    for source in [
+        "value = 0x\n",
+        "value = 0b\n",
+        "value = 0o\n",
+        "value = 0x_1\n",
+        "value = -0x_1\n",
+        "value = 0b_1\n",
+        "value = 0o_1\n",
+        "value = 1_0_\n",
+        "value = 1__0\n",
+        "value = 0x1_\n",
+        "value = 0x1__0\n",
+        "value = 0b102\n",
+        "value = 0o78\n",
+        "value = 0xG\n",
+        "value = 0x1g\n",
+        "value = 0x1.0\n",
+        "value = 1_0.0\n",
+        "value = 1.0_0\n",
+        "value = 1e1_0\n",
+        "value = 1_0ms\n",
+    ] {
+        let error = lex(source).expect_err(source);
+        assert_eq!(error.code, "AU1001", "{source}: {error}");
+    }
 }
 
 #[test]
@@ -369,6 +577,43 @@ fn delimited_match_layout_island_emits_only_the_match_suite_layout() {
         dedent < close,
         "the suite must close before its containing delimiter"
     );
+}
+
+#[test]
+fn nested_delimiters_inside_a_delimited_match_arm_remain_continuations() {
+    let tokens = lex([
+        "consume(",
+        "    match value:",
+        "        case 1: (",
+        "            \"one\"",
+        "        )",
+        "        case _: \"other\"",
+        ")",
+    ]
+    .join("\n")
+    .as_str())
+    .expect("nested arm delimiters should not create another layout suite");
+    let token_kinds = tokens
+        .iter()
+        .map(|token| token.kind.clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        token_kinds
+            .iter()
+            .filter(|kind| **kind == TokenKind::Indent)
+            .count(),
+        1
+    );
+    assert_eq!(
+        token_kinds
+            .iter()
+            .filter(|kind| **kind == TokenKind::Dedent)
+            .count(),
+        1
+    );
+    assert!(token_kinds.contains(&TokenKind::StringLiteral("one".to_string())));
+    assert!(token_kinds.contains(&TokenKind::StringLiteral("other".to_string())));
 }
 
 #[test]
@@ -699,6 +944,35 @@ fn lexer_decodes_extended_string_escape_sequences() {
     let bad_unicode =
         lex("text = \"\\u{110000}\"\n").expect_err("out-of-range unicode escape should fail");
     assert!(bad_unicode.message.contains("out of range"));
+}
+
+#[test]
+fn lexer_reports_exact_truncated_escape_and_numeric_boundary_diagnostics() {
+    let truncated_hex =
+        lex("value = \"\\x").expect_err("a hexadecimal escape must include two digits");
+    assert_eq!(truncated_hex.code, "AU1001");
+    assert_eq!(truncated_hex.span, Some(Span::new(1, 9)));
+    assert_eq!(truncated_hex.message, "unsupported escape sequence `\\x`");
+
+    let invalid_high =
+        lex("value = \"\\xg0\"\n").expect_err("the first hexadecimal digit must be valid");
+    assert_eq!(invalid_high.code, "AU1001");
+    assert_eq!(invalid_high.span, Some(Span::new(1, 9)));
+    assert_eq!(invalid_high.message, "invalid hexadecimal escape sequence");
+
+    let unterminated_unicode =
+        lex("value = \"\\u{41").expect_err("a unicode escape must include its closing brace");
+    assert_eq!(unterminated_unicode.code, "AU1001");
+    assert_eq!(unterminated_unicode.span, Some(Span::new(1, 9)));
+    assert_eq!(unterminated_unicode.message, "unterminated string literal");
+
+    let adjacent_identifier =
+        lex("value = 12abc\n").expect_err("an integer and identifier require a separator");
+    assert_eq!(adjacent_identifier.code, "AU1001");
+    assert_eq!(adjacent_identifier.span, Some(Span::new(1, 11)));
+    assert_eq!(adjacent_identifier.message, "invalid integer literal");
+
+    assert!(kinds("shifted = left >> right\n").contains(&TokenKind::ShiftRight));
 }
 
 #[test]

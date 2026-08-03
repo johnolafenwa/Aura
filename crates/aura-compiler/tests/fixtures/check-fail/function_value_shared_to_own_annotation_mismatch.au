@@ -1,6 +1,6 @@
-def length(value: String) -> int64:
+def length(value: str) -> int64:
     return value.len()
 
 def main() -> int32:
-    consuming: def(own String) -> int64 = length
+    consuming: def(own str) -> int64 = length
     return 0

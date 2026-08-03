@@ -1,6 +1,6 @@
 import json
 
-def decode(text: String) -> Result[json.Value, json.Error]:
+def decode(text: str) -> Result[json.Value, json.Error]:
     return json.parse(text)
 
 def make_unobserved_value() -> json.Value:

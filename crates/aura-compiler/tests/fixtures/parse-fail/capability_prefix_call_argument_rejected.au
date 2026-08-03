@@ -1,4 +1,4 @@
-def display(text: String):
+def display(text: str):
     print(text)
 
 def main():

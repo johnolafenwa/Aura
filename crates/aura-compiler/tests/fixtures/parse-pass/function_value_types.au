@@ -1,8 +1,8 @@
 class Pipeline:
     transform: def(int32) -> int32
-    on_pair: def((int32, String)) -> None
+    on_pair: def((int32, str)) -> None
     mutate: def(mut Counter) -> None
-    consume: def(own String) -> String
+    consume: def(own str) -> str
 
 def apply(transform: def(int32) -> int32, value: int32) -> int32:
     selected: def(int32) -> int32 = transform
@@ -14,5 +14,5 @@ def factory() -> def() -> int32:
 def answer() -> int32:
     return 42
 
-def preserve_modes(mutate: def(mut Counter) -> None, consume: def(own String) -> String) -> None:
+def preserve_modes(mutate: def(mut Counter) -> None, consume: def(own str) -> str) -> None:
     pass

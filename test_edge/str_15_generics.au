@@ -1,4 +1,4 @@
-# String in generic containers
+# str in generic containers
 
 class Box[T]:
     value: T
@@ -10,7 +10,7 @@ enum Wrapper[T]:
     Some(T)
     None
 
-def unwrap_or(w: own Wrapper[String], default: own String) -> String:
+def unwrap_or(w: own Wrapper[str], default: own str) -> str:
     match own w:
         case Wrapper.Some(v):
             return v
@@ -18,30 +18,30 @@ def unwrap_or(w: own Wrapper[String], default: own String) -> String:
             return default + ""
 
 def main() -> int32:
-    # Box[String]
-    boxed: Box[String] = Box(value="boxed string")
+    # Box[str]
+    boxed: Box[str] = Box(value="boxed string")
     print(boxed.get())
 
-    # Wrapper[String] with Some
-    wrapped: Wrapper[String] = Wrapper.Some("wrapped")
+    # Wrapper[str] with Some
+    wrapped: Wrapper[str] = Wrapper.Some("wrapped")
     result = unwrap_or(wrapped, "default")
     print(result)
 
-    # Wrapper[String] with None
-    empty: Wrapper[String] = Wrapper.None
+    # Wrapper[str] with None
+    empty: Wrapper[str] = Wrapper.None
     result2 = unwrap_or(empty, "fallback")
     print(result2)
 
-    # Option[String] builtin
-    some_str: Option[String] = Option.Some("option_value")
+    # Option[str] builtin
+    some_str: Option[str] = Option.Some("option_value")
     match own some_str:
         case Option.Some(v):
             print(v)
         case Option.None:
             print("none")
 
-    # Result[String, String]
-    ok_res: Result[String, String] = Result.Ok("success")
+    # Result[str, str]
+    ok_res: Result[str, str] = Result.Ok("success")
     match own ok_res:
         case Result.Ok(v):
             print(v)

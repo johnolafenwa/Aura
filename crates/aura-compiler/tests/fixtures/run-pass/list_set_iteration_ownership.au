@@ -1,0 +1,11 @@
+def main() -> int32:
+    names = ["Ada", "Grace"]
+    for name in names:
+        print(name)
+    print(names.len())
+
+    tags: set[str] = {"red", "blue"}
+    for tag in tags:
+        print(tag)
+    print(tags.len())
+    return 0

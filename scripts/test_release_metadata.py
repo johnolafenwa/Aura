@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release-metadata regression tests for the Aura 0.2 preview."""
+"""Release-metadata regression tests for the Aura 0.3 development channel."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 class ReleaseMetadataTests(unittest.TestCase):
-    def test_product_manifests_and_locks_agree_on_0_2_0(self) -> None:
+    def test_product_manifests_and_locks_agree_on_0_3_0(self) -> None:
         cargo_manifest = (ROOT / "Cargo.toml").read_text()
         workspace_version = re.search(
             r"\[workspace\.package\].*?^version\s*=\s*\"([^\"]+)\"",
@@ -72,12 +72,13 @@ class ReleaseMetadataTests(unittest.TestCase):
         # extension entries above are their lock records; package-local lock
         # files would split dependency resolution and are not maintained.
 
-    def test_changelog_is_a_complete_0_2_preview_release_story(self) -> None:
+    def test_changelog_opens_the_0_3_development_story(self) -> None:
         changelog = (ROOT / "CHANGELOG.md").read_text()
+        self.assertIn("## 0.3.0 — development", changelog)
+        self.assertIn("development channel", changelog.lower())
         self.assertIn("## 0.2.0 — 2026-07-31 (technical preview)", changelog)
-        self.assertIn("technical preview", changelog.lower())
         for heading in (
-            "Breaking changes and migration",
+            "Ownership surface",
             "Language",
             "Runtime and structured concurrency",
             "Callables and closures",
@@ -88,8 +89,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         ):
             with self.subTest(heading=heading):
                 self.assertIn(f"### {heading}", changelog)
-        self.assertIn("scripts/capability_migrate.py apply", changelog)
-        self.assertIn("one compatibility release", changelog)
+        self.assertNotIn("one compatibility release", changelog)
+        self.assertNotIn("capability_migrate.py", changelog)
         self.assertIn("ADR-0038", changelog)
 
     def test_manual_declares_release_and_dynamic_implementation_stamp(self) -> None:
@@ -101,8 +102,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         component = (ROOT / "docs/.vitepress/theme/ReleaseStamp.vue").read_text()
         theme = (ROOT / "docs/.vitepress/theme/index.ts").read_text()
 
-        self.assertIn("Aura 0.2.0", manual)
-        self.assertIn("technical preview", manual.lower())
+        self.assertIn("Aura 0.3.0", manual)
+        self.assertIn("development channel", manual.lower())
         self.assertIn("implementation baseline commit", manual.lower())
         self.assertIn("AURA_DOCS_COMMIT", metadata)
         self.assertIn("GITHUB_SHA", metadata)
@@ -168,8 +169,63 @@ class ReleaseMetadataTests(unittest.TestCase):
         smoke = (ROOT / "scripts/smoke-cli-archive.sh").read_text()
         self.assertIn("AURA_BUILD_COMMIT", build_script)
         self.assertIn("--short=12", build_script)
-        self.assertIn('"aura {}-preview ({})\\n"', cli)
+        self.assertIn('"aura {}-dev ({})\\n"', cli)
         self.assertIn('expected_version="aura 0.2.0-preview ($expected_commit)"', smoke)
+
+    def test_scheduled_safety_jobs_pin_the_instrumented_toolchain_and_leaks(self) -> None:
+        workflow = (ROOT / ".github/workflows/safety.yml").read_text()
+        tsan = (ROOT / "scripts/sanitizer-scheduler-tsan.sh").read_text()
+        asan = (ROOT / "scripts/sanitizer-native-runtime.sh").read_text()
+        native_runtime = (
+            ROOT / "crates/aura-compiler/src/native_runtime.rs"
+        ).read_text()
+        native_runtime_exports = (ROOT / "crates/aura-compiler/src/lib.rs").read_text()
+        ffi_tests = (
+            ROOT / "crates/aura-compiler/tests/native_runtime_ffi.rs"
+        ).read_text()
+
+        self.assertIn("RUSTUP_TOOLCHAIN: nightly-2026-07-01", workflow)
+        self.assertEqual(
+            workflow.count("cargo +nightly-2026-07-01 fuzz run"),
+            2,
+        )
+        self.assertEqual(
+            workflow.count("--target x86_64-unknown-linux-gnu"),
+            2,
+        )
+        self.assertIn("CARGO_TARGET_", tsan)
+        self.assertNotIn("export RUSTFLAGS=", tsan)
+        self.assertNotIn("--test cli", tsan)
+        self.assertIn("CARGO_TARGET_", asan)
+        self.assertNotIn("export RUSTFLAGS=", asan)
+        self.assertIn('ASAN_OPTIONS="$asan_options" cargo', asan)
+        self.assertNotIn('"$aura_bin" build', asan)
+        self.assertIn("DIRECT_VALUE_LIVE_COUNT", native_runtime)
+        self.assertIn("DIRECT_VALUE_LIVE_COUNT", native_runtime_exports)
+        self.assertNotIn("aura_direct_coverage_live_value_count", native_runtime_exports)
+        self.assertEqual(ffi_tests.count("direct_runtime_ffi_test_guard()"), 8)
+
+    def test_scheduler_stress_filters_resolve_and_fit_the_hosted_budget(self) -> None:
+        workflow = (ROOT / ".github/workflows/safety.yml").read_text()
+        stress = (ROOT / "scripts/stress-scheduler.sh").read_text()
+        cli_tests = (ROOT / "crates/aura/tests/cli.rs").read_text()
+
+        configured = re.findall(r'^  "([a-z0-9_]+)"$', stress, re.MULTILINE)
+        self.assertEqual(
+            configured,
+            [
+                "queue_consumers_share_work_fairly_on_one_worker",
+                "cancelled_sleeping_children_resume_and_can_observe_cancellation",
+                "scheduler_mixed_wakeups_complete_in_mir_and_direct_backends",
+            ],
+        )
+        for test_name in configured:
+            with self.subTest(test_name=test_name):
+                self.assertIn(f"fn {test_name}()", cli_tests)
+
+        self.assertIn("timeout-minutes: 45", workflow)
+        self.assertIn("AURA_STRESS_RUNS=10 scripts/stress-scheduler.sh", workflow)
+        self.assertNotIn("AURA_STRESS_RUNS=50 scripts/stress-scheduler.sh", workflow)
 
 
 if __name__ == "__main__":

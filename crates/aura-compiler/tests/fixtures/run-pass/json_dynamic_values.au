@@ -1,6 +1,6 @@
 import json
 
-def kind(value: own json.Value) -> String:
+def kind(value: own json.Value) -> str:
     match own value:
         case json.Value.Null:
             return "null"

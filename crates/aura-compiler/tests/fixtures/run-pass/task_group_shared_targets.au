@@ -1,7 +1,7 @@
-def default_target(value: String) -> int32:
+def default_target(value: str) -> int32:
     return value.len() as int32
 
-def explicit_shared_target(value: String) -> int32:
+def explicit_shared_target(value: str) -> int32:
     return value.len() as int32
 
 def main() -> int32:

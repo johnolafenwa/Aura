@@ -8,8 +8,8 @@ This chapter introduces `Option[T]`, `Result[T, E]`, the `try` expression, and t
 
 `Option[T]` is either `Some(value)` or `None`. Use it when absence is expected and is not itself an error:
 
-- a vector index may be out of range
-- a map key may be absent
+- a list index may be out of range
+- a dictionary key may be absent
 - a stream may reach end-of-file
 - a timed wait may finish with no value
 
@@ -30,7 +30,7 @@ The short-form patterns `Some(name)` and `None` also work when the compiler alre
 `Result[T, E]` is either `Result.Ok(value)` or `Result.Err(error)`. Use it when an operation may fail and the caller should decide what to do:
 
 ```python
-def divide(left: int32, right: int32) -> Result[int32, String]:
+def divide(left: int32, right: int32) -> Result[int32, str]:
     if right == 0:
         return Result.Err("division by zero")
     return Result.Ok(left // right)
@@ -49,7 +49,7 @@ A command-line tool might print the error and stop with a non-zero exit code. A 
 The parsing builtins return `Result`:
 
 ```python
-def read_limit(text: String) -> Result[int32, String]:
+def read_limit(text: str) -> Result[int32, str]:
     match parse_int32(text):
         case Result.Ok(value):
             if value < 0:
@@ -59,7 +59,7 @@ def read_limit(text: String) -> Result[int32, String]:
             return Result.Err(message)
 ```
 
-The signature is honest: the caller will receive either an `int32` or a `String` error message. There is no hidden path through which this function might throw.
+The signature is honest: the caller will receive either an `int32` or a `str` error message. There is no hidden path through which this function might throw.
 
 ## `try`: Propagate Failure
 
@@ -68,7 +68,7 @@ That last function has a familiar shape. It calls a sub-operation, checks whethe
 `try expr` evaluates `expr`. If the result is `Result.Ok(value)`, the expression produces `value` and execution continues. If the result is `Result.Err(error)`, the current function returns that error immediately.
 
 ```python
-def parse_pair(left: String, right: String) -> Result[int32, String]:
+def parse_pair(left: str, right: str) -> Result[int32, str]:
     a = try parse_int32(left)
     b = try parse_int32(right)
     return Result.Ok(a + b)
@@ -79,7 +79,7 @@ def parse_pair(left: String, right: String) -> Result[int32, String]:
 Use `match` instead when the function has a local recovery strategy:
 
 ```python
-def parse_or_zero(text: String) -> int32:
+def parse_or_zero(text: str) -> int32:
     match parse_int32(text):
         case Result.Ok(value):
             return value
@@ -94,7 +94,7 @@ Two constraints on `try`:
 
 ## Domain-Specific Outcomes
 
-Not every failure is well-described by a plain `Result[T, String]`. Aura APIs use richer enums when the caller benefits from distinguishing outcomes.
+Not every failure is well-described by a plain `Result[T, str]`. Aura APIs use richer enums when the caller benefits from distinguishing outcomes.
 
 | API family | Outcome type | Why this shape |
 | --- | --- | --- |
@@ -117,7 +117,7 @@ Using the right enum lets a program handle one case specifically while still han
 import fs
 import io
 
-def read_config(path: String) -> String:
+def read_config(path: str) -> str:
     match fs.read_to_string(path):
         case Result.Ok(text):
             return text
@@ -138,7 +138,7 @@ capture-free worker to `control.retry`:
 ```python
 import control
 
-def fetch_once() -> Result[String, String]:
+def fetch_once() -> Result[str, str]:
     return Result.Err("service unavailable")
 
 result = control.retry(

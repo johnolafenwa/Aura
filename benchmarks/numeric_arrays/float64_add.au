@@ -1,7 +1,7 @@
 import io
 
 
-def read_control(expected: String) -> bool:
+def read_control(expected: str) -> bool:
     match io.read_line():
         case Result.Ok(Option.Some(line)):
             return line == expected

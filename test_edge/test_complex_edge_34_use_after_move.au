@@ -1,7 +1,7 @@
 # Edge test: Using a moved value (should be caught by compiler)
 
 class Resource:
-    name: String
+    name: str
 
 def consume(r: Resource):
     print(r.name)

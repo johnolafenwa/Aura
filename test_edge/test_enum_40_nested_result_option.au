@@ -1,4 +1,4 @@
-def maybe_divide(a: int32, b: int32) -> Result[Option[int32], String]:
+def maybe_divide(a: int32, b: int32) -> Result[Option[int32], str]:
     if b == 0:
         return Result.Err("div by zero")
     val = a // b

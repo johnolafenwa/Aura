@@ -2,13 +2,13 @@ use aura_compiler::{run_path, run_source};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const NESTED_CALL_TRAP: &str = "def explode() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef relay() -> int32:\n    return explode()\n\ndef main() -> int32:\n    return relay()\n";
+const NESTED_CALL_TRAP: &str = "def explode() -> int32:\n    values: list[int32] = [1, 2]\n    return values[9]\n\ndef relay() -> int32:\n    return explode()\n\ndef main() -> int32:\n    return relay()\n";
 
-const CHILD_TASK_TRAP: &str = "def child() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    with group = TaskGroup():\n        group.start(child)\n    return 0\n";
-const NESTED_TASK_TRAP: &str = "def leaf() -> int32:\n    values: Vec[int32] = [1, 2]\n    return values[9]\n\ndef child() -> int32:\n    with inner = TaskGroup():\n        inner.start(leaf)\n    return 0\n\ndef main() -> int32:\n    with outer = TaskGroup():\n        outer.start(child)\n    return 0\n";
+const CHILD_TASK_TRAP: &str = "def child() -> int32:\n    values: list[int32] = [1, 2]\n    return values[9]\n\ndef main() -> int32:\n    with group = TaskGroup():\n        group.start(child)\n    return 0\n";
+const NESTED_TASK_TRAP: &str = "def leaf() -> int32:\n    values: list[int32] = [1, 2]\n    return values[9]\n\ndef child() -> int32:\n    with inner = TaskGroup():\n        inner.start(leaf)\n    return 0\n\ndef main() -> int32:\n    with outer = TaskGroup():\n        outer.start(child)\n    return 0\n";
 const RECURSION_TRAP: &str = "def recurse(value: int32) -> int32:\n    return recurse(value + 1)\n\ndef main() -> int32:\n    return recurse(0)\n";
-const BODY_TRAP_DURING_TASK_GROUP_CLEANUP: &str = "def child() -> int32:\n    sleep(5s)\n    return 0\n\ndef main() -> int32:\n    values: Vec[int32] = [1]\n    with group = TaskGroup():\n        group.start(child)\n        return values[9]\n";
-const CLEANUP_PRIMARY_TRAP: &str = "class Resource:\n    def close(mut self):\n        values: Vec[int32] = [1]\n        print(values[9])\n\ndef main() -> int32:\n    with resource = Resource():\n        pass\n    return 0\n";
+const BODY_TRAP_DURING_TASK_GROUP_CLEANUP: &str = "def child() -> int32:\n    sleep(5s)\n    return 0\n\ndef main() -> int32:\n    values: list[int32] = [1]\n    with group = TaskGroup():\n        group.start(child)\n        return values[9]\n";
+const CLEANUP_PRIMARY_TRAP: &str = "class Resource:\n    def close(mut self):\n        values: list[int32] = [1]\n        print(values[9])\n\ndef main() -> int32:\n    with resource = Resource():\n        pass\n    return 0\n";
 
 #[test]
 fn nested_synchronous_trap_records_and_renders_the_aura_call_chain_once() {
@@ -134,7 +134,7 @@ fn imported_call_and_cross_module_task_frames_keep_their_own_paths() {
     let worker_path = helpers.join("worker.au");
     fs::write(
         &worker_path,
-        "public def explode() -> int32:\n    values: Vec[int32] = [1]\n    return values[9]\n",
+        "public def explode() -> int32:\n    values: list[int32] = [1]\n    return values[9]\n",
     )
     .expect("worker module should be written");
 
@@ -222,7 +222,7 @@ fn body_trap_captures_active_frames_before_task_group_cleanup() {
     assert!(
         error
             .message
-            .contains("vector index `9` is out of bounds for length `1`"),
+            .contains("list index `9` is out of bounds for length `1`"),
         "unexpected primary diagnostic: {error:?}"
     );
     assert_eq!(
@@ -244,7 +244,7 @@ fn cleanup_primary_trap_captures_cleanup_function_and_active_caller_once() {
     assert!(
         error
             .message
-            .contains("vector index `9` is out of bounds for length `1`"),
+            .contains("list index `9` is out of bounds for length `1`"),
         "unexpected cleanup diagnostic: {error:?}"
     );
     assert_eq!(

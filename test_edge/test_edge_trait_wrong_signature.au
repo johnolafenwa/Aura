@@ -4,10 +4,10 @@ trait Returner:
     def get_value(self) -> int32
 
 class BadImpl:
-    value: String
+    value: str
 
 impl Returner for BadImpl:
-    def get_value(self) -> String:
+    def get_value(self) -> str:
         return self.value
 
 def main() -> int32:

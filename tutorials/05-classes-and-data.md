@@ -50,11 +50,11 @@ explanation of move semantics, copy types, and common patterns for working with 
 
 ## Default Field Values
 
-The implemented subset already supports field defaults:
+The implemented subset supports field defaults:
 
 ```python
 class ServerConfig:
-    host: String = "localhost"
+    host: str = "localhost"
     port: int32 = 8080
 ```
 
@@ -84,14 +84,14 @@ See [examples/classes/indirect_recursive.au](../examples/classes/indirect_recurs
 
 ## `public` Fields And Methods
 
-Aura now enforces class visibility across module boundaries. Fields and methods are private by default and must be marked `public` to be used from another module:
+Aura enforces class visibility across module boundaries. Fields and methods are private by default and must be marked `public` to be used from another module:
 
 ```python
 class User:
-    public name: String
+    public name: str
     age: int32
 
-    public def read_name(self) -> String:
+    public def read_name(self) -> str:
         return self.name.clone()
 ```
 
@@ -165,12 +165,12 @@ Method calls follow the same argument rules as ordinary functions, so methods an
 
 ```python
 class Greeter:
-    prefix: String
+    prefix: str
 
-    def say(self, name: String) -> String:
+    def say(self, name: str) -> str:
         return self.prefix + name
 
-    def named(prefix: own String) -> Greeter:
+    def named(prefix: own str) -> Greeter:
         return Greeter(prefix=prefix)
 
 greeter = Greeter.named(prefix="hello, ")
@@ -197,7 +197,7 @@ See [examples/classes/methods.au](../examples/classes/methods.au).
 
 ## Mutating Methods
 
-Aura now supports `mut self` methods and member-target assignment.
+Aura supports `mut self` methods and member-target assignment.
 
 ```python
 class Counter:
@@ -218,7 +218,7 @@ counter.reset()
 
 See [examples/classes/mutating_methods.au](../examples/classes/mutating_methods.au).
 
-Constructors now support positional field arguments as long as they come before any named fields:
+Constructors support positional field arguments as long as they come before any named fields:
 
 ```python
 class Point:

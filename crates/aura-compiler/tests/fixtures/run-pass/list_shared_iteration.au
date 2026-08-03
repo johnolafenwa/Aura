@@ -1,0 +1,12 @@
+def main() -> int32:
+    mut names: list[str] = ["Ada", "Grace"]
+    for name in names:
+        print(name)
+    print(names.len())
+
+    empty: list[int32] = []
+    print(empty.is_empty())
+
+    values = list[int32]()
+    print(values.len())
+    return 0

@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use super::{
-    Diagnostic, DiagnosticSeverity, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span,
-    DIAGNOSTIC_CODE_REGISTRY,
+    AssertionOperand, Diagnostic, DiagnosticSeverity, RuntimeCallFrame, RuntimeSourceSpan,
+    RuntimeTaskFrame, Span, DIAGNOSTIC_CODE_REGISTRY,
 };
 
 #[test]
@@ -75,6 +75,77 @@ fn structured_diagnostics_preserve_codes_labels_help_and_edits() {
 }
 
 #[test]
+fn assertion_operands_are_typed_structured_fields_and_human_notes() {
+    let plain = Diagnostic::coded("AU4001", "assertion failed");
+    let plain_json = serde_json::to_value(plain.structured("examples/assert.au"))
+        .expect("plain diagnostic should serialize");
+    assert!(
+        plain_json.get("assertion_operands").is_none(),
+        "diagnostics without captures must not grow an empty wire field"
+    );
+
+    let diagnostic = plain
+        .with_assertion_operand("left", "int64", "41")
+        .with_assertion_operand("right", "int64", "42");
+    assert_eq!(
+        diagnostic.assertion_operands,
+        [
+            AssertionOperand {
+                label: "left".to_string(),
+                r#type: "int64".to_string(),
+                value: "41".to_string(),
+                truncated: false,
+            },
+            AssertionOperand {
+                label: "right".to_string(),
+                r#type: "int64".to_string(),
+                value: "42".to_string(),
+                truncated: false,
+            },
+        ]
+    );
+
+    let json = serde_json::to_value(diagnostic.structured("examples/assert.au"))
+        .expect("captured assertion diagnostic should serialize");
+    assert_eq!(json["assertion_operands"][0]["label"], "left");
+    assert_eq!(json["assertion_operands"][0]["type"], "int64");
+    assert_eq!(json["assertion_operands"][0]["value"], "41");
+    assert_eq!(json["assertion_operands"][0]["truncated"], false);
+
+    let rendered = diagnostic.render_with_source("examples/assert.au", "assert 41 == 42\n");
+    assert!(rendered.contains("note: left = 41"));
+    assert!(rendered.contains("note: right = 42"));
+    assert!(rendered.find("left = 41") < rendered.find("right = 42"));
+
+    let membership = Diagnostic::coded("AU4001", "assertion failed")
+        .with_assertion_operand("item", "str", "needle")
+        .with_assertion_operand("collection", "list[str]", "[haystack]")
+        .render_with_source("examples/assert.au", "assert item in values\n");
+    assert!(membership.contains("note: item = needle"));
+    assert!(membership.contains("note: collection = [haystack]"));
+}
+
+#[test]
+fn assertion_operand_values_are_bounded_to_4096_utf8_bytes() {
+    let exact = AssertionOperand::bounded("left", "str", "a".repeat(4_096));
+    assert_eq!(exact.value.len(), 4_096);
+    assert!(!exact.truncated);
+
+    let long_ascii = AssertionOperand::bounded("right", "str", "b".repeat(4_097));
+    assert_eq!(long_ascii.value.len(), 4_096);
+    assert!(long_ascii.value.ends_with("... (truncated)"));
+    assert!(long_ascii.truncated);
+
+    let long_unicode = AssertionOperand::bounded("collection", "str", "é".repeat(2_049));
+    assert!(long_unicode.value.len() <= 4_096);
+    assert!(long_unicode
+        .value
+        .is_char_boundary(long_unicode.value.len() - "... (truncated)".len()));
+    assert!(long_unicode.value.ends_with("... (truncated)"));
+    assert!(long_unicode.truncated);
+}
+
+#[test]
 fn uncoded_constructors_assign_stable_phase_banded_codes() {
     assert_eq!(Diagnostic::new("unexpected character `@`").code, "AU1001");
     assert_eq!(
@@ -125,8 +196,8 @@ fn diagnostic_code_registry_is_unique_banded_and_append_only_shaped() {
             .iter()
             .any(|entry| entry.code == "AU2008"
                 && entry.band == "names/types"
-                && entry.title == "callable equality"),
-        "the callable-equality rejection must retain its dedicated public registry entry"
+                && entry.title == "equality unavailable"),
+        "equality-obligation rejections must retain their dedicated public registry entry"
     );
     assert!(
         DIAGNOSTIC_CODE_REGISTRY
@@ -266,6 +337,34 @@ fn runtime_frames_capture_once_clone_and_render_without_polluting_notes() {
             && help < edit
     );
     assert_eq!(rendered.matches("Aura call chain").count(), 1);
+}
+
+#[test]
+fn structured_runtime_frames_use_the_report_path_when_source_paths_are_absent() {
+    let mut diagnostic = Diagnostic::coded("AU4001", "runtime trap");
+    diagnostic.capture_runtime_frames_once(
+        vec![RuntimeCallFrame {
+            function: "worker".to_string(),
+            span: RuntimeSourceSpan::point(None, Span::new(4, 9)),
+        }],
+        vec![RuntimeTaskFrame {
+            task_function: "worker".to_string(),
+            task_entry_span: RuntimeSourceSpan::point(None, Span::new(4, 1)),
+            parent_function: "main".to_string(),
+            spawn_span: RuntimeSourceSpan::point(None, Span::new(8, 17)),
+        }],
+    );
+
+    let structured = diagnostic.structured("/workspace/main.au");
+    assert_eq!(structured.call_frames[0].span.path, "/workspace/main.au");
+    assert_eq!(
+        structured.task_ancestry[0].task_entry_span.path,
+        "/workspace/main.au"
+    );
+    assert_eq!(
+        structured.task_ancestry[0].spawn_span.path,
+        "/workspace/main.au"
+    );
 }
 
 #[test]

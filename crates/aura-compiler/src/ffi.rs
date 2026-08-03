@@ -59,9 +59,9 @@ impl fmt::Display for FfiType {
             Self::U64 => "uint64",
             Self::F32 => "float32",
             Self::F64 => "float64",
-            Self::StringView => "String view",
-            Self::BytesView => "Vec[uint8] view",
-            Self::BytesViewMut => "mut Vec[uint8] view",
+            Self::StringView => "str view",
+            Self::BytesView => "list[uint8] view",
+            Self::BytesViewMut => "mut list[uint8] view",
             Self::OpaqueHandle => "opaque handle",
         })
     }
@@ -753,9 +753,9 @@ mod tests {
             (FfiType::U64, "uint64"),
             (FfiType::F32, "float32"),
             (FfiType::F64, "float64"),
-            (FfiType::StringView, "String view"),
-            (FfiType::BytesView, "Vec[uint8] view"),
-            (FfiType::BytesViewMut, "mut Vec[uint8] view"),
+            (FfiType::StringView, "str view"),
+            (FfiType::BytesView, "list[uint8] view"),
+            (FfiType::BytesViewMut, "mut list[uint8] view"),
             (FfiType::OpaqueHandle, "opaque handle"),
         ];
         for (ffi_type, source_name) in cases {

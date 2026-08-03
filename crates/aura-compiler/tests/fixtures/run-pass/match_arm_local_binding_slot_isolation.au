@@ -1,5 +1,5 @@
 class Person:
-    name: String
+    name: str
 
 class Score:
     value: int64

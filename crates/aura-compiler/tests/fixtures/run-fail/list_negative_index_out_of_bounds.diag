@@ -1,0 +1,6 @@
+error[AU4003]: list index `-4` is out of bounds for length `3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/list_negative_index_out_of_bounds.au:3:18
+  |
+3 |     print(values[-4])
+  |                  ^
+  = note: Aura call chain (innermost first): main at 1:1

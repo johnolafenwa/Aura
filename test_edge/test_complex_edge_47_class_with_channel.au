@@ -1,9 +1,9 @@
 # Edge test: Class containing a channel as a field
 
 class MessageBus:
-    ch: Channel[String]
+    ch: Channel[str]
 
-    def send_msg(self, msg: String):
+    def send_msg(self, msg: str):
         self.ch.send(msg)
 
     def close(mut self):
@@ -14,7 +14,7 @@ def receiver(bus: MessageBus):
         print(msg)
 
 def main() -> int32:
-    ch: Channel[String] = channel()
+    ch: Channel[str] = channel()
     bus = MessageBus(ch=ch.clone())
 
     task = spawn receiver(MessageBus(ch=ch.clone()))

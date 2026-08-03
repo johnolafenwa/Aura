@@ -4,29 +4,29 @@
 # when calling trait methods on generic parameters in the same file.
 
 trait Printable:
-    def describe(self) -> String
+    def describe(self) -> str
 
 class User:
-    name: String
+    name: str
     age: int32
 
 impl Printable for User:
-    def describe(self) -> String:
+    def describe(self) -> str:
         return f"User({self.name}, {self.age})"
 
 class Product:
-    title: String
+    title: str
     price: int32
 
 impl Printable for Product:
-    def describe(self) -> String:
+    def describe(self) -> str:
         return f"Product({self.title}, {self.price})"
 
 # Generic container with trait bound
 class Container[T: Printable]:
     item: T
 
-    def display(self) -> String:
+    def display(self) -> str:
         return self.item.describe()
 
 # Generic function with trait bound

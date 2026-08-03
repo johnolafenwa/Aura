@@ -1,5 +1,5 @@
 class Holder:
-    values: Vec[int32]
+    values: list[int32]
     other: int32
 
 def main():

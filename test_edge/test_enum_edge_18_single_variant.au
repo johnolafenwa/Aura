@@ -11,7 +11,7 @@ def extract(w: Wrapper) -> int32:
         case Wrapper.Value(v):
             return v
 
-def check(u: Unit) -> String:
+def check(u: Unit) -> str:
     match own u:
         case Unit.Only:
             return "only"

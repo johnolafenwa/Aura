@@ -1,0 +1,4 @@
+def main():
+    values: list[int32] = [10]
+    index: uint64 = 0
+    print(values.get(index))

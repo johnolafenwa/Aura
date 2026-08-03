@@ -1,8 +1,8 @@
-# String as enum payload with different operations
+# str as enum payload with different operations
 
 enum ParseResult:
     Success(int32)
-    Failure(String)
+    Failure(str)
 
 def parse(input: str) -> ParseResult:
     if input == "42":

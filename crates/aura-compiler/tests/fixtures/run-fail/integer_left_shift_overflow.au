@@ -1,0 +1,4 @@
+def main():
+    base: int8 = 64
+    count: int8 = 1
+    print(base << count)

@@ -1,0 +1,15 @@
+def accepts_int64(values: list[int32], endpoint: int64):
+    print(values[endpoint:])
+    print(values.get(endpoint))
+
+def main():
+    values = Array[int32].zeros(shape=[1])
+    index: int64 = 0
+    print(values[index])
+
+    stop = 3
+    for value in range(stop=stop):
+        print(value)
+
+    large = range(stop=2147483648)
+    print(large)

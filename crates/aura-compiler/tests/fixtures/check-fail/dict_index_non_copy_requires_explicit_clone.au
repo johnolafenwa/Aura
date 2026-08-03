@@ -1,0 +1,3 @@
+def main():
+    labels: dict[str, str] = {"language": "Aura"}
+    language: str = labels["language"]

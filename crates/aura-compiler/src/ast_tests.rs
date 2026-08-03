@@ -80,7 +80,7 @@ fn item_name_matches_decl_name() {
         type_params: vec![],
         type_param_bounds: BTreeMap::new(),
         trait_name: "Display".to_string(),
-        trait_args: vec![dummy_type("String")],
+        trait_args: vec![dummy_type("str")],
         for_type: dummy_type("Point"),
         methods: vec![dummy_function("show")],
         span: Span::new(1, 1),
@@ -97,8 +97,8 @@ fn item_name_matches_decl_name() {
 
 #[test]
 fn dummy_helpers_cover_receiver_and_none_defaults() {
-    let ty = dummy_type("String");
-    assert!(matches!(ty.named_parts(), Some(("String", args)) if args.is_empty()));
+    let ty = dummy_type("str");
+    assert!(matches!(ty.named_parts(), Some(("str", args)) if args.is_empty()));
     assert!(!ty.indirect);
     assert_eq!(ty.span, Span::new(1, 1));
 
@@ -122,7 +122,7 @@ fn tuple_ast_nodes_are_structural_and_keep_binding_spans() {
     let tuple_ty = TypeRef {
         kind: super::TypeRefKind::Tuple(vec![
             TypeRef::named("int32", vec![], false, span),
-            TypeRef::named("String", vec![], false, Span::new(3, 12)),
+            TypeRef::named("str", vec![], false, Span::new(3, 12)),
         ]),
         indirect: false,
         span,
@@ -190,7 +190,7 @@ fn type_ref_json_preserves_named_tuple_and_function_shapes() {
     );
 
     let tuple = TypeRef::tuple(
-        vec![TypeRef::named("String", vec![], false, span)],
+        vec![TypeRef::named("str", vec![], false, span)],
         false,
         span,
     );
@@ -198,7 +198,7 @@ fn type_ref_json_preserves_named_tuple_and_function_shapes() {
         serde_json::to_value(&tuple).expect("tuple type reference should serialize"),
         serde_json::json!({
             "elements": [{
-                "name": "String",
+                "name": "str",
                 "args": [],
                 "indirect": false,
                 "span": {"line": 3, "column": 5}
@@ -212,7 +212,7 @@ fn type_ref_json_preserves_named_tuple_and_function_shapes() {
         vec![
             FunctionTypeParam::new(
                 ParamMode::BorrowMut,
-                TypeRef::named("String", vec![], false, span),
+                TypeRef::named("str", vec![], false, span),
                 span,
             ),
             FunctionTypeParam::new(
@@ -229,7 +229,7 @@ fn type_ref_json_preserves_named_tuple_and_function_shapes() {
         .expect("function type should expose its signature");
     assert_eq!(params.len(), 2);
     assert_eq!(params[0].mode, ParamMode::BorrowMut);
-    assert_eq!(params[0].ty.named_parts(), Some(("String", &[][..])));
+    assert_eq!(params[0].ty.named_parts(), Some(("str", &[][..])));
     assert_eq!(params[1].mode, ParamMode::Own);
     assert_eq!(params[1].ty.named_parts(), Some(("int32", &[][..])));
     assert_eq!(return_type.named_parts(), Some(("bool", &[][..])));
@@ -241,7 +241,7 @@ fn type_ref_json_preserves_named_tuple_and_function_shapes() {
             "params": [{
                 "mode": "BorrowMut",
                 "ty": {
-                    "name": "String",
+                    "name": "str",
                     "args": [],
                     "indirect": false,
                     "span": {"line": 3, "column": 5}
@@ -277,7 +277,7 @@ fn function_type_convenience_constructor_preserves_parameter_spans_and_default_c
     let return_span = Span::new(4, 32);
     let function = TypeRef::function(
         vec![
-            TypeRef::named("String", vec![], false, first_span),
+            TypeRef::named("str", vec![], false, first_span),
             TypeRef::tuple(
                 vec![TypeRef::named("int32", vec![], false, second_span)],
                 false,
@@ -305,7 +305,7 @@ fn function_type_convenience_constructor_preserves_parameter_spans_and_default_c
     assert_eq!(function.span, signature_span);
     assert!(!function.indirect);
 
-    let named = TypeRef::named("String", vec![], false, first_span);
+    let named = TypeRef::named("str", vec![], false, first_span);
     let tuple = TypeRef::tuple(vec![named.clone()], false, second_span);
     assert!(named.function_parts().is_none());
     assert!(tuple.function_parts().is_none());
@@ -318,7 +318,7 @@ fn function_type_pretty_json_preserves_the_public_wire_shape() {
         vec![FunctionTypeParam::new(
             ParamMode::Own,
             TypeRef::tuple(
-                vec![TypeRef::named("String", vec![], false, Span::new(8, 12))],
+                vec![TypeRef::named("str", vec![], false, Span::new(8, 12))],
                 false,
                 Span::new(8, 11),
             ),
@@ -342,7 +342,7 @@ fn function_type_pretty_json_preserves_the_public_wire_shape() {
                 "mode": "Own",
                 "ty": {
                     "elements": [{
-                        "name": "String",
+                        "name": "str",
                         "args": [],
                         "indirect": false,
                         "span": {"line": 8, "column": 12}

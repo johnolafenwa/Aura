@@ -49,7 +49,7 @@ def main() -> int32:
     timer_release = Queue[int32]()
     timer_armed = Queue[int64]()
     timer_samples = Queue[int64]()
-    mut overshoots = Vec[int64]()
+    mut overshoots = list[int64]()
 
     with TaskGroup() as group:
         for _ in range(100000):
@@ -126,7 +126,7 @@ def main() -> int32:
         while sample_count < 1000:
             match timer_samples.get():
                 case QueueReceive.Item(overshoot_ms):
-                    overshoots.push(overshoot_ms)
+                    overshoots.append(overshoot_ms)
                     sample_count += 1
                 case QueueReceive.Closed:
                     return 1

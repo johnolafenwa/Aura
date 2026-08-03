@@ -1,8 +1,8 @@
 class Builder:
-    prefix: String
-    suffix: String
+    prefix: str
+    suffix: str
 
-    def build(self, middle: String) -> String:
+    def build(self, middle: str) -> str:
         return self.prefix + middle + self.suffix
 
     def close(mut self):

@@ -1,5 +1,5 @@
 class Holder:
-    name: String
+    name: str
 
 def main() -> int32:
     mut h = Holder(name="first")

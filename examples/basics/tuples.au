@@ -1,4 +1,4 @@
-def make_record() -> (String, int64):
+def make_record() -> (str, int64):
     return ("Aura", 7)
 
 

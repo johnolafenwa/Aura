@@ -1,7 +1,7 @@
 # Test: calling a trait-bounded function with a type that doesn't implement the trait
 
 trait Flyable:
-    def fly(self) -> String
+    def fly(self) -> str
 
 class Rock:
     weight: int32

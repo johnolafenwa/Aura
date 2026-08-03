@@ -1,0 +1,5 @@
+error[AU2999]: class patterns are not supported; destructure the class before matching or match a separate enum tag
+ --> crates/aura-compiler/tests/fixtures/check-fail/class_named_pattern_deferred.au:7:20
+  |
+7 |         case Point(x=0):
+  |                    ^

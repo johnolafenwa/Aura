@@ -1,2 +1,2 @@
 copy class BadBox:
-    value: String
+    value: str

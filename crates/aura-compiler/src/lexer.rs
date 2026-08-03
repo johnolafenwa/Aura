@@ -43,12 +43,25 @@ pub enum TokenKind {
     MinusEqual,
     Star,
     StarEqual,
+    DoubleStar,
+    DoubleStarEqual,
     Slash,
     SlashEqual,
     DoubleSlash,
     DoubleSlashEqual,
     Percent,
     PercentEqual,
+    Ampersand,
+    AmpersandEqual,
+    Pipe,
+    PipeEqual,
+    Caret,
+    CaretEqual,
+    Tilde,
+    ShiftLeft,
+    ShiftLeftEqual,
+    ShiftRight,
+    ShiftRightEqual,
     Arrow,
     KwClass,
     KwEnum,
@@ -58,7 +71,6 @@ pub enum TokenKind {
     KwImport,
     KwFrom,
     KwMut,
-    KwBorrow,
     KwOwn,
     KwIndirect,
     KwPublic,
@@ -135,6 +147,13 @@ struct LayoutIsland {
     indent_stack: Vec<usize>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingTripleString {
+    quote: char,
+    raw_content: String,
+    span: Span,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum LineLayout {
     Global,
@@ -147,6 +166,7 @@ struct LexState {
     delimiters: Vec<DelimiterFrame>,
     pending_delimited_matches: Vec<PendingDelimitedMatch>,
     layout_islands: Vec<LayoutIsland>,
+    triple_string: Option<PendingTripleString>,
 }
 
 impl LexState {
@@ -288,6 +308,9 @@ impl LexState {
     }
 
     fn should_emit_newline(&self) -> bool {
+        if self.triple_string.is_some() {
+            return false;
+        }
         match self.layout_islands.last() {
             Some(island) => self.delimiters.len() == island.container_depth,
             None => self.delimiters.is_empty(),
@@ -465,6 +488,62 @@ fn decode_escape(
     }
 }
 
+fn find_triple_terminator(source: &str, quote: char) -> Option<usize> {
+    let chars = source.char_indices().collect::<Vec<_>>();
+    let mut backslash_run = 0usize;
+    for index in 0..chars.len() {
+        let (offset, current) = chars[index];
+        if current == quote
+            && backslash_run.is_multiple_of(2)
+            && matches!(chars.get(index + 1), Some((_, next)) if *next == quote)
+            && matches!(chars.get(index + 2), Some((_, next)) if *next == quote)
+        {
+            return Some(offset);
+        }
+        if current == '\\' {
+            backslash_run += 1;
+        } else {
+            backslash_run = 0;
+        }
+    }
+    None
+}
+
+fn decode_triple_string(source: &str, span: Span) -> Result<String> {
+    let chars = source.char_indices().collect::<Vec<_>>();
+    let mut value = String::new();
+    let mut index = 0usize;
+    let mut line = span.line;
+    let mut column = span.column + 3;
+    while index < chars.len() {
+        let current = chars[index].1;
+        if current == '\\' {
+            let (decoded, next) =
+                decode_escape(&chars, index + 1, line, column, "triple-quoted string")?;
+            value.push(decoded);
+            for (_, consumed) in &chars[index..next] {
+                if *consumed == '\n' {
+                    line += 1;
+                    column = 1;
+                } else {
+                    column += consumed.len_utf8();
+                }
+            }
+            index = next;
+        } else {
+            value.push(current);
+            if current == '\n' {
+                line += 1;
+                column = 1;
+            } else {
+                column += current.len_utf8();
+            }
+            index += 1;
+        }
+    }
+    Ok(value)
+}
+
 pub fn lex(source: &str) -> Result<Vec<Token>> {
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut tokens = Vec::new();
@@ -474,16 +553,29 @@ pub fn lex(source: &str) -> Result<Vec<Token>> {
     for (index, raw_line) in source.lines().enumerate() {
         let line_no = index + 1;
 
-        if raw_line.contains('\t') {
+        let trimmed = raw_line.trim();
+        if state.triple_string.is_none()
+            && raw_line.contains('\t')
+            && (trimmed.is_empty() || trimmed.starts_with('#'))
+        {
             return Err(Diagnostic::coded_at(
                 "AU1001",
                 Span::new(line_no, 1),
                 "tabs are not supported for indentation; use spaces",
             ));
         }
+        if state.triple_string.is_none() && (trimmed.is_empty() || trimmed.starts_with('#')) {
+            continue;
+        }
 
-        let trimmed = raw_line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
+        if state.triple_string.is_some() {
+            tokenize_line(raw_line, line_no, 1, 0, &mut state, &mut tokens)?;
+            if state.should_emit_newline() {
+                tokens.push(Token {
+                    kind: TokenKind::Newline,
+                    span: Span::new(line_no, raw_line.len() + 1),
+                });
+            }
             continue;
         }
 
@@ -527,6 +619,12 @@ pub fn lex(source: &str) -> Result<Vec<Token>> {
     if let Some(error) = state.unclosed_delimiter_error(diagnostic_eof_span) {
         return Err(error);
     }
+    if let Some(pending) = state.triple_string {
+        return Err(lexical_error(
+            pending.span,
+            "unterminated triple-quoted string literal",
+        ));
+    }
 
     while indent_stack.len() > 1 {
         indent_stack.pop();
@@ -555,6 +653,27 @@ fn tokenize_line(
     let chars: Vec<(usize, char)> = content.char_indices().collect();
     let mut index = 0;
 
+    if let Some(mut pending) = state.triple_string.take() {
+        pending.raw_content.push('\n');
+        if let Some(close) = find_triple_terminator(content, pending.quote) {
+            pending.raw_content.push_str(&content[..close]);
+            let value = decode_triple_string(&pending.raw_content, pending.span)?;
+            tokens.push(Token {
+                kind: TokenKind::StringLiteral(value),
+                span: pending.span,
+            });
+            index = chars
+                .iter()
+                .position(|(offset, _)| *offset == close)
+                .expect("triple terminator starts at a character boundary")
+                + 3;
+        } else {
+            pending.raw_content.push_str(content);
+            state.triple_string = Some(pending);
+            return Ok(());
+        }
+    }
+
     while index < chars.len() {
         let (offset, ch) = chars[index];
         let column = base_column + offset;
@@ -563,7 +682,23 @@ fn tokenize_line(
             ' ' => {
                 index += 1;
             }
-            '#' => break,
+            '\t' => {
+                return Err(Diagnostic::coded_at(
+                    "AU1001",
+                    Span::new(line_no, column),
+                    "tabs are not supported for indentation; use spaces",
+                ));
+            }
+            '#' => {
+                if let Some(tab_offset) = content[offset..].find('\t') {
+                    return Err(Diagnostic::coded_at(
+                        "AU1001",
+                        Span::new(line_no, column + tab_offset),
+                        "physical tabs are allowed only inside triple-quoted strings",
+                    ));
+                }
+                break;
+            }
             '(' => {
                 state.open_delimiter(DelimiterKind::Parenthesis, Span::new(line_no, column))?;
                 tokens.push(simple(TokenKind::LParen, line_no, column));
@@ -640,7 +775,15 @@ fn tokenize_line(
                 }
             }
             '<' => {
-                if let Some((_, '=')) = chars.get(index + 1) {
+                if matches!(chars.get(index + 1), Some((_, '<')))
+                    && matches!(chars.get(index + 2), Some((_, '=')))
+                {
+                    tokens.push(simple(TokenKind::ShiftLeftEqual, line_no, column));
+                    index += 3;
+                } else if matches!(chars.get(index + 1), Some((_, '<'))) {
+                    tokens.push(simple(TokenKind::ShiftLeft, line_no, column));
+                    index += 2;
+                } else if let Some((_, '=')) = chars.get(index + 1) {
                     tokens.push(simple(TokenKind::LessEq, line_no, column));
                     index += 2;
                 } else {
@@ -649,7 +792,15 @@ fn tokenize_line(
                 }
             }
             '>' => {
-                if let Some((_, '=')) = chars.get(index + 1) {
+                if matches!(chars.get(index + 1), Some((_, '>')))
+                    && matches!(chars.get(index + 2), Some((_, '=')))
+                {
+                    tokens.push(simple(TokenKind::ShiftRightEqual, line_no, column));
+                    index += 3;
+                } else if matches!(chars.get(index + 1), Some((_, '>'))) {
+                    tokens.push(simple(TokenKind::ShiftRight, line_no, column));
+                    index += 2;
+                } else if let Some((_, '=')) = chars.get(index + 1) {
                     tokens.push(simple(TokenKind::GreaterEq, line_no, column));
                     index += 2;
                 } else {
@@ -667,7 +818,15 @@ fn tokenize_line(
                 }
             }
             '*' => {
-                if let Some((_, '=')) = chars.get(index + 1) {
+                if matches!(chars.get(index + 1), Some((_, '*')))
+                    && matches!(chars.get(index + 2), Some((_, '=')))
+                {
+                    tokens.push(simple(TokenKind::DoubleStarEqual, line_no, column));
+                    index += 3;
+                } else if matches!(chars.get(index + 1), Some((_, '*'))) {
+                    tokens.push(simple(TokenKind::DoubleStar, line_no, column));
+                    index += 2;
+                } else if let Some((_, '=')) = chars.get(index + 1) {
                     tokens.push(simple(TokenKind::StarEqual, line_no, column));
                     index += 2;
                 } else {
@@ -701,6 +860,37 @@ fn tokenize_line(
                     index += 1;
                 }
             }
+            '&' => {
+                if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::AmpersandEqual, line_no, column));
+                    index += 2;
+                } else {
+                    tokens.push(simple(TokenKind::Ampersand, line_no, column));
+                    index += 1;
+                }
+            }
+            '|' => {
+                if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::PipeEqual, line_no, column));
+                    index += 2;
+                } else {
+                    tokens.push(simple(TokenKind::Pipe, line_no, column));
+                    index += 1;
+                }
+            }
+            '^' => {
+                if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::CaretEqual, line_no, column));
+                    index += 2;
+                } else {
+                    tokens.push(simple(TokenKind::Caret, line_no, column));
+                    index += 1;
+                }
+            }
+            '~' => {
+                tokens.push(simple(TokenKind::Tilde, line_no, column));
+                index += 1;
+            }
             '-' => {
                 if let Some((_, '>')) = chars.get(index + 1) {
                     tokens.push(simple(TokenKind::Arrow, line_no, column));
@@ -712,6 +902,37 @@ fn tokenize_line(
                     tokens.push(simple(TokenKind::Minus, line_no, column));
                     index += 1;
                 }
+            }
+            'r' if matches!(chars.get(index + 1), Some((_, 'f')))
+                && matches!(chars.get(index + 2), Some((_, '"' | '\''))) =>
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU1002",
+                    Span::new(line_no, column),
+                    "raw f-strings are not supported; use `f\"...\"` and escape backslashes explicitly",
+                ));
+            }
+            'f' if matches!(chars.get(index + 1), Some((_, 'r')))
+                && matches!(chars.get(index + 2), Some((_, '"' | '\''))) =>
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU1002",
+                    Span::new(line_no, column),
+                    "raw f-strings are not supported; use `f\"...\"` and escape backslashes explicitly",
+                ));
+            }
+            'f' if (matches!(chars.get(index + 1), Some((_, '"')))
+                && matches!(chars.get(index + 2), Some((_, '"')))
+                && matches!(chars.get(index + 3), Some((_, '"'))))
+                || (matches!(chars.get(index + 1), Some((_, '\'')))
+                    && matches!(chars.get(index + 2), Some((_, '\'')))
+                    && matches!(chars.get(index + 3), Some((_, '\'')))) =>
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU1002",
+                    Span::new(line_no, column),
+                    "triple-quoted f-strings are not supported; use single-line `f\"...\"` or an ordinary triple-quoted string",
+                ));
             }
             'f' if matches!(chars.get(index + 1), Some((_, '\''))) => {
                 return Err(Diagnostic::coded_at(
@@ -725,10 +946,17 @@ fn tokenize_line(
                 let mut value = String::new();
                 let mut interpolation_depth = 0usize;
                 let mut interpolation_string_quote = None;
+                let mut interpolation_triple_quote = None;
                 let mut interpolation_escape = false;
 
                 while index < chars.len() {
                     let (_, current) = chars[index];
+                    if current == '\t' {
+                        return Err(lexical_error(
+                            Span::new(line_no, column),
+                            "physical tabs are allowed only inside triple-quoted strings",
+                        ));
+                    }
                     if interpolation_depth == 0 && current == '"' {
                         break;
                     }
@@ -759,7 +987,18 @@ fn tokenize_line(
                     }
                     value.push(current);
                     if interpolation_depth > 0 {
-                        if let Some(quote) = interpolation_string_quote {
+                        if let Some(quote) = interpolation_triple_quote {
+                            if current == quote
+                                && matches!(chars.get(index + 1), Some((_, next)) if *next == quote)
+                                && matches!(chars.get(index + 2), Some((_, next)) if *next == quote)
+                            {
+                                value.push(quote);
+                                value.push(quote);
+                                interpolation_triple_quote = None;
+                                index += 3;
+                                continue;
+                            }
+                        } else if let Some(quote) = interpolation_string_quote {
                             if interpolation_escape {
                                 interpolation_escape = false;
                             } else if current == '\\' {
@@ -769,6 +1008,16 @@ fn tokenize_line(
                             }
                         } else {
                             match current {
+                                '"' | '\''
+                                    if matches!(chars.get(index + 1), Some((_, next)) if *next == current)
+                                        && matches!(chars.get(index + 2), Some((_, next)) if *next == current) =>
+                                {
+                                    value.push(current);
+                                    value.push(current);
+                                    interpolation_triple_quote = Some(current);
+                                    index += 3;
+                                    continue;
+                                }
                                 '"' | '\'' => interpolation_string_quote = Some(current),
                                 '{' => {
                                     if interpolation_depth >= RECURSION_LIMIT {
@@ -805,12 +1054,103 @@ fn tokenize_line(
                     span: Span::new(line_no, column),
                 });
             }
+            'r' if matches!(chars.get(index + 1), Some((_, '"' | '\''))) => {
+                let quote = chars[index + 1].1;
+                if matches!(chars.get(index + 2), Some((_, next)) if *next == quote)
+                    && matches!(chars.get(index + 3), Some((_, next)) if *next == quote)
+                {
+                    return Err(lexical_error(
+                        Span::new(line_no, column),
+                        "raw triple-quoted strings are not supported",
+                    ));
+                }
+                index += 2;
+                let mut value = String::new();
+                let mut backslash_run = 0usize;
+                let mut terminated = false;
+                while index < chars.len() {
+                    let (_, current) = chars[index];
+                    if current == '\t' {
+                        return Err(lexical_error(
+                            Span::new(line_no, column),
+                            "physical tabs are allowed only inside triple-quoted strings",
+                        ));
+                    }
+                    if current == quote {
+                        if backslash_run.is_multiple_of(2) {
+                            terminated = true;
+                            break;
+                        }
+                        value.push(current);
+                        backslash_run = 0;
+                        index += 1;
+                        continue;
+                    }
+                    value.push(current);
+                    if current == '\\' {
+                        backslash_run += 1;
+                    } else {
+                        backslash_run = 0;
+                    }
+                    index += 1;
+                }
+                if !terminated {
+                    let message = if backslash_run % 2 == 1 {
+                        "raw string cannot end in an odd run of backslashes"
+                    } else {
+                        "unterminated raw string literal; raw strings cannot contain a physical newline"
+                    };
+                    return Err(lexical_error(Span::new(line_no, column), message));
+                }
+                index += 1;
+                tokens.push(Token {
+                    kind: TokenKind::StringLiteral(value),
+                    span: Span::new(line_no, column),
+                });
+            }
             quote @ ('"' | '\'') => {
+                if matches!(chars.get(index + 1), Some((_, next)) if *next == quote)
+                    && matches!(chars.get(index + 2), Some((_, next)) if *next == quote)
+                {
+                    let start_span = Span::new(line_no, column);
+                    index += 3;
+                    let rest_offset = chars
+                        .get(index)
+                        .map_or(content.len(), |(offset, _)| *offset);
+                    let rest = &content[rest_offset..];
+                    if let Some(relative_close) = find_triple_terminator(rest, quote) {
+                        let value = decode_triple_string(&rest[..relative_close], start_span)?;
+                        tokens.push(Token {
+                            kind: TokenKind::StringLiteral(value),
+                            span: start_span,
+                        });
+                        let close_offset = rest_offset + relative_close;
+                        index = chars
+                            .iter()
+                            .position(|(offset, _)| *offset == close_offset)
+                            .expect("triple terminator starts at a character boundary")
+                            + 3;
+                    } else {
+                        state.triple_string = Some(PendingTripleString {
+                            quote,
+                            raw_content: rest.to_string(),
+                            span: start_span,
+                        });
+                        return Ok(());
+                    }
+                    continue;
+                }
                 index += 1;
                 let mut value = String::new();
 
                 while index < chars.len() {
                     let (_, current) = chars[index];
+                    if current == '\t' {
+                        return Err(lexical_error(
+                            Span::new(line_no, column),
+                            "physical tabs are allowed only inside triple-quoted strings",
+                        ));
+                    }
                     if current == quote {
                         break;
                     }
@@ -840,10 +1180,102 @@ fn tokenize_line(
             }
             '0'..='9' => {
                 let start = index;
-                index += 1;
+                let prefixed_base = if ch == '0' {
+                    match chars.get(index + 1).map(|(_, next)| *next) {
+                        Some('x' | 'X') => Some((16, "hexadecimal")),
+                        Some('b' | 'B') => Some((2, "binary")),
+                        Some('o' | 'O') => Some((8, "octal")),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
 
-                while matches!(chars.get(index), Some((_, '0'..='9'))) {
+                if let Some((radix, base_name)) = prefixed_base {
+                    let prefix = &content[chars[start].0
+                        ..chars
+                            .get(start + 2)
+                            .map(|(offset, _)| *offset)
+                            .unwrap_or(content.len())];
+                    index += 2;
+                    let digits_start = index;
+                    while matches!(
+                        chars.get(index),
+                        Some((_, '0'..='9' | 'a'..='z' | 'A'..='Z' | '_'))
+                    ) {
+                        index += 1;
+                    }
+                    if index == digits_start {
+                        return Err(lexical_error(
+                            Span::new(line_no, column),
+                            format!("integer literal requires digits after `{prefix}`"),
+                        ));
+                    }
+                    for digit_index in digits_start..index {
+                        let (_, digit) = chars[digit_index];
+                        if digit == '_' {
+                            let previous_is_digit = digit_index > digits_start
+                                && chars[digit_index - 1].1.is_digit(radix);
+                            let next_is_digit = chars
+                                .get(digit_index + 1)
+                                .is_some_and(|(_, next)| next.is_digit(radix));
+                            if !previous_is_digit || !next_is_digit {
+                                return Err(lexical_error(
+                                    Span::new(line_no, base_column + chars[digit_index].0),
+                                    "an underscore in an integer literal must appear between two digits valid for its base",
+                                ));
+                            }
+                        } else if digit.to_digit(radix).is_none() {
+                            return Err(lexical_error(
+                                Span::new(line_no, base_column + chars[digit_index].0),
+                                format!("invalid digit `{digit}` in {base_name} integer literal"),
+                            ));
+                        }
+                    }
+                    if matches!(chars.get(index), Some((_, '.')))
+                        && matches!(chars.get(index + 1), Some((_, '0'..='9')))
+                    {
+                        return Err(lexical_error(
+                            Span::new(line_no, column),
+                            "base prefixes do not apply to floating-point literals",
+                        ));
+                    }
+                    let end_offset = chars
+                        .get(index)
+                        .map(|(next_offset, _)| *next_offset)
+                        .unwrap_or_else(|| content.len());
+                    let digits = content[chars[digits_start].0..end_offset].replace('_', "");
+                    let value = u128::from_str_radix(&digits, radix).map_err(|_| {
+                        lexical_error(Span::new(line_no, column), "invalid integer literal")
+                    })?;
+                    tokens.push(Token {
+                        kind: TokenKind::IntLiteral(value),
+                        span: Span::new(line_no, column),
+                    });
+                    continue;
+                }
+
+                index += 1;
+                while matches!(chars.get(index), Some((_, '0'..='9' | '_'))) {
                     index += 1;
+                }
+                let integer_end = index;
+                let has_separator = chars[start..integer_end]
+                    .iter()
+                    .any(|(_, digit)| *digit == '_');
+                for digit_index in start..integer_end {
+                    if chars[digit_index].1 != '_' {
+                        continue;
+                    }
+                    let between_digits = digit_index > start
+                        && matches!(chars.get(digit_index - 1), Some((_, '0'..='9')))
+                        && matches!(chars.get(digit_index + 1), Some((_, '0'..='9')));
+                    if !between_digits {
+                        return Err(lexical_error(
+                            Span::new(line_no, base_column + chars[digit_index].0),
+                            "an underscore in an integer literal must appear between two decimal digits",
+                        ));
+                    }
                 }
 
                 let mut is_float = false;
@@ -855,6 +1287,12 @@ fn tokenize_line(
 
                     while matches!(chars.get(index), Some((_, '0'..='9'))) {
                         index += 1;
+                    }
+                    if matches!(chars.get(index), Some((_, '_'))) {
+                        return Err(lexical_error(
+                            Span::new(line_no, base_column + chars[index].0),
+                            "integer separators do not apply to floating-point literals",
+                        ));
                     }
                 }
 
@@ -875,6 +1313,12 @@ fn tokenize_line(
                     while matches!(chars.get(index), Some((_, '0'..='9'))) {
                         index += 1;
                     }
+                    if matches!(chars.get(index), Some((_, '_'))) {
+                        return Err(lexical_error(
+                            Span::new(line_no, base_column + chars[index].0),
+                            "integer separators do not apply to floating-point literals",
+                        ));
+                    }
                 }
 
                 let end_offset = match chars.get(index) {
@@ -884,6 +1328,12 @@ fn tokenize_line(
                 let text = &content[chars[start].0..end_offset];
 
                 if is_float {
+                    if has_separator {
+                        return Err(lexical_error(
+                            Span::new(line_no, column),
+                            "integer separators do not apply to floating-point literals",
+                        ));
+                    }
                     let value = text
                         .parse::<f64>()
                         .expect("lexer should only build syntactically valid float literals");
@@ -898,7 +1348,8 @@ fn tokenize_line(
                         span: Span::new(line_no, column),
                     });
                 } else {
-                    let value = match text.parse::<u128>() {
+                    let normalized = text.replace('_', "");
+                    let value = match normalized.parse::<u128>() {
                         Ok(value) => value,
                         Err(_) => {
                             return Err(lexical_error(
@@ -910,6 +1361,12 @@ fn tokenize_line(
                     let duration_kind = if let Some((_, suffix_start)) = chars.get(index) {
                         match suffix_start {
                             'm' => {
+                                if has_separator {
+                                    return Err(lexical_error(
+                                        Span::new(line_no, column),
+                                        "integer separators do not apply to duration literals",
+                                    ));
+                                }
                                 if matches!(chars.get(index + 1), Some((_, 's'))) {
                                     index += 2;
                                     Some(duration_literal_nanos(
@@ -927,6 +1384,12 @@ fn tokenize_line(
                                 }
                             }
                             's' => {
+                                if has_separator {
+                                    return Err(lexical_error(
+                                        Span::new(line_no, column),
+                                        "integer separators do not apply to duration literals",
+                                    ));
+                                }
                                 index += 1;
                                 Some(duration_literal_nanos(
                                     value,
@@ -939,6 +1402,14 @@ fn tokenize_line(
                     } else {
                         None
                     };
+                    if duration_kind.is_none()
+                        && matches!(chars.get(index), Some((_, '_' | 'a'..='z' | 'A'..='Z')))
+                    {
+                        return Err(lexical_error(
+                            Span::new(line_no, base_column + chars[index].0),
+                            "invalid integer literal",
+                        ));
+                    }
                     tokens.push(Token {
                         kind: duration_kind.unwrap_or(TokenKind::IntLiteral(value)),
                         span: Span::new(line_no, column),
@@ -970,7 +1441,6 @@ fn tokenize_line(
                     "import" => TokenKind::KwImport,
                     "from" => TokenKind::KwFrom,
                     "mut" => TokenKind::KwMut,
-                    "borrow" => TokenKind::KwBorrow,
                     "own" => TokenKind::KwOwn,
                     "indirect" => TokenKind::KwIndirect,
                     "public" => TokenKind::KwPublic,

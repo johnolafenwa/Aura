@@ -1,0 +1,8 @@
+import random
+
+def duplicate[T](values: list[T]) -> list[T]:
+    return values[:]
+
+def main():
+    values = [random.Rng(seed=1)]
+    print(duplicate(values))

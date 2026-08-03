@@ -3,7 +3,7 @@ enum TrafficLight:
     Yellow
     Green
 
-def show(t: TrafficLight) -> String:
+def show(t: TrafficLight) -> str:
     match own t:
         case TrafficLight.Red:
             return "STOP"

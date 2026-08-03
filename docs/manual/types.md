@@ -17,8 +17,7 @@ The type system is designed to keep three facts visible:
 | `int8`, `int16`, `int32`, `int64`, `int128`, `intsize` | Signed integers. |
 | `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize` | Unsigned integers. |
 | `float32`, `float64` | Floating-point values. |
-| `String` | Owned UTF-8 string; `len()` counts Unicode scalar values and `byte_len()` counts encoded bytes. |
-| `str` | Compatibility spelling that canonicalizes to `String` in Aura 0.2; it is not a distinct runtime view type. |
+| `str` | Owned UTF-8 string; `len()` counts Unicode scalar values and `byte_len()` counts encoded bytes. |
 | `None` | Unit type and unit value. |
 | `Duration` | Signed 128-bit nanosecond duration used by arithmetic, sleeps, timeouts, and scheduling APIs. |
 | `Range` | Integer range returned by `range(...)`. |
@@ -40,19 +39,27 @@ Integer bounds are exact:
 | `intsize` | host-pointer-width signed range |
 | `uintsize` | host-pointer-width unsigned range |
 
-`float32` and `float64` use IEEE-754 binary32 and binary64 representations. Literal lexing first requires a finite binary64 value; contextual `float32` conversion may round or overflow as recorded in [Current Limits](/manual/current-limits). Runtime operations may produce NaN, but Aura 0.2 makes `/`, `//`, or `%` by a floating zero explicit runtime failures rather than producing infinity or NaN through those operators.
+`float32` and `float64` use IEEE-754 binary32 and binary64 representations. Literal lexing first requires a finite binary64 value; contextual `float32` conversion may round or overflow as recorded in [Current Limits](/manual/current-limits). Runtime operations may produce NaN, but Aura 0.3 makes `/`, `//`, or `%` by a floating zero explicit runtime failures rather than producing infinity or NaN through those operators.
 
-`int` is an alias for `int64`, so the two spellings have identical bounds, type identity, layout, and runtime behavior. An unsuffixed integer literal uses an expected integer type when one is available. It may also use an expected `float32` or `float64` when its value is exactly representable in that target; this is literal typing, not a conversion available to integer variables. Otherwise it defaults to `int64`.
+`int` is an alias for `int64`, so the two spellings have identical bounds,
+type identity, layout, and runtime behavior. Integer literals may be decimal,
+hexadecimal (`0x`), binary (`0b`), or octal (`0o`), with underscores between
+digits. Every spelling follows the same contextual typing and bounds rules. An
+unsuffixed integer literal uses an expected integer type when one is available.
+It may also use an expected `float32` or `float64` when its value is exactly
+representable in that target; this is literal typing, not a conversion
+available to integer variables. Otherwise it defaults to `int64`.
 
 The default does not widen explicitly typed APIs. Existing fixed `int32`
-contracts remain `int32`, including `main()` exit statuses, `range(...)`
-bounds and yielded values, Vec indexes, queue capacities, and bounded
-process/network I/O byte-count parameters. A literal passed to one of those
-positions adopts the expected `int32` type and must fit it. Length results are
-intentionally `int64`:
-the builtin `len`, `String.len`, `String.byte_len`, `Vec.len`, `Map.len`, and
-`Set.len` all return `int64`. Passing a computed length to a still-`int32`
-range or index boundary requires an explicit checked `as int32` cast.
+contracts remain `int32`, including `main()` exit statuses, queue capacities,
+and bounded process/network I/O byte-count parameters. Position APIs form one
+deliberate exception: range bounds and yields, collection indices, slice
+endpoints, enumeration positions, and Array coordinates use `int64`. Values of
+type `int8`, `int16`, `int32`, `uint8`, `uint16`, or `uint32` widen losslessly
+at those positions. This conversion is unavailable in ordinary assignments,
+arguments, operators, and returns. Length results are also `int64`:
+the builtin `len`, `str.len`, `str.byte_len`, `list.len`, `dict.len`, and
+`set.len` all return `int64`, so they compose directly with ranges and indices.
 `random.secure_bytes(n)` is a separate byte-count API: `n` is `int64`, with a
 fixed per-request resource and safety ceiling of `2147483647`.
 
@@ -60,7 +67,7 @@ fixed per-request resource and safety ceiling of `2147483647`.
 normalized exactly to nanoseconds; literals are non-negative, while associated
 constructors and arithmetic can produce negative values. Representability as a
 language value is separate from validity as a host wait or deadline. `Range`
-contains `int32` start/end values and iterates from the start inclusive to the
+contains `int64` start/end values and iterates from the start inclusive to the
 end exclusive.
 
 The associated constructors `Duration.ms(int64)`, `Duration.seconds(int64)`,
@@ -75,21 +82,19 @@ operators are accepted under ADR-0007.
 
 Numeric literals are checked against the target type. Integer literals must fit an annotated integer target, and a float-context integer literal must be exactly representable in its `float32` or `float64` target. An inexact literal must make rounding explicit with a floating spelling or `.to_float()`. Integer-to-float casts also reject silent precision loss. Separately, every integer type provides `.to_float() -> float64`, which intentionally permits IEEE-754 round-to-nearest, ties-to-even conversion when an application wants to enter the floating domain.
 
-A bare `value: String` parameter grants shared access. Bare parameters do the
+A bare `value: str` parameter grants shared access. Bare parameters do the
 same for copy and move types; an implementation may pass copy bits directly
-without changing that source contract. The spelling `str` is accepted for
-compatibility but currently lowers to the same canonical `String` type; code
-must not assume a separate slice layout or lifetime-bearing runtime
-representation.
+without changing that source contract. `str` owns its UTF-8 storage. Aura has
+no separate slice layout or lifetime-bearing text-view type.
 
-`String.len() -> int64` scans the text and counts Unicode scalar values in
-O(n). `String.byte_len() -> int64` reads the UTF-8 byte count in O(1).
-`String.to_bytes() -> Vec[uint8]` and
-`String.from_bytes(Vec[uint8]) -> Result[String, bytes.Error]` provide the
-explicit strict UTF-8 boundary; `Vec[uint8]` is Aura's bytes representation.
-Aura has no distinct character type, integer String indexing, `chars()`,
-`ord()`, or `chr()`. String slicing accepts exact `int32` scalar endpoints,
-runs in O(n) over the source, and returns a fresh owned String. It is not a
+`str.len() -> int64` scans the text and counts Unicode scalar values in
+O(n). `str.byte_len() -> int64` reads the UTF-8 byte count in O(1).
+`str.to_bytes() -> list[uint8]` and
+`str.from_bytes(list[uint8]) -> Result[str, bytes.Error]` provide the
+explicit strict UTF-8 boundary; `list[uint8]` is Aura's bytes representation.
+Aura has no distinct character type, integer str indexing, `chars()`,
+`ord()`, or `chr()`. String slicing accepts `int64` scalar endpoints,
+runs in O(n) over the source, and returns a fresh owned str. It is not a
 view or a byte-indexing operation.
 
 ## Copy And Move Categories
@@ -111,10 +116,10 @@ positions:
 Move values transfer ownership:
 
 - tuple values with at least one move element
-- `String`
-- `Vec[T]`
-- `Map[K, V]`
-- `Set[T]`
+- `str`
+- `list[T]`
+- `dict[K, V]`
+- `set[T]`
 - `random.Rng`
 - ordinary user classes
 - user enum values with any move payload
@@ -128,8 +133,8 @@ Move values can still be shared through a bare parameter, accessed mutably
 through a `mut` parameter, or duplicated explicitly through methods such as
 `.clone()` when the type supports cloning.
 
-Slicing `String` produces a fresh owned String. Slicing `Vec[T]` produces a
-fresh owned Vec and is clone-producing for `T`: Copy elements are copied,
+Slicing `str` produces a fresh owned str. Slicing `list[T]` produces a
+fresh owned list and is clone-producing for `T`: Copy elements are copied,
 non-Copy elements must be clone-safe, `random.Rng` state is rejected with
 `AU3007`, and non-repeatable Task observation rights are rejected with
 `AU3009`. The result is another move value independent of the source.
@@ -142,7 +147,7 @@ queue or task.
 
 `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`, and `WaitAll[T]` are
 treated as move outcome values even when every payload type is copyable.
-`Range` is also not a general copy type in Aura 0.2; use ranges directly in
+`Range` is also not a general copy type in Aura 0.3; use ranges directly in
 iteration rather than relying on duplication.
 
 A generic user-enum payload whose declared type is an unconstrained type parameter is not assumed copyable, even when one later instantiation supplies a copy type.
@@ -187,7 +192,7 @@ is derived by the compiler and is not a builtin trait that source code can
 implement or assert. An ordinary user trait also named `Transfer` does not
 affect this structural classification.
 
-All copy types and `String` are `Transfer`. `Vec[T]`, `Set[T]`, `Map[K, V]`,
+All copy types and `str` are `Transfer`. `list[T]`, `set[T]`, `dict[K, V]`,
 tuples, classes, and enums are `Transfer` exactly when all of their stored
 component types are. The same recursive rule covers data wrappers such as
 `Option`, `Result`, task/queue outcomes, errors, and `json.Value`.
@@ -223,7 +228,7 @@ its declared/default context already makes every relevant type concrete.
 `Task[T]` is always `Transfer`, but ADR-0033 makes its Copy classification
 conditional. It is copyable only when `T` is copyable, when `T` is
 `Queue[...]`, or when `T` is `Task[U]` and `U` is recursively repeatable.
-This prevents a nested handle such as `Task[Task[String]]` from being copied
+This prevents a nested handle such as `Task[Task[str]]` from being copied
 to duplicate a single-consumer result right.
 
 This classification is the Phase 5.6 boundary used by the pinned-worker
@@ -238,11 +243,10 @@ on different pinned workers.
 | --- | --- |
 | `Option[T]` | `Some(T)` or `None`; use for ordinary absence. |
 | `Result[T, E]` | `Ok(T)` or `Err(E)`; use for recoverable failure. |
-| `Vec[T]` | Owned ordered collection. |
-| `Map[K, V]` | Owned key/value map. |
-| `Set[T]` | Owned set of unique values. |
+| `list[T]` | Owned ordered collection. |
+| `dict[K, V]` | Owned key/value dictionary. |
+| `set[T]` | Owned set of unique values. |
 | `Array[T]` | Owned contiguous row-major numeric array; `T` is exactly `int32`, `int64`, `float32`, or `float64`. |
-| `MapEntry[K, V]` | Entry value returned by `Map.items()` and `Map.entries()`. |
 | `Queue[T]` | Scheduler-aware typed queue handle. |
 | `Task[T]` | Transferable task-result handle; conditionally Copy under Accepted ADR-0033. |
 | `SendError[T]` | Queue send failure that carries the unsent value. |
@@ -252,7 +256,7 @@ on different pinned workers.
 | `WaitAny[T]` | `wait_any(...)` outcome. |
 | `WaitAll[T]` | `wait_all(...)` outcome. |
 
-`Array[T]` has runtime rank and `Vec[int64]` shape metadata rather than
+`Array[T]` has runtime rank and `list[int64]` shape metadata rather than
 shape-level static type arguments. Every Array has rank at least one, may
 contain zero-length dimensions, and owns its contiguous CPU buffer. It is
 non-Copy, explicitly cloneable, and structurally `Transfer`; a Task result
@@ -278,8 +282,8 @@ state but no `close()` operation or `with` contract. Its complete type and
 sequence rules are in [Randomness Module](/manual/randomness).
 
 `json.Value` is a move type whose recursive variants represent Null, Boolean,
-`int64`, finite `float64`, String, Vec, and Map object data. `json.Error` is a
-move type because its Syntax variant owns a String. Their exact variants and
+`int64`, finite `float64`, str, list, and dict object data. `json.Error` is a
+move type because its Syntax variant owns a str. Their exact variants and
 number rules are in [JSON Module](/manual/json).
 
 ## Type Annotations
@@ -288,43 +292,43 @@ Simple annotations:
 
 ```python
 count: int32 = 0
-name: String = "aura"
+name: str = "aura"
 ```
 
 Collection annotations:
 
 ```python
-names: Vec[String] = []
-lookup: Map[String, int32] = {}
-seen: Set[int32] = {}
+names: list[str] = []
+lookup: dict[str, int32] = {}
+seen = set[int32]()
 ```
 
 Empty collection literals need an expected type. Constructors are also available:
 
 ```python
-names = Vec[String]()
-lookup = Map[String, int32]()
-seen = Set[int32]()
+names = list[str]()
+lookup = dict[str, int32]()
+seen = set[int32]()
 ```
 
 `T?` is shorthand for `Option[T]`:
 
 ```python
-name: String? = None
+name: str? = None
 ```
 
-Type arguments are invariant, nonempty when brackets are present, and must exactly match the declared arity. Aura does not implicitly convert `Vec[int32]` to `Vec[int64]` or treat structurally identical user classes as the same type.
+Type arguments are invariant, nonempty when brackets are present, and must exactly match the declared arity. Aura does not implicitly convert `list[int32]` to `list[int64]` or treat structurally identical user classes as the same type.
 
 ## Option And Result Types
 
 Construct `Option` and `Result` with their enum names:
 
 ```python
-maybe: Option[String] = Option.Some("name")
-missing: Option[String] = Option.None
+maybe: Option[str] = Option.Some("name")
+missing: Option[str] = Option.None
 
-result: Result[int32, String] = Result.Ok(42)
-failure: Result[int32, String] = Result.Err("bad number")
+result: Result[int32, str] = Result.Ok(42)
+failure: Result[int32, str] = Result.Err("bad number")
 ```
 
 Bare `None` contextually denotes `Option.None` whenever an expected
@@ -363,14 +367,14 @@ Enums create sum types:
 enum Load[T]:
     Ready(value: T)
     Empty
-    Failed(message: String)
+    Failed(message: str)
 ```
 
 Traits define shared behavior:
 
 ```python
 trait Named:
-    def name(self) -> String
+    def name(self) -> str
 ```
 
 ## Recursive Fields
@@ -400,7 +404,7 @@ Casts are checked at runtime when the source value is not a compile-time literal
 Use parsing functions for text-to-number conversion:
 
 ```python
-def parse_answer() -> Result[int32, String]:
+def parse_answer() -> Result[int32, str]:
     value = try parse_int32("42")
     return Result.Ok(value)
 ```
@@ -473,7 +477,7 @@ contains a backend surface that cannot preserve the same behavior.
 
 ## Limits And Implementation-Defined Behavior
 
-`str` is an alias for `String`; method-value types, user-defined numeric casts,
+`int` is an alias for `int64`; method-value types, user-defined numeric casts,
 and non-numeric casts are unavailable, and recursive value fields require
 `indirect`. Capture-free named function values use
 `def(T1, mut T2, own T3) -> R`; bare parameters are shared and the written
@@ -500,6 +504,6 @@ and opaque handle types are implemented; extern functions do not become
 first-class function values. Method-value types are unavailable.
 Structural tuple types
 and their Batch 3 B3.0-c equality amendment are Accepted under ADR-0026.
-`str` is the implemented compatibility alias for `String`; a distinct borrowed
-`str` view type is unavailable. None of those unavailable types may be inferred
-from current syntax.
+`str` is the owned UTF-8 text type. A distinct borrowed text-view type is
+unavailable. None of the unavailable types may be inferred from current
+syntax.

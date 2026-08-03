@@ -1,0 +1,5 @@
+def lookup[V](values: dict[str, V], key: str) -> V:
+    return values[key]
+
+def main():
+    print("ok")

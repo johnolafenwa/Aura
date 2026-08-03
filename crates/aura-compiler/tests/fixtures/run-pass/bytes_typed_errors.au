@@ -1,8 +1,8 @@
 import bytes
 
 def main():
-    invalid_utf8: Vec[uint8] = [97, 255]
-    match String.from_bytes(invalid_utf8):
+    invalid_utf8: list[uint8] = [97, 255]
+    match str.from_bytes(invalid_utf8):
         case Result.Ok(value):
             print(value)
         case Result.Err(bytes.Error.InvalidUtf8(index)):

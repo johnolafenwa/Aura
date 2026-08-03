@@ -1,9 +1,9 @@
 class Inner:
-    data: String
+    data: str
 
 class Outer:
     inner: Inner
-    label: String
+    label: str
 
 def main() -> int32:
     mut a = Outer(inner=Inner(data="original"), label="A")

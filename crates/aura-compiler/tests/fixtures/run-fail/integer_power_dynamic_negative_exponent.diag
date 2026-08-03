@@ -1,0 +1,6 @@
+error[AU4001]: runtime negative integer exponent; use explicit floating operands for fractional power
+ --> crates/aura-compiler/tests/fixtures/run-fail/integer_power_dynamic_negative_exponent.au:6:11
+  |
+6 |     print(base ** negative_exponent())
+  |           ^
+  = note: Aura call chain (innermost first): main at 4:1

@@ -1,0 +1,4 @@
+def main():
+    values: list[int64] = [1, 2]
+    array = Array[int32].from_list(values=values, shape=[2])
+    print(array)

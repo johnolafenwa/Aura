@@ -1,0 +1,6 @@
+error[AU3003]: module constant `answer` is immutable
+ --> crates/aura-compiler/tests/fixtures/check-fail/module_constant_assignment.au:4:5
+  |
+4 |     answer = 43
+  |     ^
+  = help: put mutable state in a local value owned by `main` or another explicit owner

@@ -1,15 +1,15 @@
 class Person:
-    name: String
-    title: String
+    name: str
+    title: str
 
-    def full_title(self) -> String:
+    def full_title(self) -> str:
         return self.title + " " + self.name
 
 class Config:
-    host: String = "localhost"
-    path: String = "/api"
+    host: str = "localhost"
+    path: str = "/api"
 
-    def url(self) -> String:
+    def url(self) -> str:
         return self.host + self.path
 
 def main() -> int32:

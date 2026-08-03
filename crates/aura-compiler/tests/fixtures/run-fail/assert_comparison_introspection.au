@@ -1,0 +1,4 @@
+def main():
+    actual = 41
+    expected = 42
+    assert actual == expected, "numbers differ"

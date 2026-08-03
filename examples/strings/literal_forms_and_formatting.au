@@ -1,0 +1,14 @@
+def main():
+    prompt = """Classify this request.
+Return one label and one reason.
+"""
+    model_dir = r"C:\models\agent"
+    completed: int64 = 1234567
+    success_rate: float32 = 0.875
+    delta: float64 = -1.25
+
+    print(prompt)
+    print(model_dir)
+    print(f"completed: {completed:>12,d}")
+    print(f"success: {success_rate:+.1%}")
+    print(f"delta: {delta:09.3f}")

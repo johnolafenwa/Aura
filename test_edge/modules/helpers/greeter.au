@@ -1,2 +1,2 @@
-public def greet(name: String) -> String:
+public def greet(name: str) -> str:
     return "Hello, " + name + "!"

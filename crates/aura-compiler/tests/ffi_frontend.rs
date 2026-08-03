@@ -100,7 +100,7 @@ fn extern_c_declarations_preserve_their_bodyless_public_ast_contract() {
     let module = parse_source(concat!(
         "public extern \"C\" opaque class ProcessHandle\n",
         "public extern \"C\" def getpid() -> int32\n",
-        "extern \"C\" def write(fd: int32, bytes: Vec[uint8]) -> int64\n",
+        "extern \"C\" def write(fd: int32, bytes: list[uint8]) -> int64\n",
     ))
     .expect("FFI declarations should parse");
 
@@ -197,7 +197,7 @@ fn ffi_keywords_and_reserved_syntax_have_stable_frontend_diagnostics() {
             "FFI v0 opaque handle declarations cannot have type parameters",
         ),
         (
-            "extern \"C\" def printf(format: String, ...) -> int32\n",
+            "extern \"C\" def printf(format: str, ...) -> int32\n",
             "FFI v0 does not support variadic declarations; declare fixed parameters explicitly",
         ),
         (
@@ -359,9 +359,9 @@ fn public_ffi_engine_preserves_values_views_handles_and_signature_metadata() {
             "uint64",
             "float32",
             "float64",
-            "String view",
-            "Vec[uint8] view",
-            "mut Vec[uint8] view",
+            "str view",
+            "list[uint8] view",
+            "mut list[uint8] view",
             "opaque handle",
         ]
     );
@@ -672,10 +672,10 @@ def main():
     handle = acquire()
     result = 0 != handle
 "#,
-            "AU2003",
-            "cannot compare `Handle` because it contains opaque FFI handle `Handle` and FFI v0 does not define equality for foreign identity",
+            "AU2008",
+            "cannot compare `Handle` because opaque FFI handle `Handle` does not define equality",
             vec![
-                "compare a stable scalar or String identifier exposed by the binding instead of a foreign address"
+                "compare a stable scalar or str identifier exposed by the binding instead of foreign identity"
                     .to_string(),
             ],
         ),

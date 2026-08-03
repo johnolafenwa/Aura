@@ -1,0 +1,6 @@
+error[AU3001]: cannot move `first` out of immutable module storage
+ --> crates/aura-compiler/tests/fixtures/check-fail/module_constant_noncopy_dependency.au:2:10
+  |
+2 | second = first
+  |          ^
+  = help: call `.clone()` when an independent owned value is required

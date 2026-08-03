@@ -1,0 +1,5 @@
+error[AU2002]: map literal values must all have type `int32`, found `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/dict_literal_value_type_mismatch.au:2:53
+  |
+2 |     values: dict[str, int32] = {"aura": 1, "codex": "bad"}
+  |                                                     ^

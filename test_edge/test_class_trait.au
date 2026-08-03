@@ -1,19 +1,19 @@
 trait Printable:
-    def to_string(self) -> String
+    def to_string(self) -> str
 
 class Dog:
-    name: String
-    breed: String
+    name: str
+    breed: str
 
 impl Printable for Dog:
-    def to_string(self) -> String:
+    def to_string(self) -> str:
         return self.name + " (" + self.breed + ")"
 
 class Cat:
-    name: String
+    name: str
 
 impl Printable for Cat:
-    def to_string(self) -> String:
+    def to_string(self) -> str:
         return "Cat: " + self.name
 
 def show[T: Printable](item: T):

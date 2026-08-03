@@ -1,0 +1,29 @@
+def main() -> int32:
+    mut values: list[int32] = [10, 20, 30]
+    signed8: int8 = 0
+    signed16: int16 = 1
+    signed32: int32 = 2
+    unsigned8: uint8 = 0
+    unsigned16: uint16 = 1
+    unsigned32: uint32 = 2
+    unsigned32_stop: uint32 = 3
+
+    print(values[signed8])
+    print(values[signed16])
+    print(values[signed32])
+    print(values[unsigned8])
+    print(values[unsigned16])
+    print(values[unsigned32])
+    print(values[signed8:signed32])
+
+    values.swap(unsigned8, unsigned32)
+    print(values)
+
+    for index in range(unsigned16, unsigned32_stop):
+        print(values[index])
+
+    mut matrix = Array[int32].from_list([1, 2, 3, 4], [2, 2])
+    print(matrix[signed8, unsigned16])
+    matrix[unsigned8, signed16] = 9
+    print(matrix.get([0, 1]))
+    return 0

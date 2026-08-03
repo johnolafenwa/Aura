@@ -1,5 +1,5 @@
 error[AU1101]: `mut` is not valid in a type position; capability modifiers belong only on parameters and receivers or on supported `for` and `match` selectors (`mut` also declares mutable local bindings)
- --> crates/aura-compiler/tests/fixtures/parse-fail/capability_prefix_return_type_rejected.au:1:27
+ --> crates/aura-compiler/tests/fixtures/parse-fail/capability_prefix_return_type_rejected.au:1:24
   |
-1 | def load(text: String) -> mut String:
-  |                           ^
+1 | def load(text: str) -> mut str:
+  |                        ^

@@ -20,12 +20,12 @@ elements does not take a trailing comma.
 Tuple types mirror tuple values:
 
 ```aura
-def version() -> (String, int64):
+def version() -> (str, int64):
     return ("Aura", 7)
 ```
 
-The order and number of element types matter. `(String, int64)` and
-`(int64, String)` are different types.
+The order and number of element types matter. `(str, int64)` and
+`(int64, str)` are different types.
 
 ## Unpacking A Return Value
 
@@ -58,7 +58,7 @@ x, y = point
 print(point[0]) # point is still usable
 ```
 
-A tuple containing `String`, `Vec`, or another move value is itself a move
+A tuple containing `str`, `list`, or another move value is itself a move
 value. Unpacking it moves the whole source and gives owned leaf bindings:
 
 ```aura
@@ -87,7 +87,7 @@ assert same != changed
 ```
 
 Tuple equality reads and retains both operands. This also applies to non-copy
-tuples such as these, which contain `String`: each
+tuples such as these, which contain `str`: each
 binding remains usable in a later comparison.
 
 Tuple ordering is deliberately separate. `<`, `<=`, `>`, and `>=` are rejected
@@ -140,7 +140,7 @@ and gives shared access to non-copy leaves.
 
 Tuples are not small vectors. Beyond structural `==` and `!=`, the current
 surface has no tuple ordering, iteration, methods, named elements, rest/star
-unpacking, slicing, dynamic indexing, or implicit conversion to `Vec`.
+unpacking, slicing, dynamic indexing, or implicit conversion to `list`.
 
 Run the maintained example:
 

@@ -39,7 +39,7 @@ def wait_until_ready(ready: Queue[int32]) -> bool:
         case QueueReceive.Cancelled:
             return false
 
-def error_contains(task: Task[int32], marker: String) -> bool:
+def error_contains(task: Task[int32], marker: str) -> bool:
     match task.result(timeout=5s):
         case TaskResult.Ready(_):
             return false

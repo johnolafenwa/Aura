@@ -1,0 +1,2 @@
+def reject(values: mut dict[def(int64) -> int64, int64], key: own def(int64) -> int64):
+    values[key] = 1

@@ -1,10 +1,10 @@
 import io
 
 class TransferRecord:
-    name: String
-    values: Vec[int32]
-    labels: Map[String, Set[int32]]
-    pair: (String, int32)
+    name: str
+    values: list[int32]
+    labels: dict[str, set[int32]]
+    pair: (str, int32)
 
 enum TransferEnvelope:
     Empty
@@ -14,15 +14,15 @@ def consume_transfer_values(
     flag: bool,
     count: int64,
     delay: Duration,
-    text: own String,
-    values: own Vec[String],
-    labels: own Map[String, Set[int32]],
-    pair: own (String, int32),
+    text: own str,
+    values: own list[str],
+    labels: own dict[str, set[int32]],
+    pair: own (str, int32),
     record: own TransferRecord,
     envelope: own TransferEnvelope,
-    errors: own Vec[io.Error],
+    errors: own list[io.Error],
     queue: Queue[int32],
-    task: Task[String]
+    task: Task[str]
 ) -> int32:
     pair_name, pair_value = pair
     if flag and count == 7 and delay == 5ms:
@@ -33,16 +33,16 @@ def consume_transfer_values(
         case TransferEnvelope.Record(value):
             return value.values.len() as int32 + errors.len() as int32
 
-def make_text() -> String:
+def make_text() -> str:
     return "ready"
 
-def make_values() -> Vec[String]:
+def make_values() -> list[str]:
     return ["one", "two"]
 
-def make_labels() -> Map[String, Set[int32]]:
+def make_labels() -> dict[str, set[int32]]:
     return {"numbers": {1, 2}}
 
-def make_pair() -> (String, int32):
+def make_pair() -> (str, int32):
     return ("pair", 3)
 
 def make_record() -> TransferRecord:
@@ -62,7 +62,7 @@ def make_queue() -> Queue[int32]:
 def make_error() -> io.Error:
     return io.Error.NotFound
 
-def echo_task(task: own Task[String]) -> Task[String]:
+def echo_task(task: own Task[str]) -> Task[str]:
     return task
 
 def main() -> int32:

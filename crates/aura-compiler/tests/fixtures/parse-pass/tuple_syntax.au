@@ -1,4 +1,4 @@
-def rotate(value: (int32, String), only: (int64,)) -> ((String, int32), bool)?:
+def rotate(value: (int32, str), only: (int64,)) -> ((str, int32), bool)?:
     left, label = value
     (single,) = only
     for index, name in rows:

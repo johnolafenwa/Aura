@@ -1,5 +1,5 @@
 class EntryList:
-    entries: Vec[String]
+    entries: list[str]
 
     def has_entries(self) -> bool:
         match own self.entries:

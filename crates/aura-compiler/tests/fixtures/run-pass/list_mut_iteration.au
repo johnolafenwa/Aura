@@ -1,0 +1,21 @@
+def update_first(values: mut list[int64]) -> int64:
+    for value in mut values:
+        value += 13
+        return value
+    return 0
+
+def main() -> int32:
+    mut values = [1, 2, 3]
+    for value in mut values:
+        value += 10
+        if value == 12:
+            continue
+        if value == 13:
+            break
+
+    print(update_first(values))
+    print(values[0])
+
+    for value in values:
+        print(value)
+    return 0

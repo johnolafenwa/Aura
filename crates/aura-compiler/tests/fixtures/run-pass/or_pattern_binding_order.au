@@ -1,0 +1,12 @@
+enum Coordinates:
+    Forward(int32, int32)
+    Reverse(int32, int32)
+
+def total(value: Coordinates) -> int32:
+    return match value:
+        case Forward(left, right) | Reverse(right, left): left + right
+
+def main() -> int32:
+    print(total(Coordinates.Forward(2, 3)))
+    print(total(Coordinates.Reverse(4, 5)))
+    return 0

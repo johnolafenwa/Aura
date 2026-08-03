@@ -1,8 +1,8 @@
 trait Describe:
-    def describe(self) -> String
+    def describe(self) -> str
 
 impl[T] Describe for Task[T]:
-    def describe(self) -> String:
+    def describe(self) -> str:
         return "task trait"
 
 def answer() -> int32:

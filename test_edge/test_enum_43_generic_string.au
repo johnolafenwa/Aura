@@ -2,7 +2,7 @@ enum Wrapper[T]:
     Some(T)
     None
 
-def unwrap(w: own Wrapper[String]) -> String:
+def unwrap(w: own Wrapper[str]) -> str:
     match own w:
         case Wrapper.Some(v):
             return v

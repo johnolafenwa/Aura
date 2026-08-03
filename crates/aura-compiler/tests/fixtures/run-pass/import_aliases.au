@@ -1,0 +1,7 @@
+import path as paths
+from path import join as combine
+
+def main() -> int32:
+    print(paths.join("root", "module.au"))
+    print(combine("pkg", "types.au"))
+    return 0

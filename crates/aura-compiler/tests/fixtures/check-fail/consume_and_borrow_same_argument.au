@@ -1,5 +1,5 @@
 class Holder:
-    name: String
+    name: str
 
 def read_ref_take(href: Holder, h: own Holder):
     print(href.name)

@@ -4,8 +4,8 @@ enum Envelope[T]:
     Empty
     Value(T)
 
-def duplicate[T](values: Vec[Envelope[T]]) -> Vec[Envelope[T]]:
-    return values.clone()
+def duplicate[T](values: list[Envelope[T]]) -> list[Envelope[T]]:
+    return values.copy()
 
-def reject(values: Vec[Envelope[random.Rng]]) -> Vec[Envelope[random.Rng]]:
+def reject(values: list[Envelope[random.Rng]]) -> list[Envelope[random.Rng]]:
     return duplicate(values)

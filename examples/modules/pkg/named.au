@@ -1,2 +1,2 @@
 public trait Named:
-    def name(self) -> String
+    def name(self) -> str

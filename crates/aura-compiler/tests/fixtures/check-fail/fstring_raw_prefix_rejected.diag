@@ -1,0 +1,5 @@
+error[AU1002]: raw f-strings are not supported; use `f"..."` and escape backslashes explicitly
+ --> crates/aura-compiler/tests/fixtures/check-fail/fstring_raw_prefix_rejected.au:2:12
+  |
+2 |     text = rf"{1}"
+  |            ^

@@ -1,0 +1,2 @@
+def main():
+    text = f"""value {1}"""

@@ -1,9 +1,9 @@
 trait Show:
-    def show(self, text: String) -> int32
+    def show(self, text: str) -> int32
 
 class Box:
     value: int32
 
 impl Show for Box:
-    def show(self, text: own String) -> int32:
+    def show(self, text: own str) -> int32:
         return self.value

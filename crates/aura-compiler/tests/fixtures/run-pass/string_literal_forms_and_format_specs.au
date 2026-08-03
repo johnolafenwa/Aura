@@ -1,0 +1,15 @@
+def main():
+    multiline = """
+  first
+	second  
+  """
+    raw_path = r"C:\agents\run"
+    raw_pattern = r'\d+\.\d+'
+    count: int64 = -1234567
+    ratio: float32 = 1.23456789
+    print(multiline)
+    print(raw_path)
+    print(raw_pattern)
+    print(f"|{count:*>15,d}| {count:x} {count:X} {count:b} {count:o}")
+    print(f"|{'Aura✨':·^10.4s}| {ratio:.8f}")
+    print(f"{0.125:.1%} {1200:e}")

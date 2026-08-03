@@ -1,7 +1,7 @@
 import random
 
 class Node:
-    value: String
+    value: str
     next: indirect Node?
     generator: random.Rng
 

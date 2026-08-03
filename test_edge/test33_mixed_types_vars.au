@@ -2,7 +2,7 @@ def main():
     a: int32 = 42
     b: float64 = 3.14
     c: bool = true
-    d: String = "hello"
+    d: str = "hello"
     e: int64 = 999999
 
     print(a)

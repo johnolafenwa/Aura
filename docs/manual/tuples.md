@@ -37,9 +37,10 @@ while `(value,)` is a singleton tuple. `()` is not a tuple value. A
 multi-element tuple has no trailing comma:
 
 ```aura
-pair = ("north", 7)
-singleton = (true,)
-nested = (pair, (2, 3))
+def main():
+    pair = ("north", 7)
+    singleton = (true,)
+    nested = (pair, (2, 3))
 ```
 
 Top-level assignment and `for` binding lists use `left, right`; parentheses
@@ -51,7 +52,7 @@ are parenthesized.
 A tuple type records one exact element type at each position:
 
 ```aura
-def location() -> (String, int64):
+def location() -> (str, int64):
     return ("north", 7)
 
 point: (int64, int64) = (3, 4)
@@ -70,7 +71,7 @@ exact type contextually types the literal recursively; this rule is symmetric.
 lexicographic ordering.
 
 The ordinary optional-type suffix applies to a complete tuple type:
-`(String, int64)?` is `Option[(String, int64)]`. `indirect` tuple types are
+`(str, int64)?` is `Option[(str, int64)]`. `indirect` tuple types are
 rejected; `indirect` remains the recursive named-field facility. Consequently,
 a class field cannot place its recursive link inside a tuple. Put that link in
 a separately named `indirect` field instead; the compiler diagnoses the tuple
@@ -124,12 +125,12 @@ including `middle`, is evaluated once. Tuple ordering remains a static error.
 
 Tuple rendering uses parentheses, `, ` between elements, and one final comma
 for a singleton: `(1, 2)` and `(1,)`. Each element uses its ordinary Aura
-rendering, so a contained `String` is not quoted. `print`, f-string
+rendering, so a contained `str` is not quoted. `print`, f-string
 interpolation, and backend diagnostics use this same format. Rendering is not
 part of tuple equality, and it does not define tuple ordering.
 
 ```aura
-def make_record() -> (String, int64):
+def make_record() -> (str, int64):
     return ("Aura", 7)
 
 def main():
@@ -180,7 +181,7 @@ move.
 
 Tuple `==` and `!=` are shared-read operations rather than unpacking or
 ownership transfer. They leave both operands usable, including a non-copy
-tuple such as `(String, int64)`.
+tuple such as `(str, int64)`.
 
 For collection iteration, tuple leaves inherit the ownership provenance of the
 yielded element:
@@ -223,10 +224,10 @@ diagnostics.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 has no empty tuple, multi-element trailing tuple comma, tuple
+Aura 0.3 has no empty tuple, multi-element trailing tuple comma, tuple
 iteration, tuple methods, tuple ordering, named tuple elements, rest/star
 unpacking, mutable tuple-target writeback, tuple slicing, or dynamic tuple
-indexing. A tuple is not implicitly converted to or from `Vec`.
+indexing. A tuple is not implicitly converted to or from `list`.
 
 Tuple element order, left-to-right construction, recursive shape matching,
 copy classification, whole-source non-copy moves, constant-index results, and

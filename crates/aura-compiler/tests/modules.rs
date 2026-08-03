@@ -111,6 +111,187 @@ def main() -> int32:
 }
 
 #[test]
+fn module_alias_binds_complete_namespace_without_path_root() {
+    let temp = TempDir::new("aura-modules-module-alias");
+    temp.write(
+        "helpers/math.au",
+        r#"public def double(value: int32) -> int32:
+    return value * 2
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"import helpers.math as hm
+
+def main() -> int32:
+    print(hm.double(value=6))
+    return 0
+"#,
+    );
+
+    let output = run_path(&main_path).expect("module alias should run");
+    assert_eq!(output.stdout, "12\n");
+
+    let invalid_path = temp.write(
+        "invalid.au",
+        r#"import helpers.math as hm
+
+def main() -> int32:
+    print(helpers.math.double(value=6))
+    return 0
+"#,
+    );
+    let error = check_path(&invalid_path).expect_err("aliased import must not bind its path root");
+    assert!(
+        error.message.contains("unknown name `helpers`"),
+        "unexpected diagnostic: {}",
+        error.message
+    );
+}
+
+#[test]
+fn from_import_aliases_mix_with_direct_entries_and_preserve_nominal_identity() {
+    let temp = TempDir::new("aura-modules-from-import-alias");
+    temp.write(
+        "pkg/types.au",
+        r#"public class Counter:
+    public value: int32
+
+    public def read(self) -> int32:
+        return self.value
+
+public def twice(value: int32) -> int32:
+    return value * 2
+
+public def increment(value: int32) -> int32:
+    return value + 1
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"from pkg.types import Counter as Meter, twice as double, increment
+
+def read_meter(value: Meter) -> int32:
+    return value.read()
+
+def main() -> int32:
+    meter = Meter(value=double(value=4))
+    print(read_meter(meter))
+    print(increment(value=8))
+    return 0
+"#,
+    );
+
+    let output = run_path(&main_path).expect("mixed from-import aliases should run");
+    assert_eq!(output.stdout, "8\n9\n");
+
+    let invalid_path = temp.write(
+        "invalid.au",
+        r#"from pkg.types import twice as double
+
+def main() -> int32:
+    return twice(value=4)
+"#,
+    );
+    let error = check_path(&invalid_path)
+        .expect_err("a from-import alias must not also bind the target name");
+    assert!(
+        error.message.contains("unsupported call target"),
+        "unexpected diagnostic: {}",
+        error.message
+    );
+}
+
+#[test]
+fn import_aliases_preserve_visibility_and_reject_module_scope_collisions() {
+    let temp = TempDir::new("aura-modules-alias-visibility");
+    temp.write(
+        "pkg/secrets.au",
+        r#"def hidden() -> int32:
+    return 7
+
+public def visible() -> int32:
+    return hidden()
+"#,
+    );
+    let private_path = temp.write(
+        "private.au",
+        r#"from pkg.secrets import hidden as reveal
+
+def main() -> int32:
+    return reveal()
+"#,
+    );
+    let private_error = check_path(&private_path).expect_err("alias must preserve visibility");
+    assert!(
+        private_error
+            .message
+            .contains("item `hidden` is private in module `pkg.secrets`"),
+        "unexpected diagnostic: {}",
+        private_error.message
+    );
+
+    let collision_path = temp.write(
+        "collision.au",
+        r#"from pkg.secrets import visible as execute
+
+def execute() -> int32:
+    return 0
+
+def main() -> int32:
+    return execute()
+"#,
+    );
+    let collision_error =
+        check_path(&collision_path).expect_err("alias must share the item namespace");
+    assert_eq!(collision_error.code, "AU2999");
+    assert!(
+        collision_error.message.contains("duplicate item `execute`"),
+        "unexpected diagnostic: {}",
+        collision_error.message
+    );
+
+    let duplicate_import_path = temp.write(
+        "duplicate_import.au",
+        r#"from pkg.secrets import visible as execute
+from pkg.secrets import visible as execute
+
+def main() -> int32:
+    return execute()
+"#,
+    );
+    let duplicate_import_error = check_path(&duplicate_import_path)
+        .expect_err("aliases from separate declarations must share one import namespace");
+    assert_eq!(duplicate_import_error.code, "AU2999");
+    assert!(
+        duplicate_import_error
+            .message
+            .contains("duplicate import binding `execute`"),
+        "unexpected diagnostic: {}",
+        duplicate_import_error.message
+    );
+}
+
+#[test]
+fn builtin_module_and_member_aliases_resolve() {
+    let temp = TempDir::new("aura-modules-builtin-aliases");
+    let main_path = temp.write(
+        "main.au",
+        r#"import path as paths
+from path import join as combine
+
+def main() -> int32:
+    print(paths.join("a", "b"))
+    print(combine("c", "d"))
+    return 0
+"#,
+    );
+
+    let output = run_path(&main_path).expect("builtin aliases should run");
+    assert_eq!(output.stdout, "a/b\nc/d\n");
+}
+
+#[test]
 fn dotted_import_supports_public_classes_and_methods() {
     let temp = TempDir::new("aura-modules-dotted-import-classes");
     temp.write(
@@ -170,7 +351,7 @@ fn nested_package_module_can_be_checked_and_analyzed_directly() {
     temp.write(
         "pkg/named.au",
         r#"public trait Named:
-    def name(self) -> String
+    def name(self) -> str
 "#,
     );
     let user_path = temp.write(
@@ -178,10 +359,10 @@ fn nested_package_module_can_be_checked_and_analyzed_directly() {
         r#"from pkg.named import Named
 
 public class User:
-    public label: String
+    public label: str
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.label.clone()
 "#,
     );
@@ -449,7 +630,7 @@ fn imported_trait_impls_apply_across_module_boundaries() {
     temp.write(
         "pkg/named.au",
         r#"public trait Named:
-    def name(self) -> String
+    def name(self) -> str
 "#,
     );
     temp.write(
@@ -457,10 +638,10 @@ fn imported_trait_impls_apply_across_module_boundaries() {
         r#"from pkg.named import Named
 
 public class User:
-    public label: String
+    public label: str
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return self.label.clone()
 "#,
     );
@@ -469,7 +650,7 @@ impl Named for User:
         r#"from pkg.named import Named
 from pkg.user import User
 
-def show[T: Named](value: T) -> String:
+def show[T: Named](value: T) -> str:
     return value.name()
 
 def main() -> int32:

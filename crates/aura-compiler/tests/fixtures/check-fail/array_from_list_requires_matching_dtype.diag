@@ -1,0 +1,5 @@
+error[AU2002]: `Array.from_list` expects `list[int32]` for `values`, found `list[int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_from_list_requires_matching_dtype.au:3:36
+  |
+3 |     array = Array[int32].from_list(values=values, shape=[2])
+  |                                    ^

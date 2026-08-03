@@ -1,0 +1,5 @@
+error[AU2004]: `round` expects 1 argument, found 2
+ --> crates/aura-compiler/tests/fixtures/check-fail/round_digit_count_rejected.au:2:13
+  |
+2 |     value = round(1.25, 1)
+  |             ^

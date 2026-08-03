@@ -1,0 +1,44 @@
+class Counter:
+    value: int64
+
+enum Mode:
+    Ready
+    Waiting
+
+def classify(value: int64) -> str:
+    match value:
+        case n if n > 0:
+            return f"positive {n}"
+        case n:
+            return f"other {n}"
+
+def magnitude(value: int64) -> int64:
+    return match value:
+        case n if n >= 0: n
+        case n: 0 - n
+
+def mode_code(mode: Mode) -> int64:
+    return match mode:
+        case current if current == Mode.Ready: 1
+        case current: 2
+
+def take(counter: own Counter) -> int64:
+    match own counter:
+        case owned:
+            return owned.value
+
+def bump(counter: mut Counter):
+    match mut counter:
+        case current:
+            current.value += 1
+
+def main():
+    print(classify(3))
+    print(classify(-2))
+    print(magnitude(-7))
+    print(mode_code(Mode.Ready))
+    print(mode_code(Mode.Waiting))
+    mut counter = Counter(value=4)
+    bump(counter)
+    print(counter.value)
+    print(take(Counter(value=9)))

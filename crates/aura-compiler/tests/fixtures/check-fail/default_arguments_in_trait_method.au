@@ -1,2 +1,2 @@
 trait Greeter:
-    def greet(name: String = "world") -> String
+    def greet(name: str = "world") -> str

@@ -4,7 +4,7 @@ class Res:
     def close(mut self):
         print(self.id)
 
-def test() -> Result[String, String]:
+def test() -> Result[str, str]:
     with a = Res(id=1):
         with b = Res(id=2):
             with c = Res(id=3):

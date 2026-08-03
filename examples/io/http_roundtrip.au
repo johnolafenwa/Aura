@@ -1,7 +1,7 @@
 import io
 import net
 
-def serve_http(addresses: Queue[String]) -> Result[None, io.Error]:
+def serve_http(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.http_listen("127.0.0.1:0"):
         addresses.put(try server_listener.local_addr())
         exchange = try server_listener.accept(timeout=5s)
@@ -19,11 +19,11 @@ def serve_http(addresses: Queue[String]) -> Result[None, io.Error]:
 
 def run() -> Result[None, io.Error]:
     with TaskGroup() as group:
-        addresses = Queue[String](capacity=1)
+        addresses = Queue[str](capacity=1)
         server = group.start(serve_http, addresses)
         address = try receive_address(addresses)
 
-        headers: Map[String, String] = {"X-Test": "ok"}
+        headers: dict[str, str] = {"X-Test": "ok"}
         response = try net.http_request_text_timeout("POST", "http://" + address + "/hello", "body", headers, 5s)
         with http_response = response:
             print(http_response.status())
@@ -40,7 +40,7 @@ def run() -> Result[None, io.Error]:
                 return Result.Ok(None)
         return Result.Ok(None)
 
-def receive_address(addresses: Queue[String]) -> Result[String, io.Error]:
+def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
     match own addresses.get(timeout=5s):
         case QueueReceive.Item(address):
             return Result.Ok(address)

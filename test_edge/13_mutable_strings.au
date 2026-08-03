@@ -1,5 +1,5 @@
 def main() -> int32:
-    mut greeting: String = "hello"
+    mut greeting: str = "hello"
     print(greeting)
 
     greeting = greeting + " world"
@@ -8,13 +8,13 @@ def main() -> int32:
     greeting = greeting + "!"
     print(greeting)
 
-    mut parts: String = ""
+    mut parts: str = ""
     parts = parts + "a"
     parts = parts + "b"
     parts = parts + "c"
     print(parts)
 
-    mut name: String = "alice"
+    mut name: str = "alice"
     name = "bob"
     print(name)
 

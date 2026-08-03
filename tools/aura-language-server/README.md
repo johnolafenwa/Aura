@@ -24,7 +24,7 @@ Current compiler-backed analysis covers:
   go-to-definition, nested-clause completion, and owned result-type inference
 - incomplete comprehension clauses and filters retain exact `AU1101`
   diagnostics, broad recovery completions, and safe empty hover responses
-- owned Vec/String slices use compiler-owned result types, exact endpoint
+- owned list/str slices use compiler-owned result types, exact endpoint
   diagnostics, retained-source ownership analysis, and hover/navigation for
   names inside base and endpoint expressions
 - incomplete or reserved slice forms preserve the compiler's exact `AU2005`
@@ -40,13 +40,10 @@ The server starts one persistent compiler service:
 - `aura lsp`
 
 Requests and responses are newline-delimited JSON and carry compiler-owned
-`semantic_interface_version: 3`. Version 3 adds structural function types and
-function-value and closure operands to compiler-owned semantic data. This
-identity is distinct from the public
+`semantic_interface_version: 5`. This identity is distinct from the public
 diagnostic document's numeric schema version. The transport rejects and
 disposes a compiler with a missing or different semantic identity, invalidates
 all cached document analysis, and uses lexical recovery for the failed request;
-pre-function-value type metadata therefore cannot survive a compiler upgrade.
 Responses remain bounded to 16 MiB.
 With a matching compiler, the server caches analysis per document version,
 debounces changes, cancels obsolete completion work, guards asynchronous
@@ -60,11 +57,14 @@ does not classify or recreate semantic diagnostics independently.
 `task_ancestry` arrays. Their frame spans use zero-based `line`,
 `start_character`, and `end_character` coordinates and retain each frame's
 optional `file_path`; the bridge neither parses human backtrace notes nor
-reconstructs paths or ancestry. Updated compiler responses always include both
-arrays. Records from an older compatible semantic-interface-v2 compiler that
-omit the additive fields are treated as empty arrays. Compile-time diagnostics
-normally carry empty frame arrays today, while the populated shape is ready for
-editor workflows that present runtime diagnostics.
+reconstructs paths or ancestry. Compiler responses always include both arrays.
+Compile-time diagnostics normally carry empty frame arrays today, while the
+populated shape is ready for editor workflows that present runtime diagnostics.
+Failed structured assertions may also carry an optional `assertion_operands`
+array in `Diagnostic.data`. Each operand preserves the compiler-owned `label`,
+`type`, rendered `value`, and `truncated` flag. The field is absent when the
+diagnostic has no captured assertion operands; the bridge does not infer or
+re-render values.
 
 If the compiler process cannot be started, the lexical recovery layer provides only:
 

@@ -1,30 +1,30 @@
 public trait Named:
-    def name(self) -> String
+    def name(self) -> str
 
 public trait Describe:
-    def describe(self) -> String
+    def describe(self) -> str
 
 public class User:
-    public label: String
+    public label: str
 
-    public def associated() -> String:
+    public def associated() -> str:
         return "remote-associated"
 
-    public def inherent(self) -> String:
+    public def inherent(self) -> str:
         return f"remote-inherent:{self.label}"
 
 impl Named for User:
-    def name(self) -> String:
+    def name(self) -> str:
         return f"remote:{self.label}"
 
 public class Holder[T]:
     public value: T
 
-    public def source(self) -> String:
+    public def source(self) -> str:
         return "remote-holder"
 
 impl[T] Describe for Holder[T]:
-    def describe(self) -> String:
+    def describe(self) -> str:
         return "remote-generic-trait"
 
 public enum Envelope[T]:

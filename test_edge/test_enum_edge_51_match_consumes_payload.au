@@ -1,7 +1,7 @@
-# Test: consuming match on String payload (move semantics)
-# After consuming match that extracts String, original enum should be moved
+# Test: consuming match on str payload (move semantics)
+# After consuming match that extracts str, original enum should be moved
 enum Msg:
-    Text(String)
+    Text(str)
     Empty
 
 def main() -> int32:
@@ -11,7 +11,7 @@ def main() -> int32:
     match own m:
         case Msg.Text(s):
             print(s)
-            # s is now the owned String
+            # s is now the owned str
             print(s)
         case Msg.Empty:
             print("empty")

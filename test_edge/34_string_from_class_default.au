@@ -1,6 +1,6 @@
 class Entry:
-    key: String
-    value: String = "default"
+    key: str
+    value: str = "default"
 
 def main() -> int32:
     e1 = Entry(key="name")
