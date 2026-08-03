@@ -202,12 +202,13 @@ requires them; `next_float` consumes exactly one; shuffle consumes according
 to its loop and rejection rules. Secure functions do not observe or mutate an
 `Rng`.
 
-Two `Rng` values compare equal only when they designate the same generator
-identity; equality does not compare or expose their four state words. Human
-rendering through `print` or f-string interpolation is exactly `<rng>` and
-does not advance the stream. No public state export or import exists. There is
-also no public operation that clones the generator, including a collection or
-task-result alias that would clone it indirectly.
+`Rng` does not define equality. `==`, `!=`, membership, list equality searches,
+set insertion, and dictionary-key use are rejected with `AU2008`; generator
+identity and the four state words are not observable. Human rendering through
+`print` or f-string interpolation is exactly `<rng>` and does not advance the
+stream. No public state export or import exists. There is also no public
+operation that clones the generator, including a collection or task-result
+alias that would clone it indirectly.
 
 Invalid ranges and counts are checked before producing a return value. Secure
 entropy or allocation failure terminates the operation with the diagnostic
@@ -271,7 +272,7 @@ conditions are diagnostics, not `Result` or `random.Error` values.
 
 The MIR runtime and direct native backend implement the same deterministic
 algorithm, seed reinterpretation, rejection threshold, float mapping, shuffle
-order, identity equality, rendering, ownership, and diagnostics. For one seed
+order, rendering, ownership, and diagnostics. For one seed
 and call sequence, deterministic output MUST be bit-for-bit identical across
 backends and supported hosts.
 

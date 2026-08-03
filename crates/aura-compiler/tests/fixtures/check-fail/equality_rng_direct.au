@@ -1,0 +1,4 @@
+import random
+
+def reject(left: random.Rng, right: random.Rng):
+    print(left == right)

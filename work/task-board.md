@@ -92,7 +92,8 @@ Last updated: 2026-08-03
   containing aggregates across list search, membership, set insertion,
   dictionary-key use, and direct equality. Twelve closure/Rng surface fixtures
   and the forced MIR/direct diagnostic-parity test are green; the complete
-  semantic checker partition is 331/331 green.
+  semantic checker partition is 331/331 green. The stale Rng identity run-pass
+  fixture is replaced by a rendering fixture and a direct AU2008 rejection.
 - Push and pull-request authorization is explicit. Merge waits for checkpoint
   sign-off after three consecutive green hosted CI runs on both operating
   systems.

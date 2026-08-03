@@ -1,0 +1,8 @@
+import random
+
+def main() -> int32:
+    mut generator = random.Rng(seed=42)
+    print(generator)
+    print(f"generator={generator}")
+    print(generator.next_float())
+    return 0

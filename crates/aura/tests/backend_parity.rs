@@ -188,6 +188,7 @@ fn equality_obligation_rejections_are_identical_across_forced_backends() {
         "equality_rng_membership.au",
         "equality_rng_set_add.au",
         "equality_rng_dict_key.au",
+        "equality_rng_direct.au",
     ];
 
     for fixture_name in fixtures {
