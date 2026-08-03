@@ -2932,6 +2932,27 @@ fn s1_frontend_fstring_parser_treats_braces_inside_triple_quoted_arguments_as_st
 }
 
 #[test]
+fn s1_frontend_fstring_format_specs_require_a_real_expression_before_the_colon() {
+    let error = parse_expression("f\"{:>10}\"")
+        .expect_err("a format specification without an expression must fail");
+    assert_eq!(error.code, "AU1101");
+    assert!(error
+        .message
+        .contains("invalid f-string interpolation `:>10`"));
+}
+
+#[test]
+fn s1_frontend_multi_element_tuple_types_reject_a_trailing_comma() {
+    let error = parse_item_from("def accept(value: (int64, str,)):\n    pass\n")
+        .expect_err("only singleton tuple types accept a trailing comma");
+    assert_eq!(error.code, "AU1101");
+    assert_eq!(
+        error.message,
+        "trailing commas are only allowed for singleton tuple types"
+    );
+}
+
+#[test]
 fn parser_helper_functions_cover_format_offsets_and_specialization_checks() {
     let tokens = lex("Value[int32](1)\n").expect("tokenization should succeed");
     let mut parser = Parser::new(tokens);

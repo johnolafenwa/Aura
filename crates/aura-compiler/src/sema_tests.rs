@@ -5,6 +5,98 @@ use crate::ast::{
 use crate::diag::Span;
 use crate::integer::IntegerValue;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+#[test]
+fn s1_frontend_module_constant_failures_distinguish_collisions_order_unknowns_and_types() {
+    let collision = crate::check_source(
+        "value: int64 = 1\n\ndef value() -> int64:\n    return 2\n\ndef main():\n    pass\n",
+    )
+    .expect_err("a constant cannot collide with a function");
+    assert_eq!(collision.code, "AU2999");
+    assert!(collision
+        .message
+        .contains("module constant `value` collides with an existing function"));
+    assert_eq!(collision.secondary_spans.len(), 1);
+
+    let order = crate::check_source(
+        "first: int64 = second\nsecond: int64 = 2\n\ndef main():\n    print(first)\n",
+    )
+    .expect_err("a constant cannot read a later constant");
+    assert_eq!(order.code, "AU2001");
+    assert_eq!(
+        order.message,
+        "module constant `second` is used before initialization"
+    );
+    assert_eq!(order.secondary_spans.len(), 1);
+
+    let unknown = crate::check_source("value: int64 = missing\n\ndef main():\n    print(value)\n")
+        .expect_err("an unrelated unknown name must retain the ordinary diagnostic");
+    assert_eq!(unknown.code, "AU2001");
+    assert_eq!(unknown.message, "unknown name `missing`");
+
+    let mismatch =
+        crate::check_source("value: int64 = \"text\"\n\ndef main():\n    print(value)\n")
+            .expect_err("a constant annotation must constrain its initializer");
+    assert_eq!(mismatch.code, "AU2002");
+    assert_eq!(
+        mismatch.message,
+        "initializer for module constant `value` has type `str`, expected `int64`"
+    );
+}
+
+#[test]
+fn s1_frontend_collection_capacity_calls_report_missing_types_arity_members_and_values() {
+    for (source, code, expected) in [
+        (
+            "def main():\n    values = list.with_capacity(4)\n",
+            "AU2005",
+            "`list.with_capacity` requires explicit type arguments",
+        ),
+        (
+            "def main():\n    values = list[int64, str].with_capacity(4)\n",
+            "AU2002",
+            "`list` expects exactly 1 type argument, found 2",
+        ),
+        (
+            "def main():\n    values = dict[str].with_capacity(4)\n",
+            "AU2002",
+            "`dict` expects exactly 2 type arguments, found 1",
+        ),
+        (
+            "def main():\n    values = set[str].missing(4)\n",
+            "AU2001",
+            "type `set` has no associated function `missing`",
+        ),
+        (
+            "def main():\n    values = set[str].with_capacity(\"large\")\n",
+            "AU2002",
+            "`set.with_capacity` expects `int64`, found `str`",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err("invalid capacity call must fail");
+        assert_eq!(error.code, code, "{source}");
+        assert_eq!(error.message, expected, "{source}");
+    }
+}
+
+#[test]
+fn s1_frontend_match_guard_and_sort_reverse_errors_keep_specific_diagnostics() {
+    let guard = crate::check_source(
+        "def main():\n    match 1:\n        case _ if missing:\n            pass\n",
+    )
+    .expect_err("an invalid guard expression must retain its own diagnostic");
+    assert_eq!(guard.code, "AU2001");
+    assert_eq!(guard.message, "unknown name `missing`");
+
+    let reverse =
+        crate::check_source("def main():\n    mut values = [2, 1]\n    values.sort(reverse=1)\n")
+            .expect_err("sort reverse must be exactly bool");
+    assert_eq!(reverse.code, "AU2002");
+    assert_eq!(
+        reverse.message,
+        "`sort` expects `bool` for `reverse`, found `int64`"
+    );
+}
 use std::sync::OnceLock;
 
 fn empty_canonical_type_names() -> &'static BTreeMap<String, String> {

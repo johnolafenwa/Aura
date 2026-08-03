@@ -138,8 +138,8 @@ fn typed_integer_constructors_enforce_each_declared_width() {
 #[test]
 fn typed_integer_metadata_survives_copy_containers_and_serde() {
     let original = IntegerValue::from_i32(23);
-    let copied = Some(original);
-    let values = [copied.unwrap(), original];
+    let copied = original;
+    let values = [copied, original];
 
     assert_eq!(values[0].runtime_kind(), Some(IntegerKind::Int32));
     assert_eq!(

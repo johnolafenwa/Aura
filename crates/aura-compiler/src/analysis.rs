@@ -4228,7 +4228,7 @@ impl<'a> AnalysisBuilder<'a> {
             &iterable.kind,
             ExprKind::Call { callee, .. } if matches!(&callee.kind, ExprKind::Name(name) if name == "range")
         ) {
-            return Some(Type::named("int32"));
+            return Some(Type::named("int64"));
         }
 
         if let ExprKind::Call { callee, args } = &iterable.kind {

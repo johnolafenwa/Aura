@@ -284,12 +284,10 @@ fn builtin_function_bind_args_cover_remaining_variants() {
         assert_eq!(bound.len(), 2);
     }
 
-    for builtin in [BuiltinFunction::Cancelled] {
-        let bound = builtin
-            .bind_args(&[], Span::new(1, 1))
-            .expect("builtin should bind");
-        assert!(bound.is_empty());
-    }
+    let bound = BuiltinFunction::Cancelled
+        .bind_args(&[], Span::new(1, 1))
+        .expect("builtin should bind");
+    assert!(bound.is_empty());
 
     for builtin in [BuiltinFunction::WaitAny, BuiltinFunction::WaitAll] {
         let args = [dummy_arg(None), dummy_arg(Some("timeout"))];

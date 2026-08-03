@@ -207,6 +207,28 @@ fn s1_frontend_raw_string_diagnostics_distinguish_unsupported_triples_and_missin
 }
 
 #[test]
+fn s1_frontend_fstrings_preserve_escaped_braces_and_decode_ordinary_escapes() {
+    let tokens = kinds("message = f\"{{left}}\\n{right}\"\n");
+    assert!(tokens.contains(&TokenKind::FStringLiteral("{{left}}\n{right}".to_string())));
+}
+
+#[test]
+fn s1_frontend_numeric_literal_failures_name_overflow_and_duration_separator_rules() {
+    let integer = lex("value = 0xfffffffffffffffffffffffffffffffff\n")
+        .expect_err("an integer larger than u128 must fail during lexical conversion");
+    assert_eq!(integer.code, "AU1001");
+    assert_eq!(integer.message, "invalid integer literal");
+
+    let duration =
+        lex("value = 1_0s\n").expect_err("duration literals do not accept integer separators");
+    assert_eq!(duration.code, "AU1001");
+    assert_eq!(
+        duration.message,
+        "integer separators do not apply to duration literals"
+    );
+}
+
+#[test]
 fn multiline_triple_string_escape_errors_point_at_the_later_physical_line() {
     let error = lex("value = \"\"\"first\nnext \\q\n\"\"\"\n")
         .expect_err("an invalid escape inside multiline content must fail");

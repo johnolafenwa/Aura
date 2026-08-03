@@ -897,6 +897,71 @@ fn s1_frontend_specialized_collection_completion_reports_the_concrete_result_typ
 }
 
 #[test]
+fn s1_frontend_analysis_resolves_trait_symbols_and_integer_round_results() {
+    let source = "trait Show:\n    def show(self) -> str\n\nclass Item:\n    value: int64\n\nimpl Show for Item:\n    def show(self) -> str:\n        return self.value.to_string()\n\ndef main():\n    rounded = round(7)\n    print(rounded)\n";
+    let program = checked_program(source);
+    let builder = AnalysisBuilder::new(source, &program, Vec::new());
+    let resolved = builder
+        .resolve_name("Show", &BTreeMap::new())
+        .expect("trait names must resolve for hover and definition");
+    assert_eq!(resolved.hover, "```aura\ntrait Show\n```");
+    assert_eq!(
+        resolved.definition.expect("trait definition"),
+        range_from_span(Span::new(1, 1), "Show".len())
+    );
+
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("binding rounded: int64")));
+}
+
+#[test]
+fn s1_frontend_range_loop_analysis_matches_the_int64_index_domain() {
+    let source = concat!(
+        "def main():\n",
+        "    for index in range(0, 3):\n",
+        "        checked: int64 = index\n",
+        "        advanced = index.wrapping_add(1)\n",
+        "        print(checked)\n",
+        "        print(advanced)\n",
+    );
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "the checker must accept range bindings as int64: {:?}",
+        analysis.diagnostics
+    );
+    for expected_hover in ["local index: int64", "binding advanced: int64"] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected_hover)),
+            "missing range-loop hover `{expected_hover}` in {:?}",
+            analysis.occurrences
+        );
+    }
+
+    let completion_source = "def main():\n    for index in range(0, 3):\n        index.\n";
+    let member_line = completion_source.lines().nth(2).unwrap();
+    let completions = complete_source(completion_source, 2, member_line.len(), Some('.'))
+        .expect("range binding completion should recover from a dangling member");
+    assert!(
+        completions
+            .iter()
+            .any(|completion| completion.name == "wrapping_add"),
+        "range bindings must expose the fixed-width int64 member surface: {completions:?}"
+    );
+}
+
+#[test]
 fn incomplete_expression_inference_preserves_stable_editor_types() {
     let program = checked_program("def main():\n    pass\n");
     let builder = AnalysisBuilder::new("", &program, Vec::new());
