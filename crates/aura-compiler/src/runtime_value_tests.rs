@@ -15706,6 +15706,109 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
     listener.close();
 }
 
+#[cfg(unix)]
+#[test]
+fn https_client_reports_incomplete_and_oversized_response_framing() {
+    let timeout = StdDuration::from_secs(2);
+    let temp = TempDir::new("aura-https-response-framing");
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = temp.path().join("cert.pem");
+    let key_path = temp.path().join("key.pem");
+    fs::write(&cert_path, certificate.cert.pem()).expect("certificate should write");
+    fs::write(&key_path, certificate.key_pair.serialize_pem()).expect("key should write");
+    let listener = TlsListenerValue::bind(
+        "127.0.0.1:0",
+        cert_path.to_str().expect("UTF-8 certificate path"),
+        key_path.to_str().expect("UTF-8 key path"),
+    )
+    .expect("TLS listener should bind");
+    let address = listener.local_addr().expect("TLS address should exist");
+    let port = address
+        .rsplit_once(':')
+        .expect("TLS address should contain a port")
+        .1;
+    let oversized_length = super::MAX_HTTP_MESSAGE_BYTES + 1;
+    let responses = vec![
+        "HTTP/1.1 200 OK\r\n".to_string(),
+        format!("HTTP/1.1 200 OK\r\nContent-Length: {oversized_length}\r\n\r\n"),
+        "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nab".to_string(),
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nab".to_string(),
+    ];
+    let server_listener = listener.clone();
+    let server = thread::spawn(move || {
+        for response in responses {
+            let stream = server_listener
+                .accept(Some(timeout), Some(&CancellationContext::default()))
+                .expect("TLS server should accept each request");
+            loop {
+                let line = stream
+                    .read_line(Some(timeout), Some(&CancellationContext::default()))
+                    .expect("HTTPS request line should read")
+                    .expect("HTTPS client should not close before its headers");
+                if line.is_empty() {
+                    break;
+                }
+            }
+            stream
+                .write_all(
+                    &response,
+                    Some(timeout),
+                    Some(&CancellationContext::default()),
+                )
+                .expect("malformed HTTPS response should write");
+            stream.close();
+        }
+    });
+
+    let url = format!("https://localhost:{port}/");
+    let request = || {
+        HttpResponseValue::request_text_with_ca(
+            "GET",
+            &url,
+            "",
+            Vec::new(),
+            Some(timeout),
+            Some(&CancellationContext::default()),
+            cert_path.to_str().expect("UTF-8 certificate path"),
+        )
+    };
+
+    let incomplete_head = request().expect_err("an incomplete HTTPS response head must fail");
+    assert_eq!(incomplete_head.kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(
+        incomplete_head.to_string(),
+        "stream closed before a complete HTTP response was received"
+    );
+
+    let oversized = request().expect_err("an oversized HTTPS response must fail from its head");
+    assert_eq!(oversized.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(
+        oversized.to_string(),
+        format!(
+            "HTTP message exceeds the supported size limit of {} bytes",
+            super::MAX_HTTP_MESSAGE_BYTES
+        )
+    );
+
+    let truncated_fixed = request().expect_err("a truncated fixed HTTPS body must fail");
+    assert_eq!(truncated_fixed.kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(
+        truncated_fixed.to_string(),
+        "stream closed before the HTTP response body was fully received"
+    );
+
+    let truncated_chunked = request().expect_err("a truncated chunked HTTPS body must fail");
+    assert_eq!(truncated_chunked.kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(
+        truncated_chunked.to_string(),
+        "stream closed before the chunked HTTP response body was fully received"
+    );
+
+    server.join().expect("HTTPS framing server should join");
+    listener.close();
+}
+
 #[test]
 fn http_stream_helpers_report_unexpected_eof_for_incomplete_messages() {
     fn assert_unexpected_eof(error: io::Error) {
