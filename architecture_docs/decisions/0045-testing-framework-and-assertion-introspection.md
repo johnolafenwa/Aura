@@ -149,7 +149,7 @@ Parametrized cases use existing tuples, lists, and function values:
 def test_parser_cases() -> list[(str, def() -> None)]:
     return [
         ("empty", lambda: check_empty()),
-        ("unicode", lambda: check_unicode()),
+        ("unicode", lambda: check_unicode())
     ]
 ```
 

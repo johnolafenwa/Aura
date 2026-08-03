@@ -107,6 +107,11 @@ Last updated: 2026-08-03
   CLI version example now matches `aura 0.3.0-dev`, generated LLM artifacts
   are current, and the identity gate pins the 39-page inventory plus absence
   of stale 0.2 Manual prose without misclassifying third-party versions.
+- S1.1-e's ADR-0045 trailing-comma example is corrected. The two bounded-pool
+  watchdogs passed three independent isolated reruns apiece across MIR,
+  direct, and standalone paths, classifying the checkpoint reports as mutual
+  host-contention flakes rather than product failures; the established
+  narrow shared guard remains the correct disposition.
 - Push and pull-request authorization is explicit. Merge waits for checkpoint
   sign-off after three consecutive green hosted CI runs on both operating
   systems.
