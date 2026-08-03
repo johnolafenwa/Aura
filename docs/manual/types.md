@@ -39,7 +39,7 @@ Integer bounds are exact:
 | `intsize` | host-pointer-width signed range |
 | `uintsize` | host-pointer-width unsigned range |
 
-`float32` and `float64` use IEEE-754 binary32 and binary64 representations. Literal lexing first requires a finite binary64 value; contextual `float32` conversion may round or overflow as recorded in [Current Limits](/manual/current-limits). Runtime operations may produce NaN, but Aura 0.2 makes `/`, `//`, or `%` by a floating zero explicit runtime failures rather than producing infinity or NaN through those operators.
+`float32` and `float64` use IEEE-754 binary32 and binary64 representations. Literal lexing first requires a finite binary64 value; contextual `float32` conversion may round or overflow as recorded in [Current Limits](/manual/current-limits). Runtime operations may produce NaN, but Aura 0.3 makes `/`, `//`, or `%` by a floating zero explicit runtime failures rather than producing infinity or NaN through those operators.
 
 `int` is an alias for `int64`, so the two spellings have identical bounds,
 type identity, layout, and runtime behavior. Integer literals may be decimal,
@@ -147,7 +147,7 @@ queue or task.
 
 `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`, and `WaitAll[T]` are
 treated as move outcome values even when every payload type is copyable.
-`Range` is also not a general copy type in Aura 0.2; use ranges directly in
+`Range` is also not a general copy type in Aura 0.3; use ranges directly in
 iteration rather than relying on duplication.
 
 A generic user-enum payload whose declared type is an unconstrained type parameter is not assumed copyable, even when one later instantiation supplies a copy type.

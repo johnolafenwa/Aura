@@ -693,6 +693,33 @@ def readable_text(path: Path) -> str | None:
 
 
 class AuraIdentityTests(unittest.TestCase):
+    def test_manual_uses_current_development_version(self) -> None:
+        """Every normative Manual page must describe the 0.3 language."""
+
+        pages = sorted((ROOT / "docs/manual").glob("*.md"))
+        self.assertEqual(
+            len(pages),
+            39,
+            "update the restamp inventory when the normative Manual changes",
+        )
+        stale_version = re.compile(
+            r"(?<![A-Za-z0-9_.])(?:Aura\s+)?0\.2(?:\.0|\.x)?(?!\d)"
+        )
+        stale: list[str] = []
+        for path in pages:
+            text = path.read_text(encoding="utf-8")
+            for match in stale_version.finditer(text):
+                stale.append(
+                    f"{path.relative_to(ROOT)}:"
+                    f"{_line_number(text, match.start())}: {match.group(0)}"
+                )
+        self.assertEqual(
+            stale,
+            [],
+            "stale 0.2 prose remains in the normative Manual:\n"
+            + "\n".join(stale),
+        )
+
     def test_compiler_contains_no_removed_collection_contracts(self) -> None:
         """Dead source contracts must disappear, not merely become unreachable."""
 

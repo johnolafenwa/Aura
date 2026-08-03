@@ -117,13 +117,13 @@ The actual standard streams are supplied by the host process. A backend may buff
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 exposes line-oriented text input only; it has no standard-input byte API, terminal mode API, stream replacement API, asynchronous console API, or built-in formatted-output language. `io.read_line` has no separate Aura line-length cap and therefore allocates according to the incoming line and host memory limits.
+Aura 0.3 exposes line-oriented text input only; it has no standard-input byte API, terminal mode API, stream replacement API, asynchronous console API, or built-in formatted-output language. `io.read_line` has no separate Aura line-length cap and therefore allocates according to the incoming line and host memory limits.
 
 Terminal encoding before bytes reach the process, host pipe buffering, scheduling between concurrent writers, and the precise message stored in `io.Error.Other` are host-dependent. Stable control flow should match the specific non-message variants where possible.
 
 ## Status
 
-The standard-stream functions, `print` behavior, `io.Error` enum, strict UTF-8 policy, EOF distinction, and shortest-roundtrip float rendering are implemented and maintained in Aura 0.2. No I/O semantics on this page are provisional.
+The standard-stream functions, `print` behavior, `io.Error` enum, strict UTF-8 policy, EOF distinction, and shortest-roundtrip float rendering are implemented and maintained in Aura 0.3. No I/O semantics on this page are provisional.
 
-Aura 0.2 has no binary standard input, async stream handles, terminal control,
+Aura 0.3 has no binary standard input, async stream handles, terminal control,
 configurable formatting, or user-defined error derivation.

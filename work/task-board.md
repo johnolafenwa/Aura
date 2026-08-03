@@ -102,6 +102,11 @@ Last updated: 2026-08-03
   matches. Guarded bindings expose the whole scrutinee without contributing to
   exhaustiveness; unguarded bindings are final catch-alls. Copy, shared,
   `own`, and `mut` capabilities execute identically in MIR and direct mode.
+- S1.1-d inspected all 39 Manual pages and migrated all 91 stale 0.2
+  references across 32 affected pages to the 0.3 development contract. The
+  CLI version example now matches `aura 0.3.0-dev`, generated LLM artifacts
+  are current, and the identity gate pins the 39-page inventory plus absence
+  of stale 0.2 Manual prose without misclassifying third-party versions.
 - Push and pull-request authorization is explicit. Merge waits for checkpoint
   sign-off after three consecutive green hosted CI runs on both operating
   systems.

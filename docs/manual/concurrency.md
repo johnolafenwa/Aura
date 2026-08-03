@@ -348,7 +348,7 @@ once, may still perform its side effect, and has any late result discarded.
 A configured queue bound limits accepted pending work, but cannot guarantee
 unrelated blocking-I/O progress while all blocking workers remain stuck.
 
-Aura 0.2 task scheduling is cooperative across pinned workers. The compiler
+Aura 0.3 task scheduling is cooperative across pinned workers. The compiler
 inserts a scheduling check on every loop backedge, including the ordinary body
 tail and `continue`, so a tight loop eventually lets ready timers, Queue
 operations, and socket work on the same worker proceed. `break` and `return`
@@ -639,7 +639,7 @@ Protocol state is owned by one bounded, nonblocking service step at a time and
 is returned before the coroutine observes cancellation or resumes reactor
 waiting. The process-global pool is initialized lazily, shared by all
 lightweight schedulers, remains alive until process exit, and intentionally
-has no 0.2 runtime shutdown/join API. Non-Unix WebSocket fallback retains its
+has no 0.3 runtime shutdown/join API. Non-Unix WebSocket fallback retains its
 compatibility path. Plain socket/reactor operations remain scheduler-side;
 resolver, listener-bind, and file-read work uses the generic blocking-I/O pool.
 TLS asset bytes are read there, while PEM parsing and rustls construction run

@@ -88,7 +88,7 @@ A generic-to-generic call propagates the obligation to the caller. Inference
 continues to a fixed point independent of declaration order, and the resulting
 contract is retained by imported functions and methods. The same rules apply
 to ordinary, inherent, associated, task-target, trait, operator, and `From`
-calls. There is no source annotation for this obligation in Aura 0.2.
+calls. There is no source annotation for this obligation in Aura 0.3.
 
 When a type is concrete, a substitution containing `random.Rng` is rejected
 with `AU3007`. A concrete type whose clone safety cannot be proved is rejected
@@ -185,7 +185,7 @@ An implementation target must have a concrete or generic named outer type such a
 
 Two implementations with exactly the same trait specialization and target are duplicates and are rejected. More general and more specialized overlapping patterns may coexist. Dispatch selects the unique applicable implementation with greatest structural specificity; equal-best matches are ambiguous and rejected. Source order is never a tie breaker.
 
-Aura 0.2 does not impose a separate orphan-rule restriction, but an implementation must refer to known visible types and traits and participates only where that implementation is present in the loaded module/package context.
+Aura 0.3 does not impose a separate orphan-rule restriction, but an implementation must refer to known visible types and traits and participates only where that implementation is present in the loaded module/package context.
 
 ## Implementation Method Conformance
 
@@ -208,7 +208,7 @@ Implementation methods cannot add default ordinary arguments. Extra methods, mis
 An explicit implementation MUST NOT strengthen its trait method's clone-safety contract.
 Its body may rely on obligations already inferred by the trait method, but it
 cannot introduce a requirement that bound-based callers cannot see. Because
-Aura 0.2 has no explicit clone-safety annotation, generic clone-producing
+Aura 0.3 has no explicit clone-safety annotation, generic clone-producing
 behavior belongs in a trait default body. An implementation that adds such a
 requirement is rejected with `AU3007`.
 
@@ -323,7 +323,7 @@ trait Ord[Rhs]:
 must return `bool`.
 
 `and` and `or` do not dispatch through traits. Builtin `==` and `!=` also do
-not use an equality trait in Aura 0.2. This includes recursive structural
+not use an equality trait in Aura 0.3. This includes recursive structural
 tuple equality, which a trait implementation cannot override. Builtin
 operations take precedence wherever their concrete value rule applies.
 
@@ -442,7 +442,7 @@ behavior.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 has no trait objects, dynamic dispatch, associated types or
+Aura 0.3 has no trait objects, dynamic dispatch, associated types or
 constants, higher-kinded parameters, default type arguments, `where` clauses,
 specialization annotations, general subtyping, or separate orphan-rule
 restriction. A bare target parameter in `impl[T] Trait for T` is unsupported.

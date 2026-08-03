@@ -22,7 +22,7 @@ All three package fields are required:
 
 - `name` must match `[A-Za-z_][A-Za-z0-9_]*`; it is also the dependency import identifier
 - `version` must begin with an ASCII digit and otherwise contain only ASCII letters, digits, `.`, `-`, or `+`
-- `edition` must be exactly `"2026"` in Aura 0.2
+- `edition` must be exactly `"2026"` in Aura 0.3
 
 `allow_ffi = true` is an optional `[package]` field whose default is `false`.
 It authorizes that package to contain FFI declarations. It grants no ambient
@@ -74,7 +74,7 @@ from helpers.text import normalize
 
 An import path maps directly to a `.au` file below the selected source root. Import traversal cannot escape that root, including through canonicalized filesystem paths. Cyclic source imports are rejected.
 
-Imported modules contribute declarations, not runtime initialization. Their top-level executable statements do not run as import side effects in Aura 0.2. Visibility and import binding behavior are specified in [Names And Scopes](/manual/names-and-scopes#imports).
+Imported modules contribute declarations, not runtime initialization. Their top-level executable statements do not run as import side effects in Aura 0.3. Visibility and import binding behavior are specified in [Names And Scopes](/manual/names-and-scopes#imports).
 
 ## Dependency Sources
 
@@ -91,7 +91,7 @@ Each dependency table entry must choose exactly one source:
 `path` and `git` cannot appear together. A git entry may choose at most one of `rev`, `tag`, or `branch`; selectors without `git` are invalid.
 
 String-valued version dependencies such as `util = "1.2.0"` and detailed
-`version =` dependencies are registry forms and are not implemented. Aura 0.2
+`version =` dependencies are registry forms and are not implemented. Aura 0.3
 has no registry resolution, publish, or install flow.
 
 The dependency table key is not a free alias: it must exactly match the resolved dependency's `[package].name`. This keeps the manifest name and import root identical. A dependency package named `util` is imported with that prefix:
@@ -115,7 +115,7 @@ Resolution recursively loads path and git dependencies and enforces:
 - at most 4,096 packages in one resolved graph
 - every package has a readable `src/` directory and a valid package manifest
 
-Two different paths cannot both claim the same package name. The graph limits are observable Aura 0.2 limits and may be raised only with corresponding reference and conformance changes.
+Two different paths cannot both claim the same package name. The graph limits are observable Aura 0.3 limits and may be raised only with corresponding reference and conformance changes.
 
 ## Workspaces
 

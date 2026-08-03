@@ -1509,7 +1509,7 @@ input, and every returned collection or str is a fresh owned value.
 `str.from_bytes` is an associated str method, so it is called on the
 type, as in `str.from_bytes(payload)`. It is not a `str(...)`
 constructor. The `encoding` parameter name is reserved for a possible future
-extension; Aura 0.2 accepts no encoding argument on either str conversion.
+extension; Aura 0.3 accepts no encoding argument on either str conversion.
 
 ## Error Model
 
@@ -1622,7 +1622,7 @@ The final line demonstrates that conversion did not consume `encoded`.
 The Bytes surface adds no source-language grammar. `list[uint8]`, `import
 bytes`, associated calls, method calls, module calls, named arguments, and
 `Result` patterns use the ordinary forms defined elsewhere in this Manual.
-Aura 0.2 has no byte-string literal.
+Aura 0.3 has no byte-string literal.
 
 ## Typing Rules
 
@@ -1643,7 +1643,7 @@ shared access for the call, so a caller may reuse the input after `to_bytes`,
 `from_bytes`, encode, decode, or hash. Explicit `own` is neither required nor
 implied by these signatures.
 
-An `encoding` positional or named argument is not part of the 0.2 signature
+An `encoding` positional or named argument is not part of the 0.3 signature
 and is rejected by ordinary argument checking. A user-defined source module
 whose final component is named `bytes` does not acquire this built-in API:
 built-in behavior belongs only to the compiler-synthesized `bytes` module.
@@ -1723,14 +1723,14 @@ Actual allocation success within the codec destination ceiling is
 host-dependent. SHA-256 output is always 32 bytes. Codec output, errors, and
 offsets are not host-dependent.
 
-Aura 0.2 does not provide alternate text encodings, URL-safe or unpadded
+Aura 0.3 does not provide alternate text encodings, URL-safe or unpadded
 base64, streaming codecs, incremental hashing, HMAC, password hashing,
 constant-time digest comparison, a distinct mutable byte buffer, or implicit
 text conversion. The reserved `encoding` parameter is not implemented.
 
 ## Status
 
-`list[uint8]` is the implemented Aura 0.2 bytes type. The conversion, codec,
+`list[uint8]` is the implemented Aura 0.3 bytes type. The conversion, codec,
 error, and hash policy on this page is implemented as the Phase 3 control-plane
 surface and is accepted under ADR-0023. Derived class/enum codecs and schemas
 remain deferred beyond Phase 6.
@@ -1967,7 +1967,7 @@ class Resource:
         print("closing " + self.name)
 ```
 
-The method must be named `close`, use `mut self`, take no ordinary parameters, and return `None`. Generic user resource classes are not supported by `with` in Aura 0.2.
+The method must be named `close`, use `mut self`, take no ordinary parameters, and return `None`. Generic user resource classes are not supported by `with` in Aura 0.3.
 
 ```python
 with resource = Resource(name="db"):
@@ -2054,7 +2054,7 @@ resolution and signatures.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 has no class inheritance, overloads, property syntax, custom
+Aura 0.3 has no class inheritance, overloads, property syntax, custom
 constructor hook, or general destructor hook. Generic user classes cannot be
 managed directly by `with`. A class field default cannot call a user-defined
 function in the current compiler; compute that value before construction and
@@ -2118,7 +2118,7 @@ aura check app.au
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case; defaults to `tests/` and a 30-second per-case timeout. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
-| `aura version` / `aura --version` | Print the preview channel and 12-hex-digit source commit, such as `aura 0.2.0-preview (0123456789ab)`. |
+| `aura version` / `aura --version` | Print the development channel and 12-hex-digit source commit, such as `aura 0.3.0-dev (0123456789ab)`. |
 
 ## Checking
 
@@ -2236,7 +2236,7 @@ The JSON result is an array of `{ "name": str, "kind": str, "detail": str }` obj
 
 ## Machine-Readable And Inspection Formats
 
-`ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aura 0.2. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
+`ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aura 0.3. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
 
 `aura lsp` is a persistent JSON-lines compiler service. Each input line is an object with an optional `id`, `method`, `path`, and `source`. Supported requests are:
 
@@ -2487,9 +2487,9 @@ Filesystem path interpretation, process exit-code width, executable format, link
 
 ## Status
 
-The commands and contracts documented as maintained on this page are implemented in Aura 0.2 and covered by CLI, compiler, LSP, extension, backend-parity, and repository-gate tests. `analyze`, `complete`, and diagnostic schema version `1` are maintained tooling contracts; internal AST and MIR layouts are intentionally unstable.
+The commands and contracts documented as maintained on this page are implemented in Aura 0.3 and covered by CLI, compiler, LSP, extension, backend-parity, and repository-gate tests. `analyze`, `complete`, and diagnostic schema version `1` are maintained tooling contracts; internal AST and MIR layouts are intentionally unstable.
 
-Aura 0.2 has no package registry, publishing and installation workflow,
+Aura 0.3 has no package registry, publishing and installation workflow,
 Windows support, configurable formatter, or annotation-based test discovery.
 Its maintained execution engines are the MIR runtime and direct native
 backend.
@@ -3473,7 +3473,7 @@ once, may still perform its side effect, and has any late result discarded.
 A configured queue bound limits accepted pending work, but cannot guarantee
 unrelated blocking-I/O progress while all blocking workers remain stuck.
 
-Aura 0.2 task scheduling is cooperative across pinned workers. The compiler
+Aura 0.3 task scheduling is cooperative across pinned workers. The compiler
 inserts a scheduling check on every loop backedge, including the ordinary body
 tail and `continue`, so a tight loop eventually lets ready timers, Queue
 operations, and socket work on the same worker proceed. `break` and `return`
@@ -3764,7 +3764,7 @@ Protocol state is owned by one bounded, nonblocking service step at a time and
 is returned before the coroutine observes cancellation or resumes reactor
 waiting. The process-global pool is initialized lazily, shared by all
 lightweight schedulers, remains alive until process exit, and intentionally
-has no 0.2 runtime shutdown/join API. Non-Unix WebSocket fallback retains its
+has no 0.3 runtime shutdown/join API. Non-Unix WebSocket fallback retains its
 compatibility path. Plain socket/reactor operations remain scheduler-side;
 resolver, listener-bind, and file-read work uses the generic blocking-I/O pool.
 TLS asset bytes are read there, while PEM parsing and rustls construction run
@@ -3828,7 +3828,7 @@ A **conforming Aura implementation**:
 - preserves the observable evaluation and cleanup behavior defined by the Manual
 - produces the specified typed outcomes or runtime failures
 - provides the maintained public API surface
-- does not expose proposal-only constructs as accepted 0.2 language features
+- does not expose proposal-only constructs as accepted 0.3 language features
 
 Exact diagnostic prose is normative only where a fixture or this Manual explicitly requires it. A conforming implementation otherwise needs a clear diagnostic with an accurate source location and the same stable `AU####` code; message wording may differ without changing that code's documented meaning.
 
@@ -3918,7 +3918,7 @@ Regression tests supplement fixtures when a case needs multiple files, temporary
 
 ## Backend Equivalence
 
-Aura 0.2 has two maintained semantic runtime representations:
+Aura 0.3 has two maintained semantic runtime representations:
 
 - `aura run` lowers checked source to MIR and executes it in the MIR runtime.
 - `aura build --backend direct` lowers checked source to native code through the direct backend and links the native runtime.
@@ -4017,7 +4017,7 @@ A language or tooling behavior change is complete only when the same pass update
 6. categorized examples and Learn/tutorial material
 7. the task board and dated work note
 
-Syntax expansion is frozen for the 0.2 technical-preview release. A new construct therefore needs an explicit compatibility decision rather than being accepted solely because it is easy to parse.
+Syntax expansion is frozen for the 0.3 technical-preview release. A new construct therefore needs an explicit compatibility decision rather than being accepted solely because it is easy to parse.
 
 ## Deriving A Book
 
@@ -4035,7 +4035,7 @@ This division lets the reference remain precise while the book remains readable.
 
 # Control-Plane Modules
 
-Aura 0.2 includes a small, typed host/control-plane surface intended for service launchers, workers, evaluation harnesses, and agent infrastructure. These modules behave the same through `aura run` and direct native binaries.
+Aura 0.3 includes a small, typed host/control-plane surface intended for service launchers, workers, evaluation harnesses, and agent infrastructure. These modules behave the same through `aura run` and direct native binaries.
 
 ## System And Path
 
@@ -4092,18 +4092,18 @@ JSON compact output has sorted object keys. `json.is_valid` accepts any valid
 JSON value, while `json.parse_string_map` succeeds only for an object whose
 values are all strings. TOML output is a sorted top-level string dictionary;
 `toml.is_valid` accepts any valid TOML document, while
-`toml.parse_string_map` rejects nested tables and non-string values. Aura 0.2
+`toml.parse_string_map` rejects nested tables and non-string values. Aura 0.3
 has no derived class/enum schemas or generated codecs.
 
 ## Logs, Metrics, And Traces
 
 `log.debug/info/warn/error(message, fields)` and `trace.event(name, fields)` emit one compact JSON record to standard error. `fields` is a `dict[str, str]`. Every record has the shape `{ "kind": "log" | "trace", "level": str, "message": str, "fields": Object }`; for trace events, `level` is `event` and `message` is the event name.
 
-`metrics.increment(name, value)`, `metrics.get(name)`, and `metrics.reset()` provide process-global signed `int64` counters shared by Aura tasks in that process. A missing counter reads as zero. Incrementing past either `int64` bound is a runtime diagnostic and leaves the checked operation incomplete. These counters are useful for worker and test instrumentation; Aura 0.2 has no metrics exporter, export protocol, or scoped trace span API.
+`metrics.increment(name, value)`, `metrics.get(name)`, and `metrics.reset()` provide process-global signed `int64` counters shared by Aura tasks in that process. A missing counter reads as zero. Incrementing past either `int64` bound is a runtime diagnostic and leaves the checked operation incomplete. These counters are useful for worker and test instrumentation; Aura 0.3 has no metrics exporter, export protocol, or scoped trace span API.
 
 ## Network Boundary
 
-The HTTP client accepts `http://` and certificate-validated `https://` URLs using the platform-independent Web PKI root set. HTTP request and response bodies support content length, connection-close framing, and chunked transfer encoding. The 0.2 parser keeps a 16 MiB incoming wire-message limit, accepts at most 64 headers, and rejects conflicting framing headers. Its `dict[str, str]` header boundary cannot represent repeated equal header names losslessly.
+The HTTP client accepts `http://` and certificate-validated `https://` URLs using the platform-independent Web PKI root set. HTTP request and response bodies support content length, connection-close framing, and chunked transfer encoding. The 0.3 parser keeps a 16 MiB incoming wire-message limit, accepts at most 64 headers, and rejects conflicting framing headers. Its `dict[str, str]` header boundary cannot represent repeated equal header names losslessly.
 
 For custom certificate authorities and TLS servers, use the lower-level `net.tls_connect*` and `net.tls_listen` APIs documented in [Network Module](/manual/network).
 
@@ -4283,7 +4283,7 @@ status-specific retry policy or jitter must express it explicitly. Its
 
 The system, path, JSON, TOML, logging, trace-event, metrics, retry, and
 summarized HTTP contracts on this page are implemented and maintained in
-Aura 0.2. Recursive JSON gap-fill semantics are accepted under ADR-0021. The
+Aura 0.3. Recursive JSON gap-fill semantics are accepted under ADR-0021. The
 summarized fixed HTTP cap is Accepted under ADR-0018.
 
 Nested TOML data models, derived codecs, telemetry exporters, metric labels,
@@ -4501,11 +4501,11 @@ This page documents known current limits of the Aura compiler and runtime.
   state before cancellation or reactor waiting resumes. The non-Unix
   WebSocket fallback does not use this Phase 5.4 service. The pool is
   process-global, lazily initialized, shared by all lightweight schedulers,
-  and intentionally process-lifetime; it has no 0.2 runtime shutdown or join
+  and intentionally process-lifetime; it has no 0.3 runtime shutdown or join
   API. File reads, resolver work, and listener binding remain on the generic
   blocking-I/O pool; TLS asset bytes are read there before PEM parsing and
   rustls construction run on protocol workers.
-- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aura 0.2 has no chunked file-read API.
+- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aura 0.3 has no chunked file-read API.
 - Process-pipe and captured-output reads plus TCP, Unix, and TLS whole/bounded reads remain capped at 64 MiB. TLS certificate, private-key, and CA-file loading uses the same independent 64 MiB ceiling. A bounded byte count of zero is invalid.
 - UDP receives accept `max_bytes` from 1 through 65,535.
 - Incoming HTTP parsing accepts at most 64 headers and 16 MiB of wire data per message, including the start line, headers, transfer framing, trailers, and body. Outbound HTTP writers have no separate size cap. The high-level dictionary header model cannot preserve repeated equal field names losslessly.
@@ -4530,7 +4530,7 @@ This page documents known current limits of the Aura compiler and runtime.
   lightweight tasks park through the scheduler. Once admitted, synchronous
   parse defers cancellation until codec completion. Runtime materialization,
   JSON-aware clone/render, and dumping use iterative traversals. The service is
-  process-lifetime and has no 0.2 sizing or shutdown API. The bounded
+  process-lifetime and has no 0.3 sizing or shutdown API. The bounded
   `json.is_valid` and `json.parse_string_map` helpers retain their bounded
   caller-side paths and do not use that service; JSON
   flat-dictionary and TOML helpers remain restricted to typed
@@ -4571,7 +4571,7 @@ This page documents known current limits of the Aura compiler and runtime.
 - TLS APIs require PEM certificate/key assets.
 - Package support has local path and git dependencies, but no registry publish/install flow.
 - `fs.read_dir` silently skips an individual directory entry that fails after the directory itself was opened.
-- High-level HTTP header conversion may expose duplicate equal dictionary keys when the wire message repeats a header name; repeated headers are not a lossless 0.2 contract.
+- High-level HTTP header conversion may expose duplicate equal dictionary keys when the wire message repeats a header name; repeated headers are not a lossless 0.3 contract.
 - Accepted ADR-0033 rejects non-Transfer task captures, task results, and
   Queue payloads with `AU3008`. Every other non-repeatable transferable task
   result has one statically enforced observation right: direct result methods
@@ -4613,7 +4613,7 @@ This page documents known current limits of the Aura compiler and runtime.
   function. Discovery is name-prefix based; annotations, parameterized tests,
   and fixture/teardown protocols are not implemented.
 - A timed-out `aura test` stops waiting but cannot terminate its worker thread; the timed-out program may continue host side effects until the process exits.
-- Recursive `aura fmt` and `aura test` traversal follows directory symlinks without cycle detection in 0.2.
+- Recursive `aura fmt` and `aura test` traversal follows directory symlinks without cycle detection in 0.3.
 
 ## Source: docs/manual/diagnostics.md
 
@@ -5223,7 +5223,7 @@ A user enum is copyable when every payload type declared by every variant is sta
 
 `Option[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` follow the
 same payload-copy rule. `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`,
-and `WaitAll[T]` remain move outcome types in Aura 0.2 even for copy
+and `WaitAll[T]` remain move outcome types in Aura 0.3 even for copy
 payloads. An unconstrained generic payload is not assumed copyable. See
 [Types](/manual/types#copy-and-move-categories).
 
@@ -5278,7 +5278,7 @@ Expression arms may also use the inline grammar `case Pattern: expression`; stat
 
 ## Pattern Forms
 
-At the top level of a match arm, Aura 0.2 supports:
+At the top level of a match arm, Aura 0.3 supports:
 
 - an enum variant pattern for an enum scrutinee
 - a recursively nested fixed-arity tuple pattern for a tuple scrutinee
@@ -5556,7 +5556,7 @@ Aura source is statically checked, lowered, and executed with deterministic sing
 
 ## Maintained Execution Paths
 
-Aura 0.2 maintains one checked source language and two runtime representations:
+Aura 0.3 maintains one checked source language and two runtime representations:
 
 - `aura run` lowers the entry package to MIR and executes it in the MIR runtime.
 - native direct builds lower MIR-compatible program structure to native code linked with the direct runtime.
@@ -5578,7 +5578,7 @@ After successful checking, an entry module runs in one of two modes:
 1. If it has executable top-level statements, those statements execute in their stored source order. The file cannot also declare a local `main`.
 2. Otherwise, a local `main()` is called when present. It returns `None` or `int32`.
 
-An imported function named `main` is not an entrypoint. Imported module top-level statements do not execute as import side effects in Aura 0.2.
+An imported function named `main` is not an entrypoint. Imported module top-level statements do not execute as import side effects in Aura 0.3.
 
 For `aura run`, a returned `int32` is passed to the host process as the requested exit status; `None` means success. A built native program follows the same entry result contract.
 
@@ -6058,7 +6058,7 @@ owners, and no resource mutex remains held across the worker wait. Reactor
 readiness, absolute deadlines, and cancellation remain scheduler-side
 concerns. This protocol-step pool is lazily initialized and shared by every
 lightweight scheduler. Its workers intentionally live until process exit;
-Aura 0.2 has no protocol-pool shutdown or join surface. The non-Unix
+Aura 0.3 has no protocol-pool shutdown or join surface. The non-Unix
 WebSocket fallback retains its compatibility path. Resolver, listener-bind,
 and file reads use the generic blocking-I/O pool.
 `AURA_BLOCKING_WORKERS=<positive integer>` selects its exact worker count
@@ -6087,7 +6087,7 @@ waits for admission without value-table access, then holds read access only
 long enough to copy the source and releases it before submission and
 completion waiting. The bounded `json.is_valid` and `json.parse_string_map`
 operations remain caller-side and do not use
-this service. Codec workers are process-lifetime and have no Aura 0.2
+this service. Codec workers are process-lifetime and have no Aura 0.3
 shutdown or configuration surface.
 
 `Queue[T]` is a copy handle to shared runtime state. Under Accepted
@@ -6186,7 +6186,7 @@ Process cancellation and close operations signal/terminate according to the proc
 
 ## Runtime Limits
 
-The maintained resource size, header, frame, timeout, and platform limits are normative for Aura 0.2 and are collected in [Current Limits](/manual/current-limits). An implementation MUST reject or return a typed error when a limit is exceeded; it must not allocate without bound or hang indefinitely where the API supplies a deadline.
+The maintained resource size, header, frame, timeout, and platform limits are normative for Aura 0.3 and are collected in [Current Limits](/manual/current-limits). An implementation MUST reject or return a typed error when a limit is exceeded; it must not allocate without bound or hang indefinitely where the API supplies a deadline.
 
 ## Determinism
 
@@ -6202,7 +6202,7 @@ Pure expression evaluation, ordinary control flow, and collection operations are
 
 An explicitly seeded `random.Rng` is deterministic. Its xoshiro256** sequence,
 integer/float mapping, and shuffle order are
-fixed for Aura 0.2.x and specified in [Randomness Module](/manual/randomness).
+fixed for Aura 0.3.x and specified in [Randomness Module](/manual/randomness).
 Secure random calls are external effects and never draw from that stream.
 Aura converts host effects into typed values and ordering primitives where
 practical, but does not pretend the host environment is deterministic.
@@ -6463,7 +6463,7 @@ Arithmetic and ordering may resolve through the corresponding operator trait.
 For non-numeric user types, `/` requests `Div.div`; `//` requests
 `FloorDiv.floor_div` when neither a builtin numeric rule nor the builtin
 `Duration // int64` rule applies. Builtin equality does not use an equality
-operator trait in Aura 0.2.
+operator trait in Aura 0.3.
 
 Tuple `<`, `<=`, `>`, and `>=` are static errors. Aura has no lexicographic
 tuple ordering, and an `Ord` implementation cannot add one to a structural
@@ -7052,7 +7052,7 @@ one value per line.
 
 ## Forms Not Implemented
 
-Aura 0.2 expressions do not include generator expressions, method values,
+Aura 0.3 expressions do not include generator expressions, method values,
 assignment expressions, call-site capability annotations, non-numeric casts, or
 ordinary trailing commas. Lambdas are expression-bodied and contextually
 typed; they do not add statement-bodied or implicitly reference-capturing
@@ -7451,7 +7451,7 @@ terminate the process; no backend can make such a declaration safe.
 
 FFI v0, its package opt-in and root dependency report, bodyless
 `extern "C"` functions, opaque handles, fixed-width scalars, pointer-length
-views, and Unix process-global lookup are implemented in Aura 0.2.
+views, and Unix process-global lookup are implemented in Aura 0.3.
 
 Callbacks, raw pointers, variadics, returned views, nullable handles, explicit
 library loading/link configuration, and foreign aggregate layout are reserved
@@ -7488,7 +7488,7 @@ Filesystem APIs return `Result[..., io.Error]` except `fs.exists(...)`, which re
 | `fs.create` | `create(path: str) -> Result[fs.File, io.Error]` | Creates or truncates a file for writing. |
 | `fs.append` | `append(path: str) -> Result[fs.File, io.Error]` | Opens a file for appending, creating it if needed. |
 
-The read cap is part of the API contract and also applies to `fs.File.read_all()` and `fs.File.read_bytes()`. Aura 0.2 has no chunked file-read API, so a program that must process a larger file needs a host-side helper or must split the data before reading it through Aura.
+The read cap is part of the API contract and also applies to `fs.File.read_all()` and `fs.File.read_bytes()`. Aura 0.3 has no chunked file-read API, so a program that must process a larger file needs a host-side helper or must split the data before reading it through Aura.
 
 `fs.read_dir` reports failure to open the directory, but the current implementation silently skips an individual entry whose metadata/read operation fails after opening. Code that requires a complete audited directory snapshot must validate results through a host helper until that defect is fixed.
 
@@ -7606,15 +7606,15 @@ Host filesystem results can differ by operating system and environment. Such dif
 
 ## Limits And Implementation-Defined Behavior
 
-Each one-shot read and each `fs.File` whole-file read is capped at 256 MiB of remaining content. Aura 0.2 has no chunked file-reading API, recursive directory operation, transactional write, atomic replace helper, memory mapping, filesystem watcher, permission API, or symlink-specific API. Host paths, permissions, case sensitivity, separators, and symlink traversal follow the host.
+Each one-shot read and each `fs.File` whole-file read is capped at 256 MiB of remaining content. Aura 0.3 has no chunked file-reading API, recursive directory operation, transactional write, atomic replace helper, memory mapping, filesystem watcher, permission API, or symlink-specific API. Host paths, permissions, case sensitivity, separators, and symlink traversal follow the host.
 
 After opening a directory, an individual entry that fails during enumeration is currently skipped; only failure to open the directory is returned. Non-Unicode entry names are converted lossily. Partial writes and externally visible side effects may remain after a host failure or task cancellation.
 
 ## Status
 
-The one-shot functions, `fs.File` methods, typed errors, deterministic cleanup, strict text/byte distinction, and limits documented here are implemented and maintained in Aura 0.2. The fixed 256 MiB whole-read policy is accepted under ADR-0018.
+The one-shot functions, `fs.File` methods, typed errors, deterministic cleanup, strict text/byte distinction, and limits documented here are implemented and maintained in Aura 0.3. The fixed 256 MiB whole-read policy is accepted under ADR-0018.
 
-The skipped-entry behavior is a documented current defect, not a guarantee that callers should rely on. Aura 0.2 has no chunked or asynchronous file access, transactional operations, richer metadata, or cross-platform path abstraction API.
+The skipped-entry behavior is a documented current defect, not a guarantee that callers should rely on. Aura 0.3 has no chunked or asynchronous file access, transactional operations, richer metadata, or cross-platform path abstraction API.
 
 ## Source: docs/manual/functions.md
 
@@ -7750,7 +7750,7 @@ Binding is deterministic:
 
 Positional arguments cannot follow a named argument. Parameter and argument
 lists may span physical lines while their parentheses remain open, but they do
-not accept trailing commas in Aura 0.2.
+not accept trailing commas in Aura 0.3.
 
 ## Default Arguments
 
@@ -8163,7 +8163,7 @@ A generic-to-generic call propagates the obligation to the caller. Inference
 continues to a fixed point independent of declaration order, and the resulting
 contract is retained by imported functions and methods. The same rules apply
 to ordinary, inherent, associated, task-target, trait, operator, and `From`
-calls. There is no source annotation for this obligation in Aura 0.2.
+calls. There is no source annotation for this obligation in Aura 0.3.
 
 When a type is concrete, a substitution containing `random.Rng` is rejected
 with `AU3007`. A concrete type whose clone safety cannot be proved is rejected
@@ -8260,7 +8260,7 @@ An implementation target must have a concrete or generic named outer type such a
 
 Two implementations with exactly the same trait specialization and target are duplicates and are rejected. More general and more specialized overlapping patterns may coexist. Dispatch selects the unique applicable implementation with greatest structural specificity; equal-best matches are ambiguous and rejected. Source order is never a tie breaker.
 
-Aura 0.2 does not impose a separate orphan-rule restriction, but an implementation must refer to known visible types and traits and participates only where that implementation is present in the loaded module/package context.
+Aura 0.3 does not impose a separate orphan-rule restriction, but an implementation must refer to known visible types and traits and participates only where that implementation is present in the loaded module/package context.
 
 ## Implementation Method Conformance
 
@@ -8283,7 +8283,7 @@ Implementation methods cannot add default ordinary arguments. Extra methods, mis
 An explicit implementation MUST NOT strengthen its trait method's clone-safety contract.
 Its body may rely on obligations already inferred by the trait method, but it
 cannot introduce a requirement that bound-based callers cannot see. Because
-Aura 0.2 has no explicit clone-safety annotation, generic clone-producing
+Aura 0.3 has no explicit clone-safety annotation, generic clone-producing
 behavior belongs in a trait default body. An implementation that adds such a
 requirement is rejected with `AU3007`.
 
@@ -8398,7 +8398,7 @@ trait Ord[Rhs]:
 must return `bool`.
 
 `and` and `or` do not dispatch through traits. Builtin `==` and `!=` also do
-not use an equality trait in Aura 0.2. This includes recursive structural
+not use an equality trait in Aura 0.3. This includes recursive structural
 tuple equality, which a trait implementation cannot override. Builtin
 operations take precedence wherever their concrete value rule applies.
 
@@ -8517,7 +8517,7 @@ behavior.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 has no trait objects, dynamic dispatch, associated types or
+Aura 0.3 has no trait objects, dynamic dispatch, associated types or
 constants, higher-kinded parameters, default type arguments, `where` clauses,
 specialization annotations, general subtyping, or separate orphan-rule
 restriction. A bare target parameter in `impl[T] Trait for T` is unsupported.
@@ -8637,7 +8637,7 @@ def reject(marker: Marker[random.Rng], values: list[random.Rng]) -> list[random.
 
 # Grammar
 
-This chapter defines the complete source grammar of Aura 0.2. The grammar is normative after lexical token formation. Static restrictions—types, visibility, ownership, exhaustiveness, valid receivers, and API-specific rules—are defined by [Static Semantics](/manual/static-semantics).
+This chapter defines the complete source grammar of Aura 0.3. The grammar is normative after lexical token formation. Static restrictions—types, visibility, ownership, exhaustiveness, valid receivers, and API-specific rules—are defined by [Static Semantics](/manual/static-semantics).
 
 ## Notation
 
@@ -8749,7 +8749,7 @@ and byte strings are not tokens. There is no separate character-literal token.
 `FSTRING` begins with `f"` and ends at the matching double quote.
 `{ expression }` interpolates an ordinary Aura expression. Two opening braces insert one
 literal opening brace, and two closing braces insert one literal closing brace.
-A lone closing brace outside an interpolation is also literal in Aura 0.2.
+A lone closing brace outside an interpolation is also literal in Aura 0.3.
 Interpolations may contain nested braces and ordinary single- or double-quoted
 strings; braces inside those strings do not change interpolation depth. Empty
 or invalid interpolations are rejected. An interpolation may end with one
@@ -9509,10 +9509,10 @@ The implementation rejects source that exceeds the maintained parser complexity 
 - one comprehension rejects a 128th combined `for` clause or `if` filter
 - f-string interpolation brace nesting is limited to 128
 
-These are observable implementation limits of Aura 0.2. Inputs that exceed
+These are observable implementation limits of Aura 0.3. Inputs that exceed
 them must be rejected cleanly.
 
-## Syntax Not In Aura 0.2
+## Syntax Not In Aura 0.3
 
 The grammar intentionally excludes:
 
@@ -9650,15 +9650,15 @@ The actual standard streams are supplied by the host process. A backend may buff
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 exposes line-oriented text input only; it has no standard-input byte API, terminal mode API, stream replacement API, asynchronous console API, or built-in formatted-output language. `io.read_line` has no separate Aura line-length cap and therefore allocates according to the incoming line and host memory limits.
+Aura 0.3 exposes line-oriented text input only; it has no standard-input byte API, terminal mode API, stream replacement API, asynchronous console API, or built-in formatted-output language. `io.read_line` has no separate Aura line-length cap and therefore allocates according to the incoming line and host memory limits.
 
 Terminal encoding before bytes reach the process, host pipe buffering, scheduling between concurrent writers, and the precise message stored in `io.Error.Other` are host-dependent. Stable control flow should match the specific non-message variants where possible.
 
 ## Status
 
-The standard-stream functions, `print` behavior, `io.Error` enum, strict UTF-8 policy, EOF distinction, and shortest-roundtrip float rendering are implemented and maintained in Aura 0.2. No I/O semantics on this page are provisional.
+The standard-stream functions, `print` behavior, `io.Error` enum, strict UTF-8 policy, EOF distinction, and shortest-roundtrip float rendering are implemented and maintained in Aura 0.3. No I/O semantics on this page are provisional.
 
-Aura 0.2 has no binary standard input, async stream handles, terminal control,
+Aura 0.3 has no binary standard input, async stream handles, terminal control,
 configurable formatting, or user-defined error derivation.
 
 ## Source: docs/manual/json.md
@@ -9986,7 +9986,7 @@ keys.
 
 The dynamic-`json.parse` codec service admits two operations process-wide. Its
 two 2 MiB-stack workers are initialized lazily and intentionally live until
-process exit; Aura 0.2 has no codec-service shutdown, join, sizing, or
+process exit; Aura 0.3 has no codec-service shutdown, join, sizing, or
 capacity configuration API. The service capacity does not govern
 `json.is_valid`, `json.parse_string_map`, or `json.stringify_map`.
 
@@ -10002,11 +10002,11 @@ claim that every possible host out-of-memory condition is catchable.
 ## Status
 
 The recursive value/error model, parse/dump surface, accessors, ordering,
-formatting, and resource boundary are implemented Aura 0.2 behavior. Their
+formatting, and resource boundary are implemented Aura 0.3 behavior. Their
 exact gap-fill semantics are accepted under ADR-0021.
 
 `is_valid`, `stringify_map`, and `parse_string_map` are maintained bounded
-flat-dictionary operations. Aura 0.2 has no streaming JSON codec.
+flat-dictionary operations. Aura 0.3 has no streaming JSON codec.
 
 ## Source: docs/manual/language-specification.md
 
@@ -10114,7 +10114,7 @@ A failure in phases 1–4 is a compile-time diagnostic. A checked program may st
 
 **Clone-safety obligation**
 : An inferred callable requirement that a substituted type must not duplicate
-  non-cloneable state through a clone-producing operation. Aura 0.2 protects
+  non-cloneable state through a clone-producing operation. Aura 0.3 protects
   `random.Rng` state under this contract.
 
 **Borrow**
@@ -10252,7 +10252,7 @@ Several other spellings are lexed as ordinary identifiers and become special onl
 print("ready") # A trailing comment.
 ```
 
-Aura 0.2 has no block comments.
+Aura 0.3 has no block comments.
 
 ## Spaces, Tabs, And Indentation
 
@@ -10339,7 +10339,7 @@ cannot cross a physical newline.
 
 ## Punctuation And Operators
 
-Aura 0.2 recognizes:
+Aura 0.3 recognizes:
 
 ```text
 ( ) [ ] { } : , . ?
@@ -10502,7 +10502,7 @@ Interpolations may contain indexing, calls, nested braces used by expressions,
 and either form of ordinary string literal, including braces inside those
 strings. Empty or syntactically invalid interpolations are rejected.
 
-Use two consecutive opening braces for a literal opening brace. Two consecutive closing braces decode to one literal closing brace; Aura 0.2 also treats a lone closing brace outside an interpolation as literal text:
+Use two consecutive opening braces for a literal opening brace. Two consecutive closing braces decode to one literal closing brace; Aura 0.3 also treats a lone closing brace outside an interpolation as literal text:
 
 ```python
 print(f"{{name}} = {name}")
@@ -10940,7 +10940,7 @@ A function body begins with bindings for its ordinary parameters. A method body 
 
 Parameter names, `self`, local bindings, loop bindings, `with` bindings, and pattern bindings occupy the function's value namespace. A use is valid only after the binding has been introduced on the current control-flow path.
 
-Aura 0.2 does not support local function, class, enum, or trait declarations. Items are module-level or members of their permitted enclosing declaration.
+Aura 0.3 does not support local function, class, enum, or trait declarations. Items are module-level or members of their permitted enclosing declaration.
 
 ## Local Bindings
 
@@ -11302,7 +11302,7 @@ UDP preserves datagram boundaries. `max_bytes` must be in `1..=65535`; zero or a
 
 Malformed HTTP requests are rejected by the listener path and do not permanently poison the listener. Content-length and chunked request bodies are supported. An incoming parsed HTTP message is limited to 16 MiB of wire data and 64 headers; oversized or invalid requests are surfaced as HTTP errors where the protocol allows it.
 
-Headers are exposed as `dict[str, str]`. This boundary cannot faithfully represent repeated fields such as multiple `set-Cookie` lines. The current conversion can expose duplicate equal keys internally despite the normal `dict` uniqueness rule, so applications that require lossless or canonical repeated-header handling must not use this 0.2 high-level HTTP surface.
+Headers are exposed as `dict[str, str]`. This boundary cannot faithfully represent repeated fields such as multiple `set-Cookie` lines. The current conversion can expose duplicate equal keys internally despite the normal `dict` uniqueness rule, so applications that require lossless or canonical repeated-header handling must not use this 0.3 high-level HTTP surface.
 
 ## HTTP Client
 
@@ -11323,7 +11323,7 @@ Headers are exposed as `dict[str, str]`. This boundary cannot faithfully represe
 | `text` | `text() -> Result[str, io.Error]` | Decodes the body as UTF-8. |
 | `bytes` | `bytes() -> list[uint8]` | Returns the raw response body. |
 
-Use byte request and response APIs for binary payloads or unknown encodings. Client URLs may use `http://` or certificate-validated `https://`; responses support content length, chunked transfer encoding, and connection-close framing. The same 16 MiB incoming-message and 64-header limits apply. Redirect following, connection pooling, HTTP/2, proxies, decompression, and custom-CA arguments on the high-level HTTP helpers are not part of 0.2.
+Use byte request and response APIs for binary payloads or unknown encodings. Client URLs may use `http://` or certificate-validated `https://`; responses support content length, chunked transfer encoding, and connection-close framing. The same 16 MiB incoming-message and 64-header limits apply. Redirect following, connection pooling, HTTP/2, proxies, decompression, and custom-CA arguments on the high-level HTTP helpers are not part of 0.3.
 
 ## WebSocket
 
@@ -11334,7 +11334,7 @@ Use byte request and response APIs for binary payloads or unknown encodings. Cli
 | `accept` | `accept(timeout: Duration = ...) -> Result[net.WebSocket, io.Error]` | Waits for the next WebSocket connection. |
 | `local_addr` | `local_addr() -> Result[str, io.Error]` | Returns the bound local address. |
 
-`net.WebSocketListener` has no explicit `close()` member in Aura 0.2. It is released when its value is dropped, but it cannot currently be used as a user-defined `with` resource. This is a known resource-surface limitation.
+`net.WebSocketListener` has no explicit `close()` member in Aura 0.3. It is released when its value is dropped, but it cannot currently be used as a user-defined `with` resource. This is a known resource-surface limitation.
 
 `net.WebSocket`:
 
@@ -11468,7 +11468,7 @@ WebSocket messages are capped at 64 MiB; frames and the write buffer are capped 
 
 ## Status
 
-The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aura 0.2. Nonblocking descriptors remain registered with the persistent reactor across scheduler turns; timeout deadlines share its timer heap, and an idle scheduler blocks until readiness, another runtime event, or the next deadline without a periodic tick. The fixed resource-cap policy recorded by ADR-0018 is Accepted, as is the invalid host-timer policy recorded by ADR-0019.
+The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aura 0.3. Nonblocking descriptors remain registered with the persistent reactor across scheduler turns; timeout deadlines share its timer heap, and an idle scheduler blocks until readiness, another runtime event, or the next deadline without a periodic tick. The fixed resource-cap policy recorded by ADR-0018 is Accepted, as is the invalid host-timer policy recorded by ADR-0019.
 
 The repeated-header representation, missing WebSocket-listener close operation, incomplete WebSocket cancellation, and discarded WebSocket close errors are documented current limitations. The protocol surface is exactly the API documented on this page.
 
@@ -11676,7 +11676,7 @@ diagnostics. The bundled extension uses that compiler-owned semantic surface.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 Arrays are CPU-only, contiguous, row-major, and rank-at-least-one.
+Aura 0.3 Arrays are CPU-only, contiguous, row-major, and rank-at-least-one.
 They have no array-shape broadcasting, mixed promotion, views, reshape,
 transpose, matrix multiplication, equality, ordering, multidimensional slicing, step
 slices, slice assignment, autograd, device placement, distributed storage, or
@@ -11706,7 +11706,7 @@ narrower than NumPy's.
 ## Status
 
 Contiguous numeric Arrays and explicit scalar/Array integer arithmetic modes
-are Accepted for Aura 0.2 under
+are Accepted for Aura 0.3 under
 `architecture_docs/decisions/0041-contiguous-numeric-arrays.md`.
 The maintained contract is the exact surface on this page and contains no
 broader tensor placement, views, shape transformations, or distributed
@@ -12170,7 +12170,7 @@ that are propagated through calls and discharged after specialization.
 
 A copy use duplicates a value and a move transfers it. Shared and mutable
 borrows are statically enforced access contracts rather than first-class
-runtime reference values in Aura 0.2. Mutable borrowed calls and list
+runtime reference values in Aura 0.3. Mutable borrowed calls and list
 iteration write through the original place; `match mut` reconstructs
 and writes back on every arm exit. Simple dict indexed assignment accepts and
 owns any value type; direct compound indexed assignment requires a copy `list`
@@ -12205,7 +12205,7 @@ applicable user-defined operator traits for root and projected targets. A copy
 target is captured before the right operand. A non-copy root or projected
 target remains borrowed across that operand, so overlapping mutable borrow or
 consumption is `AU3002`. A non-copy `list` element or `dict` value cannot be a
-direct compound target because Aura 0.2 has no indexed-place identity and
+direct compound target because Aura 0.3 has no indexed-place identity and
 writeback model; Aura rejects the operation instead of cloning or
 destructively moving the stored value.
 
@@ -12296,7 +12296,7 @@ All three package fields are required:
 
 - `name` must match `[A-Za-z_][A-Za-z0-9_]*`; it is also the dependency import identifier
 - `version` must begin with an ASCII digit and otherwise contain only ASCII letters, digits, `.`, `-`, or `+`
-- `edition` must be exactly `"2026"` in Aura 0.2
+- `edition` must be exactly `"2026"` in Aura 0.3
 
 `allow_ffi = true` is an optional `[package]` field whose default is `false`.
 It authorizes that package to contain FFI declarations. It grants no ambient
@@ -12348,7 +12348,7 @@ from helpers.text import normalize
 
 An import path maps directly to a `.au` file below the selected source root. Import traversal cannot escape that root, including through canonicalized filesystem paths. Cyclic source imports are rejected.
 
-Imported modules contribute declarations, not runtime initialization. Their top-level executable statements do not run as import side effects in Aura 0.2. Visibility and import binding behavior are specified in [Names And Scopes](/manual/names-and-scopes#imports).
+Imported modules contribute declarations, not runtime initialization. Their top-level executable statements do not run as import side effects in Aura 0.3. Visibility and import binding behavior are specified in [Names And Scopes](/manual/names-and-scopes#imports).
 
 ## Dependency Sources
 
@@ -12365,7 +12365,7 @@ Each dependency table entry must choose exactly one source:
 `path` and `git` cannot appear together. A git entry may choose at most one of `rev`, `tag`, or `branch`; selectors without `git` are invalid.
 
 String-valued version dependencies such as `util = "1.2.0"` and detailed
-`version =` dependencies are registry forms and are not implemented. Aura 0.2
+`version =` dependencies are registry forms and are not implemented. Aura 0.3
 has no registry resolution, publish, or install flow.
 
 The dependency table key is not a free alias: it must exactly match the resolved dependency's `[package].name`. This keeps the manifest name and import root identical. A dependency package named `util` is imported with that prefix:
@@ -12389,7 +12389,7 @@ Resolution recursively loads path and git dependencies and enforces:
 - at most 4,096 packages in one resolved graph
 - every package has a readable `src/` directory and a valid package manifest
 
-Two different paths cannot both claim the same package name. The graph limits are observable Aura 0.2 limits and may be raised only with corresponding reference and conformance changes.
+Two different paths cannot both claim the same package name. The graph limits are observable Aura 0.3 limits and may be raised only with corresponding reference and conformance changes.
 
 ## Workspaces
 
@@ -12582,7 +12582,7 @@ source commits, raw observations, and content hashes. The current measurements
 show where the compiler and runtime are already competitive and where later
 releases need focused optimization.
 
-This page is the performance record for the Aura 0.2 technical preview. It is
+This page is the performance record for the Aura 0.3 development channel. It is
 separate from the language's semantic guarantees.
 
 ## Current Measurements
@@ -12605,7 +12605,7 @@ record. Lower is faster. “Aura / CPython” is the ratio of medians.
 | 20-client delayed loopback TCP fan-out | 104.505375 ms | 108.605459 ms | 0.962248 |
 | 16-cycle retrying HTTP worker | 429.291292 ms | 520.447791 ms | 0.824850 |
 
-The TCP shape uses 20 pre-bound loopback listeners. Aura 0.2 rejects transfer
+The TCP shape uses 20 pre-bound loopback listeners. Aura 0.3 rejects transfer
 of an accepted `TcpStream` into a handler task (`AU3008`), and a single listener
 would serialize the handlers. The task measurement includes creation and join
 of all 10,000 tasks after `GO`. The retry measurement executes the same status
@@ -12991,7 +12991,7 @@ Executable discovery, path syntax, inherited environment, signal availability, n
 
 ## Status
 
-One-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restart/event behavior, typed failures, and Unix process-group cleanup are implemented and maintained in Aura 0.2. The fixed stream-cap policy recorded by ADR-0018 is Accepted, as is the omitted-timeout and invalid host-timer policy recorded by ADR-0019.
+One-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restart/event behavior, typed failures, and Unix process-group cleanup are implemented and maintained in Aura 0.3. The fixed stream-cap policy recorded by ADR-0018 is Accepted, as is the omitted-timeout and invalid host-timer policy recorded by ADR-0019.
 
 Shell evaluation, pipelines, pseudo-terminals, Windows process groups, portable signal control, sandboxing, and operating-system service management are unavailable. They are future, non-normative facilities rather than implicit behavior of the current API.
 
@@ -13298,19 +13298,19 @@ ordering relationship exists between secure calls, tasks, backends, processes,
 or hosts.
 
 The deterministic algorithm and seeded results are not
-implementation-defined: they are stable throughout the Aura 0.2.x series as
+implementation-defined: they are stable throughout the Aura 0.3.x series as
 fixed above. They remain unsuitable for cryptography regardless of seed
 secrecy.
 
 ## Status
 
 The constructor, deterministic methods, secure functions, move-only ownership,
-backend parity, and documented diagnostics are maintained Aura 0.2 surface.
+backend parity, and documented diagnostics are maintained Aura 0.3 surface.
 The exact algorithm, mapping, compatibility window, identity/rendering policy,
 and secure-failure boundary are accepted under ADR-0020.
 
 No other random distributions, secure floating function, global generator,
-derived sampling trait, or `random.Error` type is part of Aura 0.2.
+derived sampling trait, or `random.Error` type is part of Aura 0.3.
 
 ## Source: docs/manual/statements.md
 
@@ -13320,7 +13320,7 @@ Statements introduce and update bindings, control execution, or evaluate an expr
 
 ## Statements, Items, And Suites
 
-Aura 0.2 statements are:
+Aura 0.3 statements are:
 
 - binding and assignment
 - expression statements
@@ -13526,7 +13526,7 @@ def main():
         attempts += 1
 ```
 
-The condition must have type `bool`. A false first condition executes the body zero times. Aura 0.2 has no loop `else` clause.
+The condition must have type `bool`. A false first condition executes the body zero times. Aura 0.3 has no loop `else` clause.
 
 Moving a non-copy outer value for the first time inside a repeatable loop is rejected when it could make a later iteration invalid. Reinitialize the place on every continuing path or restructure ownership explicitly.
 
@@ -13574,7 +13574,7 @@ owned leaves; and bare Queue iteration receives an owned item and gives owned
 leaves. `mut` iteration with a tuple target is rejected because the
 minimal tuple surface has no recursive element writeback.
 
-`for value in mut set:` is not supported in Aura 0.2. Queue iteration
+`for value in mut set:` is not supported in Aura 0.3. Queue iteration
 receives values rather than traversing places: each item arrives owned and the
 queue handle is a copy value. Consequently `own` and `mut` are rejected for
 Queue iteration; use the bare form. That form evaluates
@@ -13906,7 +13906,7 @@ This chapter states the cross-cutting rules. The declaration-specific chapters p
 
 ## Types And Type Equality
 
-Aura 0.2 primarily uses nominal types with invariant generic arguments. Two
+Aura 0.3 primarily uses nominal types with invariant generic arguments. Two
 nominal types match when their canonical names and recursively all type
 arguments are equal. Tuple types are structural: two tuple types match exactly
 when their arity and every corresponding element type match recursively. There
@@ -14095,7 +14095,7 @@ Arithmetic and ordering operators may otherwise resolve through the
 corresponding `Add`, `Sub`, `Mul`, `Div`, `FloorDiv`, `Mod`, or `Ord` trait
 method. Builtin numeric and Duration rules take precedence over operator-trait
 dispatch. Builtin equality does not dispatch through an operator trait in
-Aura 0.2.
+Aura 0.3.
 
 Tuple `==` and `!=` require operands with the same static tuple type. They
 apply builtin equality recursively to corresponding element types and produce
@@ -14314,7 +14314,7 @@ For a concrete receiver, the checker chooses the unique applicable implementatio
 
 For a type parameter, available methods and operators come from its declared bounds. If multiple bounds expose an indistinguishable method, the access is ambiguous unless the language can resolve one unique contract.
 
-Trait and implementation methods cannot declare default ordinary parameters in Aura 0.2. Trait default method bodies are permitted; a signature-only trait method has no body after its terminating newline.
+Trait and implementation methods cannot declare default ordinary parameters in Aura 0.3. Trait default method bodies are permitted; a signature-only trait method has no body after its terminating newline.
 
 A clone-producing operation over unresolved generic types infers clone-safety
 obligations on the contributing declared parameters. Calls propagate those
@@ -14561,13 +14561,13 @@ Compiler coverage is held at the current non-regression floor rather than being 
 
 Seeded randomness has an additional observable-data promise: the algorithm,
 seed mapping, integer and floating mappings, and shuffle order documented in
-[Randomness Module](/manual/randomness) remain stable throughout Aura 0.2.x.
+[Randomness Module](/manual/randomness) remain stable throughout Aura 0.3.x.
 A later release may change them only with an explicit decision
 and new conformance vectors. OS-secure outputs are intentionally not stable.
 
 ## Maintained Concurrency Surface
 
-Aura 0.2 uses structured concurrency:
+Aura 0.3 uses structured concurrency:
 
 - `TaskGroup()` owns child tasks inside `with`
 - `TaskGroup.start(...)` returns a `Task[T]`
@@ -14875,7 +14875,7 @@ diagnostics.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 has no empty tuple, multi-element trailing tuple comma, tuple
+Aura 0.3 has no empty tuple, multi-element trailing tuple comma, tuple
 iteration, tuple methods, tuple ordering, named tuple elements, rest/star
 unpacking, mutable tuple-target writeback, tuple slicing, or dynamic tuple
 indexing. A tuple is not implicitly converted to or from `list`.
@@ -14938,7 +14938,7 @@ Integer bounds are exact:
 | `intsize` | host-pointer-width signed range |
 | `uintsize` | host-pointer-width unsigned range |
 
-`float32` and `float64` use IEEE-754 binary32 and binary64 representations. Literal lexing first requires a finite binary64 value; contextual `float32` conversion may round or overflow as recorded in [Current Limits](/manual/current-limits). Runtime operations may produce NaN, but Aura 0.2 makes `/`, `//`, or `%` by a floating zero explicit runtime failures rather than producing infinity or NaN through those operators.
+`float32` and `float64` use IEEE-754 binary32 and binary64 representations. Literal lexing first requires a finite binary64 value; contextual `float32` conversion may round or overflow as recorded in [Current Limits](/manual/current-limits). Runtime operations may produce NaN, but Aura 0.3 makes `/`, `//`, or `%` by a floating zero explicit runtime failures rather than producing infinity or NaN through those operators.
 
 `int` is an alias for `int64`, so the two spellings have identical bounds,
 type identity, layout, and runtime behavior. Integer literals may be decimal,
@@ -15046,7 +15046,7 @@ queue or task.
 
 `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`, and `WaitAll[T]` are
 treated as move outcome values even when every payload type is copyable.
-`Range` is also not a general copy type in Aura 0.2; use ranges directly in
+`Range` is also not a general copy type in Aura 0.3; use ranges directly in
 iteration rather than relying on duplication.
 
 A generic user-enum payload whose declared type is an unconstrained type parameter is not assumed copyable, even when one later instantiation supplies a copy type.

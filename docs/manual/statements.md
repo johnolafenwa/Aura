@@ -4,7 +4,7 @@ Statements introduce and update bindings, control execution, or evaluate an expr
 
 ## Statements, Items, And Suites
 
-Aura 0.2 statements are:
+Aura 0.3 statements are:
 
 - binding and assignment
 - expression statements
@@ -210,7 +210,7 @@ def main():
         attempts += 1
 ```
 
-The condition must have type `bool`. A false first condition executes the body zero times. Aura 0.2 has no loop `else` clause.
+The condition must have type `bool`. A false first condition executes the body zero times. Aura 0.3 has no loop `else` clause.
 
 Moving a non-copy outer value for the first time inside a repeatable loop is rejected when it could make a later iteration invalid. Reinitialize the place on every continuing path or restructure ownership explicitly.
 
@@ -258,7 +258,7 @@ owned leaves; and bare Queue iteration receives an owned item and gives owned
 leaves. `mut` iteration with a tuple target is rejected because the
 minimal tuple surface has no recursive element writeback.
 
-`for value in mut set:` is not supported in Aura 0.2. Queue iteration
+`for value in mut set:` is not supported in Aura 0.3. Queue iteration
 receives values rather than traversing places: each item arrives owned and the
 queue handle is a copy value. Consequently `own` and `mut` are rejected for
 Queue iteration; use the bare form. That form evaluates

@@ -26,7 +26,7 @@ input, and every returned collection or str is a fresh owned value.
 `str.from_bytes` is an associated str method, so it is called on the
 type, as in `str.from_bytes(payload)`. It is not a `str(...)`
 constructor. The `encoding` parameter name is reserved for a possible future
-extension; Aura 0.2 accepts no encoding argument on either str conversion.
+extension; Aura 0.3 accepts no encoding argument on either str conversion.
 
 ## Error Model
 
@@ -139,7 +139,7 @@ The final line demonstrates that conversion did not consume `encoded`.
 The Bytes surface adds no source-language grammar. `list[uint8]`, `import
 bytes`, associated calls, method calls, module calls, named arguments, and
 `Result` patterns use the ordinary forms defined elsewhere in this Manual.
-Aura 0.2 has no byte-string literal.
+Aura 0.3 has no byte-string literal.
 
 ## Typing Rules
 
@@ -160,7 +160,7 @@ shared access for the call, so a caller may reuse the input after `to_bytes`,
 `from_bytes`, encode, decode, or hash. Explicit `own` is neither required nor
 implied by these signatures.
 
-An `encoding` positional or named argument is not part of the 0.2 signature
+An `encoding` positional or named argument is not part of the 0.3 signature
 and is rejected by ordinary argument checking. A user-defined source module
 whose final component is named `bytes` does not acquire this built-in API:
 built-in behavior belongs only to the compiler-synthesized `bytes` module.
@@ -240,14 +240,14 @@ Actual allocation success within the codec destination ceiling is
 host-dependent. SHA-256 output is always 32 bytes. Codec output, errors, and
 offsets are not host-dependent.
 
-Aura 0.2 does not provide alternate text encodings, URL-safe or unpadded
+Aura 0.3 does not provide alternate text encodings, URL-safe or unpadded
 base64, streaming codecs, incremental hashing, HMAC, password hashing,
 constant-time digest comparison, a distinct mutable byte buffer, or implicit
 text conversion. The reserved `encoding` parameter is not implemented.
 
 ## Status
 
-`list[uint8]` is the implemented Aura 0.2 bytes type. The conversion, codec,
+`list[uint8]` is the implemented Aura 0.3 bytes type. The conversion, codec,
 error, and hash policy on this page is implemented as the Phase 3 control-plane
 surface and is accepted under ADR-0023. Derived class/enum codecs and schemas
 remain deferred beyond Phase 6.

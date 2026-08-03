@@ -81,7 +81,7 @@ Several other spellings are lexed as ordinary identifiers and become special onl
 print("ready") # A trailing comment.
 ```
 
-Aura 0.2 has no block comments.
+Aura 0.3 has no block comments.
 
 ## Spaces, Tabs, And Indentation
 
@@ -168,7 +168,7 @@ cannot cross a physical newline.
 
 ## Punctuation And Operators
 
-Aura 0.2 recognizes:
+Aura 0.3 recognizes:
 
 ```text
 ( ) [ ] { } : , . ?
@@ -331,7 +331,7 @@ Interpolations may contain indexing, calls, nested braces used by expressions,
 and either form of ordinary string literal, including braces inside those
 strings. Empty or syntactically invalid interpolations are rejected.
 
-Use two consecutive opening braces for a literal opening brace. Two consecutive closing braces decode to one literal closing brace; Aura 0.2 also treats a lone closing brace outside an interpolation as literal text:
+Use two consecutive opening braces for a literal opening brace. Two consecutive closing braces decode to one literal closing brace; Aura 0.3 also treats a lone closing brace outside an interpolation as literal text:
 
 ```python
 print(f"{{name}} = {name}")

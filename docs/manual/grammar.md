@@ -1,6 +1,6 @@
 # Grammar
 
-This chapter defines the complete source grammar of Aura 0.2. The grammar is normative after lexical token formation. Static restrictions—types, visibility, ownership, exhaustiveness, valid receivers, and API-specific rules—are defined by [Static Semantics](/manual/static-semantics).
+This chapter defines the complete source grammar of Aura 0.3. The grammar is normative after lexical token formation. Static restrictions—types, visibility, ownership, exhaustiveness, valid receivers, and API-specific rules—are defined by [Static Semantics](/manual/static-semantics).
 
 ## Notation
 
@@ -112,7 +112,7 @@ and byte strings are not tokens. There is no separate character-literal token.
 `FSTRING` begins with `f"` and ends at the matching double quote.
 `{ expression }` interpolates an ordinary Aura expression. Two opening braces insert one
 literal opening brace, and two closing braces insert one literal closing brace.
-A lone closing brace outside an interpolation is also literal in Aura 0.2.
+A lone closing brace outside an interpolation is also literal in Aura 0.3.
 Interpolations may contain nested braces and ordinary single- or double-quoted
 strings; braces inside those strings do not change interpolation depth. Empty
 or invalid interpolations are rejected. An interpolation may end with one
@@ -872,10 +872,10 @@ The implementation rejects source that exceeds the maintained parser complexity 
 - one comprehension rejects a 128th combined `for` clause or `if` filter
 - f-string interpolation brace nesting is limited to 128
 
-These are observable implementation limits of Aura 0.2. Inputs that exceed
+These are observable implementation limits of Aura 0.3. Inputs that exceed
 them must be rejected cleanly.
 
-## Syntax Not In Aura 0.2
+## Syntax Not In Aura 0.3
 
 The grammar intentionally excludes:
 

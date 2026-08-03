@@ -321,7 +321,7 @@ keys.
 
 The dynamic-`json.parse` codec service admits two operations process-wide. Its
 two 2 MiB-stack workers are initialized lazily and intentionally live until
-process exit; Aura 0.2 has no codec-service shutdown, join, sizing, or
+process exit; Aura 0.3 has no codec-service shutdown, join, sizing, or
 capacity configuration API. The service capacity does not govern
 `json.is_valid`, `json.parse_string_map`, or `json.stringify_map`.
 
@@ -337,8 +337,8 @@ claim that every possible host out-of-memory condition is catchable.
 ## Status
 
 The recursive value/error model, parse/dump surface, accessors, ordering,
-formatting, and resource boundary are implemented Aura 0.2 behavior. Their
+formatting, and resource boundary are implemented Aura 0.3 behavior. Their
 exact gap-fill semantics are accepted under ADR-0021.
 
 `is_valid`, `stringify_map`, and `parse_string_map` are maintained bounded
-flat-dictionary operations. Aura 0.2 has no streaming JSON codec.
+flat-dictionary operations. Aura 0.3 has no streaming JSON codec.

@@ -126,13 +126,13 @@ Compiler coverage is held at the current non-regression floor rather than being 
 
 Seeded randomness has an additional observable-data promise: the algorithm,
 seed mapping, integer and floating mappings, and shuffle order documented in
-[Randomness Module](/manual/randomness) remain stable throughout Aura 0.2.x.
+[Randomness Module](/manual/randomness) remain stable throughout Aura 0.3.x.
 A later release may change them only with an explicit decision
 and new conformance vectors. OS-secure outputs are intentionally not stable.
 
 ## Maintained Concurrency Surface
 
-Aura 0.2 uses structured concurrency:
+Aura 0.3 uses structured concurrency:
 
 - `TaskGroup()` owns child tasks inside `with`
 - `TaskGroup.start(...)` returns a `Task[T]`

@@ -27,7 +27,7 @@ Filesystem APIs return `Result[..., io.Error]` except `fs.exists(...)`, which re
 | `fs.create` | `create(path: str) -> Result[fs.File, io.Error]` | Creates or truncates a file for writing. |
 | `fs.append` | `append(path: str) -> Result[fs.File, io.Error]` | Opens a file for appending, creating it if needed. |
 
-The read cap is part of the API contract and also applies to `fs.File.read_all()` and `fs.File.read_bytes()`. Aura 0.2 has no chunked file-read API, so a program that must process a larger file needs a host-side helper or must split the data before reading it through Aura.
+The read cap is part of the API contract and also applies to `fs.File.read_all()` and `fs.File.read_bytes()`. Aura 0.3 has no chunked file-read API, so a program that must process a larger file needs a host-side helper or must split the data before reading it through Aura.
 
 `fs.read_dir` reports failure to open the directory, but the current implementation silently skips an individual entry whose metadata/read operation fails after opening. Code that requires a complete audited directory snapshot must validate results through a host helper until that defect is fixed.
 
@@ -145,12 +145,12 @@ Host filesystem results can differ by operating system and environment. Such dif
 
 ## Limits And Implementation-Defined Behavior
 
-Each one-shot read and each `fs.File` whole-file read is capped at 256 MiB of remaining content. Aura 0.2 has no chunked file-reading API, recursive directory operation, transactional write, atomic replace helper, memory mapping, filesystem watcher, permission API, or symlink-specific API. Host paths, permissions, case sensitivity, separators, and symlink traversal follow the host.
+Each one-shot read and each `fs.File` whole-file read is capped at 256 MiB of remaining content. Aura 0.3 has no chunked file-reading API, recursive directory operation, transactional write, atomic replace helper, memory mapping, filesystem watcher, permission API, or symlink-specific API. Host paths, permissions, case sensitivity, separators, and symlink traversal follow the host.
 
 After opening a directory, an individual entry that fails during enumeration is currently skipped; only failure to open the directory is returned. Non-Unicode entry names are converted lossily. Partial writes and externally visible side effects may remain after a host failure or task cancellation.
 
 ## Status
 
-The one-shot functions, `fs.File` methods, typed errors, deterministic cleanup, strict text/byte distinction, and limits documented here are implemented and maintained in Aura 0.2. The fixed 256 MiB whole-read policy is accepted under ADR-0018.
+The one-shot functions, `fs.File` methods, typed errors, deterministic cleanup, strict text/byte distinction, and limits documented here are implemented and maintained in Aura 0.3. The fixed 256 MiB whole-read policy is accepted under ADR-0018.
 
-The skipped-entry behavior is a documented current defect, not a guarantee that callers should rely on. Aura 0.2 has no chunked or asynchronous file access, transactional operations, richer metadata, or cross-platform path abstraction API.
+The skipped-entry behavior is a documented current defect, not a guarantee that callers should rely on. Aura 0.3 has no chunked or asynchronous file access, transactional operations, richer metadata, or cross-platform path abstraction API.

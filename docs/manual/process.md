@@ -302,6 +302,6 @@ Executable discovery, path syntax, inherited environment, signal availability, n
 
 ## Status
 
-One-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restart/event behavior, typed failures, and Unix process-group cleanup are implemented and maintained in Aura 0.2. The fixed stream-cap policy recorded by ADR-0018 is Accepted, as is the omitted-timeout and invalid host-timer policy recorded by ADR-0019.
+One-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restart/event behavior, typed failures, and Unix process-group cleanup are implemented and maintained in Aura 0.3. The fixed stream-cap policy recorded by ADR-0018 is Accepted, as is the omitted-timeout and invalid host-timer policy recorded by ADR-0019.
 
 Shell evaluation, pipelines, pseudo-terminals, Windows process groups, portable signal control, sandboxing, and operating-system service management are unavailable. They are future, non-normative facilities rather than implicit behavior of the current API.

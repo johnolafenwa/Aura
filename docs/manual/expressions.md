@@ -252,7 +252,7 @@ Arithmetic and ordering may resolve through the corresponding operator trait.
 For non-numeric user types, `/` requests `Div.div`; `//` requests
 `FloorDiv.floor_div` when neither a builtin numeric rule nor the builtin
 `Duration // int64` rule applies. Builtin equality does not use an equality
-operator trait in Aura 0.2.
+operator trait in Aura 0.3.
 
 Tuple `<`, `<=`, `>`, and `>=` are static errors. Aura has no lexicographic
 tuple ordering, and an `Ord` implementation cannot add one to a structural
@@ -841,7 +841,7 @@ one value per line.
 
 ## Forms Not Implemented
 
-Aura 0.2 expressions do not include generator expressions, method values,
+Aura 0.3 expressions do not include generator expressions, method values,
 assignment expressions, call-site capability annotations, non-numeric casts, or
 ordinary trailing commas. Lambdas are expression-bodied and contextually
 typed; they do not add statement-bodied or implicitly reference-capturing

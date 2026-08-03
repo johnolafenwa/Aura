@@ -102,7 +102,7 @@ A failure in phases 1–4 is a compile-time diagnostic. A checked program may st
 
 **Clone-safety obligation**
 : An inferred callable requirement that a substituted type must not duplicate
-  non-cloneable state through a clone-producing operation. Aura 0.2 protects
+  non-cloneable state through a clone-producing operation. Aura 0.3 protects
   `random.Rng` state under this contract.
 
 **Borrow**

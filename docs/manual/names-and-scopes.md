@@ -127,7 +127,7 @@ A function body begins with bindings for its ordinary parameters. A method body 
 
 Parameter names, `self`, local bindings, loop bindings, `with` bindings, and pattern bindings occupy the function's value namespace. A use is valid only after the binding has been introduced on the current control-flow path.
 
-Aura 0.2 does not support local function, class, enum, or trait declarations. Items are module-level or members of their permitted enclosing declaration.
+Aura 0.3 does not support local function, class, enum, or trait declarations. Items are module-level or members of their permitted enclosing declaration.
 
 ## Local Bindings
 

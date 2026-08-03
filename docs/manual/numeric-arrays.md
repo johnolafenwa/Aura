@@ -200,7 +200,7 @@ diagnostics. The bundled extension uses that compiler-owned semantic surface.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 Arrays are CPU-only, contiguous, row-major, and rank-at-least-one.
+Aura 0.3 Arrays are CPU-only, contiguous, row-major, and rank-at-least-one.
 They have no array-shape broadcasting, mixed promotion, views, reshape,
 transpose, matrix multiplication, equality, ordering, multidimensional slicing, step
 slices, slice assignment, autograd, device placement, distributed storage, or
@@ -230,7 +230,7 @@ narrower than NumPy's.
 ## Status
 
 Contiguous numeric Arrays and explicit scalar/Array integer arithmetic modes
-are Accepted for Aura 0.2 under
+are Accepted for Aura 0.3 under
 `architecture_docs/decisions/0041-contiguous-numeric-arrays.md`.
 The maintained contract is the exact surface on this page and contains no
 broader tensor placement, views, shape transformations, or distributed

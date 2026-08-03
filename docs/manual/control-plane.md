@@ -1,6 +1,6 @@
 # Control-Plane Modules
 
-Aura 0.2 includes a small, typed host/control-plane surface intended for service launchers, workers, evaluation harnesses, and agent infrastructure. These modules behave the same through `aura run` and direct native binaries.
+Aura 0.3 includes a small, typed host/control-plane surface intended for service launchers, workers, evaluation harnesses, and agent infrastructure. These modules behave the same through `aura run` and direct native binaries.
 
 ## System And Path
 
@@ -57,18 +57,18 @@ JSON compact output has sorted object keys. `json.is_valid` accepts any valid
 JSON value, while `json.parse_string_map` succeeds only for an object whose
 values are all strings. TOML output is a sorted top-level string dictionary;
 `toml.is_valid` accepts any valid TOML document, while
-`toml.parse_string_map` rejects nested tables and non-string values. Aura 0.2
+`toml.parse_string_map` rejects nested tables and non-string values. Aura 0.3
 has no derived class/enum schemas or generated codecs.
 
 ## Logs, Metrics, And Traces
 
 `log.debug/info/warn/error(message, fields)` and `trace.event(name, fields)` emit one compact JSON record to standard error. `fields` is a `dict[str, str]`. Every record has the shape `{ "kind": "log" | "trace", "level": str, "message": str, "fields": Object }`; for trace events, `level` is `event` and `message` is the event name.
 
-`metrics.increment(name, value)`, `metrics.get(name)`, and `metrics.reset()` provide process-global signed `int64` counters shared by Aura tasks in that process. A missing counter reads as zero. Incrementing past either `int64` bound is a runtime diagnostic and leaves the checked operation incomplete. These counters are useful for worker and test instrumentation; Aura 0.2 has no metrics exporter, export protocol, or scoped trace span API.
+`metrics.increment(name, value)`, `metrics.get(name)`, and `metrics.reset()` provide process-global signed `int64` counters shared by Aura tasks in that process. A missing counter reads as zero. Incrementing past either `int64` bound is a runtime diagnostic and leaves the checked operation incomplete. These counters are useful for worker and test instrumentation; Aura 0.3 has no metrics exporter, export protocol, or scoped trace span API.
 
 ## Network Boundary
 
-The HTTP client accepts `http://` and certificate-validated `https://` URLs using the platform-independent Web PKI root set. HTTP request and response bodies support content length, connection-close framing, and chunked transfer encoding. The 0.2 parser keeps a 16 MiB incoming wire-message limit, accepts at most 64 headers, and rejects conflicting framing headers. Its `dict[str, str]` header boundary cannot represent repeated equal header names losslessly.
+The HTTP client accepts `http://` and certificate-validated `https://` URLs using the platform-independent Web PKI root set. HTTP request and response bodies support content length, connection-close framing, and chunked transfer encoding. The 0.3 parser keeps a 16 MiB incoming wire-message limit, accepts at most 64 headers, and rejects conflicting framing headers. Its `dict[str, str]` header boundary cannot represent repeated equal header names losslessly.
 
 For custom certificate authorities and TLS servers, use the lower-level `net.tls_connect*` and `net.tls_listen` APIs documented in [Network Module](/manual/network).
 
@@ -248,7 +248,7 @@ status-specific retry policy or jitter must express it explicitly. Its
 
 The system, path, JSON, TOML, logging, trace-event, metrics, retry, and
 summarized HTTP contracts on this page are implemented and maintained in
-Aura 0.2. Recursive JSON gap-fill semantics are accepted under ADR-0021. The
+Aura 0.3. Recursive JSON gap-fill semantics are accepted under ADR-0021. The
 summarized fixed HTTP cap is Accepted under ADR-0018.
 
 Nested TOML data models, derived codecs, telemetry exporters, metric labels,

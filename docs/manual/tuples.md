@@ -224,7 +224,7 @@ diagnostics.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.2 has no empty tuple, multi-element trailing tuple comma, tuple
+Aura 0.3 has no empty tuple, multi-element trailing tuple comma, tuple
 iteration, tuple methods, tuple ordering, named tuple elements, rest/star
 unpacking, mutable tuple-target writeback, tuple slicing, or dynamic tuple
 indexing. A tuple is not implicitly converted to or from `list`.

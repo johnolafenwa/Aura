@@ -206,11 +206,11 @@ This page documents known current limits of the Aura compiler and runtime.
   state before cancellation or reactor waiting resumes. The non-Unix
   WebSocket fallback does not use this Phase 5.4 service. The pool is
   process-global, lazily initialized, shared by all lightweight schedulers,
-  and intentionally process-lifetime; it has no 0.2 runtime shutdown or join
+  and intentionally process-lifetime; it has no 0.3 runtime shutdown or join
   API. File reads, resolver work, and listener binding remain on the generic
   blocking-I/O pool; TLS asset bytes are read there before PEM parsing and
   rustls construction run on protocol workers.
-- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aura 0.2 has no chunked file-read API.
+- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aura 0.3 has no chunked file-read API.
 - Process-pipe and captured-output reads plus TCP, Unix, and TLS whole/bounded reads remain capped at 64 MiB. TLS certificate, private-key, and CA-file loading uses the same independent 64 MiB ceiling. A bounded byte count of zero is invalid.
 - UDP receives accept `max_bytes` from 1 through 65,535.
 - Incoming HTTP parsing accepts at most 64 headers and 16 MiB of wire data per message, including the start line, headers, transfer framing, trailers, and body. Outbound HTTP writers have no separate size cap. The high-level dictionary header model cannot preserve repeated equal field names losslessly.
@@ -235,7 +235,7 @@ This page documents known current limits of the Aura compiler and runtime.
   lightweight tasks park through the scheduler. Once admitted, synchronous
   parse defers cancellation until codec completion. Runtime materialization,
   JSON-aware clone/render, and dumping use iterative traversals. The service is
-  process-lifetime and has no 0.2 sizing or shutdown API. The bounded
+  process-lifetime and has no 0.3 sizing or shutdown API. The bounded
   `json.is_valid` and `json.parse_string_map` helpers retain their bounded
   caller-side paths and do not use that service; JSON
   flat-dictionary and TOML helpers remain restricted to typed
@@ -276,7 +276,7 @@ This page documents known current limits of the Aura compiler and runtime.
 - TLS APIs require PEM certificate/key assets.
 - Package support has local path and git dependencies, but no registry publish/install flow.
 - `fs.read_dir` silently skips an individual directory entry that fails after the directory itself was opened.
-- High-level HTTP header conversion may expose duplicate equal dictionary keys when the wire message repeats a header name; repeated headers are not a lossless 0.2 contract.
+- High-level HTTP header conversion may expose duplicate equal dictionary keys when the wire message repeats a header name; repeated headers are not a lossless 0.3 contract.
 - Accepted ADR-0033 rejects non-Transfer task captures, task results, and
   Queue payloads with `AU3008`. Every other non-repeatable transferable task
   result has one statically enforced observation right: direct result methods
@@ -318,4 +318,4 @@ This page documents known current limits of the Aura compiler and runtime.
   function. Discovery is name-prefix based; annotations, parameterized tests,
   and fixture/teardown protocols are not implemented.
 - A timed-out `aura test` stops waiting but cannot terminate its worker thread; the timed-out program may continue host side effects until the process exits.
-- Recursive `aura fmt` and `aura test` traversal follows directory symlinks without cycle detection in 0.2.
+- Recursive `aura fmt` and `aura test` traversal follows directory symlinks without cycle detection in 0.3.

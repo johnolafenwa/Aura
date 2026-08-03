@@ -130,7 +130,7 @@ Binding is deterministic:
 
 Positional arguments cannot follow a named argument. Parameter and argument
 lists may span physical lines while their parentheses remain open, but they do
-not accept trailing commas in Aura 0.2.
+not accept trailing commas in Aura 0.3.
 
 ## Default Arguments
 

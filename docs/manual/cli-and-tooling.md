@@ -34,7 +34,7 @@ aura check app.au
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case; defaults to `tests/` and a 30-second per-case timeout. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
-| `aura version` / `aura --version` | Print the preview channel and 12-hex-digit source commit, such as `aura 0.2.0-preview (0123456789ab)`. |
+| `aura version` / `aura --version` | Print the development channel and 12-hex-digit source commit, such as `aura 0.3.0-dev (0123456789ab)`. |
 
 ## Checking
 
@@ -152,7 +152,7 @@ The JSON result is an array of `{ "name": str, "kind": str, "detail": str }` obj
 
 ## Machine-Readable And Inspection Formats
 
-`ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aura 0.2. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
+`ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aura 0.3. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
 
 `aura lsp` is a persistent JSON-lines compiler service. Each input line is an object with an optional `id`, `method`, `path`, and `source`. Supported requests are:
 
@@ -403,9 +403,9 @@ Filesystem path interpretation, process exit-code width, executable format, link
 
 ## Status
 
-The commands and contracts documented as maintained on this page are implemented in Aura 0.2 and covered by CLI, compiler, LSP, extension, backend-parity, and repository-gate tests. `analyze`, `complete`, and diagnostic schema version `1` are maintained tooling contracts; internal AST and MIR layouts are intentionally unstable.
+The commands and contracts documented as maintained on this page are implemented in Aura 0.3 and covered by CLI, compiler, LSP, extension, backend-parity, and repository-gate tests. `analyze`, `complete`, and diagnostic schema version `1` are maintained tooling contracts; internal AST and MIR layouts are intentionally unstable.
 
-Aura 0.2 has no package registry, publishing and installation workflow,
+Aura 0.3 has no package registry, publishing and installation workflow,
 Windows support, configurable formatter, or annotation-based test discovery.
 Its maintained execution engines are the MIR runtime and direct native
 backend.

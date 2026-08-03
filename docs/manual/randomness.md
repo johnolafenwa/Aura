@@ -299,16 +299,16 @@ ordering relationship exists between secure calls, tasks, backends, processes,
 or hosts.
 
 The deterministic algorithm and seeded results are not
-implementation-defined: they are stable throughout the Aura 0.2.x series as
+implementation-defined: they are stable throughout the Aura 0.3.x series as
 fixed above. They remain unsuitable for cryptography regardless of seed
 secrecy.
 
 ## Status
 
 The constructor, deterministic methods, secure functions, move-only ownership,
-backend parity, and documented diagnostics are maintained Aura 0.2 surface.
+backend parity, and documented diagnostics are maintained Aura 0.3 surface.
 The exact algorithm, mapping, compatibility window, identity/rendering policy,
 and secure-failure boundary are accepted under ADR-0020.
 
 No other random distributions, secure floating function, global generator,
-derived sampling trait, or `random.Error` type is part of Aura 0.2.
+derived sampling trait, or `random.Error` type is part of Aura 0.3.

@@ -140,7 +140,7 @@ UDP preserves datagram boundaries. `max_bytes` must be in `1..=65535`; zero or a
 
 Malformed HTTP requests are rejected by the listener path and do not permanently poison the listener. Content-length and chunked request bodies are supported. An incoming parsed HTTP message is limited to 16 MiB of wire data and 64 headers; oversized or invalid requests are surfaced as HTTP errors where the protocol allows it.
 
-Headers are exposed as `dict[str, str]`. This boundary cannot faithfully represent repeated fields such as multiple `set-Cookie` lines. The current conversion can expose duplicate equal keys internally despite the normal `dict` uniqueness rule, so applications that require lossless or canonical repeated-header handling must not use this 0.2 high-level HTTP surface.
+Headers are exposed as `dict[str, str]`. This boundary cannot faithfully represent repeated fields such as multiple `set-Cookie` lines. The current conversion can expose duplicate equal keys internally despite the normal `dict` uniqueness rule, so applications that require lossless or canonical repeated-header handling must not use this 0.3 high-level HTTP surface.
 
 ## HTTP Client
 
@@ -161,7 +161,7 @@ Headers are exposed as `dict[str, str]`. This boundary cannot faithfully represe
 | `text` | `text() -> Result[str, io.Error]` | Decodes the body as UTF-8. |
 | `bytes` | `bytes() -> list[uint8]` | Returns the raw response body. |
 
-Use byte request and response APIs for binary payloads or unknown encodings. Client URLs may use `http://` or certificate-validated `https://`; responses support content length, chunked transfer encoding, and connection-close framing. The same 16 MiB incoming-message and 64-header limits apply. Redirect following, connection pooling, HTTP/2, proxies, decompression, and custom-CA arguments on the high-level HTTP helpers are not part of 0.2.
+Use byte request and response APIs for binary payloads or unknown encodings. Client URLs may use `http://` or certificate-validated `https://`; responses support content length, chunked transfer encoding, and connection-close framing. The same 16 MiB incoming-message and 64-header limits apply. Redirect following, connection pooling, HTTP/2, proxies, decompression, and custom-CA arguments on the high-level HTTP helpers are not part of 0.3.
 
 ## WebSocket
 
@@ -172,7 +172,7 @@ Use byte request and response APIs for binary payloads or unknown encodings. Cli
 | `accept` | `accept(timeout: Duration = ...) -> Result[net.WebSocket, io.Error]` | Waits for the next WebSocket connection. |
 | `local_addr` | `local_addr() -> Result[str, io.Error]` | Returns the bound local address. |
 
-`net.WebSocketListener` has no explicit `close()` member in Aura 0.2. It is released when its value is dropped, but it cannot currently be used as a user-defined `with` resource. This is a known resource-surface limitation.
+`net.WebSocketListener` has no explicit `close()` member in Aura 0.3. It is released when its value is dropped, but it cannot currently be used as a user-defined `with` resource. This is a known resource-surface limitation.
 
 `net.WebSocket`:
 
@@ -306,6 +306,6 @@ WebSocket messages are capped at 64 MiB; frames and the write buffer are capped 
 
 ## Status
 
-The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aura 0.2. Nonblocking descriptors remain registered with the persistent reactor across scheduler turns; timeout deadlines share its timer heap, and an idle scheduler blocks until readiness, another runtime event, or the next deadline without a periodic tick. The fixed resource-cap policy recorded by ADR-0018 is Accepted, as is the invalid host-timer policy recorded by ADR-0019.
+The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aura 0.3. Nonblocking descriptors remain registered with the persistent reactor across scheduler turns; timeout deadlines share its timer heap, and an idle scheduler blocks until readiness, another runtime event, or the next deadline without a periodic tick. The fixed resource-cap policy recorded by ADR-0018 is Accepted, as is the invalid host-timer policy recorded by ADR-0019.
 
 The repeated-header representation, missing WebSocket-listener close operation, incomplete WebSocket cancellation, and discarded WebSocket close errors are documented current limitations. The protocol surface is exactly the API documented on this page.
