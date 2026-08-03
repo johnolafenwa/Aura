@@ -450,11 +450,13 @@ printed-output order unless they explicitly coordinate that order.
     - `3`
     - `20`
 - `match_guards_and_or_patterns.au`
-  - exact-Boolean guards and binding-compatible enum or-patterns
+  - exact-Boolean guards, binding-compatible enum or-patterns, and top-level
+    complete-value bindings
   - prints:
     - `positive`
     - `non-positive`
     - `missing`
+    - `4`
 - `wildcard_match.au`
   - wildcard `case _:` arms in statement-form `match`
   - prints `2`

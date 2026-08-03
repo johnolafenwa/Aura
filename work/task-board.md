@@ -98,6 +98,10 @@ Last updated: 2026-08-03
   runtime tests and the MIR/direct fixture are green. Raw `rf`/`fr` and
   triple-quoted f-string prefixes now receive precise AU1002 diagnostics, and
   the reference records the explicit-type requirement for comma grouping.
+- S1.1-c implements root binding patterns for statement and expression
+  matches. Guarded bindings expose the whole scrutinee without contributing to
+  exhaustiveness; unguarded bindings are final catch-alls. Copy, shared,
+  `own`, and `mut` capabilities execute identically in MIR and direct mode.
 - Push and pull-request authorization is explicit. Merge waits for checkpoint
   sign-off after three consecutive green hosted CI runs on both operating
   systems.

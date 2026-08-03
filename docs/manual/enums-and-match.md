@@ -154,9 +154,14 @@ At the top level of a match arm, Aura 0.2 supports:
 - an enum variant pattern for an enum scrutinee
 - a recursively nested fixed-arity tuple pattern for a tuple scrutinee
 - a supported literal pattern for a scalar scrutinee
+- a lowercase name that binds the complete scrutinee
 - `_`
 
-A lowercase binding pattern is supported inside enum payload patterns, but a top-level catch-all binding such as `case value:` is not implemented. Use `_` when the whole value is intentionally ignored.
+`case value:` is an unguarded catch-all, binds the complete scrutinee, and must
+be the final arm. `case value if condition:` makes that binding visible to the
+guard and body; because the condition may be false, another unguarded catch-all
+is still required for an open or otherwise uncovered domain. Use `_` when the
+complete value is intentionally ignored.
 
 Variant payload patterns must match the exact payload arity. A payload-carrying variant must bind or structurally match all payload positions; a payload-free variant accepts no subpatterns. Nested variant patterns are supported when their payload types are enums.
 
@@ -385,7 +390,7 @@ resource or I/O failure.
 User and builtin generic enums, structural enum equality, construction and
 inference, statement and expression matches, exhaustiveness, nested patterns,
 short variants, scalar literal patterns, guards, or-patterns,
-owned/shared/mutable matching, and
+top-level catch-all bindings, owned/shared/mutable matching, and
 borrowed matching are implemented for MIR execution and direct native
 generation. Both backends receive the same checked arm decision tree and are
 forced to agree on selected arms, payload values, writeback, and primary
@@ -394,8 +399,7 @@ diagnostics.
 ## Limits And Implementation-Defined Behavior
 
 Aura has no range/rest patterns, named-payload patterns, class/collection
-destructuring, top-level catch-all binding pattern,
-arbitrary predicate pattern, Duration/f-string pattern, or inline suite for
+destructuring, arbitrary predicate pattern, Duration/f-string pattern, or inline suite for
 statement matches. Expression arms contain exactly one expression.
 `TaskResult`, `SelectOutcome`, `WaitAny`, and `WaitAll` remain move outcome
 types regardless of copy payloads. Scrutinee and arm order, exhaustiveness,
@@ -407,7 +411,7 @@ implementation-defined.
 Nominal and generic enums, positional and named payloads, qualified and
 contextual builtin construction, structural copy/move classification,
 statement and expression matches, exhaustiveness, nested enum patterns, scalar
-literal patterns, wildcards, short variants, and borrowed matching are
+literal patterns, top-level catch-all bindings, wildcards, short variants, and borrowed matching are
 implemented for the post-Phase 1.5 surface. Match expressions, like every
 expression, produce owned results; a non-copy result must come from an owned
 source. Tuple patterns are implemented under Accepted ADR-0026. Guards and

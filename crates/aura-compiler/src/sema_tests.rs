@@ -743,6 +743,70 @@ fn s1_sema_match_guards_and_or_patterns_pin_commit_binding_and_coverage_errors()
 }
 
 #[test]
+fn root_match_bindings_are_catch_alls_in_statements_and_expressions() {
+    crate::check_source(
+        r#"
+class Box:
+    value: int64
+
+enum State:
+    Ready
+    Done
+
+def statement(value: int64) -> int64:
+    match value:
+        case n if n > 0:
+            return n
+        case n:
+            return 0 - n
+
+def expression(value: int64) -> int64:
+    return match value:
+        case n if n >= 0: n
+        case n: 0 - n
+
+def consume(box: own Box) -> int64:
+    match own box:
+        case owned:
+            return owned.value
+
+def mutate(box: mut Box):
+    match mut box:
+        case current:
+            current.value += 1
+
+def whole_enum(state: State) -> State:
+    match state:
+        case whole:
+            return whole
+"#,
+    )
+    .expect("top-level bindings should be guarded or unguarded catch-all patterns");
+
+    for (source, expected) in [
+        (
+            "def main():\n    match 1:\n        case n:\n            pass\n        case _:\n            pass\n",
+            "catch-all match arm must be the final `case`",
+        ),
+        (
+            "def choose_value() -> int64:\n    return match 1:\n        case n: n\n        case _: 0\n\ndef main():\n    pass\n",
+            "catch-all match arm must be the final `case`",
+        ),
+        (
+            "def main():\n    match 1:\n        case n if n > 0:\n            pass\n",
+            "requires a final `case _:` arm",
+        ),
+    ] {
+        let diagnostic = crate::check_source(source)
+            .expect_err("root binding coverage and ordering must stay explicit");
+        assert!(
+            diagnostic.message.contains(expected),
+            "expected `{expected}`, got {diagnostic:?}"
+        );
+    }
+}
+
+#[test]
 fn s1_sema_fstring_specs_report_syntax_and_interpolated_type_failures() {
     let syntax = crate::check_source("def main():\n    print(f\"{1:q}\")\n")
         .expect_err("unsupported format codes must fail during checking");
@@ -16856,10 +16920,6 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "wildcard match arm must be the final `case`",
             ),
             (
-                "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    match status:\n        case value:\n            return 1\n",
-                "top-level binding patterns are not yet supported",
-            ),
-            (
                 "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    match status:\n        case Other.Ready:\n            return 1\n        case _:\n            return 0\n",
                 "unknown enum `Other` in match pattern",
             ),
@@ -16894,10 +16954,6 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             (
                 "enum Status:\n    Ready\n\ndef main() -> int32:\n    match 1:\n        case Status.Ready:\n            return 1\n        case _:\n            return 0\n",
                 "match over `int64` only supports literal patterns and `_`",
-            ),
-            (
-                "def main() -> int32:\n    match 1:\n        case value:\n            return 1\n",
-                "top-level binding patterns are not yet supported",
             ),
             (
                 "def main() -> int32:\n    return range(start=true, stop=3)\n",
@@ -17072,10 +17128,6 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             "match over `int64` only supports literal patterns and `_`",
         ),
         (
-            "def main() -> int32:\n    return match 1:\n        case value: 1\n",
-            "top-level binding patterns are not yet supported",
-        ),
-        (
             "def main() -> int32:\n    return match 1:\n        case _: 0\n        case 1: 1\n",
             "wildcard match arm must be the final `case`",
         ),
@@ -17098,10 +17150,6 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
         (
             "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case 1: 1\n        case _: 0\n",
             "match over `Status` expects enum variant patterns, not literal `1`",
-        ),
-        (
-            "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case value: 1\n",
-            "top-level binding patterns are not yet supported",
         ),
         (
             "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case Other.Ready: 1\n        case _: 0\n",

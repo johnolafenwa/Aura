@@ -202,6 +202,16 @@ same types and capabilities. A false guard continues to the next arm. Guarded
 arms do not make a match exhaustive, so keep an unguarded fallback when the
 remaining domain is open.
 
+A lowercase name at the top level binds the complete scrutinee. The guarded
+form makes that name available to the condition, and the unguarded form is the
+final catch-all:
+
+```python
+return match value:
+    case whole if whole >= 0: whole
+    case whole: 0 - whole
+```
+
 In `match own`, a guard can inspect a non-copy candidate but cannot move it.
 Extraction happens only after a true guard. In `match mut`, mutations made by
 a guard remain visible when the guard is false or propagates a failure.

@@ -20000,10 +20000,29 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         }
                         Pattern::Binding(binding) => {
-                            return Err(Diagnostic::at(
-                            binding.span,
-                            "top-level binding patterns are not yet supported; use `_` or an explicit enum variant pattern",
-                        ));
+                            self.bind_pattern_locals(
+                                &arm.pattern,
+                                &scrutinee_ty,
+                                &mut arm_locals,
+                                match_stmt.capability,
+                                active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                                shared_scrutinee.as_deref(),
+                            )?;
+                            if arm.guard.is_none() {
+                                if wildcard_span.is_some() {
+                                    return Err(Diagnostic::at(
+                                        binding.span,
+                                        "duplicate catch-all match arm",
+                                    ));
+                                }
+                                if index + 1 != match_stmt.arms.len() {
+                                    return Err(Diagnostic::at(
+                                        binding.span,
+                                        "catch-all match arm must be the final `case`",
+                                    ));
+                                }
+                                wildcard_span = Some(binding.span);
+                            }
                         }
                         Pattern::Tuple(tuple) => {
                             return Err(Diagnostic::at(
@@ -20313,10 +20332,29 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     Pattern::Binding(binding) => {
-                        return Err(Diagnostic::at(
-                        binding.span,
-                        "top-level binding patterns are not yet supported; use `_` or a literal pattern",
-                    ));
+                        self.bind_pattern_locals(
+                            &arm.pattern,
+                            &scrutinee_ty,
+                            &mut arm_locals,
+                            match_stmt.capability,
+                            active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                            shared_scrutinee.as_deref(),
+                        )?;
+                        if arm.guard.is_none() {
+                            if wildcard_span.is_some() {
+                                return Err(Diagnostic::at(
+                                    binding.span,
+                                    "duplicate catch-all match arm",
+                                ));
+                            }
+                            if index + 1 != match_stmt.arms.len() {
+                                return Err(Diagnostic::at(
+                                    binding.span,
+                                    "catch-all match arm must be the final `case`",
+                                ));
+                            }
+                            wildcard_span = Some(binding.span);
+                        }
                     }
                     Pattern::Tuple(tuple) => {
                         if !matches!(scrutinee_ty, Type::Tuple(_)) {
@@ -20824,10 +20862,29 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         }
                         Pattern::Binding(binding) => {
-                            return Err(Diagnostic::at(
-                            binding.span,
-                            "top-level binding patterns are not yet supported; use `_` or an explicit enum variant pattern",
-                        ));
+                            self.bind_pattern_locals(
+                                &arm.pattern,
+                                &scrutinee_ty,
+                                &mut arm_locals,
+                                borrow_mode,
+                                active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                                shared_scrutinee.as_deref(),
+                            )?;
+                            if arm.guard.is_none() {
+                                if wildcard_seen {
+                                    return Err(Diagnostic::at(
+                                        binding.span,
+                                        "duplicate catch-all match arm",
+                                    ));
+                                }
+                                if index + 1 != arms.len() {
+                                    return Err(Diagnostic::at(
+                                        binding.span,
+                                        "catch-all match arm must be the final `case`",
+                                    ));
+                                }
+                                wildcard_seen = true;
+                            }
                         }
                         Pattern::Tuple(tuple) => {
                             return Err(Diagnostic::at(
@@ -21121,10 +21178,29 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     Pattern::Binding(binding) => {
-                        return Err(Diagnostic::at(
-                        binding.span,
-                        "top-level binding patterns are not yet supported; use `_` or a literal pattern",
-                    ));
+                        self.bind_pattern_locals(
+                            &arm.pattern,
+                            &scrutinee_ty,
+                            &mut arm_locals,
+                            borrow_mode,
+                            active_match_borrow.as_ref().or(shared_match_place.as_ref()),
+                            shared_scrutinee.as_deref(),
+                        )?;
+                        if arm.guard.is_none() {
+                            if wildcard_seen {
+                                return Err(Diagnostic::at(
+                                    binding.span,
+                                    "duplicate catch-all match arm",
+                                ));
+                            }
+                            if index + 1 != arms.len() {
+                                return Err(Diagnostic::at(
+                                    binding.span,
+                                    "catch-all match arm must be the final `case`",
+                                ));
+                            }
+                            wildcard_seen = true;
+                        }
                     }
                     Pattern::Tuple(tuple) => {
                         if !matches!(scrutinee_ty, Type::Tuple(_)) {

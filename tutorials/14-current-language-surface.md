@@ -732,6 +732,8 @@ The current compiler supports:
 - unqualified variants such as `Ok(value)` and `None` when the scrutinee type is known
 - literal patterns over `bool`, integer, and `str`
 - floating-point literal patterns
+- top-level complete-value bindings such as `case value:` and
+  `case value if condition:`
 - `match value:`
 - `match mut value:`
 - `case _:`

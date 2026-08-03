@@ -9,8 +9,14 @@ def describe(reading: Reading) -> str:
         case Exact(value) | Approx(value): "non-positive"
         case Missing: "missing"
 
+def magnitude(value: int64) -> int64:
+    return match value:
+        case whole if whole >= 0: whole
+        case whole: 0 - whole
+
 def main() -> int32:
     print(describe(Reading.Approx(3)))
     print(describe(Reading.Exact(0)))
     print(describe(Reading.Missing))
+    print(magnitude(-4))
     return 0

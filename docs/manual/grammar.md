@@ -585,7 +585,9 @@ Pattern parsing uses these contextual rules:
 
 Every or-pattern alternative must bind the same names with identical exact
 types and capabilities. A guard is an ordinary expression checked as exactly
-`bool`; its pattern bindings are in scope. There are no ranges, collection
+`bool`; its pattern bindings are in scope. A top-level binding is an
+irrefutable catch-all when unguarded and must be the final arm. A guarded
+top-level binding does not contribute to exhaustiveness. There are no ranges, collection
 destructuring, rest patterns, named-payload patterns, duration patterns, or
 f-string patterns.
 `match mut` rejects a tuple pattern because mutable tuple

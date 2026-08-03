@@ -71,6 +71,15 @@ visible to the guard and arm body. Alternatives are tested left to right, and
 the first structurally successful alternative supplies those bindings. Pattern
 tests themselves do not execute user code.
 
+### Top-level binding patterns
+
+An unqualified lowercase name may bind the complete scrutinee at the top level
+of an arm. `case name:` is an irrefutable catch-all and must be the final arm.
+`case name if condition:` binds the complete scrutinee for the guard and body,
+but the guarded arm does not contribute to exhaustiveness. The binding has the
+same copy, shared, mutable, or owned capability that the complete scrutinee
+would have under the match mode.
+
 Duplicate or subsumed alternatives are unreachable and rejected. Coverage of
 an unguarded or-pattern is the union of its alternatives. Existing literal,
 Boolean, enum, and tuple reachability rules apply recursively.
@@ -200,8 +209,8 @@ match-exposure protocol. The checkpoint disposition remains provisional.
   guards, and separation from expression `|`
 - static tests for exact-`bool` guards, binding scope/non-leakage, identical
   binding sets/types/capabilities, ordering-independent binding comparison,
-  nested expected types, duplicate/subsumed alternatives, reachability, and
-  guarded-arm exhaustiveness
+  nested expected types, top-level guarded and unguarded catch-all bindings,
+  duplicate/subsumed alternatives, reachability, and guarded-arm exhaustiveness
 - runtime tests for left-to-right alternative probing, one guard evaluation,
   false continuation, true selection, guard traps/propagation, first-match
   behavior, and no evaluation of later guards
@@ -219,8 +228,9 @@ match-exposure protocol. The checkpoint disposition remains provisional.
 
 ## Implementation and checkpoint status
 
-Guards and or-patterns are accepted and implemented as Aura 0.3's
-pattern-polish surface. Parser, checker, decision tree, both backends,
-diagnostics, reference, examples, and tooling land together. Class patterns
-remain unimplemented, and the implement-or-defer decision is provisional until
-the Batch S1 checkpoint records its explicit disposition.
+Guards, or-patterns, and top-level catch-all binding patterns are accepted and
+implemented as Aura 0.3's pattern-polish surface. Parser, checker, decision
+tree, both backends, diagnostics, reference, examples, and tooling land
+together. Class patterns remain unimplemented, and the implement-or-defer
+decision is provisional until the Batch S1 checkpoint records its explicit
+disposition.
