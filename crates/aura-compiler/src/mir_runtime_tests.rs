@@ -279,6 +279,66 @@ fn canonical_list_index_absence_is_au4008_with_actionable_help() {
 }
 
 #[test]
+fn public_mir_collection_absence_and_clear_contracts_are_exact() {
+    let list_error = crate::run_source(
+        "def main():\n    mut values: list[int64] = [10, 20]\n    values.remove(30)\n",
+    )
+    .expect_err("removing an absent list value must fail");
+    assert_eq!(list_error.code, "AU4008");
+    assert_eq!(list_error.message, "collection value was not found");
+    assert_eq!(
+        list_error.help,
+        ["check `value in values` before removing when absence is expected"]
+    );
+
+    let dict_error = crate::run_source(
+        "def main():\n    values: dict[str, int64] = {\"present\": 1}\n    print(values[\"missing\"])\n",
+    )
+    .expect_err("indexing a missing dictionary key must fail");
+    assert_eq!(dict_error.code, "AU4003");
+    assert_eq!(dict_error.message, "dict key `missing` was not present");
+    assert_eq!(dict_error.span, Some(Span::new(3, 18)));
+
+    let output = crate::run_source(
+        r#"
+def main():
+    mut values: set[str] = {"Aura", "systems"}
+    values.clear()
+    print(values.len())
+    print(values.is_empty())
+"#,
+    )
+    .expect("clearing a mutable set should execute through MIR");
+    assert_eq!(output.stdout, "0\ntrue\n");
+}
+
+#[test]
+fn public_mir_flush_and_constant_failure_cleanup_are_observable() {
+    let output = crate::run_source(include_str!(
+        "../tests/fixtures/run-pass/io_write_builtin.au"
+    ))
+    .expect("the canonical io.write/io.flush fixture should execute through MIR");
+    assert_eq!(output.stdout, "hello");
+
+    let error = crate::run_source(
+        r#"
+def initialize() -> int64:
+    print("initializing")
+    return 1 // 0
+
+value = initialize()
+
+def main():
+    print(value)
+"#,
+    )
+    .expect_err("a failing module constant must prevent main from running");
+    assert_eq!(error.code, "AU4004");
+    assert_eq!(error.message, "division by zero");
+    assert_eq!(error.partial_stdout(), Some("initializing\n"));
+}
+
+#[test]
 fn guarded_or_pattern_expressions_preserve_owned_commit_and_mutable_writeback() {
     let output = crate::run_source(
         r#"

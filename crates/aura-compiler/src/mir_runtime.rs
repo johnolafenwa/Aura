@@ -6007,14 +6007,6 @@ impl MirRuntime {
                 }
                 Ok(Value::String(text.trim().to_string()))
             }
-            "to_bytes" => {
-                if !args.is_empty() {
-                    return Err(Diagnostic::new("`to_bytes` does not take arguments"));
-                }
-                let value = Value::String(text);
-                evaluate_bytes_host_builtin_ref("str.to_bytes", &value)
-                    .expect("str.to_bytes should be a registered byte host builtin")
-            }
             "clone" => {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`clone` does not take arguments"));
