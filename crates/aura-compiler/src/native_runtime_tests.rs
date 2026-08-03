@@ -12,7 +12,7 @@ use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
 use crate::diag::{
     Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span, StructuredDiagnostic,
 };
-use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
+use crate::integer::{IntegerBounds, IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
     run_lightweight_root_task, spawn_lightweight_task, ArrayDType, ArrayStorage, ArrayValue,
@@ -19600,4 +19600,339 @@ fn direct_module_constant_abi_rejects_a_null_initializer_exactly() {
         "module constant `tests::missing_initializer` has a null initializer thunk"
     );
     super::clear_direct_module_constants();
+}
+
+const REENTRANT_DIRECT_CONSTANT_KEY: &str = "tests::reentrant_constant";
+
+unsafe extern "C-unwind" fn reentrant_direct_constant_initializer(
+    args: *const i64,
+    len: usize,
+) -> *mut OpaqueValue {
+    assert!(args.is_null());
+    assert_eq!(len, 0);
+    let thunk = reentrant_direct_constant_initializer as *const () as usize as i64;
+    super::aura_direct_module_constant(
+        REENTRANT_DIRECT_CONSTANT_KEY.as_ptr(),
+        REENTRANT_DIRECT_CONSTANT_KEY.len(),
+        thunk,
+    )
+}
+
+#[test]
+fn direct_module_constant_abi_reports_reentrancy_then_remembers_failure() {
+    const HELPER: &str = "direct-module-constant-reentrant-failure";
+    if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() != Ok(HELPER) {
+        let output = Command::new(std::env::current_exe().expect("test binary should exist"))
+            .arg("--exact")
+            .arg("native_runtime::tests::direct_module_constant_abi_reports_reentrancy_then_remembers_failure")
+            .arg("--nocapture")
+            .env("AURA_DIRECT_RUNTIME_HELPER", HELPER)
+            .output()
+            .expect("isolated reentrant module constant test should run");
+        assert!(
+            output.status.success(),
+            "isolated reentrant module constant test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    super::clear_direct_module_constants();
+    let thunk = reentrant_direct_constant_initializer as *const () as usize as i64;
+    let first = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_module_constant(
+            REENTRANT_DIRECT_CONSTANT_KEY.as_ptr(),
+            REENTRANT_DIRECT_CONSTANT_KEY.len(),
+            thunk,
+        );
+    });
+    assert_eq!(first.code, "AU4001");
+    assert_eq!(
+        first.message,
+        "module constant `tests::reentrant_constant` was read while its module was still initializing"
+    );
+
+    let second = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_module_constant(
+            REENTRANT_DIRECT_CONSTANT_KEY.as_ptr(),
+            REENTRANT_DIRECT_CONSTANT_KEY.len(),
+            thunk,
+        );
+    });
+    assert_eq!(second.code, "AU4001");
+    assert_eq!(
+        second.message,
+        "module constant `tests::reentrant_constant` previously failed to initialize"
+    );
+    super::clear_direct_module_constants();
+}
+
+#[test]
+fn direct_numeric_abis_preserve_every_integer_width_across_modes_power_round_and_divmod() {
+    fn boxed_integer(value: IntegerValue) -> *mut OpaqueValue {
+        boxed_value(Value::Int(value))
+    }
+
+    fn width_binary(
+        left: IntegerValue,
+        right: IntegerValue,
+        operation: i64,
+        mode: i64,
+    ) -> IntegerValue {
+        let left_ptr = boxed_integer(left);
+        let right_ptr = boxed_integer(right);
+        let result =
+            super::aura_direct_integer_width_binary(left_ptr, right_ptr, operation, mode, 31, 37);
+        let actual = match unsafe { value_ref(result) } {
+            Value::Int(value) => value,
+            other => panic!("expected integer result, found {other:?}"),
+        };
+        for value in [left_ptr, right_ptr, result] {
+            unsafe { release_value(value) };
+        }
+        actual
+    }
+
+    fn typed(kind: IntegerKind, value: i128) -> IntegerValue {
+        if kind.is_signed() {
+            IntegerValue::from_typed_signed(value, kind).expect("signed test value fits")
+        } else {
+            IntegerValue::from_typed_unsigned(value as u128, kind)
+                .expect("unsigned test value fits")
+        }
+    }
+
+    for kind in [
+        IntegerKind::Int8,
+        IntegerKind::Int16,
+        IntegerKind::Int32,
+        IntegerKind::Int64,
+        IntegerKind::Int128,
+        IntegerKind::IntSize,
+        IntegerKind::Uint8,
+        IntegerKind::Uint16,
+        IntegerKind::Uint32,
+        IntegerKind::Uint64,
+        IntegerKind::Uint128,
+        IntegerKind::UintSize,
+    ] {
+        let (maximum, wrapped_minimum) = match kind.bounds() {
+            IntegerBounds::Signed { min, max } => (
+                IntegerValue::from_typed_signed(max, kind).unwrap(),
+                IntegerValue::from_typed_signed(min, kind).unwrap(),
+            ),
+            IntegerBounds::Unsigned { max } => (
+                IntegerValue::from_typed_unsigned(max, kind).unwrap(),
+                IntegerValue::from_typed_unsigned(0, kind).unwrap(),
+            ),
+        };
+        let one = typed(kind, 1);
+        assert_eq!(
+            width_binary(maximum, one, 0, 1),
+            wrapped_minimum,
+            "{} wrapping_add",
+            kind.runtime_type_name()
+        );
+        assert_eq!(
+            width_binary(maximum, one, 0, 2),
+            maximum,
+            "{} saturating_add",
+            kind.runtime_type_name()
+        );
+
+        let two = typed(kind, 2);
+        let high_shift = typed(kind, i128::from(kind.bit_width() - 1));
+        assert_eq!(
+            width_binary(two, high_shift, 3, 1),
+            typed(kind, 0),
+            "{} wrapping_shl",
+            kind.runtime_type_name()
+        );
+        assert_eq!(
+            width_binary(two, high_shift, 3, 2),
+            maximum,
+            "{} saturating_shl",
+            kind.runtime_type_name()
+        );
+
+        let base = boxed_integer(typed(kind, 2));
+        let exponent = boxed_integer(typed(kind, 3));
+        let powered = super::aura_direct_binary_value_at(14, base, exponent, 0, 41, 43);
+        assert_eq!(
+            unsafe { value_ref(powered) },
+            Value::Int(typed(kind, 8)),
+            "{} power",
+            kind.runtime_type_name()
+        );
+
+        let rounded_input = boxed_integer(typed(kind, 7));
+        let rounded = super::aura_direct_round(rounded_input);
+        assert_eq!(
+            unsafe { value_ref(rounded) },
+            Value::Int(typed(kind, 7)),
+            "{} round",
+            kind.runtime_type_name()
+        );
+
+        let dividend = boxed_integer(typed(kind, 7));
+        let divisor = boxed_integer(typed(kind, 3));
+        let pair = super::aura_direct_divmod(dividend, divisor);
+        assert_eq!(
+            unsafe { value_ref(pair) },
+            Value::Tuple(TupleValue {
+                element_types: vec![
+                    Type::named(kind.runtime_type_name()),
+                    Type::named(kind.runtime_type_name()),
+                ],
+                elements: vec![Value::Int(typed(kind, 2)), Value::Int(typed(kind, 1))],
+            }),
+            "{} divmod",
+            kind.runtime_type_name()
+        );
+
+        for value in [
+            base,
+            exponent,
+            powered,
+            rounded_input,
+            rounded,
+            dividend,
+            divisor,
+            pair,
+        ] {
+            unsafe { release_value(value) };
+        }
+    }
+
+    let minimum_int128 = boxed_integer(
+        IntegerValue::from_typed_signed(i128::MIN, IntegerKind::Int128)
+            .expect("int128 minimum is representable"),
+    );
+    let minimum_address = minimum_int128 as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_abs(minimum_address as *mut OpaqueValue);
+    });
+    assert_eq!(diagnostic.code, "AU4002");
+    assert_eq!(
+        diagnostic.message,
+        "`abs(...)` overflowed the signed integer range"
+    );
+    unsafe { release_value(minimum_int128) };
+}
+
+#[test]
+fn direct_spanned_binary_abi_pins_remaining_arithmetic_and_equality_opcodes() {
+    for (opcode, left, right, expected) in [
+        (1, 9, 4, Value::Int(IntegerValue::from_i64(5))),
+        (2, 9, 4, Value::Int(IntegerValue::from_i64(36))),
+        (4, 9, 4, Value::Int(IntegerValue::from_i64(1))),
+        (5, 9, 9, Value::Bool(true)),
+    ] {
+        let result = super::aura_direct_binary_value_at(
+            opcode,
+            int_value(left),
+            int_value(right),
+            0,
+            47,
+            53,
+        );
+        assert_eq!(unsafe { value_ref(result) }, expected, "opcode {opcode}");
+        unsafe { release_value(result) };
+    }
+    let quotient =
+        super::aura_direct_binary_value_at(3, float_value(9.0), float_value(4.0), 64, 47, 53);
+    assert_eq!(unsafe { value_ref(quotient) }, Value::Float(2.25));
+    unsafe { release_value(quotient) };
+
+    let diagnostic = capture_direct_boundary_diagnostic(|| {
+        super::aura_direct_binary_value_at(3, float_value(1.0), float_value(0.0), 64, 59, 61);
+    });
+    assert_eq!(diagnostic.code, "AU4004");
+    assert_eq!(diagnostic.message, "division by zero");
+    assert_eq!(diagnostic.span, Some(Span::new(59, 61)));
+}
+
+#[test]
+fn direct_capacity_format_and_detailed_assertion_abis_pin_observable_contracts() {
+    let list = super::aura_direct_vec_empty();
+    let dict = super::aura_direct_map_empty();
+    let set = super::aura_direct_set_empty();
+    for collection in [list, dict, set] {
+        expect_unit(super::aura_direct_collection_operation(
+            collection,
+            std::ptr::null_mut(),
+            32,
+            4,
+        ));
+    }
+    assert!(super::with_vector(list, |value| value.elements.capacity()) >= 32);
+    assert!(super::with_map(dict, |value| value.entries.capacity()) >= 32);
+    assert!(super::with_set(set, |value| value.elements.capacity()) >= 32);
+
+    for (value, value_type, spec, expected) in [
+        (float_value(12.345), "float32", ".2f", "12.35"),
+        (float_value(0.125), "float64", ".1%", "12.5%"),
+        (string_value("Aura"), "str", "^8s", "  Aura  "),
+    ] {
+        assert_eq!(
+            expect_string(super::aura_direct_format_value(
+                value,
+                spec.as_ptr(),
+                spec.len(),
+                value_type.as_ptr(),
+                value_type.len(),
+            )),
+            expected
+        );
+        unsafe { release_value(value) };
+    }
+
+    let left_label = string_value("actual");
+    let left_type = string_value("int64");
+    let left_value = string_value("1");
+    let right_label = string_value("expected");
+    let right_type = string_value("int64");
+    let right_value = string_value("2");
+    let addresses = [
+        left_label,
+        left_type,
+        left_value,
+        right_label,
+        right_type,
+        right_value,
+    ]
+    .map(|value| value as usize);
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_assert_fail_detailed(
+            0,
+            0,
+            0,
+            addresses[0] as i64,
+            addresses[1] as i64,
+            addresses[2] as i64,
+            addresses[3] as i64,
+            addresses[4] as i64,
+            addresses[5] as i64,
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(diagnostic.message, "assertion failed");
+    assert_eq!(diagnostic.span, None);
+    assert_eq!(diagnostic.assertion_operands.len(), 2);
+    assert_eq!(diagnostic.assertion_operands[0].label, "actual");
+    assert_eq!(diagnostic.assertion_operands[1].label, "expected");
+
+    for value in [
+        list,
+        dict,
+        set,
+        left_label,
+        left_type,
+        left_value,
+        right_label,
+        right_type,
+        right_value,
+    ] {
+        unsafe { release_value(value) };
+    }
 }

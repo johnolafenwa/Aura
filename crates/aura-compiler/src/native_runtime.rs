@@ -4488,13 +4488,11 @@ pub extern "C-unwind" fn aura_direct_abs(value: *mut OpaqueValue) -> *mut Opaque
                     if signed == i128::MIN {
                         runtime_error("`abs(...)` overflowed the signed integer range");
                     }
-                    value
-                        .checked_neg()
-                        .map(Value::Int)
-                        .map(boxed_value)
-                        .unwrap_or_else(|| {
-                            runtime_error("`abs(...)` overflowed the signed integer range")
-                        })
+                    boxed_value(Value::Int(
+                        value
+                            .checked_neg()
+                            .expect("the int128 minimum was rejected before negation"),
+                    ))
                 }
                 IntegerRepresentation::Signed(_) | IntegerRepresentation::Unsigned(_) => {
                     boxed_value(Value::Int(value))
@@ -5016,16 +5014,22 @@ pub extern "C-unwind" fn aura_direct_vec_set_in_place(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let value = unsafe { consume_owned_value(value) };
-        let previous = with_vector_mut(vec, |vector| {
-            let Some(normalized) = normalize_vec_index(index, vector.elements.len())
-                .filter(|normalized| *normalized < vector.elements.len())
-            else {
-                return Err((vector.elements.len(), value));
-            };
-            Ok(std::mem::replace(&mut vector.elements[normalized], value))
+        let mut replacement = Some(unsafe { consume_owned_value(value) });
+        let (previous, len) = with_vector_mut(vec, |vector| {
+            let len = vector.elements.len();
+            let previous = normalize_vec_index(index, len)
+                .filter(|normalized| *normalized < len)
+                .map(|normalized| {
+                    std::mem::replace(
+                        &mut vector.elements[normalized],
+                        replacement
+                            .take()
+                            .expect("the replacement is consumed once"),
+                    )
+                });
+            (previous, len)
         });
-        let previous = previous.unwrap_or_else(|(len, _value)| {
+        let previous = previous.unwrap_or_else(|| {
             runtime_error(format!(
                 "list set index `{index}` is out of bounds for length `{len}`"
             ))
