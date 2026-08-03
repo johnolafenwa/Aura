@@ -12,7 +12,7 @@ on:
         default: ''
         type: string
       release_tag:
-        description: 'Release identity used in artifact names, such as v0.2.0-preview'
+        description: 'Release identity used in artifact names, such as v0.3.0-preview'
         required: true
         type: string
       publish:
@@ -119,6 +119,7 @@ jobs:
       - name: Build release CLI
         env:
           AURA_BUILD_COMMIT: ${{ needs.release_identity.outputs.implementation_commit }}
+          AURA_BUILD_CHANNEL: preview
         run: cargo build -p aura --release --locked
 
       - name: Package CLI

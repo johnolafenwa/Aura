@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 
 export const AURA_RELEASE = Object.freeze({
   version: '0.3.0',
-  channel: 'development'
+  channel: 'technical preview'
 })
 
 const COMMIT_PATTERN = /^[0-9a-f]{7,40}$/i

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release-metadata regression tests for the Aura 0.3 development channel."""
+"""Release-metadata regression tests for the Aura 0.3 technical preview."""
 
 from __future__ import annotations
 
@@ -72,10 +72,10 @@ class ReleaseMetadataTests(unittest.TestCase):
         # extension entries above are their lock records; package-local lock
         # files would split dependency resolution and are not maintained.
 
-    def test_changelog_opens_the_0_3_development_story(self) -> None:
+    def test_changelog_opens_the_0_3_preview_release(self) -> None:
         changelog = (ROOT / "CHANGELOG.md").read_text()
-        self.assertIn("## 0.3.0 — development", changelog)
-        self.assertIn("development channel", changelog.lower())
+        self.assertIn("## 0.3.0 — 2026-08-03 (technical preview)", changelog)
+        self.assertIn("Aura 0.3.0 is a technical preview", changelog)
         self.assertIn("## 0.2.0 — 2026-07-31 (technical preview)", changelog)
         for heading in (
             "Ownership surface",
@@ -103,7 +103,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         theme = (ROOT / "docs/.vitepress/theme/index.ts").read_text()
 
         self.assertIn("Aura 0.3.0", manual)
-        self.assertIn("development channel", manual.lower())
+        self.assertIn("technical preview", manual.lower())
         self.assertIn("implementation baseline commit", manual.lower())
         self.assertIn("AURA_DOCS_COMMIT", metadata)
         self.assertIn("GITHUB_SHA", metadata)
@@ -143,6 +143,34 @@ class ReleaseMetadataTests(unittest.TestCase):
                     stale.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
         self.assertEqual(stale, [], "stale current-release prose:\n" + "\n".join(stale))
 
+    def test_current_release_prose_no_longer_calls_itself_0_2(self) -> None:
+        roots = (
+            ROOT / "docs/manual",
+            ROOT / "docs/learn",
+            ROOT / "tutorials",
+        )
+        files = [
+            ROOT / "README.md",
+            ROOT / "SUPPORTED_PLATFORMS.md",
+            ROOT / "crates/aura/README.md",
+            ROOT / "docs/downloads.md",
+            ROOT / "docs/positioning.md",
+            ROOT / "docs/release-process.md",
+        ]
+        for directory in roots:
+            files.extend(directory.glob("*.md"))
+            files.extend(directory.glob("**/*.md"))
+
+        stale: list[str] = []
+        pattern = re.compile(
+            r"\bAura 0\.2(?:\.0|\.x)?\b|\bv0\.2\.0-preview\b|\b0\.2\.x\b"
+        )
+        for path in sorted(set(files)):
+            for number, line in enumerate(path.read_text().splitlines(), start=1):
+                if pattern.search(line):
+                    stale.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
+        self.assertEqual(stale, [], "stale current-release prose:\n" + "\n".join(stale))
+
     def test_prepublish_truth_polish_is_retained(self) -> None:
         cli_tests = (ROOT / "crates/aura/tests/cli.rs").read_text()
         cache_test = cli_tests.split(
@@ -167,10 +195,15 @@ class ReleaseMetadataTests(unittest.TestCase):
         build_script = (ROOT / "crates/aura/build.rs").read_text()
         cli = (ROOT / "crates/aura/src/main.rs").read_text()
         smoke = (ROOT / "scripts/smoke-cli-archive.sh").read_text()
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
         self.assertIn("AURA_BUILD_COMMIT", build_script)
+        self.assertIn("AURA_BUILD_CHANNEL", build_script)
         self.assertIn("--short=12", build_script)
-        self.assertIn('"aura {}-dev ({})\\n"', cli)
-        self.assertIn('expected_version="aura 0.2.0-preview ($expected_commit)"', smoke)
+        self.assertIn('"aura {}-{} ({})\\n"', cli)
+        self.assertIn(
+            'expected_version="aura $release_version ($expected_commit)"', smoke
+        )
+        self.assertIn("AURA_BUILD_CHANNEL: preview", workflow)
 
     def test_scheduled_safety_jobs_pin_the_instrumented_toolchain_and_leaks(self) -> None:
         workflow = (ROOT / ".github/workflows/safety.yml").read_text()

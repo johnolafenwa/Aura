@@ -11,7 +11,7 @@ reliable agents. It combines Python-like readability with Rust-style safety:
 deterministic ownership, structured concurrency, typed failure, native
 executables, and no garbage collector.
 
-Install the Aura 0.2 technical preview on Linux x64, macOS x64, or macOS arm64:
+Install the Aura 0.3 technical preview on Linux x64, macOS x64, or macOS arm64:
 
 ```bash
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
@@ -529,7 +529,7 @@ aura build -o ./program program.au
 
 # Why Aura
 
-Aura 0.2.0 is a technical preview of a statically typed, compiled systems
+Aura 0.3.0 is a technical preview of a statically typed, compiled systems
 language for ML infrastructure and reliable agents. Its goal is to make
 systems programming accessible to developers who value Python's readability
 and Rust's safety discipline.
@@ -599,7 +599,7 @@ ownership. Its roadmap centers
 Its ownership documentation gives each value one owner and defines
 [default immutable, `mut`, and `var` argument conventions](https://mojolang.org/docs/manual/values/ownership/).
 
-Aura 0.2 centers the application control plane around models and agents:
+Aura 0.3 centers the application control plane around models and agents:
 scoped child tasks, transferable messages, typed I/O and process failures,
 timeouts, retries, and supervision. GPU programming, heterogeneous hardware,
 and Python-library interoperability remain future surface areas.
@@ -652,7 +652,7 @@ The [Performance](/manual/performance) chapter records current measurements,
 known gaps, reproduction evidence, and the optimization direction for later
 releases.
 
-Aura 0.2 is an executable technical preview. Its current surface includes the
+Aura 0.3 is an executable technical preview. Its current surface includes the
 language, native compiler, ownership model, structured task runtime, numeric
 arrays, control-plane modules, package tooling, Manual, and editor extension.
 The [Current Limits](/manual/current-limits) chapter lists the precise
@@ -662,7 +662,7 @@ boundaries of that surface.
 
 # Downloads
 
-Aura 0.2.0 is a technical preview. The compiler, command-line tools, editor
+Aura 0.3.0 is a technical preview. The compiler, command-line tools, editor
 extension, reference manual, and source are distributed from the
 [Aura GitHub repository](https://github.com/johnolafenwa/Aura).
 
@@ -680,7 +680,7 @@ published `SHA256SUMS`, and installs Aura under `~/.local` by default. Set
 `AURA_INSTALL_PREFIX` to select another prefix.
 
 Download the archive for your platform from the
-[v0.2.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.2.0-preview).
+[v0.3.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.0-preview).
 Each release includes Linux x64, macOS x64, and macOS arm64 archives together
 with a `SHA256SUMS` manifest.
 
@@ -699,11 +699,11 @@ Install **Aura Programming Language** from either public extension registry:
 - [Open VSX](https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang)
 
 The registry packages are identical and carry the plain extension version
-`0.2.0`. The extension needs the `aura` executable on `PATH` because semantic
+`0.3.0`. The extension needs the `aura` executable on `PATH` because semantic
 editor features run through the compiler-owned `aura lsp` server.
 
 For a manual installation, download
-[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.2.0-preview/aura-language.vsix)
+[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.3.0-preview/aura-language.vsix)
 from the GitHub Release, then choose **Extensions: Install from VSIX...** in
 VS Code.
 
@@ -718,7 +718,7 @@ the complete source is available from the
 
 # Aura Language Reference
 
-The source version for this Manual is **Aura 0.3.0 (development channel)**.
+The source version for this Manual is **Aura 0.3.0 (technical preview)**.
 The release stamp below records the rendered implementation baseline commit.
 
 <ReleaseStamp />
@@ -2118,7 +2118,7 @@ aura check app.au
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case; defaults to `tests/` and a 30-second per-case timeout. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
-| `aura version` / `aura --version` | Print the development channel and 12-hex-digit source commit, such as `aura 0.3.0-dev (0123456789ab)`. |
+| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.3.0-preview (0123456789ab)`; source builds print `aura 0.3.0-dev (0123456789ab)`. |
 
 ## Checking
 
@@ -10053,7 +10053,7 @@ relevant reference page, conformance tests, examples, tutorials, and work
 record in the same pass.
 
 The repository commit identifies the precise revision of the specification.
-The rendered Manual is stamped with source version 0.3.0 (development channel)
+The rendered Manual is stamped with source version 0.3.0 (technical preview)
 and its implementation baseline commit. Release builds supply that commit
 without writing a self-referential hash into this source page; see the
 [Manual overview](/manual/) for the exact precedence and local fallback.
@@ -12582,7 +12582,7 @@ source commits, raw observations, and content hashes. The current measurements
 show where the compiler and runtime are already competitive and where later
 releases need focused optimization.
 
-This page is the performance record for the Aura 0.3 development channel. It is
+This page is the performance record for the Aura 0.3 technical preview. It is
 separate from the language's semantic guarantees.
 
 ## Current Measurements
@@ -14435,7 +14435,7 @@ The local `main` takes no parameters and returns `None` or `int32`. Imported fun
 
 # Status And Compatibility
 
-Aura 0.3 is an active development channel and advanced technical preview. It
+Aura 0.3 is an advanced technical preview. It
 is suitable for compiler and runtime evaluation, examples, and controlled
 experiments. It is not a production systems-language release or a security
 boundary for untrusted programs.
@@ -16037,7 +16037,7 @@ with group = TaskGroup():
 
 Cancellation is not an exception that lands at arbitrary points in the code. It is a request that tasks observe at well-defined boundaries. That makes cancelled code easy to reason about — and easy to test.
 
-Aura 0.2 runs task bodies on cooperative pinned workers on both maintained
+Aura 0.3 runs task bodies on cooperative pinned workers on both maintained
 backends. The runtime uses the available parallelism reported by the host by
 default; provisional
 `AURA_WORKERS=<positive integer>` selects an explicit count. A task receives
@@ -16133,7 +16133,7 @@ Good Aura concurrency tends to look the same across programs:
 - task results inspected through `TaskResult`, `wait_any`, or `wait_all`
 - long CPU loops that check `cancelled()` when cancellation matters and use
   explicit yields when a particular chunk boundary should schedule siblings
-- no detached background work; Aura 0.2 exposes no detached task form
+- no detached background work; Aura 0.3 exposes no detached task form
 
 If you can say, for each child task, which scope created it and which scope waits for it, the program is usually on the right track.
 
@@ -16445,7 +16445,7 @@ backend contract are in [Foreign Function Interface (FFI) v0](/manual/ffi).
 
 Aura release archives ship a command-line tool called `aura` plus its private native runtime under `lib/aura`. The tool parses, type-checks, runs, and builds Aura source files, and it also serves as the entry point for editor tooling.
 
-Aura 0.2 is a technical preview. This chapter covers both a release archive and a source checkout.
+Aura 0.3 is a technical preview. This chapter covers both a release archive and a source checkout.
 
 ## Install A Release Archive
 
@@ -16464,7 +16464,7 @@ For a manual installation, download the archive for a supported host, extract
 it, and keep its directory layout intact:
 
 ```text
-aura-v0.2.0-preview-<target>/
+aura-v0.3.0-preview-<target>/
 ├── bin/aura
 ├── lib/aura/
     ├── libaura_compiler.a
@@ -16507,8 +16507,8 @@ aura --version
 ```
 
 Preview builds identify both their channel and source commit, for example
-`aura 0.2.0-preview (0123456789ab)`. This distinguishes the approved preview
-from a future final `0.2.0` binary.
+`aura 0.3.0-preview (0123456789ab)`. Source-checkout builds identify their
+channel as `aura 0.3.0-dev (0123456789ab)`.
 
 On Unix shells, consider adding that export to your shell profile.
 
@@ -18039,9 +18039,9 @@ cargo run -p aura -- help
 cargo run -p aura -- --version
 ```
 
-The version command includes the release channel and a 12-hex-digit source
-commit, such as `aura 0.2.0-preview (0123456789ab)`, so a preview build is
-never mistaken for a future final `0.2.0` binary.
+The source-checkout command prints the build channel and a 12-hex-digit source
+commit, such as `aura 0.3.0-dev (0123456789ab)`. Release archives identify
+their channel as `aura 0.3.0-preview (0123456789ab)`.
 
 Use `deps update` to refresh git dependencies without deleting `Aura.lock` manually:
 
@@ -21801,7 +21801,7 @@ iteration so it can finish cleanly.
 
 Cancellation is cooperative. Aura does not forcibly kill tasks.
 
-Aura 0.2 runs task bodies on cooperative pinned scheduler workers on both
+Aura 0.3 runs task bodies on cooperative pinned scheduler workers on both
 maintained backends. The default worker count is the available parallelism
 reported by the host;
 the provisional `AURA_WORKERS=<positive integer>` environment override
@@ -21856,7 +21856,7 @@ memory compression. The same current contractual report passes the four-worker
 scaling gate at a `1.039673x` paired median wall-time ratio with `396.73%`
 median four-task process CPU.
 
-The protocol service starts lazily and lives until process exit; Aura 0.2
+The protocol service starts lazily and lives until process exit; Aura 0.3
 does not expose a shutdown or join operation for it. File reads, resolver work,
 and listener binding use the generic blocking-I/O pool. TLS asset bytes are
 read there before PEM parsing and rustls construction run on protocol workers.
@@ -22501,7 +22501,7 @@ Current builtin I/O, networking, and process surface:
 - `fs.File.write_bytes(...)`
 - `fs.File.flush()`
 - `fs.File.close()`
-- one-shot and `fs.File` whole-file reads are capped at 256 MiB of remaining content in both `aura run` and built binaries; Aura 0.2 has no chunked file-read API
+- one-shot and `fs.File` whole-file reads are capped at 256 MiB of remaining content in both `aura run` and built binaries; Aura 0.3 has no chunked file-read API
 - process capture/pipe reads and TCP, Unix, and TLS whole or bounded reads are
   capped at 64 MiB; TLS certificate, private-key, and CA-file loading uses the
   same independent 64 MiB ceiling
@@ -22708,7 +22708,7 @@ Current builtin member methods include:
 Import `random` for two deliberately separate surfaces. A mutable
 `random.Rng(seed)` is a deterministic, move-only xoshiro256** stream with
 half-open `next_int`, `[0.0, 1.0)` `next_float`, and in-place generic list
-shuffle. Seed mapping and sequences are stable throughout Aura 0.2.x and
+shuffle. Seed mapping and sequences are stable throughout Aura 0.3.x and
 identical through MIR and direct execution.
 
 `random.secure_int(lo, hi)` and `random.secure_bytes(n)` use only the host
@@ -22769,7 +22769,7 @@ The current bootstrap concurrency surface includes:
 - signed i128-nanosecond Duration values with `ms`, `s`, and `m` literals,
   integer constructors, checked arithmetic, conversions, and comparisons
 
-Aura 0.2 executes task bodies on cooperative pinned scheduler workers on
+Aura 0.3 executes task bodies on cooperative pinned scheduler workers on
 both maintained backends. The default count is the available parallelism
 reported by the host; the
 provisional `AURA_WORKERS=<positive integer>` override selects an explicit
@@ -23282,7 +23282,7 @@ one containing `random.Rng` is rejected with `AU3007`.
 
 A signature-only trait method has no inferred obligation. An explicit `impl`
 may satisfy the trait contract but may not strengthen it by adding hidden
-generic clone-producing behavior. Aura 0.2 has no written clone-safety bound,
+generic clone-producing behavior. Aura 0.3 has no written clone-safety bound,
 so put that behavior in a default trait body when it is part of the intended
 contract.
 
@@ -23912,7 +23912,7 @@ Text and binary one-shot helpers:
 - `fs.read_dir(path)`
 - `fs.remove_file(path)`
 
-The one-shot helpers and `fs.File` whole-file reads are capped at 256 MiB of remaining content in both `aura run` and built binaries. Aura 0.2 has no incremental file-read member, so larger files need a host helper or pre-splitting.
+The one-shot helpers and `fs.File` whole-file reads are capped at 256 MiB of remaining content in both `aura run` and built binaries. Aura 0.3 has no incremental file-read member, so larger files need a host helper or pre-splitting.
 
 Scoped file-handle constructors:
 
@@ -24486,12 +24486,12 @@ allocation or entropy.
 Invalid or unavailable requests trap because these functions return plain
 values: an empty/reversed integer interval or negative byte count is `AU4003`,
 while a secure byte count above the ceiling, OS entropy failure, or allocation
-failure is `AU4005`. Aura 0.2 has no `random.Error` type.
+failure is `AU4005`. Aura 0.3 has no `random.Error` type.
 
 ## Compatibility And The Full Contract
 
-Aura 0.2 fixes xoshiro256** plus its SplitMix64 seed expansion, integer
-mapping, floating mapping, and shuffle order for the complete 0.2.x series.
+Aura 0.3 fixes xoshiro256** plus its SplitMix64 seed expansion, integer
+mapping, floating mapping, and shuffle order for the complete 0.3.x series.
 That promise makes seeded tests portable across the MIR and direct backends.
 It does not make xoshiro secure.
 

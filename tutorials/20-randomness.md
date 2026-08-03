@@ -117,12 +117,12 @@ allocation or entropy.
 Invalid or unavailable requests trap because these functions return plain
 values: an empty/reversed integer interval or negative byte count is `AU4003`,
 while a secure byte count above the ceiling, OS entropy failure, or allocation
-failure is `AU4005`. Aura 0.2 has no `random.Error` type.
+failure is `AU4005`. Aura 0.3 has no `random.Error` type.
 
 ## Compatibility And The Full Contract
 
-Aura 0.2 fixes xoshiro256** plus its SplitMix64 seed expansion, integer
-mapping, floating mapping, and shuffle order for the complete 0.2.x series.
+Aura 0.3 fixes xoshiro256** plus its SplitMix64 seed expansion, integer
+mapping, floating mapping, and shuffle order for the complete 0.3.x series.
 That promise makes seeded tests portable across the MIR and direct backends.
 It does not make xoshiro secure.
 

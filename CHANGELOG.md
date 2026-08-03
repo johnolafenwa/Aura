@@ -5,12 +5,13 @@ versioning for release artifacts while it remains a technical preview; a minor
 preview release may still contain source and API incompatibilities called out
 in this file.
 
-## 0.3.0 — development
+## 0.3.0 — 2026-08-03 (technical preview)
 
-Aura 0.3.0 is the active development channel. It presents a compact,
-Python-shaped surface with static typing, deterministic ownership, and native
-execution. The complete canonical surface and feature evidence remain current
-here as development advances.
+Aura 0.3.0 is a technical preview of the current Python-shaped language,
+compiler, runtime, command-line tools, language server, VS Code extension,
+Manual, Learn track, tutorials, and examples. It combines static typing,
+deterministic ownership, native compilation, structured concurrency, and typed
+failure for systems software, ML infrastructure, and agent runtimes.
 
 - Unified collection positions on `int64`: ranges, list indices, slice
   endpoints, enumeration positions, Array coordinates, and concurrent
@@ -44,6 +45,12 @@ here as development advances.
 - Added eager immutable module constants with dependency-first, source-ordered,
   once-only initialization. Copy values read by value, while non-Copy values
   provide shared access to their defining module's stored value.
+- Added root binding patterns, sign-aware zero padding, equality-obligation
+  checking across collections, and precise diagnostics for unsupported string
+  prefixes. Values without defined equality cannot reach hidden identity
+  comparison through membership, list search, sets, or dictionary keys.
+- Published coordinated `aura-v0.3.0-preview-*` archives, the 0.3.0 VS Code
+  extension, static documentation, and a verified `SHA256SUMS` manifest.
 
 ## 0.2.0 — 2026-07-31 (technical preview)
 

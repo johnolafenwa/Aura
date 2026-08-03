@@ -26,6 +26,7 @@ fn git_path(repository: &Path, name: &str) -> Option<PathBuf> {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=AURA_BUILD_COMMIT");
+    println!("cargo:rerun-if-env-changed=AURA_BUILD_CHANNEL");
 
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let repository = manifest.join("../..");
@@ -57,5 +58,11 @@ fn main() {
         commit.len() >= 12 && commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
         "AURA_BUILD_COMMIT must contain at least 12 hexadecimal digits"
     );
+    let channel = env::var("AURA_BUILD_CHANNEL").unwrap_or_else(|_| "dev".to_string());
+    assert!(
+        matches!(channel.as_str(), "dev" | "preview"),
+        "AURA_BUILD_CHANNEL must be dev or preview"
+    );
     println!("cargo:rustc-env=AURA_BUILD_COMMIT={}", &commit[..12]);
+    println!("cargo:rustc-env=AURA_BUILD_CHANNEL={channel}");
 }

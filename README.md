@@ -5,7 +5,7 @@ reliable agents. It combines Python-like readability with Rust-style safety:
 deterministic ownership, structured concurrency, typed failure, native
 executables, and no garbage collector.
 
-Install the Aura 0.2 technical preview on Linux x64, macOS x64, or macOS arm64:
+Install the Aura 0.3 technical preview on Linux x64, macOS x64, or macOS arm64:
 
 ```bash
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh

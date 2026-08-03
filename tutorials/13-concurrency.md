@@ -370,7 +370,7 @@ iteration so it can finish cleanly.
 
 Cancellation is cooperative. Aura does not forcibly kill tasks.
 
-Aura 0.2 runs task bodies on cooperative pinned scheduler workers on both
+Aura 0.3 runs task bodies on cooperative pinned scheduler workers on both
 maintained backends. The default worker count is the available parallelism
 reported by the host;
 the provisional `AURA_WORKERS=<positive integer>` environment override
@@ -425,7 +425,7 @@ memory compression. The same current contractual report passes the four-worker
 scaling gate at a `1.039673x` paired median wall-time ratio with `396.73%`
 median four-task process CPU.
 
-The protocol service starts lazily and lives until process exit; Aura 0.2
+The protocol service starts lazily and lives until process exit; Aura 0.3
 does not expose a shutdown or join operation for it. File reads, resolver work,
 and listener binding use the generic blocking-I/O pool. TLS asset bytes are
 read there before PEM parsing and rustls construction run on protocol workers.

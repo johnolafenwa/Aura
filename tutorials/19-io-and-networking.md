@@ -76,7 +76,7 @@ Text and binary one-shot helpers:
 - `fs.read_dir(path)`
 - `fs.remove_file(path)`
 
-The one-shot helpers and `fs.File` whole-file reads are capped at 256 MiB of remaining content in both `aura run` and built binaries. Aura 0.2 has no incremental file-read member, so larger files need a host helper or pre-splitting.
+The one-shot helpers and `fs.File` whole-file reads are capped at 256 MiB of remaining content in both `aura run` and built binaries. Aura 0.3 has no incremental file-read member, so larger files need a host helper or pre-splitting.
 
 Scoped file-handle constructors:
 

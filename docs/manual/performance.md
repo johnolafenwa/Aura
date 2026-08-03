@@ -5,7 +5,7 @@ source commits, raw observations, and content hashes. The current measurements
 show where the compiler and runtime are already competitive and where later
 releases need focused optimization.
 
-This page is the performance record for the Aura 0.3 development channel. It is
+This page is the performance record for the Aura 0.3 technical preview. It is
 separate from the language's semantic guarantees.
 
 ## Current Measurements

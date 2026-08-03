@@ -494,7 +494,7 @@ Current builtin I/O, networking, and process surface:
 - `fs.File.write_bytes(...)`
 - `fs.File.flush()`
 - `fs.File.close()`
-- one-shot and `fs.File` whole-file reads are capped at 256 MiB of remaining content in both `aura run` and built binaries; Aura 0.2 has no chunked file-read API
+- one-shot and `fs.File` whole-file reads are capped at 256 MiB of remaining content in both `aura run` and built binaries; Aura 0.3 has no chunked file-read API
 - process capture/pipe reads and TCP, Unix, and TLS whole or bounded reads are
   capped at 64 MiB; TLS certificate, private-key, and CA-file loading uses the
   same independent 64 MiB ceiling
@@ -701,7 +701,7 @@ Current builtin member methods include:
 Import `random` for two deliberately separate surfaces. A mutable
 `random.Rng(seed)` is a deterministic, move-only xoshiro256** stream with
 half-open `next_int`, `[0.0, 1.0)` `next_float`, and in-place generic list
-shuffle. Seed mapping and sequences are stable throughout Aura 0.2.x and
+shuffle. Seed mapping and sequences are stable throughout Aura 0.3.x and
 identical through MIR and direct execution.
 
 `random.secure_int(lo, hi)` and `random.secure_bytes(n)` use only the host
@@ -762,7 +762,7 @@ The current bootstrap concurrency surface includes:
 - signed i128-nanosecond Duration values with `ms`, `s`, and `m` literals,
   integer constructors, checked arithmetic, conversions, and comparisons
 
-Aura 0.2 executes task bodies on cooperative pinned scheduler workers on
+Aura 0.3 executes task bodies on cooperative pinned scheduler workers on
 both maintained backends. The default count is the available parallelism
 reported by the host; the
 provisional `AURA_WORKERS=<positive integer>` override selects an explicit

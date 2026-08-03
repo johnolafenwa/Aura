@@ -1,6 +1,6 @@
 # Supported Platforms
 
-Aura 0.2 is a technical preview with this supported distribution matrix:
+Aura 0.3 is a technical preview with this supported distribution matrix:
 
 | Host | Architecture | CI | Release archive | Native `aura build` |
 | --- | --- | --- | --- | --- |

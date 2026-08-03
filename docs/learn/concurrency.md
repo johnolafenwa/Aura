@@ -312,7 +312,7 @@ with group = TaskGroup():
 
 Cancellation is not an exception that lands at arbitrary points in the code. It is a request that tasks observe at well-defined boundaries. That makes cancelled code easy to reason about — and easy to test.
 
-Aura 0.2 runs task bodies on cooperative pinned workers on both maintained
+Aura 0.3 runs task bodies on cooperative pinned workers on both maintained
 backends. The runtime uses the available parallelism reported by the host by
 default; provisional
 `AURA_WORKERS=<positive integer>` selects an explicit count. A task receives
@@ -408,7 +408,7 @@ Good Aura concurrency tends to look the same across programs:
 - task results inspected through `TaskResult`, `wait_any`, or `wait_all`
 - long CPU loops that check `cancelled()` when cancellation matters and use
   explicit yields when a particular chunk boundary should schedule siblings
-- no detached background work; Aura 0.2 exposes no detached task form
+- no detached background work; Aura 0.3 exposes no detached task form
 
 If you can say, for each child task, which scope created it and which scope waits for it, the program is usually on the right track.
 

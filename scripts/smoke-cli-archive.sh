@@ -41,6 +41,29 @@ if [[ -z "$top_levels" || "$top_levels" == *$'\n'* ]]; then
 fi
 top_level="$top_levels"
 
+case "$top_level" in
+  aura-v*-x86_64-unknown-linux-gnu)
+    release_version="${top_level#aura-v}"
+    release_version="${release_version%-x86_64-unknown-linux-gnu}"
+    ;;
+  aura-v*-x86_64-apple-darwin)
+    release_version="${top_level#aura-v}"
+    release_version="${release_version%-x86_64-apple-darwin}"
+    ;;
+  aura-v*-aarch64-apple-darwin)
+    release_version="${top_level#aura-v}"
+    release_version="${release_version%-aarch64-apple-darwin}"
+    ;;
+  *)
+    echo "archive top-level directory has an invalid release identity: $top_level" >&2
+    exit 1
+    ;;
+esac
+if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "archive top-level directory has an invalid release version: $top_level" >&2
+  exit 1
+fi
+
 tar -xzf "$archive" -C "$install_root"
 packaged="$install_root/$top_level/bin/aura"
 if [[ ! -x "$packaged" ]]; then
@@ -169,7 +192,7 @@ if [[ ! "$expected_commit" =~ ^[0-9a-fA-F]{12}$ ]]; then
   echo "expected Aura build commit must be exactly 12 hexadecimal digits" >&2
   exit 2
 fi
-expected_version="aura 0.2.0-preview ($expected_commit)"
+expected_version="aura $release_version ($expected_commit)"
 
 run_and_show "$version_stdout" "$version_stderr" 15 \
   env CARGO="$missing_cargo" "$packaged" --version

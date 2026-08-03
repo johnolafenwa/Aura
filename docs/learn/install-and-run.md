@@ -2,7 +2,7 @@
 
 Aura release archives ship a command-line tool called `aura` plus its private native runtime under `lib/aura`. The tool parses, type-checks, runs, and builds Aura source files, and it also serves as the entry point for editor tooling.
 
-Aura 0.2 is a technical preview. This chapter covers both a release archive and a source checkout.
+Aura 0.3 is a technical preview. This chapter covers both a release archive and a source checkout.
 
 ## Install A Release Archive
 
@@ -21,7 +21,7 @@ For a manual installation, download the archive for a supported host, extract
 it, and keep its directory layout intact:
 
 ```text
-aura-v0.2.0-preview-<target>/
+aura-v0.3.0-preview-<target>/
 ├── bin/aura
 ├── lib/aura/
     ├── libaura_compiler.a
@@ -64,8 +64,8 @@ aura --version
 ```
 
 Preview builds identify both their channel and source commit, for example
-`aura 0.2.0-preview (0123456789ab)`. This distinguishes the approved preview
-from a future final `0.2.0` binary.
+`aura 0.3.0-preview (0123456789ab)`. Source-checkout builds identify their
+channel as `aura 0.3.0-dev (0123456789ab)`.
 
 On Unix shells, consider adding that export to your shell profile.
 

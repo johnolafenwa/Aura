@@ -1,6 +1,6 @@
 # Why Aura
 
-Aura 0.2.0 is a technical preview of a statically typed, compiled systems
+Aura 0.3.0 is a technical preview of a statically typed, compiled systems
 language for ML infrastructure and reliable agents. Its goal is to make
 systems programming accessible to developers who value Python's readability
 and Rust's safety discipline.
@@ -70,7 +70,7 @@ ownership. Its roadmap centers
 Its ownership documentation gives each value one owner and defines
 [default immutable, `mut`, and `var` argument conventions](https://mojolang.org/docs/manual/values/ownership/).
 
-Aura 0.2 centers the application control plane around models and agents:
+Aura 0.3 centers the application control plane around models and agents:
 scoped child tasks, transferable messages, typed I/O and process failures,
 timeouts, retries, and supervision. GPU programming, heterogeneous hardware,
 and Python-library interoperability remain future surface areas.
@@ -123,7 +123,7 @@ The [Performance](/manual/performance) chapter records current measurements,
 known gaps, reproduction evidence, and the optimization direction for later
 releases.
 
-Aura 0.2 is an executable technical preview. Its current surface includes the
+Aura 0.3 is an executable technical preview. Its current surface includes the
 language, native compiler, ownership model, structured task runtime, numeric
 arrays, control-plane modules, package tooling, Manual, and editor extension.
 The [Current Limits](/manual/current-limits) chapter lists the precise

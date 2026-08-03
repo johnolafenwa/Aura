@@ -6,8 +6,10 @@ the extension but never sends it to either registry.
 
 ## Before Publishing
 
-1. Run the complete local `npm run ci` gate.
-2. Push the candidate commit and confirm hosted CI on Linux and macOS.
+1. Run the focused release-metadata, packaging, documentation, and extension
+   checks locally.
+2. Push the candidate commit and complete one full hosted CI run on Linux and
+   macOS for the exact release commit.
 3. Require hosted CI to be reliably green before enabling or relying on the
    planned on-merge auto-release automation, because that automation gates
    releases on CI success.
@@ -53,7 +55,7 @@ npx @vscode/vsce package --out aura-language.vsix --no-dependencies
 ```
 
 Inspect the resulting VSIX and confirm the identity is
-`JohnOlafenwa.vscode-aura-lang` and the Marketplace version is plain `0.2.0`.
+`JohnOlafenwa.vscode-aura-lang` and the Marketplace version is plain `0.3.0`.
 
 ## Publish An Existing Release Extension
 
@@ -64,19 +66,23 @@ without moving or recreating its tag:
 gh auth login
 gh auth status
 gh workflow run release.yml --ref main \
-  -f source_ref=main \
-  -f release_tag=v0.2.0-preview \
+  -f release_tag=v0.3.0-preview \
   -f publish=false \
   -f publish_extension=true
 ```
 
-The workflow resolves the immutable implementation source from `source_ref`,
-confirms that the GitHub Release already exists, builds a fresh VSIX from
-`main`, verifies the packaged publisher and plain version, and then publishes
-only to registries whose secrets are configured. The release tag remains the
-version identity and is neither moved nor recreated. Omit `source_ref` only
-when the VSIX already attached to the GitHub Release is the exact artifact to
-publish.
+Omit `source_ref` to make the workflow download the exact VSIX attached to the
+release. It confirms that the GitHub Release exists, verifies the packaged
+publisher and plain version, and publishes only to registries whose secrets
+are configured. The release tag remains the immutable version identity.
+
+Passing an explicit `source_ref` rebuilds a VSIX from that source. Use that
+path only when the rebuilt source is intentionally the artifact being
+published.
 
 For a new tag, the normal Release workflow publishes the GitHub Release first
 and then runs the same extension-publishing job.
+
+Release tags are annotated. Sign them when a repository signing identity is
+configured; otherwise record that the tag is unsigned by choice in the release
+work note.

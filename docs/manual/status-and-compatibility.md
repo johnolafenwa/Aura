@@ -1,6 +1,6 @@
 # Status And Compatibility
 
-Aura 0.3 is an active development channel and advanced technical preview. It
+Aura 0.3 is an advanced technical preview. It
 is suitable for compiler and runtime evaluation, examples, and controlled
 experiments. It is not a production systems-language release or a security
 boundary for untrusted programs.

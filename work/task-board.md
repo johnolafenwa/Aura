@@ -2,7 +2,33 @@
 
 Last updated: 2026-08-03
 
-## Batch S1: Aura 0.3 Python-surface program (in progress)
+## Aura v0.3.0-preview release (in progress)
+
+- Authorized target: prepare and publish Aura v0.3.0-preview without adding
+  language features, run one complete verification, publish the GitHub
+  prerelease and version 0.3.0 of `JohnOlafenwa.vscode-aura-lang` to Visual
+  Studio Marketplace and Open VSX, then verify every public artifact.
+- The prerequisite merged-main CI run `30854235277` is green on Ubuntu 24.04
+  and macOS 15. Release preparation is isolated on
+  `codex/v0.3.0-preview-release` from merged main commit `7d641f0`.
+- Product manifests already agree on 0.3.0. Release-only work stamps packaged
+  binaries as `0.3.0-preview`, moves the public installer and maintained
+  documentation to the 0.3 preview, and retains `0.3.0-dev` for ordinary
+  source builds.
+- The tag-triggered workflow will build and smoke-test three CLI archives,
+  package the documentation and VSIX, generate and verify `SHA256SUMS`, publish
+  a GitHub prerelease, and publish the same VSIX to both configured registries.
+- No tag-signing identity is configured, so the annotated tag will be unsigned
+  by choice. One complete hosted CI run on the exact candidate is the required
+  broad verification; focused release and packaging checks run locally.
+- Focused release, identity, reference, documentation, workflow, shell,
+  formatting, extension, native archive, and installed archive-smoke checks are
+  green. The exact-candidate hosted run remains pending.
+- Protected user files remain untouched: `personal/file_ops.au` and the
+  untracked ADR-0022 draft.
+- Work note: `work/2026-08-03-v0.3.0-preview-release.md`.
+
+## Batch S1: Aura 0.3 Python-surface program (complete; merged)
 
 - Authorized target: complete the coordinated 0.3 breaking migration in the
   ratified order S2 → S1 → S3 → S4 → five design-only ADRs, obtain the required
@@ -73,16 +99,15 @@ Last updated: 2026-08-03
   final exact-tree `npm run ci` gate is green at `5ee64cd`, including forced
   backend parity, editor tooling, reference integrity, docs, audits, Clippy,
   hygiene, and coverage at 96.304488163144% lines, 97.216796875% functions,
-  and 94.717811553593% regions. No synthetic tests were added. Remaining work
-  is the S1.1 checkpoint-findings closure and one complete green hosted run on
-  both operating systems. The user authorized pushes and pull requests on
-  2026-08-03, and later made one complete hosted run the standing completion
-  policy in place of repeated consecutive reruns.
+  and 94.717811553593% regions. No synthetic tests were added. S1.1 closed the
+  remaining checkpoint findings, and pull request 2 merged the completed
+  branch at `7d641f0`. The user made one complete hosted run the standing
+  completion policy in place of repeated consecutive reruns.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
 - Work note: `work/2026-08-02-batch-s1-python-surface.md`.
 
-## Batch S1.1: checkpoint findings closure (complete; awaiting sign-off)
+## Batch S1.1: checkpoint findings closure (complete; merged)
 
 - Authorized target: close equality gating, format zero-padding and literal
   diagnostics, root match binding patterns, the 0.3 reference restamp,
@@ -164,8 +189,8 @@ Last updated: 2026-08-03
   requested under the user's one-run policy.
 - Push and pull-request authorization is explicit. The user's standing policy
   now requires one complete green hosted CI run on both operating systems;
-  repeated consecutive reruns are not required. That run is complete. Merge
-  waits for checkpoint sign-off.
+  repeated consecutive reruns are not required. That run completed, and pull
+  request 2 merged the checkpoint at `7d641f0`.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
 - Work note: `work/2026-08-03-s1.1-checkpoint-findings-closure.md`.
