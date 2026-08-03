@@ -82,7 +82,7 @@ Last updated: 2026-08-03
   ADR-0022 draft, and `fc2_direct.out`.
 - Work note: `work/2026-08-02-batch-s1-python-surface.md`.
 
-## Batch S1.1: checkpoint findings closure (in progress)
+## Batch S1.1: checkpoint findings closure (complete; awaiting sign-off)
 
 - Authorized target: close equality gating, format zero-padding and literal
   diagnostics, root match binding patterns, the 0.3 reference restamp,
@@ -131,7 +131,8 @@ Last updated: 2026-08-03
   maintained one-worker fairness regression, the hosted count is ten complete
   repetitions of all three tests, and a regression pins both the resolved
   names and budget. Focused metadata, shell-syntax, and workflow checks are
-  green; a complete hosted Safety verification remains pending after push.
+  green. Hosted Safety run `30823933687` is fully green, including ASan, TSan,
+  both fuzz targets, scheduler stress, the scheduler model, and the benchmark.
 - The final local gate is green. It covers 31 Aura unit tests, 362 CLI tests,
   1,663 compiler tests, the complete forced MIR/direct parity matrix, 107 LSP
   tests at 100% coverage, 22 extension tests, all 39 Manual pages and 270
@@ -152,10 +153,19 @@ Last updated: 2026-08-03
   The lockfile now selects fixed transitive releases `brace-expansion` 5.0.9
   and `postcss` 8.5.25; a clean `npm ci` and complete npm/Rust audit gate are
   green with zero npm vulnerabilities.
+- The one required complete hosted proof, run `30846511697`, is green at final
+  code/lock commit `b5831ab`. Ubuntu 24.04 completed in 1:40:17 with
+  96.306350078161302% lines (91,179/94,676), 97.235322816718167% functions
+  (5,979/6,149), and 94.725135049253268% regions (134,145/141,615). macOS 15
+  completed in 1:06:21 with 96.304237610376447% lines (91,177/94,676),
+  97.235322816718167% functions (5,979/6,149), and 94.722310489708008% regions
+  (134,141/141,615). Both full gates and the companion Docs run `30846511698`
+  are green with zero npm vulnerabilities. No consecutive reruns were
+  requested under the user's one-run policy.
 - Push and pull-request authorization is explicit. The user's standing policy
   now requires one complete green hosted CI run on both operating systems;
-  repeated consecutive reruns are not required. Merge waits for checkpoint
-  sign-off after that run.
+  repeated consecutive reruns are not required. That run is complete. Merge
+  waits for checkpoint sign-off.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
 - Work note: `work/2026-08-03-s1.1-checkpoint-findings-closure.md`.
