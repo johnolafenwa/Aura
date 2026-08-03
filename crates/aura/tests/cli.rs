@@ -5078,6 +5078,51 @@ fn run_backend_selector_matches_across_mir_direct_and_auto() {
 }
 
 #[test]
+fn s1_float32_power_and_python_surface_match_mir_and_direct_backends() {
+    let source = r#"
+scale: float32 = 2.0
+
+def classify(value: int64) -> str:
+    match value:
+        case 1 | 2 if value > 1:
+            return "two"
+        case _:
+            return "other"
+
+def main() -> int32:
+    powered: float32 = scale ** (3.0 as float32)
+    pair: (float32, float32) = divmod(powered, 3.0 as float32)
+
+    mut values: list[int64] = list[int64].with_capacity(4)
+    values.append(4)
+    values.append(2)
+    values.append(2)
+    first = values.pop(0)
+    values.remove(2)
+    values.reserve(8)
+
+    mut labels: set[str] = set[str].with_capacity(2)
+    labels.add("aura")
+    labels.discard("missing")
+    labels.reserve(4)
+
+    mut scores: dict[str, int64] = dict[str, int64].with_capacity(2)
+    scores["aura"] = 3
+    scores.reserve(4)
+
+    print(f"{powered:.2f}|{pair}|{round(2.5 as float32)}|{classify(2)}")
+    print(f"{first}|{values.index(2)}|{values.count(2)}|{'aura' in labels}|{scores['aura']}")
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aura-s1-direct-python-surface",
+        source,
+        "8.00|(2.0, 2.0)|2|two\n4|0|1|true|3\n",
+    );
+}
+
+#[test]
 fn run_backends_match_eager_comprehension_behavior() {
     let source = include_str!("../../aura-compiler/tests/fixtures/run-pass/comprehensions.au");
     let expected =
