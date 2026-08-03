@@ -5123,6 +5123,49 @@ def main() -> int32:
 }
 
 #[test]
+fn s1_narrow_operators_format_sort_and_guarded_patterns_match_backends() {
+    let source = r#"
+base: int8 = 12
+
+def identity(value: int64) -> int64:
+    return value
+
+def describe(value: int8) -> str:
+    match value:
+        case 0 | 15 if value > (10 as int8):
+            return f"{value:04x}"
+        case _:
+            return "other"
+
+def main() -> int32:
+    right: int8 = 3
+    assert base > right
+    print(base // right)
+    print(base % right)
+    print((2 as int8) ** right)
+    print(base & right)
+    print(base | right)
+    print(base ^ right)
+    print(base << right)
+    print(base >> right)
+
+    mut values: list[int64] = [3, 1, 2]
+    values.sort(key=identity, reverse=true)
+    print(values)
+
+    ratio: float32 = 1.25
+    print(f"{base:04x}|{ratio:.2f}|{describe(15 as int8)}")
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aura-s1-direct-narrow-operators",
+        source,
+        "4\n0\n8\n0\n15\n15\n96\n1\n[3, 2, 1]\n   c|1.25|   f\n",
+    );
+}
+
+#[test]
 fn run_backends_match_eager_comprehension_behavior() {
     let source = include_str!("../../aura-compiler/tests/fixtures/run-pass/comprehensions.au");
     let expected =

@@ -159,6 +159,38 @@ def main():
 }
 
 #[test]
+fn direct_dynamic_binary_opcodes_match_the_runtime_abi() {
+    for (operator, opcode) in [
+        (BinaryOp::Add, 0),
+        (BinaryOp::Sub, 1),
+        (BinaryOp::Mul, 2),
+        (BinaryOp::Div, 3),
+        (BinaryOp::Mod, 4),
+        (BinaryOp::Eq, 5),
+        (BinaryOp::NotEq, 6),
+        (BinaryOp::Less, 7),
+        (BinaryOp::LessEq, 8),
+        (BinaryOp::Greater, 9),
+        (BinaryOp::GreaterEq, 10),
+        (BinaryOp::And, 11),
+        (BinaryOp::Or, 12),
+        (BinaryOp::FloorDiv, 13),
+        (BinaryOp::Pow, 14),
+        (BinaryOp::BitAnd, 15),
+        (BinaryOp::BitOr, 16),
+        (BinaryOp::BitXor, 17),
+        (BinaryOp::Shl, 18),
+        (BinaryOp::Shr, 19),
+    ] {
+        assert_eq!(
+            super::FunctionCompiler::binary_opcode(operator),
+            opcode,
+            "{operator:?} must retain the opcode consumed by aura_direct_binary_value_at",
+        );
+    }
+}
+
+#[test]
 fn tuple_native_ownership_gates_separate_public_projection_from_private_destructuring() {
     assert!(validate_tuple_projection_operand(&Operand::Place("pair".to_string())).is_ok());
     let public_move = validate_tuple_projection_operand(&Operand::MovePlace("pair".to_string()))

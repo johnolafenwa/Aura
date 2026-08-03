@@ -5104,7 +5104,7 @@ impl<'a> FunctionCompiler<'a> {
             };
             let left = self.ensure_opaque(left)?;
             let right = self.ensure_opaque(right)?;
-            let opcode_value = self.binary_opcode(op);
+            let opcode_value = Self::binary_opcode(op);
             let opcode = self.builder.ins().iconst(types::I64, opcode_value);
             let float_width = self.builder.ins().iconst(types::I64, float_width);
             let (line, column) = self.span_values(span);
@@ -5180,7 +5180,7 @@ impl<'a> FunctionCompiler<'a> {
         if matches!(left.ty, DirectType::Opaque(_)) || matches!(right.ty, DirectType::Opaque(_)) {
             let left = self.ensure_opaque(left)?;
             let right = self.ensure_opaque(right)?;
-            let binary_opcode = self.binary_opcode(op);
+            let binary_opcode = Self::binary_opcode(op);
             let opcode = self.builder.ins().iconst(types::I64, binary_opcode);
             let float_width = self.builder.ins().iconst(types::I64, 0);
             let (line, column) = self.span_values(span);
@@ -5510,7 +5510,7 @@ impl<'a> FunctionCompiler<'a> {
                 })
             }
             BinaryOp::FloorDiv | BinaryOp::Mod => {
-                let opcode_value = self.binary_opcode(op);
+                let opcode_value = Self::binary_opcode(op);
                 let left_box = self.builder.ins().call(self.box_f64, &[left]);
                 let right_box = self.builder.ins().call(self.box_f64, &[right]);
                 let left_boxed = self.builder.inst_results(left_box)[0];
@@ -8370,7 +8370,7 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn binary_opcode(&self, op: BinaryOp) -> i64 {
+    fn binary_opcode(op: BinaryOp) -> i64 {
         match op {
             BinaryOp::Add => 0,
             BinaryOp::Sub => 1,
@@ -9495,7 +9495,7 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_value = self.load_operand(&argument.value)?;
                         let value = self.ensure_opaque(loaded_value)?;
-                        let binary_opcode = self.binary_opcode(BinaryOp::Add);
+                        let binary_opcode = Self::binary_opcode(BinaryOp::Add);
                         let opcode = self.builder.ins().iconst(types::I64, binary_opcode);
                         let zero = self.builder.ins().iconst(types::I64, 0);
                         let inst = self.builder.ins().call(
