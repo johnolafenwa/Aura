@@ -20,23 +20,7 @@ ASAN_OPTIONS="$asan_options" cargo "+$toolchain" test \
   --test native_runtime_ffi \
   -- --test-threads=1
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-generated_dir="$(mktemp -d)"
-trap 'rm -rf "$generated_dir"' EXIT
-cargo "+$toolchain" build \
-  -Zbuild-std \
-  --target "$target" \
-  -p aura
-aura_bin="$repo_root/target/$target/debug/aura"
-export CC="$repo_root/scripts/cc-asan.sh"
-export RUSTUP_TOOLCHAIN="$toolchain"
-unset RUSTFLAGS
-unset RUSTDOCFLAGS
-
-"$aura_bin" build --backend direct -o "$generated_dir/control-plane" \
-  crates/aura-compiler/tests/fixtures/run-pass/control_plane_foundations.au
-ASAN_OPTIONS="$asan_options" "$generated_dir/control-plane"
-
-"$aura_bin" build --backend direct -o "$generated_dir/queue" \
-  examples/concurrency/bounded_queue.au
-ASAN_OPTIONS="$asan_options" "$generated_dir/queue"
+# This integration target executes the public native ABI directly, including
+# arrays, queues, tasks, files, sockets, HTTP, and resource cleanup. Do not
+# invoke aura from this sanitizer process: aura would spawn a nested Cargo
+# runtime build that does not own this script's -Zbuild-std ABI contract.

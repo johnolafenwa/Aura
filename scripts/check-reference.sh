@@ -251,7 +251,7 @@ grep -Fq '| `random.Rng.next_int` | `next_int(lo: int64, hi: int64) -> int64`' d
 grep -Fq 'result = rotl(s1 * 5, 7) * 9' docs/manual/randomness.md
 grep -Fq 'threshold = 2^64 mod span' docs/manual/randomness.md
 grep -Fq 'secure_bytes(0)' docs/manual/randomness.md
-grep -Fq 'stable throughout the Aura 0.2.x' docs/manual/randomness.md
+grep -Fq 'stable throughout the Aura 0.3.x' docs/manual/randomness.md
 grep -Fq '3321214725393783201' docs/manual/randomness.md
 grep -Fq 'The no-clone rule is transitive.' docs/manual/randomness.md
 grep -Fq '`AU3007` rejects an operation that would duplicate non-cloneable state.' docs/manual/diagnostics.md

@@ -1,0 +1,5 @@
+error[AU2999]: duplicate match arm for literal `1` (previously matched at 3:14)
+ --> crates/aura-compiler/tests/fixtures/check-fail/match_duplicate_literal.au:5:14
+  |
+5 |         case 1:
+  |              ^

@@ -113,11 +113,26 @@ Last updated: 2026-08-03
   host-contention flakes rather than product failures; the established
   narrow shared guard remains the correct disposition.
 - The Aug 3 Safety failure is locally dispositioned. Fuzz now selects its
-  pinned nightly explicitly; ASan/TSan sanitizer flags apply to target crates
-  without contaminating host build tools; and a coverage-only live-value guard
-  found and closed the test-only 18-value and 53-value FFI harness leaks. All
-  seven instrumented native-runtime tests are green with zero retained opaque
-  values. Fresh hosted Safety verification remains pending after push.
+  pinned nightly and explicit GNU target; ASan/TSan sanitizer flags apply to
+  target crates without contaminating host build tools; and a coverage-only
+  live-value guard found and closed the test-only 18-value and 53-value FFI
+  harness leaks. Hosted repair run `30802829724` proved the directly
+  instrumented TSan scheduler partition 274/274 and the ASan native-runtime
+  FFI partition 7/7, then exposed nested Aura/Cargo integration builds
+  inheriting the parent sanitizer ABI without its `-Zbuild-std` contract. The
+  final scripts retain those complete directly instrumented boundaries and no
+  longer launch a second Cargo process. Both fuzz targets explicitly use the
+  installed `x86_64-unknown-linux-gnu` target. Focused metadata, shell-syntax,
+  and workflow checks are green; fresh hosted Safety verification remains
+  pending after push.
+- The final local gate is green. It covers 31 Aura unit tests, 362 CLI tests,
+  1,663 compiler tests, the complete forced MIR/direct parity matrix, 107 LSP
+  tests at 100% coverage, 22 extension tests, all 39 Manual pages and 270
+  fenced blocks, the documentation build, both dependency audits,
+  warnings-denied Clippy, and hygiene. Exact compiler coverage is
+  96.303181376484% lines (91,176/94,676), 97.23532281671817% functions
+  (5,979/6,149), and 94.722310489708% regions (134,141/141,615). No synthetic
+  coverage test or justified exclusion was added.
 - Push and pull-request authorization is explicit. Merge waits for checkpoint
   sign-off after three consecutive green hosted CI runs on both operating
   systems.

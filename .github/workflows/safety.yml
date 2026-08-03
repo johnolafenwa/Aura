@@ -22,8 +22,8 @@ jobs:
       - uses: taiki-e/install-action@c7eb1735f09259a5035e8e5d44b1406b1cddc0fb # v2
         with:
           tool: cargo-fuzz@0.13.2
-      - run: cargo +nightly-2026-07-01 fuzz run frontend -- -max_total_time=120 -timeout=10
-      - run: cargo +nightly-2026-07-01 fuzz run mir_runtime -- -max_total_time=120 -timeout=10
+      - run: cargo +nightly-2026-07-01 fuzz run --target x86_64-unknown-linux-gnu frontend -- -max_total_time=120 -timeout=10
+      - run: cargo +nightly-2026-07-01 fuzz run --target x86_64-unknown-linux-gnu mir_runtime -- -max_total_time=120 -timeout=10
 
   native-runtime-asan:
     runs-on: ubuntu-24.04

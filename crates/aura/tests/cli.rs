@@ -44,6 +44,52 @@ fn hosted_ci_safepoint_windows_scale_without_changing_local_windows() {
     assert_eq!(timing_millis_for_hosted_ci(100, true), 400);
 }
 
+#[test]
+fn check_reports_match_expression_and_literal_pattern_diagnostics() {
+    let fixture = repo_root().join(
+        "crates/aura-compiler/tests/fixtures/check-fail/match_expression_class_pattern_deferred.au",
+    );
+    let output = Command::new(aura_bin())
+        .arg("check")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura check");
+
+    assert!(
+        !output.status.success(),
+        "class patterns must remain rejected"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[AU2999]"), "stderr was:\n{stderr}");
+    assert!(
+        stderr.contains(
+            "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code"
+        ),
+        "stderr was:\n{stderr}"
+    );
+    assert!(stderr.contains(":6:14"), "stderr was:\n{stderr}");
+
+    let duplicate_literal = repo_root()
+        .join("crates/aura-compiler/tests/fixtures/check-fail/match_duplicate_literal.au");
+    let output = Command::new(aura_bin())
+        .arg("check")
+        .arg(&duplicate_literal)
+        .output()
+        .expect("failed to run aura check");
+
+    assert!(
+        !output.status.success(),
+        "duplicate literal patterns must remain rejected"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[AU2999]"), "stderr was:\n{stderr}");
+    assert!(
+        stderr.contains("duplicate match arm for literal `1` (previously matched at 3:14)"),
+        "stderr was:\n{stderr}"
+    );
+    assert!(stderr.contains(":5:14"), "stderr was:\n{stderr}");
+}
+
 #[cfg(unix)]
 fn hold_native_runtime_build_locks(target_dir: &std::path::Path) -> Vec<fs::File> {
     use std::os::fd::AsRawFd;

@@ -1,0 +1,10 @@
+class Box:
+    value: int64
+
+def choose(box: Box) -> int64:
+    return match box:
+        case Ready: 1
+        case whole: whole.value
+
+def main():
+    pass

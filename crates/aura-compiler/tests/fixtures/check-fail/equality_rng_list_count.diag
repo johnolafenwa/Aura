@@ -3,4 +3,5 @@ error[AU2008]: cannot use `list.count` with `random.Rng` because `random.Rng` do
   |
 4 |     print(values.count(value))
   |                  ^
+  = note: Aura has no identity-equality fallback; equality-dependent operations require a defined value relation
   = help: compare generated scalar values or an explicit stable discriminant; generator identity is not value equality

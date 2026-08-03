@@ -105,6 +105,7 @@ use package::PackageGraph;
 #[doc(hidden)]
 pub mod native_runtime_coverage {
     pub use super::native_runtime::aura_direct_tag_value_type;
+    pub use super::native_runtime::DIRECT_VALUE_LIVE_COUNT;
     pub use super::native_runtime::{
         aura_direct_arg_buffer_new, aura_direct_arg_buffer_store_owned, aura_direct_array_binary,
         aura_direct_array_clone, aura_direct_array_fill_in_place, aura_direct_array_from_vec,
@@ -118,12 +119,11 @@ pub mod native_runtime_coverage {
         aura_direct_cast_integer_to_integer, aura_direct_cast_value, aura_direct_channel_new,
         aura_direct_channel_recv, aura_direct_channel_send_timeout_value,
         aura_direct_channel_try_send, aura_direct_close_value, aura_direct_coverage_clone_value,
-        aura_direct_coverage_live_value_count, aura_direct_duration_from_i64,
-        aura_direct_duration_literal, aura_direct_duration_to_float, aura_direct_enum_variant,
-        aura_direct_file_close, aura_direct_file_flush, aura_direct_file_read_all,
-        aura_direct_file_write_all, aura_direct_fs_append_string, aura_direct_fs_create,
-        aura_direct_fs_create_dir, aura_direct_fs_open, aura_direct_fs_read_dir,
-        aura_direct_function_default_binder, aura_direct_function_thunk,
+        aura_direct_duration_from_i64, aura_direct_duration_literal, aura_direct_duration_to_float,
+        aura_direct_enum_variant, aura_direct_file_close, aura_direct_file_flush,
+        aura_direct_file_read_all, aura_direct_file_write_all, aura_direct_fs_append_string,
+        aura_direct_fs_create, aura_direct_fs_create_dir, aura_direct_fs_open,
+        aura_direct_fs_read_dir, aura_direct_function_default_binder, aura_direct_function_thunk,
         aura_direct_function_value, aura_direct_host_builtin, aura_direct_http_listener_accept,
         aura_direct_http_listener_close, aura_direct_http_listener_local_addr,
         aura_direct_http_response_bytes, aura_direct_http_response_headers,

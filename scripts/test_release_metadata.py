@@ -189,13 +189,20 @@ class ReleaseMetadataTests(unittest.TestCase):
             workflow.count("cargo +nightly-2026-07-01 fuzz run"),
             2,
         )
+        self.assertEqual(
+            workflow.count("--target x86_64-unknown-linux-gnu"),
+            2,
+        )
         self.assertIn("CARGO_TARGET_", tsan)
         self.assertNotIn("export RUSTFLAGS=", tsan)
+        self.assertNotIn("--test cli", tsan)
         self.assertIn("CARGO_TARGET_", asan)
         self.assertNotIn("export RUSTFLAGS=", asan)
         self.assertIn('ASAN_OPTIONS="$asan_options" cargo', asan)
+        self.assertNotIn('"$aura_bin" build', asan)
         self.assertIn("DIRECT_VALUE_LIVE_COUNT", native_runtime)
-        self.assertIn("aura_direct_coverage_live_value_count", native_runtime_exports)
+        self.assertIn("DIRECT_VALUE_LIVE_COUNT", native_runtime_exports)
+        self.assertNotIn("aura_direct_coverage_live_value_count", native_runtime_exports)
         self.assertEqual(ffi_tests.count("direct_runtime_ffi_test_guard()"), 8)
 
 

@@ -951,7 +951,8 @@ pub struct OpaqueValue {
 }
 
 #[cfg(coverage)]
-static DIRECT_VALUE_LIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[doc(hidden)]
+pub static DIRECT_VALUE_LIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 type NativeThunk = unsafe extern "C-unwind" fn(*const i64, usize) -> *mut OpaqueValue;
 const DIRECT_MAX_CALL_DEPTH: usize = 256;
@@ -1131,11 +1132,6 @@ fn boxed_value_with_type(value: Value, runtime_type_name: Option<String>) -> *mu
     DIRECT_VALUE_LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
     register_direct_owned_value(value);
     value
-}
-
-#[cfg(coverage)]
-pub fn aura_direct_coverage_live_value_count() -> usize {
-    DIRECT_VALUE_LIVE_COUNT.load(Ordering::Acquire)
 }
 
 // These helpers validate the explicit refcount stored in `OpaqueValue`, but they cannot detect

@@ -30,16 +30,8 @@ cargo "+$toolchain" test \
   'runtime_value::tests::' \
   -- --test-threads=1
 
-# Keep these as filters rather than an enumerated list so every regression
-# added to the maintained four-worker fixture family automatically joins the
-# data-race gate. The join filter also covers the loaded four-worker
-# reachability regression, whose test name describes its semantic contract.
-for filter in four_worker task_group_join; do
-  cargo "+$toolchain" test \
-    -Zbuild-std \
-    --target "$target" \
-    -p aura \
-    --test cli \
-    "$filter" \
-    -- --test-threads=1
-done
+# Keep this gate at the directly instrumented scheduler boundary. Launching the
+# CLI integration suite here makes aura spawn a second Cargo process; that
+# child does not own this script's -Zbuild-std contract and cannot safely
+# inherit the sanitizer ABI flags. The ordinary CI parity suite continues to
+# exercise the four-worker Aura programs through the CLI.

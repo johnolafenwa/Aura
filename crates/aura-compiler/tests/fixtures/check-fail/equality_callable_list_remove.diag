@@ -3,4 +3,5 @@ error[AU2008]: cannot use `list.remove` with `def(int64) -> int64` because `def(
   |
 2 |     values.remove(value)
   |            ^
+  = note: Aura has no identity-equality fallback; equality-dependent operations require a defined value relation
   = help: compare explicit results or a stable discriminant; callable identity is not value equality

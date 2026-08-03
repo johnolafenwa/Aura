@@ -765,6 +765,11 @@ def expression(value: int64) -> int64:
         case n if n >= 0: n
         case n: 0 - n
 
+def enum_expression(state: State) -> int64:
+    return match state:
+        case whole if whole == State.Ready: 1
+        case whole: 2
+
 def consume(box: own Box) -> int64:
     match own box:
         case owned:
@@ -793,8 +798,28 @@ def whole_enum(state: State) -> State:
             "catch-all match arm must be the final `case`",
         ),
         (
+            "enum State:\n    Ready\n    Done\n\ndef main():\n    state = State.Ready\n    match state:\n        case whole:\n            pass\n        case Ready:\n            pass\n",
+            "catch-all match arm must be the final `case`",
+        ),
+        (
+            "enum State:\n    Ready\n    Done\n\ndef choose(state: State) -> int64:\n    return match state:\n        case whole: 1\n        case Ready: 2\n\ndef main():\n    pass\n",
+            "catch-all match arm must be the final `case`",
+        ),
+        (
             "def main():\n    match 1:\n        case n if n > 0:\n            pass\n",
             "requires a final `case _:` arm",
+        ),
+        (
+            "class Box:\n    value: int64\n\ndef choose(box: Box) -> int64:\n    return match box:\n        case Ready: 1\n        case whole: whole.value\n\ndef main():\n    pass\n",
+            "class patterns are not supported",
+        ),
+        (
+            "def choose(value: bool) -> int64:\n    return match value:\n        case _: 1\n        case true: 2\n\ndef main():\n    pass\n",
+            "wildcard match arm must be the final `case`",
+        ),
+        (
+            "def choose(value: bool) -> int64:\n    return match value:\n        case whole if whole: 1\n\ndef main():\n    pass\n",
+            "non-exhaustive bool match: missing `false`, `true`",
         ),
     ] {
         let diagnostic = crate::check_source(source)
@@ -25798,6 +25823,8 @@ def invalid(
 fn callable_equality_is_rejected_uniformly_for_function_values_and_closures() {
     const MESSAGE: &str =
         "callable equality is not supported; compare results or use an explicit discriminant";
+    const NOTE: &str =
+        "Aura has no identity-equality fallback; equality-dependent operations require a defined value relation";
     let cases = [
         (
             "named function value ==",
@@ -25868,6 +25895,7 @@ def main():
             crate::check_source(source).expect_err("callable equality must be rejected");
         assert_eq!(diagnostic.code, "AU2008", "{case}: {diagnostic:?}");
         assert_eq!(diagnostic.message, MESSAGE, "{case}: {diagnostic:?}");
+        assert_eq!(diagnostic.notes, [NOTE], "{case}: {diagnostic:?}");
     }
 }
 
@@ -25916,6 +25944,28 @@ def reject(values: mut dict[def(int64) -> int64, int64], key: own def(int64) -> 
     values[key] = 1
 "#,
         ),
+        (
+            "transitive class membership",
+            r#"
+class Handler:
+    callback: def(int64) -> int64
+
+def reject(values: list[Handler], value: Handler):
+    print(value in values)
+"#,
+        ),
+        (
+            "recursive enum dictionary key",
+            r#"
+enum CallbackChain:
+    Done
+    Next(indirect CallbackChain)
+    Work(def(int64) -> int64)
+
+def reject(values: dict[CallbackChain, int64], key: CallbackChain):
+    print(values[key])
+"#,
+        ),
     ];
 
     for (operation, source) in callable_cases {
@@ -25928,6 +25978,11 @@ def reject(values: mut dict[def(int64) -> int64, int64], key: own def(int64) -> 
         );
         assert!(
             diagnostic.message.contains("def(int64) -> int64"),
+            "{operation}: {diagnostic:?}"
+        );
+        assert_eq!(
+            diagnostic.notes,
+            ["Aura has no identity-equality fallback; equality-dependent operations require a defined value relation"],
             "{operation}: {diagnostic:?}"
         );
     }
@@ -26020,6 +26075,11 @@ def reject(values: list[Holder], value: Holder):
         );
         assert!(
             diagnostic.message.contains("random.Rng"),
+            "{operation}: {diagnostic:?}"
+        );
+        assert_eq!(
+            diagnostic.notes,
+            ["Aura has no identity-equality fallback; equality-dependent operations require a defined value relation"],
             "{operation}: {diagnostic:?}"
         );
     }

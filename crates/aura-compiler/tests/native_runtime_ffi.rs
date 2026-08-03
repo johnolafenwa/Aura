@@ -9,6 +9,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::ptr;
+use std::sync::atomic::Ordering;
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -24,6 +25,10 @@ extern "C-unwind" {
 
 static DIRECT_RUNTIME_FFI_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+fn direct_live_value_count() -> usize {
+    DIRECT_VALUE_LIVE_COUNT.load(Ordering::Acquire)
+}
+
 struct DirectRuntimeFfiTestGuard {
     _lock: MutexGuard<'static, ()>,
     initial_live_values: usize,
@@ -32,7 +37,7 @@ struct DirectRuntimeFfiTestGuard {
 impl Drop for DirectRuntimeFfiTestGuard {
     fn drop(&mut self) {
         assert_eq!(
-            aura_direct_coverage_live_value_count(),
+            direct_live_value_count(),
             self.initial_live_values,
             "the direct-runtime FFI test leaked opaque values"
         );
@@ -45,7 +50,7 @@ fn direct_runtime_ffi_test_guard() -> DirectRuntimeFfiTestGuard {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     DirectRuntimeFfiTestGuard {
         _lock: lock,
-        initial_live_values: aura_direct_coverage_live_value_count(),
+        initial_live_values: direct_live_value_count(),
     }
 }
 

@@ -21,6 +21,9 @@ use crate::integer::{
 };
 use crate::runtime_value::{parse_format_spec, validate_format_spec_for_type};
 
+const NO_IDENTITY_EQUALITY_NOTE: &str =
+    "Aura has no identity-equality fallback; equality-dependent operations require a defined value relation";
+
 #[derive(Clone, Debug)]
 pub struct Program {
     pub module: Module,
@@ -6797,9 +6800,7 @@ impl<'a> FunctionChecker<'a> {
                 .find_map(|element| self.callable_in_equality_type_inner(element, visiting)),
             Type::Named(name, args) => {
                 if let Some(class_info) = self.resolve_class_info(name) {
-                    if args.len() != class_info.decl.type_params.len() {
-                        return None;
-                    }
+                    debug_assert_eq!(args.len(), class_info.decl.type_params.len());
                     let key = format!("class:{}:{}", class_info.module_name, class_info.decl.name);
                     if !visiting.insert(key.clone()) {
                         return None;
@@ -6815,9 +6816,7 @@ impl<'a> FunctionChecker<'a> {
                 }
 
                 if let Some(enum_info) = self.resolve_enum_info(name) {
-                    if args.len() != enum_info.decl.type_params.len() {
-                        return None;
-                    }
+                    debug_assert_eq!(args.len(), enum_info.decl.type_params.len());
                     let key = format!("enum:{}:{}", enum_info.module_name, enum_info.decl.name);
                     if !visiting.insert(key.clone()) {
                         return None;
@@ -6993,6 +6992,7 @@ impl<'a> FunctionChecker<'a> {
                 span,
                 format!("{operation} because `{callable_ty}` does not define equality"),
             )
+            .with_note(NO_IDENTITY_EQUALITY_NOTE)
             .with_help(
                 "compare explicit results or a stable discriminant; callable identity is not value equality",
             ));
@@ -7003,6 +7003,7 @@ impl<'a> FunctionChecker<'a> {
                 span,
                 format!("{operation} because `random.Rng` does not define equality"),
             )
+            .with_note(NO_IDENTITY_EQUALITY_NOTE)
             .with_help(
                 "compare generated scalar values or an explicit stable discriminant; generator identity is not value equality",
             ));
@@ -7015,6 +7016,7 @@ impl<'a> FunctionChecker<'a> {
                     "{operation} because opaque FFI handle `{handle_ty}` does not define equality"
                 ),
             )
+            .with_note(NO_IDENTITY_EQUALITY_NOTE)
             .with_help(
                 "compare a stable scalar or str identifier exposed by the binding instead of foreign identity",
             ));
@@ -7310,7 +7312,7 @@ impl<'a> FunctionChecker<'a> {
             let resolved = substitutions
                 .get(type_param)
                 .cloned()
-                .unwrap_or_else(|| Type::TypeParam(type_param.clone()));
+                .unwrap_or(Type::TypeParam(type_param.clone()));
             self.reject_rng_duplication(operation, &resolved, span)?;
         }
         Ok(())
@@ -7327,7 +7329,7 @@ impl<'a> FunctionChecker<'a> {
             let resolved = substitutions
                 .get(type_param)
                 .cloned()
-                .unwrap_or_else(|| Type::TypeParam(type_param.clone()));
+                .unwrap_or(Type::TypeParam(type_param.clone()));
             self.require_array_equality_eligible(
                 &resolved,
                 format!("cannot use {operation} with `{resolved}`"),
@@ -13644,7 +13646,8 @@ impl<'a> FunctionChecker<'a> {
                 "AU2008",
                 span,
                 "callable equality is not supported; compare results or use an explicit discriminant",
-            ));
+            )
+            .with_note(NO_IDENTITY_EQUALITY_NOTE));
         }
         if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
             self.require_array_equality_eligible(
@@ -19974,12 +19977,6 @@ impl<'a> FunctionChecker<'a> {
                         }
                         Pattern::Wildcard(span) => {
                             if arm.guard.is_none() {
-                                if wildcard_span.is_some() {
-                                    return Err(Diagnostic::at(
-                                        *span,
-                                        "duplicate wildcard match arm",
-                                    ));
-                                }
                                 if index + 1 != match_stmt.arms.len() {
                                     return Err(Diagnostic::at(
                                         *span,
@@ -20009,12 +20006,6 @@ impl<'a> FunctionChecker<'a> {
                                 shared_scrutinee.as_deref(),
                             )?;
                             if arm.guard.is_none() {
-                                if wildcard_span.is_some() {
-                                    return Err(Diagnostic::at(
-                                        binding.span,
-                                        "duplicate catch-all match arm",
-                                    ));
-                                }
                                 if index + 1 != match_stmt.arms.len() {
                                     return Err(Diagnostic::at(
                                         binding.span,
@@ -20227,19 +20218,17 @@ impl<'a> FunctionChecker<'a> {
                 _ => false,
             };
             if class_scrutinee {
-                if let Type::Named(_, _) = &scrutinee_ty {
-                    if let Some(pattern) = match_stmt
-                        .arms
-                        .iter()
-                        .map(|arm| &arm.pattern)
-                        .find(|pattern| pattern_contains_variant_shape(pattern))
-                    {
-                        return Err(Diagnostic::coded_at(
-                            "AU2999",
-                            self.pattern_span(pattern),
-                            "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code",
-                        ));
-                    }
+                if let Some(pattern) = match_stmt
+                    .arms
+                    .iter()
+                    .map(|arm| &arm.pattern)
+                    .find(|pattern| pattern_contains_variant_shape(pattern))
+                {
+                    return Err(Diagnostic::coded_at(
+                        "AU2999",
+                        self.pattern_span(pattern),
+                        "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code",
+                    ));
                 }
             }
 
@@ -20287,9 +20276,6 @@ impl<'a> FunctionChecker<'a> {
                     }
                     Pattern::Wildcard(span) => {
                         if arm.guard.is_none() {
-                            if wildcard_span.is_some() {
-                                return Err(Diagnostic::at(*span, "duplicate wildcard match arm"));
-                            }
                             if index + 1 != match_stmt.arms.len() {
                                 return Err(Diagnostic::at(
                                     *span,
@@ -20341,12 +20327,6 @@ impl<'a> FunctionChecker<'a> {
                             shared_scrutinee.as_deref(),
                         )?;
                         if arm.guard.is_none() {
-                            if wildcard_span.is_some() {
-                                return Err(Diagnostic::at(
-                                    binding.span,
-                                    "duplicate catch-all match arm",
-                                ));
-                            }
                             if index + 1 != match_stmt.arms.len() {
                                 return Err(Diagnostic::at(
                                     binding.span,
@@ -20836,12 +20816,6 @@ impl<'a> FunctionChecker<'a> {
                         }
                         Pattern::Wildcard(wildcard_span) => {
                             if arm.guard.is_none() {
-                                if wildcard_seen {
-                                    return Err(Diagnostic::at(
-                                        *wildcard_span,
-                                        "duplicate wildcard match arm",
-                                    ));
-                                }
                                 if index + 1 != arms.len() {
                                     return Err(Diagnostic::at(
                                         *wildcard_span,
@@ -20871,12 +20845,6 @@ impl<'a> FunctionChecker<'a> {
                                 shared_scrutinee.as_deref(),
                             )?;
                             if arm.guard.is_none() {
-                                if wildcard_seen {
-                                    return Err(Diagnostic::at(
-                                        binding.span,
-                                        "duplicate catch-all match arm",
-                                    ));
-                                }
                                 if index + 1 != arms.len() {
                                     return Err(Diagnostic::at(
                                         binding.span,
@@ -21086,18 +21054,16 @@ impl<'a> FunctionChecker<'a> {
                 _ => false,
             };
             if class_scrutinee {
-                if let Type::Named(_, _) = &scrutinee_ty {
-                    if let Some(pattern) = arms
-                        .iter()
-                        .map(|arm| &arm.pattern)
-                        .find(|pattern| pattern_contains_variant_shape(pattern))
-                    {
-                        return Err(Diagnostic::coded_at(
-                            "AU2999",
-                            self.pattern_span(pattern),
-                            "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code",
-                        ));
-                    }
+                if let Some(pattern) = arms
+                    .iter()
+                    .map(|arm| &arm.pattern)
+                    .find(|pattern| pattern_contains_variant_shape(pattern))
+                {
+                    return Err(Diagnostic::coded_at(
+                        "AU2999",
+                        self.pattern_span(pattern),
+                        "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code",
+                    ));
                 }
             }
 
@@ -21144,12 +21110,6 @@ impl<'a> FunctionChecker<'a> {
                     }
                     Pattern::Wildcard(wildcard_span) => {
                         if arm.guard.is_none() {
-                            if wildcard_seen {
-                                return Err(Diagnostic::at(
-                                    *wildcard_span,
-                                    "duplicate wildcard match arm",
-                                ));
-                            }
                             if index + 1 != arms.len() {
                                 return Err(Diagnostic::at(
                                     *wildcard_span,
@@ -21187,12 +21147,6 @@ impl<'a> FunctionChecker<'a> {
                             shared_scrutinee.as_deref(),
                         )?;
                         if arm.guard.is_none() {
-                            if wildcard_seen {
-                                return Err(Diagnostic::at(
-                                    binding.span,
-                                    "duplicate catch-all match arm",
-                                ));
-                            }
                             if index + 1 != arms.len() {
                                 return Err(Diagnostic::at(
                                     binding.span,
