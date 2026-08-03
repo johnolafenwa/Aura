@@ -146,7 +146,12 @@ Last updated: 2026-08-03
   corrected coverage gate is green at 96.306350078161302% lines
   (91,179/94,676), 97.235322816718167% functions (5,979/6,149), and
   94.723722769480631% regions (134,143/141,615). No synthetic coverage test or
-  justified exclusion was added; the frozen floors did not change.
+  justified exclusion was added; the frozen floors did not change. Hosted run
+  `30841047064` proved the correction on macOS at 96.305293844268874% lines,
+  then encountered newly published npm advisories at the later audit stage.
+  The lockfile now selects fixed transitive releases `brace-expansion` 5.0.9
+  and `postcss` 8.5.25; a clean `npm ci` and complete npm/Rust audit gate are
+  green with zero npm vulnerabilities.
 - Push and pull-request authorization is explicit. The user's standing policy
   now requires one complete green hosted CI run on both operating systems;
   repeated consecutive reruns are not required. Merge waits for checkpoint
