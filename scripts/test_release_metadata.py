@@ -172,6 +172,32 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn('"aura {}-dev ({})\\n"', cli)
         self.assertIn('expected_version="aura 0.2.0-preview ($expected_commit)"', smoke)
 
+    def test_scheduled_safety_jobs_pin_the_instrumented_toolchain_and_leaks(self) -> None:
+        workflow = (ROOT / ".github/workflows/safety.yml").read_text()
+        tsan = (ROOT / "scripts/sanitizer-scheduler-tsan.sh").read_text()
+        asan = (ROOT / "scripts/sanitizer-native-runtime.sh").read_text()
+        native_runtime = (
+            ROOT / "crates/aura-compiler/src/native_runtime.rs"
+        ).read_text()
+        native_runtime_exports = (ROOT / "crates/aura-compiler/src/lib.rs").read_text()
+        ffi_tests = (
+            ROOT / "crates/aura-compiler/tests/native_runtime_ffi.rs"
+        ).read_text()
+
+        self.assertIn("RUSTUP_TOOLCHAIN: nightly-2026-07-01", workflow)
+        self.assertEqual(
+            workflow.count("cargo +nightly-2026-07-01 fuzz run"),
+            2,
+        )
+        self.assertIn("CARGO_TARGET_", tsan)
+        self.assertNotIn("export RUSTFLAGS=", tsan)
+        self.assertIn("CARGO_TARGET_", asan)
+        self.assertNotIn("export RUSTFLAGS=", asan)
+        self.assertIn('ASAN_OPTIONS="$asan_options" cargo', asan)
+        self.assertIn("DIRECT_VALUE_LIVE_COUNT", native_runtime)
+        self.assertIn("aura_direct_coverage_live_value_count", native_runtime_exports)
+        self.assertEqual(ffi_tests.count("direct_runtime_ffi_test_guard()"), 8)
+
 
 if __name__ == "__main__":
     unittest.main()

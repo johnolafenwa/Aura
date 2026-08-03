@@ -5,8 +5,15 @@ target="${1:-x86_64-unknown-linux-gnu}"
 toolchain="${AURA_NIGHTLY_TOOLCHAIN:-nightly-2026-07-01}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-export RUSTFLAGS="${RUSTFLAGS:-} -Zsanitizer=thread"
-export RUSTDOCFLAGS="${RUSTDOCFLAGS:-} -Zsanitizer=thread"
+# Instrument target crates and their rebuilt standard library without applying
+# the sanitizer ABI to host build scripts and proc macros. A blanket RUSTFLAGS
+# value makes those host tools depend on an uninstrumented host standard
+# library, which current nightly Rust rejects as an ABI mismatch.
+target_rustflags="CARGO_TARGET_$(printf '%s' "$target" | tr '[:lower:]-' '[:upper:]_')_RUSTFLAGS"
+existing_target_rustflags="$(printenv "$target_rustflags" || true)"
+export "$target_rustflags=${existing_target_rustflags:+$existing_target_rustflags }-Zsanitizer=thread"
+unset RUSTFLAGS
+unset RUSTDOCFLAGS
 export RUSTUP_TOOLCHAIN="$toolchain"
 export TSAN_OPTIONS="${TSAN_OPTIONS:-halt_on_error=1}"
 export CC="$repo_root/scripts/cc-tsan.sh"

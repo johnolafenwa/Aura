@@ -112,6 +112,12 @@ Last updated: 2026-08-03
   direct, and standalone paths, classifying the checkpoint reports as mutual
   host-contention flakes rather than product failures; the established
   narrow shared guard remains the correct disposition.
+- The Aug 3 Safety failure is locally dispositioned. Fuzz now selects its
+  pinned nightly explicitly; ASan/TSan sanitizer flags apply to target crates
+  without contaminating host build tools; and a coverage-only live-value guard
+  found and closed the test-only 18-value and 53-value FFI harness leaks. All
+  seven instrumented native-runtime tests are green with zero retained opaque
+  values. Fresh hosted Safety verification remains pending after push.
 - Push and pull-request authorization is explicit. Merge waits for checkpoint
   sign-off after three consecutive green hosted CI runs on both operating
   systems.
