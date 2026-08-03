@@ -536,6 +536,49 @@ fn s1_sema_sixth_shared_collection_field_move_offers_the_exact_copy_fix() {
 }
 
 #[test]
+fn s1_sema_final_nested_or_patterns_keep_exact_errors() {
+    let nested_or = crate::check_source(
+        "enum Choice:\n    Value((bool, bool))\n    Empty\n\ndef main():\n    value = Choice.Value((true, false))\n    match value:\n        case Value((true, _)):\n            pass\n        case Value((true, true) | (true, false)):\n            pass\n        case Empty:\n            pass\n        case _:\n            pass\n",
+    )
+    .expect_err("a prior tuple payload must subsume every nested or-pattern alternative");
+    assert_eq!(nested_or.code, "AU2999");
+    assert_eq!(nested_or.message, "unreachable match arm");
+
+    let tuple_union = crate::check_source(
+        "def main():\n    value: (int64, bool) = (1, true)\n    match value:\n        case (1, true):\n            pass\n        case (1, false):\n            pass\n        case (1, _):\n            pass\n        case _:\n            pass\n",
+    )
+    .expect_err("two prior tuple rows must subsume their literal-prefix wildcard");
+    assert_eq!(tuple_union.code, "AU2999");
+    assert_eq!(tuple_union.message, "unreachable match arm");
+}
+
+#[test]
+fn s1_sema_final_match_expression_or_patterns_preserve_result_types() {
+    crate::check_source(
+        "def classify(value: int64) -> str:\n    return match value:\n        case 1 | 2: \"small\"\n        case _: \"other\"\n\ndef main():\n    print(classify(1))\n",
+    )
+    .expect("match-expression or-patterns must preserve the annotated result type");
+
+    let class_pattern = crate::check_source(
+        "class Point:\n    x: int64\n\ndef describe(point: Point) -> str:\n    return match point:\n        case Point(value): \"point\"\n        case _: \"other\"\n\ndef main():\n    print(describe(Point(1)))\n",
+    )
+    .expect_err("class values cannot use enum-shaped match patterns");
+    assert_eq!(class_pattern.code, "AU2999");
+    assert_eq!(
+        class_pattern.message,
+        "class patterns are not supported; match an explicit enum/tag representation or use a wildcard and ordinary code"
+    );
+}
+
+#[test]
+fn s1_sema_final_task_specializations_preserve_matching_type_arguments() {
+    crate::check_source(
+        "class Factory[T]:\n    def make[T]() -> None:\n        pass\n\ndef main():\n    with group = TaskGroup():\n        group.start(Factory[int64].make[int64])\n",
+    )
+    .expect("matching class and associated-method arguments must remain a valid task target");
+}
+
+#[test]
 fn s1_sema_module_constants_reject_self_reentry_rebinding_mutation_and_moves() {
     let reentry = crate::check_source("VALUE: int64 = VALUE\n\ndef main():\n    pass\n")
         .expect_err("a module constant cannot re-enter its own initializer");
