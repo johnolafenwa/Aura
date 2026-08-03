@@ -87,6 +87,12 @@ Last updated: 2026-08-03
   ADR-0045's example, bounded-blocking-pool classification, and the Aug 3
   Safety workflow failures before the S1 merge.
 - Standing clean-slate policy is confirmed and recorded in Accepted ADR-0057.
+- S1.1-a equality gating is implemented at the common equality-obligation
+  boundary. AU2008 now blocks callables, `random.Rng`, opaque FFI handles, and
+  containing aggregates across list search, membership, set insertion,
+  dictionary-key use, and direct equality. Twelve closure/Rng surface fixtures
+  and the forced MIR/direct diagnostic-parity test are green; the complete
+  semantic checker partition is 331/331 green.
 - Push and pull-request authorization is explicit. Merge waits for checkpoint
   sign-off after three consecutive green hosted CI runs on both operating
   systems.

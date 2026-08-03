@@ -77,7 +77,10 @@ the observable result; it does not return a success flag.
 Collection equality reads and consumes neither operand. Lists compare elements
 in order. Dictionaries compare equal key/value mappings. Sets compare equal
 membership. Equality-dependent operations are available only when their
-element, key, or value types provide the required equality relation.
+element, key, or value types provide the required equality relation. Callables,
+`random.Rng`, opaque FFI handles, and values containing any of those types do
+not define equality. The compiler rejects every equality-dependent surface for
+those types with `AU2008`; no backend identity comparison is available.
 
 ### Canonical `list[T]` surface
 

@@ -196,8 +196,8 @@ fn diagnostic_code_registry_is_unique_banded_and_append_only_shaped() {
             .iter()
             .any(|entry| entry.code == "AU2008"
                 && entry.band == "names/types"
-                && entry.title == "callable equality"),
-        "the callable-equality rejection must retain its dedicated public registry entry"
+                && entry.title == "equality unavailable"),
+        "equality-obligation rejections must retain their dedicated public registry entry"
     );
     assert!(
         DIAGNOSTIC_CODE_REGISTRY

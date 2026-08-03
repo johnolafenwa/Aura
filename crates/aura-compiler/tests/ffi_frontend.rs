@@ -672,10 +672,10 @@ def main():
     handle = acquire()
     result = 0 != handle
 "#,
-            "AU2003",
-            "cannot compare `Handle` because it contains opaque FFI handle `Handle` and FFI v0 does not define equality for foreign identity",
+            "AU2008",
+            "cannot compare `Handle` because opaque FFI handle `Handle` does not define equality",
             vec![
-                "compare a stable scalar or str identifier exposed by the binding instead of a foreign address"
+                "compare a stable scalar or str identifier exposed by the binding instead of foreign identity"
                     .to_string(),
             ],
         ),

@@ -2347,18 +2347,18 @@ def main():
     for (shape, compared_type, source) in cases {
         let diagnostic = check_ffi_source_for_test(source)
             .expect_err("opaque handle identity is intentionally not observable");
-        assert_eq!(diagnostic.code, "AU2003", "{shape}: {diagnostic:?}");
+        assert_eq!(diagnostic.code, "AU2008", "{shape}: {diagnostic:?}");
         assert_eq!(
             diagnostic.message,
             format!(
-                "cannot compare `{compared_type}` because it contains opaque FFI handle `Handle` and FFI v0 does not define equality for foreign identity"
+                "cannot compare `{compared_type}` because opaque FFI handle `Handle` does not define equality"
             ),
             "{shape}"
         );
         assert_eq!(
             diagnostic.help,
             vec![
-                "compare a stable scalar or str identifier exposed by the binding instead of a foreign address"
+                "compare a stable scalar or str identifier exposed by the binding instead of foreign identity"
                     .to_string()
             ],
             "{shape}"
@@ -2381,16 +2381,16 @@ def main():
         );
         let diagnostic = check_ffi_source_for_test(&source)
             .expect_err("opaque identity must remain hidden in either operand position");
-        assert_eq!(diagnostic.code, "AU2003", "{operator}: {diagnostic:?}");
+        assert_eq!(diagnostic.code, "AU2008", "{operator}: {diagnostic:?}");
         assert_eq!(
             diagnostic.message,
-            "cannot compare `Handle` because it contains opaque FFI handle `Handle` and FFI v0 does not define equality for foreign identity",
+            "cannot compare `Handle` because opaque FFI handle `Handle` does not define equality",
             "{operator}"
         );
         assert_eq!(
             diagnostic.help,
             vec![
-                "compare a stable scalar or str identifier exposed by the binding instead of a foreign address"
+                "compare a stable scalar or str identifier exposed by the binding instead of foreign identity"
                     .to_string()
             ],
             "{operator}"
@@ -2541,7 +2541,7 @@ def main():
 }
 
 #[test]
-fn ffi_opaque_handles_are_rejected_by_every_clone_producing_collection_observer() {
+fn ffi_opaque_handles_are_rejected_by_reachable_clone_producing_collection_observers() {
     let cases = [
         (
             "list.copy",
@@ -2602,17 +2602,6 @@ def main():
 "#,
         ),
         (
-            "dict.keys",
-            r#"
-extern "C" opaque class Handle
-extern "C" def acquire() -> Handle
-
-def main():
-    handles: dict[Handle, int32] = {acquire(): 1}
-    copied = handles.keys()
-"#,
-        ),
-        (
             "dict.values",
             r#"
 extern "C" opaque class Handle
@@ -2632,17 +2621,6 @@ extern "C" def acquire() -> Handle
 def main():
     handles: dict[str, Handle] = {"one": acquire()}
     copied = handles.items()
-"#,
-        ),
-        (
-            "set.copy",
-            r#"
-extern "C" opaque class Handle
-extern "C" def acquire() -> Handle
-
-def main():
-    handles: set[Handle] = {acquire()}
-    copied = handles.copy()
 "#,
         ),
     ];
@@ -25842,6 +25820,160 @@ def main():
             crate::check_source(source).expect_err("callable equality must be rejected");
         assert_eq!(diagnostic.code, "AU2008", "{case}: {diagnostic:?}");
         assert_eq!(diagnostic.message, MESSAGE, "{case}: {diagnostic:?}");
+    }
+}
+
+#[test]
+fn equality_dependent_collection_surfaces_reject_callables_and_rng_state() {
+    let callable_cases = [
+        (
+            "list.remove",
+            r#"
+def reject(values: mut list[def(int64) -> int64], value: def(int64) -> int64):
+    values.remove(value)
+"#,
+        ),
+        (
+            "list.index",
+            r#"
+def reject(values: list[def(int64) -> int64], value: def(int64) -> int64):
+    print(values.index(value))
+"#,
+        ),
+        (
+            "list.count",
+            r#"
+def reject(values: list[def(int64) -> int64], value: def(int64) -> int64):
+    print(values.count(value))
+"#,
+        ),
+        (
+            "membership",
+            r#"
+def reject(values: list[def(int64) -> int64], value: def(int64) -> int64):
+    print(value in values)
+"#,
+        ),
+        (
+            "set.add",
+            r#"
+def reject(values: mut set[def(int64) -> int64], value: own def(int64) -> int64):
+    values.add(value)
+"#,
+        ),
+        (
+            "dict key assignment",
+            r#"
+def reject(values: mut dict[def(int64) -> int64, int64], key: own def(int64) -> int64):
+    values[key] = 1
+"#,
+        ),
+    ];
+
+    for (operation, source) in callable_cases {
+        let diagnostic = crate::check_source(source)
+            .expect_err("callable values must not reach identity equality in collections");
+        assert_eq!(diagnostic.code, "AU2008", "{operation}: {diagnostic:?}");
+        assert!(
+            diagnostic.message.contains("does not define equality"),
+            "{operation}: {diagnostic:?}"
+        );
+        assert!(
+            diagnostic.message.contains("def(int64) -> int64"),
+            "{operation}: {diagnostic:?}"
+        );
+    }
+
+    let rng_cases = [
+        (
+            "direct equality",
+            r#"
+import random
+
+def reject(left: random.Rng, right: random.Rng):
+    print(left == right)
+"#,
+        ),
+        (
+            "list.remove",
+            r#"
+import random
+
+def reject(values: mut list[random.Rng], value: random.Rng):
+    values.remove(value)
+"#,
+        ),
+        (
+            "list.index",
+            r#"
+import random
+
+def reject(values: list[random.Rng], value: random.Rng):
+    print(values.index(value))
+"#,
+        ),
+        (
+            "list.count",
+            r#"
+import random
+
+def reject(values: list[random.Rng], value: random.Rng):
+    print(values.count(value))
+"#,
+        ),
+        (
+            "membership",
+            r#"
+import random
+
+def reject(values: list[random.Rng], value: random.Rng):
+    print(value in values)
+"#,
+        ),
+        (
+            "set.add",
+            r#"
+import random
+
+def reject(values: mut set[random.Rng], value: own random.Rng):
+    values.add(value)
+"#,
+        ),
+        (
+            "dict key assignment",
+            r#"
+import random
+
+def reject(values: mut dict[random.Rng, int64], key: own random.Rng):
+    values[key] = 1
+"#,
+        ),
+        (
+            "transitive wrapper membership",
+            r#"
+import random
+
+class Holder:
+    generator: random.Rng
+
+def reject(values: list[Holder], value: Holder):
+    print(value in values)
+"#,
+        ),
+    ];
+
+    for (operation, source) in rng_cases {
+        let diagnostic = crate::check_source(source)
+            .expect_err("random.Rng identity must not reach equality-dependent operations");
+        assert_eq!(diagnostic.code, "AU2008", "{operation}: {diagnostic:?}");
+        assert!(
+            diagnostic.message.contains("does not define equality"),
+            "{operation}: {diagnostic:?}"
+        );
+        assert!(
+            diagnostic.message.contains("random.Rng"),
+            "{operation}: {diagnostic:?}"
+        );
     }
 }
 

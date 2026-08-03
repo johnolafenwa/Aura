@@ -6777,6 +6777,72 @@ impl<'a> FunctionChecker<'a> {
         self.opaque_handle_in_type_inner(ty, &mut BTreeSet::new())
     }
 
+    /// Returns the first callable runtime value structurally contained in
+    /// `ty`. Callable signatures describe code, not a value relation: neither
+    /// function pointers nor closure environments acquire identity equality
+    /// merely because they are stored inside another type.
+    fn callable_in_equality_type(&self, ty: &Type) -> Option<Type> {
+        self.callable_in_equality_type_inner(ty, &mut BTreeSet::new())
+    }
+
+    fn callable_in_equality_type_inner(
+        &self,
+        ty: &Type,
+        visiting: &mut BTreeSet<String>,
+    ) -> Option<Type> {
+        match ty {
+            Type::Function { .. } | Type::Closure { .. } => Some(ty.clone()),
+            Type::Tuple(elements) => elements
+                .iter()
+                .find_map(|element| self.callable_in_equality_type_inner(element, visiting)),
+            Type::Named(name, args) => {
+                if let Some(class_info) = self.resolve_class_info(name) {
+                    if args.len() != class_info.decl.type_params.len() {
+                        return None;
+                    }
+                    let key = format!("class:{}:{}", class_info.module_name, class_info.decl.name);
+                    if !visiting.insert(key.clone()) {
+                        return None;
+                    }
+                    let substitutions =
+                        substitutions_from_decl_type_args(&class_info.decl.type_params, args);
+                    let callable = class_info.fields.values().find_map(|field| {
+                        let field_ty = substitute_type(&field.ty, &substitutions);
+                        self.callable_in_equality_type_inner(&field_ty, visiting)
+                    });
+                    visiting.remove(&key);
+                    return callable;
+                }
+
+                if let Some(enum_info) = self.resolve_enum_info(name) {
+                    if args.len() != enum_info.decl.type_params.len() {
+                        return None;
+                    }
+                    let key = format!("enum:{}:{}", enum_info.module_name, enum_info.decl.name);
+                    if !visiting.insert(key.clone()) {
+                        return None;
+                    }
+                    let substitutions =
+                        substitutions_from_decl_type_args(&enum_info.decl.type_params, args);
+                    let callable = enum_info
+                        .variants
+                        .values()
+                        .flat_map(|variant| &variant.payloads)
+                        .find_map(|payload| {
+                            let payload_ty = substitute_type(&payload.ty, &substitutions);
+                            self.callable_in_equality_type_inner(&payload_ty, visiting)
+                        });
+                    visiting.remove(&key);
+                    return callable;
+                }
+
+                args.iter()
+                    .find_map(|arg| self.callable_in_equality_type_inner(arg, visiting))
+            }
+            Type::TypeParam(_) | Type::Module(_) | Type::Unit => None,
+        }
+    }
+
     /// Returns the first structurally contained Array whose lack of equality
     /// makes `ty` unavailable to equality-bearing operations.
     fn array_in_equality_type(&self, ty: &Type) -> Option<Type> {
@@ -6920,6 +6986,39 @@ impl<'a> FunctionChecker<'a> {
         operation: impl Into<String>,
         span: crate::diag::Span,
     ) -> Result<()> {
+        let operation = operation.into();
+        if let Some(callable_ty) = self.callable_in_equality_type(ty) {
+            return Err(Diagnostic::coded_at(
+                "AU2008",
+                span,
+                format!("{operation} because `{callable_ty}` does not define equality"),
+            )
+            .with_help(
+                "compare explicit results or a stable discriminant; callable identity is not value equality",
+            ));
+        }
+        if self.rng_clone_safety(ty) == RngCloneSafety::ContainsRng {
+            return Err(Diagnostic::coded_at(
+                "AU2008",
+                span,
+                format!("{operation} because `random.Rng` does not define equality"),
+            )
+            .with_help(
+                "compare generated scalar values or an explicit stable discriminant; generator identity is not value equality",
+            ));
+        }
+        if let Some(handle_ty) = self.opaque_handle_in_type(ty) {
+            return Err(Diagnostic::coded_at(
+                "AU2008",
+                span,
+                format!(
+                    "{operation} because opaque FFI handle `{handle_ty}` does not define equality"
+                ),
+            )
+            .with_help(
+                "compare a stable scalar or str identifier exposed by the binding instead of foreign identity",
+            ));
+        }
         let Some(array_ty) = self.array_in_equality_type(ty) else {
             let obligations = self.array_equality_type_params(ty);
             self.array_equality_obligations
@@ -6932,7 +7031,7 @@ impl<'a> FunctionChecker<'a> {
             span,
             format!(
                 "{} because it contains `{array_ty}`, whose equality is unavailable",
-                operation.into()
+                operation
             ),
         )
         .with_help(

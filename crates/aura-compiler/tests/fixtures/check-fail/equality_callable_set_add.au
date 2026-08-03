@@ -1,0 +1,2 @@
+def reject(values: mut set[def(int64) -> int64], value: own def(int64) -> int64):
+    values.add(value)

@@ -44,6 +44,13 @@ rejected with `AU2002`. Contextual integer-literal typing applies, but Aura
 does not convert an already typed value or infer a union for a collection
 literal.
 
+Collection operations that compare stored values require a defined equality
+relation for the relevant type. This includes list `remove`, `index`, and
+`count`; `in` and `not in`; set insertion; and every dictionary-key operation.
+Callables, `random.Rng`, opaque FFI handles, and values containing any of those
+types do not define equality. The compiler rejects the operation with `AU2008`
+and names the unmet obligation.
+
 ## Iteration
 
 Lists support shared, consuming, and mutable place iteration. Sets support

@@ -1,0 +1,4 @@
+import random
+
+def reject(values: list[random.Rng], value: random.Rng):
+    print(value in values)

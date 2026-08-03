@@ -138,7 +138,7 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
     DiagnosticCodeInfo {
         code: "AU2008",
         band: "names/types",
-        title: "callable equality",
+        title: "equality unavailable",
     },
     DiagnosticCodeInfo {
         code: "AU2999",

@@ -1,0 +1,6 @@
+error[AU2008]: cannot use `list.index` with `def(int64) -> int64` because `def(int64) -> int64` does not define equality
+ --> crates/aura-compiler/tests/fixtures/check-fail/equality_callable_list_index.au:2:18
+  |
+2 |     print(values.index(value))
+  |                  ^
+  = help: compare explicit results or a stable discriminant; callable identity is not value equality

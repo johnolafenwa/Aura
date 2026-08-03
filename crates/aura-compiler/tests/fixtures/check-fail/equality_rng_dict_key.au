@@ -1,0 +1,4 @@
+import random
+
+def reject(values: mut dict[random.Rng, int64], key: own random.Rng):
+    values[key] = 1

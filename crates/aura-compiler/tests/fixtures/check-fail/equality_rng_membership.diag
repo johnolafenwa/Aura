@@ -1,0 +1,6 @@
+error[AU2008]: cannot test membership for `random.Rng` because `random.Rng` does not define equality
+ --> crates/aura-compiler/tests/fixtures/check-fail/equality_rng_membership.au:4:17
+  |
+4 |     print(value in values)
+  |                 ^
+  = help: compare generated scalar values or an explicit stable discriminant; generator identity is not value equality
