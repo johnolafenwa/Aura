@@ -68,10 +68,12 @@ Last updated: 2026-08-02
   guards and or-patterns themselves are accepted and implemented. Generated
   `llms.txt`/`llms-full.txt`, combined reference/editor/cache verification, and
   the pre-closure forced-parity/documentation gates are green. The exact
-  closure-tree coverage gate passes 361 CLI and 1,659 compiler tests at
-  96.306604722043% lines, 97.216796875% functions, and 94.719226741389%
-  regions with no synthetic tests. Remaining work is the final exact-tree
-  local gate and three green hosted runs.
+  closure-tree coverage gate passes 361 CLI and 1,659 compiler tests. The
+  final exact-tree `npm run ci` gate is green at `5ee64cd`, including forced
+  backend parity, editor tooling, reference integrity, docs, audits, Clippy,
+  hygiene, and coverage at 96.304488163144% lines, 97.216796875% functions,
+  and 94.717811553593% regions. No synthetic tests were added. Remaining work
+  is explicit push authorization and three green hosted runs.
 - Protected user files remain untouched: `personal/file_ops.au`, the untracked
   ADR-0022 draft, and `fc2_direct.out`.
 - Work note: `work/2026-08-02-batch-s1-python-surface.md`.

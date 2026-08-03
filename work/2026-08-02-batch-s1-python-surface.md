@@ -441,7 +441,7 @@ Duration construction overflow wrappers, redundant private call-target
 fallbacks, and generic-only builtin lowering closures whose public registry
 cannot construct the old path.
 
-The final exact coverage replay passed all 361 CLI tests, 1,659
+The dedicated closure coverage replay passed all 361 CLI tests, 1,659
 compiler-library tests, and every instrumented integration suite at:
 
 - 91,003/94,493 lines (96.306604722043%);
@@ -451,6 +451,13 @@ compiler-library tests, and every instrumented integration suite at:
 The one-time downward-truncated checkpoint ratchet is therefore
 96.30%/97.21%/94.71%. No synthetic coverage test, coverage exclusion, or
 malformed internal compiler-state test was added.
+
+The final `npm run ci` replay at `5ee64cdfc73197bd9084b26c270407df8d2daf9a`
+also passed the ratchet. Its independent profile merge recorded
+91,001/94,493 lines (96.304488163144%), 5,973/6,144 functions
+(97.216796875%), and 133,859/141,324 regions (94.717811553593%). The two
+replays differ by two nondeterministic process-path lines while both remain
+above the downward-truncated checkpoint floors.
 
 ## Verification
 
@@ -530,14 +537,13 @@ Current focused version-stamp evidence:
 - Match closure — focused parser/checker/MIR/analysis tests and the complete
   guard/or-pattern fixture family passed. Forced MIR/direct runs agree for
   accepted selection and mutable writeback, owned-candidate behavior, and
-  trap/propagation diagnostics. The final corpus-wide parity matrix remains
-  pending.
+  trap/propagation diagnostics. The final corpus-wide parity matrix passed.
 - Module-constant closure — 5 focused compiler tests, all 9 fixture families,
   the package dependency test, 2 LSP integrations, the language-server check,
   focused MIR/direct parity, and 127 verified Manual blocks passed.
 - Testing/reference closure — ADR-0045's reference completion matrix is checked
-  through every focused item; only the checkpoint-wide matrix and full gates
-  remain. Semantic interface schema 5 and its cache/editor identities are
+  through every focused item; the checkpoint-wide matrix and full local gate
+  also pass. Semantic interface schema 5 and its cache/editor identities are
   aligned. Wrapped reference assertions and production warning-denied Clippy
   passed on their focused commits.
 - Checkpoint-documentation proof — reference inventory passes at 39 pages, 270
@@ -545,20 +551,23 @@ Current focused version-stamp evidence:
   normative section or executable example; the focused reference unit suite is
   10/10; the clean-surface identity suite is 11/11; the production VitePress
   build and link resolution pass; and `git diff --check` passes. The complete
-  reference wrapper reaches only its deliberate stale-generated-LLM stop:
-  `llms.txt` and `llms-full.txt` will regenerate after the four math constants
-  finalize the source reference.
+  reference wrapper and regenerated `llms.txt`/`llms-full.txt` are green after
+  the four math constants finalized the source reference.
 
-The checkpoint-wide forced-backend parity matrix, LSP and extension suites,
-reference integrity, documentation build, audits, and hygiene passed on the
-pre-closure combined tree. The exact final compiler coverage replay and the
-one-time checkpoint re-ratchet are green on the closure tree. The final
-exact-tree local gate and three hosted runs remain before checkpoint sign-off.
+The final exact-tree `npm run ci` gate is green at
+`5ee64cdfc73197bd9084b26c270407df8d2daf9a`: formatting, benchmark and release
+regressions, identity, all Rust tests, the forced-backend parity matrix, LSP,
+extension packaging/tests, compiler and LSP coverage, reference integrity,
+the documentation build, npm and Rust audits, warning-denied Clippy, and
+hygiene all passed. The Rust audit retains the already-allowed
+`rustls-pemfile` unmaintained warning. `target/` finished at 19 GiB with 37 GiB
+free, below both cleanup thresholds. Three hosted runs remain before checkpoint
+sign-off.
 
 ## Follow-up
 
-Run the final exact-tree local gate, then obtain explicit user authorization
-before pushing this branch. After three consecutive hosted runs pass on both
-operating systems, ratify ADR-0045's P1-P6 answers and ADR-0049's class-pattern
-deferment, publish the checkpoint report, and stop. Do not begin loans, the P1
-performance batch, publishing, or any 0.4 implementation.
+Obtain explicit user authorization before pushing this branch. After three
+consecutive hosted runs pass on both operating systems, ratify ADR-0045's
+P1-P6 answers and ADR-0049's class-pattern deferment, publish the checkpoint
+report, and stop. Do not begin loans, the P1 performance batch, publishing, or
+any 0.4 implementation.
