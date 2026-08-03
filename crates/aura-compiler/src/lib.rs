@@ -375,13 +375,7 @@ pub fn run_path_with_stdout_sink_and_program_args(
     stdout_sink: StdoutSink,
     program_args: Vec<String>,
 ) -> Result<RunOutput> {
-    let program = check_path(path)?;
-    let mir = lower_to_mir(&program);
-    mir_runtime::run_with_stdout_sink_and_program_args_trusted(
-        &mir,
-        Some(stdout_sink),
-        program_args,
-    )
+    run_path_entry_with_stdout_sink_and_program_args(path, None, Some(stdout_sink), program_args)
 }
 
 /// Runs one parameterless top-level entry from a manifest-checked path.

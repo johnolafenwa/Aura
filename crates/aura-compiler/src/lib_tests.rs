@@ -10,7 +10,8 @@ use super::{
     run_mir, run_path, run_path_entry_with_stdout_sink_and_program_args, run_path_with_source,
     run_path_with_source_and_stdout_sink, run_path_with_source_and_stdout_sink_and_program_args,
     run_path_with_stdout_sink, run_path_with_stdout_sink_and_program_args, run_serialized_mir,
-    run_source, run_source_with_stdout_sink, sha256_hex, ModuleLoader, StdoutSink, Value,
+    run_source, run_source_with_stdout_sink, sha256_hex, update_git_dependencies_in_working_dir,
+    ModuleLoader, StdoutSink, Value,
 };
 use crate::ast::TypeRef;
 use crate::diag::Span;
@@ -71,6 +72,60 @@ fn captured_stdout_sink() -> (Arc<Mutex<String>>, StdoutSink) {
             .push_str(chunk);
     });
     (captured, sink)
+}
+
+#[test]
+fn public_path_entry_and_dependency_update_facades_preserve_results() {
+    let temp = TempDir::new("aura-public-path-facades");
+    fs::create_dir_all(temp.path().join("src")).expect("package source directory should exist");
+    fs::write(
+        temp.path().join("Aura.toml"),
+        "[package]\nname = \"facades\"\nversion = \"0.3.0\"\nedition = \"2026\"\n",
+    )
+    .expect("package manifest should be written");
+    let entry_path = temp.path().join("src/main.au");
+    fs::write(
+        &entry_path,
+        concat!(
+            "import sys\n\n",
+            "def selected() -> int64:\n",
+            "    print(\"selected\")\n",
+            "    print(sys.args().len())\n",
+            "    return 17\n\n",
+            "def main() -> int32:\n",
+            "    return 0\n",
+        ),
+    )
+    .expect("package entry should be written");
+
+    let (captured, sink) = captured_stdout_sink();
+    let output = run_path_entry_with_stdout_sink_and_program_args(
+        &entry_path,
+        Some("selected"),
+        Some(sink),
+        vec!["first".to_string(), "second".to_string()],
+    )
+    .expect("the public path facade should execute the selected entry");
+    assert_eq!(output.stdout, "selected\n2\n");
+    assert_eq!(output.value, Value::Int(IntegerValue::from_signed(17)));
+    assert_eq!(
+        captured
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_str(),
+        "selected\n2\n"
+    );
+
+    let update = update_git_dependencies_in_working_dir(temp.path(), None)
+        .expect("the public update facade should write a lock for the package");
+    assert!(update.updated_packages.is_empty());
+    assert_eq!(
+        update.lockfile_root,
+        fs::canonicalize(temp.path()).expect("package root should canonicalize")
+    );
+    let lockfile = fs::read_to_string(temp.path().join("Aura.lock"))
+        .expect("the public update facade should write Aura.lock");
+    assert!(lockfile.contains("name = \"facades\""));
 }
 
 #[test]

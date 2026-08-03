@@ -20,51 +20,35 @@ fn type_ref(name: &str, args: Vec<TypeRef>) -> TypeRef {
 }
 
 fn lower_type_ref(type_ref: &TypeRef) -> Type {
-    match &type_ref.kind {
-        crate::ast::TypeRefKind::Tuple(elements) => {
-            Type::Tuple(elements.iter().map(lower_type_ref).collect())
-        }
-        crate::ast::TypeRefKind::Named { name, args } if name == "None" => Type::Unit,
-        crate::ast::TypeRefKind::Named { name, args } => {
-            Type::Named(name.clone(), args.iter().map(lower_type_ref).collect())
-        }
-        crate::ast::TypeRefKind::Function {
-            params,
-            return_type,
-        } => Type::Function {
-            params: params
-                .iter()
-                .map(|param| FunctionParamContract {
-                    name: String::new(),
-                    ty: lower_type_ref(&param.ty),
-                    passing: resolve_param_passing(param.mode),
-                    has_default: false,
-                    default_erased: true,
-                })
-                .collect(),
-            return_type: Box::new(lower_type_ref(return_type)),
-        },
-    }
+    lower_type_ref_with_type_params(type_ref, None)
 }
 
 fn lower_generic_type_ref(type_ref: &TypeRef, type_params: &BTreeSet<String>) -> Type {
+    lower_type_ref_with_type_params(type_ref, Some(type_params))
+}
+
+fn lower_type_ref_with_type_params(
+    type_ref: &TypeRef,
+    type_params: Option<&BTreeSet<String>>,
+) -> Type {
     match &type_ref.kind {
         crate::ast::TypeRefKind::Tuple(elements) => Type::Tuple(
             elements
                 .iter()
-                .map(|element| lower_generic_type_ref(element, type_params))
+                .map(|element| lower_type_ref_with_type_params(element, type_params))
                 .collect(),
         ),
         crate::ast::TypeRefKind::Named { name, args } if name == "None" => Type::Unit,
         crate::ast::TypeRefKind::Named { name, args }
-            if args.is_empty() && type_params.contains(name) =>
+            if args.is_empty()
+                && matches!(type_params, Some(type_params) if type_params.contains(name)) =>
         {
             Type::TypeParam(name.clone())
         }
         crate::ast::TypeRefKind::Named { name, args } => Type::Named(
             name.clone(),
             args.iter()
-                .map(|arg| lower_generic_type_ref(arg, type_params))
+                .map(|arg| lower_type_ref_with_type_params(arg, type_params))
                 .collect(),
         ),
         crate::ast::TypeRefKind::Function {
@@ -75,13 +59,13 @@ fn lower_generic_type_ref(type_ref: &TypeRef, type_params: &BTreeSet<String>) ->
                 .iter()
                 .map(|param| FunctionParamContract {
                     name: String::new(),
-                    ty: lower_generic_type_ref(&param.ty, type_params),
+                    ty: lower_type_ref_with_type_params(&param.ty, type_params),
                     passing: resolve_param_passing(param.mode),
                     has_default: false,
                     default_erased: true,
                 })
                 .collect(),
-            return_type: Box::new(lower_generic_type_ref(return_type, type_params)),
+            return_type: Box::new(lower_type_ref_with_type_params(return_type, type_params)),
         },
     }
 }
