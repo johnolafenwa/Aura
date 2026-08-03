@@ -4953,17 +4953,6 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "text",
                 string_ty.clone(),
                 string_value.clone(),
-                Type::Named("list".to_string(), vec![Type::named("uint8")]),
-                "to_bytes",
-                vec![arg(Operand::Int(1))],
-            ),
-            "expected `to_bytes()` to take no arguments",
-        ),
-        (
-            module_with_main_member_call_result_type(
-                "text",
-                string_ty.clone(),
-                string_value.clone(),
                 Type::named("int64"),
                 "len",
                 vec![MirArg {
@@ -7913,6 +7902,55 @@ def main() -> int32:
             "member-length matrix should reference `{required}`: {referenced:?}"
         );
     }
+}
+
+#[test]
+fn direct_string_to_bytes_routes_through_the_registered_host_builtin() {
+    let source = r#"
+def main() -> int32:
+    payload = "café".to_bytes()
+    print(payload)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("str.to_bytes source should lower to MIR");
+    assert!(
+        mir.functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .any(
+                |block| block.instructions.iter().any(|instruction| matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::Call {
+                            callee: CallTarget::Name(name),
+                            ..
+                        },
+                        ..
+                    } if name == "str.to_bytes"
+                ))
+            ),
+        "public str.to_bytes syntax must canonicalize to the registered host-builtin call"
+    );
+    let bytes = emit_host_object(&mir).expect("str.to_bytes should emit direct native code");
+    let referenced = object_referenced_symbols(&bytes);
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aura_direct_host_builtin")),
+        "str.to_bytes must use the registered host-builtin ABI: {referenced:?}"
+    );
+
+    let object = cranelift_object::object::File::parse(bytes.as_slice())
+        .expect("str.to_bytes direct output should be a readable host object");
+    assert!(
+        object
+            .sections()
+            .filter_map(|section| section.data().ok())
+            .any(|data| data
+                .windows(b"str.to_bytes".len())
+                .any(|window| window == b"str.to_bytes")),
+        "direct code must identify the canonical str.to_bytes host operation"
+    );
 }
 
 #[test]

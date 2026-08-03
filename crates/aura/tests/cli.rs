@@ -5166,6 +5166,22 @@ def main() -> int32:
 }
 
 #[test]
+fn s1_string_to_bytes_matches_mir_and_direct_backends() {
+    let source = r#"
+def main() -> int32:
+    print("Aura".to_bytes())
+    print("café".to_bytes())
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aura-s1-direct-string-to-bytes",
+        source,
+        "[65, 117, 114, 97]\n[99, 97, 102, 101, 204, 129]\n",
+    );
+}
+
+#[test]
 fn run_backends_match_eager_comprehension_behavior() {
     let source = include_str!("../../aura-compiler/tests/fixtures/run-pass/comprehensions.au");
     let expected =

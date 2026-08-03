@@ -9595,15 +9595,6 @@ impl<'a> FunctionCompiler<'a> {
                             Type::named("str"),
                         ))
                     }
-                    "to_bytes" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `to_bytes()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        self.compile_host_builtin_loaded_call("str.to_bytes", &[object])
-                    }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
                         name, field
