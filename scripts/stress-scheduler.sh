@@ -3,7 +3,7 @@ set -euo pipefail
 
 runs="${AURA_STRESS_RUNS:-25}"
 tests=(
-  "queue_consumers_share_work_without_starvation"
+  "queue_consumers_share_work_fairly_on_one_worker"
   "cancelled_sleeping_children_resume_and_can_observe_cancellation"
   "scheduler_mixed_wakeups_complete_in_mir_and_direct_backends"
 )

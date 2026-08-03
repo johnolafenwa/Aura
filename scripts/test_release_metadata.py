@@ -205,6 +205,28 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertNotIn("aura_direct_coverage_live_value_count", native_runtime_exports)
         self.assertEqual(ffi_tests.count("direct_runtime_ffi_test_guard()"), 8)
 
+    def test_scheduler_stress_filters_resolve_and_fit_the_hosted_budget(self) -> None:
+        workflow = (ROOT / ".github/workflows/safety.yml").read_text()
+        stress = (ROOT / "scripts/stress-scheduler.sh").read_text()
+        cli_tests = (ROOT / "crates/aura/tests/cli.rs").read_text()
+
+        configured = re.findall(r'^  "([a-z0-9_]+)"$', stress, re.MULTILINE)
+        self.assertEqual(
+            configured,
+            [
+                "queue_consumers_share_work_fairly_on_one_worker",
+                "cancelled_sleeping_children_resume_and_can_observe_cancellation",
+                "scheduler_mixed_wakeups_complete_in_mir_and_direct_backends",
+            ],
+        )
+        for test_name in configured:
+            with self.subTest(test_name=test_name):
+                self.assertIn(f"fn {test_name}()", cli_tests)
+
+        self.assertIn("timeout-minutes: 45", workflow)
+        self.assertIn("AURA_STRESS_RUNS=10 scripts/stress-scheduler.sh", workflow)
+        self.assertNotIn("AURA_STRESS_RUNS=50 scripts/stress-scheduler.sh", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

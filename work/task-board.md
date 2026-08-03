@@ -122,9 +122,14 @@ Last updated: 2026-08-03
   inheriting the parent sanitizer ABI without its `-Zbuild-std` contract. The
   final scripts retain those complete directly instrumented boundaries and no
   longer launch a second Cargo process. Both fuzz targets explicitly use the
-  installed `x86_64-unknown-linux-gnu` target. Focused metadata, shell-syntax,
-  and workflow checks are green; fresh hosted Safety verification remains
-  pending after push.
+  installed `x86_64-unknown-linux-gnu` target. Hosted run `30819818749` proved
+  all four fuzz/sanitizer jobs and exposed an independent workflow-budget
+  defect: the stress job reached iteration 16/50 before its 45-minute timeout,
+  while one stale exact filter ran zero tests. The filter now resolves to the
+  maintained one-worker fairness regression, the hosted count is ten complete
+  repetitions of all three tests, and a regression pins both the resolved
+  names and budget. Focused metadata, shell-syntax, and workflow checks are
+  green; a complete hosted Safety verification remains pending after push.
 - The final local gate is green. It covers 31 Aura unit tests, 362 CLI tests,
   1,663 compiler tests, the complete forced MIR/direct parity matrix, 107 LSP
   tests at 100% coverage, 22 extension tests, all 39 Manual pages and 270
