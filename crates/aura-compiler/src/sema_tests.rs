@@ -328,6 +328,150 @@ fn s1_sema_fourth_match_statements_and_expressions_pin_shape_diagnostics() {
 }
 
 #[test]
+fn s1_sema_fifth_entry_module_rules_and_constant_plan_are_observable() {
+    let mutable_module = crate::check_source("mut state = 1\n\ndef main():\n    pass\n")
+        .expect_err("module-level mutable state must be rejected before entrypoint checking");
+    assert_eq!(mutable_module.code, "AU3003");
+    assert_eq!(
+        mutable_module.message,
+        "module bindings are immutable; `mut` module state is not supported"
+    );
+    assert_eq!(
+        mutable_module.help,
+        vec!["put mutable state in a local value owned by `main` or another explicit owner"]
+    );
+
+    let return_type = crate::check_source("def main() -> str:\n    return \"bad\"\n")
+        .expect_err("main must retain its exact runtime return contract");
+    assert_eq!(return_type.code, "AU2999");
+    assert_eq!(
+        return_type.message,
+        "`main` must return `int32` or `None` in the bootstrap runtime"
+    );
+
+    let program = crate::check_source(
+        "first: int64 = 1\nsecond: int64 = first + 1\n\ndef main():\n    print(second)\n",
+    )
+    .expect("valid module constants must produce a deterministic source-order plan");
+    let names = program
+        .constant_init_plan
+        .iter()
+        .map(|constant| constant.decl.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["first", "second"]);
+}
+
+#[test]
+fn s1_sema_fifth_contextual_literals_lambdas_and_variants_keep_exact_errors() {
+    let float =
+        crate::check_source("def main():\n    value: float32 = -16777217\n    print(value)\n")
+            .expect_err("an inexact negative integer must not silently round in float32 context");
+    assert_eq!(float.code, "AU2002");
+    assert_eq!(
+        float.message,
+        "integer literal `-16777217` cannot be represented exactly as `float32`; write an explicit float spelling such as `-16777217.0` or use `.to_float()` when rounding is intended"
+    );
+
+    let lambda = crate::check_source(
+        "def main():\n    callback: def(int64) -> str = lambda value: value\n    print(callback)\n",
+    )
+    .expect_err("a lambda body must match its contextual callable return type");
+    assert_eq!(lambda.code, "AU2002");
+    assert_eq!(
+        lambda.message,
+        "lambda body has type `int64`, expected `str`"
+    );
+
+    let variant = crate::check_source(
+        "def make() -> Option[int32]:\n    return Option.Some(\"bad\")\n\ndef main():\n    pass\n",
+    )
+    .expect_err("an expected builtin enum type must constrain its payload");
+    assert_eq!(variant.code, "AU2999");
+    assert_eq!(
+        variant.message,
+        "variant `Some` of enum `Option` expects `int32`, found `str`"
+    );
+}
+
+#[test]
+fn s1_sema_fifth_member_values_methods_and_missing_fields_stay_specific() {
+    let associated = crate::check_source(
+        "class Box:\n    value: int32\n\n    def make(value: int32) -> Box:\n        return Box(value=value)\n\ndef main():\n    callback = Box.make\n    print(callback)\n",
+    )
+    .expect_err("associated methods are callable only through direct syntax");
+    assert_eq!(associated.code, "AU2005");
+    assert_eq!(
+        associated.message,
+        "associated method values are not supported in this language version; call `Box.make(...)` directly or wrap it in a named function"
+    );
+
+    let integer = crate::check_source(
+        "def main():\n    left: int8 = 1\n    right: int16 = 2\n    value = left.wrapping_add(right)\n    print(value)\n",
+    )
+    .expect_err("fixed-width arithmetic methods require one exact integer type");
+    assert_eq!(integer.code, "AU2002");
+    assert_eq!(
+        integer.message,
+        "`wrapping_add` expects `int8`, found `int16`"
+    );
+
+    for (source, code, expected) in [
+        (
+            "def main():\n    value = 1\n    print(value.missing)\n",
+            "AU2002",
+            "type `int64` has no field `missing`",
+        ),
+        (
+            "class Box:\n    value: int32\n\ndef main():\n    box = Box(value=1)\n    print(box.missing)\n",
+            "AU2999",
+            "class `Box` has no field `missing`",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err("unknown fields must name their owner");
+        assert_eq!(error.code, code, "{source}: {error:?}");
+        assert_eq!(error.message, expected, "{source}");
+    }
+}
+
+#[test]
+fn s1_sema_fifth_custom_compound_operator_retains_the_target_access() {
+    let error = crate::check_source(
+        r#"
+trait Add[Rhs, Out]:
+    def add(own self, rhs: own Rhs) -> Out
+
+class Box:
+    value: int32
+
+impl Add[int32, Box] for Box:
+    def add(own self, rhs: own int32) -> Box:
+        return Box(value=self.value + rhs)
+
+def main():
+    mut box = Box(value=1)
+    box += box.value
+"#,
+    )
+    .expect_err("a consuming compound operator target must conflict with a projected RHS read");
+    assert_eq!(error.code, "AU3002");
+    assert_eq!(
+        error.message,
+        "cannot borrow `box.value` while `box` remains reserved for consumption by the compound assignment target"
+    );
+    assert_eq!(error.secondary_spans.len(), 1);
+    assert_eq!(
+        error.secondary_spans[0].label,
+        "consumption by the compound assignment target begins here"
+    );
+    assert_eq!(
+        error.help,
+        vec![
+            "call `.clone()` before the expression when an independent value is intended, or perform the read in a separate statement first"
+        ]
+    );
+}
+
+#[test]
 fn s1_sema_module_constants_reject_self_reentry_rebinding_mutation_and_moves() {
     let reentry = crate::check_source("VALUE: int64 = VALUE\n\ndef main():\n    pass\n")
         .expect_err("a module constant cannot re-enter its own initializer");
