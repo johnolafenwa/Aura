@@ -5161,7 +5161,7 @@ def main() -> int32:
     assert_run_and_direct_source_stdout(
         "aura-s1-direct-narrow-operators",
         source,
-        "4\n0\n8\n0\n15\n15\n96\n1\n[3, 2, 1]\n   c|1.25|   f\n",
+        "4\n0\n8\n0\n15\n15\n96\n1\n[3, 2, 1]\n000c|1.25|000f\n",
     );
 }
 
