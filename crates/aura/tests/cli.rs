@@ -5182,6 +5182,24 @@ def main() -> int32:
 }
 
 #[test]
+fn s1_discarded_collection_capacity_failures_match_mir_and_direct_backends() {
+    for (name, call) in [
+        ("list", "list[int64].with_capacity(-1)"),
+        ("set", "set[str].with_capacity(-1)"),
+        ("dict", "dict[str, int64].with_capacity(-1)"),
+    ] {
+        let source = format!("def main():\n    {call}\n    print(\"unreachable\")\n");
+        assert_run_and_direct_source_failure_with_timeout(
+            &format!("aura-s1-discarded-{name}-capacity"),
+            &source,
+            std::time::Duration::from_secs(30),
+            "",
+            "error[AU4003]: collection capacity cannot be negative",
+        );
+    }
+}
+
+#[test]
 fn run_backends_match_eager_comprehension_behavior() {
     let source = include_str!("../../aura-compiler/tests/fixtures/run-pass/comprehensions.au");
     let expected =

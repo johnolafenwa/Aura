@@ -7954,6 +7954,33 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_discarded_with_capacity_calls_preserve_each_collection_constructor() {
+    let source = r#"
+def main():
+    list[int64].with_capacity(2)
+    set[str].with_capacity(2)
+    dict[str, int64].with_capacity(2)
+    print("complete")
+"#;
+    let mir = lower_source_to_mir(source)
+        .expect("discarded collection-capacity calls should lower to MIR");
+    let object = emit_host_object(&mir)
+        .expect("discarded collection-capacity calls should emit direct native code");
+    let referenced = object_referenced_symbols(&object);
+    for required in [
+        "aura_direct_vec_empty",
+        "aura_direct_set_empty",
+        "aura_direct_map_empty",
+        "aura_direct_collection_operation",
+    ] {
+        assert!(
+            referenced.iter().any(|symbol| symbol.contains(required)),
+            "discarded with_capacity calls must retain `{required}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
 fn direct_member_lengths_do_not_emit_implicit_int32_range_checks() {
     let baseline =
         module_with_main_call_result_type(Rvalue::Use(Operand::Int(0)), Type::named("int64"));

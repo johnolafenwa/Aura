@@ -4637,7 +4637,7 @@ impl<'a> FunctionCompiler<'a> {
                 let right = self.load_operand_with_integer_hint(right, right_integer_hint)?;
                 self.compile_binary(*op, left, right, Some(*span))
             }
-            Rvalue::Call { callee, args } => self.compile_call(callee, args, Some(target)),
+            Rvalue::Call { callee, args } => self.compile_call(callee, args, target),
             Rvalue::VecLiteral {
                 elements,
                 element_type,
@@ -5665,7 +5665,7 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         callee: &CallTarget,
         args: &[MirArg],
-        target: Option<&DirectType>,
+        target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         match callee {
             CallTarget::Name(name) if name == "print" => self.compile_print(args),
@@ -5684,7 +5684,7 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         call: &MirExternCall,
         args: &[MirArg],
-        target: Option<&DirectType>,
+        target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         if call.abi != "C" {
             return Err(format!(
@@ -5789,17 +5789,14 @@ impl<'a> FunctionCompiler<'a> {
             &format!("extern return from `{}`", call.symbol),
         )?;
         let result = self.coerce_value(boxed_result, &return_direct)?;
-        match target {
-            Some(target) => self.coerce_value(result, target),
-            None => Ok(result),
-        }
+        self.coerce_value(result, target)
     }
 
     fn compile_function_value_call(
         &mut self,
         function: &Operand,
         args: &[MirArg],
-        target: Option<&DirectType>,
+        target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         let function_type = infer_operand_type(function, &self.variable_types, &self.classes)
             .ok_or("direct backend could not infer the indirect callee type".to_string())?;
@@ -5927,10 +5924,7 @@ impl<'a> FunctionCompiler<'a> {
         let boxed_result =
             self.owned_opaque_result(vec![raw_result], direct_type_to_type(&return_direct));
         let result = self.coerce_value(boxed_result, &return_direct)?;
-        match target {
-            Some(target) => self.coerce_value(result, target),
-            None => Ok(result),
-        }
+        self.coerce_value(result, target)
     }
 
     fn compile_print(&mut self, args: &[MirArg]) -> std::result::Result<ValueRef, String> {
@@ -6035,7 +6029,7 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         name: &str,
         args: &[MirArg],
-        target: Option<&DirectType>,
+        target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         if name == "random::Rng" {
             let ordered = ordered_named_args(&["seed"], args)?;
@@ -6086,19 +6080,15 @@ impl<'a> FunctionCompiler<'a> {
             .and_then(|field| BuiltinAssociatedFunction::resolve("Array", field))
         {
             let (array_ty, element_type) = match target {
-                Some(DirectType::Opaque(ty @ Type::Named(owner, arguments)))
+                DirectType::Opaque(ty @ Type::Named(owner, arguments))
                     if owner == "Array" && arguments.len() == 1 =>
                 {
                     (ty.clone(), arguments[0].clone())
                 }
                 other => {
-                    let rendered = match other {
-                        Some(ty) => render_direct_type(ty),
-                        None => "no target type".to_string(),
-                    };
                     return Err(format!(
                         "direct backend requires an Array result type for `{name}`, found {}",
-                        rendered
+                        render_direct_type(other)
                     ));
                 }
             };
@@ -6341,7 +6331,7 @@ impl<'a> FunctionCompiler<'a> {
                 ],
             );
             let result_type = match target {
-                Some(DirectType::Opaque(Type::Named(name, type_args)))
+                DirectType::Opaque(Type::Named(name, type_args))
                     if name == "SelectOutcome" && type_args.len() == 2 =>
                 {
                     Type::Named(name.clone(), type_args.clone())
@@ -6626,19 +6616,7 @@ impl<'a> FunctionCompiler<'a> {
                     &[collection, zero, minimum.values[0], opcode],
                 );
                 self.release_opaque_handle(self.builder.inst_results(reserve)[0]);
-                let result_ty =
-                    target
-                        .map(direct_type_to_type)
-                        .unwrap_or_else(|| match type_name {
-                            "list" | "set" => {
-                                Type::Named(type_name.to_string(), vec![Type::named("Unknown")])
-                            }
-                            "dict" => Type::Named(
-                                "dict".to_string(),
-                                vec![Type::named("Unknown"), Type::named("Unknown")],
-                            ),
-                            _ => unreachable!(),
-                        });
+                let result_ty = direct_type_to_type(target);
                 return Ok(self.owned_opaque_result(vec![collection], result_ty));
             }
         }
@@ -6677,7 +6655,7 @@ impl<'a> FunctionCompiler<'a> {
             .cloned()
             .unwrap_or_default();
         let mut substitutions = HashMap::new();
-        if let (Some(target), Some(return_type)) = (target, self.function_return_types.get(name)) {
+        if let Some(return_type) = self.function_return_types.get(name) {
             collect_direct_runtime_type_substitutions(
                 &direct_type_to_type(return_type),
                 &direct_type_to_type(target),
