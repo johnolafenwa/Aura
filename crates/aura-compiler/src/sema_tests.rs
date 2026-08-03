@@ -472,6 +472,70 @@ def main():
 }
 
 #[test]
+fn s1_sema_sixth_bytes_conversion_pins_shared_input_and_result_type() {
+    crate::check_source(
+        "import bytes\n\ndef main():\n    payload: list[uint8] = [65]\n    decoded: Result[str, bytes.Error] = str.from_bytes(payload)\n    print(payload.len())\n    print(decoded)\n",
+    )
+    .expect("str.from_bytes must return its typed result without consuming the byte list");
+
+    let error = crate::check_source(
+        "import bytes\n\ndef main():\n    payload: list[int64] = [65]\n    decoded = str.from_bytes(payload)\n    print(decoded)\n",
+    )
+    .expect_err("str.from_bytes must require an exact byte-list input");
+    assert_eq!(error.code, "AU2999");
+    assert_eq!(
+        error.message,
+        "`str.from_bytes` expects `list[uint8]`, found `list[int64]`"
+    );
+}
+
+#[test]
+fn s1_sema_sixth_or_pattern_subsumption_remains_observable() {
+    let prior_or = crate::check_source(
+        "def main():\n    match 3:\n        case 1 | 2:\n            pass\n        case 1:\n            pass\n        case _:\n            pass\n",
+    )
+    .expect_err("a prior or-pattern must make its repeated alternative unreachable");
+    assert_eq!(prior_or.code, "AU2999");
+    assert_eq!(prior_or.message, "unreachable match arm");
+
+    let current_or = crate::check_source(
+        "enum Choice:\n    Value(int64)\n    Empty\n\ndef main():\n    value = Choice.Value(1)\n    match value:\n        case Value(_):\n            pass\n        case Value(1) | Value(2):\n            pass\n        case Empty:\n            pass\n",
+    )
+    .expect_err("one prior variant pattern must subsume every current alternative");
+    assert_eq!(current_or.code, "AU2999");
+    assert_eq!(current_or.message, "unreachable match arm");
+
+    let bindings = crate::check_source(
+        "enum Choice:\n    Left(int64)\n    Right(int64)\n\ndef main():\n    value = Choice.Left(1)\n    match value:\n        case Left(left) | Right(right):\n            print(left)\n",
+    )
+    .expect_err("or-pattern alternatives must expose one identical binding set");
+    assert_eq!(bindings.code, "AU2999");
+    assert_eq!(
+        bindings.message,
+        "every alternative in an or-pattern must bind the same names with identical types and capabilities"
+    );
+}
+
+#[test]
+fn s1_sema_sixth_shared_collection_field_move_offers_the_exact_copy_fix() {
+    let error = crate::check_source(
+        "class Holder:\n    values: list[int64]\n\ndef take(holder: Holder) -> list[int64]:\n    return holder.values\n\ndef main():\n    pass\n",
+    )
+    .expect_err("a collection field cannot move through a shared parameter");
+    assert_eq!(error.code, "AU3002");
+    assert_eq!(
+        error.message,
+        "cannot move non-copy field `values` out of borrowed value `holder`"
+    );
+    assert_eq!(
+        error.help,
+        ["take `holder` as `own Holder` when the field should be moved, or call `.copy()` on the field to return an independent value"]
+    );
+    assert_eq!(error.edits.len(), 1);
+    assert_eq!(error.edits[0].replacement, ".copy()");
+}
+
+#[test]
 fn s1_sema_module_constants_reject_self_reentry_rebinding_mutation_and_moves() {
     let reentry = crate::check_source("VALUE: int64 = VALUE\n\ndef main():\n    pass\n")
         .expect_err("a module constant cannot re-enter its own initializer");
