@@ -588,6 +588,60 @@ fn checked_integer_power_preserves_width_and_reports_domain_and_overflow() {
 }
 
 #[test]
+fn s1_frontend_bitwise_operations_preserve_every_runtime_integer_width() {
+    for kind in [
+        IntegerKind::Int8,
+        IntegerKind::Int16,
+        IntegerKind::Int32,
+        IntegerKind::Int64,
+        IntegerKind::Int128,
+        IntegerKind::IntSize,
+    ] {
+        let one = IntegerValue::from_typed_signed(1, kind).expect("one should fit");
+        let three = IntegerValue::from_typed_signed(3, kind).expect("three should fit");
+        let two = IntegerValue::from_typed_signed(2, kind).expect("two should fit");
+        assert_eq!(one.checked_bitand(three), Some(one), "{kind:?}");
+        assert_eq!(one.checked_bitor(two), Some(three), "{kind:?}");
+        assert_eq!(three.checked_bitxor(one), Some(two), "{kind:?}");
+        assert_eq!(
+            one.bitnot().and_then(IntegerValue::bitnot),
+            Some(one),
+            "{kind:?}"
+        );
+    }
+
+    for kind in [
+        IntegerKind::Uint8,
+        IntegerKind::Uint16,
+        IntegerKind::Uint32,
+        IntegerKind::Uint64,
+        IntegerKind::Uint128,
+        IntegerKind::UintSize,
+    ] {
+        let one = IntegerValue::from_typed_unsigned(1, kind).expect("one should fit");
+        let three = IntegerValue::from_typed_unsigned(3, kind).expect("three should fit");
+        let two = IntegerValue::from_typed_unsigned(2, kind).expect("two should fit");
+        assert_eq!(one.checked_bitand(three), Some(one), "{kind:?}");
+        assert_eq!(one.checked_bitor(two), Some(three), "{kind:?}");
+        assert_eq!(three.checked_bitxor(one), Some(two), "{kind:?}");
+        assert_eq!(
+            one.bitnot().and_then(IntegerValue::bitnot),
+            Some(one),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn s1_frontend_unsigned_integer_power_preserves_the_declared_runtime_width() {
+    let two = IntegerValue::from_typed_unsigned(2, IntegerKind::Uint16).unwrap();
+    let ten = IntegerValue::from_typed_unsigned(10, IntegerKind::Uint16).unwrap();
+    let expected = IntegerValue::from_typed_unsigned(1024, IntegerKind::Uint16).unwrap();
+    assert_eq!(two.checked_pow(ten), Ok(expected));
+    assert_eq!(expected.runtime_kind(), Some(IntegerKind::Uint16));
+}
+
+#[test]
 fn d3_negative_literal_default_is_int64_and_does_not_widen_implicitly() {
     assert_eq!(
         minimal_signed_type_for_negative_literal(7),

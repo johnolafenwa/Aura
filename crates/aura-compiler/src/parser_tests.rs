@@ -2888,6 +2888,50 @@ fn match_guards_and_or_patterns_parse_in_statement_and_expression_forms() {
 }
 
 #[test]
+fn s1_frontend_every_pattern_form_can_anchor_an_or_pattern_at_its_own_source_span() {
+    for (source, expected) in [
+        ("(1 | 2) | 3", Span::new(1, 2)),
+        ("Choice(1) | Choice(2)", Span::new(1, 1)),
+        ("(1, value) | (2, value)", Span::new(1, 1)),
+        ("value | value", Span::new(1, 1)),
+        ("1 | 2", Span::new(1, 1)),
+        ("_ | _", Span::new(1, 1)),
+    ] {
+        let pattern = parse_pattern_from(source).expect("or-pattern should parse");
+        let Pattern::Or(pattern) = pattern else {
+            panic!("expected `{source}` to produce an or-pattern");
+        };
+        assert_eq!(pattern.span, expected, "{source}");
+        assert_eq!(pattern.alternatives.len(), 2, "{source}");
+    }
+}
+
+#[test]
+fn s1_frontend_fstring_parser_treats_braces_inside_triple_quoted_arguments_as_string_content() {
+    let expression = parse_expression("f\"{echo('''left } right''')}\"")
+        .expect("triple-quoted argument content must not close interpolation");
+    let ExprKind::FString(parts) = expression.kind else {
+        panic!("expected an f-string");
+    };
+    let [FormatPart::Expr(interpolation)] = parts.as_slice() else {
+        panic!("expected exactly one interpolation");
+    };
+    let ExprKind::Call { args, .. } = &interpolation.kind else {
+        panic!("expected an interpolated call");
+    };
+    assert!(matches!(
+        args.as_slice(),
+        [Argument {
+            value: Expr {
+                kind: ExprKind::String(value),
+                ..
+            },
+            ..
+        }] if value == "left } right"
+    ));
+}
+
+#[test]
 fn parser_helper_functions_cover_format_offsets_and_specialization_checks() {
     let tokens = lex("Value[int32](1)\n").expect("tokenization should succeed");
     let mut parser = Parser::new(tokens);

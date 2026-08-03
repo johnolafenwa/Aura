@@ -871,6 +871,32 @@ def main():
 }
 
 #[test]
+fn s1_frontend_specialized_collection_completion_reports_the_concrete_result_type() {
+    for (receiver, expected_detail) in [
+        (
+            "list[int64]",
+            "with_capacity(minimum: int64) -> list[int64]",
+        ),
+        (
+            "dict[str, int64]",
+            "with_capacity(minimum: int64) -> dict[str, int64]",
+        ),
+        ("set[str]", "with_capacity(minimum: int64) -> set[str]"),
+    ] {
+        let source = format!("def main():\n    {receiver}.\n");
+        let line = source.lines().nth(1).expect("completion line");
+        let character = line.find('.').expect("receiver dot") + 1;
+        let completions = complete_source(&source, 1, character, Some('.'))
+            .expect("specialized collection completion should recover");
+        let with_capacity = completions
+            .iter()
+            .find(|item| item.name == "with_capacity")
+            .expect("with_capacity completion should exist");
+        assert_eq!(with_capacity.detail, expected_detail, "{receiver}");
+    }
+}
+
+#[test]
 fn incomplete_expression_inference_preserves_stable_editor_types() {
     let program = checked_program("def main():\n    pass\n");
     let builder = AnalysisBuilder::new("", &program, Vec::new());

@@ -163,6 +163,50 @@ fn physical_tabs_are_content_only_inside_triple_quoted_strings() {
 }
 
 #[test]
+fn s1_frontend_physical_tabs_in_single_line_string_forms_report_the_same_source_error() {
+    for source in [
+        "value = \"left\tright\"\n",
+        "value = r\"left\tright\"\n",
+        "value = f\"left\tright\"\n",
+    ] {
+        let error = lex(source).expect_err("single-line strings must reject physical tabs");
+        assert_eq!(error.code, "AU1001");
+        assert_eq!(error.span, Some(Span::new(1, 9)));
+        assert_eq!(
+            error.message,
+            "physical tabs are allowed only inside triple-quoted strings"
+        );
+    }
+}
+
+#[test]
+fn s1_frontend_fstring_interpolation_keeps_braces_inside_triple_quoted_arguments() {
+    let tokens = kinds("message = f\"{echo('''left } right''')}\"\n");
+    assert!(tokens.contains(&TokenKind::FStringLiteral(
+        "{echo('''left } right''')}".to_string()
+    )));
+}
+
+#[test]
+fn s1_frontend_raw_string_diagnostics_distinguish_unsupported_triples_and_missing_terminators() {
+    let triple = lex("value = r\"\"\"text\"\"\"\n")
+        .expect_err("raw triple-quoted strings are outside the string surface");
+    assert_eq!(triple.code, "AU1001");
+    assert_eq!(
+        triple.message,
+        "raw triple-quoted strings are not supported"
+    );
+
+    let unterminated = lex("value = r\"never closes\n")
+        .expect_err("raw strings cannot contain a physical newline");
+    assert_eq!(unterminated.code, "AU1001");
+    assert_eq!(
+        unterminated.message,
+        "unterminated raw string literal; raw strings cannot contain a physical newline"
+    );
+}
+
+#[test]
 fn multiline_triple_string_escape_errors_point_at_the_later_physical_line() {
     let error = lex("value = \"\"\"first\nnext \\q\n\"\"\"\n")
         .expect_err("an invalid escape inside multiline content must fail");

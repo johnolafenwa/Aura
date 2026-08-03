@@ -478,6 +478,70 @@ fn associated_call_metadata_covers_duration_constructors_and_string_byte_decodin
 }
 
 #[test]
+fn s1_frontend_canonical_collection_associated_metadata_is_exact_and_bindable() {
+    for (owner, function, detail) in [
+        (
+            "list",
+            BuiltinAssociatedFunction::ListWithCapacity,
+            "with_capacity(minimum: int64) -> list[T]",
+        ),
+        (
+            "dict",
+            BuiltinAssociatedFunction::DictWithCapacity,
+            "with_capacity(minimum: int64) -> dict[K, V]",
+        ),
+        (
+            "set",
+            BuiltinAssociatedFunction::SetWithCapacity,
+            "with_capacity(minimum: int64) -> set[T]",
+        ),
+    ] {
+        assert_eq!(
+            BuiltinAssociatedFunction::resolve(owner, "with_capacity"),
+            Some(function)
+        );
+        assert_eq!(function.owner_name(), owner);
+        assert_eq!(function.detail(), detail);
+        assert_eq!(
+            function.docs(),
+            "Creates an empty collection with at least the requested capacity."
+        );
+        let args = [dummy_arg(Some("minimum"))];
+        let bound = function
+            .bind_args(&args, Span::new(4, 7))
+            .expect("minimum should bind by name");
+        assert_eq!(
+            bound[0].and_then(|arg| arg.name.as_deref()),
+            Some("minimum")
+        );
+    }
+}
+
+#[test]
+fn s1_frontend_canonical_membership_metadata_names_dict_and_set_behavior_plainly() {
+    assert_eq!(
+        BuiltinMember::MapSet.docs(),
+        "Inserts or replaces `key`, returning the previous value as `Option[V]`."
+    );
+    assert_eq!(
+        BuiltinMember::MapContainsKey.detail(),
+        "contains(key: K) -> bool"
+    );
+    assert_eq!(
+        BuiltinMember::MapContainsKey.docs(),
+        "Returns true when the dict contains `key`."
+    );
+    assert_eq!(
+        BuiltinMember::SetContains.detail(),
+        "contains(value: T) -> bool"
+    );
+    assert_eq!(
+        BuiltinMember::SetContains.docs(),
+        "Returns true when the set contains `value`."
+    );
+}
+
+#[test]
 fn array_call_metadata_pins_constructors_members_and_integer_modes() {
     for (function, name, detail, argument_names) in [
         (
