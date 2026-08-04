@@ -103,12 +103,18 @@ impl Parser {
         let mut constants = Vec::new();
         let mut items = Vec::new();
         let mut top_level_stmts = Vec::new();
+        let mut top_level_local_names = std::collections::BTreeSet::new();
         self.skip_newlines();
 
         while !self.at_eof() {
             if self.at_keyword_import() || self.at_from_import_start() {
                 imports.push(self.parse_import()?);
-            } else if self.at_module_constant_start() {
+            } else if self.at_module_constant_start()
+                && !matches!(
+                    self.current_kind(),
+                    TokenKind::Identifier(name) if top_level_local_names.contains(name)
+                )
+            {
                 constants.push(self.parse_module_constant()?);
             } else if self.at_simple(&TokenKind::KwPublic)
                 || self.at_copy_class_start()
@@ -121,7 +127,16 @@ impl Parser {
             {
                 items.push(self.parse_item()?);
             } else {
-                top_level_stmts.push(self.parse_stmt()?);
+                let statement = self.parse_stmt()?;
+                if let Stmt::Assign(AssignStmt {
+                    mutable: true,
+                    target: AssignTarget::Name(name),
+                    ..
+                }) = &statement
+                {
+                    top_level_local_names.insert(name.clone());
+                }
+                top_level_stmts.push(statement);
             }
             self.skip_newlines();
         }

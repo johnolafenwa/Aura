@@ -460,6 +460,23 @@ constants are ready. An entry module with executable top-level statements
 cannot define a local `main`. Imported module top-level statements do not
 execute as import side effects.
 
+A top-level `mut name = value` statement declares `name` in the entry script's
+local environment. Later `name = value` and compound assignments such as
+`name += value` reassign that same local:
+
+```aura
+mut count = 0
+count = count + 1
+count += 1
+print(count)
+```
+
+A bare top-level binding with a new name remains a module constant, regardless
+of its textual position among entry statements. It cannot read a top-level
+script local because constants initialize before entry execution. Declare the
+new binding with `mut` to keep the computation in the entry script, or move the
+work into `main`.
+
 The accepted `main` signatures and process exit behavior are defined in [Functions](/manual/functions#main) and [Execution Model](/manual/execution-model#entry-module-execution).
 
 ## Contextual Legality Summary
@@ -477,6 +494,7 @@ Parsing a statement shape does not make it legal in every context:
 - `with` requires a supported resource and preserves its cleanup capability.
 - items cannot appear inside suites.
 - module constants are immutable and cannot use `mut` or reassignment.
+- module constants cannot read top-level script locals, which initialize later.
 - an entry module cannot mix executable top-level statements with local `main`.
 
 The complete checker rules are normative in [Static Semantics](/manual/static-semantics), and ownership effects are normative in [Ownership And Borrowing](/manual/ownership-and-borrowing).

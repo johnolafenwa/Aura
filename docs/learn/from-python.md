@@ -34,20 +34,37 @@ statements or an explicit `main`, never both. Declarations like `class` and
 This is the first error most Python developers hit:
 
 ```aura
-total = 0
-total = total + 1   # error: cannot assign to immutable binding `total`
+def main():
+    total = 0
+    total = total + 1   # error: cannot assign to immutable binding `total`
 ```
 
 Add `mut` and it works:
 
 ```aura
-mut total = 0
-total = total + 1
+def main():
+    mut total = 0
+    total = total + 1
 ```
 
 `mut` is not a type — it is permission to rebind or mutate. You will see it in
 three places: local bindings, parameters that a function may change, and
 methods that modify their object.
+
+Top-level entry scripts use the same rule. A `mut` binding and its later plain
+or compound assignments belong to the script's shared local environment:
+
+```aura
+mut count = 0
+count = count + 1
+count += 1
+print(count)  # 2
+```
+
+A new bare top-level binding such as `limit = 3` declares an immutable module
+constant. Module constants initialize before top-level entry statements, even
+when the two categories are interleaved in the file. Use `mut limit = ...` when
+the value must be computed from an earlier top-level script local.
 
 ## Values Have Owners
 

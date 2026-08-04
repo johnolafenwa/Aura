@@ -51,6 +51,20 @@ test("extension manifest and listing are ready for both public marketplaces", ()
   assert.ok(manifest.files.includes("images/aura.png"));
   assert.equal(fs.existsSync(path.join(extensionRoot, "LICENSE")), true);
   assert.equal(fs.existsSync(path.join(extensionRoot, manifest.icon)), true);
+  const auraLanguage = manifest.contributes.languages.find(
+    (language) => language.id === "aura"
+  );
+  assert.deepEqual(auraLanguage?.icon, {
+    light: "./images/aura.png",
+    dark: "./images/aura.png"
+  });
+  for (const iconPath of Object.values(auraLanguage.icon)) {
+    assert.equal(
+      fs.existsSync(path.resolve(extensionRoot, iconPath)),
+      true,
+      `${iconPath} should exist for Aura files in the Explorer`
+    );
+  }
   assert.match(
     readme.split("\n").slice(0, 5).join("\n"),
     /Aura is a .* programming language[\s\S]*https:\/\/github\.com\/johnolafenwa\/Aura/i

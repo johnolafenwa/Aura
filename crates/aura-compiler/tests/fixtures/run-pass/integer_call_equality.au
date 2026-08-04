@@ -1,0 +1,19 @@
+def signed_value() -> int32:
+    return 7
+
+def unsigned_value() -> uint64:
+    return 9
+
+def main():
+    print(signed_value() == 7)
+    print(7 == signed_value())
+    print(signed_value() != 8)
+    print(8 != signed_value())
+    print(unsigned_value() == 9)
+    print(9 == unsigned_value())
+    print(unsigned_value() != 10)
+    print(10 != unsigned_value())
+    print(signed_value() == 7 == signed_value())
+    print(unsigned_value() == 9 == unsigned_value())
+    assert signed_value() == 7
+    assert 9 == unsigned_value()

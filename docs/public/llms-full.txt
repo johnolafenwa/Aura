@@ -2861,14 +2861,21 @@ The JSON result is an array of `{ "name": str, "kind": str, "detail": str }` obj
 
 `ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aura 0.3. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
 
-`aura lsp` is a persistent JSON-lines compiler service. Each input line is an object with an optional `id`, `method`, `path`, and `source`. Supported requests are:
+`aura lsp` is a persistent JSON-lines compiler service. Every request requires
+`semantic_interface_version: 5` plus string fields `method`, `path`, and
+`source`; `id` is optional and is echoed in the response. Supported requests
+are:
 
 ```json
-{"id":1,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
-{"id":2,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
+{"id":1,"semantic_interface_version":5,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
+{"id":2,"semantic_interface_version":5,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
 ```
 
-Each response is one line containing the same `id` plus either `result` or an `error` string. Paths give the virtual source a package/import context; ranges and completion positions are zero-based.
+Each response is one line containing the same `id`,
+`semantic_interface_version: 5`, and either `result` or an `error` string.
+Paths give the virtual source a package/import context; ranges and completion
+positions are zero-based. A missing or different semantic interface version is
+an incompatible request and returns a schema-mismatch error.
 
 ## Output And Exit Status
 
@@ -11494,6 +11501,14 @@ Module storage is immutable. Module-level `mut`, reassignment, compound
 assignment, and mutable access are `AU3003` errors. Stateful application data
 belongs in a local value owned by `main` or another explicit owner.
 
+An entry script's top-level local environment is separate from module storage.
+The statement `mut count = 0` creates a mutable local in that environment;
+later `count = count + 1` and `count += 1` both reassign it. A fresh bare
+top-level binding still declares a module constant. That constant cannot read a
+top-level script local because constant initialization happens before entry
+statements execute. Use `mut` on the fresh binding to make it another script
+local, or place the computation in `main`.
+
 ## Imports
 
 An unaliased module import binds the first path component as a namespace:
@@ -11696,6 +11711,11 @@ Builtin enum types such as `Option`, `Result`, `QueueReceive`, and `process.Erro
 An entry module may contain executable top-level statements instead of a local
 `main`. Those statements share one top-level local environment and execute in
 source order after reachable module constants finish initialization.
+
+A `mut` simple-name assignment declares a mutable top-level local. Later plain
+and compound assignments to that name remain in the statement stream and
+update the same local. A bare assignment to a new name is a module constant,
+even when it appears after an executable statement in source order.
 
 Imported modules contribute items and eagerly initialized constants. Their
 top-level executable statements are checked as source and do not run as import
@@ -14399,6 +14419,23 @@ constants are ready. An entry module with executable top-level statements
 cannot define a local `main`. Imported module top-level statements do not
 execute as import side effects.
 
+A top-level `mut name = value` statement declares `name` in the entry script's
+local environment. Later `name = value` and compound assignments such as
+`name += value` reassign that same local:
+
+```aura
+mut count = 0
+count = count + 1
+count += 1
+print(count)
+```
+
+A bare top-level binding with a new name remains a module constant, regardless
+of its textual position among entry statements. It cannot read a top-level
+script local because constants initialize before entry execution. Declare the
+new binding with `mut` to keep the computation in the entry script, or move the
+work into `main`.
+
 The accepted `main` signatures and process exit behavior are defined in [Functions](/manual/functions#main) and [Execution Model](/manual/execution-model#entry-module-execution).
 
 ## Contextual Legality Summary
@@ -14416,6 +14453,7 @@ Parsing a statement shape does not make it legal in every context:
 - `with` requires a supported resource and preserves its cleanup capability.
 - items cannot appear inside suites.
 - module constants are immutable and cannot use `mut` or reassignment.
+- module constants cannot read top-level script locals, which initialize later.
 - an entry module cannot mix executable top-level statements with local `main`.
 
 The complete checker rules are normative in [Static Semantics](/manual/static-semantics), and ownership effects are normative in [Ownership And Borrowing](/manual/ownership-and-borrowing).
@@ -17249,20 +17287,37 @@ statements or an explicit `main`, never both. Declarations like `class` and
 This is the first error most Python developers hit:
 
 ```aura
-total = 0
-total = total + 1   # error: cannot assign to immutable binding `total`
+def main():
+    total = 0
+    total = total + 1   # error: cannot assign to immutable binding `total`
 ```
 
 Add `mut` and it works:
 
 ```aura
-mut total = 0
-total = total + 1
+def main():
+    mut total = 0
+    total = total + 1
 ```
 
 `mut` is not a type — it is permission to rebind or mutate. You will see it in
 three places: local bindings, parameters that a function may change, and
 methods that modify their object.
+
+Top-level entry scripts use the same rule. A `mut` binding and its later plain
+or compound assignments belong to the script's shared local environment:
+
+```aura
+mut count = 0
+count = count + 1
+count += 1
+print(count)  # 2
+```
+
+A new bare top-level binding such as `limit = 3` declares an immutable module
+constant. Module constants initialize before top-level entry statements, even
+when the two categories are interleaved in the file. Use `mut limit = ...` when
+the value must be computed from an earlier top-level script local.
 
 ## Values Have Owners
 

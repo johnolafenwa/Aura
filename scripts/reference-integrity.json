@@ -340,7 +340,7 @@
       "reason": "Long-running documentation development server command."
     },
     "docs/manual/cli-and-tooling.md#json-1": {
-      "sha256": "75e02ead5e814db24b3a7bd2814d1231cc9aa2286afced258db669c1e2393b64",
+      "sha256": "2aab4e79268630f40c20f1ce37f7c51d75f5a26b029d011a829d32ffdde7b0cc",
       "mode": "illustrative",
       "reason": "Two-line analysis-service request transcript, not a single executable JSON document."
     },
@@ -1493,6 +1493,12 @@
       "sha256": "c04397028c36cdadf9a6c5b679382799fa2568dc9208907bea8c51fa028d3da7",
       "mode": "run",
       "stdout": "hello\n",
+      "stderr": ""
+    },
+    "docs/manual/statements.md#aura-22": {
+      "sha256": "31fbed6eff35ada870dd48591cc66256662225850e7abaab9cb84df545929114",
+      "mode": "run",
+      "stdout": "2\n",
       "stderr": ""
     },
     "docs/manual/statements.md#aura-3": {

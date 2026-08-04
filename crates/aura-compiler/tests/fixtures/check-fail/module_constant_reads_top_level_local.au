@@ -1,0 +1,9 @@
+class C:
+    v: int64
+
+    def take(own self) -> int64:
+        return self.v
+
+mut c = C(v=1)
+x = c.take()
+print(x)

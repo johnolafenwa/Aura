@@ -6282,6 +6282,55 @@ fn contextual_none_equality_lowers_none_as_option_variants() {
 }
 
 #[test]
+fn integer_call_equality_keeps_each_call_temporary_at_its_declared_type() {
+    let source = include_str!("../tests/fixtures/run-pass/integer_call_equality.au");
+    let module = crate::lower_source_to_mir(source).expect("integer equality source should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should be lowered");
+    let local_types = main
+        .local_types
+        .iter()
+        .map(|local| (local.name.as_str(), &local.ty))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let call_temporaries = main
+        .blocks
+        .iter()
+        .flat_map(|block| block.instructions.iter())
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        ..
+                    },
+            } if matches!(name.as_str(), "signed_value" | "unsigned_value") => {
+                Some((target.as_str(), name.as_str()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(!call_temporaries.is_empty());
+    for (temporary, function) in call_temporaries {
+        let expected = Type::named(if function == "signed_value" {
+            "int32"
+        } else {
+            "uint64"
+        });
+        assert_eq!(
+            local_types.get(temporary).copied(),
+            Some(&expected),
+            "{function} call temporary {temporary} must keep its declared return type"
+        );
+    }
+}
+
+#[test]
 fn assertions_lower_to_lazy_failure_blocks_with_keyword_spans() {
     let source = r#"def main() -> int32:
     assert true

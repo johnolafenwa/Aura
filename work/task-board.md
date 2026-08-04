@@ -2,6 +2,38 @@
 
 Last updated: 2026-08-04
 
+## Compiler review fixes, LSP docs, and VS Code icon (local verification complete)
+
+- Authorized target: fix plain reassignment of an existing top-level `mut`
+  script local and investigate the reported `own self` call that produced an
+  `AU2001` unknown-name diagnostic.
+- Parser and execution regressions pin `mut count = 0`,
+  `count = count + 1`, and `count += 1` as one mutable script local. The
+  program now prints `2` on the MIR and direct backends.
+- The `own self` report crosses Aura's module-constant initialization boundary:
+  `c` is a top-level script local, while a fresh bare `x = ...` declares a
+  module constant that initializes first. It now receives a focused `AU2001`
+  diagnostic with the valid `mut x = ...` and `main` repairs. It is not
+  classified as a move from immutable module storage.
+- Compiler unit, fixture, backend, CLI parity, and LSP regressions are green.
+  Manual, Learn, generated LLM documentation, reference replay, docs build,
+  formatting, Clippy, extension packaging, and hygiene checks are green.
+- The VS Code language contribution now assigns Aura's existing mark to `.au`
+  files in both light and dark Explorer themes. A manifest regression pins the
+  icon paths and verifies the packaged source asset exists.
+- Direct lowering now preserves `int32` and `uint64` function-call result types
+  when `==` or `!=` supplies a contextual literal. Plain, reversed, chained,
+  and assertion comparisons are pinned on both backends.
+- The Manual and language-server README now show the required
+  `semantic_interface_version: 5` field in JSON-lines requests. A reference
+  regression parses the examples and pins the exact version.
+- Protected user files remain untouched: `personal/file_ops.au` and the
+  untracked ADR-0022 draft.
+- One hosted CI run will provide the final complete gate after push. The local
+  full-gate attempt exhausted disk on stale generated artifacts; those were
+  cleaned and the affected forced-backend parity stage passed on retry.
+- Work note: `work/2026-08-04-top-level-script-binding-fixes.md`.
+
 ## Landing-page language positioning (complete)
 
 - Authorized target: describe Aura as a simple and safe compiled systems

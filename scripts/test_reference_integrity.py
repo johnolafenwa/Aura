@@ -28,6 +28,28 @@ REQUIRED_SECTIONS = (
 
 
 class ReferenceIntegrityTests(unittest.TestCase):
+    def test_lsp_request_examples_pin_the_required_semantic_interface(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        cli = (root / "docs/manual/cli-and-tooling.md").read_text(encoding="utf-8")
+        request_block = (
+            cli.split("`aura lsp` is a persistent JSON-lines compiler service.", 1)[1]
+            .split("```json", 1)[1]
+            .split("```", 1)[0]
+        )
+        requests = [
+            json.loads(line) for line in request_block.splitlines() if line.strip()
+        ]
+
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(
+            [request["semantic_interface_version"] for request in requests],
+            [5, 5],
+        )
+        lsp_readme = (root / "tools/aura-language-server/README.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"semantic_interface_version":5', lsp_readme)
+
     def test_cli_tooling_registry_matches_the_complete_diagnostic_code_table(
         self,
     ) -> None:

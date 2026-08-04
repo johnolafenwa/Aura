@@ -1669,6 +1669,15 @@ fn direct_backend_emits_contextual_none_and_unit_equality() {
 }
 
 #[test]
+fn direct_backend_preserves_integer_call_types_through_equality_contexts() {
+    let source = include_str!("../tests/fixtures/run-pass/integer_call_equality.au");
+    let mir = lower_source_to_mir(source).expect("integer equality source should lower to MIR");
+
+    emit_host_object(&mir)
+        .expect("direct equality must preserve int32 and uint64 function-call result types");
+}
+
+#[test]
 fn direct_backend_emits_retain_and_release_hooks_for_opaque_call_and_local_flow() {
     let source = r#"
 def echo(value: str):

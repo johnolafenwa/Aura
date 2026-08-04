@@ -7801,6 +7801,15 @@ fn run_and_direct_backends_preserve_int64_defaulting_boundaries_aliases_and_cast
 }
 
 #[test]
+fn run_and_direct_backends_preserve_integer_call_equality_contexts() {
+    let source =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/integer_call_equality.au");
+    let expected =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/integer_call_equality.stdout");
+    assert_run_and_direct_source_stdout("aura-integer-call-equality", source, expected);
+}
+
+#[test]
 fn run_and_direct_backends_preserve_floor_division_and_modulo() {
     let source =
         include_str!("../../aura-compiler/tests/fixtures/run-pass/floor_division_and_modulo.au");

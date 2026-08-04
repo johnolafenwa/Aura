@@ -58,6 +58,14 @@ Module storage is immutable. Module-level `mut`, reassignment, compound
 assignment, and mutable access are `AU3003` errors. Stateful application data
 belongs in a local value owned by `main` or another explicit owner.
 
+An entry script's top-level local environment is separate from module storage.
+The statement `mut count = 0` creates a mutable local in that environment;
+later `count = count + 1` and `count += 1` both reassign it. A fresh bare
+top-level binding still declares a module constant. That constant cannot read a
+top-level script local because constant initialization happens before entry
+statements execute. Use `mut` on the fresh binding to make it another script
+local, or place the computation in `main`.
+
 ## Imports
 
 An unaliased module import binds the first path component as a namespace:
@@ -260,6 +268,11 @@ Builtin enum types such as `Option`, `Result`, `QueueReceive`, and `process.Erro
 An entry module may contain executable top-level statements instead of a local
 `main`. Those statements share one top-level local environment and execute in
 source order after reachable module constants finish initialization.
+
+A `mut` simple-name assignment declares a mutable top-level local. Later plain
+and compound assignments to that name remain in the statement stream and
+update the same local. A bare assignment to a new name is a module constant,
+even when it appears after an executable statement in source order.
 
 Imported modules contribute items and eagerly initialized constants. Their
 top-level executable statements are checked as source and do not run as import

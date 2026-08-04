@@ -53,6 +53,10 @@
         "extensions": [
           ".au"
         ],
+        "icon": {
+          "light": "./images/aura.png",
+          "dark": "./images/aura.png"
+        },
         "configuration": "./language-configuration.json"
       }
     ],

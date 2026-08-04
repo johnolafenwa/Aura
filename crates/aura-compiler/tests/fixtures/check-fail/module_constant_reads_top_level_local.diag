@@ -1,0 +1,7 @@
+error[AU2001]: module constant `x` cannot read top-level script local `c`
+ --> crates/aura-compiler/tests/fixtures/check-fail/module_constant_reads_top_level_local.au:8:5
+  |
+8 | x = c.take()
+  |     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/module_constant_reads_top_level_local.au:7:5: `c` is initialized when top-level entry statements run
+  = help: declare `x` with `mut` to make it a top-level script local, or move this work into `main`

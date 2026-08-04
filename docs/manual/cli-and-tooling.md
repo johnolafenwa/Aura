@@ -154,14 +154,21 @@ The JSON result is an array of `{ "name": str, "kind": str, "detail": str }` obj
 
 `ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aura 0.3. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
 
-`aura lsp` is a persistent JSON-lines compiler service. Each input line is an object with an optional `id`, `method`, `path`, and `source`. Supported requests are:
+`aura lsp` is a persistent JSON-lines compiler service. Every request requires
+`semantic_interface_version: 5` plus string fields `method`, `path`, and
+`source`; `id` is optional and is echoed in the response. Supported requests
+are:
 
 ```json
-{"id":1,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
-{"id":2,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
+{"id":1,"semantic_interface_version":5,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
+{"id":2,"semantic_interface_version":5,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
 ```
 
-Each response is one line containing the same `id` plus either `result` or an `error` string. Paths give the virtual source a package/import context; ranges and completion positions are zero-based.
+Each response is one line containing the same `id`,
+`semantic_interface_version: 5`, and either `result` or an `error` string.
+Paths give the virtual source a package/import context; ranges and completion
+positions are zero-based. A missing or different semantic interface version is
+an incompatible request and returns a schema-mismatch error.
 
 ## Output And Exit Status
 

@@ -2513,6 +2513,19 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         .iter()
         .map(|constant| (constant.name.clone(), constant.span))
         .collect::<BTreeMap<_, _>>();
+    let declared_top_level_local_spans = module
+        .top_level_stmts
+        .iter()
+        .filter_map(|statement| match statement {
+            Stmt::Assign(AssignStmt {
+                mutable: true,
+                target: AssignTarget::Name(name),
+                span,
+                ..
+            }) => Some((name.clone(), *span)),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
     for constant in &module.constants {
         if let Some((kind, existing)) =
             item_names.insert(constant.name.clone(), ("module constant", constant.span))
@@ -2557,25 +2570,51 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         .with_ffi(&extern_functions, &opaque_handles);
         let mut scope = HashMap::new();
         checker.seed_module_scope(&mut scope);
-        let inferred =
-            match checker.type_of_expr_hint(&constant.value, &mut scope, expected.as_ref()) {
-                Ok(ty) => ty,
-                Err(error) => {
-                    let blocked = declared_constant_spans.iter().find(|(name, span)| {
-                        (**span == constant.span || span.line > constant.span.line)
-                            && error.message.contains(&format!("unknown name `{name}`"))
-                    });
-                    if let Some((name, declaration)) = blocked {
-                        return Err(Diagnostic::coded_at(
-                            "AU2001",
-                            constant.value.span,
-                            format!("module constant `{name}` is used before initialization"),
-                        )
-                        .with_secondary(*declaration, format!("`{name}` is declared here")));
-                    }
-                    return Err(error);
+        let inferred = match checker.type_of_expr_hint(
+            &constant.value,
+            &mut scope,
+            expected.as_ref(),
+        ) {
+            Ok(ty) => ty,
+            Err(error) => {
+                let blocked = declared_constant_spans.iter().find(|(name, span)| {
+                    (**span == constant.span || span.line > constant.span.line)
+                        && error.message.contains(&format!("unknown name `{name}`"))
+                });
+                if let Some((name, declaration)) = blocked {
+                    return Err(Diagnostic::coded_at(
+                        "AU2001",
+                        constant.value.span,
+                        format!("module constant `{name}` is used before initialization"),
+                    )
+                    .with_secondary(*declaration, format!("`{name}` is declared here")));
                 }
-            };
+                let script_local = declared_top_level_local_spans
+                    .iter()
+                    .find(|(name, _)| error.message.contains(&format!("unknown name `{name}`")));
+                if let Some((name, declaration)) = script_local {
+                    return Err(Diagnostic::coded_at(
+                            "AU2001",
+                            error.span.unwrap_or(constant.value.span),
+                            format!(
+                                "module constant `{}` cannot read top-level script local `{name}`",
+                                constant.name
+                            ),
+                        )
+                        .with_secondary(
+                            *declaration,
+                            format!(
+                                "`{name}` is initialized when top-level entry statements run"
+                            ),
+                        )
+                        .with_help(format!(
+                            "declare `{}` with `mut` to make it a top-level script local, or move this work into `main`",
+                            constant.name
+                        )));
+                }
+                return Err(error);
+            }
+        };
         if let Some(expected) = &expected {
             if &inferred != expected {
                 return Err(Diagnostic::coded_at(

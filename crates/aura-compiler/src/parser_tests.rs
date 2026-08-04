@@ -1610,6 +1610,38 @@ fn parse_script_mode_keeps_mutable_locals_beside_module_constants() {
 }
 
 #[test]
+fn parse_top_level_plain_assignment_reuses_an_existing_mutable_script_local() {
+    let module = parse("mut count = 0\ncount = count + 1\ncount += 1\nprint(count)\n")
+        .expect("top-level reassignment must remain in the script statement stream");
+
+    assert!(module.constants.is_empty());
+    assert!(matches!(
+        module.top_level_stmts.as_slice(),
+        [
+            Stmt::Assign(AssignStmt {
+                mutable: true,
+                target: AssignTarget::Name(first),
+                op: None,
+                ..
+            }),
+            Stmt::Assign(AssignStmt {
+                mutable: false,
+                target: AssignTarget::Name(second),
+                op: None,
+                ..
+            }),
+            Stmt::Assign(AssignStmt {
+                mutable: false,
+                target: AssignTarget::Name(third),
+                op: Some(BinaryOp::Add),
+                ..
+            }),
+            Stmt::Expr(_),
+        ] if first == "count" && second == "count" && third == "count"
+    ));
+}
+
+#[test]
 fn parse_import_aliases_preserve_target_and_local_names() {
     let module = parse(
         [

@@ -362,6 +362,33 @@ fn s1_sema_fifth_entry_module_rules_and_constant_plan_are_observable() {
 }
 
 #[test]
+fn module_constant_diagnostic_names_the_later_top_level_script_local() {
+    let error = crate::check_source(
+        "class C:\n    v: int64\n\n    def take(own self) -> int64:\n        return self.v\n\nmut c = C(v=1)\nx = c.take()\nprint(x)\n",
+    )
+    .expect_err("a module constant cannot read an entry-script local");
+
+    assert_eq!(error.code, "AU2001");
+    assert_eq!(
+        error.message,
+        "module constant `x` cannot read top-level script local `c`"
+    );
+    assert_eq!(error.span, Some(crate::diag::Span::new(8, 5)));
+    assert_eq!(
+        error.help,
+        vec![
+            "declare `x` with `mut` to make it a top-level script local, or move this work into `main`"
+        ]
+    );
+    assert_eq!(error.secondary_spans.len(), 1);
+    assert_eq!(error.secondary_spans[0].span, crate::diag::Span::new(7, 5));
+    assert_eq!(
+        error.secondary_spans[0].label,
+        "`c` is initialized when top-level entry statements run"
+    );
+}
+
+#[test]
 fn s1_sema_fifth_contextual_literals_lambdas_and_variants_keep_exact_errors() {
     let float =
         crate::check_source("def main():\n    value: float32 = -16777217\n    print(value)\n")

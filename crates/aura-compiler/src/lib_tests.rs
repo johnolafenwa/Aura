@@ -2107,6 +2107,16 @@ fn script_mode_mutable_locals_coexist_with_module_constants() {
 }
 
 #[test]
+fn top_level_script_plain_and_compound_reassignment_share_the_mutable_local() {
+    let source = "mut count = 0\ncount = count + 1\ncount += 1\nprint(count)\n";
+
+    check_source(source).expect("both top-level reassignment forms should type-check");
+    let output = run_source(source).expect("both top-level reassignment forms should run");
+    assert_eq!(output.stdout, "2\n");
+    assert_eq!(output.value, zero_exit_value());
+}
+
+#[test]
 fn mutable_top_level_binding_cannot_be_module_storage_beside_main() {
     let error = check_source("mut counter: int32 = 0\ndef main():\n    print(counter)\n")
         .expect_err("mutable module storage must remain rejected");

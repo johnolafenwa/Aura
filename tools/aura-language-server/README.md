@@ -40,11 +40,16 @@ The server starts one persistent compiler service:
 - `aura lsp`
 
 Requests and responses are newline-delimited JSON and carry compiler-owned
-`semantic_interface_version: 5`. This identity is distinct from the public
-diagnostic document's numeric schema version. The transport rejects and
-disposes a compiler with a missing or different semantic identity, invalidates
-all cached document analysis, and uses lexical recovery for the failed request;
-Responses remain bounded to 16 MiB.
+`semantic_interface_version: 5`. Every request must include the exact field:
+
+```json
+{"id":1,"semantic_interface_version":5,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
+```
+
+This identity is distinct from the public diagnostic document's numeric schema
+version. The transport rejects and disposes a compiler with a missing or
+different semantic identity, invalidates all cached document analysis, and uses
+lexical recovery for the failed request. Responses remain bounded to 16 MiB.
 With a matching compiler, the server caches analysis per document version,
 debounces changes, cancels obsolete completion work, guards asynchronous
 responses by document version, and invalidates only changed documents and their

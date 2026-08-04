@@ -2937,6 +2937,51 @@ test("compiler bridge exposes module constants through symbols hover definitions
   }
 });
 
+test("compiler bridge explains module constants that read top-level script locals", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-top-level-local-"));
+  const source = [
+    "class C:",
+    "    v: int64",
+    "",
+    "    def take(own self) -> int64:",
+    "        return self.v",
+    "",
+    "mut c = C(v=1)",
+    "x = c.take()",
+    "print(x)",
+    ""
+  ].join("\n");
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainUri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 1);
+    assert.equal(analysis.diagnostics[0].code, "AU2001");
+    assert.equal(
+      analysis.diagnostics[0].message,
+      "module constant `x` cannot read top-level script local `c`"
+    );
+    assert.deepEqual(analysis.diagnostics[0].help, [
+      "declare `x` with `mut` to make it a top-level script local, or move this work into `main`"
+    ]);
+
+    const [diagnostic] = compilerDiagnosticsToLsp(analysis, mainUri);
+    assert.equal(
+      diagnostic.relatedInformation?.[0]?.message,
+      "`c` is initialized when top-level entry statements run"
+    );
+    assert.deepEqual(diagnostic.range, {
+      start: { line: 7, character: 4 },
+      end: { line: 7, character: 5 }
+    });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge preserves import aliases in hover, definitions, and completions", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-import-aliases-"));
   try {
