@@ -69,9 +69,11 @@ export default defineConfig({
           items: [
             { text: 'Overview', link: '/learn/' },
             { text: 'Install And Run', link: '/learn/install-and-run' },
+            { text: 'Aura For Python Developers', link: '/learn/from-python' },
             { text: 'Small Programs', link: '/learn/small-programs' },
             { text: 'Data Modeling', link: '/learn/data-modeling' },
             { text: 'Collections', link: '/learn/collections' },
+            { text: 'Converting Between Types', link: '/learn/casting' },
             { text: 'Ownership And Borrowing', link: '/learn/ownership-and-borrowing' },
             { text: 'Errors With Result And Option', link: '/learn/results-and-options' },
             { text: 'Testing', link: '/learn/testing' },

@@ -54,19 +54,23 @@ aura run examples/classes/point_distance.au
 The chapters are ordered so that each idea has a practical reason to exist before the formal rules arrive.
 
 1. [Getting Aura Running](/learn/install-and-run) — install the CLI, run your first program, build your first binary.
-2. [The First Program](/learn/small-programs) — bindings, functions, control flow, and small decisions made with `match`.
-3. [Shaping Data](/learn/data-modeling) — classes, enums, methods, and the patterns that keep domain data honest.
-4. [Working With Collections](/learn/collections) — `list[T]`, `dict[K, V]`,
+2. [Aura For Python Developers](/learn/from-python) — the fast track: what
+   transfers from Python, and what will surprise you.
+3. [The First Program](/learn/small-programs) — bindings, functions, control flow, and small decisions made with `match`.
+4. [Shaping Data](/learn/data-modeling) — classes, enums, methods, and the patterns that keep domain data honest.
+5. [Working With Collections](/learn/collections) — `list[T]`, `dict[K, V]`,
    `set[T]`, eager owned comprehensions, owned list/str slices, and fixed
    shape numeric `Array[T]` values.
-5. [Values, Moves, And Borrows](/learn/ownership-and-borrowing) — the ownership model, explained through the programs that benefit from it.
-6. [Results, Options, And `try`](/learn/results-and-options) — how Aura represents recoverable failure without hiding control flow.
-7. [Testing](/learn/testing) — writing tests, reading a failed assertion, parameterized cases, and CI output.
-8. [Organizing Code](/learn/modules-and-packages) — splitting a program into files, packages, and workspaces.
-9. [Structured Concurrency](/learn/concurrency) — `TaskGroup`, `Task[T]`, `Queue[T]`, cancellation, and worker pools.
-10. [Talking To The World](/learn/io-process-networking) — files, processes, sockets, HTTP, and supervisors.
-11. [Running And Shipping](/learn/native-builds) — when to use `run`, when to use `build`, and what the native binary gives you.
-12. [Calling A Small C API](/learn/ffi) — package-authorized FFI v0 for
+6. [Converting Between Types](/learn/casting) — `as`, `.to_float()`, parsing
+   text, and why nothing converts implicitly.
+7. [Values, Moves, And Borrows](/learn/ownership-and-borrowing) — the ownership model, explained through the programs that benefit from it.
+8. [Results, Options, And `try`](/learn/results-and-options) — how Aura represents recoverable failure without hiding control flow.
+9. [Testing](/learn/testing) — writing tests, reading a failed assertion, parameterized cases, and CI output.
+10. [Organizing Code](/learn/modules-and-packages) — splitting a program into files, packages, and workspaces.
+11. [Structured Concurrency](/learn/concurrency) — `TaskGroup`, `Task[T]`, `Queue[T]`, cancellation, and worker pools.
+12. [Talking To The World](/learn/io-process-networking) — files, processes, sockets, HTTP, and supervisors.
+13. [Running And Shipping](/learn/native-builds) — when to use `run`, when to use `build`, and what the native binary gives you.
+14. [Calling A Small C API](/learn/ffi) — package-authorized FFI v0 for
     fixed-width values, temporary byte views, and opaque handles.
 
 Three case studies put the pieces together:
