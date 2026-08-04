@@ -40,6 +40,19 @@ Linux x86-64 release inside Ubuntu on WSL 2. See the detailed
 [platform installation guides](/install/) and the repository's
 supported-platform matrix before relying on an unlisted host.
 
+## Choose Your Platform Guide
+
+Use the guide for the system where the `aura` command will run:
+
+- [Install on macOS](/install/macos) covers Apple silicon and Intel Macs,
+  persistent `PATH` setup, Xcode command-line tools, and verification.
+- [Install on Linux](/install/linux) covers Ubuntu 24.04 and compatible
+  x86-64 glibc systems, required packages, and the native build toolchain.
+- [Install on Windows with WSL 2](/install/windows-wsl) covers Ubuntu setup,
+  Linux filesystem placement, Aura installation inside WSL, and remote VS Code.
+- [Install the VS Code extension](/install/vscode) covers Marketplace, Open
+  VSX, manual VSIX, WSL, compiler paths, and editor verification.
+
 ## Build From Source
 
 Contributors building Aura itself need the pinned Rust toolchain and a host C compiler.
@@ -74,6 +87,34 @@ Preview builds identify both their channel and source commit, for example
 channel as `aura 0.3.0-dev (0123456789ab)`.
 
 On Unix shells, consider adding that export to your shell profile.
+
+## Install The VS Code Extension
+
+Install the CLI first and confirm that VS Code will be able to find it:
+
+```bash
+command -v aura
+aura --version
+```
+
+Install **Aura Programming Language** from the Visual Studio Marketplace, or
+run this command from a terminal where `code` is available:
+
+```bash
+code --install-extension JohnOlafenwa.vscode-aura-lang
+```
+
+Open an `.au` file and confirm that the language mode reads **Aura**. Syntax
+highlighting is bundled with the extension. Diagnostics, completion, hover,
+definitions, and symbols come from the compiler server that the extension
+launches through `aura lsp`.
+
+On Windows with WSL 2, open the project from the Ubuntu terminal with `code .`.
+In the resulting **WSL: Ubuntu** window, select **Install in WSL: Ubuntu** for
+the Aura extension. The extension and `aura` CLI must both run inside WSL.
+
+The [complete VS Code installation guide](/install/vscode) also covers Open
+VSX, manual VSIX installation, custom compiler paths, and troubleshooting.
 
 ## Your First Program
 

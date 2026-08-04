@@ -49,6 +49,12 @@ TextMate grammar. This batch changes no language or compiler behavior.
   `llms.txt` and `llms-full.txt`, explains their roles, supplies a copyable
   instruction, and makes the Manual's normative status explicit. The homepage
   hero now links to the briefing.
+- Added a compact installation rail directly below the homepage hero actions,
+  with dedicated links for macOS, Linux, Windows through WSL 2, and the VS Code
+  extension.
+- Expanded Learn's installation chapter with a platform-guide directory and a
+  complete VS Code setup path covering CLI discovery, Marketplace installation,
+  language-server behavior, and WSL remote installation.
 
 ## Verification
 
@@ -80,9 +86,15 @@ TextMate grammar. This batch changes no language or compiler behavior.
   generated-summary quality, and containment of long URLs. Desktop and
   390-by-844 browser checks verified the anchored hero action, both document
   links, copy feedback, zero horizontal overflow, and responsive text wrapping.
+- Three focused tests pin the homepage installation routes, responsive
+  four/two/one-column behavior, and the Learn chapter's VS Code instructions.
+  Desktop and 390-by-844 browser checks verified all four homepage links in the
+  rendered hero, the Learn headings and commands, and zero horizontal overflow.
+  Every linked platform guide and the Learn chapter returned HTTP 200 locally.
 
 ## Follow-up
 
-PR #4 merged at `d9cac8a`. The homepage agent-docs follow-up was authorized for
-a direct push to `main`. No compiler release or extension republish is required
-because the installed binaries and VSIX are unchanged.
+PR #4 merged at `d9cac8a`. The homepage agent-docs and installation-navigation
+follow-ups were authorized for direct pushes to `main`. No compiler release or
+extension republish is required because the installed binaries and VSIX are
+unchanged.

@@ -25,11 +25,17 @@ Last updated: 2026-08-04
   `llms-full.txt`, explains when to use each file, and provides a copyable
   instruction that treats the linked Manual as normative. The hero links
   directly to this section.
+- A dedicated installation rail directly below the homepage hero actions links
+  macOS, Linux, Windows-through-WSL, and VS Code users to the right guide. The
+  Learn installation chapter repeats those platform routes and now includes a
+  complete VS Code setup section, including `aura lsp` and remote WSL setup.
 - Focused tests, generated LLM artifacts, the `/Aura/` production docs build,
   complete reference replay, 22 extension tests, six local HTTP routes,
   desktop rendering, and 390-pixel rendering are green. PR #4 merged at
   `d9cac8a`; its documentation workflow is green. The direct-to-main homepage
-  follow-up was authorized by the user.
+  follow-ups were authorized by the user. The installation navigation has
+  focused route/responsiveness tests, rendered desktop and mobile verification,
+  and current generated LLM documentation.
 - Protected user files remain untouched: `personal/file_ops.au` and the
   untracked ADR-0022 draft.
 - Work note: `work/2026-08-04-installation-and-aura-highlighting.md`.

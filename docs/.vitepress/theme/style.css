@@ -95,6 +95,84 @@
   }
 }
 
+.aura-hero-platforms {
+  max-width: 680px;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--vp-c-divider);
+}
+
+.aura-hero-platforms-label {
+  display: block;
+  margin-bottom: 9px;
+  color: var(--vp-c-text-2);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.aura-hero-platform-links {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.aura-hero-platform-links a {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  min-height: 44px;
+  padding: 9px 11px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+  color: var(--vp-c-text-1);
+  background: color-mix(in srgb, var(--vp-c-bg-soft) 84%, transparent);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-decoration: none;
+  transition: border-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.aura-hero-platform-links a:hover {
+  border-color: color-mix(in srgb, var(--vp-c-brand-1) 64%, var(--vp-c-divider));
+  color: var(--vp-c-brand-1);
+  transform: translateY(-1px);
+}
+
+.aura-hero-platform-links a:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
+.aura-hero-platform-links a > span:first-child {
+  min-width: 0;
+}
+
+.aura-hero-platform-links a > span:last-child {
+  flex: 0 0 auto;
+  transition: transform 160ms ease;
+}
+
+.aura-hero-platform-links a:hover > span:last-child {
+  transform: translateX(2px);
+}
+
+@media (max-width: 767px) {
+  .aura-hero-platform-links {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 419px) {
+  .aura-hero-platform-links {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .aura-agent-docs {
   position: relative;
   display: grid;
@@ -288,6 +366,8 @@
 
   .aura-agent-docs-links a,
   .aura-agent-docs-links a > span:last-child,
+  .aura-hero-platform-links a,
+  .aura-hero-platform-links a > span:last-child,
   .aura-agent-docs-instruction button {
     transition: none;
   }
