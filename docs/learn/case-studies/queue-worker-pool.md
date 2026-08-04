@@ -19,7 +19,7 @@ The pool needs four things:
 
 A job is a small record, and the worker function explicitly takes ownership:
 
-```python
+```aura
 class Job:
     id: int32
     payload: str
@@ -34,7 +34,7 @@ def handle(job: own Job) -> str:
 
 A producer puts jobs into a queue and closes the queue when it has nothing more to send:
 
-```python
+```aura
 def produce(jobs: Queue[Job]):
     jobs.put(Job(id=1, payload="index"))
     jobs.put(Job(id=2, payload="render"))
@@ -48,7 +48,7 @@ Closing is part of the protocol. A consumer that sees the queue close knows its 
 
 A consumer reads jobs until the queue closes, the surrounding task group is cancelled, or all producers finish:
 
-```python
+```aura
 def consume(name: str, jobs: Queue[Job], results: Queue[str]):
     for job in jobs:
         result = f"{name}: {handle(job)}"
@@ -64,7 +64,7 @@ no magic token, no special return code — closing the queue is the signal.
 
 The parent owns the task group, the queues, and the decision about when the pool has finished:
 
-```python
+```aura
 jobs = Queue[Job](capacity=8)
 results = Queue[str]()
 
@@ -112,7 +112,7 @@ Avoid making every worker guess. The benefit of structured concurrency is knowin
 
 Use a timeout when the producer should fail fast:
 
-```python
+```aura
 match jobs.put(Job(id=4, payload="notify"), timeout=100ms):
     case Result.Ok(_):
         pass

@@ -12,7 +12,7 @@ visible.
 
 Call `to_bytes()` on a str:
 
-```python
+```aura
 import bytes
 
 text = "Aura 🌌"
@@ -27,7 +27,7 @@ Aura does not normalize the text or rewrite line endings.
 Going the other way can fail because an arbitrary byte list need not be
 valid UTF-8:
 
-```python
+```aura
 import bytes
 
 payload: list[uint8] = [65, 117, 114, 97]
@@ -53,7 +53,7 @@ after `from_bytes`, and the original str remains available after
 
 Hex encoding uses two lowercase digits per byte:
 
-```python
+```aura
 import bytes
 
 payload: list[uint8] = [0, 1, 254, 255]
@@ -63,7 +63,7 @@ print(text)
 
 The result is `0001feff`. Decoding accepts uppercase or lowercase ASCII:
 
-```python
+```aura
 match bytes.hex_decode("0001FeFf"):
     case Result.Ok(payload):
         print(payload)
@@ -82,7 +82,7 @@ signs, or non-ASCII digits. Odd length is checked before digit validity.
 
 Base64 is useful when a text protocol needs to carry arbitrary bytes:
 
-```python
+```aura
 import bytes
 
 payload: list[uint8] = [0, 1, 254, 255]
@@ -108,7 +108,7 @@ when text is required.
 
 `bytes.sha256` returns a raw 32-byte SHA-256 digest:
 
-```python
+```aura
 import bytes
 
 payload = "abc".to_bytes()
@@ -124,7 +124,7 @@ For a str, `bytes.sha256_string(text)` hashes exactly the bytes produced by
 `text.to_bytes()`. It does not add a terminator or normalize text. These two
 expressions therefore produce equal digest vectors:
 
-```python
+```aura
 bytes.sha256_string("café")
 bytes.sha256("café".to_bytes())
 ```

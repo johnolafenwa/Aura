@@ -3,13 +3,13 @@
 Assertions turn a condition that must hold into an immediate, source-located
 runtime failure. Use the short form when the default message is enough:
 
-```python
+```aura
 assert user_count >= 0
 ```
 
 Use a second expression when the failure needs application context:
 
-```python
+```aura
 assert response_code == 200, "worker expected a successful response"
 ```
 
@@ -23,7 +23,7 @@ continues and the message expression is not evaluated. When it is `false`, the
 message is evaluated exactly once and becomes the failure text. This makes it
 safe to construct an expensive diagnostic only for the failure path:
 
-```python
+```aura
 def explain(value: int64) -> str:
     print("building failure message")
     return f"unexpected value {value}"
@@ -42,7 +42,7 @@ failure and never reaches the assertion result.
 For a top-level comparison or positive membership test, Aura reports the two
 values that produced the failure:
 
-```python
+```aura
 expected = 42
 actual = 41
 assert actual == expected
@@ -85,7 +85,7 @@ fails, the assertion remains the primary diagnostic.
 `aura test` discovers parameterless module functions named `test_*`. A function
 returning `None` is one independently reported case:
 
-```python
+```aura
 def test_account_total():
     charges = [20, 21]
     assert charges[0] + charges[1] == 41
@@ -108,7 +108,7 @@ A valid filter with no matches succeeds with a zero-case summary.
 
 Optional `setup()` and `teardown()` functions run around every selected case:
 
-```python
+```aura
 def setup():
     print("setup")
 
@@ -131,7 +131,7 @@ state.
 
 A registration function returns labeled, named test functions:
 
-```python
+```aura
 def empty_case():
     assert "".len() == 0
 

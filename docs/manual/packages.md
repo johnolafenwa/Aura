@@ -67,7 +67,7 @@ A file path below `src/` maps to its dot-separated path without `.au`:
 
 Local imports are not prefixed with the current package name:
 
-```python
+```aura
 import helpers.text
 from helpers.text import normalize
 ```
@@ -96,7 +96,7 @@ has no registry resolution, publish, or install flow.
 
 The dependency table key is not a free alias: it must exactly match the resolved dependency's `[package].name`. This keeps the manifest name and import root identical. A dependency package named `util` is imported with that prefix:
 
-```python
+```aura
 import util.math
 
 print(util.math.double(21))
@@ -203,7 +203,7 @@ For stdin-backed compiler commands, the supplied path still controls package dis
 
 Only `public` top-level classes, enums, functions, and traits can be imported from another module. Public classes still enforce field and method visibility separately. Trait implementations loaded through package modules participate in dispatch with their defining module identities preserved.
 
-```python
+```aura
 from util.math import double
 
 print(double(21))

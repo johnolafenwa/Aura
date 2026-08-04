@@ -12,7 +12,7 @@ Say the program has some math helpers. Move them into their own file:
 helpers/math.au
 ```
 
-```python
+```aura
 public def double(value: int32) -> int32:
     return value * 2
 
@@ -22,7 +22,7 @@ def internal(value: int32) -> int32:
 
 From another file, import the module and call its public names:
 
-```python
+```aura
 import helpers.math
 
 print(helpers.math.double(21))
@@ -34,7 +34,7 @@ Only declarations marked `public` are visible outside the file. `internal(...)` 
 
 `import helpers.math` brings the whole module namespace in, so calls read `helpers.math.double(21)`. When a single name is the local concept, use `from ... import ...` to pull the name directly:
 
-```python
+```aura
 from helpers.math import double
 
 print(double(21))
@@ -47,7 +47,7 @@ Both styles are useful. A quick rule: when a file imports many names from a modu
 Use `as` when the complete module path is too long for repeated use or when
 two modules export the same concise name:
 
-```python
+```aura
 import helpers.math as integer_math
 from helpers.counter import Counter as ReadableCounter
 
@@ -60,7 +60,7 @@ how the importer spells the name, while the declaration keeps its original
 module identity, type, visibility, and behavior. A from-import may mix direct
 and aliased entries:
 
-```python
+```aura
 from helpers.math import double as twice, empty
 ```
 
@@ -114,7 +114,7 @@ aura deps update util
 
 A dependency is imported by its package name:
 
-```python
+```aura
 import util.math
 
 print(util.math.double(10))
@@ -137,7 +137,7 @@ Each member is still an ordinary package with its own `Aura.toml`. The workspace
 
 A module boundary should usually hide representation and expose behaviour:
 
-```python
+```aura
 public class Counter:
     value: int32 = 0
 

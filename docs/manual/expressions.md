@@ -13,7 +13,7 @@ Primary expressions are the atoms from which postfix, prefix, and binary express
 - a list, set, or dictionary literal
 - a list, set, or dictionary comprehension
 
-```python
+```aura
 count
 42
 3.14
@@ -156,7 +156,7 @@ compares a `bool` against `c`.
 
 Parentheses override precedence:
 
-```python
+```aura
 scaled = (left + right) * factor
 inside = lower < value < upper
 ```
@@ -289,7 +289,7 @@ An unsuffixed integer literal may take the type of a `float32` or `float64` oper
 
 Every integer type provides `.to_float() -> float64`. This conversion uses IEEE-754 round-to-nearest, ties-to-even and may lose integer precision:
 
-```python
+```aura
 left: int64 = 9007199254740993
 right: int64 = 2
 ratio = left.to_float() / right.to_float()
@@ -335,7 +335,7 @@ borrows its receiver.
 `f"{value}"` interpolates. It accepts any value the renderer accepts, so it is
 total over the maintained surface rather than restricted to scalars.
 
-```python
+```aura
 hosts = ["alpha", "beta"]
 print(len(hosts))
 print(str(len(hosts)))
@@ -366,7 +366,7 @@ Both operands are read. `in` never moves either operand, because the member it
 delegates to takes a shared borrow of the container and a shared borrow of the
 value. The value is evaluated before the container, matching source order.
 
-```python
+```aura
 ports = [80, 443]
 print(443 in ports)
 print(8080 not in ports)
@@ -384,7 +384,7 @@ The same rule applies to tuple equality links. In
 adjacent links, while `last` is skipped when the first link is false. Tuple
 equality does not consume any evaluated chain operand.
 
-```python
+```aura
 def in_range(value: int32, low: int32, high: int32) -> bool:
     return low <= value < high
 ```
@@ -408,7 +408,7 @@ The target spelling `int` is exactly the same target type as `int64`.
 
 Casts are postfix and bind more tightly than arithmetic:
 
-```python
+```aura
 whole = 7.9 as int32
 widened = 3 as float64
 total = left + right as int64
@@ -423,7 +423,7 @@ member access, calls, and numeric casts. Suffixes are applied from left to
 right; parenthesize a larger prefix or binary expression before applying a
 suffix to its result:
 
-```python
+```aura
 users[0].name.clone()
 Result[int32, str].Ok(7)
 value as int64
@@ -435,7 +435,7 @@ Postfix chains are limited by the maintained syntax-complexity budget described 
 
 A call has zero or more comma-separated arguments:
 
-```python
+```aura
 print("hello")
 range(1, 4)
 process.run(["echo", "hi"], stdout=process.pipe(), group=true)
@@ -481,7 +481,7 @@ the argument expressions.
 
 Explicit type arguments use brackets:
 
-```python
+```aura
 box = Box[int32](value=42)
 value = identity[int64](7)
 result = Result[int32, str].Ok(7)
@@ -500,7 +500,7 @@ Type arguments do not accept a trailing comma. Generic inference, arity, and tra
 
 `object.member` selects a visible field, method, enum variant, module item, or maintained builtin member:
 
-```python
+```aura
 point.x
 point.distance()
 Status.Ready
@@ -519,7 +519,7 @@ Visibility and resolution are static. Missing or private members are compile-tim
 `base[index]` evaluates the base, then the index. Direct indexing supports
 vectors, maps, and numeric Arrays under the maintained static rules:
 
-```python
+```aura
 values[0]
 counts["ready"]
 matrix[1, 2]
@@ -617,7 +617,7 @@ copies; mutate the source by index or build a new value`.
 
 Aura has list, set, and dictionary literals:
 
-```python
+```aura
 values = [1, 2, 3]
 seen = {1, 2, 3}
 counts = {"ready": 2, "done": 1}
@@ -627,7 +627,7 @@ The first colon in a nonempty brace literal determines dictionary syntax. Withou
 
 Empty literals require expected types because they contain no values from which to infer element types:
 
-```python
+```aura
 values: list[int32] = []
 counts: dict[str, int32] = {}
 seen = set[int32]()
@@ -700,7 +700,7 @@ An f-string produces an owned `str` and evaluates interpolations from left
 to right. Each interpolation is rendered to `str` immediately, before the
 next interpolation begins:
 
-```python
+```aura
 name = "aura"
 count = 3
 message = f"{name}: {count}"
@@ -723,7 +723,7 @@ literal braces, and the complete format grammar are defined by
 
 An arm contains exactly one expression. It may be inline:
 
-```python
+```aura
 label = match code:
     case 0: "ok"
     case _: "other"
@@ -731,7 +731,7 @@ label = match code:
 
 Or the expression may be placed on one indented following line:
 
-```python
+```aura
 label = match code:
     case 0:
         "ok"
@@ -753,7 +753,7 @@ Use `match value` to inspect without consuming a non-copy scrutinee, or `match m
 
 `try expression` operates on `Result[T, E]`:
 
-```python
+```aura
 def parse_value(text: str) -> Result[int32, str]:
     value = try parse_int32(text)
     return Result.Ok(value)
@@ -770,7 +770,7 @@ The enclosing function must return a compatible `Result`. When the error types d
 
 Enum constructors use the enum or specialized enum name followed by the variant:
 
-```python
+```aura
 result: Result[int32, str] = Result.Ok(7)
 missing: Option[str] = Option.None
 ready = Status.Ready(count=3)

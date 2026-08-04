@@ -290,14 +290,14 @@ number rules are in [JSON Module](/manual/json).
 
 Simple annotations:
 
-```python
+```aura
 count: int32 = 0
 name: str = "aura"
 ```
 
 Collection annotations:
 
-```python
+```aura
 names: list[str] = []
 lookup: dict[str, int32] = {}
 seen = set[int32]()
@@ -305,7 +305,7 @@ seen = set[int32]()
 
 Empty collection literals need an expected type. Constructors are also available:
 
-```python
+```aura
 names = list[str]()
 lookup = dict[str, int32]()
 seen = set[int32]()
@@ -313,7 +313,7 @@ seen = set[int32]()
 
 `T?` is shorthand for `Option[T]`:
 
-```python
+```aura
 name: str? = None
 ```
 
@@ -323,7 +323,7 @@ Type arguments are invariant, nonempty when brackets are present, and must exact
 
 Construct `Option` and `Result` with their enum names:
 
-```python
+```aura
 maybe: Option[str] = Option.Some("name")
 missing: Option[str] = Option.None
 
@@ -343,7 +343,7 @@ Aura has no identity-test spelling: use `value == None`, `value != None`, or
 
 Pattern matching may use qualified or short-form variants when the type is known:
 
-```python
+```aura
 match result:
     case Result.Ok(value):
         print(value)
@@ -355,7 +355,7 @@ match result:
 
 Classes create product types:
 
-```python
+```aura
 class Point:
     x: float64
     y: float64
@@ -363,7 +363,7 @@ class Point:
 
 Enums create sum types:
 
-```python
+```aura
 enum Load[T]:
     Ready(value: T)
     Empty
@@ -372,7 +372,7 @@ enum Load[T]:
 
 Traits define shared behavior:
 
-```python
+```aura
 trait Named:
     def name(self) -> str
 ```
@@ -381,7 +381,7 @@ trait Named:
 
 Direct recursive fields are not implemented. Use `indirect` for recursive class fields:
 
-```python
+```aura
 class Node:
     value: int32
     next: indirect Option[Node] = Option.None
@@ -403,7 +403,7 @@ Casts are checked at runtime when the source value is not a compile-time literal
 
 Use parsing functions for text-to-number conversion:
 
-```python
+```aura
 def parse_answer() -> Result[int32, str]:
     value = try parse_int32("42")
     return Result.Ok(value)

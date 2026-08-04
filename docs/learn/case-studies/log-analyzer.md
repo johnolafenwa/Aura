@@ -19,7 +19,7 @@ The report it produces answers three questions: how many entries of each severit
 
 A valid log entry has three pieces: a level, a service, and a message. A class with three fields says exactly that:
 
-```python
+```aura
 class LogLine:
     level: str
     service: str
@@ -32,7 +32,7 @@ The original text is kept in `message` so later code can print or inspect the un
 
 A line that cannot be parsed is not a crash. It is an expected, measurable absence of data. That makes `Option[LogLine]` the right return type:
 
-```python
+```aura
 def parse_line(line: str) -> Option[LogLine]:
     clean = line.trim()
     parts = clean.split(" ")
@@ -61,7 +61,7 @@ The `parts.len() < 3` guard makes the two fallback arms unreachable, but keeping
 
 Counting uses a dictionary from string to integer. The helper is deliberately small:
 
-```python
+```aura
 def increment(counts: mut dict[str, int32], key: own str):
     current = match counts.get(key):
         case Option.Some(value):
@@ -80,7 +80,7 @@ is needed.
 
 Now pull the pieces together:
 
-```python
+```aura
 lines = ["INFO api started", "WARN api slow", "ERROR worker failed", "INFO worker recovered", "badline"]
 
 mut levels = dict[str, int32]()
@@ -116,7 +116,7 @@ When a run produces the wrong output, the fix is nearly always visible in those 
 Nothing in this program assumes a particular input size. Changing the input
 from an inline list to a file is localised:
 
-```python
+```aura
 import fs
 
 text = try fs.read_to_string("app.log")

@@ -8,7 +8,7 @@ The APIs in these modules share a shape. Operations that can fail return `Result
 
 The simplest filesystem API is one-shot:
 
-```python
+```aura
 import fs
 
 path = "tmp.txt"
@@ -27,7 +27,7 @@ cap applies to the remaining contents read by `fs.File.read_all()` and
 fails at the cap. Larger files need a host helper or pre-splitting because Aura
 0.2 has no incremental file-read member.
 
-```python
+```aura
 import fs
 import io
 
@@ -48,7 +48,7 @@ def copy_text(source: str, dest: str) -> Result[None, io.Error]:
 
 `print(value)` renders a value and adds a newline. When a program needs more control — writing without a newline, flushing for a prompt, reading a line from standard input — the `io` module has it:
 
-```python
+```aura
 import io
 
 try io.write("name> ")
@@ -69,7 +69,7 @@ match io.read_line():
 
 `process.run` executes a subprocess from an argument list. There is no shell interpretation, so the arguments are not re-split and there are no quoting hazards. The return value is a `process.Completed` record.
 
-```python
+```aura
 import process
 
 completed = try process.run(command=["/bin/echo", "aura process"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s, group=true)
@@ -90,7 +90,7 @@ deadline values return `process.Error.Io(io.Error.InvalidInput)`.
 
 When a child writes bytes that are not valid UTF-8, use `stdout_bytes()` and `stderr_bytes()`:
 
-```python
+```aura
 bytes = completed.stdout_bytes()
 print(bytes.len())
 ```
@@ -99,7 +99,7 @@ print(bytes.len())
 
 `process.start` returns a `process.Child` you can talk to while the child is running:
 
-```python
+```aura
 import process
 
 child = try process.start(command=["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.pipe(), group=true)
@@ -137,7 +137,7 @@ child.close()
 
 When a program needs to manage several named subprocesses — start them, observe their lifetimes, restart them according to a policy — use a `process.supervisor`:
 
-```python
+```aura
 import process
 
 with supervisor = process.supervisor():
@@ -160,7 +160,7 @@ the same name returns an error and preserves the existing child. Leaving the
 
 Network APIs return `Result[..., io.Error]`. Waits accept `timeout=...`. Listeners, streams, and other resources belong in `with` blocks.
 
-```python
+```aura
 import net
 
 with listener = try net.listen("127.0.0.1:0"):
@@ -191,7 +191,7 @@ A live listener or stream is not `Transfer`, so it cannot be captured by a
 new task. The task that creates a listener keeps it and its accepted streams;
 it may use an ordinary helper on that same task to process a connection:
 
-```python
+```aura
 import io
 import net
 
@@ -217,7 +217,7 @@ The `read_line` returns `Result[Option[str], io.Error]` for the same reason `io.
 
 HTTP client helpers return `net.HttpResponse`:
 
-```python
+```aura
 import net
 
 headers: dict[str, str] = {}
@@ -234,7 +234,7 @@ WebSocket APIs follow the same resource style: create or accept a socket, send a
 
 Most system-facing Aura code has the same outline:
 
-```python
+```aura
 import fs
 import io
 

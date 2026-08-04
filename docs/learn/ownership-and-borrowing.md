@@ -18,7 +18,7 @@ Some values are cheap enough to duplicate that the language just does it.
 Numbers, `bool`, `Duration`, and queue handles are **copy types**. Assigning
 one to a new name produces another usable binding:
 
-```python
+```aura
 count = 3
 other = count
 
@@ -37,7 +37,7 @@ Everything else — `str`, `list[T]`, `dict[K, V]`, `set[T]`,
 resources, and network resources — is a **move type**. Assigning a move value
 transfers ownership:
 
-```python
+```aura
 name = "aura"
 other = name
 
@@ -52,7 +52,7 @@ The rule prevents two bindings from thinking they are responsible for the same o
 If a move type supports independent duplication, a program asks for it
 explicitly with `.clone()`:
 
-```python
+```aura
 name = "aura"
 copy = name.clone()
 
@@ -62,7 +62,7 @@ print(copy)
 
 Collections clone their elements when `copy()` creates independent storage:
 
-```python
+```aura
 jobs = ["parse", "check", "build"]
 snapshot = jobs.copy()
 
@@ -83,7 +83,7 @@ keeping both values.
 
 A closure takes its captured values when the lambda expression is evaluated:
 
-```python
+```aura
 label = "compile"
 length: def() -> int64 = lambda: label.len()
 
@@ -98,7 +98,7 @@ the complete closure; a second call would be a moved-value error.
 
 To keep both owners, clone before creation:
 
-```python
+```aura
 label = "compile"
 captured = label.clone()
 length: def() -> int64 = lambda: captured.len()
@@ -115,7 +115,7 @@ owned values. Captured environments are read-only in the current phase.
 
 When a helper should read a value without owning it, the parameter uses `T`:
 
-```python
+```aura
 def render_title(title: str) -> str:
     return title.to_upper()
 
@@ -130,7 +130,7 @@ move a non-copy value out through that shared access.
 
 Classes make the benefit obvious:
 
-```python
+```aura
 class Job:
     id: int32
     label: str
@@ -149,7 +149,7 @@ The same job is rendered twice because `render` never takes ownership.
 
 When a helper should mutate a caller-owned value, the parameter uses `mut T`:
 
-```python
+```aura
 def add_job(jobs: mut list[str], job: own str):
     jobs.append(job)
 
@@ -172,7 +172,7 @@ Two rules apply to mutable borrows:
 
 Methods declare how they receive `self`, and the receiver form determines what the method is allowed to do:
 
-```python
+```aura
 class Counter:
     value: int32
 
@@ -189,7 +189,7 @@ ownership of the whole instance.
 
 A borrowed method may look at non-copy fields but cannot move them out:
 
-```python
+```aura
 class Label:
     text: str
 
@@ -203,7 +203,7 @@ class Label:
 
 Owned fields are independent. A program can move one field out of a class without giving up the rest — but the moved field becomes unusable until it is reassigned:
 
-```python
+```aura
 class Packet:
     id: int32
     body: str
@@ -225,7 +225,7 @@ For example, `list.append(value: own T)`, dictionary indexed assignment, and
 `set.add(value: own T)` move non-copy values into their collection. If the
 caller still needs one, clone it.
 
-```python
+```aura
 mut jobs = list[str]()
 label = "compile"
 jobs.append(label.clone())
@@ -234,7 +234,7 @@ print(label)
 
 Lookup methods such as `list.get` and `dict.get` return cloned owned values. The collection keeps its element, and the caller receives an independent copy:
 
-```python
+```aura
 names = ["ada", "grace"]
 
 match names.get(0):
@@ -255,7 +255,7 @@ Child tasks receive **owned captures**. The start operation moves or copies each
 argument into task-owned storage before the child can outlive the caller. The
 target function can then borrow that capture or consume it:
 
-```python
+```aura
 def worker(label: str):
     print(label)
 
@@ -268,7 +268,7 @@ The capture itself is owned by the task, so starting it still moves the
 caller's non-copy value. If the parent also needs the label, clone before
 starting the child:
 
-```python
+```aura
 with group = TaskGroup():
     label = "compile"
     group.start_soon(worker, label.clone())
@@ -300,7 +300,7 @@ when several consumers need independently owned messages.
 
 Owned resources — files, listeners, streams, processes, supervisors, task groups — should live inside `with` blocks:
 
-```python
+```aura
 import fs
 
 with file = try fs.open("data.txt"):

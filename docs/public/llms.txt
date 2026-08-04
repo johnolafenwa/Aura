@@ -9,6 +9,14 @@
 - [Why Aura](https://johnolafenwa.github.io/Aura/positioning): Aura 0.3.0 is a technical preview of a statically typed, compiled systems language for ML infrastructure and reliable agents. Its goal is to make systems programming accessible to developers who value Python's readability and Rust's safety discipline.
 - [Downloads](https://johnolafenwa.github.io/Aura/downloads): Aura 0.3.0 is a technical preview. The compiler, command-line tools, editor extension, reference manual, and source are distributed from the [Aura GitHub repository](https://github.com/johnolafenwa/Aura).
 
+## Install Aura
+
+- [Install Aura](https://johnolafenwa.github.io/Aura/install): Aura 0.3 is distributed as a self-contained command-line tool with its private native runtime. Choose the guide for the operating system where `aura` will run:
+- [Install Aura On Linux](https://johnolafenwa.github.io/Aura/install/linux): The Aura 0.3 preview supports x86-64 Ubuntu 24.04 and compatible glibc-based Linux distributions. The release does not currently include Linux ARM64 or musl archives.
+- [Install Aura On macOS](https://johnolafenwa.github.io/Aura/install/macos): Aura publishes separate macOS 15 archives for Apple silicon and Intel. The installer uses `uname` to select the correct archive.
+- [Install The VS Code Extension](https://johnolafenwa.github.io/Aura/install/vscode): The **Aura Programming Language** extension provides `.au` syntax highlighting, indentation, snippets, diagnostics, completion, hover, go-to-definition, and document symbols.
+- [Install Aura On Windows With WSL](https://johnolafenwa.github.io/Aura/install/windows-wsl): Aura does not publish a native Windows executable. On an x86-64 Windows 11 machine, install and run the Linux release inside Windows Subsystem for Linux 2 using Ubuntu 24.04. The CLI, compiler runtime, projects, and VS Code language server all run inside WSL 2.
+
 ## Language Manual
 
 - [Aura Language Reference](https://johnolafenwa.github.io/Aura/manual): The source version for this Manual is **Aura 0.3.0 (technical preview)**. The release stamp below records the rendered implementation baseline commit.

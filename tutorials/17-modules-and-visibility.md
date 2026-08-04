@@ -6,19 +6,19 @@ Aura supports local file modules with `import`, `from ... import ...`, and `publ
 
 Use Python-style import syntax to bring in a module by its file path:
 
-```python
+```aura
 import helpers.math
 ```
 
 This resolves to `helpers/math.au` relative to the current source root. Call public functions through the module path:
 
-```python
+```aura
 print(helpers.math.double(value=5))
 ```
 
 Namespace imports also work for classes and enums:
 
-```python
+```aura
 import pkg.types
 
 counter = pkg.types.Counter(value=4)
@@ -27,7 +27,7 @@ status = pkg.types.Status.Ready
 
 Module-qualified type annotations are supported:
 
-```python
+```aura
 counter: pkg.types.Counter = pkg.types.Counter(value=4)
 ```
 
@@ -35,7 +35,7 @@ counter: pkg.types.Counter = pkg.types.Counter(value=4)
 
 Use `from ... import ...` to bring a name into the local scope:
 
-```python
+```aura
 from helpers.counter import Counter
 ```
 
@@ -47,7 +47,7 @@ can import public functions, classes, enums, traits, and module constants.
 Declare stable configuration and constructed immutable values beside the
 functions that use them:
 
-```python
+```aura
 service_name = "planner"
 public max_attempts: int64 = 3
 retry_budget = max_attempts + 2
@@ -69,7 +69,7 @@ program needs independent owned data.
 
 Export a constant with `public` and import it through either form:
 
-```python
+```aura
 import settings
 from settings import max_attempts as configured_attempts
 
@@ -82,7 +82,7 @@ def main():
 
 Use `as` to choose a concise or collision-free local name for a module:
 
-```python
+```aura
 import helpers.math as integer_math
 
 print(integer_math.double(value=5))
@@ -90,7 +90,7 @@ print(integer_math.double(value=5))
 
 Individual from-import entries may also be aliased:
 
-```python
+```aura
 from helpers.counter import Counter as ReadableCounter
 
 counter = ReadableCounter(value=2)
@@ -104,14 +104,14 @@ resolution continue to use the original declaration.
 
 Top-level items are private by default. Mark items with `public` to make them available to other modules:
 
-```python
+```aura
 public def double(value: int32) -> int32:
     return value * 2
 ```
 
 For classes, both the class itself and its fields/methods have independent visibility:
 
-```python
+```aura
 public class Counter:
     public value: int32
 
@@ -138,13 +138,13 @@ Within the same module, all members are accessible regardless of visibility.
 
 When a file lives under a package with `Aura.toml`, the package's `src/` directory is the source root. Local imports work the same way:
 
-```python
+```aura
 import helpers.math    # resolves to src/helpers/math.au
 ```
 
 Dependencies declared in the manifest are imported by package name:
 
-```python
+```aura
 import util.math       # resolves to the util dependency's src/math.au
 ```
 

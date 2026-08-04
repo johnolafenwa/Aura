@@ -106,11 +106,13 @@ class ReferenceIntegrityTests(unittest.TestCase):
                 [block.identifier for block in inventory.aura_blocks],
                 [
                     "docs/manual/feature.md#aura-1",
-                    "docs/manual/feature.md#aura-2",
                     "docs/manual/nested/detail.md#aura-1",
                 ],
             )
-            self.assertEqual(inventory.aura_blocks[0].source, 'print("one")\n')
+            self.assertEqual(inventory.aura_blocks[0].source, 'print("two")\n')
+            self.assertIn("docs/manual/feature.md#python-1", {
+                block.identifier for block in inventory.blocks
+            })
 
     def test_metadata_rejects_stale_hash_and_unexplained_illustration(self) -> None:
         block = reference_integrity.ReferenceBlock(
@@ -145,7 +147,7 @@ class ReferenceIntegrityTests(unittest.TestCase):
                     aura check example.au
                     ```
 
-                    ```python
+                    ```aura
                     print("checked")
                     ```
                     """
@@ -223,7 +225,7 @@ class ReferenceIntegrityTests(unittest.TestCase):
             )
             (manual / "feature.md").write_text(
                 "# Feature\n\n"
-                "```python\nprint(\"fragment\")\n```\n\n"
+                "```aura\nprint(\"fragment\")\n```\n\n"
                 + sections,
                 encoding="utf-8",
             )
@@ -384,7 +386,7 @@ class ReferenceIntegrityTests(unittest.TestCase):
                 path="docs/manual/packages.md",
                 ordinal=1,
                 line=1,
-                language="python",
+                language="aura",
                 source="import helpers.text\n",
             )
             metadata = {

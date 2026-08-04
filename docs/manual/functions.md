@@ -5,7 +5,7 @@ contracts fix the parameter names, parameter passing modes, parameter types,
 generic parameters and bounds, return behavior, and any inferred clone-safety
 obligations used at every call site.
 
-```python
+```aura
 def add(left: int32, right: int32) -> int32:
     return left + right
 ```
@@ -16,7 +16,7 @@ The complete declaration grammar is in [Grammar](/manual/grammar#functions-metho
 
 Every ordinary parameter has an explicit type. A return annotation is optional; omitting it is exactly equivalent to `-> None`.
 
-```python
+```aura
 def square(value: int32) -> int32:
     return value * value
 
@@ -35,7 +35,7 @@ tuple's recursive classification; see [Tuples](/manual/tuples).
 
 A function with any other return type must return on every statically reachable path:
 
-```python
+```aura
 def classify(value: int32) -> str:
     if value < 0:
         return "negative"
@@ -52,7 +52,7 @@ Function names share the module item namespace with classes, enums, traits, and 
 
 A function is private to its defining module by default. Prefix the declaration with `public` to make it importable from another module:
 
-```python
+```aura
 public def double(value: int32) -> int32:
     return value * 2
 ```
@@ -69,7 +69,7 @@ The passing mode is part of the function signature:
 | `value: own T` | Owned argument. A move value is consumed; a copy value is duplicated. |
 | `value: mut T` | Exclusive mutable borrow. The argument must be a mutable place. |
 
-```python
+```aura
 def consume(name: own str):
     print(name)
 
@@ -83,7 +83,7 @@ def push_name(names: mut list[str], name: own str):
 The modifier is written in the declaration after the colon. Calls pass the
 expression directly; Aura has no call-site capability prefix:
 
-```python
+```aura
 mut names = list[str]()
 push_name(names, "Ada")
 ```
@@ -106,7 +106,7 @@ function must consume or return its argument.
 
 Calls accept positional arguments followed by named arguments:
 
-```python
+```aura
 def render(name: str, count: int32 = 1):
     print(name)
 
@@ -137,7 +137,7 @@ not accept trailing commas in Aura 0.3.
 A default is permitted on a bare shared or `own` parameter of a top-level
 function or class method:
 
-```python
+```aura
 def greet(name: str = "world"):
     print("hello " + name)
 ```
@@ -171,13 +171,13 @@ Model](/manual/execution-model#evaluation-order).
 
 Maintained builtin functions and methods use the same binding rules, with parameter names defined by their API metadata:
 
-```python
+```aura
 import process
 
 process.run(["/bin/echo", "hi"], stdout=process.pipe(), group=true)
 ```
 
-```python
+```aura
 import net
 
 net.http_request_text_timeout(method="POST", url="http://127.0.0.1:8080/jobs", body="{}", headers={}, timeout=2s)
@@ -189,7 +189,7 @@ The module chapters and [API Index](/manual/api-index) are authoritative for bui
 
 `try` is valid only when its operand has type `Result[T, E1]` and the enclosing function returns `Result[U, E2]`:
 
-```python
+```aura
 def parse_total(left: str, right: str) -> Result[int32, str]:
     a = try parse_int32(left)
     b = try parse_int32(right)
@@ -202,7 +202,7 @@ def parse_total(left: str, right: str) -> Result[int32, str]:
 
 Every return annotation describes an owned result:
 
-```python
+```aura
 class User:
     name: str
     score: int32
@@ -218,7 +218,7 @@ For a non-copy result, the function must produce ownership. It can construct a
 fresh value, clone a clone-safe value, move from an `own` parameter, or invoke
 an operation that consumes an owner:
 
-```python
+```aura
 def copy_name(user: User) -> str:
     return user.name.clone()
 
@@ -237,14 +237,14 @@ Borrowing](/manual/ownership-and-borrowing#owned-returns).
 
 Type parameters follow the function name:
 
-```python
+```aura
 def identity[T](value: own T) -> T:
     return value
 ```
 
 Bounds restrict substitutions:
 
-```python
+```aura
 def describe[T: Greeter](value: T) -> str:
     return value.greet()
 
@@ -254,7 +254,7 @@ def use_both[T: First + Second](value: T) -> int32:
 
 The checker infers type arguments from call arguments and an available expected result type. Explicit specialization fixes them:
 
-```python
+```aura
 answer = identity[int64](42)
 ```
 
@@ -325,7 +325,7 @@ The ordinary and explicit-stack `TaskGroup` start methods accept a named
 function value as their target. Existing direct named-function and
 associated-method-without-`self` target forms remain accepted.
 
-```python
+```aura
 def work(value: int32) -> int32:
     return value * 2
 
@@ -346,12 +346,12 @@ storage has no caller-visible writeback contract. See [Concurrency](/manual/conc
 
 In the selected entry module, a local function named `main` is the entrypoint when there are no executable top-level statements. Its only valid signatures are:
 
-```python
+```aura
 def main() -> int32:
     return 0
 ```
 
-```python
+```aura
 def main():
     print("done")
 ```

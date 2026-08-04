@@ -4,21 +4,21 @@ Functions are declared with `def` and require explicit parameter types.
 
 ## Basic Functions
 
-```python
+```aura
 def add(a: int32, b: int32) -> int32:
     return a + b
 ```
 
 The return type follows `->`. If a function does not return a value, you can omit the return type and it defaults to `None`:
 
-```python
+```aura
 def greet():
     print("hello")
 ```
 
 Reaching the end of a `None`-returning function is allowed. You can also use a bare `return`:
 
-```python
+```aura
 def log_value(value: int32):
     print(value)
     return
@@ -30,7 +30,7 @@ See [examples/basics/main_function.au](../examples/basics/main_function.au).
 
 Parameters are written with explicit types:
 
-```python
+```aura
 def distance(a: Point, b: Point) -> float64:
     dx = a.x - b.x
     dy = a.y - b.y
@@ -43,7 +43,7 @@ An unmodified parameter grants shared access for every type. An implementation
 may pass copy bits directly, but that does not change the source-level
 contract. Write `own` when the function takes ownership:
 
-```python
+```aura
 def archive(doc: own Document):
     print(doc.title)
 ```
@@ -61,21 +61,21 @@ explanation.
 
 Use `T` for read-only access:
 
-```python
+```aura
 def read(counter: Counter) -> int32:
     return counter.value
 ```
 
 Use `mut T` for mutable access -- the function can modify the value and changes persist back to the caller:
 
-```python
+```aura
 def bump(counter: mut Counter):
     counter.value += 1
 ```
 
 A `mut` parameter requires a mutable binding at the call site:
 
-```python
+```aura
 mut counter = Counter(value=41)
 bump(counter)
 print(counter.value)    # 42
@@ -84,7 +84,7 @@ print(counter.value)    # 42
 Aura rejects overlapping arguments when `mut` is involved. Mutable access
 must be exclusive -- no other overlapping access can exist in the same call:
 
-```python
+```aura
 # This would be rejected:
 # bad(a: mut Counter, b: Counter) called with bad(c, c)
 ```
@@ -102,7 +102,7 @@ rejected.
 
 Aura supports positional and named arguments:
 
-```python
+```aura
 def subtract(left: int32, right: int32) -> int32:
     return left - right
 
@@ -124,7 +124,7 @@ Rules:
 
 Parameters can have defaults, which must come after required parameters:
 
-```python
+```aura
 def greet(name: str = "world"):
     print("hello " + name)
 
@@ -144,7 +144,7 @@ See [examples/basics/default_arguments.au](../examples/basics/default_arguments.
 
 Some builtins also support named arguments:
 
-```python
+```aura
 for value in range(stop=3):
     print(value)
 
@@ -170,7 +170,7 @@ The bootstrap compiler supports functions returning:
 Every function return is an owned value. Returning a copy type produces an
 ordinary independent copy:
 
-```python
+```aura
 class User:
     score: int32
 
@@ -184,7 +184,7 @@ return annotation.
 When several shared parameters have copy types, the function can select and
 return any one of their values without a source label:
 
-```python
+```aura
 def choose_positive(left: int32, right: int32) -> int32:
     if left > 0:
         return left
@@ -205,7 +205,7 @@ name an argument, field, or lifetime source.
 
 Functions can be generic over type parameters:
 
-```python
+```aura
 def identity[T](value: own T) -> T:
     return value
 ```
@@ -217,7 +217,7 @@ The compiler infers type arguments from the arguments you pass and, when needed,
 A module-level named function can be stored and passed like any other copy
 value. Write its type in declaration-shaped form:
 
-```python
+```aura
 class Pipeline:
     transform: def(int32) -> int32
 
@@ -240,7 +240,7 @@ parameter names or default expressions. Bare parameters are shared. An
 inferred binding such as `selected = consume` retains the exact contract, and
 you can also write it explicitly:
 
-```python
+```aura
 mutate: def(mut Counter) -> None = increment
 consume: def(own str) -> str = take
 callbacks: list[def(mut Counter) -> None] = [mutate]
@@ -279,7 +279,7 @@ See [examples/basics/function_values.au](../examples/basics/function_values.au).
 Use a lambda when the callable is one expression and its parameter types are
 already clear from context:
 
-```python
+```aura
 offset: int32 = 40
 add: def(int32) -> int32 = lambda value: value + offset
 print(add(2))
@@ -297,7 +297,7 @@ their types from context.
 Captures happen when the lambda is created. Copy values such as `offset` are
 snapshotted. A non-Copy owned value moves into the closure:
 
-```python
+```aura
 name = "Aura"
 length: def() -> int64 = lambda: name.len()
 print(length())

@@ -5,7 +5,7 @@ The rule is simple: the line continues while `(`, `[`, or `{` remains open.
 
 ## Calls And Signatures
 
-```python
+```aura
 def combine(
     left: int64,
     right: int64
@@ -23,7 +23,7 @@ after that line ends the logical statement.
 
 ## Collections And Grouping
 
-```python
+```aura
 values = [
     10,
     20
@@ -48,7 +48,7 @@ extra four-space level so the structure remains obvious.
 
 A trailing comment can end one continued physical line:
 
-```python
+```aura
 values = [
     10, # first input
 
@@ -63,7 +63,7 @@ The blank line and comment do not close `[`, so the list continues.
 `match` still needs an indented `case` block even when it appears inside a
 call:
 
-```python
+```aura
 print(
     match status:
         case Ready: "ready"
@@ -97,7 +97,7 @@ value = left + \        # invalid Aura
 A comma or operator at the end of a line is not enough by itself. Keep a
 delimiter open. A multi-element list still rejects a trailing comma, so write:
 
-```python
+```aura
 values = [
     10,
     20

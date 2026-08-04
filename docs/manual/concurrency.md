@@ -27,7 +27,7 @@ rejected before execution with `AU4006`.
 Scheduler APIs use `Duration`. This executable example covers every literal
 unit plus the computed surface:
 
-```python
+```aura
 def main() -> int32:
     attempt: int64 = 3
     print(10ms)
@@ -63,7 +63,7 @@ The exact host-timer classification is accepted under ADR-0019.
 
 Construct a group with `TaskGroup()` and normally bind it with `with`:
 
-```python
+```aura
 with group = TaskGroup():
     task = group.start(work, 1)
 ```
@@ -113,7 +113,7 @@ stay on the service workers, but it excludes the compiled program's
 MIR/direct language-execution frames. Keep the ordinary default unless
 measurement of the complete task justifies a custom size.
 
-```python
+```aura
 with group = TaskGroup():
     parser = group.start_with_stack(512 * 1024, parse_document, source)
     group.start_soon_with_stack(2 * 1024 * 1024, deep_worker, jobs)
@@ -164,7 +164,7 @@ timeout, cancellation, failure, and a collapsed `None` do not restore it.
 
 `Queue[T]` moves values between tasks. Queue handles are copy values.
 
-```python
+```aura
 jobs = Queue[str]()
 bounded = Queue[str](capacity=8)
 ```
@@ -199,7 +199,7 @@ bounded = Queue[str](capacity=8)
 
 Queue iteration:
 
-```python
+```aura
 for value in jobs:
     print(value)
 ```
@@ -302,7 +302,7 @@ Index priority is deterministic, not fair. A persistently ready lower-index
 source can starve a higher-index source. Rotate argument order between calls
 when round-robin service is required.
 
-```python
+```aura
 def main() -> int32:
     messages = Queue[str]()
     messages.put("ready")
@@ -334,7 +334,7 @@ Cancellation is cooperative. `group.cancel()` marks child tasks as cancelled. Ta
 
 Long CPU loops should check `cancelled()` directly:
 
-```python
+```aura
 while not cancelled():
     do_step()
 ```

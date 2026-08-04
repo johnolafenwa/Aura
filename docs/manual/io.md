@@ -2,7 +2,7 @@
 
 The `io` module covers standard input/output and the common error enum shared by filesystem and networking APIs.
 
-```python
+```aura
 import io
 ```
 
@@ -18,7 +18,7 @@ The top-level `print(value)` builtin is separate. It renders a value, writes a n
 
 Example:
 
-```python
+```aura
 import io
 
 def prompt() -> Result[None, io.Error]:
@@ -65,7 +65,7 @@ match io.read_line():
 
 Handle specific cases when the program has specific policy:
 
-```python
+```aura
 match io.read_line():
     case Result.Ok(Option.Some(line)):
         print(line)

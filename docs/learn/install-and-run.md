@@ -35,14 +35,20 @@ Add the extracted `bin` directory to `PATH`. Running and checking programs need
 no Rust installation. Building a native executable needs a host C compiler
 because `aura` performs the final host link itself.
 
-Aura does not publish a Windows archive in 0.2. See the repository's supported-platform matrix before relying on a source build on an unlisted host.
+Aura does not publish a native Windows archive. Windows 11 users can run the
+Linux x86-64 release inside Ubuntu on WSL 2. See the detailed
+[platform installation guides](/install/) and the repository's
+supported-platform matrix before relying on an unlisted host.
 
 ## Build From Source
 
 Contributors building Aura itself need the pinned Rust toolchain and a host C compiler.
 
 - **Rust**: install through [rustup](https://rustup.rs). `rust-toolchain.toml` selects Rust 1.95.0.
-- **C compiler**: macOS ships one through the Xcode command-line tools (`xcode-select --install`). On Linux, `build-essential` or its distribution equivalent is enough. Windows source builds are experimental and are not part of the 0.2 support matrix.
+- **C compiler**: macOS provides one through the Xcode command-line tools
+  (`xcode-select --install`). On Linux and Ubuntu under WSL 2,
+  `build-essential` supplies the supported host toolchain. Native Windows
+  source builds remain outside the distribution matrix.
 
 ## Build The Compiler
 
@@ -73,7 +79,7 @@ On Unix shells, consider adding that export to your shell profile.
 
 Save the following as `hello.au`:
 
-```python
+```aura
 print("hello from aura")
 ```
 
@@ -95,7 +101,7 @@ The program is a **top-level script**. Aura runs the file line by line and exits
 
 For programs that want an explicit entry point, define a function named `main`:
 
-```python
+```aura
 def main() -> int32:
     print("ready")
     return 0

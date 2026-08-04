@@ -62,7 +62,7 @@ belongs in a local value owned by `main` or another explicit owner.
 
 An unaliased module import binds the first path component as a namespace:
 
-```python
+```aura
 import tools.text
 
 value = tools.text.parse("input")
@@ -71,7 +71,7 @@ value = tools.text.parse("input")
 An aliased module import binds the complete module under the alias and does
 not introduce the path's first component:
 
-```python
+```aura
 import tools.text as text_tools
 
 value = text_tools.parse("input")
@@ -79,14 +79,14 @@ value = text_tools.parse("input")
 
 From-imports bind the requested public items directly:
 
-```python
+```aura
 from tools.text import parse, ResultRow
 ```
 
 Each from-import entry may bind a local alias. Direct and aliased entries may
 appear together:
 
-```python
+```aura
 from tools.text import parse as parse_text, ResultRow
 ```
 
@@ -133,7 +133,7 @@ Aura 0.3 does not support local function, class, enum, or trait declarations. It
 
 An assignment to a previously unseen simple name introduces a binding:
 
-```python
+```aura
 def main():
     name = "Aura"
     mut count: int32 = 0
@@ -211,7 +211,7 @@ The compiler recognizes constant `true`, constant `false`, and their grouped/`no
 
 Each match arm has its own payload-binding scope. Bindings become available only in that arm's body or value expression.
 
-```python
+```aura
 match result:
     case Result.Ok(value):
         print(value)

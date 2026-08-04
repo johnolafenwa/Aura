@@ -9,7 +9,7 @@ The `net` module exposes scheduler-aware networking resources:
 - Unix domain sockets on Unix hosts
 - TLS listeners and streams
 
-```python
+```aura
 import net
 import io
 ```
@@ -78,7 +78,7 @@ Text reads decode UTF-8 strictly and return `io.Error.InvalidData` for invalid b
 
 Example echo handler:
 
-```python
+```aura
 import io
 import net
 
@@ -235,7 +235,7 @@ Handshake and accept paths use scheduler-aware waits. A TLS handshake also has a
 
 Network listeners and streams are owned resources. Prefer `with` when the lifetime is lexical:
 
-```python
+```aura
 import io
 import net
 

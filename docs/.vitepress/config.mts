@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitepress'
+import { AURA_LANGUAGE, AURA_LANGUAGE_LABEL } from './aura-language.mjs'
 import { AURA_RELEASE, resolveImplementationCommit } from './release-metadata.mjs'
 
 const base = process.env.VITEPRESS_BASE ?? '/'
@@ -22,7 +23,16 @@ export default defineConfig({
   srcExclude: [proposalStem, 'ml_systems_support_plan.md', 'testing_strategy.md'],
   lastUpdated: true,
   markdown: {
-    lineNumbers: true
+    lineNumbers: true,
+    languages: [AURA_LANGUAGE],
+    languageLabel: {
+      aura: AURA_LANGUAGE_LABEL
+    },
+    shikiSetup(highlighter) {
+      if (!highlighter.getLoadedLanguages().includes('aura')) {
+        throw new Error('the source.aura syntax grammar did not load')
+      }
+    }
   },
   themeConfig: {
     logo: '/aura-mark.svg',
@@ -31,6 +41,7 @@ export default defineConfig({
       provider: 'local'
     },
     nav: [
+      { text: 'Install', link: '/install/' },
       { text: 'Learn', link: '/learn/' },
       { text: 'Manual', link: '/manual/' },
       { text: 'Downloads', link: '/downloads' },
@@ -39,6 +50,19 @@ export default defineConfig({
       { text: 'GitHub', link: 'https://github.com/johnolafenwa/Aura' }
     ],
     sidebar: {
+      '/install/': [
+        {
+          text: 'Install Aura',
+          items: [
+            { text: 'Choose A Platform', link: '/install/' },
+            { text: 'macOS', link: '/install/macos' },
+            { text: 'Linux', link: '/install/linux' },
+            { text: 'Windows With WSL', link: '/install/windows-wsl' },
+            { text: 'VS Code Extension', link: '/install/vscode' },
+            { text: 'Release Downloads', link: '/downloads' }
+          ]
+        }
+      ],
       '/learn/': [
         {
           text: 'Learn Aura',
@@ -117,6 +141,7 @@ export default defineConfig({
           text: 'Aura Book',
           items: [
             { text: 'Home', link: '/' },
+            { text: 'Install', link: '/install/' },
             { text: 'Why Aura', link: '/positioning' },
             { text: 'Downloads', link: '/downloads' },
             { text: 'Release Process', link: '/release-process' },

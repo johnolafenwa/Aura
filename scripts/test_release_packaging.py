@@ -38,6 +38,14 @@ LANDING_INSTALL_COMPONENT = (
 MANUAL_INDEX = REPO_ROOT / "docs" / "manual" / "index.md"
 PERFORMANCE_DOC = REPO_ROOT / "docs" / "manual" / "performance.md"
 POSITIONING_DOC = REPO_ROOT / "docs" / "positioning.md"
+INSTALL_DOCS = {
+    "index": REPO_ROOT / "docs" / "install" / "index.md",
+    "macos": REPO_ROOT / "docs" / "install" / "macos.md",
+    "linux": REPO_ROOT / "docs" / "install" / "linux.md",
+    "wsl": REPO_ROOT / "docs" / "install" / "windows-wsl.md",
+    "vscode": REPO_ROOT / "docs" / "install" / "vscode.md",
+}
+SUPPORTED_PLATFORMS = REPO_ROOT / "SUPPORTED_PLATFORMS.md"
 
 
 RETRY_STDOUT = """\
@@ -179,6 +187,67 @@ class LandingAndInstallerTests(unittest.TestCase):
         self.assertIn(command, component)
         self.assertIn("home-hero-info-after", theme)
         self.assertTrue(INSTALL_SCRIPT.is_file())
+
+    def test_installation_book_covers_every_supported_user_path(self) -> None:
+        missing = [name for name, path in INSTALL_DOCS.items() if not path.is_file()]
+        self.assertEqual(missing, [], f"missing installation pages: {missing}")
+
+        pages = {
+            name: path.read_text(encoding="utf-8")
+            for name, path in INSTALL_DOCS.items()
+        }
+        install_command = (
+            "curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh"
+        )
+        for name in ("index", "macos", "linux", "wsl"):
+            with self.subTest(page=name):
+                self.assertIn(install_command, pages[name])
+                self.assertIn("aura --version", pages[name])
+
+        self.assertIn("xcode-select --install", pages["macos"])
+        self.assertIn("Apple silicon", pages["macos"])
+        self.assertIn("Intel", pages["macos"])
+        self.assertIn("build-essential", pages["linux"])
+        self.assertIn("Ubuntu 24.04", pages["linux"])
+        self.assertIn("wsl --install -d Ubuntu-24.04", pages["wsl"])
+        self.assertIn("WSL 2", pages["wsl"])
+        self.assertIn("code .", pages["wsl"])
+        self.assertIn("WSL: Ubuntu", pages["wsl"])
+
+        downloads = DOWNLOADS_DOC.read_text(encoding="utf-8")
+        config = (REPO_ROOT / "docs" / ".vitepress" / "config.mts").read_text(
+            encoding="utf-8"
+        )
+        for route in (
+            "/install/",
+            "/install/macos",
+            "/install/linux",
+            "/install/windows-wsl",
+            "/install/vscode",
+        ):
+            with self.subTest(route=route):
+                self.assertIn(route, downloads + config)
+
+        platforms = SUPPORTED_PLATFORMS.read_text(encoding="utf-8")
+        self.assertIn("Windows 11 with WSL 2", platforms)
+        self.assertNotIn("0.2 archives", platforms)
+
+    def test_vscode_installation_covers_registry_cli_vsix_and_wsl(self) -> None:
+        self.assertTrue(INSTALL_DOCS["vscode"].is_file())
+        guide = INSTALL_DOCS["vscode"].read_text(encoding="utf-8")
+        required = (
+            "https://marketplace.visualstudio.com/items?itemName=JohnOlafenwa.vscode-aura-lang",
+            "https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang",
+            "code --install-extension JohnOlafenwa.vscode-aura-lang",
+            "aura-language.vsix",
+            "Extensions: Install from VSIX...",
+            "AURA_LSP_AURA_PATH",
+            "aura lsp",
+            "WSL: Ubuntu",
+        )
+        for text in required:
+            with self.subTest(text=text):
+                self.assertIn(text, guide)
 
     def test_performance_evidence_has_a_dedicated_manual_page(self) -> None:
         performance = PERFORMANCE_DOC.read_text(encoding="utf-8")

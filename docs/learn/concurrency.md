@@ -8,14 +8,14 @@ This chapter introduces that scope — the `TaskGroup` — and the two other pri
 
 Begin with a plain worker:
 
-```python
+```aura
 def double(value: int32) -> int32:
     return value * 2
 ```
 
 Run it inside a task group:
 
-```python
+```aura
 with group = TaskGroup():
     task = group.start(double, 21)
 
@@ -55,7 +55,7 @@ host-unrepresentable wait is invalid and never means “wait forever.”
 
 When the program does not need a handle to a child's result, use `start_soon`:
 
-```python
+```aura
 def say(label: str):
     print(label)
 
@@ -73,7 +73,7 @@ application code and keeps large task populations economical. If measurement
 shows that one child has a different task-local stack requirement, use a
 collision-free stack override:
 
-```python
+```aura
 def deep_worker(depth: int32) -> int32:
     return visit_tree(depth)
 
@@ -109,7 +109,7 @@ borrow that capture or consume it; it never borrows the caller's stack value.
 When both the parent and the child want the same clone-safe move value, clone
 before starting:
 
-```python
+```aura
 def worker(label: str):
     print(label)
 
@@ -140,7 +140,7 @@ so passing one to a producer does not take it away from the parent. Queue
 construction, `put`, and `try_put` require a structurally `Transfer` payload;
 receiving moves one admitted value to the consumer.
 
-```python
+```aura
 def producer(jobs: Queue[int32]):
     for value in range(5):
         jobs.put(value)
@@ -167,13 +167,13 @@ program can often rely on normal exit to drain the queue; explicitly calling
 
 `Queue[T]()` creates an unbounded queue. An unbounded queue is convenient but risky: a fast producer and a slow consumer will let memory grow without limit. A **bounded** queue says how many values are allowed in flight:
 
-```python
+```aura
 jobs = Queue[str](capacity=2)
 ```
 
 When a bounded queue is full, `put` waits until space is available, a timeout expires, the queue closes, or the task is cancelled. The failure shape is `SendError[T]`, which carries the unsent value back to the caller:
 
-```python
+```aura
 match jobs.put("compile", timeout=50ms):
     case Result.Ok(_):
         print("queued")
@@ -193,7 +193,7 @@ match jobs.put("compile", timeout=50ms):
 
 A common shape has one producer and several workers. Each worker reads the same queue until the producer closes it:
 
-```python
+```aura
 def worker(name: str, jobs: Queue[int32]):
     for job in jobs:
         print(f"{name}: {job}")
@@ -220,7 +220,7 @@ Leaving the `with` block waits for the producer to finish and for each worker to
 Use `select(...)` when one operation may become ready through different source
 kinds:
 
-```python
+```aura
 outcome = select(messages, task, 50ms)
 
 match own outcome:
@@ -249,7 +249,7 @@ Selection uses the ordinary builtin call shown above.
 
 Sometimes a program needs to wait on a batch of tasks at once. `wait_any` returns when the first one finishes:
 
-```python
+```aura
 tasks: list[Task[int32]] = []
 
 with group = TaskGroup():
@@ -269,7 +269,7 @@ with group = TaskGroup():
 
 `wait_all` returns when every task has either produced a value or one has failed:
 
-```python
+```aura
 match wait_all(tasks, timeout=1s):
     case WaitAll.Ready(values):
         for value in values:
@@ -298,7 +298,7 @@ waits, socket waits, HTTP calls, and process waits. Compiler-inserted loop
 safepoints schedule sibling work but deliberately do not inspect cancellation,
 so a CPU-bound loop that must stop on request should check `cancelled()` itself:
 
-```python
+```aura
 def ticker():
     while not cancelled():
         print("tick")
@@ -386,7 +386,7 @@ schedule. Interleaving and ready-task order remain unspecified.
 `yield_now()` adds an explicit cooperative scheduling point between
 application-chosen chunks:
 
-```python
+```aura
 def crunch():
     mut chunk: int32 = 0
     while chunk < 100:

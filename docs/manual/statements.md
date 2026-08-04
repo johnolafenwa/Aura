@@ -20,7 +20,7 @@ Class, enum, function, trait, and implementation declarations are items, not sta
 
 A compound statement header ends with `:` and `NEWLINE`, followed by an indented suite. Suites contain one or more statements:
 
-```python
+```aura
 if ready:
     print("ready")
     record_success()
@@ -36,7 +36,7 @@ and does not permit multiple statements on one physical line.
 
 The first assignment to a simple name introduces a binding:
 
-```python
+```aura
 name = "aura"
 count: int32 = 0
 ```
@@ -45,7 +45,7 @@ The binding's type is its annotation when present, otherwise the initializer typ
 
 `mut` makes a newly introduced binding assignable and usable as a mutable place:
 
-```python
+```aura
 def main():
     mut count: int32 = 0
     count = 1
@@ -56,7 +56,7 @@ Reassignment requires an existing mutable binding and preserves its type. `mut` 
 
 `from` is a contextual identifier and is legal as a binding and assignment target when the token sequence is not a from-import:
 
-```python
+```aura
 def main():
     mut from = "cache"
     from = "network"
@@ -66,7 +66,7 @@ def main():
 
 An assignment target begins with a name and may continue through fields or indices:
 
-```python
+```aura
 point.x = 4.0
 values[0] = 9
 counts["ready"] = 2
@@ -87,7 +87,7 @@ assignment, member leaf, or index leaf.
 
 A type annotation is allowed only on a simple-name target. `mut` also belongs only to a new simple-name binding. These forms are invalid:
 
-```python
+```aura
 # Invalid.
 # point.x: float64 = 4.0
 # mut point.x = 4.0
@@ -104,7 +104,7 @@ non-copy, matching `set(key: own K, value: own V)`.
 
 Aura supports the complete arithmetic compound-assignment family `+=`, `-=`, `*=`, `/=`, `%=`, and `//=`:
 
-```python
+```aura
 count += 1
 total *= scale
 pages //= page_size
@@ -154,7 +154,7 @@ See [Ownership And Borrowing](/manual/ownership-and-borrowing) for moves, partia
 
 Any expression may be used as a statement when its produced value is not needed:
 
-```python
+```aura
 print("ready")
 queue.close()
 counter.increment()
@@ -166,14 +166,14 @@ The expression is fully evaluated, including moves, mutations, I/O, and runtime 
 
 `return` is legal only inside a function or method:
 
-```python
+```aura
 def answer() -> int32:
     return 42
 ```
 
 The expression is evaluated before control returns. Its type must equal the declared return type. Bare `return` produces `None` and is valid only where `None` is a valid return.
 
-```python
+```aura
 def maybe_log(enabled: bool):
     if not enabled:
         return
@@ -186,7 +186,7 @@ A non-`None` function must return on every statically reachable path. Returning 
 
 `if`, zero or more `elif` branches, and an optional `else` select at most one suite:
 
-```python
+```aura
 if value < 0:
     print("negative")
 elif value == 0:
@@ -203,7 +203,7 @@ Conditions are evaluated in source order until one is `true`. Only the selected 
 
 A `while` statement evaluates its condition before each iteration:
 
-```python
+```aura
 def main():
     mut attempts = 0
     while attempts < 3:
@@ -219,7 +219,7 @@ Moving a non-copy outer value for the first time inside a repeatable loop is rej
 A `for` statement binds one name or recursively unpacks one tuple target for
 each value from an iterable:
 
-```python
+```aura
 for value in values:
     print(value)
 
@@ -285,7 +285,7 @@ other arity or a named argument reports `AU2004`.
 performs `min(len(first), len(second))` iterations and never observes the
 longer sequence's tail.
 
-```python
+```aura
 hosts = ["alpha", "beta"]
 ports = [80, 443, 8080]
 
@@ -306,7 +306,7 @@ ownership modifiers do not apply to these copy values, and suggests
 
 `break` and `continue` are legal only inside `for` or `while`:
 
-```python
+```aura
 for value in range(10):
     if value == 5:
         break
@@ -321,7 +321,7 @@ for value in range(10):
 
 Statement-form `match` evaluates its scrutinee exactly once and considers arms in source order. The first matching arm executes:
 
-```python
+```aura
 match result:
     case Result.Ok(value):
         print(value)
@@ -345,13 +345,13 @@ writeback is not part of the minimal surface. See
 
 Aura accepts two equivalent binding forms:
 
-```python
+```aura
 with file = try fs.open("data.txt"):
     text = try file.read_all()
     print(text)
 ```
 
-```python
+```aura
 with TaskGroup() as group:
     group.start_soon(worker)
 ```
@@ -405,7 +405,7 @@ example.
 
 `pass` performs no operation and produces no binding:
 
-```python
+```aura
 def placeholder():
     pass
 ```
@@ -416,7 +416,7 @@ It must appear on its own logical line. It is used for intentionally empty funct
 
 Imports are module elements rather than executable statements. Aura accepts:
 
-```python
+```aura
 import util.math
 from util.math import double, triple
 import agents.telemetry as telemetry

@@ -32,7 +32,7 @@ Files, network sockets, subprocess pipes, supervisors, and task groups should no
 
 A complete script:
 
-```python
+```aura
 class Point:
     x: float64
     y: float64

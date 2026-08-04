@@ -9,7 +9,7 @@ Aura has a maintained I/O surface through four builtin modules:
 
 These modules are imported like ordinary namespaces:
 
-```python
+```aura
 import io
 import fs
 import net
@@ -27,7 +27,7 @@ lightweight-task scheduler.
 
 Use `io.write(...)`, `io.flush()`, and `io.read_line()` for explicit terminal I/O:
 
-```python
+```aura
 import io
 
 def main() -> int32:
@@ -95,7 +95,7 @@ Those constructors return `Result[fs.File, io.Error]`. `fs.File` works with `wit
 
 Text example:
 
-```python
+```aura
 import fs
 import io
 
@@ -106,7 +106,7 @@ def load_text(path: str) -> Result[str, io.Error]:
 
 Binary example:
 
-```python
+```aura
 import fs
 import io
 
@@ -204,7 +204,7 @@ otherwise ownership must transfer.
 
 One-shot example:
 
-```python
+```aura
 import process
 
 def run_echo() -> Result[None, process.Error]:
@@ -217,7 +217,7 @@ def run_echo() -> Result[None, process.Error]:
 
 Interactive pipe example:
 
-```python
+```aura
 import process
 
 def roundtrip() -> Result[None, process.Error]:
@@ -251,7 +251,7 @@ See:
 
 Supervisor example:
 
-```python
+```aura
 import process
 
 def supervise() -> Result[None, process.Error]:
@@ -302,7 +302,7 @@ Both listener and stream resources work with `with`.
 
 Text example:
 
-```python
+```aura
 import io
 import net
 
