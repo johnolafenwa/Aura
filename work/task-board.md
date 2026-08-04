@@ -1,29 +1,37 @@
 # Task Board
 
-Last updated: 2026-08-03
+Last updated: 2026-08-04
 
-## Aura v0.3.0-preview release (in progress)
+## Aura v0.3.0-preview release (complete)
 
 - Authorized target: prepare and publish Aura v0.3.0-preview without adding
   language features, run one complete verification, publish the GitHub
   prerelease and version 0.3.0 of `JohnOlafenwa.vscode-aura-lang` to Visual
   Studio Marketplace and Open VSX, then verify every public artifact.
 - The prerequisite merged-main CI run `30854235277` is green on Ubuntu 24.04
-  and macOS 15. Release preparation is isolated on
-  `codex/v0.3.0-preview-release` from merged main commit `7d641f0`.
+  and macOS 15. Release preparation completed on
+  `codex/v0.3.0-preview-release`; exact candidate `8dd97c59` is merged to
+  `main`.
 - Product manifests already agree on 0.3.0. Release-only work stamps packaged
   binaries as `0.3.0-preview`, moves the public installer and maintained
   documentation to the 0.3 preview, and retains `0.3.0-dev` for ordinary
   source builds.
-- The tag-triggered workflow will build and smoke-test three CLI archives,
-  package the documentation and VSIX, generate and verify `SHA256SUMS`, publish
-  a GitHub prerelease, and publish the same VSIX to both configured registries.
+- The tag-triggered workflow built and smoke-tested three CLI archives,
+  packaged the documentation and VSIX, generated and verified `SHA256SUMS`,
+  published a GitHub prerelease, and published the same VSIX to both
+  configured registries.
 - No tag-signing identity is configured, so the annotated tag will be unsigned
   by choice. One complete hosted CI run on the exact candidate is the required
   broad verification; focused release and packaging checks run locally.
 - Focused release, identity, reference, documentation, workflow, shell,
   formatting, extension, native archive, and installed archive-smoke checks are
-  green. The exact-candidate hosted run remains pending.
+  green. The one complete exact-candidate hosted gate, run `30860733864`, is
+  green on Ubuntu 24.04 and macOS 15 at `8dd97c59`.
+- Annotated unsigned tag `v0.3.0-preview` targets `8dd97c59`. Coordinated
+  release run `30866580337` is green. The public GitHub prerelease contains all
+  six expected assets, every checksum verifies, the deployed installer and
+  Manual identify the exact release, and extension version 0.3.0 is available
+  from Open VSX and the Visual Studio Marketplace package endpoint.
 - Protected user files remain untouched: `personal/file_ops.au` and the
   untracked ADR-0022 draft.
 - Work note: `work/2026-08-03-v0.3.0-preview-release.md`.
