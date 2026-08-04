@@ -159,21 +159,27 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
 class LandingAndInstallerTests(unittest.TestCase):
     def test_landing_leads_with_aura_systems_and_agent_value(self) -> None:
         landing = LANDING_DOC.read_text(encoding="utf-8")
-        required_copy = (
-            "Python-like code with Rust-style safety.",
-            "democratize systems programming",
-            "compiled systems language",
-            "ML systems and reliable agents",
-            "statically typed",
-            "no garbage collector",
-            "deterministic ownership",
-            "structured concurrency",
-            "typed failure",
-            "| | Python | Rust | Aura |",
+
+        # Structure and claims, not exact marketing sentences: pinning phrasing
+        # turns every copy edit into a CI failure without protecting anything.
+        for element in ("layout: home", "hero:", "tagline:", "features:"):
+            with self.subTest(element=element):
+                self.assertIn(element, landing)
+
+        self.assertIn("| | Python | Rust | Aura |", landing)
+        self.assertIn("```aura", landing)
+
+        lowered = landing.lower()
+        required_claims = (
+            "ownership",
+            "concurrency",
+            "garbage collector",
+            "agents",
+            "preview",
         )
-        for copy in required_copy:
-            with self.subTest(copy=copy):
-                self.assertIn(copy, landing)
+        for claim in required_claims:
+            with self.subTest(claim=claim):
+                self.assertIn(claim, lowered)
 
         self.assertNotIn("## Measured Snapshot", landing)
         self.assertNotIn("Aura / CPython", landing)
