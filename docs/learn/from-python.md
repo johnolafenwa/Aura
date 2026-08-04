@@ -217,17 +217,58 @@ def total(prices: list[float64]) -> float64:
     return sum
 ```
 
-Four differences worth knowing up front:
+Three differences worth knowing up front:
 
 - **A missing parameter type is a parse error**, not a dynamic parameter.
   `def f(x):` does not compile.
-- **A missing return type means `None`.** If the body returns a value, you get
-  a mismatch error rather than an inferred type.
 - **Numeric types never convert implicitly.** Passing an `int32` where `int64`
   is expected is an error; cast with `as int64` or `.to_float()`. Unsuffixed
   integer literals are `int64`, floats are `float64`.
 - **Generics are explicit**: `list[str]`, `dict[str, int64]`, `Option[int64]`,
   and type parameters are declared, as in `def first[T](values: list[T]) -> Option[T]`.
+
+### If It Returns A Value, Declare The Type
+
+A function with no `->` returns nothing. That is fine when the body really
+returns nothing, and a bare `return` for an early exit is fine too:
+
+```aura
+def greet(name: str):
+    print(f"hi {name}")
+
+def early(flag: bool):
+    if flag:
+        return
+    print("no")
+```
+
+The moment the body returns a *value*, the signature has to say so. Aura does
+not infer it from the body:
+
+```aura
+def double(n: int64):
+    return n * 2
+```
+
+```text
+error[AU2002]: return type mismatch: expected `None`, found `int64`
+ --> ret_bad.au:2:5
+  |
+2 |     return n * 2
+  |     ^
+```
+
+Read `-> None` as the default that was there all along. The fix is to write
+the type you meant:
+
+```aura
+def double(n: int64) -> int64:
+    return n * 2
+```
+
+Coming from Python this feels like extra typing for about a day, and then it
+starts reading as documentation: every signature tells you what goes in and
+what comes back without opening the body.
 
 ## Things That Will Surprise You
 
