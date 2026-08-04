@@ -16,8 +16,8 @@ hero:
       text: Read The Manual
       link: /manual/
     - theme: alt
-      text: Why Aura
-      link: /positioning
+      text: AI Agent Docs
+      link: /#ai-agents
 
 features:
   - title: Systems Programming, Made Familiar
@@ -33,6 +33,8 @@ features:
 Aura exists to democratize systems programming. It combines the readability of
 Python-like code with Rust-style safety and reliability, then applies that
 combination to the infrastructure behind ML systems and agents.
+
+<AgentDocs />
 
 Aura is a **compiled systems language**. Every program is **statically typed**.
 Values follow a **deterministic ownership** model, resources have defined

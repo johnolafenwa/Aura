@@ -45,6 +45,10 @@ TextMate grammar. This batch changes no language or compiler behavior.
   documentation while preserving the historical proposal exclusion.
 - Updated Downloads, Learn, the root README, the extension listing README,
   Supported Platforms, VitePress navigation, and generated LLM artifacts.
+- Added a prominent homepage briefing for AI agents. It links directly to
+  `llms.txt` and `llms-full.txt`, explains their roles, supplies a copyable
+  instruction, and makes the Manual's normative status explicit. The homepage
+  hero now links to the briefing.
 
 ## Verification
 
@@ -72,9 +76,13 @@ TextMate grammar. This batch changes no language or compiler behavior.
 - All six local installation/download routes returned HTTP 200. Generated LLM
   documentation is current, the custom highlighter tests are green, and the
   post-run build tree remains 19 GiB with 31 GiB free.
+- The agent briefing has three focused tests covering endpoint prominence,
+  generated-summary quality, and containment of long URLs. Desktop and
+  390-by-844 browser checks verified the anchored hero action, both document
+  links, copy feedback, zero horizontal overflow, and responsive text wrapping.
 
 ## Follow-up
 
-Push the completed documentation branch, obtain green hosted checks, and merge
-the pull request. No compiler release or extension republish is required
+PR #4 merged at `d9cac8a`. The homepage agent-docs follow-up was authorized for
+a direct push to `main`. No compiler release or extension republish is required
 because the installed binaries and VSIX are unchanged.

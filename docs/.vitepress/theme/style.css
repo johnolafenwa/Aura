@@ -95,6 +95,204 @@
   }
 }
 
+.aura-agent-docs {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
+  gap: clamp(32px, 6vw, 76px);
+  align-items: center;
+  margin: 72px 0 80px;
+  padding: clamp(36px, 5vw, 64px) clamp(24px, 5vw, 60px);
+  overflow: hidden;
+  border-block: 1px solid color-mix(in srgb, var(--vp-c-brand-1) 28%, var(--vp-c-divider));
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--vp-c-brand-soft) 78%, transparent), transparent 42%),
+    linear-gradient(135deg, var(--vp-c-bg-soft), color-mix(in srgb, var(--vp-c-bg) 88%, var(--vp-c-brand-soft)));
+  scroll-margin-top: 88px;
+  animation: aura-agent-docs-enter 480ms ease-out both;
+}
+
+.aura-agent-docs::after {
+  position: absolute;
+  right: -72px;
+  bottom: -96px;
+  width: 260px;
+  height: 260px;
+  border: 1px solid color-mix(in srgb, var(--vp-c-brand-1) 22%, transparent);
+  border-radius: 50%;
+  content: '';
+  pointer-events: none;
+}
+
+.aura-agent-docs-intro,
+.aura-agent-docs-instruction {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.aura-agent-docs-eyebrow {
+  display: block;
+  margin-bottom: 12px;
+  color: var(--vp-c-brand-1);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.aura-agent-docs h2 {
+  max-width: 560px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  color: var(--vp-c-text-1);
+  font-size: clamp(30px, 4vw, 48px);
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+}
+
+.aura-agent-docs-intro > p {
+  max-width: 590px;
+  margin: 18px 0 28px;
+  color: var(--vp-c-text-2);
+  font-size: 17px;
+  line-height: 1.7;
+}
+
+.aura-agent-docs-links {
+  display: grid;
+  border-top: 1px solid var(--vp-c-divider);
+}
+
+.aura-agent-docs-links a {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 17px 2px;
+  border-bottom: 1px solid var(--vp-c-divider);
+  color: var(--vp-c-text-1);
+  text-decoration: none;
+  transition: color 160ms ease, padding 160ms ease;
+}
+
+.aura-agent-docs-links a:hover {
+  padding-right: 7px;
+  padding-left: 7px;
+  color: var(--vp-c-brand-1);
+}
+
+.aura-agent-docs-links a > span:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.aura-agent-docs-links strong {
+  font-family: var(--vp-font-family-mono);
+  font-size: 15px;
+}
+
+.aura-agent-docs-links small {
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.aura-agent-docs-links a > span:last-child {
+  font-size: 20px;
+  transition: transform 160ms ease;
+}
+
+.aura-agent-docs-links a:hover > span:last-child {
+  transform: translate(2px, -2px);
+}
+
+.aura-agent-docs-instruction {
+  padding: 22px 0 22px 24px;
+  border-left: 2px solid var(--vp-c-brand-1);
+}
+
+.aura-agent-docs-instruction-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  color: var(--vp-c-text-2);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.aura-agent-docs-instruction button {
+  padding: 6px 10px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 7px;
+  color: var(--vp-c-text-1);
+  background: var(--vp-c-bg);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.aura-agent-docs-instruction button:hover {
+  border-color: var(--vp-c-brand-1);
+  color: var(--vp-c-brand-1);
+  transform: translateY(-1px);
+}
+
+.aura-agent-docs-instruction button:focus-visible,
+.aura-agent-docs-links a:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 3px;
+}
+
+.aura-agent-docs-instruction > p {
+  margin: 0;
+  color: var(--vp-c-text-1);
+  font-family: var(--vp-font-family-mono);
+  font-size: 14px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+@keyframes aura-agent-docs-enter {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 767px) {
+  .aura-agent-docs {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 34px;
+    margin: 56px 0 64px;
+  }
+
+  .aura-agent-docs-instruction {
+    padding: 20px 0 4px 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aura-agent-docs {
+    animation: none;
+  }
+
+  .aura-agent-docs-links a,
+  .aura-agent-docs-links a > span:last-child,
+  .aura-agent-docs-instruction button {
+    transition: none;
+  }
+}
+
 .VPDoc h2 {
   border-top: 1px solid var(--vp-c-divider);
   padding-top: 28px;

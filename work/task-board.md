@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-04
 
-## Platform installation and Aura highlighting (implementation complete)
+## Platform installation, Aura highlighting, and agent docs (complete)
 
 - Authorized target: publish detailed macOS, Linux, Windows-through-WSL, and
   VS Code extension installation documentation; replace Python highlighting
@@ -21,10 +21,15 @@ Last updated: 2026-08-04
   prerequisites, checksum-verified installation, PATH persistence, native
   build toolchains, upgrades, WSL 2 setup, WSL filesystem placement, remote
   extension installation, and troubleshooting.
+- The homepage now gives AI agents a prominent entry point for `llms.txt` and
+  `llms-full.txt`, explains when to use each file, and provides a copyable
+  instruction that treats the linked Manual as normative. The hero links
+  directly to this section.
 - Focused tests, generated LLM artifacts, the `/Aura/` production docs build,
   complete reference replay, 22 extension tests, six local HTTP routes,
-  desktop rendering, and 390-pixel WSL rendering are green. Push, hosted
-  checks, and merge remain.
+  desktop rendering, and 390-pixel rendering are green. PR #4 merged at
+  `d9cac8a`; its documentation workflow is green. The direct-to-main homepage
+  follow-up was authorized by the user.
 - Protected user files remain untouched: `personal/file_ops.au` and the
   untracked ADR-0022 draft.
 - Work note: `work/2026-08-04-installation-and-aura-highlighting.md`.
