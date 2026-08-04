@@ -54,6 +54,25 @@ GitHub Release publication. The workflow requires an existing GitHub Release
 only when it downloads an already-built VSIX; a VSIX built from an explicit
 `source_ref` no longer hits that unrelated guard.
 
+Publication completed through Release workflow run
+[`30954401440`](https://github.com/johnolafenwa/Aura/actions/runs/30954401440)
+at commit `4fb9b5dbee19f16c9fe6ecc45ac6393cdb2e169c`. Immutable source
+resolution, the hosted extension/docs build, VSIX identity validation, and
+both registry publications passed. Native CLI builds and GitHub Release
+publication were skipped. Documentation workflow run
+[`30954403228`](https://github.com/johnolafenwa/Aura/actions/runs/30954403228)
+built and deployed the shared grammar from the same commit.
+
+Visual Studio Marketplace and Open VSX both publicly report version 0.3.2.
+The VSIX downloaded from each registry is byte-identical:
+
+`9ded50ce24dcf599938fd40bdd09ed3f664c5435db10aaf5a93320a0bd8db66e`
+
+Both public packages identify `JohnOlafenwa.vscode-aura-lang` version 0.3.2
+and contain the new embedded-expression and format-placeholder scopes. The
+local VS Code installation was upgraded through the public Marketplace from
+0.3.1 to 0.3.2 and verified with the bundled VS Code CLI.
+
 ## Protected files
 
 The existing `personal/file_ops.au` modification and untracked ADR-0022 draft

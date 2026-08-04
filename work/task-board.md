@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-04
 
-## F-string interpolation highlighting (0.3.2 publication in progress)
+## F-string interpolation highlighting (0.3.2 published)
 
 - Authorized target: correct the reported VS Code syntax-highlighting defect
   where `f"Lang: {lang}"` colored the interpolation braces and expression as
@@ -17,6 +17,14 @@ Last updated: 2026-08-04
 - Focused extension tests and packaging are green. The user authorized an
   extension-only 0.3.2 publication to both marketplaces. The compiler and CLI
   remain Aura 0.3.1-preview.
+- Extension-only Release run `30954401440` is green at `4fb9b5d`; the CLI and
+  GitHub Release jobs were skipped. Docs run `30954403228` built and deployed
+  the shared grammar successfully.
+- Visual Studio Marketplace and Open VSX both publicly report version 0.3.2.
+  Their downloadable VSIX packages are byte-identical at SHA-256
+  `9ded50ce24dcf599938fd40bdd09ed3f664c5435db10aaf5a93320a0bd8db66e`
+  and contain the corrected interpolation scopes. The local VS Code
+  installation was upgraded from 0.3.1 to 0.3.2 through the public listing.
 - Protected user files remain untouched: `personal/file_ops.au` and the
   untracked ADR-0022 draft.
 - Work note: `work/2026-08-04-fstring-interpolation-highlighting.md`.
