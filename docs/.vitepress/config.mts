@@ -74,6 +74,7 @@ export default defineConfig({
             { text: 'Collections', link: '/learn/collections' },
             { text: 'Ownership And Borrowing', link: '/learn/ownership-and-borrowing' },
             { text: 'Errors With Result And Option', link: '/learn/results-and-options' },
+            { text: 'Testing', link: '/learn/testing' },
             { text: 'Modules And Packages', link: '/learn/modules-and-packages' },
             { text: 'Concurrency', link: '/learn/concurrency' },
             { text: 'Files, Processes, Networking', link: '/learn/io-process-networking' },

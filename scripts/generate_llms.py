@@ -33,6 +33,17 @@ def _without_frontmatter(text: str) -> str:
     return normalized[closing + len("\n---\n") :].lstrip("\n")
 
 
+def _without_vue_components(text: str) -> str:
+    """Drop self-closing Vue component tags used only by the rendered site.
+
+    Files such as docs/index.md embed components (`<AgentDocs />`) that carry
+    no meaning for a reader of the generated text, so they must not leak into
+    the machine-readable documentation.
+    """
+    stripped = re.sub(r"^[ \t]*<[A-Z][A-Za-z0-9]*\s*/>[ \t]*\n?", "", text, flags=re.MULTILINE)
+    return re.sub(r"\n{3,}", "\n\n", stripped)
+
+
 def _title(text: str, fallback: str) -> str:
     match = re.search(r"^#\s+(.+?)\s*$", text, flags=re.MULTILINE)
     return match.group(1).strip() if match else fallback
@@ -79,7 +90,12 @@ def discover_sources(root: Path) -> List[Source]:
         if relative in seen:
             continue
         seen.add(relative)
-        content = _without_frontmatter(path.read_text(encoding="utf-8")).strip() + "\n"
+        content = (
+            _without_vue_components(
+                _without_frontmatter(path.read_text(encoding="utf-8"))
+            ).strip()
+            + "\n"
+        )
         sources.append(
             Source(
                 relative=relative,

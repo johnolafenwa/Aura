@@ -88,7 +88,7 @@ grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0024-assertion-eval
 grep -Fq '0024-assertion-evaluation-and-diagnostic-policy.md' architecture_docs/decisions/README.md
 test -s examples/basics/assertions.au
 grep -Fq '`assertions.au`' examples/README.md
-grep -Fq '[23-assertions.md]' tutorials/README.md
+grep -Fq '[23-assertions-and-tests.md]' tutorials/README.md
 test -s examples/agents/retrying_network_worker.au
 grep -Fq 'random.Rng(42)' examples/agents/retrying_network_worker.au
 grep -Fq 'if status != 503:' examples/agents/retrying_network_worker.au
@@ -1055,3 +1055,5 @@ python3 scripts/test_reference_integrity.py
 python3 scripts/reference_integrity.py
 python3 -m unittest scripts/test_release_metadata.py
 node --test docs/.vitepress/release-metadata.test.mjs
+node --test docs/.vitepress/agent-docs.test.mjs
+node --test docs/.vitepress/landing-examples.test.mjs

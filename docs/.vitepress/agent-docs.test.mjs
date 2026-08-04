@@ -37,6 +37,17 @@ test('the agent briefing contains long URLs at mobile widths', () => {
 test('the machine-readable homepage summary remains descriptive', () => {
   const llms = fs.readFileSync(`${root}/docs/public/llms.txt`, 'utf8')
 
-  assert.doesNotMatch(llms, /<AgentDocs \/>/)
-  assert.match(llms, /Systems programming should not require a systems background/)
+  // Structural checks only. Pinning exact marketing prose makes every copy
+  // edit a CI failure; what must hold is that the summary exists, describes
+  // the language, and carries no site-only markup.
+  assert.doesNotMatch(llms, /<[A-Z][A-Za-z0-9]*\s*\/>/)
+
+  const summary = llms.match(/^> (.+)$/m)?.[1] ?? ''
+  assert.ok(summary.length > 80, `llms.txt summary is too short: ${summary}`)
+
+  const homepageEntry = llms.match(/^- \[Aura\]\(https:\/\/[^)]*github\.io[^)]*\): (.+)$/m)?.[1] ?? ''
+  assert.ok(
+    homepageEntry.length > 80,
+    `llms.txt homepage description is too short: ${homepageEntry}`
+  )
 })

@@ -61,11 +61,12 @@ The chapters are ordered so that each idea has a practical reason to exist befor
    shape numeric `Array[T]` values.
 5. [Values, Moves, And Borrows](/learn/ownership-and-borrowing) — the ownership model, explained through the programs that benefit from it.
 6. [Results, Options, And `try`](/learn/results-and-options) — how Aura represents recoverable failure without hiding control flow.
-7. [Organizing Code](/learn/modules-and-packages) — splitting a program into files, packages, and workspaces.
-8. [Structured Concurrency](/learn/concurrency) — `TaskGroup`, `Task[T]`, `Queue[T]`, cancellation, and worker pools.
-9. [Talking To The World](/learn/io-process-networking) — files, processes, sockets, HTTP, and supervisors.
-10. [Running And Shipping](/learn/native-builds) — when to use `run`, when to use `build`, and what the native binary gives you.
-11. [Calling A Small C API](/learn/ffi) — package-authorized FFI v0 for
+7. [Testing](/learn/testing) — writing tests, reading a failed assertion, parameterized cases, and CI output.
+8. [Organizing Code](/learn/modules-and-packages) — splitting a program into files, packages, and workspaces.
+9. [Structured Concurrency](/learn/concurrency) — `TaskGroup`, `Task[T]`, `Queue[T]`, cancellation, and worker pools.
+10. [Talking To The World](/learn/io-process-networking) — files, processes, sockets, HTTP, and supervisors.
+11. [Running And Shipping](/learn/native-builds) — when to use `run`, when to use `build`, and what the native binary gives you.
+12. [Calling A Small C API](/learn/ffi) — package-authorized FFI v0 for
     fixed-width values, temporary byte views, and opaque handles.
 
 Three case studies put the pieces together:
