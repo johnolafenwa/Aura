@@ -2,6 +2,25 @@
 
 Last updated: 2026-08-04
 
+## Aura v0.3.1-preview release (preparation in progress)
+
+- Authorized target: publish Aura v0.3.1-preview, including compiler archives,
+  documentation, checksums, and version 0.3.1 of the VS Code extension to both
+  public marketplaces. No new language feature is in scope.
+- Coordinated crate, npm, LSP, extension, Manual, installer, download, and
+  release-process identities are now 0.3.1 / v0.3.1-preview.
+- The changelog records the top-level script-local fix, direct integer-call
+  equality parity, required LSP semantic-interface documentation, `.au` file
+  icon, and the maintained documentation improvements since v0.3.0-preview.
+- Focused release metadata, packaging, extension, and reference checks are
+  green. Exact-candidate hosted CI, tagging, publication, and public artifact
+  verification remain.
+- The tag will be annotated and unsigned by choice because no signing identity
+  is configured in this checkout.
+- Protected user files remain untouched: `personal/file_ops.au` and the
+  untracked ADR-0022 draft.
+- Work note: `work/2026-08-04-v0.3.1-preview-release.md`.
+
 ## Compiler review fixes, LSP docs, and VS Code icon (local verification complete)
 
 - Authorized target: fix plain reassignment of an existing top-level `mut`
@@ -29,7 +48,7 @@ Last updated: 2026-08-04
   regression parses the examples and pins the exact version.
 - Protected user files remain untouched: `personal/file_ops.au` and the
   untracked ADR-0022 draft.
-- One hosted CI run will provide the final complete gate after push. The local
+- Hosted CI run `30934099472` is green on Ubuntu 24.04 and macOS 15. The local
   full-gate attempt exhausted disk on stale generated artifacts; those were
   cleaned and the affected forced-backend parity stage passed on retry.
 - Work note: `work/2026-08-04-top-level-script-binding-fixes.md`.

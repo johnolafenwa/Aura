@@ -5,6 +5,28 @@ versioning for release artifacts while it remains a technical preview; a minor
 preview release may still contain source and API incompatibilities called out
 in this file.
 
+## 0.3.1 — 2026-08-04 (technical preview)
+
+Aura 0.3.1 is a technical preview patch release of the compiler, command-line
+tools, language server, VS Code extension, Manual, Learn track, tutorials, and
+installation tooling.
+
+- Fixed plain and compound reassignment of mutable top-level script locals.
+  Module constants that read a script local now receive a focused diagnostic
+  explaining initialization order and the valid `mut` or `main` repairs.
+- Fixed direct-backend integer `==` and `!=` when a function call supplies an
+  `int32` or `uint64` operand. Function-result temporaries retain their declared
+  type across ordinary comparisons, reversed operands, comparison chains, and
+  assertion introspection, with MIR/direct parity coverage.
+- Documented the required language-server request field
+  `semantic_interface_version: 5` in the Manual and server package.
+- Added Aura file icons to the VS Code language contribution using the
+  maintained Aura mark.
+- Expanded platform installation guidance, native Aura syntax highlighting,
+  AI-agent documentation entry points, the Python fast track, conversions,
+  testing guidance, and the systems-language positioning for agents and ML
+  infrastructure.
+
 ## 0.3.0 — 2026-08-03 (technical preview)
 
 Aura 0.3.0 is a technical preview of the current Python-shaped language,

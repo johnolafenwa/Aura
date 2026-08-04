@@ -10,11 +10,11 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 
 class ReleaseMetadataTests(unittest.TestCase):
-    def test_product_manifests_and_locks_agree_on_0_3_0(self) -> None:
+    def test_product_manifests_and_locks_agree_on_0_3_1(self) -> None:
         cargo_manifest = (ROOT / "Cargo.toml").read_text()
         workspace_version = re.search(
             r"\[workspace\.package\].*?^version\s*=\s*\"([^\"]+)\"",
@@ -74,8 +74,9 @@ class ReleaseMetadataTests(unittest.TestCase):
 
     def test_changelog_opens_the_0_3_preview_release(self) -> None:
         changelog = (ROOT / "CHANGELOG.md").read_text()
+        self.assertIn("## 0.3.1 — 2026-08-04 (technical preview)", changelog)
+        self.assertIn("Aura 0.3.1 is a technical preview", changelog)
         self.assertIn("## 0.3.0 — 2026-08-03 (technical preview)", changelog)
-        self.assertIn("Aura 0.3.0 is a technical preview", changelog)
         self.assertIn("## 0.2.0 — 2026-07-31 (technical preview)", changelog)
         for heading in (
             "Ownership surface",
@@ -102,7 +103,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         component = (ROOT / "docs/.vitepress/theme/ReleaseStamp.vue").read_text()
         theme = (ROOT / "docs/.vitepress/theme/index.ts").read_text()
 
-        self.assertIn("Aura 0.3.0", manual)
+        self.assertIn("Aura 0.3.1", manual)
         self.assertIn("technical preview", manual.lower())
         self.assertIn("implementation baseline commit", manual.lower())
         self.assertIn("AURA_DOCS_COMMIT", metadata)
@@ -165,6 +166,33 @@ class ReleaseMetadataTests(unittest.TestCase):
         pattern = re.compile(
             r"\bAura 0\.2(?:\.0|\.x)?\b|\bv0\.2\.0-preview\b|\b0\.2\.x\b"
         )
+        for path in sorted(set(files)):
+            for number, line in enumerate(path.read_text().splitlines(), start=1):
+                if pattern.search(line):
+                    stale.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
+        self.assertEqual(stale, [], "stale current-release prose:\n" + "\n".join(stale))
+
+    def test_current_release_prose_no_longer_calls_itself_0_3_0(self) -> None:
+        roots = (
+            ROOT / "docs/manual",
+            ROOT / "docs/learn",
+            ROOT / "docs/install",
+            ROOT / "tutorials",
+        )
+        files = [
+            ROOT / "README.md",
+            ROOT / "SUPPORTED_PLATFORMS.md",
+            ROOT / "crates/aura/README.md",
+            ROOT / "docs/downloads.md",
+            ROOT / "docs/positioning.md",
+            ROOT / "docs/release-process.md",
+        ]
+        for directory in roots:
+            files.extend(directory.glob("*.md"))
+            files.extend(directory.glob("**/*.md"))
+
+        stale: list[str] = []
+        pattern = re.compile(r"\bAura 0\.3\.0\b|\bv0\.3\.0-preview\b")
         for path in sorted(set(files)):
             for number, line in enumerate(path.read_text().splitlines(), start=1):
                 if pattern.search(line):

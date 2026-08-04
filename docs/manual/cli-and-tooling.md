@@ -34,7 +34,7 @@ aura check app.au
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case; defaults to `tests/` and a 30-second per-case timeout. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
-| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.3.0-preview (0123456789ab)`; source builds print `aura 0.3.0-dev (0123456789ab)`. |
+| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.3.1-preview (0123456789ab)`; source builds print `aura 0.3.1-dev (0123456789ab)`. |
 
 ## Checking
 

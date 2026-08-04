@@ -1,6 +1,6 @@
 # Why Aura
 
-Aura 0.3.0 is a technical preview of a statically typed, compiled systems
+Aura 0.3.1 is a technical preview of a statically typed, compiled systems
 language for ML infrastructure and reliable agents. The premise is that
 systems programming has been gated behind hard languages, and it does not
 have to be: the safety guarantees do not require the difficulty. Aura is for

@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 export const AURA_RELEASE = Object.freeze({
-  version: '0.3.0',
+  version: '0.3.1',
   channel: 'technical preview'
 })
 

@@ -24,7 +24,7 @@ Verify the result in the same terminal after adding `~/.local/bin` to `PATH`:
 aura --version
 ```
 
-The expected release identity begins with `aura 0.3.0-preview`. The remaining
+The expected release identity begins with `aura 0.3.1-preview`. The remaining
 text is the source commit used to build the binary.
 
 ## What Gets Installed

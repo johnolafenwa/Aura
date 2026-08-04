@@ -520,7 +520,7 @@ grammar, ownership rules, execution model, APIs, diagnostics, and limits.
 
 # Why Aura
 
-Aura 0.3.0 is a technical preview of a statically typed, compiled systems
+Aura 0.3.1 is a technical preview of a statically typed, compiled systems
 language for ML infrastructure and reliable agents. The premise is that
 systems programming has been gated behind hard languages, and it does not
 have to be: the safety guarantees do not require the difficulty. Aura is for
@@ -654,7 +654,7 @@ boundaries of that surface.
 
 # Downloads
 
-Aura 0.3.0 is a technical preview. The compiler, command-line tools, editor
+Aura 0.3.1 is a technical preview. The compiler, command-line tools, editor
 extension, reference manual, and source are distributed from the
 [Aura GitHub repository](https://github.com/johnolafenwa/Aura).
 
@@ -679,7 +679,7 @@ Choose a detailed platform guide:
 - [Windows 11 through Ubuntu on WSL 2](/install/windows-wsl)
 
 Download the archive for your platform from the
-[v0.3.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.0-preview).
+[v0.3.1-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.1-preview).
 Each release includes Linux x64, macOS x64, and macOS arm64 archives together
 with a `SHA256SUMS` manifest.
 
@@ -698,7 +698,7 @@ Install **Aura Programming Language** from either public extension registry:
 - [Open VSX](https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang)
 
 The registry packages are identical and carry the plain extension version
-`0.3.0`. The extension needs the `aura` executable on `PATH` because semantic
+`0.3.1`. The extension needs the `aura` executable on `PATH` because semantic
 editor features run through the compiler-owned `aura lsp` server.
 
 Install from a terminal with:
@@ -708,7 +708,7 @@ code --install-extension JohnOlafenwa.vscode-aura-lang
 ```
 
 For a manual installation, download
-[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.3.0-preview/aura-language.vsix)
+[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.3.1-preview/aura-language.vsix)
 from the GitHub Release, then choose **Extensions: Install from VSIX...** in
 VS Code.
 
@@ -751,7 +751,7 @@ Verify the result in the same terminal after adding `~/.local/bin` to `PATH`:
 aura --version
 ```
 
-The expected release identity begins with `aura 0.3.0-preview`. The remaining
+The expected release identity begins with `aura 0.3.1-preview`. The remaining
 text is the source commit used to build the binary.
 
 ## What Gets Installed
@@ -859,7 +859,7 @@ command -v aura
 aura --version
 ```
 
-The version should begin with `aura 0.3.0-preview`.
+The version should begin with `aura 0.3.1-preview`.
 
 ## 6. Run A Program
 
@@ -957,7 +957,7 @@ verified installer:
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
-The script downloads the matching `v0.3.0-preview` archive and checks it
+The script downloads the matching `v0.3.1-preview` archive and checks it
 against the release's `SHA256SUMS` file before copying anything into the
 installation prefix.
 
@@ -986,7 +986,7 @@ The command path should end in `.local/bin/aura`, and the version should begin
 with:
 
 ```text
-aura 0.3.0-preview
+aura 0.3.1-preview
 ```
 
 ## 5. Run A Program
@@ -1102,7 +1102,7 @@ codium --install-extension JohnOlafenwa.vscode-aura-lang
 ## Install The Release VSIX Manually
 
 Download `aura-language.vsix` from the
-[v0.3.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.0-preview).
+[v0.3.1-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.1-preview).
 Then open the Command Palette and choose **Extensions: Install from VSIX...**.
 
 The command-line form is:
@@ -1343,7 +1343,7 @@ are outside the supported distribution matrix for this preview.
 
 # Aura Language Reference
 
-The source version for this Manual is **Aura 0.3.0 (technical preview)**.
+The source version for this Manual is **Aura 0.3.1 (technical preview)**.
 The release stamp below records the rendered implementation baseline commit.
 
 Release builders set `AURA_DOCS_COMMIT`; GitHub builds use `GITHUB_SHA`; a
@@ -2741,7 +2741,7 @@ aura check app.au
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case; defaults to `tests/` and a 30-second per-case timeout. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
-| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.3.0-preview (0123456789ab)`; source builds print `aura 0.3.0-dev (0123456789ab)`. |
+| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.3.1-preview (0123456789ab)`; source builds print `aura 0.3.1-dev (0123456789ab)`. |
 
 ## Checking
 
@@ -10683,7 +10683,7 @@ relevant reference page, conformance tests, examples, tutorials, and work
 record in the same pass.
 
 The repository commit identifies the precise revision of the specification.
-The rendered Manual is stamped with source version 0.3.0 (technical preview)
+The rendered Manual is stamped with source version 0.3.1 (technical preview)
 and its implementation baseline commit. Release builds supply that commit
 without writing a self-referential hash into this source page; see the
 [Manual overview](/manual/) for the exact precedence and local fallback.
@@ -17605,7 +17605,7 @@ For a manual installation, download the archive for a supported host, extract
 it, and keep its directory layout intact:
 
 ```text
-aura-v0.3.0-preview-<target>/
+aura-v0.3.1-preview-<target>/
 ├── bin/aura
 ├── lib/aura/
     ├── libaura_compiler.a
@@ -17667,8 +17667,8 @@ aura --version
 ```
 
 Preview builds identify both their channel and source commit, for example
-`aura 0.3.0-preview (0123456789ab)`. Source-checkout builds identify their
-channel as `aura 0.3.0-dev (0123456789ab)`.
+`aura 0.3.1-preview (0123456789ab)`. Source-checkout builds identify their
+channel as `aura 0.3.1-dev (0123456789ab)`.
 
 On Unix shells, consider adding that export to your shell profile.
 
@@ -19404,8 +19404,8 @@ cargo run -p aura -- --version
 ```
 
 The source-checkout command prints the build channel and a 12-hex-digit source
-commit, such as `aura 0.3.0-dev (0123456789ab)`. Release archives identify
-their channel as `aura 0.3.0-preview (0123456789ab)`.
+commit, such as `aura 0.3.1-dev (0123456789ab)`. Release archives identify
+their channel as `aura 0.3.1-preview (0123456789ab)`.
 
 Use `deps update` to refresh git dependencies without deleting `Aura.lock` manually:
 

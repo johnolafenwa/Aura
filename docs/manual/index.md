@@ -1,6 +1,6 @@
 # Aura Language Reference
 
-The source version for this Manual is **Aura 0.3.0 (technical preview)**.
+The source version for this Manual is **Aura 0.3.1 (technical preview)**.
 The release stamp below records the rendered implementation baseline commit.
 
 <ReleaseStamp />

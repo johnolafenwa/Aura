@@ -6,8 +6,8 @@
 
 - [Aura](https://github.com/johnolafenwa/Aura#readme): Aura is a compiled, statically typed systems language for ML infrastructure and reliable agents. It combines Python-like readability with Rust-style safety: deterministic ownership, structured concurrency, typed failure, native executables, and no garbage collector.
 - [Aura](https://johnolafenwa.github.io/Aura): Systems programming should not require a systems background. Python is easy to write, Rust is safe to run, and Aura aims for both: Pythonic code, checked by a compiler that thinks like Rust, on a runtime that schedules like Go. The people building on top of models should be able to build the infrastructure under them too.
-- [Why Aura](https://johnolafenwa.github.io/Aura/positioning): Aura 0.3.0 is a technical preview of a statically typed, compiled systems language for ML infrastructure and reliable agents. The premise is that systems programming has been gated behind hard languages, and it does not have to be: the safety guarantees do not require the difficulty. Aura is for people who want Python's readability without giving up Rust's discipline.
-- [Downloads](https://johnolafenwa.github.io/Aura/downloads): Aura 0.3.0 is a technical preview. The compiler, command-line tools, editor extension, reference manual, and source are distributed from the [Aura GitHub repository](https://github.com/johnolafenwa/Aura).
+- [Why Aura](https://johnolafenwa.github.io/Aura/positioning): Aura 0.3.1 is a technical preview of a statically typed, compiled systems language for ML infrastructure and reliable agents. The premise is that systems programming has been gated behind hard languages, and it does not have to be: the safety guarantees do not require the difficulty. Aura is for people who want Python's readability without giving up Rust's discipline.
+- [Downloads](https://johnolafenwa.github.io/Aura/downloads): Aura 0.3.1 is a technical preview. The compiler, command-line tools, editor extension, reference manual, and source are distributed from the [Aura GitHub repository](https://github.com/johnolafenwa/Aura).
 
 ## Install Aura
 
@@ -19,7 +19,7 @@
 
 ## Language Manual
 
-- [Aura Language Reference](https://johnolafenwa.github.io/Aura/manual): The source version for this Manual is **Aura 0.3.0 (technical preview)**. The release stamp below records the rendered implementation baseline commit.
+- [Aura Language Reference](https://johnolafenwa.github.io/Aura/manual): The source version for this Manual is **Aura 0.3.1 (technical preview)**. The release stamp below records the rendered implementation baseline commit.
 - [API Index](https://johnolafenwa.github.io/Aura/manual/api-index): This page indexes every maintained public builtin constant, function, method, module type, and builtin enum documented by the manual. It is intentionally dense. Use the linked manual pages for examples and longer discussion.
 - [Assertions](https://johnolafenwa.github.io/Aura/manual/assertions): An assertion states an invariant that must hold for execution to continue. Assertions are for programmer errors and internal consistency, not recoverable input or protocol failures. Use a typed `Result` when a caller should be able to handle the outcome.
 - [Bytes, Text Codecs, And SHA-256](https://johnolafenwa.github.io/Aura/manual/bytes): Aura represents an owned sequence of bytes as `list[uint8]`. There is no separate `Bytes` nominal type and no implicit conversion between text and bytes. UTF-8 conversion is available on `str`; hexadecimal, base64, and SHA-256 operations live in the built-in `bytes` module.
