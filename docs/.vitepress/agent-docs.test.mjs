@@ -37,6 +37,6 @@ test('the agent briefing contains long URLs at mobile widths', () => {
 test('the machine-readable homepage summary remains descriptive', () => {
   const llms = fs.readFileSync(`${root}/docs/public/llms.txt`, 'utf8')
 
-  assert.doesNotMatch(llms, /\): <AgentDocs \/>/)
-  assert.match(llms, /Aura exists to democratize systems programming/)
+  assert.doesNotMatch(llms, /<AgentDocs \/>/)
+  assert.match(llms, /Python is easy to write\. Rust is safe to run\./)
 })

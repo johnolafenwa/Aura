@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Aura
   text: Simple, safe systems programming.
-  tagline: A compiled language with Python's syntax, Rust's ownership, and Go's concurrency — built for agents and ML infrastructure.
+  tagline: A compiled language with Python-inspired syntax, Rust-like ownership, and Go-style concurrency — built for agents and ML infrastructure.
   image:
     src: /aura-mark.svg
     alt: Aura language mark
@@ -19,8 +19,8 @@ hero:
       text: AI Agent Docs
       link: /#ai-agents
 features:
-  - title: Reads Like Python
-    details: Indentation, f-strings, comprehensions, keyword arguments. Static types catch mistakes before anything runs.
+  - title: Pythonic Syntax
+    details: Indentation, f-strings, comprehensions, keyword arguments — Python-inspired, not Python-identical. Static types catch mistakes before anything runs.
   - title: Owns Like Rust
     details: Every value has one owner. Access is shared, mut, or own — checked at compile time, cleaned up deterministically, no garbage collector.
   - title: Runs Like Go
@@ -29,9 +29,9 @@ features:
 
 ## Why Aura
 
-Python is easy to write. Rust is safe to run. Aura is both: code that looks
-like Python, checked by a compiler that thinks like Rust, on a runtime that
-schedules like Go.
+Python is easy to write. Rust is safe to run. Aura aims for both: Pythonic
+code — familiar, not identical — checked by a compiler that thinks like Rust,
+on a runtime that schedules like Go.
 
 Aura is a technical preview. The language and APIs may still change before a
 stable release.
@@ -40,7 +40,7 @@ stable release.
 
 | | Python | Rust | Aura |
 | --- | --- | --- | --- |
-| Syntax | Indentation-based, concise | Explicit systems syntax | **Indentation-based, concise** |
+| Syntax | Indentation-based, concise | Explicit systems syntax | **Pythonic, indentation-based** |
 | Types | Dynamic, optional hints | Static | **Static, with inference** |
 | Execution | Interpreter | Native executables | **Native executables** |
 | Memory | Reference counting + GC | Ownership, no GC | **Ownership, no GC** |
@@ -51,29 +51,20 @@ stable release.
 ## A First Program
 
 ```aura
-class Tracker:
-    counts: dict[str, int64]
+langs = ["python", "rust", "aura"]
 
-    def record(mut self, event: own str):
-        if event in self.counts:
-            self.counts[event] += 1
-        else:
-            self.counts[event] = 1
+for lang in langs:
+    print(f"hello, {lang}")
 
-mut tracker = Tracker(counts={"boot": 1})
-tracker.record("request")
-tracker.record("request")
-
-match tracker.counts.get("request"):
-    case Option.Some(n):
-        print(f"request seen {n} times")
+match langs.get(0):
+    case Option.Some(first):
+        print(f"first up: {first}")
     case Option.None:
-        print("no requests")
+        print("empty list")
 ```
 
-It reads like Python, and the compiler sees more: `record` must declare
-`mut self` to mutate, the dict takes ownership of its keys, and the `match`
-must handle the missing case. All of it is checked before the program runs.
+Pythonic on the surface — and typed underneath. `get` returns an `Option`,
+so the empty case must be handled before the program ever runs.
 
 ## Built For Agent Infrastructure
 
