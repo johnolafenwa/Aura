@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-04
 
-## Aura v0.3.1-preview release (preparation in progress)
+## Aura v0.3.1-preview release (complete)
 
 - Authorized target: publish Aura v0.3.1-preview, including compiler archives,
   documentation, checksums, and version 0.3.1 of the VS Code extension to both
@@ -13,10 +13,18 @@ Last updated: 2026-08-04
   equality parity, required LSP semantic-interface documentation, `.au` file
   icon, and the maintained documentation improvements since v0.3.0-preview.
 - Focused release metadata, packaging, extension, and reference checks are
-  green. Exact-candidate hosted CI, tagging, publication, and public artifact
-  verification remain.
-- The tag will be annotated and unsigned by choice because no signing identity
-  is configured in this checkout.
+  green. Exact-candidate hosted CI run `30943450655` is green on Ubuntu 24.04
+  and macOS 15 at `fcf8af9c`; documentation run `30943450659` is also green.
+- Annotated unsigned tag `v0.3.1-preview` targets
+  `fcf8af9c39713d15e6a1e4a872b38db23995b02b`. Release workflow
+  `30951424421` is fully green and published the GitHub prerelease, three CLI
+  archives, documentation, `SHA256SUMS`, and the VSIX.
+- Every public checksum verifies. The downloaded Apple-silicon CLI archive and
+  deployed installer report `aura 0.3.1-preview (fcf8af9c3971)` and pass the
+  packaged direct-backend smoke. Visual Studio Marketplace and Open VSX both
+  publicly report `JohnOlafenwa.vscode-aura-lang` version `0.3.1`.
+- The tag is unsigned by choice because no signing identity is configured in
+  this checkout.
 - Protected user files remain untouched: `personal/file_ops.au` and the
   untracked ADR-0022 draft.
 - Work note: `work/2026-08-04-v0.3.1-preview-release.md`.
