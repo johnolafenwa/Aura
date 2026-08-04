@@ -11,10 +11,11 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VERSION = "0.3.1"
+EXTENSION_VERSION = "0.3.2"
 
 
 class ReleaseMetadataTests(unittest.TestCase):
-    def test_product_manifests_and_locks_agree_on_0_3_1(self) -> None:
+    def test_product_manifests_and_locks_record_current_versions(self) -> None:
         cargo_manifest = (ROOT / "Cargo.toml").read_text()
         workspace_version = re.search(
             r"\[workspace\.package\].*?^version\s*=\s*\"([^\"]+)\"",
@@ -51,11 +52,14 @@ class ReleaseMetadataTests(unittest.TestCase):
         manifests = {
             "root": ROOT / "package.json",
             "lsp": ROOT / "tools/aura-language-server/package.json",
-            "extension": ROOT / "tools/vscode-aura/package.json",
         }
         for label, path in manifests.items():
             with self.subTest(label=label):
                 self.assertEqual(json.loads(path.read_text())["version"], VERSION)
+        self.assertEqual(
+            json.loads((ROOT / "tools/vscode-aura/package.json").read_text())["version"],
+            EXTENSION_VERSION,
+        )
 
         root_lock = json.loads((ROOT / "package-lock.json").read_text())
         self.assertEqual(root_lock["version"], VERSION)
@@ -65,7 +69,8 @@ class ReleaseMetadataTests(unittest.TestCase):
             VERSION,
         )
         self.assertEqual(
-            root_lock["packages"]["tools/vscode-aura"]["version"], VERSION
+            root_lock["packages"]["tools/vscode-aura"]["version"],
+            EXTENSION_VERSION,
         )
 
         # This npm workspace intentionally uses one root lock. The LSP and

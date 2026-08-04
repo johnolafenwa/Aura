@@ -467,6 +467,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         publish_extension_job = self.workflow.split(
             "\n  publish-extension:\n", 1
         )[1]
+        confirm_existing_release = publish_extension_job.split(
+            "      - name: Confirm existing GitHub Release\n", 1
+        )[1].split("\n      - name: Download VS Code extension", 1)[0]
+        self.assertIn("needs.tools.result == 'skipped'", confirm_existing_release)
         self.assertIn("needs.tools.result == 'success'", publish_extension_job)
         self.assertIn("needs.publish.result == 'skipped'", publish_extension_job)
         self.assertRegex(
@@ -482,6 +486,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             release_process,
             r"download\s+the exact VSIX attached to the\s+release",
         )
+        self.assertIn("-f source_ref=main", release_process)
+        self.assertIn("-f release_tag=v0.3.2", release_process)
 
     def test_manual_source_and_release_identity_are_separate(self) -> None:
         checkout_ref = (

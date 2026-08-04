@@ -300,6 +300,7 @@ jobs:
           ${{
             github.event_name == 'workflow_dispatch' &&
             inputs.publish_extension &&
+            needs.tools.result == 'skipped' &&
             needs.publish.result == 'skipped'
           }}
         run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null

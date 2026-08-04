@@ -5,6 +5,13 @@ versioning for release artifacts while it remains a technical preview; a minor
 preview release may still contain source and API incompatibilities called out
 in this file.
 
+## VS Code extension 0.3.2 — 2026-08-04
+
+- Fixed VS Code and documentation highlighting for f-string interpolations.
+  Interpolation braces now receive the standard format-placeholder scope, and
+  embedded identifiers and operators are highlighted as Aura expressions
+  instead of inheriting the surrounding string color.
+
 ## 0.3.1 — 2026-08-04 (technical preview)
 
 Aura 0.3.1 is a technical preview patch release of the compiler, command-line

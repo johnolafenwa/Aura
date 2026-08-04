@@ -2,6 +2,25 @@
 
 Last updated: 2026-08-04
 
+## F-string interpolation highlighting (0.3.2 publication in progress)
+
+- Authorized target: correct the reported VS Code syntax-highlighting defect
+  where `f"Lang: {lang}"` colored the interpolation braces and expression as
+  ordinary string text.
+- The canonical `source.aura` grammar now assigns standard format-placeholder
+  scopes to `{` and `}`, an embedded-expression scope to the interpolation,
+  and expression scopes to identifiers and operators. Doubled literal braces
+  remain string escapes.
+- A Dark+ Shiki regression pins visibly distinct colors for string text,
+  braces, and the embedded identifier. Extension structure tests pin the same
+  scopes, and the packaged VSIX contains the corrected grammar.
+- Focused extension tests and packaging are green. The user authorized an
+  extension-only 0.3.2 publication to both marketplaces. The compiler and CLI
+  remain Aura 0.3.1-preview.
+- Protected user files remain untouched: `personal/file_ops.au` and the
+  untracked ADR-0022 draft.
+- Work note: `work/2026-08-04-fstring-interpolation-highlighting.md`.
+
 ## Aura v0.3.1-preview release (complete)
 
 - Authorized target: publish Aura v0.3.1-preview, including compiler archives,

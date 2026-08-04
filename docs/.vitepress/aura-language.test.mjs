@@ -28,3 +28,26 @@ test('Shiki tokenizes Aura source with the custom grammar', async () => {
   assert.match(html, /main/)
   assert.match(html, /hello from aura/)
 })
+
+test('Shiki colors Aura f-string interpolation separately from string text', async () => {
+  const highlighter = await createHighlighter({
+    themes: ['dark-plus'],
+    langs: [AURA_LANGUAGE]
+  })
+  const [line] = highlighter.codeToTokens('print(f"Lang: {lang}")', {
+    lang: 'aura',
+    theme: 'dark-plus'
+  }).tokens
+  const stringText = line.find((token) => token.content.includes('Lang: '))
+  const openingBrace = line.find((token) => token.content === '{')
+  const expression = line.find((token) => token.content === 'lang')
+  const closingBrace = line.find((token) => token.content === '}')
+
+  assert.ok(stringText, 'the f-string text should be tokenized')
+  assert.ok(openingBrace, 'the opening interpolation brace should be its own token')
+  assert.ok(expression, 'the interpolation expression should be its own token')
+  assert.ok(closingBrace, 'the closing interpolation brace should be its own token')
+  assert.notEqual(openingBrace.color, stringText.color)
+  assert.notEqual(expression.color, stringText.color)
+  assert.notEqual(closingBrace.color, stringText.color)
+})

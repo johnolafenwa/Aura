@@ -26,7 +26,7 @@ test("extension manifest and listing are ready for both public marketplaces", ()
   assert.equal(manifest.name, "vscode-aura-lang");
   assert.equal(manifest.publisher, "JohnOlafenwa");
   assert.equal(manifest.displayName, "Aura Programming Language");
-  assert.equal(manifest.version, "0.3.1");
+  assert.equal(manifest.version, "0.3.2");
   assert.equal(manifest.preview, true);
   assert.equal(manifest.private, undefined);
   assert.equal(manifest.icon, "images/aura.png");
@@ -256,9 +256,31 @@ test("syntax grammar distinguishes ordinary quotes and nests strings in f-string
     (pattern) => pattern.name === "meta.interpolation.aura"
   );
   assert.ok(interpolation);
+  assert.equal(interpolation.contentName, "meta.embedded.expression.aura");
+  assert.match(
+    interpolation.beginCaptures["0"].name,
+    /constant\.character\.format\.placeholder\.other\.aura/
+  );
+  assert.match(
+    interpolation.endCaptures["0"].name,
+    /constant\.character\.format\.placeholder\.other\.aura/
+  );
   assert.ok(
     interpolation.patterns.some((pattern) => pattern.include === "#strings"),
     "f-string interpolations should recognize nested ordinary strings"
+  );
+  assert.ok(
+    interpolation.patterns.some(
+      (pattern) => pattern.name === "variable.other.readwrite.aura"
+    ),
+    "f-string interpolation identifiers should receive expression scopes"
+  );
+  assert.ok(
+    fStringRule.patterns.some(
+      (pattern) => pattern.name === "constant.character.escape.aura"
+        && pattern.match === "\\{\\{|\\}\\}"
+    ),
+    "doubled braces should remain literal f-string text"
   );
 
   const configurationPath = path.join(extensionRoot, "language-configuration.json");

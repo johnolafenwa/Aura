@@ -66,17 +66,22 @@
               "match": "\\\\."
             },
             {
+              "name": "constant.character.escape.aura",
+              "match": "\\{\\{|\\}\\}"
+            },
+            {
               "name": "meta.interpolation.aura",
               "begin": "\\{",
+              "contentName": "meta.embedded.expression.aura",
               "beginCaptures": {
                 "0": {
-                  "name": "punctuation.section.interpolation.begin.aura"
+                  "name": "constant.character.format.placeholder.other.aura punctuation.definition.interpolation.begin.aura"
                 }
               },
               "end": "\\}",
               "endCaptures": {
                 "0": {
-                  "name": "punctuation.section.interpolation.end.aura"
+                  "name": "constant.character.format.placeholder.other.aura punctuation.definition.interpolation.end.aura"
                 }
               },
               "patterns": [
@@ -100,6 +105,13 @@
                 },
                 {
                   "include": "#numbers"
+                },
+                {
+                  "include": "#operators"
+                },
+                {
+                  "name": "variable.other.readwrite.aura",
+                  "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
                 }
               ]
             }

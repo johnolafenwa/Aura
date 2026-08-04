@@ -55,7 +55,27 @@ npx @vscode/vsce package --out aura-language.vsix --no-dependencies
 ```
 
 Inspect the resulting VSIX and confirm the identity is
-`JohnOlafenwa.vscode-aura-lang` and the Marketplace version is plain `0.3.1`.
+`JohnOlafenwa.vscode-aura-lang` and the Marketplace version is plain `0.3.2`.
+
+## Publish An Extension-Only Patch
+
+Build and publish an intentionally newer extension from an explicit source
+commit without rebuilding or replacing the Aura CLI release:
+
+```bash
+gh auth login
+gh auth status
+gh workflow run release.yml --ref main \
+  -f source_ref=main \
+  -f release_tag=v0.3.2 \
+  -f publish=false \
+  -f publish_extension=true
+```
+
+The explicit `source_ref` makes the workflow build the VSIX from that source.
+The `release_tag` input supplies the expected plain Marketplace version; it
+does not create or require a GitHub Release when the VSIX is built in the same
+run. The CLI build and GitHub Release publication jobs stay skipped.
 
 ## Publish An Existing Release Extension
 
@@ -76,8 +96,8 @@ release. It confirms that the GitHub Release exists, verifies the packaged
 publisher and plain version, and publishes only to registries whose secrets
 are configured. The release tag remains the immutable version identity.
 
-Passing an explicit `source_ref` rebuilds a VSIX from that source. Use that
-path only when the rebuilt source is intentionally the artifact being
+Passing an explicit `source_ref` selects the extension-only patch path above.
+Use it only when the rebuilt source is intentionally the artifact being
 published.
 
 For a new tag, the normal Release workflow publishes the GitHub Release first
