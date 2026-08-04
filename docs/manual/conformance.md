@@ -133,9 +133,9 @@ rather than an unexplained semantic divergence.
 Reference changes are checked by `npm run check:reference`. The gate retains
 the normative-page, navigation, grammar-anchor, execution-order, canonical
 surface, and deleted-evaluator guards. It inventories every fenced
-block in `docs/manual`. Fences labeled `aura` or `python` are Aura source;
-Bash, EBNF, JSON, text, and TOML fences require an explicit contract, as does
-every other fence language.
+block in `docs/manual`. Fences labeled `aura` are Aura source. Bash, EBNF,
+JSON, text, and TOML fences require an explicit contract, as does every other
+fence language. A `python` fence means Python and is never interpreted as Aura.
 
 Every fenced block has a source-hash-pinned contract in
 `scripts/reference-integrity.json`:

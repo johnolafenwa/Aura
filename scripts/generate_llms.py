@@ -67,6 +67,7 @@ def discover_sources(root: Path) -> List[Source]:
         path = root / relative
         if path.is_file():
             candidates.append(path)
+    candidates.extend(_ordered_markdown(root / "docs/install"))
     candidates.extend(_ordered_markdown(root / "docs/manual"))
     candidates.extend(_ordered_markdown(root / "docs/learn"))
     candidates.extend(_ordered_markdown(root / "tutorials"))
@@ -113,6 +114,7 @@ def _public_url(relative: Path) -> str:
 def _summary(sources: List[Source]) -> str:
     groups = [
         ("Project", lambda source: source.relative == Path("README.md") or source.relative.parent == Path("docs")),
+        ("Install Aura", lambda source: source.relative.parts[:2] == ("docs", "install")),
         ("Language Manual", lambda source: source.relative.parts[:2] == ("docs", "manual")),
         ("Learn Aura", lambda source: source.relative.parts[:2] == ("docs", "learn")),
         ("Tutorials", lambda source: source.relative.parts[:1] == ("tutorials",)),

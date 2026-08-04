@@ -6,7 +6,7 @@ The complete syntax is in [Grammar](/manual/grammar#classes). Class names, field
 
 ## Declaration
 
-```python
+```aura
 class Point:
     x: float64
     y: float64
@@ -16,7 +16,7 @@ A class body contains one or more fields, methods, or `pass` entries. Fields and
 
 Every field has an explicit type. A field may have a default expression of exactly that type:
 
-```python
+```aura
 class Server:
     host: str = "127.0.0.1"
     port: int32 = 8080
@@ -26,7 +26,7 @@ Field defaults are evaluated afresh for each construction where the field is omi
 
 Generic classes declare bounded or unbounded type parameters after the name:
 
-```python
+```aura
 class Box[T]:
     value: T
 
@@ -40,7 +40,7 @@ Type parameter names must be unique, all field and method types must be known wi
 
 Calling the class name constructs a value. Arguments may be positional in field declaration order, named by field, or positional followed by named:
 
-```python
+```aura
 point = Point(3.0, 4.0)
 server = Server()
 custom = Server("0.0.0.0", port=9090)
@@ -73,7 +73,7 @@ completely.
 
 Generic arguments may be explicit:
 
-```python
+```aura
 box = Box[int32](value=42)
 ```
 
@@ -83,7 +83,7 @@ Without explicit arguments, the checker infers them from provided fields or an e
 
 Classes, fields, and methods are private to their defining module unless marked `public`:
 
-```python
+```aura
 public class Counter:
     public value: int32 = 0
 
@@ -97,7 +97,7 @@ Imported declarations retain their defining module identity for private-access c
 
 ## Methods And Receivers
 
-```python
+```aura
 class Counter:
     value: int32 = 0
 
@@ -123,7 +123,7 @@ The receiver, when present, is the first method parameter:
 | `mut self` | Exclusive mutable receiver. The call requires a mutable place and may mutate it. |
 | none | Associated method. It is called through the type, not an instance. |
 
-```python
+```aura
 mut counter = Counter.zero()
 counter.increment()
 print(counter.get())
@@ -143,7 +143,7 @@ An associated method has no implicit `self` and is called as `Counter.zero()`. I
 
 A field assignment requires a mutable base place:
 
-```python
+```aura
 mut counter = Counter.zero()
 counter.value = 10
 counter.increment()
@@ -157,7 +157,7 @@ Moving one non-copy field from an owned class partially moves that value. Disjoi
 
 A consuming receiver may return an owned field because it owns the class value:
 
-```python
+```aura
 class User:
     name: str
 
@@ -168,7 +168,7 @@ class User:
 A shared-borrowed receiver cannot move an owned field. When the field type
 supports cloning, clone to produce an owned result:
 
-```python
+```aura
 class User:
     name: str
 
@@ -178,7 +178,7 @@ class User:
 
 Returning a copy-valued field produces an ordinary independent copy:
 
-```python
+```aura
 class Counter:
     value: int32
 
@@ -192,7 +192,7 @@ label or reserve an aliasing contract. See [Functions](/manual/functions#owned-r
 
 ## `copy class`
 
-```python
+```aura
 copy class Pair:
     left: int32
     right: int32
@@ -208,7 +208,7 @@ A field layout cannot contain its class again through an all-direct class-field 
 
 Mark a field `indirect` to break the direct layout cycle:
 
-```python
+```aura
 class Node:
     value: int32
     next: indirect Option[Node] = Option.None
@@ -220,7 +220,7 @@ class Node:
 
 A non-generic user class may be managed by `with` when it declares this exact instance method shape:
 
-```python
+```aura
 class Resource:
     name: str
 
@@ -230,7 +230,7 @@ class Resource:
 
 The method must be named `close`, use `mut self`, take no ordinary parameters, and return `None`. Generic user resource classes are not supported by `with` in Aura 0.3.
 
-```python
+```aura
 with resource = Resource(name="db"):
     print("using resource")
 ```

@@ -2,6 +2,33 @@
 
 Last updated: 2026-08-04
 
+## Platform installation and Aura highlighting (implementation complete)
+
+- Authorized target: publish detailed macOS, Linux, Windows-through-WSL, and
+  VS Code extension installation documentation; replace Python highlighting
+  on Aura examples with a native VitePress Aura grammar; push and merge without
+  user intervention. No language feature or compiler behavior is in scope.
+- Test-first contracts pin all five installation pages, current release
+  commands, platform prerequisites, VS Code registry/CLI/VSIX/WSL paths, the
+  `source.aura` grammar, canonical fence labels, and navigation.
+- VitePress now consumes the VS Code extension's maintained TextMate grammar
+  directly. The documentation site and editor therefore use one syntax source.
+- All 619 maintained `python` fence labels across docs and tutorials are now
+  `aura`; 673 canonical Aura fences remain and the historical proposal is
+  untouched. Reference tooling no longer interprets Python as Aura, and an
+  identity guard prevents reintroduction.
+- The installation hub and platform guides cover architecture checks,
+  prerequisites, checksum-verified installation, PATH persistence, native
+  build toolchains, upgrades, WSL 2 setup, WSL filesystem placement, remote
+  extension installation, and troubleshooting.
+- Focused tests, generated LLM artifacts, the `/Aura/` production docs build,
+  complete reference replay, 22 extension tests, six local HTTP routes,
+  desktop rendering, and 390-pixel WSL rendering are green. Push, hosted
+  checks, and merge remain.
+- Protected user files remain untouched: `personal/file_ops.au` and the
+  untracked ADR-0022 draft.
+- Work note: `work/2026-08-04-installation-and-aura-highlighting.md`.
+
 ## Aura v0.3.0-preview release (complete)
 
 - Authorized target: prepare and publish Aura v0.3.0-preview without adding

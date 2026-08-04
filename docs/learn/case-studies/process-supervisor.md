@@ -16,7 +16,7 @@ When the program needs to reject duplicate names, restart failed children accord
 
 ## Starting A Child
 
-```python
+```aura
 import process
 
 with supervisor = process.supervisor():
@@ -39,7 +39,7 @@ correctness property for every lifecycle operation that follows.
 
 A supervisor produces events while children start, exit, and restart. The `wait` method returns a structured `SupervisorWait` outcome:
 
-```python
+```aura
 match supervisor.wait(timeout=2s):
     case process.SupervisorWait.Event(process.SupervisorEvent.Exited(name, status, restart_count)):
         print(name)
@@ -57,7 +57,7 @@ Each event carries the child's name, its status or error, and how many restarts 
 
 When "timed out or no event" can collapse to the same branch, `wait_or_none` maps a timeout to `Option.None` inside a `Result`:
 
-```python
+```aura
 match supervisor.wait_or_none(timeout=500ms):
     case Result.Ok(Option.Some(event)):
         print(event)
@@ -89,7 +89,7 @@ Restart policy is a question with a real answer. Letting `Always` retry a config
 
 Prefer this shape:
 
-```python
+```aura
 with supervisor = process.supervisor():
     try supervisor.start(name="worker", command=["/bin/sleep", "60"], group=true)
     match supervisor.wait(timeout=1s):
@@ -113,7 +113,7 @@ shutdown. Scope exit handles ordinary cleanup.
 
 This is the smallest template that still has the right shape:
 
-```python
+```aura
 import process
 
 def run() -> Result[None, process.Error]:

@@ -19,7 +19,7 @@ The rest of the chapter fills those decisions in.
 
 Imagine a small job runner. A job has an identifier, a queue name, and an attempt count:
 
-```python
+```aura
 class Job:
     id: int32
     queue: str
@@ -28,7 +28,7 @@ class Job:
 
 Construct an instance with named fields:
 
-```python
+```aura
 job = Job(id=42, queue="image")
 ```
 
@@ -37,7 +37,7 @@ Fields can have defaults. The caller above did not supply `attempts`, so it star
 By default, classes are **move types**. A bare class parameter borrows; write
 `own` to transfer ownership:
 
-```python
+```aura
 def consume(job: own Job):
     print(job.id)
 
@@ -48,7 +48,7 @@ consume(job)
 
 When a helper only needs to look at a job, borrow it:
 
-```python
+```aura
 def describe(job: Job) -> str:
     return job.queue + "#" + job.id.to_string()
 ```
@@ -59,7 +59,7 @@ The caller keeps the value and can use it again. The call site writes `describe(
 
 Methods are functions declared inside a class. The **receiver** — how `self` is named in the signature — says what the method is allowed to do.
 
-```python
+```aura
 class Job:
     id: int32
     queue: str
@@ -74,7 +74,7 @@ class Job:
 
 Use it:
 
-```python
+```aura
 mut job = Job(id=42, queue="image")
 job.bump()
 print(job.label())
@@ -93,7 +93,7 @@ Receiver forms:
 A borrowed method cannot move an owned field out of `self`. When the field type
 supports cloning, clone when you need to return an owned copy:
 
-```python
+```aura
 class User:
     name: str
 
@@ -105,7 +105,7 @@ Returning `self.name` directly would move the `str` through a shared borrow, whi
 
 An associated method is called on the type itself — useful for constructors and factories:
 
-```python
+```aura
 class Counter:
     value: int32 = 0
 
@@ -113,7 +113,7 @@ class Counter:
         return Counter()
 ```
 
-```python
+```aura
 counter = Counter.zero()
 ```
 
@@ -121,7 +121,7 @@ counter = Counter.zero()
 
 Some records are so small that treating them as move values is more ceremony than it is worth. When every field is itself a copy type, declare the class `copy class`:
 
-```python
+```aura
 copy class Offset:
     x: int32
     y: int32
@@ -129,7 +129,7 @@ copy class Offset:
 
 Copy classes duplicate on assignment:
 
-```python
+```aura
 a = Offset(x=1, y=2)
 b = a
 print(a.x)
@@ -142,7 +142,7 @@ This is not a way to opt out of ownership when it feels inconvenient. Reach for 
 
 An enum describes a value that is exactly one of several shapes. A job in flight, for instance, is always in one of four states: queued, running, done, or failed.
 
-```python
+```aura
 enum JobState:
     Queued
     Running(worker: str)
@@ -152,13 +152,13 @@ enum JobState:
 
 Construct a variant by naming it:
 
-```python
+```aura
 state = JobState.Running(worker="worker-a")
 ```
 
 `match` then inspects the variant exhaustively:
 
-```python
+```aura
 def render_state(state: JobState) -> str:
     return match state:
         case JobState.Queued:
@@ -179,7 +179,7 @@ When each state carries different data, an enum almost always reads better than 
 
 A class can own an enum, and often should. This shape — a stable record with a changing state — is one of the cleanest patterns in Aura.
 
-```python
+```aura
 class TrackedJob:
     job: Job
     state: JobState = JobState.Queued
@@ -197,7 +197,7 @@ The fields that never change live on the class. The field that does change is an
 
 Classes and enums can be parameterised by type. `Box[T]` holds some `T`; `Load[T]` represents a value that has either arrived, is still absent, or has failed:
 
-```python
+```aura
 class Box[T]:
     value: T
 

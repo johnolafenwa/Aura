@@ -11,6 +11,13 @@ Install the Aura 0.3 technical preview on Linux x64, macOS x64, or macOS arm64:
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
+Detailed setup is available for
+[macOS](https://johnolafenwa.github.io/Aura/install/macos),
+[Linux](https://johnolafenwa.github.io/Aura/install/linux), and
+[Windows through WSL 2](https://johnolafenwa.github.io/Aura/install/windows-wsl).
+The [VS Code guide](https://johnolafenwa.github.io/Aura/install/vscode) covers
+Marketplace, Open VSX, VSIX, and WSL remote installation.
+
 Aura aims to democratize systems programming for teams building model-serving
 infrastructure, agent runtimes, data and evaluation workers, tool executors,
 and the control planes around them. Shared access, exclusive mutation,

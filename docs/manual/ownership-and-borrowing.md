@@ -21,7 +21,7 @@ Current copy categories are:
 - user enums whose every declared payload type is statically copyable
 - `Option[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` when every payload type is copyable
 
-```python
+```aura
 a = 1
 b = a
 print(a)
@@ -48,7 +48,7 @@ Move values transfer ownership on by-value use. Current move categories include:
 - `TaskGroup`
 - file, process, supervisor, pipe, and network resources
 
-```python
+```aura
 def main():
     name = "aura"
     other = name
@@ -113,7 +113,7 @@ The spelling asymmetry is intentional: parameter ownership occupies the type pos
 Call sites never prefix arguments with a capability. The parameter or receiver
 declaration selects the mode:
 
-```python
+```aura
 def render(name: str) -> str:
     return name.to_upper()
 
@@ -131,7 +131,7 @@ have a default, even for a copy type: its caller-invisible temporary would make
 every mutation a silent lost write. Require the caller to pass a mutable value,
 or take `own T` and return the result.
 
-```python
+```aura
 def add_name(names: mut list[str], name: own str):
     names.append(name)
 
@@ -149,7 +149,7 @@ reassigned.
 
 All receiver and argument accesses for one call are checked together. Shared borrows may overlap other shared borrows. Every mutable borrow and every move must be exclusive with respect to an overlapping place.
 
-```python
+```aura
 class Acc:
     value: int32
 
@@ -169,7 +169,7 @@ The same exclusivity rule applies when one argument consumes a value and another
 
 Moving a non-copy field from an owned class marks that field path moved while preserving disjoint fields:
 
-```python
+```aura
 class User:
     name: str
     id: int32
@@ -187,14 +187,14 @@ The complete class value cannot be used while any field remains moved. Assigning
 
 Moving a non-copy field through a shared or mutable borrow is rejected because the borrower does not own the containing value:
 
-```python
+```aura
 def bad(user: User) -> str:
     return user.name # rejected
 ```
 
 Use `.clone()` for a new owned value when the type supports it, or expose an owner method that performs the read or mutation:
 
-```python
+```aura
 def good(user: User) -> str:
     return user.name.clone()
 ```
@@ -212,7 +212,7 @@ Block-local bindings do not escape their branch, arm, loop, or `with` body. See 
 Every function return transfers an owned value to its caller. Copy values are
 ordinary independent copies. A non-copy return must come from an owned source:
 
-```python
+```aura
 def identity(value: int32) -> int32:
     return value
 
@@ -242,7 +242,7 @@ label or access capability. The detailed rules are in
 `match own` consumes a non-copy enum scrutinee. Bare `match` retains the enum
 and gives non-copy payload bindings shared-borrow provenance:
 
-```python
+```aura
 result: Result[str, str] = Result.Ok("ready")
 
 match result:
@@ -299,7 +299,7 @@ iteration; recursive mutable tuple writeback is not defined.
 
 `.clone()` explicitly creates another owned structural value where the maintained type exposes cloning:
 
-```python
+```aura
 name = "aura"
 copy = name.clone()
 print(name)
@@ -364,7 +364,7 @@ methods with bare shared or `own` parameters. `mut` targets are rejected. The
 two `_with_stack` forms add an `int64` capacity argument before the callable;
 they do not change capture ownership.
 
-```python
+```aura
 def worker(label: str):
     print(label)
 
@@ -413,7 +413,7 @@ capture or result remains an owned
 
 Resource ownership should normally be lexical:
 
-```python
+```aura
 import fs
 import io
 

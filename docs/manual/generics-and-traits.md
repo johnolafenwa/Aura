@@ -8,7 +8,7 @@ Aura does not use structural typing: having methods with matching spellings does
 
 Classes, enums, functions, methods, and implementation blocks may declare type parameters:
 
-```python
+```aura
 class Box[T]:
     value: T
 
@@ -24,7 +24,7 @@ Type parameter names must be unique within their declaration. `Self` is reserved
 
 Bounds follow a type parameter after `:`. `+` means every listed bound is required:
 
-```python
+```aura
 def use_value[T: Display + Score](value: T) -> int32:
     print(value.display())
     return value.score()
@@ -32,7 +32,7 @@ def use_value[T: Display + Score](value: T) -> int32:
 
 Classes and enums may also carry bounds. The checker enforces them when resolving construction and when the specialized value is used through bounded generic operations:
 
-```python
+```aura
 class NamedBox[T: Named]:
     value: T
 
@@ -53,7 +53,7 @@ and remains declaration-stable even when a call later specializes `T` to a
 copy type. Use `value: own T` when the generic body consumes, stores, or returns
 the argument.
 
-```python
+```aura
 boxed = Box(value=7)          # Box[int64]
 value = identity("Aura")   # str
 ```
@@ -62,7 +62,7 @@ Every declared type parameter must resolve. The checker does not invent a type f
 
 Explicit specialization fixes the arguments:
 
-```python
+```aura
 boxed = Box[int64](value=42)
 value = identity[int64](42)
 ok = Result[int32, str].Ok(7)
@@ -99,14 +99,14 @@ not clone-producing and introduces no such obligation.
 
 A trait declares a nominal method contract:
 
-```python
+```aura
 trait Greeter:
     def greet(self) -> str
 ```
 
 Trait methods may be signature-only, ending at the newline, or may provide a default body after `:`:
 
-```python
+```aura
 trait Named:
     def name(self) -> str
 
@@ -116,14 +116,14 @@ trait Named:
 
 A marker trait contains `pass` and no required methods:
 
-```python
+```aura
 trait Marker:
     pass
 ```
 
 Trait names and method names must be unique in their scopes. Trait type parameter lists use the plain parameter form:
 
-```python
+```aura
 trait Mapper[T]:
     def map(self, value: own T) -> T
 ```
@@ -141,7 +141,7 @@ A trait is private to its defining module unless declared `public trait`. Implem
 
 `Self` denotes the implementing or enclosing concrete class specialization in supported class, trait, and implementation method type positions:
 
-```python
+```aura
 trait Combine:
     def combine(self, other: Self) -> Self
 ```
@@ -152,7 +152,7 @@ trait Combine:
 
 An implementation attaches one trait specialization to one target type pattern:
 
-```python
+```aura
 class Person:
     name: str
 
@@ -163,19 +163,19 @@ impl Greeter for Person:
 
 Generic and specialized implementations are supported:
 
-```python
+```aura
 impl Mapper[int32] for Doubler:
     def map(self, value: own int32) -> int32:
         return value * self.factor
 ```
 
-```python
+```aura
 impl[T] Mapper[T] for Box[T]:
     def map(self, value: own T) -> T:
         return value
 ```
 
-```python
+```aura
 impl Displayable for Box[str]:
     def display(self) -> str:
         return self.value.clone()
@@ -229,14 +229,14 @@ For a concrete value, member lookup considers inherent class methods and applica
 
 For a type parameter, only methods justified by declared bounds are available:
 
-```python
+```aura
 def say_hello[T: Greeter](value: T):
     print(value.greet())
 ```
 
 Specialized trait bounds provide their type arguments:
 
-```python
+```aura
 def apply[M: Mapper[int32]](mapper: M, value: int32) -> int32:
     return mapper.map(value)
 ```
@@ -248,7 +248,7 @@ contract. Associated trait methods follow the same rule as receiver methods.
 
 Traits may also declare associated methods without `self`:
 
-```python
+```aura
 trait Factory:
     def make() -> int32
 
@@ -263,7 +263,7 @@ value = Widget.make()
 
 A trait may require one or more supertraits:
 
-```python
+```aura
 trait Labelled: Named:
     def label(self) -> str:
         return "name=" + self.name()
@@ -301,7 +301,7 @@ remainder; `Mod.mod` on a user type has the semantics of that implementation.
 
 The maintained generic shapes are illustrated by:
 
-```python
+```aura
 trait Add[Rhs, Out]:
     def add(self, rhs: Rhs) -> Out
 
@@ -336,7 +336,7 @@ When `try` propagates `Result[T, SourceError]` from a function returning `Result
 
 The conventional contract is:
 
-```python
+```aura
 trait From[Source]:
     def from(value: own Source) -> Self
 ```
@@ -467,7 +467,7 @@ subtyping, and arbitrary blanket implementation targets are unavailable.
 The following blocks pin the observable boundary. A generic clone helper is
 valid for a safe specialization:
 
-```python
+```aura
 def duplicate[T](values: list[T]) -> list[T]:
     return values.copy()
 
@@ -479,7 +479,7 @@ def main() -> int32:
 
 The same callable rejects an unsafe concrete specialization:
 
-```python
+```aura
 import random
 
 def duplicate[T](values: list[T]) -> list[T]:
@@ -491,7 +491,7 @@ def reject(values: list[random.Rng]) -> list[random.Rng]:
 
 The requirement also survives a generic-to-generic call:
 
-```python
+```aura
 import random
 
 def duplicate[T](values: list[T]) -> list[T]:
@@ -507,7 +507,7 @@ def reject(values: list[random.Rng]) -> list[random.Rng]:
 A signature-only trait method does not let an implementation add a hidden
 requirement:
 
-```python
+```aura
 trait Copier[T]:
     def copy_values(self) -> list[T]
 
@@ -521,7 +521,7 @@ impl[T] Copier[T] for Wrapper[T]:
 
 A trait default body can establish the requirement for safe specializations:
 
-```python
+```aura
 trait Duplicator[T]:
     def duplicate(self, values: list[T]) -> list[T]:
         return values.copy()
@@ -541,7 +541,7 @@ def main() -> int32:
 
 Its unsafe specialization is rejected through the same contract:
 
-```python
+```aura
 import random
 
 trait Duplicator[T]:

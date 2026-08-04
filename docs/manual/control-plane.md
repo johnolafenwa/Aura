@@ -77,7 +77,7 @@ For custom certificate authorities and TLS servers, use the lower-level `net.tls
 This self-contained validation example is safe to run without host files,
 network access, or environment assumptions:
 
-```python
+```aura
 import json
 
 def main():

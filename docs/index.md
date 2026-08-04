@@ -86,7 +86,7 @@ connect them.
 
 ## A First Program
 
-```python
+```aura
 class Job:
     id: int32
     label: str

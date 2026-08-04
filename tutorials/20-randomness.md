@@ -9,7 +9,7 @@ functions ask the operating system for unpredictable values.
 
 Import the module and keep the generator in a mutable binding:
 
-```python
+```aura
 import random
 
 mut rng = random.Rng(42)
@@ -33,7 +33,7 @@ never return one.
 
 `shuffle` mutably borrows a list and rearranges its existing elements:
 
-```python
+```aura
 import random
 
 mut rng = random.Rng(42)
@@ -52,7 +52,7 @@ advance the stream.
 An `Rng` contains evolving state. It is deliberately non-copy and has no
 public clone route:
 
-```python
+```aura
 import random
 
 def take_rng(rng: own random.Rng):
@@ -66,7 +66,7 @@ take_rng(rng)
 The three generator methods need a mutable receiver. If a helper should
 advance the caller's stream without taking ownership, give it a mutable borrow:
 
-```python
+```aura
 import random
 
 def roll(rng: mut random.Rng) -> int64:
@@ -96,7 +96,7 @@ traits and `From` conversions enforce the selected method's contract too.
 The deterministic generator is predictable and must not create secrets. Use
 the secure functions for tokens, nonces, salts, keys, and session identifiers:
 
-```python
+```aura
 import random
 
 die_roll = random.secure_int(1, 7)

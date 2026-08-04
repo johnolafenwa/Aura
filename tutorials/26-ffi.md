@@ -14,7 +14,7 @@ edition = "2026"
 allow_ffi = true
 ```
 
-```python
+```aura
 public extern "C" def getpid() -> int32
 
 def main() -> int32:
@@ -46,7 +46,7 @@ is not NUL-terminated. `list[uint8]` is the matching read-only byte view, while
 changing the list length. Empty views pass a null pointer and length zero.
 The native callee must not retain any view pointer after the synchronous call.
 
-```python
+```aura
 public extern "C" def checksum(data: list[uint8]) -> uint64
 public extern "C" def normalize(data: mut list[uint8]) -> None
 ```
@@ -55,7 +55,7 @@ public extern "C" def normalize(data: mut list[uint8]) -> None
 
 Use a declaration-only opaque class for a non-null foreign pointer:
 
-```python
+```aura
 public extern "C" opaque class Handle
 public extern "C" def acquire() -> Handle
 public extern "C" def inspect(handle: Handle) -> int32

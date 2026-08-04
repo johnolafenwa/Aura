@@ -6,7 +6,7 @@ Aura currently runs through the bootstrap CLI, `aura`. You invoke it from the re
 
 Create a file called `hello.au`:
 
-```python
+```aura
 print("hello, aura")
 ```
 
@@ -123,7 +123,7 @@ Aura supports two entry styles.
 
 Write executable statements directly at the top level. This is the simplest way to start:
 
-```python
+```aura
 a = 56
 b = 100
 print(a + b)
@@ -135,7 +135,7 @@ See [examples/basics/top_level_script.au](../examples/basics/top_level_script.au
 
 For programs that return an exit code, declare a `main` function:
 
-```python
+```aura
 def main() -> int32:
     print(5)
     return 0

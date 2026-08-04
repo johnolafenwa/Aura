@@ -120,7 +120,7 @@ allocation availability remain external conditions.
 
 ## Example
 
-```python
+```aura
 import random
 
 def main() -> int32:

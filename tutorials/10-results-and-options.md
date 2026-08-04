@@ -6,7 +6,7 @@ Aura provides three built-in generic enums for representing success/failure and 
 
 Use `Result[T, E]` when an operation can succeed with a value of type `T` or fail with an error of type `E`:
 
-```python
+```aura
 def divide(a: int32, b: int32) -> Result[int32, str]:
     if b == 0:
         return Result.Err("division by zero")
@@ -15,7 +15,7 @@ def divide(a: int32, b: int32) -> Result[int32, str]:
 
 Handle the result with `match`:
 
-```python
+```aura
 match divide(10, 3):
     case Ok(value):
         print(f"result: {value}")
@@ -29,7 +29,7 @@ This is Aura's primary error-handling pattern. Instead of exceptions (like Pytho
 
 Use `Option[T]` when a value may or may not be present:
 
-```python
+```aura
 def find_user(id: int32) -> Option[str]:
     if id == 1:
         return Option.Some("Ada")
@@ -38,7 +38,7 @@ def find_user(id: int32) -> Option[str]:
 
 Handle it with `match`:
 
-```python
+```aura
 match find_user(1):
     case Some(name):
         print(f"found: {name}")
@@ -61,7 +61,7 @@ These look similar but are different:
 - **`None`** is the unit type and value. It means "no meaningful return value." A function with no `-> ...` returns `None`.
 - **`Option.None`** is the empty variant of `Option[T]`. It means "no value present in this optional slot."
 
-```python
+```aura
 done: None = None              # the unit value
 missing: Option[int32] = Option.None   # an empty optional
 ```
@@ -70,13 +70,13 @@ In practice, the distinction is clear from context. When you see `Option.None` i
 
 `Option.Some(...)` can infer `T` from its payload even without an annotation:
 
-```python
+```aura
 count = Option.Some(5)
 ```
 
 `Option.None` still needs an expected `Option[T]` type because there is no payload to infer from:
 
-```python
+```aura
 missing: Option[int32] = Option.None
 ```
 
@@ -84,7 +84,7 @@ missing: Option[int32] = Option.None
 
 `SendError[T]` is the error type returned when a queue send fails because the queue is closed or a waiting send is cancelled. It wraps the value that could not be sent, so you can recover it:
 
-```python
+```aura
 ch = Queue[int32]()
 ch.close()
 
@@ -103,7 +103,7 @@ See [examples/concurrency/send_result.au](../examples/concurrency/send_result.au
 
 A common pattern is chaining operations that each return `Result`. Use `match` to unwrap each step:
 
-```python
+```aura
 def process(input: str) -> Result[int32, str]:
     match parse_int32(input):
         case Ok(value):
@@ -120,7 +120,7 @@ For simpler cases, Aura provides `try expr` to reduce the nesting. See [12-error
 
 `control.retry` handles the common policy where every `Err` is retryable:
 
-```python
+```aura
 import control
 
 def attempt() -> Result[int32, str]:

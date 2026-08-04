@@ -8,7 +8,7 @@ Along the way we will meet bindings, functions, control flow, integer parsing, m
 
 Aura files run top to bottom. A script can mix prints, bindings, and computation:
 
-```python
+```aura
 print('aura')
 print(40 + 2)
 ```
@@ -18,7 +18,7 @@ the same escape rules. F-strings remain double-quoted as `f"..."`.
 
 Save that as `greeting.au` and run `aura run greeting.au`. Scripts are useful for quick tools and examples. When a program benefits from an explicit entry point — especially when it will be built as a native binary that should return an exit code — use `main`:
 
-```python
+```aura
 def main() -> int32:
     print("ready")
     return 0
@@ -30,7 +30,7 @@ def main() -> int32:
 
 Use `name = expression` when the type of the right-hand side is clear:
 
-```python
+```aura
 limit = 10
 label = "jobs"
 enabled = true
@@ -38,7 +38,7 @@ enabled = true
 
 Bindings are immutable by default. When a binding will be reassigned, mark it `mut`:
 
-```python
+```aura
 mut count = 0
 count = count + 1
 count += 1
@@ -46,7 +46,7 @@ count += 1
 
 Aura infers the type of most bindings from their initial value. Add an explicit annotation when the compiler cannot work it out on its own — especially for empty collection literals, which have no elements to guess from:
 
-```python
+```aura
 values: list[int32] = []
 counts: dict[str, int32] = {}
 seen = set[str]()
@@ -59,7 +59,7 @@ where the type forms part of the program's public contract.
 
 A function declares its parameters and its return type:
 
-```python
+```aura
 def classify(value: int32) -> str:
     if value < 0:
         return "negative"
@@ -73,14 +73,14 @@ def classify(value: int32) -> str:
 
 Functions that do not return a meaningful value may omit the return type:
 
-```python
+```aura
 def log_value(value: int32):
     print(value)
 ```
 
 Parameters may have defaults, so callers can omit them:
 
-```python
+```aura
 def classify_with_limit(value: int32, limit: int32 = 10) -> str:
     if value < 0:
         return "negative"
@@ -99,7 +99,7 @@ Named arguments are always available and are worth reaching for whenever a call 
 
 When a callback is one expression, write a contextually typed lambda:
 
-```python
+```aura
 offset: int32 = 40
 add: def(int32) -> int32 = lambda value: value + offset
 
@@ -125,7 +125,7 @@ locals, direct calls, compiler-known callbacks, or one qualifying task start.
 
 `if`, `elif`, and `else` chain as you would expect:
 
-```python
+```aura
 if value < 0:
     print("negative")
 elif value == 0:
@@ -136,7 +136,7 @@ else:
 
 `for value in range(n)` counts from zero up to (but not including) `n`. With two arguments, `range(start, stop)` uses an explicit start:
 
-```python
+```aura
 mut total = 0
 for value in range(5):
     total += value
@@ -148,7 +148,7 @@ for value in range(-2, 3):
 
 Use `while` when the stop condition is not a simple range:
 
-```python
+```aura
 mut current = 1
 while current < 100:
     current = current * 2
@@ -157,7 +157,7 @@ print(current)
 
 `break` exits the nearest loop; `continue` skips to the next iteration:
 
-```python
+```aura
 for value in range(10):
     if value == 2:
         continue
@@ -170,7 +170,7 @@ for value in range(10):
 
 `match` is the tool for decisions with a shape. It can be used as a statement or as an expression that produces a value.
 
-```python
+```aura
 def status_name(code: int32) -> str:
     return match code:
         case 0:
@@ -185,7 +185,7 @@ def status_name(code: int32) -> str:
 
 Integer and `str` matches use `_` as a wildcard because their value spaces are open. Boolean matches are exhaustive when both `true` and `false` are covered:
 
-```python
+```aura
 def enabled_name(enabled: bool) -> str:
     return match enabled:
         case true:
@@ -201,7 +201,7 @@ For enums, `match` becomes even more useful: the compiler will tell you when a v
 Aura expresses parsing with `Result`, so a bad input becomes explicit control
 flow:
 
-```python
+```aura
 def parse_count(text: str) -> int32:
     match parse_int32(text):
         case Result.Ok(value):
@@ -220,7 +220,7 @@ print(parse_count("forty-two"))
 
 This program classifies a list of numbers, counts how often each category appears, and prints the totals.
 
-```python
+```aura
 def classify(value: int32) -> str:
     if value < 0:
         return "negative"

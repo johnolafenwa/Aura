@@ -2,7 +2,7 @@
 
 The `fs` module provides one-shot helpers for common file operations and an owned `fs.File` resource for handle-based workflows.
 
-```python
+```aura
 import fs
 import io
 ```
@@ -35,7 +35,7 @@ The read cap is part of the API contract and also applies to `fs.File.read_all()
 
 `fs.File` is an owned resource. Use `with` for deterministic cleanup:
 
-```python
+```aura
 def show_file() -> Result[None, io.Error]:
     with file = try fs.open("data.txt"):
         text = try file.read_all()
@@ -56,7 +56,7 @@ def show_file() -> Result[None, io.Error]:
 
 Use text helpers when the file is known to be UTF-8:
 
-```python
+```aura
 def read_config() -> Result[str, io.Error]:
     text = try fs.read_to_string("config.txt")
     return Result.Ok(text)
@@ -64,7 +64,7 @@ def read_config() -> Result[str, io.Error]:
 
 Use byte helpers for binary data or unknown encodings:
 
-```python
+```aura
 def read_image_size() -> Result[int64, io.Error]:
     bytes = try fs.read_bytes("image.bin")
     return Result.Ok(bytes.len())
@@ -81,7 +81,7 @@ All text reads decode UTF-8 strictly and return `io.Error.InvalidData` for inval
 
 ## Example: Append A Line
 
-```python
+```aura
 import fs
 import io
 
@@ -97,7 +97,7 @@ def append_line(path: str, line: str) -> Result[None, io.Error]:
 
 Filesystem errors use `io.Error`. Match variants when the program has different policy for different cases:
 
-```python
+```aura
 match fs.read_to_string("config.txt"):
     case Result.Ok(text):
         print(text)

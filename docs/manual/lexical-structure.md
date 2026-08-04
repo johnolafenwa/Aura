@@ -51,7 +51,7 @@ also introduces a mutable local binding.
 
 `from` is contextual. At module level, a complete prefix of the form `from module.path import ...` begins an import. In other identifier positions, `from` can name a parameter, local binding, expression, member, type-path component, or named argument:
 
-```python
+```aura
 def replace(from: str, to: str) -> str:
     return from + to
 
@@ -76,7 +76,7 @@ Several other spellings are lexed as ordinary identifiers and become special onl
 
 `#` begins a comment outside a string and consumes the remainder of the physical line:
 
-```python
+```aura
 # A comment-only line.
 print("ready") # A trailing comment.
 ```
@@ -87,7 +87,7 @@ Aura 0.3 has no block comments.
 
 Blocks are indentation-based:
 
-```python
+```aura
 if ready:
     print("yes")
 else:
@@ -120,7 +120,7 @@ emit `NEWLINE`, `INDENT`, or `DEDENT`. The next nonblank physical line
 continues the same logical token sequence. Delimiters may be nested and mixed,
 but they must close in last-opened, first-closed order with the matching kind.
 
-```python
+```aura
 def combine(
     left: int64,
     right: int64
@@ -266,7 +266,7 @@ computed or negative values.
 Ordinary string literals use matching single or double quote delimiters and are
 single-line:
 
-```python
+```aura
 double = "Aura"
 single = 'Aura'
 apostrophe = 'Aura\'s strings'
@@ -292,7 +292,7 @@ literal such as `'x'` is a `str`, not a distinct character type.
 
 Three matching quotes create an exact multiline string:
 
-```python
+```aura
 prompt = """Classify this request.
 Return one label and one reason.
 """
@@ -305,7 +305,7 @@ Physical tabs inside the delimiters are content.
 
 A lowercase `r` creates a single-line raw string:
 
-```python
+```aura
 path = r"C:\agents\run"
 pattern = r'\d+\.\d+'
 ```
@@ -321,7 +321,7 @@ A string literal has type `str`. See [Types](/manual/types) for ownership and [E
 
 An f-string begins with `f"` and is double-quoted and single-line:
 
-```python
+```aura
 name = "aura"
 print(f"hello {name}")
 ```
@@ -333,7 +333,7 @@ strings. Empty or syntactically invalid interpolations are rejected.
 
 Use two consecutive opening braces for a literal opening brace. Two consecutive closing braces decode to one literal closing brace; Aura 0.3 also treats a lone closing brace outside an interpolation as literal text:
 
-```python
+```aura
 print(f"{{name}} = {name}")
 ```
 
@@ -341,7 +341,7 @@ F-strings support the same escapes as ordinary strings and remain
 double-quoted. An interpolation accepts a static format specification after a
 top-level colon:
 
-```python
+```aura
 def main():
     count: int64 = 1234567
     ratio: float32 = 0.875

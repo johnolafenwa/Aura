@@ -17,6 +17,8 @@ class GenerateLlmsTests(unittest.TestCase):
             (root / "README.md").write_text("# Aura\n\nRoot pitch.\n", encoding="utf-8")
             for relative, body in {
                 "docs/index.md": "---\nlayout: home\n---\n\n# Home\n\nLanding pitch.\n",
+                "docs/install/index.md": "# Install\n\nInstallation entry.\n",
+                "docs/install/linux.md": "# Linux\n\nLinux setup.\n",
                 "docs/manual/index.md": "# Manual\n\nReference entry.\n",
                 "docs/manual/types.md": "# Types\n\nType rules.\n",
                 "docs/learn/index.md": "# Learn\n\nLearning entry.\n",
@@ -37,6 +39,8 @@ class GenerateLlmsTests(unittest.TestCase):
                 [
                     "README.md",
                     "docs/index.md",
+                    "docs/install/index.md",
+                    "docs/install/linux.md",
                     "docs/manual/index.md",
                     "docs/manual/types.md",
                     "docs/learn/index.md",
@@ -50,6 +54,9 @@ class GenerateLlmsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "README.md").write_text("# Aura\n\nRoot pitch.\n", encoding="utf-8")
+            install = root / "docs/install/index.md"
+            install.parent.mkdir(parents=True)
+            install.write_text("# Install\n\nInstallation entry.\n", encoding="utf-8")
             manual = root / "docs/manual/index.md"
             manual.parent.mkdir(parents=True)
             manual.write_text(
@@ -59,6 +66,7 @@ class GenerateLlmsTests(unittest.TestCase):
 
             outputs = generate_llms.render_outputs(root)
             self.assertIn("[Manual]", outputs["llms.txt"])
+            self.assertIn("[Install]", outputs["llms.txt"])
             self.assertIn("## Source: docs/manual/index.md", outputs["llms-full.txt"])
             self.assertNotIn("Hidden metadata", outputs["llms-full.txt"])
 

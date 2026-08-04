@@ -2,7 +2,7 @@
 
 The `process` module runs child processes without a shell by default. Commands are explicit `list[str]` argv values. That means `["/bin/echo", "hello world"]` runs exactly one executable with one argument; Aura does not split strings or expand shell syntax.
 
-```python
+```aura
 import process
 ```
 
@@ -44,7 +44,7 @@ erases those call-site extras and requires every positional argument.
 
 The `env` dictionary augments the inherited host environment and replaces inherited values with matching names. Aura never invokes a shell for `run` or `start`. Capture occurs only for streams configured with `process.pipe()` and each captured stream is capped at 64 MiB.
 
-```python
+```aura
 def run_echo() -> Result[None, process.Error]:
     command = ["/bin/echo", "aura"]
     completed = try process.run(command, stdout=process.pipe(), stderr=process.pipe(), timeout=1s)
@@ -62,7 +62,7 @@ Signature: `process.start(command: list[str], cwd: Option[str] = None, env: dict
 
 `process.start(...)` returns a live `process.Child`. The default is interactive-friendly: stdout and stderr inherit the parent's streams unless you ask for pipes.
 
-```python
+```aura
 def start_cat() -> Result[process.Child, process.Error]:
     command = ["/bin/cat"]
     child = try process.start(command, stdin=process.pipe(), stdout=process.pipe(), stderr=process.pipe(), group=true)
@@ -117,7 +117,7 @@ A pipe deadline expires as `Err(process.Error.TimedOut)`; cancellation becomes `
 
 Close a child's stdin pipe when the child expects EOF:
 
-```python
+```aura
 def close_stdin(child: process.Child) -> Result[None, process.Error]:
     match child.stdin():
         case Option.Some(pipe):
@@ -144,7 +144,7 @@ def close_stdin(child: process.Child) -> Result[None, process.Error]:
 
 Use `check` when a command failure should stop the current `Result`-returning function:
 
-```python
+```aura
 def must_succeed() -> Result[None, process.Error]:
     completed = try process.run(["/bin/false"], timeout=1s)
     try completed.check()
@@ -155,13 +155,13 @@ Use byte methods for tools that may emit binary or non-UTF-8 output.
 
 ## process.supervisor
 
-```python
+```aura
 process.supervisor() -> process.Supervisor
 ```
 
 A supervisor is a resource that owns named child process specs and emits lifecycle events. Bind it with `with` whenever possible:
 
-```python
+```aura
 def wait_for_worker() -> Result[process.SupervisorWait, process.Error]:
     with supervisor = process.supervisor():
         try supervisor.start(name="worker", command=["/bin/sleep", "1"])

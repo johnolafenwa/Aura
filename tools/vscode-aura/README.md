@@ -23,6 +23,10 @@ The matching `.vsix` is also attached to each
 [Aura release](https://github.com/johnolafenwa/Aura/releases) for manual
 installation through **Extensions: Install from VSIX...**.
 
+The [complete installation guide](https://johnolafenwa.github.io/Aura/install/vscode)
+covers command-line installation, WSL remote setup, custom compiler paths, and
+verification.
+
 The extension includes the editor client and JavaScript language-server
 transport. Semantic analysis is performed by the actual Aura compiler server,
 the `aura lsp` subcommand, so the `aura` executable must also be installed and

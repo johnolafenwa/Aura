@@ -4,7 +4,7 @@ The implemented class model currently covers fields, default values, keyword con
 
 ## Declaring A Class
 
-```python
+```aura
 class Point:
     x: float64
     y: float64
@@ -14,14 +14,14 @@ See [examples/classes/point_distance.au](../examples/classes/point_distance.au).
 
 Generic classes are also supported:
 
-```python
+```aura
 class Box[T]:
     value: T
 ```
 
 Aura also supports explicit copy classes when every field is itself copyable:
 
-```python
+```aura
 copy class Point:
     x: int32
     y: int32
@@ -33,13 +33,13 @@ See [examples/classes/copy_class.au](../examples/classes/copy_class.au).
 
 Aura currently uses keyword-style construction:
 
-```python
+```aura
 p1 = Point(x=0.0, y=0.0)
 ```
 
 ## Accessing Fields
 
-```python
+```aura
 dx = a.x - b.x
 ```
 
@@ -52,7 +52,7 @@ explanation of move semantics, copy types, and common patterns for working with 
 
 The implemented subset supports field defaults:
 
-```python
+```aura
 class ServerConfig:
     host: str = "localhost"
     port: int32 = 8080
@@ -60,7 +60,7 @@ class ServerConfig:
 
 You can then omit those fields during construction:
 
-```python
+```aura
 local = ServerConfig()
 named = ServerConfig(host="aura.dev")
 ```
@@ -72,7 +72,7 @@ See [examples/classes/default_fields.au](../examples/classes/default_fields.au).
 Recursive class fields must be marked `indirect`. This gives the child an
 out-of-line representation and keeps the parent size finite:
 
-```python
+```aura
 class Node:
     value: int32
     next: indirect Node?
@@ -86,7 +86,7 @@ See [examples/classes/indirect_recursive.au](../examples/classes/indirect_recurs
 
 Aura enforces class visibility across module boundaries. Fields and methods are private by default and must be marked `public` to be used from another module:
 
-```python
+```aura
 class User:
     public name: str
     age: int32
@@ -107,7 +107,7 @@ See [examples/modules/simple_import.au](../examples/modules/simple_import.au).
 
 Aura supports methods declared directly inside the class body.
 
-```python
+```aura
 class Counter:
     value: int32
 
@@ -137,7 +137,7 @@ ordinary parameter; use `self`, `self`, `own self`, or
 
 Example:
 
-```python
+```aura
 class Counter:
     value: int32
 
@@ -156,14 +156,14 @@ class Counter:
 
 Call them through an instance:
 
-```python
+```aura
 counter = Counter(value=4)
 print(counter.read())
 ```
 
 Method calls follow the same argument rules as ordinary functions, so methods and associated methods can also use named arguments:
 
-```python
+```aura
 class Greeter:
     prefix: str
 
@@ -181,7 +181,7 @@ print(greeter.say(name="aura"))
 
 Methods without a receiver are called through the class name:
 
-```python
+```aura
 class Counter:
     value: int32
 
@@ -189,7 +189,7 @@ class Counter:
         return Counter(value=0)
 ```
 
-```python
+```aura
 print(Counter.zero().read())
 ```
 
@@ -199,7 +199,7 @@ See [examples/classes/methods.au](../examples/classes/methods.au).
 
 Aura supports `mut self` methods and member-target assignment.
 
-```python
+```aura
 class Counter:
     value: int32
 
@@ -210,7 +210,7 @@ class Counter:
         self.value = 0
 ```
 
-```python
+```aura
 mut counter = Counter(value=4)
 counter.bump()
 counter.reset()
@@ -220,7 +220,7 @@ See [examples/classes/mutating_methods.au](../examples/classes/mutating_methods.
 
 Constructors support positional field arguments as long as they come before any named fields:
 
-```python
+```aura
 class Point:
     x: int32
     y: int32 = 9

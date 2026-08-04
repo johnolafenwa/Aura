@@ -13,7 +13,7 @@ This chapter introduces `Option[T]`, `Result[T, E]`, the `try` expression, and t
 - a stream may reach end-of-file
 - a timed wait may finish with no value
 
-```python
+```aura
 names = ["Ada", "Grace"]
 
 match names.get(3):
@@ -29,7 +29,7 @@ The short-form patterns `Some(name)` and `None` also work when the compiler alre
 
 `Result[T, E]` is either `Result.Ok(value)` or `Result.Err(error)`. Use it when an operation may fail and the caller should decide what to do:
 
-```python
+```aura
 def divide(left: int32, right: int32) -> Result[int32, str]:
     if right == 0:
         return Result.Err("division by zero")
@@ -48,7 +48,7 @@ A command-line tool might print the error and stop with a non-zero exit code. A 
 
 The parsing builtins return `Result`:
 
-```python
+```aura
 def read_limit(text: str) -> Result[int32, str]:
     match parse_int32(text):
         case Result.Ok(value):
@@ -67,7 +67,7 @@ That last function has a familiar shape. It calls a sub-operation, checks whethe
 
 `try expr` evaluates `expr`. If the result is `Result.Ok(value)`, the expression produces `value` and execution continues. If the result is `Result.Err(error)`, the current function returns that error immediately.
 
-```python
+```aura
 def parse_pair(left: str, right: str) -> Result[int32, str]:
     a = try parse_int32(left)
     b = try parse_int32(right)
@@ -78,7 +78,7 @@ def parse_pair(left: str, right: str) -> Result[int32, str]:
 
 Use `match` instead when the function has a local recovery strategy:
 
-```python
+```aura
 def parse_or_zero(text: str) -> int32:
     match parse_int32(text):
         case Result.Ok(value):
@@ -113,7 +113,7 @@ receive outcomes transfer one owned item and do not have this restriction.
 
 Using the right enum lets a program handle one case specifically while still handling the others:
 
-```python
+```aura
 import fs
 import io
 
@@ -135,7 +135,7 @@ def read_config(path: str) -> str:
 When every `Err` should be retried under one simple attempt budget, pass a
 capture-free worker to `control.retry`:
 
-```python
+```aura
 import control
 
 def fetch_once() -> Result[str, str]:

@@ -6,7 +6,7 @@ Aura uses enums for user data and for maintained runtime outcomes including `Opt
 
 ## Enum Declarations
 
-```python
+```aura
 enum Status:
     Ready(count: int32)
     Failed(str)
@@ -23,7 +23,7 @@ One variant cannot mix positional and named payload declarations. Empty parenthe
 
 Enums may be generic and bounded:
 
-```python
+```aura
 enum Load[T: Named]:
     Ready(T)
     Failed(message: str)
@@ -40,7 +40,7 @@ The complete declaration and pattern syntax is in [Grammar](/manual/grammar#enum
 
 Use the enum type and variant name:
 
-```python
+```aura
 ready = Status.Ready(count=3)
 failed = Status.Failed("disk full")
 empty = Status.Empty
@@ -72,14 +72,14 @@ payload positions continue to correspond to that declaration order.
 
 Explicit specialization fixes generic arguments:
 
-```python
+```aura
 ok = Result[int32, str].Ok(7)
 missing = Option[str].None
 ```
 
 Generic enum arguments may instead be inferred from payloads or an expected annotation, argument, or return type:
 
-```python
+```aura
 ok: Result[int32, str] = Result.Ok(7)
 missing: Option[str] = Option.None
 ```
@@ -102,7 +102,7 @@ payloads. An unconstrained generic payload is not assumed copyable. See
 
 Statement-form `match` executes a statement suite:
 
-```python
+```aura
 match ready:
     case Status.Ready(count):
         print(count)
@@ -116,7 +116,7 @@ The scrutinee is evaluated exactly once. Arms are considered in source order and
 
 An enum match must cover every variant and all relevant nested payload patterns, or finish with `_`:
 
-```python
+```aura
 match ready:
     case Status.Ready(count):
         print(count)
@@ -132,7 +132,7 @@ can be false. Duplicate and provably unreachable unguarded arms are rejected.
 
 A match expression produces a value:
 
-```python
+```aura
 def status_label(status: own Status) -> str:
     return match status:
         case Status.Ready(count):
@@ -207,7 +207,7 @@ propagation, or trap cleanup, so later arms and cleanup observe the update.
 
 The fully qualified style is always valid:
 
-```python
+```aura
 match result:
     case Result.Ok(value):
         print(value)
@@ -217,7 +217,7 @@ match result:
 
 When the scrutinee type supplies one unambiguous enum identity, the enum prefix may be omitted:
 
-```python
+```aura
 match result:
     case Ok(value):
         print(value)
@@ -232,7 +232,7 @@ Use the qualified form in public examples and reference material when ambiguity 
 `match own` consumes a non-copy scrutinee place and yields owned payload
 bindings:
 
-```python
+```aura
 def main():
     result: Result[str, str] = Result.Ok("hello")
 
@@ -246,7 +246,7 @@ def main():
 Use bare `match` to retain the scrutinee and expose shared non-copy payload
 bindings:
 
-```python
+```aura
 result: Result[str, str] = Result.Ok("hello")
 
 match result:
@@ -276,7 +276,7 @@ Borrowed payloads cannot be moved as owned values. Copy payloads are ordinary co
 
 Literal patterns are supported for `bool`, integer, floating-point, and `str` scrutinees:
 
-```python
+```aura
 match code:
     case 200:
         print("ok")

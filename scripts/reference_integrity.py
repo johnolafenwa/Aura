@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-AURA_FENCE_LANGUAGES = frozenset({"aura", "python"})
+AURA_FENCE_LANGUAGES = frozenset({"aura"})
 VERIFIED_MODES = frozenset(
     {"check", "run", "check-fail", "package-check", "command"}
 )

@@ -36,7 +36,7 @@ The built-in copy types are:
 
 Copy types behave the way Python developers expect:
 
-```python
+```aura
 x: int32 = 10
 y = x          # copies the value
 print(x)       # 10 -- still usable
@@ -66,7 +66,7 @@ Copying an allowed handle never copies a queued value or task result.
 
 Here is where Python intuition breaks down:
 
-```python
+```aura
 name: str = "aura"
 other = name          # ownership moves to `other`
 print(other)          # "aura" -- works fine
@@ -74,7 +74,7 @@ print(other)          # "aura" -- works fine
 
 If you try to use `name` after the move:
 
-```python
+```aura
 name: str = "aura"
 other = name
 print(name)           # COMPILE ERROR
@@ -100,7 +100,7 @@ error: use of moved value `name`
 
 When a move type supports independent duplication, call `.clone()`:
 
-```python
+```aura
 name: str = "aura"
 other = name.clone()   # explicit copy -- name stays valid
 print(name)            # "aura"
@@ -109,7 +109,7 @@ print(other)           # "aura"
 
 Collections expose `copy()`:
 
-```python
+```aura
 mut xs: list[int32] = [1, 2, 3]
 ys = xs.copy()         # independent copy
 xs.append(4)
@@ -127,7 +127,7 @@ requirement and reject an unsafe concrete specialization with `AU3007`.
 
 List and str slices are another explicit owned-copy boundary:
 
-```python
+```aura
 names = ["Ada", "Grace", "Margaret"]
 selected = names[1:]       # fresh owned list[str]
 label = "A🎉Z"[1:2]       # fresh owned str containing 🎉
@@ -144,7 +144,7 @@ List cannot mutate the source, and the slice cannot be an assignment target.
 
 A contextually typed lambda owns every outer local it uses:
 
-```python
+```aura
 label = "compile"
 length: def() -> int64 = lambda: label.len()
 
@@ -160,7 +160,7 @@ report `AU3001`.
 Copy captures are snapshots and leave their sources usable. When outer code
 also needs a non-copy value, clone before creating the closure:
 
-```python
+```aura
 label = "compile"
 captured = label.clone()
 length: def() -> int64 = lambda: captured.len()
@@ -185,7 +185,7 @@ Bare function parameters grant logical shared access for every type. An
 implementation may pass copy bits directly, but that does not change the
 source-level contract. To transfer a move value to a function, write `own`:
 
-```python
+```aura
 class Document:
     title: str
     pages: int32
@@ -202,7 +202,7 @@ The explicit `own` parameter took ownership of `doc`. After the call, `doc` is n
 
 For copy types, shared access can be implemented by passing copied bits:
 
-```python
+```aura
 def double(x: int32) -> int32:
     return x * 2
 
@@ -224,7 +224,7 @@ Aura has two kinds of borrows:
 
 A shared borrow lets a function read a value without consuming it:
 
-```python
+```aura
 class Counter:
     value: int32
 
@@ -242,7 +242,7 @@ still owns the value.
 
 You can have multiple shared borrows active at the same time because none of them can modify the value:
 
-```python
+```aura
 def sum_values(a: Counter, b: Counter) -> int32:
     return a.value + b.value
 
@@ -255,7 +255,7 @@ print(sum_values(c1, c2))   # 30 -- both still valid
 
 A mutable borrow lets a function modify the value in place:
 
-```python
+```aura
 def bump(counter: mut Counter):
     counter.value += 1
 
@@ -266,7 +266,7 @@ print(counter.value)       # 42 -- the change persisted
 
 The caller must declare the binding as `mut` because the function will modify it. If the binding is not mutable, the compiler rejects the call:
 
-```python
+```aura
 counter = Counter(value=41)  # not mutable
 bump(counter)                # COMPILE ERROR
 ```
@@ -280,7 +280,7 @@ error: argument for parameter `counter` in function `bump` must be a mutable pla
 You cannot have mutable access and another overlapping access to the same
 value at the same time. This prevents data races and aliasing bugs:
 
-```python
+```aura
 def bad(a: mut Counter, b: Counter):
     a.value += b.value
 
@@ -298,7 +298,7 @@ Methods on classes use the same borrowing system through **receivers**. The rece
 
 ### `self` -- read the instance
 
-```python
+```aura
 class Account:
     balance: float64
 
@@ -309,7 +309,7 @@ class Account:
 Bare `self` is shared access. The method can read fields but cannot modify
 them, and the caller retains ownership.
 
-```python
+```aura
 account = Account(balance=100.0)
 print(account.display())    # "Balance: 100.0"
 print(account.balance)      # still accessible
@@ -317,7 +317,7 @@ print(account.balance)      # still accessible
 
 ### `mut self` -- modify the instance
 
-```python
+```aura
 class Account:
     balance: float64
 
@@ -330,7 +330,7 @@ class Account:
 
 The method can read and write fields. The instance must be declared `mut`:
 
-```python
+```aura
 mut account = Account(balance=100.0)
 account.deposit(50.0)
 print(account.display())    # "Balance: 150.0"
@@ -338,14 +338,14 @@ print(account.display())    # "Balance: 150.0"
 
 If you forget `mut`:
 
-```python
+```aura
 account = Account(balance=100.0)
 account.deposit(50.0)       # COMPILE ERROR: must be a mutable place
 ```
 
 ### `own self` -- consume the instance
 
-```python
+```aura
 class Connection:
     host: str
 
@@ -355,7 +355,7 @@ class Connection:
 
 An `own self` receiver takes ownership. A non-copy instance is consumed after the call:
 
-```python
+```aura
 conn = Connection(host="example.com")
 host = conn.into_host()
 print(host)               # "example.com"
@@ -368,7 +368,7 @@ Use `own self` when the method needs to disassemble the instance or transfer own
 
 Methods without a receiver are called on the class itself, not on an instance:
 
-```python
+```aura
 class Counter:
     value: int32
 
@@ -376,7 +376,7 @@ class Counter:
         return Counter(value=0)
 ```
 
-```python
+```aura
 c = Counter.zero()
 ```
 
@@ -396,7 +396,7 @@ must consume the instance, or `mut` when it must mutate in place.
 
 When you own a value, reading a non-copy field **moves** that field out of the instance:
 
-```python
+```aura
 class User:
     name: str
     age: int32
@@ -418,7 +418,7 @@ error: use of moved field `name` from `user`
 
 When you borrow a value, you cannot move non-copy fields out of it because you do not own it:
 
-```python
+```aura
 def get_name(user: User) -> str:
     return user.name       # COMPILE ERROR
 ```
@@ -431,21 +431,21 @@ The function only borrowed `user` -- it has no right to take the `name` away. Th
 
 **Option 1: clone the field**
 
-```python
+```aura
 def get_name(user: User) -> str:
     return user.name.clone()   # explicit copy, user keeps its name
 ```
 
 **Option 2: take ownership of the whole value**
 
-```python
+```aura
 def get_name(user: own User) -> str:
     return user.name           # consumes user, moves name out
 ```
 
 **Option 3: return a copy-type field instead**
 
-```python
+```aura
 def get_age(user: User) -> int32:
     return user.age            # int32 is copy, no move needed
 ```
@@ -454,7 +454,7 @@ def get_age(user: User) -> int32:
 
 By default, user-defined classes are move types. You can make a class copyable with `copy class`, but only if every field is itself a copy type:
 
-```python
+```aura
 copy class Point:
     x: int32
     y: int32
@@ -467,7 +467,7 @@ print(p2.x)           # 1
 
 If any field is a move type, the compiler rejects the `copy` annotation:
 
-```python
+```aura
 copy class Bad:
     name: str       # COMPILE ERROR
     value: int32
@@ -484,7 +484,7 @@ error: field `name` on `copy class Bad` must be a copy type, found `str`
 Loops use the same readable default. Bare `list` and `set` iteration borrows the
 collection, so it remains usable:
 
-```python
+```aura
 mut names: list[str] = ["Ada", "Grace", "Margaret"]
 for name in names:
     print(name)
@@ -493,7 +493,7 @@ print(names.len())     # 3 -- still usable
 
 Write `own` when you intend to move each element out and consume the list:
 
-```python
+```aura
 names: list[str] = ["Ada", "Grace", "Margaret"]
 for name in own names:
     print(name)
@@ -503,7 +503,7 @@ for name in own names:
 **Note:** Even `list[int32]` is itself a move type, but its bare loop still
 borrows. Only `own` consumes it:
 
-```python
+```aura
 mut xs: list[int32] = [1, 2, 3]
 for x in xs:
     print(x)
@@ -516,7 +516,7 @@ for x in own xs:
 
 Bare iteration is the shared form:
 
-```python
+```aura
 mut names: list[str] = ["Ada", "Grace", "Margaret"]
 for name in names:
     print(name)
@@ -532,7 +532,7 @@ For copy element types, the loop variable receives a copy of each element. For n
 
 To modify elements during iteration, use `for ... in mut`:
 
-```python
+```aura
 class Score:
     value: int32
 
@@ -565,7 +565,7 @@ consume, and `mut` to update.
 
 A comprehension is the eager expression counterpart of nested bare loops:
 
-```python
+```aura
 names = ["Ada", "Grace"]
 lengths = [name.len() for name in names]
 copies = [name.clone() for name in names]
@@ -586,7 +586,7 @@ eager result. Every target disappears after the closing delimiter.
 Pattern matching follows the same ownership rules. Bare `match` shares the
 value, so the caller keeps ownership:
 
-```python
+```aura
 result: Result[str, str] = Result.Ok("success")
 match result:
     case Ok(msg):
@@ -598,7 +598,7 @@ print(result)          # still valid
 
 To consume the value and receive owned payloads, use `match own`:
 
-```python
+```aura
 result: Result[str, str] = Result.Ok("success")
 match own result:
     case Ok(msg):
@@ -610,7 +610,7 @@ match own result:
 
 To match and mutate the payload, use `match mut`:
 
-```python
+```aura
 mut result: Result[str, str] = Result.Ok("hello")
 match mut result:
     case Ok(msg):
@@ -624,7 +624,7 @@ match mut result:
 
 Queues transfer ownership of sent values. When you put a value into a queue, it moves:
 
-```python
+```aura
 jobs = Queue[str]()
 jobs.put("hello")      # "hello" moves into the queue
 # the sent string is now owned by whichever task receives it
@@ -641,7 +641,7 @@ Queue handles are cheap copy references. Passing a queue to
 `TaskGroup.start(...)` shares the same underlying queue; you do not need
 `.clone()` for the common case:
 
-```python
+```aura
 def send_message(jobs: Queue[str]):
     jobs.put("from task")
     jobs.close()
@@ -680,7 +680,7 @@ rights.
 ### Pattern: "I need to use a value after passing it to a function"
 
 **Problem:**
-```python
+```aura
 def archive(doc: own Document):
     print(doc.title)
 
@@ -690,7 +690,7 @@ print(doc.title)       # COMPILE ERROR: use of moved value
 ```
 
 **Fix 1 -- remove `own` to use the bare shared-borrow default:**
-```python
+```aura
 def archive(doc: Document):
     print(doc.title)
 ```
@@ -698,7 +698,7 @@ def archive(doc: Document):
 The bare `doc: Document` declaration is the shared spelling.
 
 **Fix 2 -- keep the owned parameter and clone before passing:**
-```python
+```aura
 archive(doc.clone())
 print(doc.title)       # doc still valid
 ```
@@ -706,13 +706,13 @@ print(doc.title)       # doc still valid
 ### Pattern: "I need to read a str field without consuming the owner"
 
 **Problem:**
-```python
+```aura
 def get_title(doc: Document) -> str:
     return doc.title   # COMPILE ERROR: cannot move out of shared access
 ```
 
 **Fix -- clone the field:**
-```python
+```aura
 def get_title(doc: Document) -> str:
     return doc.title.clone()
 ```
@@ -720,14 +720,14 @@ def get_title(doc: Document) -> str:
 ### Pattern: "I need to consume collection elements"
 
 **Problem:**
-```python
+```aura
 for item in items:
     inspect(item)
 print(items.len())     # still available
 ```
 
 **Use `own` when the consumer needs owned items:**
-```python
+```aura
 for item in own items:
     process(item)
 # items is now moved
@@ -736,13 +736,13 @@ for item in own items:
 ### Pattern: "I need to modify elements in a collection"
 
 **Problem:**
-```python
+```aura
 for score in scores:
     score.double()     # COMPILE ERROR: not mutable
 ```
 
 **Fix -- mutable borrow iterate:**
-```python
+```aura
 for score in mut scores:
     score.double()
 ```
@@ -750,13 +750,13 @@ for score in mut scores:
 ### Pattern: "The compiler says my binding must be mutable"
 
 **Problem:**
-```python
+```aura
 counter = Counter(value=0)
 counter.bump()         # COMPILE ERROR: must be a mutable place
 ```
 
 **Fix -- declare with `mut`:**
-```python
+```aura
 mut counter = Counter(value=0)
 counter.bump()
 ```

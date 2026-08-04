@@ -16,7 +16,7 @@ allow_ffi = true
 
 Then declare a bodyless C function and call it directly:
 
-```python
+```aura
 public extern "C" def getpid() -> int32
 
 def main() -> int32:
@@ -49,7 +49,7 @@ and the string view is not promised to end in a NUL byte.
 
 Use an opaque handle when C owns an object whose layout Aura should not see:
 
-```python
+```aura
 public extern "C" opaque class Handle
 public extern "C" def acquire() -> Handle
 public extern "C" def inspect(handle: Handle) -> int32

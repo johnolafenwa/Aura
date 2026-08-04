@@ -6,7 +6,7 @@ In Aura, every value has a type known at compile time. Bindings are introduced w
 
 The compiler infers the type from the right-hand side:
 
-```python
+```aura
 a = 56
 b = 100
 total = a + b
@@ -20,7 +20,7 @@ See [examples/basics/top_level_script.au](../examples/basics/top_level_script.au
 
 You can write the type explicitly when you want to be clear or when the compiler needs help:
 
-```python
+```aura
 a: int32 = 6
 b: int32 = 10
 c: int32 = a + b
@@ -28,7 +28,7 @@ c: int32 = a + b
 
 Type annotations are required when the compiler cannot infer the type, for example with empty collections:
 
-```python
+```aura
 mut names: list[str] = []
 mut counts: dict[str, int32] = {}
 ```
@@ -39,7 +39,7 @@ See [examples/basics/main_function.au](../examples/basics/main_function.au).
 
 Bindings are immutable by default. Use `mut` when you need to reassign:
 
-```python
+```aura
 mut counter: int32 = 1
 counter = counter + 1
 counter += 3
@@ -55,7 +55,7 @@ Reusing an existing name updates that binding. The current compiler does not cre
 
 Aura uses `None` as both the unit type and the sole unit value:
 
-```python
+```aura
 status: None = None
 ```
 
@@ -81,7 +81,7 @@ The full set of integer types covers `int8` through `int128`, `uint8` through `u
 
 Integer literals default to `int64`. Floating-point literals default to `float64`, but both kinds of literal adopt a compatible expected numeric type from an annotation, parameter, return type, or field. An integer literal may adopt `float32` or `float64` only when its integer value is exactly representable there:
 
-```python
+```aura
 count: int32 = 12
 ratio: float32 = 3.25
 whole_ratio: float64 = 2
@@ -122,7 +122,7 @@ Aura provides three owned collection types and several runtime types:
 `Array[T]` is an owned non-Copy value with a fixed rank-at-least-one shape.
 Construct it explicitly with an Array constructor:
 
-```python
+```aura
 source: list[float64] = [1.0, 2.0, 3.0, 4.0]
 matrix = Array[float64].from_list(source, [2, 2])
 zeros = Array[int32].zeros([3, 4])
@@ -139,32 +139,32 @@ and the [Numeric Arrays Manual](../docs/manual/numeric-arrays.md).
 
 Create a list with a list literal:
 
-```python
+```aura
 mut numbers = [1, 2, 3]
 ```
 
 Or with the explicit empty constructor:
 
-```python
+```aura
 values = list[int32]()
 ```
 
 The element type must be consistent:
 
-```python
+```aura
 mut ok = [1, 2, 3]
 mut bad = [1, "two"]  # rejected: mixed types
 ```
 
 Empty list literals need a type annotation:
 
-```python
+```aura
 mut names: list[str] = []
 ```
 
 Common list operations:
 
-```python
+```aura
 mut items = [10, 20, 30]
 items.append(40)             # append an element
 print(items.len())         # 4
@@ -176,7 +176,7 @@ popped = items.pop()       # removes and returns the last element
 Negative list indexes count from the end. The same normalization applies to
 direct reads and writes and to `get`, `set`, `pop`, and `swap`:
 
-```python
+```aura
 print(items[-1])                 # final element
 match items.get(-2):
     case Option.Some(value):
@@ -198,7 +198,7 @@ current length.
 List slicing uses the same loud boundary philosophy and returns a fresh owned
 list:
 
-```python
+```aura
 values = [10, 20, 30, 40]
 middle = values[1:3]  # [20, 30]
 prefix = values[:2]   # [10, 20]
@@ -218,7 +218,7 @@ The method surface includes `len`, `is_empty`, `copy`, `append`, `pop`, `get`,
 
 The four callable-powered algorithms use named function values:
 
-```python
+```aura
 def doubled(value: int32) -> int32:
     return value * 2
 
@@ -242,7 +242,7 @@ the exact bare/shared capability shown above, not `mut` or `own`.
 
 `list.len()`, `range(...)`, and list indexes share the `int64` position domain:
 
-```python
+```aura
 for index in range(items.len()):
     print(items[index])
 ```
@@ -250,7 +250,7 @@ for index in range(items.len()):
 The free `len(value)` builtin delegates to the same member and has the same
 `int64` result:
 
-```python
+```aura
 assert len(items) == items.len()
 assert len("A🎉") == "A🎉".len()
 ```
@@ -266,7 +266,7 @@ access is rejected. A value containing `random.Rng` must be transferred with
 `pop(index)` because it cannot be cloned, and the rejection names that
 reason directly:
 
-```python
+```aura
 names = ["Ada", "Grace"]
 match names.get(0):
     case Option.Some(value):
@@ -290,33 +290,33 @@ error and preserves the declared type.
 
 Create a dictionary with a literal:
 
-```python
+```aura
 mut counts = {"aura": 1, "codex": 2}
 ```
 
 Or with the explicit empty constructor:
 
-```python
+```aura
 counts = dict[str, int32]()
 ```
 
 Empty dictionary literals need a type annotation:
 
-```python
+```aura
 mut counts: dict[str, int32] = {}
 ```
 
 Dictionaries support indexed reads when the value type is copy, and indexed writes for
 all value types:
 
-```python
+```aura
 counts["aura"] = 5
 print(counts["aura"])
 ```
 
 Dictionary lookups work inside larger expressions including f-strings:
 
-```python
+```aura
 print(f"value: {counts['aura']}")
 ```
 
@@ -328,7 +328,7 @@ rejection explains that `get(key)` would also be rejected.
 
 `items()` returns `list[(K, V)]` in insertion order:
 
-```python
+```aura
 entries = counts.items()
 match entries.get(0):
     case Option.Some((key, value)):
@@ -349,14 +349,14 @@ See [examples/collections/dict_basics.au](../examples/collections/dict_basics.au
 Create a set with value-only entries inside curly braces. Dictionary literals use
 `key: value` pairs:
 
-```python
+```aura
 mut seen = {1, 2, 2, 3}       # duplicates are removed
 print(seen.len())              # 3
 ```
 
 Or with the explicit empty constructor:
 
-```python
+```aura
 names = set[str]()
 ```
 
@@ -374,7 +374,7 @@ See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
 
 List, set, and dictionary comprehensions build fresh owned collections:
 
-```python
+```aura
 values = [1, 2, 3, 4]
 squares = [value * value for value in values]
 even = {value for value in values if value % 2 == 0}
@@ -385,7 +385,7 @@ Each clause uses the same bare-loop rules as `for value in values:`. A list or
 Set target is shared, so storing a non-copy target in the new collection needs
 an explicit clone:
 
-```python
+```aura
 names = ["Ada", "Grace"]
 names_copy = [name.clone() for name in names]
 ```
@@ -409,7 +409,7 @@ Summary of literal type rules:
   remain non-negative, so use a constructor such as `Duration.ms(-5)` for a
   negative Duration value
 
-```python
+```aura
 offset: int32 = -5
 temperature: float64 = -3.5
 short_wait: Duration = 5ms

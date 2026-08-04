@@ -305,7 +305,7 @@ def scan_public_python_surface(text: str) -> list[tuple[int, str]]:
 
 def _aura_document_fences(text: str) -> list[tuple[int, str]]:
     fences: list[tuple[int, str]] = []
-    pattern = re.compile(r"(?ms)^```(?:aura|au|python)\s*\n(.*?)^```\s*$")
+    pattern = re.compile(r"(?ms)^```aura\s*\n(.*?)^```\s*$")
     for match in pattern.finditer(text):
         fences.append((_line_number(text, match.start(1)), match.group(1)))
     return fences
@@ -693,6 +693,26 @@ def readable_text(path: Path) -> str | None:
 
 
 class AuraIdentityTests(unittest.TestCase):
+    def test_maintained_aura_examples_use_canonical_fence_labels(self) -> None:
+        stale: list[str] = []
+        roots = (ROOT / "docs", ROOT / "tutorials")
+        for root in roots:
+            for path in sorted(root.rglob("*.md")):
+                relative = path.relative_to(ROOT).as_posix()
+                if relative == f"docs/{OLD_LOWER}_language_proposal.md":
+                    continue
+                text = path.read_text(encoding="utf-8")
+                for match in re.finditer(r"(?m)^```(?:python|au)(?:\s|$)", text):
+                    stale.append(
+                        f"{relative}:{_line_number(text, match.start())}: "
+                        f"use ```aura for Aura source"
+                    )
+        self.assertEqual(
+            stale,
+            [],
+            "noncanonical Aura fence labels remain:\n" + "\n".join(stale),
+        )
+
     def test_manual_uses_current_development_version(self) -> None:
         """Every normative Manual page must describe the 0.3 language."""
 
