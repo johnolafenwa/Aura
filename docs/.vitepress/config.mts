@@ -8,7 +8,7 @@ const proposalStem = 'auro' + 'ra_language_proposal.md'
 
 export default defineConfig({
   title: 'Aura',
-  description: 'Aura is a compiled, Python-like systems language for ML infrastructure and reliable agents.',
+  description: 'Aura is a compiled systems language with Python-like syntax, Rust-like ownership, and Go-like tasks for agents and frontier ML systems.',
   lang: 'en-US',
   base,
   vite: {

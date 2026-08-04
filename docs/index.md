@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: Aura
-  text: Python-like code with Rust-style safety.
-  tagline: Aura is a compiled systems language for ML systems and reliable agents. It is statically typed, has no garbage collector, and uses deterministic ownership to make resource safety part of the language.
+  text: Simple, safe systems programming.
+  tagline: A compiled systems language for agents and frontier ML systems, with Python-like syntax, Rust-like ownership, and Go-like task-based concurrency.
   image:
     src: /aura-mark.svg
     alt: Aura language mark
@@ -20,19 +20,25 @@ hero:
       link: /#ai-agents
 
 features:
-  - title: Systems Programming, Made Familiar
-    details: Python-like syntax keeps the code readable. Static types and ownership checks catch mistakes before a program runs. Teams can build dependable native software without giving up an approachable language.
-  - title: Compiled Reliability
-    details: Aura compiles programs into native executables. Deterministic ownership controls value transfer and cleanup, with no garbage collector and no hidden lifetime convention.
-  - title: Built For ML Systems And Agents
-    details: Structured tasks, typed failures, files, subprocesses, networking, timeouts, retries, and supervision form one language surface for model infrastructure and agent runtimes.
+  - title: Familiar Python-Like Syntax
+    details: Readable, indentation-based syntax makes systems code easier to learn and maintain. Static typing still catches mistakes before a program runs.
+  - title: Safe Rust-Like Ownership
+    details: Deterministic ownership controls access, transfer, and cleanup. Aura compiles native executables with no garbage collector.
+  - title: Simple Go-Like Tasks
+    details: Go-like tasks provide a direct surface for structured concurrency. Task groups account for child work, cancellation, and results.
 ---
 
 ## Systems Programming For Everyone
 
 Aura exists to democratize systems programming. It combines the readability of
-Python-like code with Rust-style safety and reliability, then applies that
-combination to the infrastructure behind ML systems and agents.
+Python-like code with ownership-based safety and task-based concurrency. The
+result is **Python-like code with Rust-style safety.** Go-like tasks give the
+same language a direct concurrency model for ML systems and reliable agents.
+
+Aura is designed to be a **simple and safe systems language** for building
+**agents and frontier ML systems**. It combines **Python-like syntax**,
+**Rust-like ownership**, and **Go-like task-based concurrency** in one focused
+language.
 
 <AgentDocs />
 
@@ -52,14 +58,14 @@ familiar to Python developers.
 | Memory management | Reference counting and cyclic garbage collection | Ownership and borrowing, no garbage collector | **Deterministic ownership, no garbage collector** |
 | Failure model | Exceptions | `Result`, `Option`, and panics | **Typed `Result`, `Option`, outcome enums, and source diagnostics** |
 | Concurrency | Threads, processes, and async frameworks | Threads and an async ecosystem | **Scoped `TaskGroup` children and owned value transfer** |
-| Primary strength | Fast development and a vast ecosystem | Maximum control, performance, and mature systems tooling | **Approachable, reliable infrastructure for ML systems and agents** |
+| Primary strength | Fast development and a vast ecosystem | Maximum control, performance, and mature systems tooling | **Safe infrastructure for agents and frontier ML systems** |
 
-Python remains the fastest way for many people to express an idea. Rust sets a
-high standard for memory-safe systems software. Aura brings familiar syntax,
-ownership-based reliability, structured concurrency, and typed operational
-failure into one focused language.
+Python makes programs easy to read and write. Rust sets a high standard for
+ownership-based memory safety. Go makes concurrent service software direct.
+Aura brings those strengths together for safe systems programming with typed
+operational failure.
 
-## A Language For ML Systems And Agents
+## A Language For Agents And Frontier ML Systems
 
 The work around a model is systems work. Inference services manage sockets,
 files, processes, queues, deadlines, and shared compute. Agents call tools,
@@ -82,9 +88,9 @@ Aura makes those responsibilities explicit:
    TCP, HTTP, WebSockets, TLS, queues, retries, and supervisors share the same
    ownership and failure rules.
 
-This foundation is designed for model-serving infrastructure, agent runtimes,
-data and evaluation workers, tool execution, and the control planes that
-connect them.
+This foundation is designed for frontier model-serving infrastructure, agent
+runtimes, data and evaluation workers, tool execution, and the control planes
+that connect them.
 
 ## A First Program
 

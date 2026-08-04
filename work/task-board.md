@@ -2,6 +2,25 @@
 
 Last updated: 2026-08-04
 
+## Landing-page language positioning (complete)
+
+- Authorized target: describe Aura as a simple and safe compiled systems
+  language for agents and frontier ML systems, with syntax similar to Python,
+  ownership similar to Rust, and task-based concurrency similar to Go.
+- The hero now leads with “Simple, safe systems programming.” and states all
+  three language influences directly. Supporting benefits explain familiar
+  syntax, deterministic ownership without garbage collection, and scoped task
+  concurrency.
+- The compact Python/Rust comparison remains in place. Go's influence is now
+  explicit in the hero, the task-concurrency benefit, and the supporting copy,
+  alongside Aura's scoped `TaskGroup` contract.
+- The landing-page regression suite, generated LLM artifacts, production docs
+  build, desktop render, and 390-pixel render are green. No page-level
+  horizontal overflow was introduced.
+- Protected user files remain untouched: `personal/file_ops.au` and the
+  untracked ADR-0022 draft.
+- Work note: `work/2026-08-04-landing-positioning-refinement.md`.
+
 ## Platform installation, Aura highlighting, and agent docs (complete)
 
 - Authorized target: publish detailed macOS, Linux, Windows-through-WSL, and
