@@ -53,20 +53,26 @@ stable release.
 ## A First Program
 
 ```aura
-langs = ["python", "rust", "aura"]
+def scale(values: mut list[int64], factor: int64):
+    for value in mut values:
+        value *= factor
 
-for lang in langs:
-    print(f"hello, {lang}")
+def total(values: list[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
 
-match langs.get(0):
-    case Option.Some(first):
-        print(f"first up: {first}")
-    case Option.None:
-        print("empty list")
+mut scores = [10, 20, 30]
+scale(scores, 3)
+
+print(f"scores: {scores}")
+print(f"total: {total(scores)}")
 ```
 
-Pythonic on the surface, typed underneath. `get` returns an `Option`, so the
-empty case must be handled before the program ever runs.
+Pythonic on the surface, typed underneath. Every signature says what it does
+to its arguments: `scale` asks for `mut` access and changes the list in place,
+`total` only reads it. The compiler holds both to their word.
 
 ## Built For Agent Infrastructure
 
