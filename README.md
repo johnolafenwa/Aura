@@ -18,11 +18,13 @@ Detailed setup is available for
 The [VS Code guide](https://johnolafenwa.github.io/Aura/install/vscode) covers
 Marketplace, Open VSX, VSIX, and WSL remote installation.
 
-Aura aims to democratize systems programming for teams building model-serving
-infrastructure, agent runtimes, data and evaluation workers, tool executors,
-and the control planes around them. Shared access, exclusive mutation,
-ownership transfer, resource cleanup, and child-task lifetime are checked by
-the language.
+Systems programming has been gated behind hard languages, and the work around
+models is systems work: serving infrastructure, agent runtimes, evaluation
+workers, and the control planes that connect them. Aura's goal is to open that
+work up — native performance, deterministic cleanup, and real parallelism
+without leaving Python-shaped code behind. Access, mutation, ownership
+transfer, resource cleanup, and child-task lifetime are all checked by the
+compiler.
 
 Read [Why Aura](docs/positioning.md) for the project direction. The canonical
 implemented contract begins with the normative

@@ -9,15 +9,12 @@ Each chapter introduces one part of the language through a program that would ma
 Programs in Aura tend to be easier to read when three questions are answered near the code.
 
 **Who owns this value?**
-Numbers, booleans, durations, and queue handles are copy values: binding one
-to a new name is cheap and both names remain valid. A task handle is copyable
-only when its result can be observed repeatedly; otherwise it is a move value
-with one result-observation right. Strings, collections, deterministic random
-generators, ordinary class instances, file handles, process resources, task
-groups, and network resources are also move values: assignment transfers
-ownership. At a call boundary, a bare parameter grants logical shared access
-for every type, while an explicit `own` position transfers ownership. This
-rule is visible in the signature.
+Small things copy — numbers, booleans, durations, queue handles. Binding one
+to a new name is cheap and both names keep working. Everything else moves:
+strings, collections, class instances, files, processes, task groups, network
+resources. Assignment hands ownership over. (A task handle sits in between: it
+copies when its result can be read more than once.) At a call boundary the
+signature tells you which it is — a bare parameter shares, `own` transfers.
 
 **Can this call fail?**
 Failure that a caller might sensibly handle lives in the return type.
@@ -44,7 +41,7 @@ point = Point(x=3.0, y=4.0)
 print(distance(point))
 ```
 
-Several ideas are already visible. `Point` is a class with named fields. `distance` takes a borrowed point because it only needs to read one; the call site just passes the value and Aura supplies the borrow. `print` renders a value and adds a newline. The script runs top to bottom; no `main` is required.
+Several ideas are already visible. `Point` is a class with named fields. `distance` only reads its argument, so the bare parameter grants shared access and the caller keeps the point. `print` renders a value and adds a newline. The script runs top to bottom; no `main` is required.
 
 Run it with:
 

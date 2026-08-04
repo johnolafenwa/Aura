@@ -20,7 +20,7 @@ hero:
       link: /#ai-agents
 features:
   - title: Pythonic Syntax
-    details: Indentation, f-strings, comprehensions, keyword arguments — Python-inspired, not Python-identical. Static types catch mistakes before anything runs.
+    details: Indentation, f-strings, comprehensions, keyword arguments. Static types catch mistakes before anything runs.
   - title: Owns Like Rust
     details: Every value has one owner. Access is shared, mut, or own — checked at compile time, cleaned up deterministically, no garbage collector.
   - title: Runs Like Go
@@ -29,9 +29,11 @@ features:
 
 ## Why Aura
 
-Python is easy to write. Rust is safe to run. Aura aims for both: Pythonic
-code — familiar, not identical — checked by a compiler that thinks like Rust,
-on a runtime that schedules like Go.
+Systems programming should not require a systems background. Python is easy to
+write, Rust is safe to run, and Aura aims for both: Pythonic code, checked by a
+compiler that thinks like Rust, on a runtime that schedules like Go. The people
+building on top of models should be able to build the infrastructure under them
+too.
 
 Aura is a technical preview. The language and APIs may still change before a
 stable release.
@@ -63,8 +65,8 @@ match langs.get(0):
         print("empty list")
 ```
 
-Pythonic on the surface — and typed underneath. `get` returns an `Option`,
-so the empty case must be handled before the program ever runs.
+Pythonic on the surface, typed underneath. `get` returns an `Option`, so the
+empty case must be handled before the program ever runs.
 
 ## Built For Agent Infrastructure
 

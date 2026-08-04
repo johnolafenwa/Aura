@@ -1,23 +1,24 @@
 # Why Aura
 
 Aura 0.3.0 is a technical preview of a statically typed, compiled systems
-language for ML infrastructure and reliable agents. Its goal is to make
-systems programming accessible to developers who value Python's readability
-and Rust's safety discipline.
+language for ML infrastructure and reliable agents. The premise is that
+systems programming has been gated behind hard languages, and it does not
+have to be: the safety guarantees do not require the difficulty. Aura is for
+people who want Python's readability without giving up Rust's discipline.
 
-Three language commitments define the current direction:
+Three commitments shape the language:
 
-- **deterministic ownership**: bare access is shared, `mut` is exclusive
-  mutation, `own` transfers a value, and the owning scope defines cleanup;
-- **structured concurrency**: a `TaskGroup` owns every child started within
-  its scope, and scope exit accounts for those children; and
-- **typed failure**: files, subprocesses, sockets, HTTP operations, retries,
-  and supervisors expose recoverable failure through `Result`, `Option`, and
+- **Deterministic ownership.** Bare access is shared, `mut` is exclusive
+  mutation, `own` transfers a value, and the owning scope defines cleanup.
+- **Structured concurrency.** A `TaskGroup` owns every child started in its
+  scope, and scope exit accounts for all of them.
+- **Typed failure.** Files, subprocesses, sockets, HTTP, retries, and
+  supervisors surface recoverable failure through `Result`, `Option`, and
   focused outcome enums.
 
-Ownership defines access, transfer, and cleanup. Task scheduling remains a
-separate runtime concern. Concurrent completion, cross-worker scheduling, and
-output order are unspecified. The [Ownership](/manual/ownership-and-borrowing),
+Ownership governs access, transfer, and cleanup — not scheduling. Concurrent
+completion, cross-worker scheduling, and output order stay unspecified. The
+[Ownership](/manual/ownership-and-borrowing),
 [Concurrency](/manual/concurrency), and
 [Control-Plane Modules](/manual/control-plane) chapters define the exact
 contracts.

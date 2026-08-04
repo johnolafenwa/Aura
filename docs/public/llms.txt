@@ -5,8 +5,8 @@
 ## Project
 
 - [Aura](https://github.com/johnolafenwa/Aura#readme): Aura is a compiled, statically typed systems language for ML infrastructure and reliable agents. It combines Python-like readability with Rust-style safety: deterministic ownership, structured concurrency, typed failure, native executables, and no garbage collector.
-- [Aura](https://johnolafenwa.github.io/Aura): Python is easy to write. Rust is safe to run. Aura aims for both: Pythonic code — familiar, not identical — checked by a compiler that thinks like Rust, on a runtime that schedules like Go.
-- [Why Aura](https://johnolafenwa.github.io/Aura/positioning): Aura 0.3.0 is a technical preview of a statically typed, compiled systems language for ML infrastructure and reliable agents. Its goal is to make systems programming accessible to developers who value Python's readability and Rust's safety discipline.
+- [Aura](https://johnolafenwa.github.io/Aura): Systems programming should not require a systems background. Python is easy to write, Rust is safe to run, and Aura aims for both: Pythonic code, checked by a compiler that thinks like Rust, on a runtime that schedules like Go. The people building on top of models should be able to build the infrastructure under them too.
+- [Why Aura](https://johnolafenwa.github.io/Aura/positioning): Aura 0.3.0 is a technical preview of a statically typed, compiled systems language for ML infrastructure and reliable agents. The premise is that systems programming has been gated behind hard languages, and it does not have to be: the safety guarantees do not require the difficulty. Aura is for people who want Python's readability without giving up Rust's discipline.
 - [Downloads](https://johnolafenwa.github.io/Aura/downloads): Aura 0.3.0 is a technical preview. The compiler, command-line tools, editor extension, reference manual, and source are distributed from the [Aura GitHub repository](https://github.com/johnolafenwa/Aura).
 
 ## Install Aura
