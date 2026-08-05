@@ -9,7 +9,7 @@ Aura has a maintained I/O surface through four builtin modules:
 
 These modules are imported like ordinary namespaces:
 
-```aura
+```aura check-pass
 import io
 import fs
 import net
@@ -27,7 +27,7 @@ lightweight-task scheduler.
 
 Use `io.write(...)`, `io.flush()`, and `io.read_line()` for explicit terminal I/O:
 
-```aura
+```aura check-pass
 import io
 
 def main() -> int32:
@@ -95,7 +95,7 @@ Those constructors return `Result[fs.File, io.Error]`. `fs.File` works with `wit
 
 Text example:
 
-```aura
+```aura check-pass
 import fs
 import io
 
@@ -106,7 +106,7 @@ def load_text(path: str) -> Result[str, io.Error]:
 
 Binary example:
 
-```aura
+```aura check-pass
 import fs
 import io
 
@@ -204,7 +204,7 @@ otherwise ownership must transfer.
 
 One-shot example:
 
-```aura
+```aura check-pass
 import process
 
 def run_echo() -> Result[None, process.Error]:
@@ -217,7 +217,7 @@ def run_echo() -> Result[None, process.Error]:
 
 Interactive pipe example:
 
-```aura
+```aura check-pass
 import process
 
 def roundtrip() -> Result[None, process.Error]:
@@ -251,7 +251,7 @@ See:
 
 Supervisor example:
 
-```aura
+```aura check-pass
 import process
 
 def supervise() -> Result[None, process.Error]:
@@ -302,7 +302,7 @@ Both listener and stream resources work with `with`.
 
 Text example:
 
-```aura
+```aura check-pass
 import io
 import net
 
@@ -385,7 +385,6 @@ The maintained HTTP convenience surface includes:
 - `headers()`
 - `text()`
 - `bytes()`
-- `close()`
 
 See [examples/io/http_roundtrip.au](../examples/io/http_roundtrip.au).
 

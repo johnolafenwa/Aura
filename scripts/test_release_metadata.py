@@ -10,8 +10,8 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-VERSION = "0.3.1"
-EXTENSION_VERSION = "0.3.2"
+VERSION = "0.3.2"
+EXTENSION_VERSION = "0.3.3"
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -79,8 +79,9 @@ class ReleaseMetadataTests(unittest.TestCase):
 
     def test_changelog_opens_the_0_3_preview_release(self) -> None:
         changelog = (ROOT / "CHANGELOG.md").read_text()
+        self.assertIn("## 0.3.2 — 2026-08-04 (technical preview)", changelog)
+        self.assertIn("Aura 0.3.2 is a technical preview", changelog)
         self.assertIn("## 0.3.1 — 2026-08-04 (technical preview)", changelog)
-        self.assertIn("Aura 0.3.1 is a technical preview", changelog)
         self.assertIn("## 0.3.0 — 2026-08-03 (technical preview)", changelog)
         self.assertIn("## 0.2.0 — 2026-07-31 (technical preview)", changelog)
         for heading in (
@@ -108,7 +109,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         component = (ROOT / "docs/.vitepress/theme/ReleaseStamp.vue").read_text()
         theme = (ROOT / "docs/.vitepress/theme/index.ts").read_text()
 
-        self.assertIn("Aura 0.3.1", manual)
+        self.assertIn("Aura 0.3.2", manual)
         self.assertIn("technical preview", manual.lower())
         self.assertIn("implementation baseline commit", manual.lower())
         self.assertIn("AURA_DOCS_COMMIT", metadata)

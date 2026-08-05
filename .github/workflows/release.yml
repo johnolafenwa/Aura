@@ -12,7 +12,7 @@ on:
         default: ''
         type: string
       release_tag:
-        description: 'Release identity used in artifact names, such as v0.3.1-preview'
+        description: 'Release identity used in artifact names, such as v0.3.2-preview'
         required: true
         type: string
       publish:
@@ -39,6 +39,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       implementation_commit: ${{ steps.source.outputs.implementation_commit }}
+      extension_version: ${{ steps.source.outputs.extension_version }}
 
     steps:
       - name: Checkout requested source
@@ -59,7 +60,14 @@ jobs:
       - name: Resolve immutable source commit
         id: source
         shell: bash
-        run: echo "implementation_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "implementation_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          extension_version="$(python3 -c 'import json; print(json.load(open("tools/vscode-aura/package.json"))["version"])')"
+          if [[ ! "$extension_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "invalid extension version: $extension_version" >&2
+            exit 2
+          fi
+          echo "extension_version=$extension_version" >> "$GITHUB_OUTPUT"
 
       - name: Confirm publish tag identifies built source
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
@@ -293,6 +301,7 @@ jobs:
       VSCE_PAT: ${{ secrets.VSCE_PAT }}
       OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
       GH_TOKEN: ${{ github.token }}
+      EXPECTED_EXTENSION_VERSION: ${{ needs.release_identity.outputs.extension_version }}
 
     steps:
       - name: Confirm existing GitHub Release
@@ -328,8 +337,7 @@ jobs:
       - name: Validate VSIX Marketplace identity
         shell: bash
         run: |
-          expected_version="${RELEASE_TAG#v}"
-          expected_version="${expected_version%%-*}"
+          expected_version="$EXPECTED_EXTENSION_VERSION"
           node - "$VSIX_PATH" "$expected_version" <<'NODE'
           const { execFileSync } = require("node:child_process");
           const [vsixPath, expectedVersion] = process.argv.slice(2);

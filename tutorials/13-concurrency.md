@@ -25,13 +25,13 @@ Every task belongs to a `TaskGroup`.
 
 A queue is a typed pipe for sending values between tasks:
 
-```aura
+```aura check-pass
 jobs = Queue[int32]()
 ```
 
 Queues may also be bounded:
 
-```aura
+```aura check-pass
 jobs = Queue[int32](capacity=16)
 ```
 
@@ -42,7 +42,7 @@ never grows beyond its configured bound.
 
 For ordinary code, use the convenience forms:
 
-```aura
+```aura fragment
 print(jobs.get_or_none(timeout=100ms))
 print(jobs.get_or(0, timeout=100ms))
 ```
@@ -51,7 +51,7 @@ Without a timeout, `get_or_none()` and `get_or(default)` are immediate non-block
 
 Use `get(timeout=...)` when you need to distinguish all wait states. It returns `QueueReceive[T]`:
 
-```aura
+```aura fragment
 match jobs.get():
     case QueueReceive.Item(value):
         print(value)
@@ -69,7 +69,7 @@ See [examples/concurrency/queue_timeout.au](../examples/concurrency/queue_timeou
 
 `put(value)` and `put(value, timeout=...)` return `Result[None, SendError[T]]`:
 
-```aura
+```aura fragment
 match jobs.put(4, timeout=5ms):
     case Result.Ok(_):
         print("sent")
@@ -93,7 +93,7 @@ See [examples/concurrency/queue_put_timeout.au](../examples/concurrency/queue_pu
 
 You can iterate over a queue until it is closed and empty:
 
-```aura
+```aura check-pass
 jobs = Queue[int32]()
 jobs.put(1)
 jobs.put(2)
@@ -123,7 +123,7 @@ delivers an owned item and the Queue handle itself is a copy value.
 
 Task groups tie child tasks to a lexical scope:
 
-```aura
+```aura fragment
 with TaskGroup() as group:
     first = group.start(worker, jobs)
     second = group.start(worker, jobs)
@@ -141,14 +141,14 @@ keeping ordinary producer/consumer backpressure scoped to the parent block.
 
 Use `start(...)` when you need a handle:
 
-```aura
+```aura fragment
 with TaskGroup() as group:
     task = group.start(producer, jobs)
 ```
 
 Use `start_soon(...)` when you only need the side effect of starting the task:
 
-```aura
+```aura fragment
 with TaskGroup() as group:
     group.start_soon(producer, jobs)
 ```
@@ -186,7 +186,7 @@ unresolved type parameter at the task boundary.
 default task stack. A child with a measured task-local stack requirement can
 request a custom capacity without changing its target arguments:
 
-```aura
+```aura fragment
 with group = TaskGroup():
     task = group.start_with_stack(1024 * 1024, deep_worker, input)
     group.start_soon_with_stack(2 * 1024 * 1024, deep_sink, jobs)
@@ -209,7 +209,7 @@ the compiled program's MIR/direct execution frames.
 
 Associated methods without `self` work too:
 
-```aura
+```aura check-pass
 class Worker:
     def run(value: int32) -> int32:
         return value + 1
@@ -242,7 +242,7 @@ observation is the ordinary moved-value diagnostic `AU3001`.
 
 For ordinary code, use:
 
-```aura
+```aura fragment
 print(task.result_or_none(timeout=100ms))
 print(task.result_or(-1, timeout=100ms))
 ```
@@ -253,7 +253,7 @@ Without a timeout, `result_or_none()` and `result_or(default)` are immediate non
 
 Use `Task.result(timeout=...)` when you need to distinguish all wait states. It returns `TaskResult[T]`:
 
-```aura
+```aura fragment
 match task.result():
     case TaskResult.Ready(value):
         print(value)
@@ -270,7 +270,7 @@ match task.result():
 Use the builtin `select(...)` when one wait mixes queues, tasks, and a relative
 deadline. It is an ordinary variadic call, not the removed statement form:
 
-```aura
+```aura fragment
 outcome = select(messages, worker_task, 20ms)
 
 match own outcome:
@@ -307,7 +307,7 @@ Use `wait_any(...)` and `wait_all(...)` for an existing homogeneous
 
 `wait_any(tasks, timeout=...)` returns `WaitAny[T]`:
 
-```aura
+```aura fragment
 match wait_any(task_list, timeout=20ms):
     case WaitAny.Ready(index, value):
         print(index)
@@ -325,7 +325,7 @@ match wait_any(task_list, timeout=20ms):
 
 `wait_all(tasks, timeout=...)` returns `WaitAll[T]`:
 
-```aura
+```aura fragment
 match wait_all(task_list, timeout=20ms):
     case WaitAll.Ready(results):
         for result in results:
@@ -352,7 +352,7 @@ See [examples/concurrency/task_group_wait_helpers.au](../examples/concurrency/ta
 
 Call `group.cancel()` to signal all tasks in the group to stop. Inside long-running task code, call `cancelled()` to observe the request:
 
-```aura
+```aura check-pass
 def worker(out: Queue[int32]):
     mut i: int32 = 0
     while i < 100:
@@ -465,7 +465,7 @@ scheduler indefinitely. Calling `yield_now()` between chosen bounded chunks
 provides an explicit scheduling point sooner than the amortized native check
 when the application wants one:
 
-```aura
+```aura check-pass
 def count(label: str):
     mut step: int32 = 1
     while step <= 3:
@@ -485,7 +485,7 @@ See [examples/concurrency/yield_now.au](../examples/concurrency/yield_now.au).
 
 A simple delay:
 
-```aura
+```aura check-pass
 sleep(100ms)
 ```
 
@@ -519,7 +519,7 @@ same seven-request trace through the MIR and forced-direct backends.
 
 ## Full Example
 
-```aura
+```aura check-pass
 def producer(out: Queue[int32]) -> int32:
     out.put(2)
     out.put(4)

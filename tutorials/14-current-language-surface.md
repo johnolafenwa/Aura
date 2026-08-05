@@ -8,6 +8,8 @@ It is intentionally implementation-facing. Use the earlier chapters to learn the
 
 Aura currently supports these top-level declarations:
 
+- `import module`, `import module as alias`, and `from module import name`
+- immutable complete-value module constants such as `limit: int64 = 10`
 - `public class`
 - `public enum`
 - `public def`
@@ -19,6 +21,7 @@ Aura currently supports these top-level declarations:
 - `def`
 - `trait`
 - `impl Trait for Type`
+- authorized `extern "C" def` and `extern "C" opaque class` declarations
 
 It also supports top-level executable statements for script-style files.
 
@@ -86,12 +89,17 @@ Builtin generic or runtime-facing types currently accepted:
 - `Result[T, E]`
 - `SendError[T]`
 - `Queue[T]`
+- `QueueReceive[T]`
 - `list[T]`
 - `dict[K, V]`
 - `set[T]`
 - `Array[T]`, where `T` is exactly `int32`, `int64`, `float32`, or `float64`
 - `Task[T]`
+- `TaskResult[T]`
 - `TaskGroup`
+- `SelectOutcome[Q, T]`
+- `WaitAny[T]`
+- `WaitAll[T]`
 
 Structural tuple types such as `(str, int64)` and singleton `(bool,)` are
 also accepted. A tuple is copyable exactly when every element is copyable.
@@ -213,7 +221,8 @@ that contains one, has no public clone route.
 
 The current compiler supports these statement forms:
 
-- assignment and compound assignment through `+=`, `-=`, `*=`, `/=`, `%=`, and `//=`
+- assignment and compound assignment through `+=`, `-=`, `*=`, `**=`, `/=`,
+  `%=`, `//=`, `&=`, `|=`, `^=`, `<<=`, and `>>=`
 - recursive tuple unpack assignment such as `name, count = record`
 - `return`
 - `if` / `elif` / `else`
@@ -241,7 +250,8 @@ The current compiler supports these expression forms:
 - names
 - parenthesized tuple values such as `(name, count)` and singleton `(value,)`
 - decimal, hexadecimal, binary, and octal integer literals with digit
-  separators; float, string, f-string, boolean, `None`, and duration literals
+  separators; float, ordinary string, triple-quoted string, raw string,
+  f-string, boolean, `None`, and duration literals
   - ordinary strings accept matching single or double quotes with shared escapes
   - f-strings remain double-quoted as `f"..."`, while interpolations may contain either ordinary quote form
 - arithmetic, comparison, and boolean operators
@@ -285,6 +295,8 @@ The current compiler supports these expression forms:
 - explicit type arguments on call targets such as `Box[int32](...)` and `Result[int32, str].Ok(...)`
 - enum and built-in enum variant construction
 - `try expr`
+- contextually typed expression lambdas such as `lambda value: value + 1`
+- expression-form `match` in bindings, returns, and call arguments
 - conditional expressions written `value if condition else alternative`; the
   condition must be exactly `bool`, is evaluated once, and selects exactly one
   lazily evaluated arm. Both arms must have one static result type. This form
@@ -299,9 +311,10 @@ The current compiler supports these expression forms:
   `(int64, element)`, and `zip(first, second)`, which stops at the shorter
   sequence; both take `list[T]` or `set[T]` operands over the bare-loop shared
   default and are legal only as a `for` iterable
-- the builtin functions `len(value)`, which delegates to the value's `len()`
-  member and produces `int64`, and `str(value)`, which produces the same
-  `str` that `print` writes; both names are reserved and cannot be redefined
+- the builtin functions `print`, `range`, `cancelled`, `yield_now`, `sleep`,
+  `select`, `wait_any`, `wait_all`, `abs`, `min`, `max`, `sqrt`, `round`,
+  `divmod`, `parse_int32`, `parse_int64`, `parse_float64`, `len`, and `str`;
+  these names are reserved and cannot be redefined
 - parenthesized expressions and tuple values
 - delimiter-based newline continuation while `(`, `[`, or `{` remains open
   - continuation indentation is visual and does not create a block
@@ -352,13 +365,12 @@ transpose, view, step, slice assignment, or accelerator placement. Empty
 Class methods currently support these receiver forms:
 
 - `self` for shared access
-- `self`
 - `own self`
 - `mut self`
 - no receiver for associated methods
 
-Bare `self` and `self` have the same shared semantics. `self: Type` is
-not a receiver declaration and is rejected with guidance naming these forms.
+Bare `self` has shared semantics. `self: Type` is not a receiver declaration
+and is rejected with guidance naming the valid forms.
 
 Ordinary functions, instance methods, and associated methods support:
 
@@ -842,7 +854,7 @@ compression. The current four-worker workload passes at a `1.039673x` paired
 median wall-time ratio with `396.73%` median four-task process CPU.
 
 The protocol service is lazily initialized and remains alive until process
-exit; it has no 0.2 shutdown or join surface. File reads, resolver work, and
+exit; it has no public shutdown or join surface. File reads, resolver work, and
 listener binding use the generic blocking-I/O pool. Only subsequent PEM
 parsing and rustls construction use protocol workers for TLS assets.
 
@@ -890,7 +902,10 @@ Current collection notes:
 - `insert(-1, value)` inserts before the last element;
   `insert(values.len(), value)` appends,
   and positions outside the range are clamped to the nearest boundary
-- `list[T]` supports equality and inequality when both sides have the same `list[T]` type
+- `list[T]` supports equality and inequality when both sides have the same
+  `list[T]` type and `T` defines equality; `remove`, `index`, `count`,
+  membership, set insertion, and dictionary-key operations enforce the same
+  obligation with `AU2008`
 - `list.set(index, value)`, `list.pop(index)`, and `list.swap(first, second)` trap on out-of-bounds indices; `list.remove(value)` traps with `AU4008` when no equal value exists
 - empty dictionary literals need an expected `dict[K, V]` type, or use `dict[K, V]()` explicitly
 - `dict[K, V]` supports literal construction, indexed writes for every `V`, direct indexed reads under the value ownership rule, and the methods `len`, `is_empty`, `copy`, `get`, `remove`, `keys`, `values`, `items`, `clear`, `update`, `reserve`, and `with_capacity`
@@ -938,6 +953,14 @@ The current CLI commands are:
 - `mir`
 - `analyze`
 - `complete`
+- `lsp`
+- `new`
+- `fmt`
+- `test`
+- `deps update`
+- `upgrade`
+- `help`
+- `version`
 
 Current backend/tooling notes:
 

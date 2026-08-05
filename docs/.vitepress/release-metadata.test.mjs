@@ -6,9 +6,9 @@ import {
   resolveImplementationCommit
 } from './release-metadata.mjs'
 
-test('the maintained documentation source identifies the 0.3.1 technical preview', () => {
+test('the maintained documentation source identifies the 0.3.2 technical preview', () => {
   assert.deepEqual(AURA_RELEASE, {
-    version: '0.3.1',
+    version: '0.3.2',
     channel: 'technical preview'
   })
 })

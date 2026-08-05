@@ -6,7 +6,7 @@ If you are coming from Python, this works like Python's `with` statement and con
 
 ## `with` Binds A Scoped Resource
 
-```aura
+```aura check-pass
 import fs
 import io
 
@@ -30,7 +30,7 @@ In the current compiler, a `with` resource may be:
 
 - a user-defined class with:
 
-```aura
+```aura fragment
 def close(mut self):
 ```
 
@@ -45,7 +45,7 @@ For user-defined classes, `close(...)` must take `mut self`, no extra parameters
 
 `TaskGroup()` is the one non-class value that supports `with`:
 
-```aura
+```aura fragment
 with TaskGroup() as group:
     group.start(worker, out)
     group.start(worker, out)

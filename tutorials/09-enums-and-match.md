@@ -4,7 +4,7 @@ Enums let you define a type that can be one of several variants. Combined with `
 
 ## Declaring An Enum
 
-```aura
+```aura check-pass
 enum TrafficLight:
     Red
     Yellow
@@ -17,7 +17,7 @@ Each variant belongs to the enum's namespace: `TrafficLight.Red`, `TrafficLight.
 
 Variants can carry a single value:
 
-```aura
+```aura check-pass
 enum ParseResult:
     Success(int32)
     Failure(str)
@@ -34,7 +34,7 @@ acts like `Failure(own str)`, and the same is true of builtins such as
 
 Enums can be generic:
 
-```aura
+```aura check-pass
 enum Wrapper[T]:
     Item(T)
     Empty
@@ -42,7 +42,7 @@ enum Wrapper[T]:
 
 You can provide explicit type arguments when the compiler needs help:
 
-```aura
+```aura check-pass
 wrapped = Result[int32, str].Ok(7)
 ```
 
@@ -52,7 +52,7 @@ See [examples/enums/explicit_type_args.au](../examples/enums/explicit_type_args.
 
 Aura's `match` requires you to handle every variant. If you miss one, the compiler reports an error:
 
-```aura
+```aura fragment
 def value_or_zero(result: own ParseResult) -> int32:
     match result:
         case ParseResult.Success(value):
@@ -66,7 +66,7 @@ def value_or_zero(result: own ParseResult) -> int32:
 
 Use `case _:` to match any remaining variants:
 
-```aura
+```aura fragment
 match light:
     case TrafficLight.Red:
         print("stop")
@@ -78,7 +78,7 @@ match light:
 
 When a case matches a payload variant, the payload becomes a local binding:
 
-```aura
+```aura fragment
 case ParseResult.Success(value):
     return value    # value is an int32 here
 ```
@@ -87,7 +87,7 @@ case ParseResult.Success(value):
 
 When the scrutinee type is already known, you can omit the enum name:
 
-```aura
+```aura check-pass
 result: Result[str, str] = Result.Ok("ok")
 
 match result:
@@ -105,7 +105,7 @@ Bare `match` inspects without consuming the value. Write `match own` when an
 arm must receive owned payloads. This distinction matters for non-copy types
 (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
 
-```aura
+```aura check-pass
 result: Result[str, str] = Result.Ok("ok")
 
 match result:
@@ -119,7 +119,7 @@ match result:
 
 Use `match mut` when you need to modify the matched value:
 
-```aura
+```aura check-pass
 mut result: Result[str, str] = Result.Ok("hello")
 match mut result:
     case Ok(msg):
@@ -136,7 +136,7 @@ See [examples/enums/match_borrow.au](../examples/enums/match_borrow.au).
 
 You can also match on literal values of `bool`, integer, and `str`:
 
-```aura
+```aura check-pass
 def describe_number(value: int32) -> str:
     match value:
         case 0:
@@ -149,7 +149,7 @@ def describe_number(value: int32) -> str:
 
 Boolean matches are exhaustive when they cover both `true` and `false`:
 
-```aura
+```aura check-pass
 def describe_flag(flag: bool) -> str:
     match flag:
         case true:
@@ -164,7 +164,7 @@ See [examples/control_flow/match_literals.au](../examples/control_flow/match_lit
 
 Nested patterns, expression-form `match`, floating-point literal patterns, keyword payload arguments, and multi-payload variants are also supported:
 
-```aura
+```aura check-pass
 enum Inner:
     Pair(int32, int32)
 
@@ -187,7 +187,7 @@ See [examples/enums/rich_match.au](../examples/enums/rich_match.au).
 A guard adds an exact Boolean condition after structural matching. An
 or-pattern lets one arm accept several structural alternatives:
 
-```aura
+```aura fragment
 match code:
     case 200 | 201 if code == 201:
         print("created")
@@ -206,7 +206,7 @@ A lowercase name at the top level binds the complete scrutinee. The guarded
 form makes that name available to the condition, and the unguarded form is the
 final catch-all:
 
-```aura
+```aura fragment
 return match value:
     case whole if whole >= 0: whole
     case whole: 0 - whole
@@ -220,7 +220,7 @@ See [examples/enums/match_guards_and_or_patterns.au](../examples/enums/match_gua
 
 Expression-form `match` is not limited to `return`. It also works in binding and argument positions, and an arm value may itself be a nested block-form expression:
 
-```aura
+```aura fragment
 value = match outer:
     case Outer.A: 10
     case Outer.B: 20

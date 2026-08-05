@@ -5,6 +5,34 @@ versioning for release artifacts while it remains a technical preview; a minor
 preview release may still contain source and API incompatibilities called out
 in this file.
 
+## VS Code extension 0.3.3 — 2026-08-04
+
+- Added builtin-function highlighting for calls such as `print(...)`,
+  `range(...)`, and `len(...)`.
+- Preserved member completion inside nested calls and in buffers containing an
+  unrelated compiler diagnostic.
+- Fixed extension shutdown by registering the language client itself as the
+  disposable after asynchronous startup.
+
+## 0.3.2 — 2026-08-04 (technical preview)
+
+Aura 0.3.2 is a technical preview patch release of the compiler, command-line
+tools, language server, VS Code extension, Manual, Learn track, tutorials, and
+installation tooling.
+
+- Fixed MIR and direct execution of module constants that call list
+  algorithms such as `map`, `filter`, and `copy`.
+- Fixed module-constant list, set, and dictionary comprehensions by retaining
+  their checked closure and comprehension metadata through lowering.
+- Added `aura upgrade`, which downloads the maintained installer and upgrades
+  the compiler and bundled native runtime in the active install prefix.
+- Corrected tutorial ownership, equality, error-conversion, queue-send,
+  receiver, networking, numeric-cast, and current-surface guidance.
+- Classified and compiler-checked every Aura tutorial fence through the new
+  tutorial integrity gate.
+- Published VS Code extension 0.3.3 with builtin highlighting, resilient list
+  member completion, and correct language-client disposal.
+
 ## VS Code extension 0.3.2 — 2026-08-04
 
 - Fixed VS Code and documentation highlighting for f-string interpolations.

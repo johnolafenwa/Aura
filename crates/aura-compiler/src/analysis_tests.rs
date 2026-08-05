@@ -5039,6 +5039,29 @@ fn compiler_member_completion_tolerates_multiple_dangling_dot_buffers() {
 }
 
 #[test]
+fn compiler_member_completion_survives_a_closing_delimiter_and_unrelated_diagnostic() {
+    let source = [
+        "def inspect(tags: list[str]):",
+        "    first = tags[0].clone()",
+        "    print(range(tags.))",
+    ]
+    .join("\n");
+    let member_line = source.lines().nth(2).unwrap();
+    let character = member_line.find("tags.").unwrap() + "tags.".len();
+
+    let completions = complete_source(&source, 2, character, Some('.'))
+        .expect("member completion should ignore unrelated diagnostics");
+    let names = completions
+        .into_iter()
+        .map(|item| item.name)
+        .collect::<BTreeSet<_>>();
+
+    assert!(names.contains("append"));
+    assert!(names.contains("get"));
+    assert!(names.contains("len"));
+}
+
+#[test]
 fn machine_readable_analysis_recovers_symbols_for_dangling_dot_buffers() {
     let source = [
         "class Counter:",

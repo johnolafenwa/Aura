@@ -30,13 +30,13 @@ cargo run -p aura -- run my-app/src/main.au
 
 The compiler treats the directory containing `Aura.toml` as the package root and `src/` as the source root. Local imports resolve relative to `src/`:
 
-```aura
+```aura fragment
 import helpers.math    # resolves to src/helpers/math.au
 ```
 
 An alias changes the local spelling without changing that resolution path:
 
-```aura
+```aura fragment
 import helpers.math as integer_math
 from helpers.math import double as twice
 ```
@@ -52,7 +52,7 @@ util = { path = "../util" }
 
 Then import through the package name:
 
-```aura
+```aura fragment
 import util.math
 ```
 
@@ -80,14 +80,14 @@ Git dependencies support three selectors:
 
 Imports work the same way as path dependencies -- use the package name:
 
-```aura
+```aura fragment
 import util.math
 import jsonx.parser
 ```
 
 The complete dependency path may be aliased after it resolves:
 
-```aura
+```aura fragment
 import util.math as util_math
 from jsonx.parser import parse as parse_json
 ```

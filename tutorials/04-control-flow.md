@@ -4,7 +4,7 @@ Aura supports the standard control-flow constructs: conditionals, loops, pattern
 
 ## `if`, `elif`, and `else`
 
-```aura
+```aura check-pass
 score: int32 = 90
 
 if score < 50:
@@ -21,7 +21,7 @@ See [examples/control_flow/if_elif_else.au](../examples/control_flow/if_elif_els
 
 Aura supports boolean operators in conditions:
 
-```aura
+```aura fragment
 if ready and not blocked:
     print("ready")
 
@@ -34,7 +34,7 @@ See [examples/control_flow/boolean_logic.au](../examples/control_flow/boolean_lo
 
 Use `value if condition else alternative` when a branch chooses one value:
 
-```aura
+```aura fragment
 label = "ready" if ready else "waiting"
 ```
 
@@ -46,7 +46,7 @@ arms.
 Conditional expressions bind less tightly than `or` and associate to the
 right. A nested expression therefore reads as an `if`/`elif` choice:
 
-```aura
+```aura fragment
 label = "high" if score >= 80 else "mid" if score >= 50 else "low"
 ```
 
@@ -59,7 +59,7 @@ See [examples/control_flow/conditional_expressions.au](../examples/control_flow/
 
 `in` and `not in` ask whether a container holds a value:
 
-```aura
+```aura check-pass
 ports = [80, 443]
 print(443 in ports)
 print(8080 not in ports)
@@ -75,15 +75,17 @@ The container decides what the test means and what the value must be:
 | `str` | substring containment | `str` |
 
 Membership reads both operands and moves neither, so a non-copy container and
-a non-copy value are both still usable afterwards. A container Aura cannot
-test reports `AU2003`, and a value of the wrong type reports `AU2002`.
+a non-copy value are both still usable afterwards. The element or key type
+must define equality; closures, `random.Rng`, opaque FFI handles, and values
+containing them are rejected with `AU2008`. A container Aura cannot test
+reports `AU2003`, and a value of the wrong type reports `AU2002`.
 
 ## Chained Comparisons
 
 Comparisons chain the way they do in Python, so a range check reads as one
 expression:
 
-```aura
+```aura check-pass
 def in_range(value: int32, low: int32, high: int32) -> bool:
     return low <= value < high
 ```
@@ -101,7 +103,7 @@ See [examples/control_flow/membership_and_chains.au](../examples/control_flow/me
 
 ## `while`
 
-```aura
+```aura check-pass
 mut n: int32 = 0
 while n < 10:
     print(n)
@@ -110,7 +112,7 @@ while n < 10:
 
 Use `while true:` with `break` for loops with complex exit conditions:
 
-```aura
+```aura check-pass
 mut attempts: int32 = 0
 while true:
     attempts += 1
@@ -123,7 +125,7 @@ while true:
 
 Both work inside `while` and `for` loops:
 
-```aura
+```aura check-pass
 mut n: int32 = 0
 while n < 10:
     n += 1
@@ -140,7 +142,7 @@ See [examples/control_flow/while_break_continue.au](../examples/control_flow/whi
 
 Use `pass` when a block must exist but has no statements. This is the same as Python:
 
-```aura
+```aura check-pass
 class Empty:
     pass
 
@@ -152,7 +154,7 @@ See [examples/basics/pass_keyword.au](../examples/basics/pass_keyword.au).
 
 ## `for` Over `range`
 
-```aura
+```aura check-pass
 mut total: int64 = 0
 
 for value in range(6):
@@ -169,11 +171,13 @@ See [examples/control_flow/for_range.au](../examples/control_flow/for_range.au).
 
 ## `for` Over Collections
 
-Vectors and sets can be iterated in three ownership modes. The choice matters because of Aura's ownership model (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
+Lists and sets can be iterated in ownership modes. The choice matters because
+of Aura's ownership model (see
+[06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
 
 **Bare/default** -- reads through a shared borrow. The collection stays valid:
 
-```aura
+```aura check-pass
 names = ["Ada", "Grace"]
 for name in names:
     print(name)
@@ -182,18 +186,19 @@ print(names.len())       # still usable
 
 **Owned** -- consumes the collection. After the loop, it is no longer valid:
 
-```aura
-names = ["Ada", "Grace"]
-for name in own names:
-    print(name)
-# names is consumed -- cannot use it after this loop
+```aura check-pass
+def main():
+    names = ["Ada", "Grace"]
+    for name in own names:
+        print(name)
+    # names is consumed -- cannot use it after this loop
 ```
 
 `for name in names:` is the explicit spelling of shared iteration.
 
 **By mutable borrow** -- modifies elements in place. Requires a `mut` binding:
 
-```aura
+```aura check-pass
 mut scores = [1, 2, 3]
 for item in mut scores:
     item += 1
@@ -208,7 +213,7 @@ See [examples/collections/list_iteration.au](../examples/collections/list_iterat
 
 Sets support bare shared and `own` iteration:
 
-```aura
+```aura check-pass
 seen = {1, 2, 3}
 for value in seen:
     print(value)
@@ -220,7 +225,7 @@ See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
 
 `enumerate(...)` gives you the position alongside each value:
 
-```aura
+```aura check-pass
 hosts = ["alpha", "beta"]
 for index, host in enumerate(hosts):
     print(f"{index}: {host}")
@@ -228,7 +233,7 @@ for index, host in enumerate(hosts):
 
 `zip(...)` walks two sequences together and stops at the shorter one:
 
-```aura
+```aura fragment
 ports = [80, 443, 8080]
 for host, port in zip(hosts, ports):
     print(f"{host}:{port}")
@@ -251,7 +256,7 @@ See [examples/control_flow/enumerate_and_zip.au](../examples/control_flow/enumer
 Comprehensions package nested bare loops and filters into an eager collection
 expression:
 
-```aura
+```aura check-pass
 values = [1, 2, 3, 4]
 even_squares = [value * value for value in values if value % 2 == 0]
 pairs = [
@@ -265,7 +270,7 @@ The output expression is written first, but the first iterable runs first.
 Filters run left to right and nested clauses are outer-major, so `pairs` is
 `[11, 12, 21, 22]`. A dictionary comprehension evaluates its key before its value:
 
-```aura
+```aura fragment
 labels = {value: value * 10 for value in values if value >= 3}
 ```
 

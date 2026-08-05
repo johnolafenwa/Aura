@@ -26,7 +26,7 @@ verified installer:
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
-The script downloads the matching `v0.3.1-preview` archive and checks it
+The script downloads the matching `v0.3.2-preview` archive and checks it
 against the release's `SHA256SUMS` file before copying anything into the
 installation prefix.
 
@@ -55,7 +55,7 @@ The command path should end in `.local/bin/aura`, and the version should begin
 with:
 
 ```text
-aura 0.3.1-preview
+aura 0.3.2-preview
 ```
 
 ## 5. Run A Program
@@ -90,15 +90,17 @@ aura build -o hello hello.au
 ./hello
 ```
 
-## Upgrade Or Reinstall
+## Upgrade Aura
 
-Running the installer again replaces the installed CLI and runtime with the
-current published preview:
+Upgrade the installed CLI and runtime to the current published preview:
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+aura upgrade
 aura --version
 ```
+
+The command preserves the active install prefix and uses the same verified
+installer as a fresh installation.
 
 ## Troubleshooting
 

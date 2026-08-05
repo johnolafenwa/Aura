@@ -6,7 +6,7 @@ needed.
 
 ## Generic Classes
 
-```aura
+```aura check-pass
 class Box[T]:
     value: T
 
@@ -16,7 +16,7 @@ class Box[T]:
 
 Use it with any type:
 
-```aura
+```aura fragment
 int_box: Box[int32] = Box(value=7)
 print(int_box.get())
 
@@ -26,7 +26,7 @@ print(text_box.get())
 
 You can also provide the type argument explicitly at the constructor:
 
-```aura
+```aura fragment
 boxed = Box[int32](value=7)
 ```
 
@@ -36,7 +36,7 @@ The compiler infers type arguments from the surrounding expected type or the pro
 
 Sometimes a generic class should only accept types that implement a specific trait (see [16-traits.md](16-traits.md)):
 
-```aura
+```aura fragment
 class Wrapper[T: Greeter]:
     value: T
 ```
@@ -47,13 +47,13 @@ This restricts `T` to types that implement `Greeter`. Attempting to construct a 
 
 Enums can also be generic. Unit variants and payload variants both work:
 
-```aura
+```aura check-pass
 enum Wrapper[T]:
     Item(T)
     Empty
 ```
 
-```aura
+```aura fragment
 wrapped: Wrapper[str] = Wrapper.Item("ok")
 
 match wrapped:
@@ -67,7 +67,7 @@ Payload matching uses the instantiated payload type, so `value` is a `str` in th
 
 Generic enums may also use bounded type parameters:
 
-```aura
+```aura fragment
 enum MaybeNamed[T: Greeter]:
     Some(T)
     Empty
@@ -75,14 +75,14 @@ enum MaybeNamed[T: Greeter]:
 
 ## Generic Functions
 
-```aura
+```aura check-pass
 def identity[T](value: own T) -> T:
     return value
 ```
 
 The compiler infers type arguments from call arguments and the expected return type:
 
-```aura
+```aura fragment
 print(identity(7))               # infers T = int64
 text: str = identity("aura") # infers T = str
 print(text)
@@ -90,7 +90,7 @@ print(text)
 
 Method calls on generic class instances work inside generic functions:
 
-```aura
+```aura fragment
 def extract[T](box: own Box[T]) -> T:
     return box.get()
 ```
@@ -105,7 +105,7 @@ otherwise consumes the value.
 A generic body may clone values without rejecting the declaration merely
 because `T` is unresolved:
 
-```aura
+```aura check-pass
 def duplicate[T](values: list[T]) -> list[T]:
     return values.copy()
 

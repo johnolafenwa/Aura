@@ -6,7 +6,7 @@ In Aura, every value has a type known at compile time. Bindings are introduced w
 
 The compiler infers the type from the right-hand side:
 
-```aura
+```aura check-pass
 a = 56
 b = 100
 total = a + b
@@ -20,7 +20,7 @@ See [examples/basics/top_level_script.au](../examples/basics/top_level_script.au
 
 You can write the type explicitly when you want to be clear or when the compiler needs help:
 
-```aura
+```aura check-pass
 a: int32 = 6
 b: int32 = 10
 c: int32 = a + b
@@ -28,7 +28,7 @@ c: int32 = a + b
 
 Type annotations are required when the compiler cannot infer the type, for example with empty collections:
 
-```aura
+```aura check-pass
 mut names: list[str] = []
 mut counts: dict[str, int32] = {}
 ```
@@ -39,7 +39,7 @@ See [examples/basics/main_function.au](../examples/basics/main_function.au).
 
 Bindings are immutable by default. Use `mut` when you need to reassign:
 
-```aura
+```aura check-pass
 mut counter: int32 = 1
 counter = counter + 1
 counter += 3
@@ -55,7 +55,7 @@ Reusing an existing name updates that binding. The current compiler does not cre
 
 Aura uses `None` as both the unit type and the sole unit value:
 
-```aura
+```aura check-pass
 status: None = None
 ```
 
@@ -81,7 +81,7 @@ The full set of integer types covers `int8` through `int128`, `uint8` through `u
 
 Integer literals default to `int64`. Floating-point literals default to `float64`, but both kinds of literal adopt a compatible expected numeric type from an annotation, parameter, return type, or field. An integer literal may adopt `float32` or `float64` only when its integer value is exactly representable there:
 
-```aura
+```aura check-pass
 count: int32 = 12
 ratio: float32 = 3.25
 whole_ratio: float64 = 2
@@ -122,7 +122,7 @@ Aura provides three owned collection types and several runtime types:
 `Array[T]` is an owned non-Copy value with a fixed rank-at-least-one shape.
 Construct it explicitly with an Array constructor:
 
-```aura
+```aura check-pass
 source: list[float64] = [1.0, 2.0, 3.0, 4.0]
 matrix = Array[float64].from_list(source, [2, 2])
 zeros = Array[int32].zeros([3, 4])
@@ -139,44 +139,46 @@ and the [Numeric Arrays Manual](../docs/manual/numeric-arrays.md).
 
 Create a list with a list literal:
 
-```aura
+```aura check-pass
 mut numbers = [1, 2, 3]
 ```
 
 Or with the explicit empty constructor:
 
-```aura
+```aura check-pass
 values = list[int32]()
 ```
 
 The element type must be consistent:
 
-```aura
+```aura check-fail:AU2002
 mut ok = [1, 2, 3]
 mut bad = [1, "two"]  # rejected: mixed types
 ```
 
 Empty list literals need a type annotation:
 
-```aura
+```aura check-pass
 mut names: list[str] = []
 ```
 
 Common list operations:
 
-```aura
-mut items = [10, 20, 30]
-items.append(40)             # append an element
-print(items.len())         # 4
-print(items[0])            # 10 -- indexed access
-print(20 in items)         # true
-popped = items.pop()       # removes and returns the last element
+```aura check-pass
+def main():
+    mut items = [10, 20, 30]
+    items.append(40)       # append an element
+    print(items.len())     # 4
+    print(items[0])        # 10 -- indexed access
+    print(20 in items)     # true
+    popped = items.pop()   # removes and returns the last element
+    print(popped)          # 40
 ```
 
 Negative list indexes count from the end. The same normalization applies to
 direct reads and writes and to `get`, `set`, `pop`, and `swap`:
 
-```aura
+```aura fragment
 print(items[-1])                 # final element
 match items.get(-2):
     case Option.Some(value):
@@ -198,7 +200,7 @@ current length.
 List slicing uses the same loud boundary philosophy and returns a fresh owned
 list:
 
-```aura
+```aura check-pass
 values = [10, 20, 30, 40]
 middle = values[1:3]  # [20, 30]
 prefix = values[:2]   # [10, 20]
@@ -216,9 +218,14 @@ The method surface includes `len`, `is_empty`, `copy`, `append`, `pop`, `get`,
 `insert`, `set`, `remove`, `index`, `count`, `swap`, `extend`, `clear`,
 `reverse`, `sort`, `map`, `filter`, `reserve`, and `with_capacity`.
 
+Operations that compare elements require the element type to define equality.
+This includes `remove`, `index`, `count`, `in`, and `not in`. Closures,
+`random.Rng`, opaque FFI handles, and values containing them have no equality
+relation, so these operations are rejected with `AU2008`.
+
 The four callable-powered algorithms use named function values:
 
-```aura
+```aura check-pass
 def doubled(value: int32) -> int32:
     return value * 2
 
@@ -242,7 +249,7 @@ the exact bare/shared capability shown above, not `mut` or `own`.
 
 `list.len()`, `range(...)`, and list indexes share the `int64` position domain:
 
-```aura
+```aura fragment
 for index in range(items.len()):
     print(items[index])
 ```
@@ -250,7 +257,7 @@ for index in range(items.len()):
 The free `len(value)` builtin delegates to the same member and has the same
 `int64` result:
 
-```aura
+```aura fragment
 assert len(items) == items.len()
 assert len("A🎉") == "A🎉".len()
 ```
@@ -259,14 +266,15 @@ For `str`, `len()` counts Unicode scalar values and `byte_len()` counts the
 UTF-8 encoding bytes. Both counts are `int64`, so `"A🎉".len()` is `2` while
 `"A🎉".byte_len()` is `5`.
 
-Indexed reads work as ordinary expressions, so chains like `keys[idx].clone()` are supported.
-For clone-safe non-copy element types like `str` or ordinary user-defined
-classes, use `get(index)` for an explicit cloned read. Direct `items[index]`
-access is rejected. A value containing `random.Rng` must be transferred with
+Indexed reads work directly for copy element types. For clone-safe non-copy
+element types like `str` or ordinary user-defined classes, use `get(index)`
+for an explicit cloned read. Appending `.clone()` after `items[index]` cannot
+repair the read because the illegal move would happen before the method call.
+A value containing `random.Rng` must be transferred with
 `pop(index)` because it cannot be cloned, and the rejection names that
 reason directly:
 
-```aura
+```aura check-pass
 names = ["Ada", "Grace"]
 match names.get(0):
     case Option.Some(value):
@@ -290,33 +298,33 @@ error and preserves the declared type.
 
 Create a dictionary with a literal:
 
-```aura
+```aura check-pass
 mut counts = {"aura": 1, "codex": 2}
 ```
 
 Or with the explicit empty constructor:
 
-```aura
+```aura check-pass
 counts = dict[str, int32]()
 ```
 
 Empty dictionary literals need a type annotation:
 
-```aura
+```aura check-pass
 mut counts: dict[str, int32] = {}
 ```
 
 Dictionaries support indexed reads when the value type is copy, and indexed writes for
 all value types:
 
-```aura
+```aura fragment
 counts["aura"] = 5
 print(counts["aura"])
 ```
 
 Dictionary lookups work inside larger expressions including f-strings:
 
-```aura
+```aura fragment
 print(f"value: {counts['aura']}")
 ```
 
@@ -328,7 +336,7 @@ rejection explains that `get(key)` would also be rejected.
 
 `items()` returns `list[(K, V)]` in insertion order:
 
-```aura
+```aura fragment
 entries = counts.items()
 match entries.get(0):
     case Option.Some((key, value)):
@@ -349,14 +357,14 @@ See [examples/collections/dict_basics.au](../examples/collections/dict_basics.au
 Create a set with value-only entries inside curly braces. Dictionary literals use
 `key: value` pairs:
 
-```aura
+```aura check-pass
 mut seen = {1, 2, 2, 3}       # duplicates are removed
 print(seen.len())              # 3
 ```
 
 Or with the explicit empty constructor:
 
-```aura
+```aura check-pass
 names = set[str]()
 ```
 
@@ -374,7 +382,7 @@ See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
 
 List, set, and dictionary comprehensions build fresh owned collections:
 
-```aura
+```aura check-pass
 values = [1, 2, 3, 4]
 squares = [value * value for value in values]
 even = {value for value in values if value % 2 == 0}
@@ -385,7 +393,7 @@ Each clause uses the same bare-loop rules as `for value in values:`. A list or
 Set target is shared, so storing a non-copy target in the new collection needs
 an explicit clone:
 
-```aura
+```aura check-pass
 names = ["Ada", "Grace"]
 names_copy = [name.clone() for name in names]
 ```
@@ -409,7 +417,7 @@ Summary of literal type rules:
   remain non-negative, so use a constructor such as `Duration.ms(-5)` for a
   negative Duration value
 
-```aura
+```aura check-pass
 offset: int32 = -5
 temperature: float64 = -3.5
 short_wait: Duration = 5ms

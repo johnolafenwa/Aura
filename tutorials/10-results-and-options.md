@@ -1,12 +1,14 @@
 # Results And Options
 
-Aura provides three built-in generic enums for representing success/failure and presence/absence. These are the foundation of error handling in Aura.
+Aura represents typed success, failure, presence, and absence with
+`Result[T, E]`, `Option[T]`, and the queue-specific `SendError[T]`. These enums
+form the foundation of recoverable error handling in Aura.
 
 ## `Result[T, E]`
 
 Use `Result[T, E]` when an operation can succeed with a value of type `T` or fail with an error of type `E`:
 
-```aura
+```aura check-pass
 def divide(a: int32, b: int32) -> Result[int32, str]:
     if b == 0:
         return Result.Err("division by zero")
@@ -15,7 +17,7 @@ def divide(a: int32, b: int32) -> Result[int32, str]:
 
 Handle the result with `match`:
 
-```aura
+```aura fragment
 match divide(10, 3):
     case Ok(value):
         print(f"result: {value}")
@@ -29,7 +31,7 @@ This is Aura's primary error-handling pattern. Instead of exceptions (like Pytho
 
 Use `Option[T]` when a value may or may not be present:
 
-```aura
+```aura check-pass
 def find_user(id: int32) -> Option[str]:
     if id == 1:
         return Option.Some("Ada")
@@ -38,7 +40,7 @@ def find_user(id: int32) -> Option[str]:
 
 Handle it with `match`:
 
-```aura
+```aura fragment
 match find_user(1):
     case Some(name):
         print(f"found: {name}")
@@ -61,7 +63,7 @@ These look similar but are different:
 - **`None`** is the unit type and value. It means "no meaningful return value." A function with no `-> ...` returns `None`.
 - **`Option.None`** is the empty variant of `Option[T]`. It means "no value present in this optional slot."
 
-```aura
+```aura check-pass
 done: None = None              # the unit value
 missing: Option[int32] = Option.None   # an empty optional
 ```
@@ -70,21 +72,24 @@ In practice, the distinction is clear from context. When you see `Option.None` i
 
 `Option.Some(...)` can infer `T` from its payload even without an annotation:
 
-```aura
+```aura check-pass
 count = Option.Some(5)
 ```
 
 `Option.None` still needs an expected `Option[T]` type because there is no payload to infer from:
 
-```aura
+```aura check-pass
 missing: Option[int32] = Option.None
 ```
 
 ## `SendError[T]`
 
-`SendError[T]` is the error type returned when a queue send fails because the queue is closed or a waiting send is cancelled. It wraps the value that could not be sent, so you can recover it:
+`SendError[T]` is the error type returned when a queue send fails. It wraps the
+value that could not be sent, so you can recover it. `put` can report a closed
+queue, cancellation, or timeout; `try_put` reports `Full` when a bounded queue
+has no capacity:
 
-```aura
+```aura check-pass
 ch = Queue[int32]()
 ch.close()
 
@@ -95,6 +100,10 @@ match ch.put(4):
         print(f"queue closed, could not send {value}")
     case Err(SendError.Cancelled(value)):
         print(f"send cancelled, could not send {value}")
+    case Err(SendError.TimedOut(value)):
+        print(f"send timed out, could not send {value}")
+    case Err(SendError.Full(value)):
+        print(f"queue full, could not send {value}")
 ```
 
 See [examples/concurrency/send_result.au](../examples/concurrency/send_result.au) for a full example.
@@ -103,9 +112,9 @@ See [examples/concurrency/send_result.au](../examples/concurrency/send_result.au
 
 A common pattern is chaining operations that each return `Result`. Use `match` to unwrap each step:
 
-```aura
+```aura check-pass
 def process(input: str) -> Result[int32, str]:
-    match parse_int32(input):
+    match own parse_int32(input):
         case Ok(value):
             if value < 0:
                 return Result.Err("negative value")
@@ -120,7 +129,7 @@ For simpler cases, Aura provides `try expr` to reduce the nesting. See [12-error
 
 `control.retry` handles the common policy where every `Err` is retryable:
 
-```aura
+```aura check-pass
 import control
 
 def attempt() -> Result[int32, str]:
@@ -151,12 +160,12 @@ for a status-aware network policy.
 The bootstrap compiler supports:
 
 - `Result[T, E]`, `Option[T]`, and `SendError[T]` in type positions
-- constructing values with `Result.Ok(...)`, `Result.Err(...)`, `Option.Some(...)`, `Option.None`, `SendError.Closed(...)`, and `SendError.Cancelled(...)`
+- constructing values with `Result.Ok(...)`, `Result.Err(...)`,
+  `Option.Some(...)`, `Option.None`, and every `SendError` variant:
+  `Closed(...)`, `Cancelled(...)`, `TimedOut(...)`, and `Full(...)`
 - exhaustive `match` over all of these
 - unqualified variants (`Ok`, `Err`, `Some`, `None`) when the scrutinee type is known
-
-Not yet supported:
-
-- implicit error conversion for `try` (error types must match exactly)
+- `try` propagation with either the exact error type or a visible applicable
+  `impl From[SourceError] for TargetError`
 
 See [examples/enums/result_option.au](../examples/enums/result_option.au).

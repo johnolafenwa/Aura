@@ -7,7 +7,7 @@ const { computeAuraNewlineIndent } = require("./indentation");
 
 let client;
 
-function activate(context) {
+async function activate(context) {
   const serverModule = context.asAbsolutePath(path.join("dist", "server.js"));
   const serverOptions = {
     run: { module: serverModule, transport: TransportKind.ipc },
@@ -86,7 +86,8 @@ function activate(context) {
     })
   );
 
-  context.subscriptions.push(client.start());
+  await client.start();
+  context.subscriptions.push(client);
 }
 
 function getIndentUnit(editor) {

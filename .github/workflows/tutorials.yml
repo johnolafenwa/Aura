@@ -1,0 +1,40 @@
+name: Tutorial Examples
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tutorials/**'
+      - 'scripts/check_tutorials.py'
+      - '.github/workflows/tutorials.yml'
+  pull_request:
+    paths:
+      - 'tutorials/**'
+      - 'scripts/check_tutorials.py'
+      - '.github/workflows/tutorials.yml'
+
+env:
+  CARGO_TERM_COLOR: never
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.95.0
+
+      - name: Build Aura
+        run: cargo build -p aura
+
+      - name: Check tutorial fences
+        run: python3 scripts/check_tutorials.py
