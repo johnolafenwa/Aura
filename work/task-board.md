@@ -2,6 +2,29 @@
 
 Last updated: 2026-08-05
 
+## Compiled-language positioning sweep (complete)
+
+- Authorized target: lead every maintained user-facing surface with Aura's
+  current identity as a compiled, statically typed programming language; place
+  the systems-language ambition exclusively in a clearly labeled long-term
+  direction that names operating systems and device drivers.
+- Updated the root README, VitePress homepage and metadata, Why Aura page,
+  tutorial overview, ML infrastructure roadmap, VS Code listing, extension
+  metadata, and generated AI-agent documentation source.
+- Added positioning regressions for the homepage, site metadata, extension
+  listing, and generated `llms.txt` summary. Focused tests are green.
+- Verification is green: 19 VitePress component/positioning tests, 15 identity
+  tests, LLM generation and freshness checks, all 24 extension tests, the
+  production documentation build, Manual reference integrity, all 336 tutorial
+  fences, and VSIX packaging.
+- The change is documentation and listing metadata only, so the focused gates
+  replace an unrelated full compiler/runtime CI run. The user authorized a
+  direct push to `main`.
+- Historical proposals, ADRs, work notes, and CHANGELOG entries remain
+  unchanged. Protected user files remain untouched: `personal/file_ops.au` and
+  the untracked ADR-0022 draft.
+- Work note: `work/2026-08-05-compiled-language-positioning.md`.
+
 ## Aura v0.3.2 repair and extension 0.3.3 release (complete)
 
 - Authorized target: fix every compiler, tutorial, and editor defect found by

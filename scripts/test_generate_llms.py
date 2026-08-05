@@ -67,6 +67,12 @@ class GenerateLlmsTests(unittest.TestCase):
             outputs = generate_llms.render_outputs(root)
             self.assertIn("[Manual]", outputs["llms.txt"])
             self.assertIn("[Install]", outputs["llms.txt"])
+            self.assertIn(
+                "> Aura is a compiled, statically typed programming language",
+                outputs["llms.txt"],
+            )
+            self.assertIn("long-term goal", outputs["llms.txt"])
+            self.assertNotIn("statically typed systems language", outputs["llms.txt"])
             self.assertIn("## Source: docs/manual/index.md", outputs["llms-full.txt"])
             self.assertNotIn("Hidden metadata", outputs["llms-full.txt"])
 

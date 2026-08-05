@@ -1,12 +1,12 @@
 # Aura
 
-> Aura is a compiled, statically typed systems language with Python-like syntax, deterministic ownership, native execution, and no garbage collector. It is designed for reliable ML systems and agents.
+> Aura is a compiled, statically typed programming language with Python-inspired syntax, deterministic ownership, native execution, and no garbage collector. Its current focus includes reliable applications, agents, and ML infrastructure; its long-term goal is a general-purpose systems language for every type of software, including operating systems and device drivers.
 
 ## Project
 
-- [Aura](https://github.com/johnolafenwa/Aura#readme): Aura is a compiled, statically typed systems language for ML infrastructure and reliable agents. It combines Python-like readability with Rust-style safety: deterministic ownership, structured concurrency, typed failure, native executables, and no garbage collector.
-- [Aura](https://johnolafenwa.github.io/Aura): Systems programming should not require a systems background. Python is easy to write, Rust is safe to run, and Aura aims for both: Pythonic code, checked by a compiler that thinks like Rust, on a runtime that schedules like Go. The people building on top of models should be able to build the infrastructure under them too.
-- [Why Aura](https://johnolafenwa.github.io/Aura/positioning): Aura 0.3.2 is a technical preview of a statically typed, compiled systems language for ML infrastructure and reliable agents. The premise is that systems programming has been gated behind hard languages, and it does not have to be: the safety guarantees do not require the difficulty. Aura is for people who want Python's readability without giving up Rust's discipline.
+- [Aura](https://github.com/johnolafenwa/Aura#readme): Aura is a compiled, statically typed programming language designed for reliable software. It combines Python-inspired readability with deterministic ownership, structured concurrency, typed failure, native executables, and no garbage collector.
+- [Aura](https://johnolafenwa.github.io/Aura): Aura brings familiar source code to a compiled, statically typed language. Its indentation-based syntax is easy to read, while compiler checks cover types, ownership, mutation, exhaustive matching, failure handling, and task boundaries. Programs build as native executables with deterministic cleanup and no garbage collector.
+- [Why Aura](https://johnolafenwa.github.io/Aura/positioning): Aura 0.3.2 is a technical preview of a compiled, statically typed programming language for reliable software. It combines Python-inspired syntax, deterministic ownership, structured concurrency, typed failure, and native executables.
 - [Downloads](https://johnolafenwa.github.io/Aura/downloads): Aura 0.3.2 is a technical preview. The compiler, command-line tools, editor extension, reference manual, and source are distributed from the [Aura GitHub repository](https://github.com/johnolafenwa/Aura).
 
 ## Install Aura
@@ -79,7 +79,7 @@
 
 ## Tutorials
 
-- [Overview](https://github.com/johnolafenwa/Aura/blob/main/tutorials/00-overview.md): Aura is a systems programming language with Python-like readability, explicit static types, and an ownership-based memory model that eliminates the need for a garbage collector.
+- [Overview](https://github.com/johnolafenwa/Aura/blob/main/tutorials/00-overview.md): Aura is a compiled, statically typed programming language with Python-inspired syntax, explicit ownership, native executables, and no garbage collector.
 - [Running Programs](https://github.com/johnolafenwa/Aura/blob/main/tutorials/01-running-programs.md): Aura currently runs through the bootstrap CLI, `aura`. You invoke it from the repository root using `cargo run -p aura --`.
 - [Bindings And Types](https://github.com/johnolafenwa/Aura/blob/main/tutorials/02-bindings-and-types.md): In Aura, every value has a type known at compile time. Bindings are introduced with assignment -- no `let` keyword is needed.
 - [Functions](https://github.com/johnolafenwa/Aura/blob/main/tutorials/03-functions.md): Functions are declared with `def` and require explicit parameter types.

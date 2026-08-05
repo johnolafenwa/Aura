@@ -1,8 +1,14 @@
 # Aura Programming Language
 
-Aura is a Python-familiar systems programming language with explicit ownership,
-native compilation, and structured concurrency. The language, compiler, and
-editor tooling are developed in the [Aura repository](https://github.com/johnolafenwa/Aura).
+Aura is a compiled, statically typed programming language with Python-familiar
+syntax, deterministic ownership, native executables, and structured
+concurrency. Its current focus includes reliable applications, agents, and ML
+infrastructure.
+
+Aura's long-term goal is to become a general-purpose systems language for every
+layer of software, including operating systems and device drivers. The
+language, compiler, and editor tooling are developed in the
+[Aura repository](https://github.com/johnolafenwa/Aura).
 
 This preview extension provides the maintained VS Code experience for `.au`
 source files:

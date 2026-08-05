@@ -1,8 +1,16 @@
 # Overview
 
-Aura is a systems programming language with Python-like readability, explicit static types, and an ownership-based memory model that eliminates the need for a garbage collector.
+Aura is a compiled, statically typed programming language with Python-inspired
+syntax, explicit ownership, native executables, and no garbage collector.
 
-If you know Python, Aura will feel familiar -- same indentation-based syntax, no semicolons, `def` for functions, `class` for types. The key differences are: every variable has a known type at compile time, values have a single owner that controls their lifetime, and the language compiles to native binaries.
+If you know Python, Aura will feel familiar: indentation defines blocks,
+functions use `def`, classes use `class`, and semicolons are unnecessary. The
+compiler assigns every expression a type, checks how values and resources are
+owned, and validates the program before execution.
+
+Aura 0.3 focuses on reliable applications, agents, and ML infrastructure. The
+long-term goal is a general-purpose systems language capable of building the
+full software stack, including operating systems and device drivers.
 
 These tutorials teach the language as it exists in this repository today, not the full proposal surface.
 

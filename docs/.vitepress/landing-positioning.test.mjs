@@ -5,25 +5,42 @@ import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 
-test('the landing page states Aura\'s three familiar foundations and purpose', () => {
+test('the landing page leads with Aura\'s compiled and statically typed identity', () => {
   const landing = fs.readFileSync(`${root}/docs/index.md`, 'utf8')
 
   for (const statement of [
-    'Simple, safe systems programming.',
-    'A compiled systems language for agents and frontier ML systems',
-    'Python-like syntax',
-    'Rust-like ownership',
-    'Go-like task-based concurrency',
-    'simple and safe systems language'
+    'Compiled. Statically typed. Familiar.',
+    'Python-inspired syntax, deterministic ownership, structured concurrency, and native executables for reliable software.',
+    'Native Compilation',
+    'Static Types',
+    'Ownership-Based Reliability',
+    'Aura brings familiar source code to a compiled, statically typed language.'
   ]) {
     assert.match(landing, new RegExp(statement.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
   }
+
+  assert.doesNotMatch(landing, /Simple, safe systems programming\./)
+  assert.doesNotMatch(landing, /Aura is (?:a|the)[^.]*systems(?: programming)? language/i)
 })
 
 test('the site metadata carries the same positioning', () => {
   const config = fs.readFileSync(`${root}/docs/.vitepress/config.mts`, 'utf8')
 
-  assert.match(config, /compiled systems language with Python-like syntax/)
-  assert.match(config, /Rust-like ownership/)
-  assert.match(config, /Go-like tasks for agents and frontier ML systems/)
+  assert.match(config, /compiled, statically typed programming language/)
+  assert.match(config, /Python-inspired syntax/)
+  assert.match(config, /native executables for reliable software/)
+  assert.doesNotMatch(config, /compiled systems language/)
+})
+
+test('the systems-language ambition is explicitly long-term', () => {
+  const landing = fs.readFileSync(`${root}/docs/index.md`, 'utf8')
+  const positioning = fs.readFileSync(`${root}/docs/positioning.md`, 'utf8')
+  const combined = `${landing}\n${positioning}`
+
+  assert.match(
+    combined,
+    /long-term goal[^.]*general-purpose systems language[^.]*every type of software/is
+  )
+  assert.match(combined, /operating systems/i)
+  assert.match(combined, /device drivers/i)
 })

@@ -1,14 +1,19 @@
-# Aura ML Systems Support Plan
+# Aura ML Infrastructure Support Plan
 
 Status: the control-plane baseline and contiguous numeric `Array` subset are
 implemented. Other sections describe design objectives outside the current
 language contract.
 
-This document describes how Aura can become a strong ML systems language without trying to replace Python or PyTorch for model training.
+This document describes the path for making Aura a strong language for ML
+infrastructure, agent runtimes, and the control plane around models. It covers
+numeric processing, Python interoperability, observability, distributed
+execution, device-aware orchestration, and integration with established ML
+runtimes.
 
 The intended split is:
 
-- Aura owns orchestration, serving, supervision, transport, artifact movement, observability, and systems composition.
+- Aura owns orchestration, serving, supervision, transport, artifact movement,
+  observability, and infrastructure composition.
 - Aura should also be able to handle moderate local numeric and data-processing work directly, especially for preprocessing, postprocessing, evaluation glue, and batch shaping.
 - Python and existing accelerator-aware runtimes continue to own most training, large tensor-heavy model execution, and vendor-specific kernel stacks.
 
@@ -34,7 +39,7 @@ See:
 
 ## Goal
 
-Make Aura excellent for ML systems work such as:
+Make Aura excellent for ML infrastructure work such as:
 
 - inference serving and routing
 - embedding pipelines
@@ -46,7 +51,8 @@ Make Aura excellent for ML systems work such as:
 - accelerator-aware service composition
 - distributed job control and failure handling
 
-without turning Aura into a PyTorch clone or requiring Aura-native training APIs first.
+The first milestones concentrate on infrastructure, interoperability, and
+practical local processing. Aura-native training APIs belong to later work.
 
 ## Non-goals
 
@@ -62,7 +68,8 @@ Those may become future integrations, but they are not the first milestone.
 
 ## Problem Statement
 
-Aura has a usable first control-plane boundary, but it is missing the data-plane and exporter depth a production ML systems language needs:
+Aura has a usable first control-plane boundary, but it is missing the data-plane
+and exporter depth a production ML infrastructure language needs:
 
 - no maintained host-side dense-array surface for local numeric work
 - no maintained shared-memory or copy-avoiding borrowed-buffer transport surface
@@ -74,8 +81,9 @@ That means Aura can already act as a control-plane language, but it cannot yet a
 
 ## Design Principles
 
-1. Do not replace Python training.
-   Aura should interoperate with Python workers and model runtimes rather than competing with them immediately.
+1. Interoperate with Python training.
+   Aura should connect directly to Python workers and established model
+   runtimes through clear, typed boundaries.
 
 2. Make system boundaries first-class.
    Process supervision, transport, observability, deadlines, and structured failure handling are the first priorities.
@@ -564,13 +572,12 @@ If Aura can only fund a small number of milestones first, the recommended order 
 5. tensor/device handle interop
 6. full tensor, placement-aware execution, and distributed runtime work
 
-That order intentionally makes Aura strong at ML systems operations and practical local data processing before Aura becomes ambitious about full accelerator-native tensor execution.
+That order makes Aura strong at ML infrastructure operations and practical
+local data processing, then expands into accelerator-native tensor execution.
 
 ## Summary
 
-Aura does not need to replace Python training to become a strong ML systems language.
-
-It does need to become excellent at:
+Aura can become a strong language for ML infrastructure by excelling at:
 
 - supervising Python and native worker processes
 - handling ordinary local numeric data work directly
@@ -578,4 +585,6 @@ It does need to become excellent at:
 - exposing logs, metrics, and traces as first-class runtime concepts
 - understanding tensor, device, and accelerator handles as real language-level resources later on
 
-If Aura gets those boundaries right, it can become a serious ML systems language while still using Python and existing runtimes for the tensor-heavy parts that already work well today.
+These boundaries can make Aura a serious language for ML infrastructure while
+Python and established runtimes continue to provide mature tensor-heavy
+execution.

@@ -1,9 +1,9 @@
 # Aura
 
-Aura is a compiled, statically typed systems language for ML infrastructure and
-reliable agents. It combines Python-like readability with Rust-style safety:
-deterministic ownership, structured concurrency, typed failure, native
-executables, and no garbage collector.
+Aura is a compiled, statically typed programming language designed for reliable
+software. It combines Python-inspired readability with deterministic ownership,
+structured concurrency, typed failure, native executables, and no garbage
+collector.
 
 Install the Aura 0.3 technical preview on Linux x64, macOS x64, or macOS arm64:
 
@@ -24,13 +24,16 @@ Detailed setup is available for
 The [VS Code guide](https://johnolafenwa.github.io/Aura/install/vscode) covers
 Marketplace, Open VSX, VSIX, and WSL remote installation.
 
-Systems programming has been gated behind hard languages, and the work around
-models is systems work: serving infrastructure, agent runtimes, evaluation
-workers, and the control planes that connect them. Aura's goal is to open that
-work up — native performance, deterministic cleanup, and real parallelism
-without leaving Python-shaped code behind. Access, mutation, ownership
-transfer, resource cleanup, and child-task lifetime are all checked by the
-compiler.
+Aura 0.3 focuses on applications for agents, ML infrastructure, and the control
+planes around models. The compiler checks types, access, mutation, ownership
+transfer, resource cleanup, and task boundaries before execution.
+
+Aura's long-term goal is to become a general-purpose systems language capable
+of building every type of software: applications, services, databases,
+language runtimes, embedded software, operating systems, and device drivers.
+Future releases will expand Aura with the freestanding targets, low-level
+memory facilities, hardware interfaces, and platform controls required for
+that scope.
 
 Read [Why Aura](docs/positioning.md) for the project direction. The canonical
 implemented contract begins with the normative

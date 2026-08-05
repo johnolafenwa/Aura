@@ -6,10 +6,10 @@
 
 # Aura
 
-Aura is a compiled, statically typed systems language for ML infrastructure and
-reliable agents. It combines Python-like readability with Rust-style safety:
-deterministic ownership, structured concurrency, typed failure, native
-executables, and no garbage collector.
+Aura is a compiled, statically typed programming language designed for reliable
+software. It combines Python-inspired readability with deterministic ownership,
+structured concurrency, typed failure, native executables, and no garbage
+collector.
 
 Install the Aura 0.3 technical preview on Linux x64, macOS x64, or macOS arm64:
 
@@ -30,13 +30,16 @@ Detailed setup is available for
 The [VS Code guide](https://johnolafenwa.github.io/Aura/install/vscode) covers
 Marketplace, Open VSX, VSIX, and WSL remote installation.
 
-Systems programming has been gated behind hard languages, and the work around
-models is systems work: serving infrastructure, agent runtimes, evaluation
-workers, and the control planes that connect them. Aura's goal is to open that
-work up — native performance, deterministic cleanup, and real parallelism
-without leaving Python-shaped code behind. Access, mutation, ownership
-transfer, resource cleanup, and child-task lifetime are all checked by the
-compiler.
+Aura 0.3 focuses on applications for agents, ML infrastructure, and the control
+planes around models. The compiler checks types, access, mutation, ownership
+transfer, resource cleanup, and task boundaries before execution.
+
+Aura's long-term goal is to become a general-purpose systems language capable
+of building every type of software: applications, services, databases,
+language runtimes, embedded software, operating systems, and device drivers.
+Future releases will expand Aura with the freestanding targets, low-level
+memory facilities, hardware interfaces, and platform controls required for
+that scope.
 
 Read [Why Aura](docs/positioning.md) for the project direction. The canonical
 implemented contract begins with the normative
@@ -449,11 +452,14 @@ Full extension install and packaging steps are documented in [tools/vscode-aura/
 
 ## Why Aura
 
-Systems programming should not require a systems background. Python is easy to
-write, Rust is safe to run, and Aura aims for both: Pythonic code, checked by a
-compiler that thinks like Rust, on a runtime that schedules like Go. The people
-building on top of models should be able to build the infrastructure under them
-too.
+Aura brings familiar source code to a compiled, statically typed language. Its
+indentation-based syntax is easy to read, while compiler checks cover types,
+ownership, mutation, exhaustive matching, failure handling, and task
+boundaries. Programs build as native executables with deterministic cleanup
+and no garbage collector.
+
+The current preview is designed for reliable applications, agent runtimes, ML
+infrastructure, evaluation workers, and control-plane services.
 
 Aura is a technical preview. The language and APIs may still change before a
 stable release.
@@ -462,13 +468,13 @@ stable release.
 
 | | Python | Rust | Aura |
 | --- | --- | --- | --- |
-| Syntax | Indentation-based, concise | Explicit systems syntax | **Pythonic, indentation-based** |
-| Types | Dynamic, optional hints | Static | **Static, with inference** |
-| Execution | Interpreter | Native executables | **Native executables** |
-| Memory | Reference counting + GC | Ownership, no GC | **Ownership, no GC** |
+| Syntax | Indentation-based and concise | Explicit and low-level | **Python-inspired and indentation-based** |
+| Types | Dynamic, with optional hints | Static | **Static, with inference** |
+| Execution | Interpreter and virtual machine | Native executables | **Native executables** |
+| Memory | Reference counting and garbage collection | Ownership | **Ownership, no garbage collector** |
 | Failure | Exceptions | `Result`, `Option`, panics | **Typed `Result`, `Option`, outcome enums** |
-| Concurrency | Threads and async, serialized by the GIL | Threads + async ecosystem | **Structured task groups on every core, no function coloring** |
-| Built for | Everything, fast | Maximum control | **Agents and ML infrastructure** |
+| Concurrency | Threads and async functions | Threads and async ecosystem | **Structured task groups across multiple cores** |
+| Current focus | General-purpose applications and scripting | Systems and application software | **Reliable applications, agents, and ML infrastructure** |
 
 ## A First Program
 
@@ -490,14 +496,15 @@ print(f"scores: {scores}")
 print(f"total: {total(scores)}")
 ```
 
-Pythonic on the surface, typed underneath. Every signature says what it does
-to its arguments: `scale` asks for `mut` access and changes the list in place,
-`total` only reads it. The compiler holds both to their word.
+The syntax is familiar and every operation remains statically checked. Each
+signature states what it does to its arguments: `scale` asks for `mut` access
+and changes the list in place, while `total` only reads it. The compiler
+enforces both contracts.
 
-## Built For Agent Infrastructure
+## Built For Agents And ML Infrastructure
 
-Serving models and running agents is systems work — sockets, subprocesses,
-queues, deadlines, retries. Aura's rules make the failure modes visible:
+Serving models and running agents involves sockets, subprocesses, queues,
+deadlines, and retries. Aura's rules make the failure modes visible:
 
 - **Values have owners.** Bare parameters share, `mut` mutates, `own`
   transfers. Cleanup follows the owning scope.
@@ -508,6 +515,19 @@ queues, deadlines, retries. Aura's rules make the failure modes visible:
 - **The standard library speaks infrastructure.** Files, processes, TCP,
   HTTP, WebSockets, TLS, queues, retries, and supervisors follow the same
   ownership and failure rules as everything else.
+
+## Long-Term Direction
+
+Aura's long-term goal is to become a general-purpose systems language capable
+of building every type of software. The intended scope spans applications,
+services, databases, language runtimes, embedded software, operating systems,
+and device drivers.
+
+Aura 0.3 establishes the foundation through static typing, deterministic
+ownership, native compilation, structured concurrency, typed failure,
+packages, and integrated tooling. Later releases will extend that foundation
+with freestanding compilation, low-level memory access, hardware interfaces,
+portable layout controls, cross-compilation, and specialized runtime profiles.
 
 ## Start Building
 
@@ -526,11 +546,15 @@ grammar, ownership rules, execution model, APIs, diagnostics, and limits.
 
 # Why Aura
 
-Aura 0.3.2 is a technical preview of a statically typed, compiled systems
-language for ML infrastructure and reliable agents. The premise is that
-systems programming has been gated behind hard languages, and it does not
-have to be: the safety guarantees do not require the difficulty. Aura is for
-people who want Python's readability without giving up Rust's discipline.
+Aura 0.3.2 is a technical preview of a compiled, statically typed programming
+language for reliable software. It combines Python-inspired syntax,
+deterministic ownership, structured concurrency, typed failure, and native
+executables.
+
+The current language focuses on agents, ML infrastructure, evaluation workers,
+network services, and the control-plane software around models. These
+workloads benefit from readable source code, explicit resource lifetimes,
+structured tasks, and failures represented directly in the type system.
 
 Three commitments shape the language:
 
@@ -549,7 +573,7 @@ completion, cross-worker scheduling, and output order stay unspecified. The
 [Control-Plane Modules](/manual/control-plane) chapters define the exact
 contracts.
 
-## ML Systems And Agents Are Systems Software
+## Built For Agents And ML Infrastructure
 
 Modern ML products extend far beyond model code. They include inference
 gateways, queue workers, evaluation pipelines, tool executors, subprocess
@@ -571,6 +595,19 @@ The result is a focused language for the reliable control plane around models:
 - infrastructure where cleanup and failure handling are correctness
   requirements.
 
+## Long-Term Direction
+
+Aura's long-term goal is to become a general-purpose systems language capable
+of building every type of software. The intended scope spans applications,
+services, databases, language runtimes, embedded software, operating systems,
+and device drivers.
+
+Aura 0.3 establishes the foundation through static typing, deterministic
+ownership, native compilation, structured concurrency, typed failure,
+packages, and integrated tooling. Later releases will extend that foundation
+with freestanding compilation, low-level memory access, hardware interfaces,
+portable layout controls, cross-compilation, and specialized runtime profiles.
+
 ## Familiar Source, Strong Guarantees
 
 Python demonstrated the value of readable, low-friction source code. Rust
@@ -578,10 +615,10 @@ demonstrated that ownership can prevent broad classes of memory and concurrency
 errors before execution. Aura combines those lessons in an indentation-based
 language with a smaller control-plane focus.
 
-The familiar surface lowers the cost of reading and writing systems code. The
-compiler still requires exact types at public boundaries, validates ownership
+The familiar surface lowers the cost of reading and writing compiled software.
+The compiler requires exact types at public boundaries, validates ownership
 and task transfer, checks exhaustive matches, and carries source context into
-runtime diagnostics. Familiar syntax does not weaken the contract.
+runtime diagnostics. Familiar syntax preserves the complete language contract.
 
 ## Adjacent Languages
 
@@ -591,7 +628,7 @@ describe focus and language contracts. Primary sources were checked on 31 July
 
 ### Mojo
 
-Mojo is a close neighbor in Python-shaped systems syntax and compiler-tracked
+Mojo is a close neighbor in Python-shaped compiled syntax and compiler-tracked
 ownership. Its roadmap centers
 [high-performance kernels on CPUs, GPUs, and ASICs, with Python interoperability](https://mojolang.org/docs/roadmap/).
 Its ownership documentation gives each value one owner and defines
@@ -19288,9 +19325,17 @@ the JSON schema, and exit codes.
 
 # Overview
 
-Aura is a systems programming language with Python-like readability, explicit static types, and an ownership-based memory model that eliminates the need for a garbage collector.
+Aura is a compiled, statically typed programming language with Python-inspired
+syntax, explicit ownership, native executables, and no garbage collector.
 
-If you know Python, Aura will feel familiar -- same indentation-based syntax, no semicolons, `def` for functions, `class` for types. The key differences are: every variable has a known type at compile time, values have a single owner that controls their lifetime, and the language compiles to native binaries.
+If you know Python, Aura will feel familiar: indentation defines blocks,
+functions use `def`, classes use `class`, and semicolons are unnecessary. The
+compiler assigns every expression a type, checks how values and resources are
+owned, and validates the program before execution.
+
+Aura 0.3 focuses on reliable applications, agents, and ML infrastructure. The
+long-term goal is a general-purpose systems language capable of building the
+full software stack, including operating systems and device drivers.
 
 These tutorials teach the language as it exists in this repository today, not the full proposal surface.
 

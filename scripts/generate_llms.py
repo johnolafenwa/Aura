@@ -138,7 +138,7 @@ def _summary(sources: List[Source]) -> str:
     lines = [
         "# Aura",
         "",
-        "> Aura is a compiled, statically typed systems language with Python-like syntax, deterministic ownership, native execution, and no garbage collector. It is designed for reliable ML systems and agents.",
+        "> Aura is a compiled, statically typed programming language with Python-inspired syntax, deterministic ownership, native execution, and no garbage collector. Its current focus includes reliable applications, agents, and ML infrastructure; its long-term goal is a general-purpose systems language for every type of software, including operating systems and device drivers.",
         "",
     ]
     for heading, predicate in groups:

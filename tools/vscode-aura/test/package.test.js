@@ -33,11 +33,13 @@ test("extension manifest and listing are ready for both public marketplaces", ()
   assert.deepEqual(manifest.categories, ["Programming Languages"]);
   assert.deepEqual(manifest.keywords, [
     "aura",
-    "systems programming",
+    "compiled language",
     "python-like",
     "structured concurrency",
     "lsp"
   ]);
+  assert.match(manifest.description, /compiled, statically typed programming language/);
+  assert.doesNotMatch(manifest.description, /systems programming language/);
   assert.deepEqual(manifest.repository, {
     type: "git",
     url: "https://github.com/johnolafenwa/Aura.git",
@@ -66,8 +68,8 @@ test("extension manifest and listing are ready for both public marketplaces", ()
     );
   }
   assert.match(
-    readme.split("\n").slice(0, 5).join("\n"),
-    /Aura is a .* programming language[\s\S]*https:\/\/github\.com\/johnolafenwa\/Aura/i
+    readme.split("\n").slice(0, 12).join("\n"),
+    /Aura is a compiled, statically typed programming language[\s\S]*https:\/\/github\.com\/johnolafenwa\/Aura/i
   );
   assert.doesNotMatch(manifest.scripts["package:vsix"], /allow-missing-repository|skip-license/);
 });
