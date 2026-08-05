@@ -1,8 +1,8 @@
 # Task Board
 
-Last updated: 2026-08-04
+Last updated: 2026-08-05
 
-## Aura v0.3.2 repair and extension 0.3.3 release (in progress)
+## Aura v0.3.2 repair and extension 0.3.3 release (complete)
 
 - Authorized target: fix every compiler, tutorial, and editor defect found by
   the 2026-08-04 tutorial/manual/compiler audit; publish the corresponding Aura
@@ -21,14 +21,23 @@ Last updated: 2026-08-04
 - Release target: Aura `v0.3.2-preview` and extension `0.3.3`, because the
   currently published identities are Aura `v0.3.1-preview` and extension
   `0.3.2`.
-- Current verification: module-constant fixes pass on both backends; the
+- Verification: module-constant fixes pass on both backends; the
   `aura upgrade` tests are green and `aura update` is rejected; 111 compiler
   analysis tests, 109 LSP tests, 24 extension tests, 45 release tests, all 336
   tutorial fences, Manual reference integrity, generated LLM artifacts, and
   the production documentation build are green. The clean complete local gate
   is green, including forced backend parity, compiler coverage at 96.31% lines,
-  97.22% functions, and 94.74% regions, plus LSP coverage at 100%. Hosted CI,
-  merge, tag, publication, and public artifact verification remain.
+  97.22% functions, and 94.74% regions, plus LSP coverage at 100%.
+- Exact-candidate hosted CI run `30962972180` is green on Ubuntu 24.04 and
+  macOS 15. PR #5 merged at `504bb06fcc96`; annotated unsigned tag
+  `v0.3.2-preview` targets that exact commit.
+- Release workflow `30968287811` is green. The GitHub prerelease, three native
+  archives, docs archive, VSIX, and `SHA256SUMS` are public and verified. The
+  public installer reports `aura 0.3.2-preview (504bb06fcc96)` and exposes
+  `aura upgrade`.
+- Visual Studio Marketplace and Open VSX serve the byte-identical extension
+  version 0.3.3 package at SHA-256
+  `0e4a7922bd5fc54862fd468e54e12696bb040d459e0c1fb0ae05c5840f830799`.
 - Protected user files remain untouched: `personal/file_ops.au` and the
   untracked ADR-0022 draft.
 - Work note: `work/2026-08-04-tutorial-editor-runtime-repair-release.md`.

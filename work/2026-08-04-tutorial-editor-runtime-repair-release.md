@@ -84,12 +84,40 @@ Post-repair focused verification:
 - LSP coverage: 100% lines, functions, branches, and statements
 - forced MIR/direct fixture parity: green in 908.94 seconds
 
-## Remaining
+Release verification:
 
-- run one hosted candidate gate
-- merge, tag, publish, and verify Aura `v0.3.2-preview` and extension `0.3.3`
+- exact-candidate hosted CI run
+  [`30962972180`](https://github.com/johnolafenwa/Aura/actions/runs/30962972180):
+  green on Ubuntu 24.04 and macOS 15
+- Docs run `30962972181` and Tutorial Examples run `30962972207`: green
+- merge commit and unsigned annotated tag target:
+  `504bb06fcc96c2db4c6158b993e4e5cd58f532c4`
+- release workflow
+  [`30968287811`](https://github.com/johnolafenwa/Aura/actions/runs/30968287811):
+  green, including all platform package smokes and both marketplace publishes
+- GitHub prerelease:
+  [`v0.3.2-preview`](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.2-preview),
+  published and identified as a prerelease
+- the public installer passed a checksum-verifying isolated-prefix install and
+  reports `aura 0.3.2-preview (504bb06fcc96)`; the downloaded packaged CLI
+  reports the same identity and runs a direct-backend example successfully
+- the GitHub, Visual Studio Marketplace, and Open VSX VSIX downloads are
+  byte-identical at SHA-256
+  `0e4a7922bd5fc54862fd468e54e12696bb040d459e0c1fb0ae05c5840f830799`
+  and identify `JohnOlafenwa.vscode-aura-lang` version `0.3.3`
+
+Every downloaded GitHub asset passed the public `SHA256SUMS` manifest:
+
+| Asset | SHA-256 |
+| --- | --- |
+| `aura-docs-v0.3.2-preview.tar.gz` | `9af741a1c887df22073a9e276b6f403218d3c12f5b090cf6c218e0b8eb2bbc4d` |
+| `aura-language.vsix` | `0e4a7922bd5fc54862fd468e54e12696bb040d459e0c1fb0ae05c5840f830799` |
+| `aura-v0.3.2-preview-aarch64-apple-darwin.tar.gz` | `36ac1f78d07d3db21f78284b920e2917d4d9257cf7243d127b9c16c5386c7680` |
+| `aura-v0.3.2-preview-x86_64-apple-darwin.tar.gz` | `a50618cd5c46711df42b176697ed3cc439c9183cba370f0b1ac50d5420569824` |
+| `aura-v0.3.2-preview-x86_64-unknown-linux-gnu.tar.gz` | `43740a0e6fbcb136b575d0ef80be248a4aa6717292bd209379962b0db877cf40` |
 
 ## Follow-Up
 
-None yet. This note will be finalized with commit, gate, hosted-run, release,
-marketplace, and checksum evidence.
+None. The tag is unsigned by choice because no signing identity is configured
+in this checkout. The existing `personal/file_ops.au` modification and
+untracked ADR-0022 draft remain unstaged and unchanged.
