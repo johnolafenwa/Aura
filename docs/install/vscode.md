@@ -43,7 +43,7 @@ codium --install-extension JohnOlafenwa.vscode-aura-lang
 ## Install The Release VSIX Manually
 
 Download `aura-language.vsix` from the
-[v0.3.1-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.1-preview).
+[v0.3.2-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.2-preview).
 Then open the Command Palette and choose **Extensions: Install from VSIX...**.
 
 The command-line form is:

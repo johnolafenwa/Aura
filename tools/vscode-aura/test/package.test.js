@@ -26,7 +26,7 @@ test("extension manifest and listing are ready for both public marketplaces", ()
   assert.equal(manifest.name, "vscode-aura-lang");
   assert.equal(manifest.publisher, "JohnOlafenwa");
   assert.equal(manifest.displayName, "Aura Programming Language");
-  assert.equal(manifest.version, "0.3.2");
+  assert.equal(manifest.version, "0.3.3");
   assert.equal(manifest.preview, true);
   assert.equal(manifest.private, undefined);
   assert.equal(manifest.icon, "images/aura.png");
@@ -338,6 +338,42 @@ test("syntax grammar tracks maintained builtin types", () => {
     assert.equal(typePattern.test(typeName), true, `${typeName} should be highlighted as a type`);
   }
   assert.doesNotMatch(typeRule.match, /Channel/);
+});
+
+test("syntax grammar highlights maintained builtin function calls", () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const grammar = JSON.parse(
+    fs.readFileSync(path.join(extensionRoot, "syntaxes", "aura.tmLanguage.json"), "utf8")
+  );
+  const builtinRule = grammar.repository.builtins.patterns.find(
+    (pattern) => pattern.name === "support.function.builtin.aura"
+  );
+
+  assert.ok(builtinRule);
+  const builtinPattern = new RegExp(builtinRule.match);
+  for (const name of [
+    "print",
+    "range",
+    "len",
+    "str",
+    "select",
+    "wait_any",
+    "wait_all",
+    "parse_int64"
+  ]) {
+    assert.equal(builtinPattern.test(`${name}(`), true, `${name} should be highlighted`);
+  }
+  assert.equal(builtinPattern.test("user_function("), false);
+});
+
+test("extension activation registers the language client itself as disposable", () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const source = fs.readFileSync(path.join(extensionRoot, "src", "extension.js"), "utf8");
+
+  assert.match(source, /async function activate\(context\)/);
+  assert.match(source, /await client\.start\(\)/);
+  assert.match(source, /context\.subscriptions\.push\(client\)/);
+  assert.doesNotMatch(source, /subscriptions\.push\(client\.start\(\)\)/);
 });
 
 test("Aura newline indentation inherits the current block indent", () => {

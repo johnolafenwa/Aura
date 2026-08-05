@@ -11,6 +11,12 @@ Install the Aura 0.3 technical preview on Linux x64, macOS x64, or macOS arm64:
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
+Already have Aura installed? Upgrade the compiler and bundled runtime with:
+
+```bash
+aura upgrade
+```
+
 Detailed setup is available for
 [macOS](https://johnolafenwa.github.io/Aura/install/macos),
 [Linux](https://johnolafenwa.github.io/Aura/install/linux), and

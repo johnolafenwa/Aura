@@ -55,6 +55,7 @@ fn main() {
         "version" | "--version" | "-V" => print_version_and_exit(),
         "lsp" => handle_lsp_service(),
         "new" => handle_new_command(args.collect()),
+        "upgrade" => handle_upgrade_command(args.collect()),
         "fmt" => handle_fmt_command(args.collect()),
         "test" => handle_test_command(args.collect()),
         "deps" => {
@@ -356,6 +357,110 @@ fn main() {
         }
         _ => print_usage_and_exit(2),
     }
+}
+
+const DEFAULT_UPGRADE_INSTALLER_URL: &str = "https://johnolafenwa.github.io/Aura/install.sh";
+const MAX_UPGRADE_INSTALLER_BYTES: u64 = 1024 * 1024;
+
+struct UpgradeWorkspace {
+    path: PathBuf,
+}
+
+impl Drop for UpgradeWorkspace {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn handle_upgrade_command(args: Vec<String>) {
+    if !args.is_empty() {
+        eprintln!("`aura upgrade` does not accept arguments");
+        process::exit(2);
+    }
+
+    if let Err(error) = run_upgrade() {
+        eprintln!("Aura upgrade failed: {error}");
+        process::exit(1);
+    }
+    write_stdout("Aura upgrade complete\n");
+}
+
+fn run_upgrade() -> Result<(), String> {
+    let installer_url = std::env::var("AURA_UPGRADE_INSTALLER_URL")
+        .unwrap_or_else(|_| DEFAULT_UPGRADE_INSTALLER_URL.to_string());
+    let workspace = create_upgrade_workspace()
+        .map_err(|error| format!("could not create a private temporary directory: {error}"))?;
+    let installer_path = workspace.path.join("install.sh");
+
+    write_stdout(&format!(
+        "Downloading the Aura installer from {installer_url}\n"
+    ));
+    let download = Command::new("curl")
+        .args(["-fsSL", &installer_url, "-o"])
+        .arg(&installer_path)
+        .status()
+        .map_err(|error| format!("could not start curl; install curl and try again: {error}"))?;
+    if !download.success() {
+        return Err(format!(
+            "could not download the installer (curl exited with {download})"
+        ));
+    }
+
+    let metadata = fs::symlink_metadata(&installer_path)
+        .map_err(|error| format!("could not inspect the downloaded installer: {error}"))?;
+    if !metadata.file_type().is_file() {
+        return Err("the downloaded installer is not a regular file".to_string());
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_UPGRADE_INSTALLER_BYTES {
+        return Err(format!(
+            "the downloaded installer has an invalid size of {} bytes",
+            metadata.len()
+        ));
+    }
+
+    let mut install = Command::new("sh");
+    install.arg(&installer_path);
+    if std::env::var_os("AURA_INSTALL_PREFIX").is_none() {
+        if let Some(prefix) = active_install_prefix() {
+            install.env("AURA_INSTALL_PREFIX", prefix);
+        }
+    }
+    let status = install
+        .status()
+        .map_err(|error| format!("could not start the installer with `sh`: {error}"))?;
+    if !status.success() {
+        return Err(format!("the installer exited with {status}"));
+    }
+    Ok(())
+}
+
+fn active_install_prefix() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let bin_directory = executable.parent()?;
+    if bin_directory.file_name()?.to_str()? != "bin" {
+        return None;
+    }
+    bin_directory.parent().map(Path::to_path_buf)
+}
+
+fn create_upgrade_workspace() -> io::Result<UpgradeWorkspace> {
+    let root = std::env::temp_dir();
+    for attempt in 0..16_u32 {
+        let path = root.join(format!(
+            "aura-upgrade-{}-{}-{attempt}",
+            std::process::id(),
+            system_time_nanos()
+        ));
+        match create_private_directory(&path) {
+            Ok(()) => return Ok(UpgradeWorkspace { path }),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a unique upgrade workspace",
+    ))
 }
 
 fn handle_new_command(args: Vec<String>) {
@@ -4553,6 +4658,7 @@ fn usage_text() -> &'static str {
        or: aura fmt [--check] [path ...]\n\
        or: aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]\n\
        or: aura deps update [package]\n\
+       or: aura upgrade\n\
        or: aura help\n\
        or: aura version"
 }

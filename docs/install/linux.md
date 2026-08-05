@@ -54,7 +54,7 @@ command -v aura
 aura --version
 ```
 
-The version should begin with `aura 0.3.1-preview`.
+The version should begin with `aura 0.3.2-preview`.
 
 ## 6. Run A Program
 
@@ -87,12 +87,17 @@ aura build -o hello hello.au
 ./hello
 ```
 
-## Upgrade Or Reinstall
+## Upgrade Aura
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+aura upgrade
 aura --version
 ```
+
+`aura upgrade` downloads the current installer, verifies the published release
+checksums, and replaces the compiler and bundled runtime in the same install
+prefix. Set `AURA_INSTALL_PREFIX` when upgrading an installation in a custom
+location.
 
 ## Troubleshooting
 

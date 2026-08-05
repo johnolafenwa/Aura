@@ -1,0 +1,9 @@
+values: list[int32] = [1, 2, 3, 4]
+squares: list[int32] = [value * value for value in values]
+even: set[int32] = {value for value in values if value % 2 == 0}
+labels: dict[int32, int32] = {value: value * 10 for value in values}
+
+def main():
+    print(squares)
+    print(even.len())
+    print(labels[3])

@@ -17,6 +17,12 @@ Install the Aura 0.3 technical preview on Linux x64, macOS x64, or macOS arm64:
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
+Already have Aura installed? Upgrade the compiler and bundled runtime with:
+
+```bash
+aura upgrade
+```
+
 Detailed setup is available for
 [macOS](https://johnolafenwa.github.io/Aura/install/macos),
 [Linux](https://johnolafenwa.github.io/Aura/install/linux), and
@@ -520,7 +526,7 @@ grammar, ownership rules, execution model, APIs, diagnostics, and limits.
 
 # Why Aura
 
-Aura 0.3.1 is a technical preview of a statically typed, compiled systems
+Aura 0.3.2 is a technical preview of a statically typed, compiled systems
 language for ML infrastructure and reliable agents. The premise is that
 systems programming has been gated behind hard languages, and it does not
 have to be: the safety guarantees do not require the difficulty. Aura is for
@@ -654,7 +660,7 @@ boundaries of that surface.
 
 # Downloads
 
-Aura 0.3.1 is a technical preview. The compiler, command-line tools, editor
+Aura 0.3.2 is a technical preview. The compiler, command-line tools, editor
 extension, reference manual, and source are distributed from the
 [Aura GitHub repository](https://github.com/johnolafenwa/Aura).
 
@@ -679,7 +685,7 @@ Choose a detailed platform guide:
 - [Windows 11 through Ubuntu on WSL 2](/install/windows-wsl)
 
 Download the archive for your platform from the
-[v0.3.1-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.1-preview).
+[v0.3.2-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.2-preview).
 Each release includes Linux x64, macOS x64, and macOS arm64 archives together
 with a `SHA256SUMS` manifest.
 
@@ -698,7 +704,7 @@ Install **Aura Programming Language** from either public extension registry:
 - [Open VSX](https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang)
 
 The registry packages are identical and carry the plain extension version
-`0.3.1`. The extension needs the `aura` executable on `PATH` because semantic
+`0.3.3`. The extension needs the `aura` executable on `PATH` because semantic
 editor features run through the compiler-owned `aura lsp` server.
 
 Install from a terminal with:
@@ -708,7 +714,7 @@ code --install-extension JohnOlafenwa.vscode-aura-lang
 ```
 
 For a manual installation, download
-[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.3.1-preview/aura-language.vsix)
+[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.3.2-preview/aura-language.vsix)
 from the GitHub Release, then choose **Extensions: Install from VSIX...** in
 VS Code.
 
@@ -751,7 +757,7 @@ Verify the result in the same terminal after adding `~/.local/bin` to `PATH`:
 aura --version
 ```
 
-The expected release identity begins with `aura 0.3.1-preview`. The remaining
+The expected release identity begins with `aura 0.3.2-preview`. The remaining
 text is the source commit used to build the binary.
 
 ## What Gets Installed
@@ -859,7 +865,7 @@ command -v aura
 aura --version
 ```
 
-The version should begin with `aura 0.3.1-preview`.
+The version should begin with `aura 0.3.2-preview`.
 
 ## 6. Run A Program
 
@@ -892,12 +898,17 @@ aura build -o hello hello.au
 ./hello
 ```
 
-## Upgrade Or Reinstall
+## Upgrade Aura
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+aura upgrade
 aura --version
 ```
+
+`aura upgrade` downloads the current installer, verifies the published release
+checksums, and replaces the compiler and bundled runtime in the same install
+prefix. Set `AURA_INSTALL_PREFIX` when upgrading an installation in a custom
+location.
 
 ## Troubleshooting
 
@@ -957,7 +968,7 @@ verified installer:
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
-The script downloads the matching `v0.3.1-preview` archive and checks it
+The script downloads the matching `v0.3.2-preview` archive and checks it
 against the release's `SHA256SUMS` file before copying anything into the
 installation prefix.
 
@@ -986,7 +997,7 @@ The command path should end in `.local/bin/aura`, and the version should begin
 with:
 
 ```text
-aura 0.3.1-preview
+aura 0.3.2-preview
 ```
 
 ## 5. Run A Program
@@ -1021,15 +1032,17 @@ aura build -o hello hello.au
 ./hello
 ```
 
-## Upgrade Or Reinstall
+## Upgrade Aura
 
-Running the installer again replaces the installed CLI and runtime with the
-current published preview:
+Upgrade the installed CLI and runtime to the current published preview:
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+aura upgrade
 aura --version
 ```
+
+The command preserves the active install prefix and uses the same verified
+installer as a fresh installation.
 
 ## Troubleshooting
 
@@ -1102,7 +1115,7 @@ codium --install-extension JohnOlafenwa.vscode-aura-lang
 ## Install The Release VSIX Manually
 
 Download `aura-language.vsix` from the
-[v0.3.1-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.1-preview).
+[v0.3.2-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.3.2-preview).
 Then open the Command Palette and choose **Extensions: Install from VSIX...**.
 
 The command-line form is:
@@ -1302,12 +1315,15 @@ Continue with the complete [VS Code extension guide](/install/vscode).
 
 ## Upgrade Aura
 
-Run the installer again from the Ubuntu terminal:
+Run the updater from the Ubuntu terminal:
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+aura upgrade
 aura --version
 ```
+
+The command upgrades the Linux compiler and runtime inside WSL. Run it in the
+Ubuntu terminal, not PowerShell.
 
 ## Troubleshooting
 
@@ -1343,7 +1359,7 @@ are outside the supported distribution matrix for this preview.
 
 # Aura Language Reference
 
-The source version for this Manual is **Aura 0.3.1 (technical preview)**.
+The source version for this Manual is **Aura 0.3.2 (technical preview)**.
 The release stamp below records the rendered implementation baseline commit.
 
 Release builders set `AURA_DOCS_COMMIT`; GitHub builds use `GITHUB_SHA`; a
@@ -2739,9 +2755,10 @@ aura check app.au
 | `aura new path` | Create `Aura.toml` and `src/main.au` without overwriting an existing path. |
 | `aura fmt [--check] [paths...]` | Normalize Aura source whitespace or verify formatting. |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case; defaults to `tests/` and a 30-second per-case timeout. |
+| `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
-| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.3.1-preview (0123456789ab)`; source builds print `aura 0.3.1-dev (0123456789ab)`. |
+| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.3.2-preview (0123456789ab)`; source builds print `aura 0.3.2-dev (0123456789ab)`. |
 
 ## Checking
 
@@ -10683,7 +10700,7 @@ relevant reference page, conformance tests, examples, tutorials, and work
 record in the same pass.
 
 The repository commit identifies the precise revision of the specification.
-The rendered Manual is stamped with source version 0.3.1 (technical preview)
+The rendered Manual is stamped with source version 0.3.2 (technical preview)
 and its implementation baseline commit. Release builds supply that commit
 without writing a self-referential hash into this source page; see the
 [Manual overview](/manual/) for the exact precedence and local fallback.
@@ -17601,11 +17618,18 @@ native runtime under `~/.local`. If `~/.local/bin` is absent from `PATH`, the
 installer prints the exact export command. Set `AURA_INSTALL_PREFIX` before
 running the command to choose another prefix.
 
+After Aura is installed, update the compiler and its bundled native runtime
+with:
+
+```bash
+aura upgrade
+```
+
 For a manual installation, download the archive for a supported host, extract
 it, and keep its directory layout intact:
 
 ```text
-aura-v0.3.1-preview-<target>/
+aura-v0.3.2-preview-<target>/
 ├── bin/aura
 ├── lib/aura/
     ├── libaura_compiler.a
@@ -17667,8 +17691,8 @@ aura --version
 ```
 
 Preview builds identify both their channel and source commit, for example
-`aura 0.3.1-preview (0123456789ab)`. Source-checkout builds identify their
-channel as `aura 0.3.1-dev (0123456789ab)`.
+`aura 0.3.2-preview (0123456789ab)`. Source-checkout builds identify their
+channel as `aura 0.3.2-dev (0123456789ab)`.
 
 On Unix shells, consider adding that export to your shell profile.
 
@@ -19334,7 +19358,7 @@ Aura currently runs through the bootstrap CLI, `aura`. You invoke it from the re
 
 Create a file called `hello.au`:
 
-```aura
+```aura check-pass
 print("hello, aura")
 ```
 
@@ -19404,8 +19428,8 @@ cargo run -p aura -- --version
 ```
 
 The source-checkout command prints the build channel and a 12-hex-digit source
-commit, such as `aura 0.3.1-dev (0123456789ab)`. Release archives identify
-their channel as `aura 0.3.1-preview (0123456789ab)`.
+commit, such as `aura 0.3.2-dev (0123456789ab)`. Release archives identify
+their channel as `aura 0.3.2-preview (0123456789ab)`.
 
 Use `deps update` to refresh git dependencies without deleting `Aura.lock` manually:
 
@@ -19451,7 +19475,7 @@ Aura supports two entry styles.
 
 Write executable statements directly at the top level. This is the simplest way to start:
 
-```aura
+```aura check-pass
 a = 56
 b = 100
 print(a + b)
@@ -19463,7 +19487,7 @@ See [examples/basics/top_level_script.au](../examples/basics/top_level_script.au
 
 For programs that return an exit code, declare a `main` function:
 
-```aura
+```aura check-pass
 def main() -> int32:
     print(5)
     return 0
@@ -19495,7 +19519,7 @@ In Aura, every value has a type known at compile time. Bindings are introduced w
 
 The compiler infers the type from the right-hand side:
 
-```aura
+```aura check-pass
 a = 56
 b = 100
 total = a + b
@@ -19509,7 +19533,7 @@ See [examples/basics/top_level_script.au](../examples/basics/top_level_script.au
 
 You can write the type explicitly when you want to be clear or when the compiler needs help:
 
-```aura
+```aura check-pass
 a: int32 = 6
 b: int32 = 10
 c: int32 = a + b
@@ -19517,7 +19541,7 @@ c: int32 = a + b
 
 Type annotations are required when the compiler cannot infer the type, for example with empty collections:
 
-```aura
+```aura check-pass
 mut names: list[str] = []
 mut counts: dict[str, int32] = {}
 ```
@@ -19528,7 +19552,7 @@ See [examples/basics/main_function.au](../examples/basics/main_function.au).
 
 Bindings are immutable by default. Use `mut` when you need to reassign:
 
-```aura
+```aura check-pass
 mut counter: int32 = 1
 counter = counter + 1
 counter += 3
@@ -19544,7 +19568,7 @@ Reusing an existing name updates that binding. The current compiler does not cre
 
 Aura uses `None` as both the unit type and the sole unit value:
 
-```aura
+```aura check-pass
 status: None = None
 ```
 
@@ -19570,7 +19594,7 @@ The full set of integer types covers `int8` through `int128`, `uint8` through `u
 
 Integer literals default to `int64`. Floating-point literals default to `float64`, but both kinds of literal adopt a compatible expected numeric type from an annotation, parameter, return type, or field. An integer literal may adopt `float32` or `float64` only when its integer value is exactly representable there:
 
-```aura
+```aura check-pass
 count: int32 = 12
 ratio: float32 = 3.25
 whole_ratio: float64 = 2
@@ -19611,7 +19635,7 @@ Aura provides three owned collection types and several runtime types:
 `Array[T]` is an owned non-Copy value with a fixed rank-at-least-one shape.
 Construct it explicitly with an Array constructor:
 
-```aura
+```aura check-pass
 source: list[float64] = [1.0, 2.0, 3.0, 4.0]
 matrix = Array[float64].from_list(source, [2, 2])
 zeros = Array[int32].zeros([3, 4])
@@ -19628,44 +19652,46 @@ and the [Numeric Arrays Manual](../docs/manual/numeric-arrays.md).
 
 Create a list with a list literal:
 
-```aura
+```aura check-pass
 mut numbers = [1, 2, 3]
 ```
 
 Or with the explicit empty constructor:
 
-```aura
+```aura check-pass
 values = list[int32]()
 ```
 
 The element type must be consistent:
 
-```aura
+```aura check-fail:AU2002
 mut ok = [1, 2, 3]
 mut bad = [1, "two"]  # rejected: mixed types
 ```
 
 Empty list literals need a type annotation:
 
-```aura
+```aura check-pass
 mut names: list[str] = []
 ```
 
 Common list operations:
 
-```aura
-mut items = [10, 20, 30]
-items.append(40)             # append an element
-print(items.len())         # 4
-print(items[0])            # 10 -- indexed access
-print(20 in items)         # true
-popped = items.pop()       # removes and returns the last element
+```aura check-pass
+def main():
+    mut items = [10, 20, 30]
+    items.append(40)       # append an element
+    print(items.len())     # 4
+    print(items[0])        # 10 -- indexed access
+    print(20 in items)     # true
+    popped = items.pop()   # removes and returns the last element
+    print(popped)          # 40
 ```
 
 Negative list indexes count from the end. The same normalization applies to
 direct reads and writes and to `get`, `set`, `pop`, and `swap`:
 
-```aura
+```aura fragment
 print(items[-1])                 # final element
 match items.get(-2):
     case Option.Some(value):
@@ -19687,7 +19713,7 @@ current length.
 List slicing uses the same loud boundary philosophy and returns a fresh owned
 list:
 
-```aura
+```aura check-pass
 values = [10, 20, 30, 40]
 middle = values[1:3]  # [20, 30]
 prefix = values[:2]   # [10, 20]
@@ -19705,9 +19731,14 @@ The method surface includes `len`, `is_empty`, `copy`, `append`, `pop`, `get`,
 `insert`, `set`, `remove`, `index`, `count`, `swap`, `extend`, `clear`,
 `reverse`, `sort`, `map`, `filter`, `reserve`, and `with_capacity`.
 
+Operations that compare elements require the element type to define equality.
+This includes `remove`, `index`, `count`, `in`, and `not in`. Closures,
+`random.Rng`, opaque FFI handles, and values containing them have no equality
+relation, so these operations are rejected with `AU2008`.
+
 The four callable-powered algorithms use named function values:
 
-```aura
+```aura check-pass
 def doubled(value: int32) -> int32:
     return value * 2
 
@@ -19731,7 +19762,7 @@ the exact bare/shared capability shown above, not `mut` or `own`.
 
 `list.len()`, `range(...)`, and list indexes share the `int64` position domain:
 
-```aura
+```aura fragment
 for index in range(items.len()):
     print(items[index])
 ```
@@ -19739,7 +19770,7 @@ for index in range(items.len()):
 The free `len(value)` builtin delegates to the same member and has the same
 `int64` result:
 
-```aura
+```aura fragment
 assert len(items) == items.len()
 assert len("A🎉") == "A🎉".len()
 ```
@@ -19748,14 +19779,15 @@ For `str`, `len()` counts Unicode scalar values and `byte_len()` counts the
 UTF-8 encoding bytes. Both counts are `int64`, so `"A🎉".len()` is `2` while
 `"A🎉".byte_len()` is `5`.
 
-Indexed reads work as ordinary expressions, so chains like `keys[idx].clone()` are supported.
-For clone-safe non-copy element types like `str` or ordinary user-defined
-classes, use `get(index)` for an explicit cloned read. Direct `items[index]`
-access is rejected. A value containing `random.Rng` must be transferred with
+Indexed reads work directly for copy element types. For clone-safe non-copy
+element types like `str` or ordinary user-defined classes, use `get(index)`
+for an explicit cloned read. Appending `.clone()` after `items[index]` cannot
+repair the read because the illegal move would happen before the method call.
+A value containing `random.Rng` must be transferred with
 `pop(index)` because it cannot be cloned, and the rejection names that
 reason directly:
 
-```aura
+```aura check-pass
 names = ["Ada", "Grace"]
 match names.get(0):
     case Option.Some(value):
@@ -19779,33 +19811,33 @@ error and preserves the declared type.
 
 Create a dictionary with a literal:
 
-```aura
+```aura check-pass
 mut counts = {"aura": 1, "codex": 2}
 ```
 
 Or with the explicit empty constructor:
 
-```aura
+```aura check-pass
 counts = dict[str, int32]()
 ```
 
 Empty dictionary literals need a type annotation:
 
-```aura
+```aura check-pass
 mut counts: dict[str, int32] = {}
 ```
 
 Dictionaries support indexed reads when the value type is copy, and indexed writes for
 all value types:
 
-```aura
+```aura fragment
 counts["aura"] = 5
 print(counts["aura"])
 ```
 
 Dictionary lookups work inside larger expressions including f-strings:
 
-```aura
+```aura fragment
 print(f"value: {counts['aura']}")
 ```
 
@@ -19817,7 +19849,7 @@ rejection explains that `get(key)` would also be rejected.
 
 `items()` returns `list[(K, V)]` in insertion order:
 
-```aura
+```aura fragment
 entries = counts.items()
 match entries.get(0):
     case Option.Some((key, value)):
@@ -19838,14 +19870,14 @@ See [examples/collections/dict_basics.au](../examples/collections/dict_basics.au
 Create a set with value-only entries inside curly braces. Dictionary literals use
 `key: value` pairs:
 
-```aura
+```aura check-pass
 mut seen = {1, 2, 2, 3}       # duplicates are removed
 print(seen.len())              # 3
 ```
 
 Or with the explicit empty constructor:
 
-```aura
+```aura check-pass
 names = set[str]()
 ```
 
@@ -19863,7 +19895,7 @@ See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
 
 List, set, and dictionary comprehensions build fresh owned collections:
 
-```aura
+```aura check-pass
 values = [1, 2, 3, 4]
 squares = [value * value for value in values]
 even = {value for value in values if value % 2 == 0}
@@ -19874,7 +19906,7 @@ Each clause uses the same bare-loop rules as `for value in values:`. A list or
 Set target is shared, so storing a non-copy target in the new collection needs
 an explicit clone:
 
-```aura
+```aura check-pass
 names = ["Ada", "Grace"]
 names_copy = [name.clone() for name in names]
 ```
@@ -19898,7 +19930,7 @@ Summary of literal type rules:
   remain non-negative, so use a constructor such as `Duration.ms(-5)` for a
   negative Duration value
 
-```aura
+```aura check-pass
 offset: int32 = -5
 temperature: float64 = -3.5
 short_wait: Duration = 5ms
@@ -19912,21 +19944,21 @@ Functions are declared with `def` and require explicit parameter types.
 
 ## Basic Functions
 
-```aura
+```aura check-pass
 def add(a: int32, b: int32) -> int32:
     return a + b
 ```
 
 The return type follows `->`. If a function does not return a value, you can omit the return type and it defaults to `None`:
 
-```aura
+```aura check-pass
 def greet():
     print("hello")
 ```
 
 Reaching the end of a `None`-returning function is allowed. You can also use a bare `return`:
 
-```aura
+```aura check-pass
 def log_value(value: int32):
     print(value)
     return
@@ -19938,7 +19970,7 @@ See [examples/basics/main_function.au](../examples/basics/main_function.au).
 
 Parameters are written with explicit types:
 
-```aura
+```aura fragment
 def distance(a: Point, b: Point) -> float64:
     dx = a.x - b.x
     dy = a.y - b.y
@@ -19951,7 +19983,7 @@ An unmodified parameter grants shared access for every type. An implementation
 may pass copy bits directly, but that does not change the source-level
 contract. Write `own` when the function takes ownership:
 
-```aura
+```aura fragment
 def archive(doc: own Document):
     print(doc.title)
 ```
@@ -19969,21 +20001,21 @@ explanation.
 
 Use `T` for read-only access:
 
-```aura
+```aura fragment
 def read(counter: Counter) -> int32:
     return counter.value
 ```
 
 Use `mut T` for mutable access -- the function can modify the value and changes persist back to the caller:
 
-```aura
+```aura fragment
 def bump(counter: mut Counter):
     counter.value += 1
 ```
 
 A `mut` parameter requires a mutable binding at the call site:
 
-```aura
+```aura fragment
 mut counter = Counter(value=41)
 bump(counter)
 print(counter.value)    # 42
@@ -19992,7 +20024,7 @@ print(counter.value)    # 42
 Aura rejects overlapping arguments when `mut` is involved. Mutable access
 must be exclusive -- no other overlapping access can exist in the same call:
 
-```aura
+```aura check-pass
 # This would be rejected:
 # bad(a: mut Counter, b: Counter) called with bad(c, c)
 ```
@@ -20010,7 +20042,7 @@ rejected.
 
 Aura supports positional and named arguments:
 
-```aura
+```aura check-pass
 def subtract(left: int32, right: int32) -> int32:
     return left - right
 
@@ -20032,7 +20064,7 @@ Rules:
 
 Parameters can have defaults, which must come after required parameters:
 
-```aura
+```aura check-pass
 def greet(name: str = "world"):
     print("hello " + name)
 
@@ -20052,7 +20084,7 @@ See [examples/basics/default_arguments.au](../examples/basics/default_arguments.
 
 Some builtins also support named arguments:
 
-```aura
+```aura check-pass
 for value in range(stop=3):
     print(value)
 
@@ -20066,19 +20098,16 @@ See [examples/basics/named_builtin_arguments.au](../examples/basics/named_builti
 
 ## What Functions Can Return
 
-The bootstrap compiler supports functions returning:
-
-- scalar types (`int32`, `float64`, `bool`, etc.)
-- classes
-- user-defined enums
-- `Result[T, E]` and `Option[T]`
-- `Task[T]`
-- `None`
+Functions may return any concrete type accepted in a return annotation,
+including scalars, tuples, strings, collections, numeric arrays, classes,
+enums, generic specializations, function values, `Result[T, E]`, `Option[T]`,
+`Task[T]`, and `None`. Every result is owned; return types never describe a
+borrow into an argument or local value.
 
 Every function return is an owned value. Returning a copy type produces an
 ordinary independent copy:
 
-```aura
+```aura check-pass
 class User:
     score: int32
 
@@ -20092,7 +20121,7 @@ return annotation.
 When several shared parameters have copy types, the function can select and
 return any one of their values without a source label:
 
-```aura
+```aura check-pass
 def choose_positive(left: int32, right: int32) -> int32:
     if left > 0:
         return left
@@ -20113,7 +20142,7 @@ name an argument, field, or lifetime source.
 
 Functions can be generic over type parameters:
 
-```aura
+```aura check-pass
 def identity[T](value: own T) -> T:
     return value
 ```
@@ -20125,7 +20154,7 @@ The compiler infers type arguments from the arguments you pass and, when needed,
 A module-level named function can be stored and passed like any other copy
 value. Write its type in declaration-shaped form:
 
-```aura
+```aura check-pass
 class Pipeline:
     transform: def(int32) -> int32
 
@@ -20148,7 +20177,7 @@ parameter names or default expressions. Bare parameters are shared. An
 inferred binding such as `selected = consume` retains the exact contract, and
 you can also write it explicitly:
 
-```aura
+```aura fragment
 mutate: def(mut Counter) -> None = increment
 consume: def(own str) -> str = take
 callbacks: list[def(mut Counter) -> None] = [mutate]
@@ -20187,10 +20216,11 @@ See [examples/basics/function_values.au](../examples/basics/function_values.au).
 Use a lambda when the callable is one expression and its parameter types are
 already clear from context:
 
-```aura
-offset: int32 = 40
-add: def(int32) -> int32 = lambda value: value + offset
-print(add(2))
+```aura check-pass
+def main():
+    offset: int32 = 40
+    add: def(int32) -> int32 = lambda value: value + offset
+    print(add(2))
 ```
 
 The annotation supplies `value: int32` and the `int32` result. A lambda does
@@ -20205,11 +20235,12 @@ their types from context.
 Captures happen when the lambda is created. Copy values such as `offset` are
 snapshotted. A non-Copy owned value moves into the closure:
 
-```aura
-name = "Aura"
-length: def() -> int64 = lambda: name.len()
-print(length())
-print(length())
+```aura check-pass
+def main():
+    name = "Aura"
+    length: def() -> int64 = lambda: name.len()
+    print(length())
+    print(length())
 ```
 
 This is repeatable because the body only reads `name`. A body that returns or
@@ -20243,7 +20274,7 @@ Aura supports the standard control-flow constructs: conditionals, loops, pattern
 
 ## `if`, `elif`, and `else`
 
-```aura
+```aura check-pass
 score: int32 = 90
 
 if score < 50:
@@ -20260,7 +20291,7 @@ See [examples/control_flow/if_elif_else.au](../examples/control_flow/if_elif_els
 
 Aura supports boolean operators in conditions:
 
-```aura
+```aura fragment
 if ready and not blocked:
     print("ready")
 
@@ -20273,7 +20304,7 @@ See [examples/control_flow/boolean_logic.au](../examples/control_flow/boolean_lo
 
 Use `value if condition else alternative` when a branch chooses one value:
 
-```aura
+```aura fragment
 label = "ready" if ready else "waiting"
 ```
 
@@ -20285,7 +20316,7 @@ arms.
 Conditional expressions bind less tightly than `or` and associate to the
 right. A nested expression therefore reads as an `if`/`elif` choice:
 
-```aura
+```aura fragment
 label = "high" if score >= 80 else "mid" if score >= 50 else "low"
 ```
 
@@ -20298,7 +20329,7 @@ See [examples/control_flow/conditional_expressions.au](../examples/control_flow/
 
 `in` and `not in` ask whether a container holds a value:
 
-```aura
+```aura check-pass
 ports = [80, 443]
 print(443 in ports)
 print(8080 not in ports)
@@ -20314,15 +20345,17 @@ The container decides what the test means and what the value must be:
 | `str` | substring containment | `str` |
 
 Membership reads both operands and moves neither, so a non-copy container and
-a non-copy value are both still usable afterwards. A container Aura cannot
-test reports `AU2003`, and a value of the wrong type reports `AU2002`.
+a non-copy value are both still usable afterwards. The element or key type
+must define equality; closures, `random.Rng`, opaque FFI handles, and values
+containing them are rejected with `AU2008`. A container Aura cannot test
+reports `AU2003`, and a value of the wrong type reports `AU2002`.
 
 ## Chained Comparisons
 
 Comparisons chain the way they do in Python, so a range check reads as one
 expression:
 
-```aura
+```aura check-pass
 def in_range(value: int32, low: int32, high: int32) -> bool:
     return low <= value < high
 ```
@@ -20340,7 +20373,7 @@ See [examples/control_flow/membership_and_chains.au](../examples/control_flow/me
 
 ## `while`
 
-```aura
+```aura check-pass
 mut n: int32 = 0
 while n < 10:
     print(n)
@@ -20349,7 +20382,7 @@ while n < 10:
 
 Use `while true:` with `break` for loops with complex exit conditions:
 
-```aura
+```aura check-pass
 mut attempts: int32 = 0
 while true:
     attempts += 1
@@ -20362,7 +20395,7 @@ while true:
 
 Both work inside `while` and `for` loops:
 
-```aura
+```aura check-pass
 mut n: int32 = 0
 while n < 10:
     n += 1
@@ -20379,7 +20412,7 @@ See [examples/control_flow/while_break_continue.au](../examples/control_flow/whi
 
 Use `pass` when a block must exist but has no statements. This is the same as Python:
 
-```aura
+```aura check-pass
 class Empty:
     pass
 
@@ -20391,7 +20424,7 @@ See [examples/basics/pass_keyword.au](../examples/basics/pass_keyword.au).
 
 ## `for` Over `range`
 
-```aura
+```aura check-pass
 mut total: int64 = 0
 
 for value in range(6):
@@ -20408,11 +20441,13 @@ See [examples/control_flow/for_range.au](../examples/control_flow/for_range.au).
 
 ## `for` Over Collections
 
-Vectors and sets can be iterated in three ownership modes. The choice matters because of Aura's ownership model (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
+Lists and sets can be iterated in ownership modes. The choice matters because
+of Aura's ownership model (see
+[06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
 
 **Bare/default** -- reads through a shared borrow. The collection stays valid:
 
-```aura
+```aura check-pass
 names = ["Ada", "Grace"]
 for name in names:
     print(name)
@@ -20421,18 +20456,19 @@ print(names.len())       # still usable
 
 **Owned** -- consumes the collection. After the loop, it is no longer valid:
 
-```aura
-names = ["Ada", "Grace"]
-for name in own names:
-    print(name)
-# names is consumed -- cannot use it after this loop
+```aura check-pass
+def main():
+    names = ["Ada", "Grace"]
+    for name in own names:
+        print(name)
+    # names is consumed -- cannot use it after this loop
 ```
 
 `for name in names:` is the explicit spelling of shared iteration.
 
 **By mutable borrow** -- modifies elements in place. Requires a `mut` binding:
 
-```aura
+```aura check-pass
 mut scores = [1, 2, 3]
 for item in mut scores:
     item += 1
@@ -20447,7 +20483,7 @@ See [examples/collections/list_iteration.au](../examples/collections/list_iterat
 
 Sets support bare shared and `own` iteration:
 
-```aura
+```aura check-pass
 seen = {1, 2, 3}
 for value in seen:
     print(value)
@@ -20459,7 +20495,7 @@ See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
 
 `enumerate(...)` gives you the position alongside each value:
 
-```aura
+```aura check-pass
 hosts = ["alpha", "beta"]
 for index, host in enumerate(hosts):
     print(f"{index}: {host}")
@@ -20467,7 +20503,7 @@ for index, host in enumerate(hosts):
 
 `zip(...)` walks two sequences together and stops at the shorter one:
 
-```aura
+```aura fragment
 ports = [80, 443, 8080]
 for host, port in zip(hosts, ports):
     print(f"{host}:{port}")
@@ -20490,7 +20526,7 @@ See [examples/control_flow/enumerate_and_zip.au](../examples/control_flow/enumer
 Comprehensions package nested bare loops and filters into an eager collection
 expression:
 
-```aura
+```aura check-pass
 values = [1, 2, 3, 4]
 even_squares = [value * value for value in values if value % 2 == 0]
 pairs = [
@@ -20504,7 +20540,7 @@ The output expression is written first, but the first iterable runs first.
 Filters run left to right and nested clauses are outer-major, so `pairs` is
 `[11, 12, 21, 22]`. A dictionary comprehension evaluates its key before its value:
 
-```aura
+```aura fragment
 labels = {value: value * 10 for value in values if value >= 3}
 ```
 
@@ -20547,11 +20583,14 @@ Queue; use `for item in queue:`.
 
 # Classes And Data
 
-The implemented class model currently covers fields, default values, keyword construction, member access, `public` fields and methods, instance methods, associated methods, mutating methods, explicit `copy class` declarations, and indirect recursive fields.
+The implemented class model currently covers fields, default values,
+positional and named construction, member access, `public` fields and methods,
+instance methods, associated methods, mutating methods, explicit `copy class`
+declarations, and indirect recursive fields.
 
 ## Declaring A Class
 
-```aura
+```aura check-pass
 class Point:
     x: float64
     y: float64
@@ -20561,14 +20600,14 @@ See [examples/classes/point_distance.au](../examples/classes/point_distance.au).
 
 Generic classes are also supported:
 
-```aura
+```aura check-pass
 class Box[T]:
     value: T
 ```
 
 Aura also supports explicit copy classes when every field is itself copyable:
 
-```aura
+```aura check-pass
 copy class Point:
     x: int32
     y: int32
@@ -20578,15 +20617,15 @@ See [examples/classes/copy_class.au](../examples/classes/copy_class.au).
 
 ## Constructing A Value
 
-Aura currently uses keyword-style construction:
+Class construction accepts named fields:
 
-```aura
+```aura fragment
 p1 = Point(x=0.0, y=0.0)
 ```
 
 ## Accessing Fields
 
-```aura
+```aura fragment
 dx = a.x - b.x
 ```
 
@@ -20599,7 +20638,7 @@ explanation of move semantics, copy types, and common patterns for working with 
 
 The implemented subset supports field defaults:
 
-```aura
+```aura check-pass
 class ServerConfig:
     host: str = "localhost"
     port: int32 = 8080
@@ -20607,7 +20646,7 @@ class ServerConfig:
 
 You can then omit those fields during construction:
 
-```aura
+```aura fragment
 local = ServerConfig()
 named = ServerConfig(host="aura.dev")
 ```
@@ -20619,7 +20658,7 @@ See [examples/classes/default_fields.au](../examples/classes/default_fields.au).
 Recursive class fields must be marked `indirect`. This gives the child an
 out-of-line representation and keeps the parent size finite:
 
-```aura
+```aura check-pass
 class Node:
     value: int32
     next: indirect Node?
@@ -20633,7 +20672,7 @@ See [examples/classes/indirect_recursive.au](../examples/classes/indirect_recurs
 
 Aura enforces class visibility across module boundaries. Fields and methods are private by default and must be marked `public` to be used from another module:
 
-```aura
+```aura check-pass
 class User:
     public name: str
     age: int32
@@ -20654,7 +20693,7 @@ See [examples/modules/simple_import.au](../examples/modules/simple_import.au).
 
 Aura supports methods declared directly inside the class body.
 
-```aura
+```aura check-pass
 class Counter:
     value: int32
 
@@ -20668,8 +20707,6 @@ The current compiler accepts these receiver forms. For a full explanation of how
 
 - `self`
   - shared receiver and the default spelling; read-only access
-- `self`
-  - explicit synonym for shared `self`
 - `own self`
   - consuming receiver; takes ownership of a non-copy instance
 - `mut self`
@@ -20679,12 +20716,11 @@ The current compiler accepts these receiver forms. For a full explanation of how
 
 A receiver must be first and is never typed explicitly. `self: Counter` is
 rejected because it looks like an instance receiver but would otherwise be an
-ordinary parameter; use `self`, `self`, `own self`, or
-`mut self`.
+ordinary parameter; use `self`, `own self`, or `mut self`.
 
 Example:
 
-```aura
+```aura check-pass
 class Counter:
     value: int32
 
@@ -20703,14 +20739,14 @@ class Counter:
 
 Call them through an instance:
 
-```aura
+```aura fragment
 counter = Counter(value=4)
 print(counter.read())
 ```
 
 Method calls follow the same argument rules as ordinary functions, so methods and associated methods can also use named arguments:
 
-```aura
+```aura check-pass
 class Greeter:
     prefix: str
 
@@ -20728,7 +20764,7 @@ print(greeter.say(name="aura"))
 
 Methods without a receiver are called through the class name:
 
-```aura
+```aura check-pass
 class Counter:
     value: int32
 
@@ -20736,7 +20772,7 @@ class Counter:
         return Counter(value=0)
 ```
 
-```aura
+```aura fragment
 print(Counter.zero().read())
 ```
 
@@ -20746,7 +20782,7 @@ See [examples/classes/methods.au](../examples/classes/methods.au).
 
 Aura supports `mut self` methods and member-target assignment.
 
-```aura
+```aura check-pass
 class Counter:
     value: int32
 
@@ -20757,7 +20793,7 @@ class Counter:
         self.value = 0
 ```
 
-```aura
+```aura fragment
 mut counter = Counter(value=4)
 counter.bump()
 counter.reset()
@@ -20767,7 +20803,7 @@ See [examples/classes/mutating_methods.au](../examples/classes/mutating_methods.
 
 Constructors support positional field arguments as long as they come before any named fields:
 
-```aura
+```aura check-pass
 class Point:
     x: int32
     y: int32 = 9
@@ -20781,7 +20817,6 @@ second = Point(7)
 The bootstrap compiler does not yet support:
 
 - separate `impl` blocks
-- method visibility modifiers
 
 ## Source: tutorials/06-ownership-and-borrowing.md
 
@@ -20823,7 +20858,7 @@ The built-in copy types are:
 
 Copy types behave the way Python developers expect:
 
-```aura
+```aura check-pass
 x: int32 = 10
 y = x          # copies the value
 print(x)       # 10 -- still usable
@@ -20853,23 +20888,27 @@ Copying an allowed handle never copies a queued value or task result.
 
 Here is where Python intuition breaks down:
 
-```aura
-name: str = "aura"
-other = name          # ownership moves to `other`
-print(other)          # "aura" -- works fine
+```aura check-pass
+def main():
+    name: str = "aura"
+    other = name          # ownership moves to `other`
+    print(other)          # "aura" -- works fine
 ```
 
 If you try to use `name` after the move:
 
-```aura
-name: str = "aura"
-other = name
-print(name)           # COMPILE ERROR
+```aura check-fail:AU3001
+def main():
+    name: str = "aura"
+    other = name
+    print(other)
+    print(name)           # COMPILE ERROR
 ```
 
 The compiler rejects this with:
 
 ```
+
 error: use of moved value `name`
 ```
 
@@ -20887,7 +20926,7 @@ error: use of moved value `name`
 
 When a move type supports independent duplication, call `.clone()`:
 
-```aura
+```aura check-pass
 name: str = "aura"
 other = name.clone()   # explicit copy -- name stays valid
 print(name)            # "aura"
@@ -20896,12 +20935,13 @@ print(other)           # "aura"
 
 Collections expose `copy()`:
 
-```aura
-mut xs: list[int32] = [1, 2, 3]
-ys = xs.copy()         # independent copy
-xs.append(4)
-print(xs.len())        # 4
-print(ys.len())        # 3 -- unaffected
+```aura check-pass
+def main():
+    mut xs: list[int32] = [1, 2, 3]
+    ys = xs.copy()         # independent copy
+    xs.append(4)
+    print(xs.len())        # 4
+    print(ys.len())        # 3 -- unaffected
 ```
 
 Explicit duplication makes the allocation and element-copying cost visible.
@@ -20914,7 +20954,7 @@ requirement and reject an unsafe concrete specialization with `AU3007`.
 
 List and str slices are another explicit owned-copy boundary:
 
-```aura
+```aura check-pass
 names = ["Ada", "Grace", "Margaret"]
 selected = names[1:]       # fresh owned list[str]
 label = "A🎉Z"[1:2]       # fresh owned str containing 🎉
@@ -20931,12 +20971,13 @@ List cannot mutate the source, and the slice cannot be an assignment target.
 
 A contextually typed lambda owns every outer local it uses:
 
-```aura
-label = "compile"
-length: def() -> int64 = lambda: label.len()
+```aura check-pass
+def main():
+    label = "compile"
+    length: def() -> int64 = lambda: label.len()
 
-print(length())
-print(length())
+    print(length())
+    print(length())
 ```
 
 `label` moves into the closure when the lambda expression is evaluated. Both
@@ -20947,13 +20988,14 @@ report `AU3001`.
 Copy captures are snapshots and leave their sources usable. When outer code
 also needs a non-copy value, clone before creating the closure:
 
-```aura
-label = "compile"
-captured = label.clone()
-length: def() -> int64 = lambda: captured.len()
+```aura check-pass
+def main():
+    label = "compile"
+    captured = label.clone()
+    length: def() -> int64 = lambda: captured.len()
 
-print(label)
-print(length())
+    print(label)
+    print(length())
 ```
 
 Bare and `mut` enclosing parameters are borrowed capabilities and cannot be
@@ -20972,7 +21014,7 @@ Bare function parameters grant logical shared access for every type. An
 implementation may pass copy bits directly, but that does not change the
 source-level contract. To transfer a move value to a function, write `own`:
 
-```aura
+```aura check-fail:AU3001
 class Document:
     title: str
     pages: int32
@@ -20980,16 +21022,17 @@ class Document:
 def archive(doc: own Document):
     print(doc.title)
 
-doc = Document(title="Report", pages=42)
-archive(doc)
-print(doc.pages)       # COMPILE ERROR: use of moved value `doc`
+def main():
+    doc = Document(title="Report", pages=42)
+    archive(doc)
+    print(doc.pages)       # COMPILE ERROR: use of moved value `doc`
 ```
 
 The explicit `own` parameter took ownership of `doc`. After the call, `doc` is no longer valid in the calling scope. If the declaration were simply `doc: Document`, it would borrow and the caller could keep using it.
 
 For copy types, shared access can be implemented by passing copied bits:
 
-```aura
+```aura check-pass
 def double(x: int32) -> int32:
     return x * 2
 
@@ -21011,7 +21054,7 @@ Aura has two kinds of borrows:
 
 A shared borrow lets a function read a value without consuming it:
 
-```aura
+```aura check-pass
 class Counter:
     value: int32
 
@@ -21029,7 +21072,7 @@ still owns the value.
 
 You can have multiple shared borrows active at the same time because none of them can modify the value:
 
-```aura
+```aura fragment
 def sum_values(a: Counter, b: Counter) -> int32:
     return a.value + b.value
 
@@ -21042,7 +21085,7 @@ print(sum_values(c1, c2))   # 30 -- both still valid
 
 A mutable borrow lets a function modify the value in place:
 
-```aura
+```aura fragment
 def bump(counter: mut Counter):
     counter.value += 1
 
@@ -21053,12 +21096,13 @@ print(counter.value)       # 42 -- the change persisted
 
 The caller must declare the binding as `mut` because the function will modify it. If the binding is not mutable, the compiler rejects the call:
 
-```aura
+```aura fragment
 counter = Counter(value=41)  # not mutable
 bump(counter)                # COMPILE ERROR
 ```
 
 ```
+
 error: argument for parameter `counter` in function `bump` must be a mutable place
 ```
 
@@ -21067,7 +21111,7 @@ error: argument for parameter `counter` in function `bump` must be a mutable pla
 You cannot have mutable access and another overlapping access to the same
 value at the same time. This prevents data races and aliasing bugs:
 
-```aura
+```aura fragment
 def bad(a: mut Counter, b: Counter):
     a.value += b.value
 
@@ -21085,7 +21129,7 @@ Methods on classes use the same borrowing system through **receivers**. The rece
 
 ### `self` -- read the instance
 
-```aura
+```aura check-pass
 class Account:
     balance: float64
 
@@ -21096,7 +21140,7 @@ class Account:
 Bare `self` is shared access. The method can read fields but cannot modify
 them, and the caller retains ownership.
 
-```aura
+```aura fragment
 account = Account(balance=100.0)
 print(account.display())    # "Balance: 100.0"
 print(account.balance)      # still accessible
@@ -21104,7 +21148,7 @@ print(account.balance)      # still accessible
 
 ### `mut self` -- modify the instance
 
-```aura
+```aura check-pass
 class Account:
     balance: float64
 
@@ -21117,7 +21161,7 @@ class Account:
 
 The method can read and write fields. The instance must be declared `mut`:
 
-```aura
+```aura fragment
 mut account = Account(balance=100.0)
 account.deposit(50.0)
 print(account.display())    # "Balance: 150.0"
@@ -21125,14 +21169,14 @@ print(account.display())    # "Balance: 150.0"
 
 If you forget `mut`:
 
-```aura
+```aura fragment
 account = Account(balance=100.0)
 account.deposit(50.0)       # COMPILE ERROR: must be a mutable place
 ```
 
 ### `own self` -- consume the instance
 
-```aura
+```aura check-pass
 class Connection:
     host: str
 
@@ -21142,7 +21186,7 @@ class Connection:
 
 An `own self` receiver takes ownership. A non-copy instance is consumed after the call:
 
-```aura
+```aura fragment
 conn = Connection(host="example.com")
 host = conn.into_host()
 print(host)               # "example.com"
@@ -21155,7 +21199,7 @@ Use `own self` when the method needs to disassemble the instance or transfer own
 
 Methods without a receiver are called on the class itself, not on an instance:
 
-```aura
+```aura check-pass
 class Counter:
     value: int32
 
@@ -21163,7 +21207,7 @@ class Counter:
         return Counter(value=0)
 ```
 
-```aura
+```aura fragment
 c = Counter.zero()
 ```
 
@@ -21183,19 +21227,21 @@ must consume the instance, or `mut` when it must mutate in place.
 
 When you own a value, reading a non-copy field **moves** that field out of the instance:
 
-```aura
+```aura check-fail:AU3001
 class User:
     name: str
     age: int32
 
-user = User(name="Ada", age=36)
-greeting = user.name         # moves `name` out of `user`
-print(greeting)              # "Ada"
-print(user.age)              # 36 -- copy field, still fine
-print(user.name)             # COMPILE ERROR: use of moved field `name` from `user`
+def main():
+    user = User(name="Ada", age=36)
+    greeting = user.name     # moves `name` out of `user`
+    print(greeting)          # "Ada"
+    print(user.age)          # 36 -- copy field, still fine
+    print(user.name)         # COMPILE ERROR: use of moved field `name` from `user`
 ```
 
 ```
+
 error: use of moved field `name` from `user`
 ```
 
@@ -21205,12 +21251,13 @@ error: use of moved field `name` from `user`
 
 When you borrow a value, you cannot move non-copy fields out of it because you do not own it:
 
-```aura
+```aura fragment
 def get_name(user: User) -> str:
     return user.name       # COMPILE ERROR
 ```
 
 ```
+
 error: cannot move non-copy field `name` out of borrowed value `user`
 ```
 
@@ -21218,21 +21265,21 @@ The function only borrowed `user` -- it has no right to take the `name` away. Th
 
 **Option 1: clone the field**
 
-```aura
+```aura fragment
 def get_name(user: User) -> str:
     return user.name.clone()   # explicit copy, user keeps its name
 ```
 
 **Option 2: take ownership of the whole value**
 
-```aura
+```aura fragment
 def get_name(user: own User) -> str:
     return user.name           # consumes user, moves name out
 ```
 
 **Option 3: return a copy-type field instead**
 
-```aura
+```aura fragment
 def get_age(user: User) -> int32:
     return user.age            # int32 is copy, no move needed
 ```
@@ -21241,7 +21288,7 @@ def get_age(user: User) -> int32:
 
 By default, user-defined classes are move types. You can make a class copyable with `copy class`, but only if every field is itself a copy type:
 
-```aura
+```aura check-pass
 copy class Point:
     x: int32
     y: int32
@@ -21254,13 +21301,14 @@ print(p2.x)           # 1
 
 If any field is a move type, the compiler rejects the `copy` annotation:
 
-```aura
+```aura check-fail:AU2002
 copy class Bad:
     name: str       # COMPILE ERROR
     value: int32
 ```
 
 ```
+
 error: field `name` on `copy class Bad` must be a copy type, found `str`
 ```
 
@@ -21271,7 +21319,7 @@ error: field `name` on `copy class Bad` must be a copy type, found `str`
 Loops use the same readable default. Bare `list` and `set` iteration borrows the
 collection, so it remains usable:
 
-```aura
+```aura check-pass
 mut names: list[str] = ["Ada", "Grace", "Margaret"]
 for name in names:
     print(name)
@@ -21280,17 +21328,18 @@ print(names.len())     # 3 -- still usable
 
 Write `own` when you intend to move each element out and consume the list:
 
-```aura
-names: list[str] = ["Ada", "Grace", "Margaret"]
-for name in own names:
-    print(name)
-# names is moved
+```aura check-pass
+def main():
+    names: list[str] = ["Ada", "Grace", "Margaret"]
+    for name in own names:
+        print(name)
+    # names is moved
 ```
 
 **Note:** Even `list[int32]` is itself a move type, but its bare loop still
 borrows. Only `own` consumes it:
 
-```aura
+```aura check-pass
 mut xs: list[int32] = [1, 2, 3]
 for x in xs:
     print(x)
@@ -21303,7 +21352,7 @@ for x in own xs:
 
 Bare iteration is the shared form:
 
-```aura
+```aura check-pass
 mut names: list[str] = ["Ada", "Grace", "Margaret"]
 for name in names:
     print(name)
@@ -21319,7 +21368,7 @@ For copy element types, the loop variable receives a copy of each element. For n
 
 To modify elements during iteration, use `for ... in mut`:
 
-```aura
+```aura check-pass
 class Score:
     value: int32
 
@@ -21352,7 +21401,7 @@ consume, and `mut` to update.
 
 A comprehension is the eager expression counterpart of nested bare loops:
 
-```aura
+```aura check-pass
 names = ["Ada", "Grace"]
 lengths = [name.len() for name in names]
 copies = [name.clone() for name in names]
@@ -21373,7 +21422,7 @@ eager result. Every target disappears after the closing delimiter.
 Pattern matching follows the same ownership rules. Bare `match` shares the
 value, so the caller keeps ownership:
 
-```aura
+```aura check-pass
 result: Result[str, str] = Result.Ok("success")
 match result:
     case Ok(msg):
@@ -21385,19 +21434,20 @@ print(result)          # still valid
 
 To consume the value and receive owned payloads, use `match own`:
 
-```aura
-result: Result[str, str] = Result.Ok("success")
-match own result:
-    case Ok(msg):
-        print(msg)     # msg is owned
-    case Err(e):
-        print(e)
-# result is moved
+```aura check-pass
+def main():
+    result: Result[str, str] = Result.Ok("success")
+    match own result:
+        case Ok(msg):
+            print(msg)     # msg is owned
+        case Err(e):
+            print(e)
+    # result is moved
 ```
 
 To match and mutate the payload, use `match mut`:
 
-```aura
+```aura check-pass
 mut result: Result[str, str] = Result.Ok("hello")
 match mut result:
     case Ok(msg):
@@ -21411,7 +21461,7 @@ match mut result:
 
 Queues transfer ownership of sent values. When you put a value into a queue, it moves:
 
-```aura
+```aura check-pass
 jobs = Queue[str]()
 jobs.put("hello")      # "hello" moves into the queue
 # the sent string is now owned by whichever task receives it
@@ -21428,7 +21478,7 @@ Queue handles are cheap copy references. Passing a queue to
 `TaskGroup.start(...)` shares the same underlying queue; you do not need
 `.clone()` for the common case:
 
-```aura
+```aura check-pass
 def send_message(jobs: Queue[str]):
     jobs.put("from task")
     jobs.close()
@@ -21467,7 +21517,7 @@ rights.
 ### Pattern: "I need to use a value after passing it to a function"
 
 **Problem:**
-```aura
+```aura fragment
 def archive(doc: own Document):
     print(doc.title)
 
@@ -21477,7 +21527,7 @@ print(doc.title)       # COMPILE ERROR: use of moved value
 ```
 
 **Fix 1 -- remove `own` to use the bare shared-borrow default:**
-```aura
+```aura fragment
 def archive(doc: Document):
     print(doc.title)
 ```
@@ -21485,7 +21535,7 @@ def archive(doc: Document):
 The bare `doc: Document` declaration is the shared spelling.
 
 **Fix 2 -- keep the owned parameter and clone before passing:**
-```aura
+```aura fragment
 archive(doc.clone())
 print(doc.title)       # doc still valid
 ```
@@ -21493,13 +21543,13 @@ print(doc.title)       # doc still valid
 ### Pattern: "I need to read a str field without consuming the owner"
 
 **Problem:**
-```aura
+```aura fragment
 def get_title(doc: Document) -> str:
     return doc.title   # COMPILE ERROR: cannot move out of shared access
 ```
 
 **Fix -- clone the field:**
-```aura
+```aura fragment
 def get_title(doc: Document) -> str:
     return doc.title.clone()
 ```
@@ -21507,14 +21557,14 @@ def get_title(doc: Document) -> str:
 ### Pattern: "I need to consume collection elements"
 
 **Problem:**
-```aura
+```aura fragment
 for item in items:
     inspect(item)
 print(items.len())     # still available
 ```
 
 **Use `own` when the consumer needs owned items:**
-```aura
+```aura fragment
 for item in own items:
     process(item)
 # items is now moved
@@ -21523,13 +21573,13 @@ for item in own items:
 ### Pattern: "I need to modify elements in a collection"
 
 **Problem:**
-```aura
+```aura fragment
 for score in scores:
     score.double()     # COMPILE ERROR: not mutable
 ```
 
 **Fix -- mutable borrow iterate:**
-```aura
+```aura fragment
 for score in mut scores:
     score.double()
 ```
@@ -21537,13 +21587,13 @@ for score in mut scores:
 ### Pattern: "The compiler says my binding must be mutable"
 
 **Problem:**
-```aura
+```aura fragment
 counter = Counter(value=0)
 counter.bump()         # COMPILE ERROR: must be a mutable place
 ```
 
 **Fix -- declare with `mut`:**
-```aura
+```aura fragment
 mut counter = Counter(value=0)
 counter.bump()
 ```
@@ -21597,7 +21647,7 @@ Aura supports enough numeric and string behavior for real programs. This chapter
 
 The standard arithmetic operators work on matching numeric types:
 
-```aura
+```aura check-pass
 a: int32 = 6
 b: int32 = 10
 print(a + b)    # 16
@@ -21614,7 +21664,7 @@ truncating integer division or floating true division. Use `//` for a floor
 quotient. Both `//` and `%` follow the divisor-sign rule, including when either
 operand is negative:
 
-```aura
+```aura check-pass
 print(7 // -3)  # -3
 print(7 % -3)   # -2
 print(-7 // 3)  # -3
@@ -21625,14 +21675,14 @@ The identity `a == (a // b) * b + (a % b)` holds for nonzero integer `b`.
 Integer `//` and `%` by zero fail at runtime. Floating-point `/` remains true
 division:
 
-```aura
+```aura check-pass
 print(7.0 / 2.0) # 3.5
 ```
 
 When the inputs are integers and true division is intended, convert both with
 `.to_float()`:
 
-```aura
+```aura check-pass
 numerator: int64 = 7
 denominator: int64 = 2
 print(numerator.to_float() / denominator.to_float()) # 3.5
@@ -21641,7 +21691,7 @@ print(numerator.to_float() / denominator.to_float()) # 3.5
 Every integer type has `.to_float() -> float64`. It rounds to the nearest
 representable IEEE-754 value using ties-to-even, so large integers may change:
 
-```aura
+```aura check-pass
 large: int64 = 9007199254740993
 print(large.to_float()) # 9007199254740992.0
 ```
@@ -21651,7 +21701,7 @@ floor/divmod correction, so the remainder follows the divisor's sign even
 where a naive host remainder would not. Floating `/`, `//`, and `%` by zero
 fail at runtime.
 
-```aura
+```aura check-pass
 print(-10.5 // 3.0) # -4.0
 print(-10.5 % 3.0)  # 1.5
 ```
@@ -21663,7 +21713,7 @@ operator trait when no builtin numeric or Duration rule applies.
 
 Unary minus works on integers and floats:
 
-```aura
+```aura check-pass
 offset: int32 = -5
 temperature: float64 = -3.5
 ```
@@ -21677,7 +21727,7 @@ Aura does not do implicit numeric widening. Mixed expressions like `int32 + int6
 Integer literals can use decimal, hexadecimal, binary, or octal notation.
 Underscores can group digits without changing the value:
 
-```aura
+```aura check-pass
 requests = 1_000_000
 red: uint32 = 0xFF
 permissions: uint16 = 0o755
@@ -21695,7 +21745,7 @@ Every integer type supports `&`, `|`, `^`, `~`, `<<`, and `>>`. Both operands
 of a binary operation have the same exact integer type. This includes a shift
 count:
 
-```aura
+```aura check-pass
 value: uint32 = 0b1010_0000
 mask: uint32 = 0b1111_0000
 four: uint32 = 4
@@ -21717,7 +21767,7 @@ are `&=`, `|=`, `^=`, `<<=`, and `>>=`.
 
 `**` is right-associative and more tightly bound than unary minus on its left:
 
-```aura
+```aura check-pass
 print(2 ** 3 ** 2) # 512
 print(-2 ** 2)     # -4
 print((-2) ** 2)   # 4
@@ -21731,7 +21781,7 @@ reports defined domain and overflow failures.
 `round` uses nearest-integer ties-to-even for floating inputs and returns
 `int64`. An integer input is returned unchanged with its exact type:
 
-```aura
+```aura check-pass
 print(round(2.5)) # 2
 print(round(3.5)) # 4
 ```
@@ -21739,7 +21789,7 @@ print(round(3.5)) # 4
 `divmod(left, right)` evaluates both values once and returns the floor quotient
 and divisor-signed remainder together:
 
-```aura
+```aura check-pass
 quotient, remainder = divmod(-17, 5)
 print(quotient)  # -4
 print(remainder) # 3
@@ -21754,7 +21804,7 @@ Ordinary integer `+`, `-`, and `*` are checked and report `AU4002` if the
 mathematical result does not fit the integer type. Every integer type also
 provides explicit wrapping and saturating alternatives:
 
-```aura
+```aura check-pass
 top: int32 = 2147483647
 
 print(top.wrapping_add(1))    # -2147483648
@@ -21766,7 +21816,7 @@ print(top.saturating_mul(2))  # 2147483647
 Shift operations have the same explicit arithmetic modes. The count has the
 receiver's exact type and must remain below its bit width:
 
-```aura
+```aura check-pass
 high: uint8 = 0b1000_0000
 one: uint8 = 1
 
@@ -21786,7 +21836,7 @@ operand is either another same-shape `Array[T]` or one scalar of exactly `T`.
 `Array[T]` provides fixed-shape, contiguous, row-major numeric storage for
 exactly `int32`, `int64`, `float32`, and `float64`:
 
-```aura
+```aura check-pass
 def square(value: float64) -> float64:
     return value * value
 
@@ -21815,7 +21865,7 @@ and [Numeric Arrays](../docs/manual/numeric-arrays.md).
 
 Integer literals default to `int64`, whose shorter alias is `int`. Floating-point literals default to `float64`. Both adopt a compatible expected numeric type when the surrounding context requires it:
 
-```aura
+```aura check-pass
 count: int32 = 12
 ratio: float32 = 3.25
 whole: float64 = 2
@@ -21825,7 +21875,7 @@ An integer literal adopts a `float32` or `float64` context only when its value i
 
 Aura provides builtin numeric helpers:
 
-```aura
+```aura check-pass
 print(abs(-7))        # 7
 print(min(9, 2))      # 2
 print(max(4, 12))     # 12
@@ -21834,7 +21884,7 @@ print(sqrt(81.0))     # 9.0
 
 `float64` also has a `.sqrt()` method:
 
-```aura
+```aura check-pass
 value: float64 = 81.0
 print(value.sqrt())   # 9.0
 ```
@@ -21849,7 +21899,7 @@ See [examples/numbers/numeric_builtins.au](../examples/numbers/numeric_builtins.
 
 Primitive numeric and boolean values support `.to_string()`:
 
-```aura
+```aura check-pass
 count: int32 = 42
 ok: bool = true
 print(count.to_string())   # "42"
@@ -21860,16 +21910,19 @@ print(ok.to_string())      # "true"
 
 Use `expr as Type` to cast between numeric types:
 
-```aura
+```aura check-pass
 whole = 7.9 as int32       # 7 (truncates toward zero)
 narrowed = 1.25 as float32
 widened = 3 as float64
 ```
 
-Integer casts are range-checked at runtime. `300 as int8` fails cleanly and
-never wraps.
+Integer casts are range-checked and never wrap. A provably invalid literal
+such as `300 as int8` is rejected while checking. A cast from a value computed
+at runtime is checked when it executes and traps cleanly if the value does not
+fit.
 
-Integer-to-float casts are also exactness-checked at runtime. Aura rejects a
+Integer-to-float casts follow the same split: literals can be rejected while
+checking, and dynamic values are exactness-checked at runtime. Aura rejects a
 cast that would lose integer precision.
 
 That strict cast is intentionally different from `.to_float()`. For the
@@ -21894,7 +21947,7 @@ The combined arithmetic example is
 
 Use `int` (the `int64` alias) and `float64` by default. Other explicit widths are useful when you need control over memory layout, value ranges, or a fixed API contract. APIs declared with `int32` remain `int32`; literal defaulting does not widen them. Full-range `uint128` arithmetic is supported:
 
-```aura
+```aura check-pass
 value: uint128 = 340282366920938463463374607431768211455
 print(value)
 ```
@@ -21906,7 +21959,7 @@ annotated type's range, Aura reports an error and preserves the declared type.
 
 The bootstrap compiler also supports `float32` in typed contexts like class fields and function parameters:
 
-```aura
+```aura check-pass
 class Measurement:
     value: float32
 
@@ -21921,7 +21974,7 @@ See [examples/numbers/float32_values.au](../examples/numbers/float32_values.au).
 Ordinary strings use matching single or double quotes. Both forms produce the
 same `str`, support the same escapes, and concatenate with `+`:
 
-```aura
+```aura check-pass
 greeting = 'hello' + ", aura"
 apostrophe = 'Aura\'s strings'
 quotation = 'the compiler said "ready"'
@@ -21934,7 +21987,7 @@ type.
 Use three matching quotes for exact multiline text. The compiler keeps the
 first newline, last newline, indentation, spaces, and physical tabs:
 
-```aura
+```aura check-pass
 prompt = """Summarize the request.
 Return JSON with a label and reason.
 """
@@ -21942,7 +21995,7 @@ Return JSON with a label and reason.
 
 Use lowercase `r` for a single-line value where backslashes are data:
 
-```aura
+```aura check-pass
 model_dir = r"C:\models\agent"
 number_pattern = r'\d+\.\d+'
 ```
@@ -21955,7 +22008,7 @@ byte strings are unavailable.
 Interpolated strings use the double-quoted `f"..."` form and produce an owned
 `str`; `f'...'` is not supported:
 
-```aura
+```aura check-pass
 name: str = "Aura"
 answer: int32 = 42
 print(f"Hello, {name} {answer}")
@@ -21966,7 +22019,7 @@ print(f"delta: {-1.25:09.3f}")
 
 Interpolations accept any expression, including indexed lookups:
 
-```aura
+```aura fragment
 print(f"value: {counts['key']}")
 ```
 
@@ -21985,7 +22038,7 @@ See [examples/strings/f_strings.au](../examples/strings/f_strings.au).
 
 When a function takes a string it only reads, use `str`:
 
-```aura
+```aura check-pass
 def greet(name: str) -> str:
     return "Hello, " + name
 ```
@@ -21996,7 +22049,7 @@ See [examples/strings/borrow_str.au](../examples/strings/borrow_str.au).
 
 Aura provides a rich set of string methods:
 
-```aura
+```aura check-pass
 text = "  aura repo  "
 print(text.len())                    # 15
 print(text.contains("repo"))         # true
@@ -22012,7 +22065,7 @@ print(trimmed.to_upper())           # "AURA REPO"
 `len()` counts Unicode scalar values, while `byte_len()` reports the number of
 bytes in the UTF-8 encoding. Both members return `int64`:
 
-```aura
+```aura check-pass
 text = 'A🎉'
 print(text.len())       # 2; O(n)
 print(text.byte_len())  # 5; O(1)
@@ -22021,7 +22074,7 @@ print(text.byte_len())  # 5; O(1)
 Integer indexing on `str` remains unavailable, but one-colon slicing
 returns a fresh owned str:
 
-```aura
+```aura check-pass
 text = "A🎉Z"
 print(text[1:2])   # 🎉
 print(text[:2])    # A🎉
@@ -22045,7 +22098,7 @@ argument remains reserved but unimplemented.
 
 `strip_prefix(...)` and `strip_suffix(...)` return `Option[str]`, so they compose with `match`:
 
-```aura
+```aura fragment
 match trimmed.strip_prefix("aura "):
     case Some(rest):
         print(rest)     # "repo"
@@ -22055,14 +22108,14 @@ match trimmed.strip_prefix("aura "):
 
 `join(...)` uses the receiver as the separator:
 
-```aura
+```aura check-pass
 parts = ["aura", "lang", "tests"]
 print("-".join(parts))    # "aura-lang-tests"
 ```
 
 `clone()` creates an independent copy of a string (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for why this matters):
 
-```aura
+```aura check-pass
 text: str = "aura"
 copy = text.clone()
 print(text)    # still valid
@@ -22081,7 +22134,7 @@ Aura provides parsing builtins that return `Result`:
 
 Use `match` to handle success and failure:
 
-```aura
+```aura check-pass
 match parse_int32("42"):
     case Result.Ok(value):
         print(value)
@@ -22097,7 +22150,7 @@ See [examples/strings/string_parsing_and_formatting.au](../examples/strings/stri
 
 Strings support `==` and `!=`:
 
-```aura
+```aura fragment
 if greeting == "hello, aura":
     print(greeting)
 ```
@@ -22111,7 +22164,7 @@ The comparison operators produce `bool`:
 - `==`, `!=`, `<`, `<=`, `>`, `>=`
 - `and`, `or`, `not`
 
-```aura
+```aura fragment
 if score >= 90 and not failed:
     print("passed")
 ```
@@ -22120,7 +22173,7 @@ if score >= 90 and not failed:
 
 Duration literals are used with the concurrency surface (see [13-concurrency.md](13-concurrency.md)):
 
-```aura
+```aura check-pass
 short_wait: Duration = 5ms
 normal_wait: Duration = 1s
 long_wait: Duration = 2m
@@ -22131,7 +22184,7 @@ non-negative integral counts with `ms`, `s`, or `m`; there is no `ns` suffix,
 fractional literal, or unary minus for Duration. Use the signed associated
 constructors when the count is computed:
 
-```aura
+```aura check-pass
 attempt: int64 = 3
 base = Duration.ms(125)
 backoff = attempt * base
@@ -22232,7 +22285,7 @@ Enums let you define a type that can be one of several variants. Combined with `
 
 ## Declaring An Enum
 
-```aura
+```aura check-pass
 enum TrafficLight:
     Red
     Yellow
@@ -22245,7 +22298,7 @@ Each variant belongs to the enum's namespace: `TrafficLight.Red`, `TrafficLight.
 
 Variants can carry a single value:
 
-```aura
+```aura check-pass
 enum ParseResult:
     Success(int32)
     Failure(str)
@@ -22262,7 +22315,7 @@ acts like `Failure(own str)`, and the same is true of builtins such as
 
 Enums can be generic:
 
-```aura
+```aura check-pass
 enum Wrapper[T]:
     Item(T)
     Empty
@@ -22270,7 +22323,7 @@ enum Wrapper[T]:
 
 You can provide explicit type arguments when the compiler needs help:
 
-```aura
+```aura check-pass
 wrapped = Result[int32, str].Ok(7)
 ```
 
@@ -22280,7 +22333,7 @@ See [examples/enums/explicit_type_args.au](../examples/enums/explicit_type_args.
 
 Aura's `match` requires you to handle every variant. If you miss one, the compiler reports an error:
 
-```aura
+```aura fragment
 def value_or_zero(result: own ParseResult) -> int32:
     match result:
         case ParseResult.Success(value):
@@ -22294,7 +22347,7 @@ def value_or_zero(result: own ParseResult) -> int32:
 
 Use `case _:` to match any remaining variants:
 
-```aura
+```aura fragment
 match light:
     case TrafficLight.Red:
         print("stop")
@@ -22306,7 +22359,7 @@ match light:
 
 When a case matches a payload variant, the payload becomes a local binding:
 
-```aura
+```aura fragment
 case ParseResult.Success(value):
     return value    # value is an int32 here
 ```
@@ -22315,7 +22368,7 @@ case ParseResult.Success(value):
 
 When the scrutinee type is already known, you can omit the enum name:
 
-```aura
+```aura check-pass
 result: Result[str, str] = Result.Ok("ok")
 
 match result:
@@ -22333,7 +22386,7 @@ Bare `match` inspects without consuming the value. Write `match own` when an
 arm must receive owned payloads. This distinction matters for non-copy types
 (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
 
-```aura
+```aura check-pass
 result: Result[str, str] = Result.Ok("ok")
 
 match result:
@@ -22347,7 +22400,7 @@ match result:
 
 Use `match mut` when you need to modify the matched value:
 
-```aura
+```aura check-pass
 mut result: Result[str, str] = Result.Ok("hello")
 match mut result:
     case Ok(msg):
@@ -22364,7 +22417,7 @@ See [examples/enums/match_borrow.au](../examples/enums/match_borrow.au).
 
 You can also match on literal values of `bool`, integer, and `str`:
 
-```aura
+```aura check-pass
 def describe_number(value: int32) -> str:
     match value:
         case 0:
@@ -22377,7 +22430,7 @@ def describe_number(value: int32) -> str:
 
 Boolean matches are exhaustive when they cover both `true` and `false`:
 
-```aura
+```aura check-pass
 def describe_flag(flag: bool) -> str:
     match flag:
         case true:
@@ -22392,7 +22445,7 @@ See [examples/control_flow/match_literals.au](../examples/control_flow/match_lit
 
 Nested patterns, expression-form `match`, floating-point literal patterns, keyword payload arguments, and multi-payload variants are also supported:
 
-```aura
+```aura check-pass
 enum Inner:
     Pair(int32, int32)
 
@@ -22415,7 +22468,7 @@ See [examples/enums/rich_match.au](../examples/enums/rich_match.au).
 A guard adds an exact Boolean condition after structural matching. An
 or-pattern lets one arm accept several structural alternatives:
 
-```aura
+```aura fragment
 match code:
     case 200 | 201 if code == 201:
         print("created")
@@ -22434,7 +22487,7 @@ A lowercase name at the top level binds the complete scrutinee. The guarded
 form makes that name available to the condition, and the unguarded form is the
 final catch-all:
 
-```aura
+```aura fragment
 return match value:
     case whole if whole >= 0: whole
     case whole: 0 - whole
@@ -22448,7 +22501,7 @@ See [examples/enums/match_guards_and_or_patterns.au](../examples/enums/match_gua
 
 Expression-form `match` is not limited to `return`. It also works in binding and argument positions, and an arm value may itself be a nested block-form expression:
 
-```aura
+```aura fragment
 value = match outer:
     case Outer.A: 10
     case Outer.B: 20
@@ -22471,13 +22524,15 @@ See [examples/enums/result_match.au](../examples/enums/result_match.au) and [exa
 
 # Results And Options
 
-Aura provides three built-in generic enums for representing success/failure and presence/absence. These are the foundation of error handling in Aura.
+Aura represents typed success, failure, presence, and absence with
+`Result[T, E]`, `Option[T]`, and the queue-specific `SendError[T]`. These enums
+form the foundation of recoverable error handling in Aura.
 
 ## `Result[T, E]`
 
 Use `Result[T, E]` when an operation can succeed with a value of type `T` or fail with an error of type `E`:
 
-```aura
+```aura check-pass
 def divide(a: int32, b: int32) -> Result[int32, str]:
     if b == 0:
         return Result.Err("division by zero")
@@ -22486,7 +22541,7 @@ def divide(a: int32, b: int32) -> Result[int32, str]:
 
 Handle the result with `match`:
 
-```aura
+```aura fragment
 match divide(10, 3):
     case Ok(value):
         print(f"result: {value}")
@@ -22500,7 +22555,7 @@ This is Aura's primary error-handling pattern. Instead of exceptions (like Pytho
 
 Use `Option[T]` when a value may or may not be present:
 
-```aura
+```aura check-pass
 def find_user(id: int32) -> Option[str]:
     if id == 1:
         return Option.Some("Ada")
@@ -22509,7 +22564,7 @@ def find_user(id: int32) -> Option[str]:
 
 Handle it with `match`:
 
-```aura
+```aura fragment
 match find_user(1):
     case Some(name):
         print(f"found: {name}")
@@ -22532,7 +22587,7 @@ These look similar but are different:
 - **`None`** is the unit type and value. It means "no meaningful return value." A function with no `-> ...` returns `None`.
 - **`Option.None`** is the empty variant of `Option[T]`. It means "no value present in this optional slot."
 
-```aura
+```aura check-pass
 done: None = None              # the unit value
 missing: Option[int32] = Option.None   # an empty optional
 ```
@@ -22541,21 +22596,24 @@ In practice, the distinction is clear from context. When you see `Option.None` i
 
 `Option.Some(...)` can infer `T` from its payload even without an annotation:
 
-```aura
+```aura check-pass
 count = Option.Some(5)
 ```
 
 `Option.None` still needs an expected `Option[T]` type because there is no payload to infer from:
 
-```aura
+```aura check-pass
 missing: Option[int32] = Option.None
 ```
 
 ## `SendError[T]`
 
-`SendError[T]` is the error type returned when a queue send fails because the queue is closed or a waiting send is cancelled. It wraps the value that could not be sent, so you can recover it:
+`SendError[T]` is the error type returned when a queue send fails. It wraps the
+value that could not be sent, so you can recover it. `put` can report a closed
+queue, cancellation, or timeout; `try_put` reports `Full` when a bounded queue
+has no capacity:
 
-```aura
+```aura check-pass
 ch = Queue[int32]()
 ch.close()
 
@@ -22566,6 +22624,10 @@ match ch.put(4):
         print(f"queue closed, could not send {value}")
     case Err(SendError.Cancelled(value)):
         print(f"send cancelled, could not send {value}")
+    case Err(SendError.TimedOut(value)):
+        print(f"send timed out, could not send {value}")
+    case Err(SendError.Full(value)):
+        print(f"queue full, could not send {value}")
 ```
 
 See [examples/concurrency/send_result.au](../examples/concurrency/send_result.au) for a full example.
@@ -22574,9 +22636,9 @@ See [examples/concurrency/send_result.au](../examples/concurrency/send_result.au
 
 A common pattern is chaining operations that each return `Result`. Use `match` to unwrap each step:
 
-```aura
+```aura check-pass
 def process(input: str) -> Result[int32, str]:
-    match parse_int32(input):
+    match own parse_int32(input):
         case Ok(value):
             if value < 0:
                 return Result.Err("negative value")
@@ -22591,7 +22653,7 @@ For simpler cases, Aura provides `try expr` to reduce the nesting. See [12-error
 
 `control.retry` handles the common policy where every `Err` is retryable:
 
-```aura
+```aura check-pass
 import control
 
 def attempt() -> Result[int32, str]:
@@ -22622,13 +22684,13 @@ for a status-aware network policy.
 The bootstrap compiler supports:
 
 - `Result[T, E]`, `Option[T]`, and `SendError[T]` in type positions
-- constructing values with `Result.Ok(...)`, `Result.Err(...)`, `Option.Some(...)`, `Option.None`, `SendError.Closed(...)`, and `SendError.Cancelled(...)`
+- constructing values with `Result.Ok(...)`, `Result.Err(...)`,
+  `Option.Some(...)`, `Option.None`, and every `SendError` variant:
+  `Closed(...)`, `Cancelled(...)`, `TimedOut(...)`, and `Full(...)`
 - exhaustive `match` over all of these
 - unqualified variants (`Ok`, `Err`, `Some`, `None`) when the scrutinee type is known
-
-Not yet supported:
-
-- implicit error conversion for `try` (error types must match exactly)
+- `try` propagation with either the exact error type or a visible applicable
+  `impl From[SourceError] for TargetError`
 
 See [examples/enums/result_option.au](../examples/enums/result_option.au).
 
@@ -22642,7 +22704,7 @@ If you are coming from Python, this works like Python's `with` statement and con
 
 ## `with` Binds A Scoped Resource
 
-```aura
+```aura check-pass
 import fs
 import io
 
@@ -22666,7 +22728,7 @@ In the current compiler, a `with` resource may be:
 
 - a user-defined class with:
 
-```aura
+```aura fragment
 def close(mut self):
 ```
 
@@ -22681,7 +22743,7 @@ For user-defined classes, `close(...)` must take `mut self`, no extra parameters
 
 `TaskGroup()` is the one non-class value that supports `with`:
 
-```aura
+```aura fragment
 with TaskGroup() as group:
     group.start(worker, out)
     group.start(worker, out)
@@ -22716,7 +22778,7 @@ When functions return `Result[T, E]`, chaining multiple fallible operations with
 
 `try expr` evaluates the expression, which must produce a `Result[T, E]`. If the result is `Ok(value)`, `try` unwraps it and the expression evaluates to the inner value. If the result is `Err(e)`, Aura returns that error from the current function immediately.
 
-```aura
+```aura check-pass
 def divide(a: int32, b: int32) -> Result[int32, str]:
     if b == 0:
         return Result.Err("division by zero")
@@ -22734,7 +22796,7 @@ In `add_one_after_divide`, `try divide(a, b)` either:
 
 Without `try`, the same function would need a nested `match`:
 
-```aura
+```aura fragment
 def add_one_after_divide(a: int32, b: int32) -> Result[int32, str]:
     match divide(a, b):
         case Ok(value):
@@ -22747,7 +22809,7 @@ def add_one_after_divide(a: int32, b: int32) -> Result[int32, str]:
 
 `try` shines when chaining several fallible calls:
 
-```aura
+```aura fragment
 def compute(input: str) -> Result[int32, str]:
     parsed = try parse_int32(input)
     doubled = try divide(parsed * 2, 3)
@@ -22760,7 +22822,7 @@ Each `try` either succeeds and continues to the next line, or short-circuits the
 
 `try` can appear inside larger expressions:
 
-```aura
+```aura check-pass
 def add_parsed(a: str, b: str) -> Result[int32, str]:
     return Result.Ok(try parse_int32(a) + try parse_int32(b))
 ```
@@ -22769,7 +22831,7 @@ def add_parsed(a: str, b: str) -> Result[int32, str]:
 
 `try` works inside `with` blocks. The resource cleanup still runs when `try` triggers an early return:
 
-```aura
+```aura fragment
 def process_file(handle: own FileHandle) -> Result[str, str]:
     with file = handle:
         value = try validate(file.read())
@@ -22781,10 +22843,15 @@ def process_file(handle: own FileHandle) -> Result[str, str]:
 
 - `try` is only valid inside a function body
 - the enclosing function must return `Result[T, E]`
-- the `try` expression must produce `Result[U, E]` -- the error type `E` must match exactly
+- the `try` expression must produce `Result[U, SourceError]`; the enclosing
+  error type may be identical or provide a visible applicable
+  `impl From[SourceError] for TargetError`
 - `try` unwraps `Ok(value)` to the inner type `U`
 
-The error type matching is strict in the bootstrap compiler. If your function returns `Result[int32, str]`, every `try` expression must also use `str` as its error type.
+Exact error types propagate directly. When they differ, Aura calls the
+selected `From.from` implementation before returning `Result.Err(...)`.
+See the Manual's [`From` And `try`](../docs/manual/generics-and-traits.md#from-and-try)
+section for the trait contract and conversion rules.
 
 See:
 
@@ -22820,13 +22887,13 @@ Every task belongs to a `TaskGroup`.
 
 A queue is a typed pipe for sending values between tasks:
 
-```aura
+```aura check-pass
 jobs = Queue[int32]()
 ```
 
 Queues may also be bounded:
 
-```aura
+```aura check-pass
 jobs = Queue[int32](capacity=16)
 ```
 
@@ -22837,7 +22904,7 @@ never grows beyond its configured bound.
 
 For ordinary code, use the convenience forms:
 
-```aura
+```aura fragment
 print(jobs.get_or_none(timeout=100ms))
 print(jobs.get_or(0, timeout=100ms))
 ```
@@ -22846,7 +22913,7 @@ Without a timeout, `get_or_none()` and `get_or(default)` are immediate non-block
 
 Use `get(timeout=...)` when you need to distinguish all wait states. It returns `QueueReceive[T]`:
 
-```aura
+```aura fragment
 match jobs.get():
     case QueueReceive.Item(value):
         print(value)
@@ -22864,7 +22931,7 @@ See [examples/concurrency/queue_timeout.au](../examples/concurrency/queue_timeou
 
 `put(value)` and `put(value, timeout=...)` return `Result[None, SendError[T]]`:
 
-```aura
+```aura fragment
 match jobs.put(4, timeout=5ms):
     case Result.Ok(_):
         print("sent")
@@ -22888,7 +22955,7 @@ See [examples/concurrency/queue_put_timeout.au](../examples/concurrency/queue_pu
 
 You can iterate over a queue until it is closed and empty:
 
-```aura
+```aura check-pass
 jobs = Queue[int32]()
 jobs.put(1)
 jobs.put(2)
@@ -22918,7 +22985,7 @@ delivers an owned item and the Queue handle itself is a copy value.
 
 Task groups tie child tasks to a lexical scope:
 
-```aura
+```aura fragment
 with TaskGroup() as group:
     first = group.start(worker, jobs)
     second = group.start(worker, jobs)
@@ -22936,14 +23003,14 @@ keeping ordinary producer/consumer backpressure scoped to the parent block.
 
 Use `start(...)` when you need a handle:
 
-```aura
+```aura fragment
 with TaskGroup() as group:
     task = group.start(producer, jobs)
 ```
 
 Use `start_soon(...)` when you only need the side effect of starting the task:
 
-```aura
+```aura fragment
 with TaskGroup() as group:
     group.start_soon(producer, jobs)
 ```
@@ -22981,7 +23048,7 @@ unresolved type parameter at the task boundary.
 default task stack. A child with a measured task-local stack requirement can
 request a custom capacity without changing its target arguments:
 
-```aura
+```aura fragment
 with group = TaskGroup():
     task = group.start_with_stack(1024 * 1024, deep_worker, input)
     group.start_soon_with_stack(2 * 1024 * 1024, deep_sink, jobs)
@@ -23004,7 +23071,7 @@ the compiled program's MIR/direct execution frames.
 
 Associated methods without `self` work too:
 
-```aura
+```aura check-pass
 class Worker:
     def run(value: int32) -> int32:
         return value + 1
@@ -23037,7 +23104,7 @@ observation is the ordinary moved-value diagnostic `AU3001`.
 
 For ordinary code, use:
 
-```aura
+```aura fragment
 print(task.result_or_none(timeout=100ms))
 print(task.result_or(-1, timeout=100ms))
 ```
@@ -23048,7 +23115,7 @@ Without a timeout, `result_or_none()` and `result_or(default)` are immediate non
 
 Use `Task.result(timeout=...)` when you need to distinguish all wait states. It returns `TaskResult[T]`:
 
-```aura
+```aura fragment
 match task.result():
     case TaskResult.Ready(value):
         print(value)
@@ -23065,7 +23132,7 @@ match task.result():
 Use the builtin `select(...)` when one wait mixes queues, tasks, and a relative
 deadline. It is an ordinary variadic call, not the removed statement form:
 
-```aura
+```aura fragment
 outcome = select(messages, worker_task, 20ms)
 
 match own outcome:
@@ -23102,7 +23169,7 @@ Use `wait_any(...)` and `wait_all(...)` for an existing homogeneous
 
 `wait_any(tasks, timeout=...)` returns `WaitAny[T]`:
 
-```aura
+```aura fragment
 match wait_any(task_list, timeout=20ms):
     case WaitAny.Ready(index, value):
         print(index)
@@ -23120,7 +23187,7 @@ match wait_any(task_list, timeout=20ms):
 
 `wait_all(tasks, timeout=...)` returns `WaitAll[T]`:
 
-```aura
+```aura fragment
 match wait_all(task_list, timeout=20ms):
     case WaitAll.Ready(results):
         for result in results:
@@ -23147,7 +23214,7 @@ See [examples/concurrency/task_group_wait_helpers.au](../examples/concurrency/ta
 
 Call `group.cancel()` to signal all tasks in the group to stop. Inside long-running task code, call `cancelled()` to observe the request:
 
-```aura
+```aura check-pass
 def worker(out: Queue[int32]):
     mut i: int32 = 0
     while i < 100:
@@ -23260,7 +23327,7 @@ scheduler indefinitely. Calling `yield_now()` between chosen bounded chunks
 provides an explicit scheduling point sooner than the amortized native check
 when the application wants one:
 
-```aura
+```aura check-pass
 def count(label: str):
     mut step: int32 = 1
     while step <= 3:
@@ -23280,7 +23347,7 @@ See [examples/concurrency/yield_now.au](../examples/concurrency/yield_now.au).
 
 A simple delay:
 
-```aura
+```aura check-pass
 sleep(100ms)
 ```
 
@@ -23314,7 +23381,7 @@ same seven-request trace through the MIR and forced-direct backends.
 
 ## Full Example
 
-```aura
+```aura check-pass
 def producer(out: Queue[int32]) -> int32:
     out.put(2)
     out.put(4)
@@ -23379,6 +23446,8 @@ It is intentionally implementation-facing. Use the earlier chapters to learn the
 
 Aura currently supports these top-level declarations:
 
+- `import module`, `import module as alias`, and `from module import name`
+- immutable complete-value module constants such as `limit: int64 = 10`
 - `public class`
 - `public enum`
 - `public def`
@@ -23390,6 +23459,7 @@ Aura currently supports these top-level declarations:
 - `def`
 - `trait`
 - `impl Trait for Type`
+- authorized `extern "C" def` and `extern "C" opaque class` declarations
 
 It also supports top-level executable statements for script-style files.
 
@@ -23457,12 +23527,17 @@ Builtin generic or runtime-facing types currently accepted:
 - `Result[T, E]`
 - `SendError[T]`
 - `Queue[T]`
+- `QueueReceive[T]`
 - `list[T]`
 - `dict[K, V]`
 - `set[T]`
 - `Array[T]`, where `T` is exactly `int32`, `int64`, `float32`, or `float64`
 - `Task[T]`
+- `TaskResult[T]`
 - `TaskGroup`
+- `SelectOutcome[Q, T]`
+- `WaitAny[T]`
+- `WaitAll[T]`
 
 Structural tuple types such as `(str, int64)` and singleton `(bool,)` are
 also accepted. A tuple is copyable exactly when every element is copyable.
@@ -23584,7 +23659,8 @@ that contains one, has no public clone route.
 
 The current compiler supports these statement forms:
 
-- assignment and compound assignment through `+=`, `-=`, `*=`, `/=`, `%=`, and `//=`
+- assignment and compound assignment through `+=`, `-=`, `*=`, `**=`, `/=`,
+  `%=`, `//=`, `&=`, `|=`, `^=`, `<<=`, and `>>=`
 - recursive tuple unpack assignment such as `name, count = record`
 - `return`
 - `if` / `elif` / `else`
@@ -23612,7 +23688,8 @@ The current compiler supports these expression forms:
 - names
 - parenthesized tuple values such as `(name, count)` and singleton `(value,)`
 - decimal, hexadecimal, binary, and octal integer literals with digit
-  separators; float, string, f-string, boolean, `None`, and duration literals
+  separators; float, ordinary string, triple-quoted string, raw string,
+  f-string, boolean, `None`, and duration literals
   - ordinary strings accept matching single or double quotes with shared escapes
   - f-strings remain double-quoted as `f"..."`, while interpolations may contain either ordinary quote form
 - arithmetic, comparison, and boolean operators
@@ -23656,6 +23733,8 @@ The current compiler supports these expression forms:
 - explicit type arguments on call targets such as `Box[int32](...)` and `Result[int32, str].Ok(...)`
 - enum and built-in enum variant construction
 - `try expr`
+- contextually typed expression lambdas such as `lambda value: value + 1`
+- expression-form `match` in bindings, returns, and call arguments
 - conditional expressions written `value if condition else alternative`; the
   condition must be exactly `bool`, is evaluated once, and selects exactly one
   lazily evaluated arm. Both arms must have one static result type. This form
@@ -23670,9 +23749,10 @@ The current compiler supports these expression forms:
   `(int64, element)`, and `zip(first, second)`, which stops at the shorter
   sequence; both take `list[T]` or `set[T]` operands over the bare-loop shared
   default and are legal only as a `for` iterable
-- the builtin functions `len(value)`, which delegates to the value's `len()`
-  member and produces `int64`, and `str(value)`, which produces the same
-  `str` that `print` writes; both names are reserved and cannot be redefined
+- the builtin functions `print`, `range`, `cancelled`, `yield_now`, `sleep`,
+  `select`, `wait_any`, `wait_all`, `abs`, `min`, `max`, `sqrt`, `round`,
+  `divmod`, `parse_int32`, `parse_int64`, `parse_float64`, `len`, and `str`;
+  these names are reserved and cannot be redefined
 - parenthesized expressions and tuple values
 - delimiter-based newline continuation while `(`, `[`, or `{` remains open
   - continuation indentation is visual and does not create a block
@@ -23723,13 +23803,12 @@ transpose, view, step, slice assignment, or accelerator placement. Empty
 Class methods currently support these receiver forms:
 
 - `self` for shared access
-- `self`
 - `own self`
 - `mut self`
 - no receiver for associated methods
 
-Bare `self` and `self` have the same shared semantics. `self: Type` is
-not a receiver declaration and is rejected with guidance naming these forms.
+Bare `self` has shared semantics. `self: Type` is not a receiver declaration
+and is rejected with guidance naming the valid forms.
 
 Ordinary functions, instance methods, and associated methods support:
 
@@ -24213,7 +24292,7 @@ compression. The current four-worker workload passes at a `1.039673x` paired
 median wall-time ratio with `396.73%` median four-task process CPU.
 
 The protocol service is lazily initialized and remains alive until process
-exit; it has no 0.2 shutdown or join surface. File reads, resolver work, and
+exit; it has no public shutdown or join surface. File reads, resolver work, and
 listener binding use the generic blocking-I/O pool. Only subsequent PEM
 parsing and rustls construction use protocol workers for TLS assets.
 
@@ -24261,7 +24340,10 @@ Current collection notes:
 - `insert(-1, value)` inserts before the last element;
   `insert(values.len(), value)` appends,
   and positions outside the range are clamped to the nearest boundary
-- `list[T]` supports equality and inequality when both sides have the same `list[T]` type
+- `list[T]` supports equality and inequality when both sides have the same
+  `list[T]` type and `T` defines equality; `remove`, `index`, `count`,
+  membership, set insertion, and dictionary-key operations enforce the same
+  obligation with `AU2008`
 - `list.set(index, value)`, `list.pop(index)`, and `list.swap(first, second)` trap on out-of-bounds indices; `list.remove(value)` traps with `AU4008` when no equal value exists
 - empty dictionary literals need an expected `dict[K, V]` type, or use `dict[K, V]()` explicitly
 - `dict[K, V]` supports literal construction, indexed writes for every `V`, direct indexed reads under the value ownership rule, and the methods `len`, `is_empty`, `copy`, `get`, `remove`, `keys`, `values`, `items`, `clear`, `update`, `reserve`, and `with_capacity`
@@ -24309,6 +24391,14 @@ The current CLI commands are:
 - `mir`
 - `analyze`
 - `complete`
+- `lsp`
+- `new`
+- `fmt`
+- `test`
+- `deps update`
+- `upgrade`
+- `help`
+- `version`
 
 Current backend/tooling notes:
 
@@ -24389,7 +24479,7 @@ needed.
 
 ## Generic Classes
 
-```aura
+```aura check-pass
 class Box[T]:
     value: T
 
@@ -24399,7 +24489,7 @@ class Box[T]:
 
 Use it with any type:
 
-```aura
+```aura fragment
 int_box: Box[int32] = Box(value=7)
 print(int_box.get())
 
@@ -24409,7 +24499,7 @@ print(text_box.get())
 
 You can also provide the type argument explicitly at the constructor:
 
-```aura
+```aura fragment
 boxed = Box[int32](value=7)
 ```
 
@@ -24419,7 +24509,7 @@ The compiler infers type arguments from the surrounding expected type or the pro
 
 Sometimes a generic class should only accept types that implement a specific trait (see [16-traits.md](16-traits.md)):
 
-```aura
+```aura fragment
 class Wrapper[T: Greeter]:
     value: T
 ```
@@ -24430,13 +24520,13 @@ This restricts `T` to types that implement `Greeter`. Attempting to construct a 
 
 Enums can also be generic. Unit variants and payload variants both work:
 
-```aura
+```aura check-pass
 enum Wrapper[T]:
     Item(T)
     Empty
 ```
 
-```aura
+```aura fragment
 wrapped: Wrapper[str] = Wrapper.Item("ok")
 
 match wrapped:
@@ -24450,7 +24540,7 @@ Payload matching uses the instantiated payload type, so `value` is a `str` in th
 
 Generic enums may also use bounded type parameters:
 
-```aura
+```aura fragment
 enum MaybeNamed[T: Greeter]:
     Some(T)
     Empty
@@ -24458,14 +24548,14 @@ enum MaybeNamed[T: Greeter]:
 
 ## Generic Functions
 
-```aura
+```aura check-pass
 def identity[T](value: own T) -> T:
     return value
 ```
 
 The compiler infers type arguments from call arguments and the expected return type:
 
-```aura
+```aura fragment
 print(identity(7))               # infers T = int64
 text: str = identity("aura") # infers T = str
 print(text)
@@ -24473,7 +24563,7 @@ print(text)
 
 Method calls on generic class instances work inside generic functions:
 
-```aura
+```aura fragment
 def extract[T](box: own Box[T]) -> T:
     return box.get()
 ```
@@ -24488,7 +24578,7 @@ otherwise consumes the value.
 A generic body may clone values without rejecting the declaration merely
 because `T` is unresolved:
 
-```aura
+```aura check-pass
 def duplicate[T](values: list[T]) -> list[T]:
     return values.copy()
 
@@ -24543,12 +24633,12 @@ Traits define shared behavior that different types can implement. If you know Py
 
 A trait lists method signatures. Methods may omit a body or provide a default implementation:
 
-```aura
+```aura check-pass
 trait Greeter:
     def greet(self) -> str
 ```
 
-```aura
+```aura check-pass
 trait Named:
     def name(self) -> str
     def label(self) -> str:
@@ -24557,28 +24647,28 @@ trait Named:
 
 Empty marker traits use `pass`:
 
-```aura
+```aura check-pass
 trait Marker:
     pass
 ```
 
 Generic traits use the same `Name[T]` syntax as classes:
 
-```aura
+```aura check-pass
 trait Mapper[T]:
     def map(self, value: own T) -> T
 ```
 
 Trait methods and impl methods may also use `Self` in parameter and return positions:
 
-```aura
+```aura check-pass
 trait Combine:
     def combine(self, other: Self) -> Self
 ```
 
 Traits may also inherit from other traits:
 
-```aura
+```aura check-pass
 trait Named:
     def name(self) -> str
 
@@ -24593,7 +24683,7 @@ When a type implements `Labelled`, it must also implement `Named`. Generic bound
 
 Use `impl Trait for Type:` to provide the trait's methods for a concrete type:
 
-```aura
+```aura fragment
 class User:
     name: str
 
@@ -24604,7 +24694,7 @@ impl Greeter for User:
 
 You can also implement traits for specialized generic instances:
 
-```aura
+```aura fragment
 class Box[T]:
     value: T
 
@@ -24615,7 +24705,7 @@ impl Greeter for Box[str]:
 
 Open generic impl headers work too:
 
-```aura
+```aura fragment
 impl[T] Showable for Box[T]:
     def show(self) -> str:
         return "box"
@@ -24623,7 +24713,7 @@ impl[T] Showable for Box[T]:
 
 And generic traits can be implemented for generic classes:
 
-```aura
+```aura fragment
 impl Mapper[T] for Box[T]:
     def map(self, value: own T) -> T:
         return value
@@ -24634,7 +24724,7 @@ impl Mapper[T] for Box[T]:
 When a generic trait default method performs a clone-producing operation,
 Aura infers a clone-safety obligation as part of that method's contract:
 
-```aura
+```aura check-pass
 trait Duplicator[T]:
     def duplicate(self, values: list[T]) -> list[T]:
         return values.copy()
@@ -24654,20 +24744,20 @@ contract.
 
 Generic functions can require that a type parameter implements a trait using inline bounds:
 
-```aura
+```aura fragment
 def speak[T: Greeter](value: T):
     print(value.greet())
 ```
 
 At the call site, Aura checks that the concrete type implements the required trait:
 
-```aura
+```aura fragment
 speak(value=User(name="aura"))   # User implements Greeter, so this works
 ```
 
 Multiple bounds use `+`:
 
-```aura
+```aura fragment
 def use_both[T: A + B](value: T) -> int32:
     return value.a() + value.b()
 ```
@@ -24676,7 +24766,7 @@ def use_both[T: A + B](value: T) -> int32:
 
 Class and enum type parameters can also carry trait bounds:
 
-```aura
+```aura fragment
 class Wrapper[T: Greeter]:
     value: T
 ```
@@ -24687,7 +24777,7 @@ See [15-generics.md](15-generics.md) for more on generic type parameters.
 
 Bounds can be specialized, which is useful when the trait itself is generic:
 
-```aura
+```aura fragment
 def apply[T: Mapper[int32]](mapper: T, value: int32) -> int32:
     return mapper.map(value=value)
 ```
@@ -24696,7 +24786,7 @@ This says: `T` must implement `Mapper` specifically for `int32`.
 
 Specialized dispatch works across multiple implementing types in the same program:
 
-```aura
+```aura check-pass
 trait Describe:
     def describe(self) -> str
 
@@ -24727,7 +24817,7 @@ See [examples/traits/self_parameters.au](../examples/traits/self_parameters.au) 
 
 Traits can declare methods without a receiver. They are called through the implementing type name:
 
-```aura
+```aura check-pass
 trait Factory:
     def make() -> int32
 
@@ -24770,7 +24860,7 @@ resolves through `Div.div`.
 
 Example:
 
-```aura
+```aura fragment
 class Point:
     x: int32
     y: int32
@@ -24786,7 +24876,7 @@ impl Neg[Point] for Point:
 
 With these impls, you can use `+` and `-` with `Point` values, including through generic bounds:
 
-```aura
+```aura fragment
 def add_all[T: Add[T, T]](left: T, right: T) -> T:
     return left + right
 ```
@@ -24798,7 +24888,7 @@ contract. The `From.from` method selected by `try` does the same.
 
 Ordering traits work the same way for `<`, `<=`, `>`, and `>=`:
 
-```aura
+```aura check-pass
 trait Ord[Rhs]:
     def lt(self, rhs: Rhs) -> bool
     def le(self, rhs: Rhs) -> bool
@@ -24808,7 +24898,7 @@ trait Ord[Rhs]:
 
 This lets you write generic ordered code such as:
 
-```aura
+```aura fragment
 def choose_smaller[T: Ord[T]](left: own T, right: own T) -> T:
     if left < right:
         return left
@@ -24821,7 +24911,7 @@ See [examples/traits/ordering_traits.au](../examples/traits/ordering_traits.au).
 
 A trait can also target a builtin type, not only your own classes and enums:
 
-```aura
+```aura check-pass
 trait Describe:
     def describe(self) -> str
 
@@ -24868,7 +24958,8 @@ The implemented trait surface supports:
   collide with a builtin member of that target
 - `Self` in trait and impl method parameter and return positions
 - associated methods without `self`
-- operator traits for `+`, `-`, `*`, `/`, `%`, `<`, `<=`, `>`, `>=`, unary `-`, and `not`
+- operator traits for `+`, `-`, `*`, `/`, `//`, `%`, `<`, `<=`, `>`, `>=`,
+  unary `-`, and `not`
 - inferred clone-safety contracts from trait defaults, with explicit impls
   forbidden from strengthening them
 
@@ -24884,19 +24975,19 @@ Aura supports local file modules with `import`, `from ... import ...`, and `publ
 
 Use Python-style import syntax to bring in a module by its file path:
 
-```aura
+```aura fragment
 import helpers.math
 ```
 
 This resolves to `helpers/math.au` relative to the current source root. Call public functions through the module path:
 
-```aura
+```aura fragment
 print(helpers.math.double(value=5))
 ```
 
 Namespace imports also work for classes and enums:
 
-```aura
+```aura fragment
 import pkg.types
 
 counter = pkg.types.Counter(value=4)
@@ -24905,7 +24996,7 @@ status = pkg.types.Status.Ready
 
 Module-qualified type annotations are supported:
 
-```aura
+```aura fragment
 counter: pkg.types.Counter = pkg.types.Counter(value=4)
 ```
 
@@ -24913,7 +25004,7 @@ counter: pkg.types.Counter = pkg.types.Counter(value=4)
 
 Use `from ... import ...` to bring a name into the local scope:
 
-```aura
+```aura fragment
 from helpers.counter import Counter
 ```
 
@@ -24925,7 +25016,7 @@ can import public functions, classes, enums, traits, and module constants.
 Declare stable configuration and constructed immutable values beside the
 functions that use them:
 
-```aura
+```aura check-pass
 service_name = "planner"
 public max_attempts: int64 = 3
 retry_budget = max_attempts + 2
@@ -24947,7 +25038,7 @@ program needs independent owned data.
 
 Export a constant with `public` and import it through either form:
 
-```aura
+```aura fragment
 import settings
 from settings import max_attempts as configured_attempts
 
@@ -24960,7 +25051,7 @@ def main():
 
 Use `as` to choose a concise or collision-free local name for a module:
 
-```aura
+```aura fragment
 import helpers.math as integer_math
 
 print(integer_math.double(value=5))
@@ -24968,7 +25059,7 @@ print(integer_math.double(value=5))
 
 Individual from-import entries may also be aliased:
 
-```aura
+```aura fragment
 from helpers.counter import Counter as ReadableCounter
 
 counter = ReadableCounter(value=2)
@@ -24982,14 +25073,14 @@ resolution continue to use the original declaration.
 
 Top-level items are private by default. Mark items with `public` to make them available to other modules:
 
-```aura
+```aura check-pass
 public def double(value: int32) -> int32:
     return value * 2
 ```
 
 For classes, both the class itself and its fields/methods have independent visibility:
 
-```aura
+```aura check-pass
 public class Counter:
     public value: int32
 
@@ -25016,13 +25107,13 @@ Within the same module, all members are accessible regardless of visibility.
 
 When a file lives under a package with `Aura.toml`, the package's `src/` directory is the source root. Local imports work the same way:
 
-```aura
+```aura fragment
 import helpers.math    # resolves to src/helpers/math.au
 ```
 
 Dependencies declared in the manifest are imported by package name:
 
-```aura
+```aura fragment
 import util.math       # resolves to the util dependency's src/math.au
 ```
 
@@ -25076,13 +25167,13 @@ cargo run -p aura -- run my-app/src/main.au
 
 The compiler treats the directory containing `Aura.toml` as the package root and `src/` as the source root. Local imports resolve relative to `src/`:
 
-```aura
+```aura fragment
 import helpers.math    # resolves to src/helpers/math.au
 ```
 
 An alias changes the local spelling without changing that resolution path:
 
-```aura
+```aura fragment
 import helpers.math as integer_math
 from helpers.math import double as twice
 ```
@@ -25098,7 +25189,7 @@ util = { path = "../util" }
 
 Then import through the package name:
 
-```aura
+```aura fragment
 import util.math
 ```
 
@@ -25126,14 +25217,14 @@ Git dependencies support three selectors:
 
 Imports work the same way as path dependencies -- use the package name:
 
-```aura
+```aura fragment
 import util.math
 import jsonx.parser
 ```
 
 The complete dependency path may be aliased after it resolves:
 
-```aura
+```aura fragment
 import util.math as util_math
 from jsonx.parser import parse as parse_json
 ```
@@ -25209,7 +25300,7 @@ Aura has a maintained I/O surface through four builtin modules:
 
 These modules are imported like ordinary namespaces:
 
-```aura
+```aura check-pass
 import io
 import fs
 import net
@@ -25227,7 +25318,7 @@ lightweight-task scheduler.
 
 Use `io.write(...)`, `io.flush()`, and `io.read_line()` for explicit terminal I/O:
 
-```aura
+```aura check-pass
 import io
 
 def main() -> int32:
@@ -25295,7 +25386,7 @@ Those constructors return `Result[fs.File, io.Error]`. `fs.File` works with `wit
 
 Text example:
 
-```aura
+```aura check-pass
 import fs
 import io
 
@@ -25306,7 +25397,7 @@ def load_text(path: str) -> Result[str, io.Error]:
 
 Binary example:
 
-```aura
+```aura check-pass
 import fs
 import io
 
@@ -25404,7 +25495,7 @@ otherwise ownership must transfer.
 
 One-shot example:
 
-```aura
+```aura check-pass
 import process
 
 def run_echo() -> Result[None, process.Error]:
@@ -25417,7 +25508,7 @@ def run_echo() -> Result[None, process.Error]:
 
 Interactive pipe example:
 
-```aura
+```aura check-pass
 import process
 
 def roundtrip() -> Result[None, process.Error]:
@@ -25451,7 +25542,7 @@ See:
 
 Supervisor example:
 
-```aura
+```aura check-pass
 import process
 
 def supervise() -> Result[None, process.Error]:
@@ -25502,7 +25593,7 @@ Both listener and stream resources work with `with`.
 
 Text example:
 
-```aura
+```aura check-pass
 import io
 import net
 
@@ -25585,7 +25676,6 @@ The maintained HTTP convenience surface includes:
 - `headers()`
 - `text()`
 - `bytes()`
-- `close()`
 
 See [examples/io/http_roundtrip.au](../examples/io/http_roundtrip.au).
 
@@ -25742,7 +25832,7 @@ functions ask the operating system for unpredictable values.
 
 Import the module and keep the generator in a mutable binding:
 
-```aura
+```aura check-pass
 import random
 
 mut rng = random.Rng(42)
@@ -25766,7 +25856,7 @@ never return one.
 
 `shuffle` mutably borrows a list and rearranges its existing elements:
 
-```aura
+```aura check-pass
 import random
 
 mut rng = random.Rng(42)
@@ -25785,7 +25875,7 @@ advance the stream.
 An `Rng` contains evolving state. It is deliberately non-copy and has no
 public clone route:
 
-```aura
+```aura check-pass
 import random
 
 def take_rng(rng: own random.Rng):
@@ -25799,7 +25889,7 @@ take_rng(rng)
 The three generator methods need a mutable receiver. If a helper should
 advance the caller's stream without taking ownership, give it a mutable borrow:
 
-```aura
+```aura check-pass
 import random
 
 def roll(rng: mut random.Rng) -> int64:
@@ -25829,7 +25919,7 @@ traits and `From` conversions enforce the selected method's contract too.
 The deterministic generator is predictable and must not create secrets. Use
 the secure functions for tokens, nonces, salts, keys, and session identifiers:
 
-```aura
+```aura check-pass
 import random
 
 die_roll = random.secure_int(1, 7)
@@ -25885,7 +25975,7 @@ examples described here are implemented.
 
 `json.parse` returns `Result[json.Value, json.Error]`:
 
-```aura
+```aura check-pass
 import json
 
 result = json.parse("{\"name\":\"aura\",\"workers\":3}")
@@ -25907,7 +25997,7 @@ finite `float64`; `NestingTooDeep` and `InputTooLarge` report their limits.
 Lines and columns start at one, and a column counts Unicode scalar values.
 UTF-8 byte offsets are not used for this field.
 
-```aura
+```aura fragment
 match json.parse("{\"ready\":"):
     case Result.Ok(value):
         print(value)
@@ -25934,7 +26024,7 @@ source spelling alone does not select the variant.
 
 The scalar accessors are intentionally exact:
 
-```aura
+```aura check-pass
 import json
 
 integer = json.Value.Int(7)
@@ -25959,16 +26049,17 @@ remains available. Owned `String`, `Array`, and
 Object payloads use the consuming module functions `json.into_string`,
 `json.into_array`, and `json.into_object`:
 
-```aura
+```aura check-pass
 import json
 
-value = json.Value.Array([json.Value.Int(2), json.Value.Int(3)])
+def main():
+    value = json.Value.Array([json.Value.Int(2), json.Value.Int(3)])
 
-match json.into_array(value):
-    case Option.Some(items):
-        print(items.len())
-    case Option.None:
-        print("not an array")
+    match json.into_array(value):
+        case Option.Some(items):
+            print(items.len())
+        case Option.None:
+            print("not an array")
 ```
 
 An `into_*` call consumes its argument whether or not the variant matches.
@@ -25981,7 +26072,7 @@ Construct Values with ordinary qualified enum constructors. One Object can
 contain different JSON kinds because every dictionary value has the same
 `json.Value` type:
 
-```aura
+```aura check-pass
 import json
 
 payload = json.Value.Object({"workers": json.Value.Int(3), "ready": json.Value.Bool(true), "tags": json.Value.Array([json.Value.String("compiler"), json.Value.String("service")])})
@@ -26065,7 +26156,7 @@ visible.
 
 Call `to_bytes()` on a str:
 
-```aura
+```aura check-pass
 import bytes
 
 text = "Aura 🌌"
@@ -26080,7 +26171,7 @@ Aura does not normalize the text or rewrite line endings.
 Going the other way can fail because an arbitrary byte list need not be
 valid UTF-8:
 
-```aura
+```aura check-pass
 import bytes
 
 payload: list[uint8] = [65, 117, 114, 97]
@@ -26106,7 +26197,7 @@ after `from_bytes`, and the original str remains available after
 
 Hex encoding uses two lowercase digits per byte:
 
-```aura
+```aura check-pass
 import bytes
 
 payload: list[uint8] = [0, 1, 254, 255]
@@ -26116,7 +26207,7 @@ print(text)
 
 The result is `0001feff`. Decoding accepts uppercase or lowercase ASCII:
 
-```aura
+```aura fragment
 match bytes.hex_decode("0001FeFf"):
     case Result.Ok(payload):
         print(payload)
@@ -26135,7 +26226,7 @@ signs, or non-ASCII digits. Odd length is checked before digit validity.
 
 Base64 is useful when a text protocol needs to carry arbitrary bytes:
 
-```aura
+```aura check-pass
 import bytes
 
 payload: list[uint8] = [0, 1, 254, 255]
@@ -26147,6 +26238,8 @@ match bytes.base64_decode(encoded):
         print(decoded)
     case Result.Err(bytes.Error.InvalidBase64(index)):
         print(f"invalid base64 at byte {index}")
+    case Result.Err(error):
+        print(error)
 ```
 
 This prints `AAH+/w==` and then `[0, 1, 254, 255]`.
@@ -26161,7 +26254,7 @@ when text is required.
 
 `bytes.sha256` returns a raw 32-byte SHA-256 digest:
 
-```aura
+```aura check-pass
 import bytes
 
 payload = "abc".to_bytes()
@@ -26177,7 +26270,7 @@ For a str, `bytes.sha256_string(text)` hashes exactly the bytes produced by
 `text.to_bytes()`. It does not add a terminator or normalize text. These two
 expressions therefore produce equal digest vectors:
 
-```aura
+```aura fragment
 bytes.sha256_string("café")
 bytes.sha256("café".to_bytes())
 ```
@@ -26201,7 +26294,7 @@ allocation failure traps with `AU4005`. A codec never returns a partial
 successful value.
 
 The optional `encoding` parameter is reserved but not implemented. These are
-the complete 0.2 conversion calls:
+the complete 0.3 conversion calls:
 
 - `text.to_bytes()`
 - `str.from_bytes(payload)`
@@ -26228,13 +26321,13 @@ preflights, backend parity, and non-features, read the normative
 Assertions turn a condition that must hold into an immediate, source-located
 runtime failure. Use the short form when the default message is enough:
 
-```aura
+```aura fragment
 assert user_count >= 0
 ```
 
 Use a second expression when the failure needs application context:
 
-```aura
+```aura fragment
 assert response_code == 200, "worker expected a successful response"
 ```
 
@@ -26248,7 +26341,7 @@ continues and the message expression is not evaluated. When it is `false`, the
 message is evaluated exactly once and becomes the failure text. This makes it
 safe to construct an expensive diagnostic only for the failure path:
 
-```aura
+```aura check-pass
 def explain(value: int64) -> str:
     print("building failure message")
     return f"unexpected value {value}"
@@ -26267,7 +26360,7 @@ failure and never reaches the assertion result.
 For a top-level comparison or positive membership test, Aura reports the two
 values that produced the failure:
 
-```aura
+```aura check-pass
 expected = 42
 actual = 41
 assert actual == expected
@@ -26310,7 +26403,7 @@ fails, the assertion remains the primary diagnostic.
 `aura test` discovers parameterless module functions named `test_*`. A function
 returning `None` is one independently reported case:
 
-```aura
+```aura check-pass
 def test_account_total():
     charges = [20, 21]
     assert charges[0] + charges[1] == 41
@@ -26333,7 +26426,7 @@ A valid filter with no matches succeeds with a zero-case summary.
 
 Optional `setup()` and `teardown()` functions run around every selected case:
 
-```aura
+```aura check-pass
 def setup():
     print("setup")
 
@@ -26356,7 +26449,7 @@ state.
 
 A registration function returns labeled, named test functions:
 
-```aura
+```aura check-pass
 def empty_case():
     assert "".len() == 0
 
@@ -26403,7 +26496,7 @@ The rule is simple: the line continues while `(`, `[`, or `{` remains open.
 
 ## Calls And Signatures
 
-```aura
+```aura check-pass
 def combine(
     left: int64,
     right: int64
@@ -26421,7 +26514,7 @@ after that line ends the logical statement.
 
 ## Collections And Grouping
 
-```aura
+```aura check-pass
 values = [
     10,
     20
@@ -26446,7 +26539,7 @@ extra four-space level so the structure remains obvious.
 
 A trailing comment can end one continued physical line:
 
-```aura
+```aura check-pass
 values = [
     10, # first input
 
@@ -26461,7 +26554,7 @@ The blank line and comment do not close `[`, so the list continues.
 `match` still needs an indented `case` block even when it appears inside a
 call:
 
-```aura
+```aura fragment
 print(
     match status:
         case Ready: "ready"
@@ -26495,7 +26588,7 @@ value = left + \        # invalid Aura
 A comma or operator at the end of a line is not enough by itself. Keep a
 delimiter open. A multi-element list still rejects a trailing comma, so write:
 
-```aura
+```aura check-pass
 values = [
     10,
     20
@@ -26534,7 +26627,7 @@ would add more ceremony than meaning.
 
 A comma inside parentheses makes a tuple:
 
-```aura
+```aura check-pass
 pair = ("Aura", 7)
 only = (true,)
 ```
@@ -26545,7 +26638,7 @@ elements does not take a trailing comma.
 
 Tuple types mirror tuple values:
 
-```aura
+```aura check-pass
 def version() -> (str, int64):
     return ("Aura", 7)
 ```
@@ -26557,7 +26650,7 @@ The order and number of element types matter. `(str, int64)` and
 
 Use a comma-separated target to give each result a name:
 
-```aura
+```aura fragment
 name, number = version()
 print(name)
 print(number)
@@ -26567,7 +26660,7 @@ Tuple value expressions require parentheses, but the top-level assignment
 target does not: write `name, number = pair`, not a naked tuple expression.
 Nested targets use parentheses:
 
-```aura
+```aura check-pass
 label, (x, y) = ("point", (3, 4))
 ```
 
@@ -26578,7 +26671,7 @@ the target.
 
 A tuple is a copy value only when every element is a copy value:
 
-```aura
+```aura check-pass
 point = (3, 4)
 x, y = point
 print(point[0]) # point is still usable
@@ -26587,11 +26680,13 @@ print(point[0]) # point is still usable
 A tuple containing `str`, `list`, or another move value is itself a move
 value. Unpacking it moves the whole source and gives owned leaf bindings:
 
-```aura
-record = ("Aura", 7)
-name, number = record
-print(name)
-# print(record) would be a use-after-move error
+```aura check-pass
+def main():
+    record = ("Aura", 7)
+    name, number = record
+    print(name)
+    print(number)
+    # print(record) would be a use-after-move error
 ```
 
 Aura deliberately reports reuse of the original tuple. Positional partial
@@ -26602,7 +26697,7 @@ moves are not exposed.
 `==` and `!=` compare tuples recursively, element by element. Both operands
 must have exactly the same tuple type, and every element must support equality:
 
-```aura
+```aura check-pass
 baseline = ("Aura", (7, true))
 same = ("Aura", (7, true))
 changed = ("Aura", (8, true))
@@ -26623,7 +26718,7 @@ for tuple operands; compare the intended elements explicitly instead.
 
 Indexing is available for the small read-only case:
 
-```aura
+```aura check-pass
 point = (3, 4)
 print(point[1])
 ```
@@ -26636,7 +26731,7 @@ Unpack the tuple when you need ownership of a non-copy element.
 
 A `for` target may recursively unpack tuple items:
 
-```aura
+```aura check-pass
 for label, count in [("ready", 2), ("done", 3)]:
     print(f"{label}:{count}")
 ```
@@ -26651,7 +26746,7 @@ reconstruct and write a changed tuple back into the collection.
 
 Tuple patterns use the same fixed shape:
 
-```aura
+```aura check-pass
 match ((1, 2), true):
     case ((left, right), flag):
         print(left + right)
@@ -26707,7 +26802,7 @@ edition = "2026"
 allow_ffi = true
 ```
 
-```aura
+```aura fragment
 public extern "C" def getpid() -> int32
 
 def main() -> int32:
@@ -26739,7 +26834,7 @@ is not NUL-terminated. `list[uint8]` is the matching read-only byte view, while
 changing the list length. Empty views pass a null pointer and length zero.
 The native callee must not retain any view pointer after the synchronous call.
 
-```aura
+```aura fragment
 public extern "C" def checksum(data: list[uint8]) -> uint64
 public extern "C" def normalize(data: mut list[uint8]) -> None
 ```
@@ -26748,7 +26843,7 @@ public extern "C" def normalize(data: mut list[uint8]) -> None
 
 Use a declaration-only opaque class for a non-null foreign pointer:
 
-```aura
+```aura fragment
 public extern "C" opaque class Handle
 public extern "C" def acquire() -> Handle
 public extern "C" def inspect(handle: Handle) -> int32

@@ -6,12 +6,12 @@ Traits define shared behavior that different types can implement. If you know Py
 
 A trait lists method signatures. Methods may omit a body or provide a default implementation:
 
-```aura
+```aura check-pass
 trait Greeter:
     def greet(self) -> str
 ```
 
-```aura
+```aura check-pass
 trait Named:
     def name(self) -> str
     def label(self) -> str:
@@ -20,28 +20,28 @@ trait Named:
 
 Empty marker traits use `pass`:
 
-```aura
+```aura check-pass
 trait Marker:
     pass
 ```
 
 Generic traits use the same `Name[T]` syntax as classes:
 
-```aura
+```aura check-pass
 trait Mapper[T]:
     def map(self, value: own T) -> T
 ```
 
 Trait methods and impl methods may also use `Self` in parameter and return positions:
 
-```aura
+```aura check-pass
 trait Combine:
     def combine(self, other: Self) -> Self
 ```
 
 Traits may also inherit from other traits:
 
-```aura
+```aura check-pass
 trait Named:
     def name(self) -> str
 
@@ -56,7 +56,7 @@ When a type implements `Labelled`, it must also implement `Named`. Generic bound
 
 Use `impl Trait for Type:` to provide the trait's methods for a concrete type:
 
-```aura
+```aura fragment
 class User:
     name: str
 
@@ -67,7 +67,7 @@ impl Greeter for User:
 
 You can also implement traits for specialized generic instances:
 
-```aura
+```aura fragment
 class Box[T]:
     value: T
 
@@ -78,7 +78,7 @@ impl Greeter for Box[str]:
 
 Open generic impl headers work too:
 
-```aura
+```aura fragment
 impl[T] Showable for Box[T]:
     def show(self) -> str:
         return "box"
@@ -86,7 +86,7 @@ impl[T] Showable for Box[T]:
 
 And generic traits can be implemented for generic classes:
 
-```aura
+```aura fragment
 impl Mapper[T] for Box[T]:
     def map(self, value: own T) -> T:
         return value
@@ -97,7 +97,7 @@ impl Mapper[T] for Box[T]:
 When a generic trait default method performs a clone-producing operation,
 Aura infers a clone-safety obligation as part of that method's contract:
 
-```aura
+```aura check-pass
 trait Duplicator[T]:
     def duplicate(self, values: list[T]) -> list[T]:
         return values.copy()
@@ -117,20 +117,20 @@ contract.
 
 Generic functions can require that a type parameter implements a trait using inline bounds:
 
-```aura
+```aura fragment
 def speak[T: Greeter](value: T):
     print(value.greet())
 ```
 
 At the call site, Aura checks that the concrete type implements the required trait:
 
-```aura
+```aura fragment
 speak(value=User(name="aura"))   # User implements Greeter, so this works
 ```
 
 Multiple bounds use `+`:
 
-```aura
+```aura fragment
 def use_both[T: A + B](value: T) -> int32:
     return value.a() + value.b()
 ```
@@ -139,7 +139,7 @@ def use_both[T: A + B](value: T) -> int32:
 
 Class and enum type parameters can also carry trait bounds:
 
-```aura
+```aura fragment
 class Wrapper[T: Greeter]:
     value: T
 ```
@@ -150,7 +150,7 @@ See [15-generics.md](15-generics.md) for more on generic type parameters.
 
 Bounds can be specialized, which is useful when the trait itself is generic:
 
-```aura
+```aura fragment
 def apply[T: Mapper[int32]](mapper: T, value: int32) -> int32:
     return mapper.map(value=value)
 ```
@@ -159,7 +159,7 @@ This says: `T` must implement `Mapper` specifically for `int32`.
 
 Specialized dispatch works across multiple implementing types in the same program:
 
-```aura
+```aura check-pass
 trait Describe:
     def describe(self) -> str
 
@@ -190,7 +190,7 @@ See [examples/traits/self_parameters.au](../examples/traits/self_parameters.au) 
 
 Traits can declare methods without a receiver. They are called through the implementing type name:
 
-```aura
+```aura check-pass
 trait Factory:
     def make() -> int32
 
@@ -233,7 +233,7 @@ resolves through `Div.div`.
 
 Example:
 
-```aura
+```aura fragment
 class Point:
     x: int32
     y: int32
@@ -249,7 +249,7 @@ impl Neg[Point] for Point:
 
 With these impls, you can use `+` and `-` with `Point` values, including through generic bounds:
 
-```aura
+```aura fragment
 def add_all[T: Add[T, T]](left: T, right: T) -> T:
     return left + right
 ```
@@ -261,7 +261,7 @@ contract. The `From.from` method selected by `try` does the same.
 
 Ordering traits work the same way for `<`, `<=`, `>`, and `>=`:
 
-```aura
+```aura check-pass
 trait Ord[Rhs]:
     def lt(self, rhs: Rhs) -> bool
     def le(self, rhs: Rhs) -> bool
@@ -271,7 +271,7 @@ trait Ord[Rhs]:
 
 This lets you write generic ordered code such as:
 
-```aura
+```aura fragment
 def choose_smaller[T: Ord[T]](left: own T, right: own T) -> T:
     if left < right:
         return left
@@ -284,7 +284,7 @@ See [examples/traits/ordering_traits.au](../examples/traits/ordering_traits.au).
 
 A trait can also target a builtin type, not only your own classes and enums:
 
-```aura
+```aura check-pass
 trait Describe:
     def describe(self) -> str
 
@@ -331,7 +331,8 @@ The implemented trait surface supports:
   collide with a builtin member of that target
 - `Self` in trait and impl method parameter and return positions
 - associated methods without `self`
-- operator traits for `+`, `-`, `*`, `/`, `%`, `<`, `<=`, `>`, `>=`, unary `-`, and `not`
+- operator traits for `+`, `-`, `*`, `/`, `//`, `%`, `<`, `<=`, `>`, `>=`,
+  unary `-`, and `not`
 - inferred clone-safety contracts from trait defaults, with explicit impls
   forbidden from strengthening them
 

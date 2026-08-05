@@ -1,0 +1,15 @@
+def doubled(value: int32) -> int32:
+    return value * 2
+
+def is_even(value: int32) -> bool:
+    return value % 2 == 0
+
+values: list[int32] = [3, 1, 2, 4]
+mapped: list[int32] = values.map(doubled)
+filtered: list[int32] = values.filter(is_even)
+copied: list[int32] = values.copy()
+
+def main():
+    print(mapped)
+    print(filtered)
+    print(copied)

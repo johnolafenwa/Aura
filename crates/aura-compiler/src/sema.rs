@@ -2526,6 +2526,8 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             _ => None,
         })
         .collect::<BTreeMap<_, _>>();
+    let mut constant_closure_infos = BTreeMap::new();
+    let mut constant_comprehension_infos = BTreeMap::new();
     for constant in &module.constants {
         if let Some((kind, existing)) =
             item_names.insert(constant.name.clone(), ("module constant", constant.span))
@@ -2628,6 +2630,8 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             }
         }
         checker.consume_value_expr(&constant.value, &mut scope)?;
+        constant_closure_infos.extend(checker.closure_infos.borrow().clone());
+        constant_comprehension_infos.extend(checker.comprehension_infos.borrow().clone());
         constants.insert(
             constant.name.clone(),
             ConstantInfo {
@@ -3142,8 +3146,12 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             changed |= target.len() != before;
         }
         if !changed {
-            program.closures = closure_infos;
+            program.closures = constant_closure_infos.clone();
+            program.closures.extend(closure_infos);
             program.comprehensions = field_default_comprehensions.clone();
+            program
+                .comprehensions
+                .extend(constant_comprehension_infos.clone());
             program.comprehensions.extend(comprehension_infos);
             // An explicit impl may honor a trait clone-safety contract, but it
             // may not silently strengthen it: bound-based callers can enforce

@@ -4725,6 +4725,32 @@ test("compiler bridge recovers completions and symbols for dangling-dot EOF buff
   }
 });
 
+test("compiler bridge preserves member completion inside a call with an unrelated diagnostic", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-member-diagnostic-"));
+  try {
+    const mainPath = path.join(tempRoot, "tags.au");
+    const mainUri = `file://${mainPath}`;
+    const lines = [
+      "def inspect(tags: list[str]):",
+      "    first = tags[0].clone()",
+      "    print(range(tags.))"
+    ];
+    const source = lines.join("\n");
+    const character = lines[2].indexOf("tags.") + "tags.".length;
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const completions = await completeWithCompiler(mainUri, source, 2, character, ".");
+
+    assert.ok(completions);
+    const names = new Set(completions.map((item) => item.name));
+    for (const name of ["append", "get", "len"]) {
+      assert.ok(names.has(name), `list completion should include ${name}`);
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge exposes one random.Rng constructor and its stateful members", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-random-"));
   try {

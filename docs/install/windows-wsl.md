@@ -110,12 +110,15 @@ Continue with the complete [VS Code extension guide](/install/vscode).
 
 ## Upgrade Aura
 
-Run the installer again from the Ubuntu terminal:
+Run the updater from the Ubuntu terminal:
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+aura upgrade
 aura --version
 ```
+
+The command upgrades the Linux compiler and runtime inside WSL. Run it in the
+Ubuntu terminal, not PowerShell.
 
 ## Troubleshooting
 

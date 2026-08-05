@@ -5694,13 +5694,13 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_shared_vec_source(&mut self, object: &Expr) -> Operand {
-        match self.render_place_expr_option(object) {
-            Some(place) => Operand::Place(place),
-            None => {
-                let expected = self.infer_expr_type(object);
-                self.lower_expr_at_sequence_point(object, expected.as_ref())
-            }
-        }
+        // A source-level name is not necessarily a frame-local MIR place.
+        // Module constants are loaded through `Rvalue::ModuleConstant`, while
+        // locals and parameters naturally lower back to their existing place.
+        // Running every shared source through expression lowering preserves
+        // that distinction for map/filter without changing ownership.
+        let expected = self.infer_expr_type(object);
+        self.lower_expr_at_sequence_point(object, expected.as_ref())
     }
 
     fn lower_vec_key_collection_loop(

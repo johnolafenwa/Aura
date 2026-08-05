@@ -12,7 +12,7 @@ examples described here are implemented.
 
 `json.parse` returns `Result[json.Value, json.Error]`:
 
-```aura
+```aura check-pass
 import json
 
 result = json.parse("{\"name\":\"aura\",\"workers\":3}")
@@ -34,7 +34,7 @@ finite `float64`; `NestingTooDeep` and `InputTooLarge` report their limits.
 Lines and columns start at one, and a column counts Unicode scalar values.
 UTF-8 byte offsets are not used for this field.
 
-```aura
+```aura fragment
 match json.parse("{\"ready\":"):
     case Result.Ok(value):
         print(value)
@@ -61,7 +61,7 @@ source spelling alone does not select the variant.
 
 The scalar accessors are intentionally exact:
 
-```aura
+```aura check-pass
 import json
 
 integer = json.Value.Int(7)
@@ -86,16 +86,17 @@ remains available. Owned `String`, `Array`, and
 Object payloads use the consuming module functions `json.into_string`,
 `json.into_array`, and `json.into_object`:
 
-```aura
+```aura check-pass
 import json
 
-value = json.Value.Array([json.Value.Int(2), json.Value.Int(3)])
+def main():
+    value = json.Value.Array([json.Value.Int(2), json.Value.Int(3)])
 
-match json.into_array(value):
-    case Option.Some(items):
-        print(items.len())
-    case Option.None:
-        print("not an array")
+    match json.into_array(value):
+        case Option.Some(items):
+            print(items.len())
+        case Option.None:
+            print("not an array")
 ```
 
 An `into_*` call consumes its argument whether or not the variant matches.
@@ -108,7 +109,7 @@ Construct Values with ordinary qualified enum constructors. One Object can
 contain different JSON kinds because every dictionary value has the same
 `json.Value` type:
 
-```aura
+```aura check-pass
 import json
 
 payload = json.Value.Object({"workers": json.Value.Int(3), "ready": json.Value.Bool(true), "tags": json.Value.Array([json.Value.String("compiler"), json.Value.String("service")])})

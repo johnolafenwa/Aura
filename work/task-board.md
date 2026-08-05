@@ -2,6 +2,37 @@
 
 Last updated: 2026-08-04
 
+## Aura v0.3.2 repair and extension 0.3.3 release (in progress)
+
+- Authorized target: fix every compiler, tutorial, and editor defect found by
+  the 2026-08-04 tutorial/manual/compiler audit; publish the corresponding Aura
+  and VS Code extension releases; do not pause for further authorization.
+- Compiler work: regress and repair module-constant collection algorithms that
+  pass checking but fail in MIR/direct execution, plus module-constant
+  comprehensions that currently panic both execution paths.
+- Editor work: preserve member completion through incomplete or otherwise
+  diagnostic-bearing buffers, highlight builtin functions, and correct the
+  extension-client disposal lifecycle.
+- CLI work: add `aura upgrade` as the supported command for upgrading an
+  installed Aura toolchain to the latest published release.
+- Documentation work: align all tutorial claims and inline examples with the
+  normative Manual and current compiler, and add executable tutorial-fence
+  integrity coverage so the drift cannot recur.
+- Release target: Aura `v0.3.2-preview` and extension `0.3.3`, because the
+  currently published identities are Aura `v0.3.1-preview` and extension
+  `0.3.2`.
+- Current verification: module-constant fixes pass on both backends; the
+  `aura upgrade` tests are green and `aura update` is rejected; 111 compiler
+  analysis tests, 109 LSP tests, 24 extension tests, 45 release tests, all 336
+  tutorial fences, Manual reference integrity, generated LLM artifacts, and
+  the production documentation build are green. The clean complete local gate
+  is green, including forced backend parity, compiler coverage at 96.31% lines,
+  97.22% functions, and 94.74% regions, plus LSP coverage at 100%. Hosted CI,
+  merge, tag, publication, and public artifact verification remain.
+- Protected user files remain untouched: `personal/file_ops.au` and the
+  untracked ADR-0022 draft.
+- Work note: `work/2026-08-04-tutorial-editor-runtime-repair-release.md`.
+
 ## F-string interpolation highlighting (0.3.2 published)
 
 - Authorized target: correct the reported VS Code syntax-highlighting defect

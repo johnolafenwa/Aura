@@ -6,7 +6,7 @@ Aura currently runs through the bootstrap CLI, `aura`. You invoke it from the re
 
 Create a file called `hello.au`:
 
-```aura
+```aura check-pass
 print("hello, aura")
 ```
 
@@ -76,8 +76,8 @@ cargo run -p aura -- --version
 ```
 
 The source-checkout command prints the build channel and a 12-hex-digit source
-commit, such as `aura 0.3.1-dev (0123456789ab)`. Release archives identify
-their channel as `aura 0.3.1-preview (0123456789ab)`.
+commit, such as `aura 0.3.2-dev (0123456789ab)`. Release archives identify
+their channel as `aura 0.3.2-preview (0123456789ab)`.
 
 Use `deps update` to refresh git dependencies without deleting `Aura.lock` manually:
 
@@ -123,7 +123,7 @@ Aura supports two entry styles.
 
 Write executable statements directly at the top level. This is the simplest way to start:
 
-```aura
+```aura check-pass
 a = 56
 b = 100
 print(a + b)
@@ -135,7 +135,7 @@ See [examples/basics/top_level_script.au](../examples/basics/top_level_script.au
 
 For programs that return an exit code, declare a `main` function:
 
-```aura
+```aura check-pass
 def main() -> int32:
     print(5)
     return 0

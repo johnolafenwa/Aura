@@ -6,7 +6,7 @@ When functions return `Result[T, E]`, chaining multiple fallible operations with
 
 `try expr` evaluates the expression, which must produce a `Result[T, E]`. If the result is `Ok(value)`, `try` unwraps it and the expression evaluates to the inner value. If the result is `Err(e)`, Aura returns that error from the current function immediately.
 
-```aura
+```aura check-pass
 def divide(a: int32, b: int32) -> Result[int32, str]:
     if b == 0:
         return Result.Err("division by zero")
@@ -24,7 +24,7 @@ In `add_one_after_divide`, `try divide(a, b)` either:
 
 Without `try`, the same function would need a nested `match`:
 
-```aura
+```aura fragment
 def add_one_after_divide(a: int32, b: int32) -> Result[int32, str]:
     match divide(a, b):
         case Ok(value):
@@ -37,7 +37,7 @@ def add_one_after_divide(a: int32, b: int32) -> Result[int32, str]:
 
 `try` shines when chaining several fallible calls:
 
-```aura
+```aura fragment
 def compute(input: str) -> Result[int32, str]:
     parsed = try parse_int32(input)
     doubled = try divide(parsed * 2, 3)
@@ -50,7 +50,7 @@ Each `try` either succeeds and continues to the next line, or short-circuits the
 
 `try` can appear inside larger expressions:
 
-```aura
+```aura check-pass
 def add_parsed(a: str, b: str) -> Result[int32, str]:
     return Result.Ok(try parse_int32(a) + try parse_int32(b))
 ```
@@ -59,7 +59,7 @@ def add_parsed(a: str, b: str) -> Result[int32, str]:
 
 `try` works inside `with` blocks. The resource cleanup still runs when `try` triggers an early return:
 
-```aura
+```aura fragment
 def process_file(handle: own FileHandle) -> Result[str, str]:
     with file = handle:
         value = try validate(file.read())
@@ -71,10 +71,15 @@ def process_file(handle: own FileHandle) -> Result[str, str]:
 
 - `try` is only valid inside a function body
 - the enclosing function must return `Result[T, E]`
-- the `try` expression must produce `Result[U, E]` -- the error type `E` must match exactly
+- the `try` expression must produce `Result[U, SourceError]`; the enclosing
+  error type may be identical or provide a visible applicable
+  `impl From[SourceError] for TargetError`
 - `try` unwraps `Ok(value)` to the inner type `U`
 
-The error type matching is strict in the bootstrap compiler. If your function returns `Result[int32, str]`, every `try` expression must also use `str` as its error type.
+Exact error types propagate directly. When they differ, Aura calls the
+selected `From.from` implementation before returning `Result.Err(...)`.
+See the Manual's [`From` And `try`](../docs/manual/generics-and-traits.md#from-and-try)
+section for the trait contract and conversion rules.
 
 See:
 

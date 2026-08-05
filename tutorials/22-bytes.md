@@ -12,7 +12,7 @@ visible.
 
 Call `to_bytes()` on a str:
 
-```aura
+```aura check-pass
 import bytes
 
 text = "Aura 🌌"
@@ -27,7 +27,7 @@ Aura does not normalize the text or rewrite line endings.
 Going the other way can fail because an arbitrary byte list need not be
 valid UTF-8:
 
-```aura
+```aura check-pass
 import bytes
 
 payload: list[uint8] = [65, 117, 114, 97]
@@ -53,7 +53,7 @@ after `from_bytes`, and the original str remains available after
 
 Hex encoding uses two lowercase digits per byte:
 
-```aura
+```aura check-pass
 import bytes
 
 payload: list[uint8] = [0, 1, 254, 255]
@@ -63,7 +63,7 @@ print(text)
 
 The result is `0001feff`. Decoding accepts uppercase or lowercase ASCII:
 
-```aura
+```aura fragment
 match bytes.hex_decode("0001FeFf"):
     case Result.Ok(payload):
         print(payload)
@@ -82,7 +82,7 @@ signs, or non-ASCII digits. Odd length is checked before digit validity.
 
 Base64 is useful when a text protocol needs to carry arbitrary bytes:
 
-```aura
+```aura check-pass
 import bytes
 
 payload: list[uint8] = [0, 1, 254, 255]
@@ -94,6 +94,8 @@ match bytes.base64_decode(encoded):
         print(decoded)
     case Result.Err(bytes.Error.InvalidBase64(index)):
         print(f"invalid base64 at byte {index}")
+    case Result.Err(error):
+        print(error)
 ```
 
 This prints `AAH+/w==` and then `[0, 1, 254, 255]`.
@@ -108,7 +110,7 @@ when text is required.
 
 `bytes.sha256` returns a raw 32-byte SHA-256 digest:
 
-```aura
+```aura check-pass
 import bytes
 
 payload = "abc".to_bytes()
@@ -124,7 +126,7 @@ For a str, `bytes.sha256_string(text)` hashes exactly the bytes produced by
 `text.to_bytes()`. It does not add a terminator or normalize text. These two
 expressions therefore produce equal digest vectors:
 
-```aura
+```aura fragment
 bytes.sha256_string("café")
 bytes.sha256("café".to_bytes())
 ```
@@ -148,7 +150,7 @@ allocation failure traps with `AU4005`. A codec never returns a partial
 successful value.
 
 The optional `encoding` parameter is reserved but not implemented. These are
-the complete 0.2 conversion calls:
+the complete 0.3 conversion calls:
 
 - `text.to_bytes()`
 - `str.from_bytes(payload)`

@@ -17,11 +17,18 @@ native runtime under `~/.local`. If `~/.local/bin` is absent from `PATH`, the
 installer prints the exact export command. Set `AURA_INSTALL_PREFIX` before
 running the command to choose another prefix.
 
+After Aura is installed, update the compiler and its bundled native runtime
+with:
+
+```bash
+aura upgrade
+```
+
 For a manual installation, download the archive for a supported host, extract
 it, and keep its directory layout intact:
 
 ```text
-aura-v0.3.1-preview-<target>/
+aura-v0.3.2-preview-<target>/
 ├── bin/aura
 ├── lib/aura/
     ├── libaura_compiler.a
@@ -83,8 +90,8 @@ aura --version
 ```
 
 Preview builds identify both their channel and source commit, for example
-`aura 0.3.1-preview (0123456789ab)`. Source-checkout builds identify their
-channel as `aura 0.3.1-dev (0123456789ab)`.
+`aura 0.3.2-preview (0123456789ab)`. Source-checkout builds identify their
+channel as `aura 0.3.2-dev (0123456789ab)`.
 
 On Unix shells, consider adding that export to your shell profile.
 

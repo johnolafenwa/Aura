@@ -61,7 +61,7 @@ connection.onInitialize((params) => {
   return {
     serverInfo: {
       name: "aura-language-server",
-      version: "0.3.1"
+      version: "0.3.2"
     },
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,

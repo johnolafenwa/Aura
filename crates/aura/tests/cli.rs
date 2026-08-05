@@ -6144,7 +6144,98 @@ fn help_flags_exit_successfully() {
             "help must advertise every maintained test-runner option, stdout was:\n{}",
             stdout
         );
+        assert!(
+            stdout.contains("or: aura upgrade"),
+            "help must advertise the updater, stdout was:\n{}",
+            stdout
+        );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn upgrade_downloads_and_runs_the_official_installer_for_the_active_prefix() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new("aura-upgrade-success");
+    let fake_bin = temp.path().join("bin");
+    let prefix = temp.path().join("installed-aura");
+    fs::create_dir_all(&fake_bin).expect("fake executable directory should be created");
+
+    let installer = temp.path().join("installer.sh");
+    fs::write(
+        &installer,
+        "#!/bin/sh\nset -eu\nprintf 'installer-prefix=%s\\n' \"$AURA_INSTALL_PREFIX\"\n",
+    )
+    .expect("fake installer should be written");
+
+    let curl = fake_bin.join("curl");
+    fs::write(
+        &curl,
+        "#!/bin/sh\nset -eu\noutput=\nwhile test \"$#\" -gt 0; do\n  case \"$1\" in\n    -o) output=$2; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ntest -n \"$output\"\ncp \"$AURA_TEST_UPGRADE_INSTALLER\" \"$output\"\n",
+    )
+    .expect("fake curl should be written");
+    let mut permissions = fs::metadata(&curl)
+        .expect("fake curl metadata should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&curl, permissions).expect("fake curl should be executable");
+
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(fake_bin.clone()).chain(std::env::split_paths(&inherited_path)),
+    )
+    .expect("test PATH should be valid");
+    let output = Command::new(aura_bin())
+        .arg("upgrade")
+        .env("PATH", path)
+        .env(
+            "AURA_UPGRADE_INSTALLER_URL",
+            "https://example.invalid/install.sh",
+        )
+        .env("AURA_TEST_UPGRADE_INSTALLER", &installer)
+        .env("AURA_INSTALL_PREFIX", &prefix)
+        .output()
+        .expect("failed to run aura upgrade");
+
+    assert!(
+        output.status.success(),
+        "upgrade should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!("installer-prefix={}", prefix.display())),
+        "the installer must inherit the selected install prefix, stdout was:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Aura upgrade complete"),
+        "upgrade should report completion, stdout was:\n{stdout}"
+    );
+}
+
+#[test]
+fn upgrade_rejects_arguments_and_the_unratified_update_alias() {
+    let extra = Command::new(aura_bin())
+        .args(["upgrade", "now"])
+        .output()
+        .expect("failed to run aura upgrade with an extra argument");
+    assert_eq!(extra.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&extra.stderr).contains("`aura upgrade` does not accept arguments"),
+        "unexpected stderr:\n{}",
+        String::from_utf8_lossy(&extra.stderr)
+    );
+
+    let retired = Command::new(aura_bin())
+        .arg("update")
+        .output()
+        .expect("failed to run the unsupported aura update spelling");
+    assert_eq!(retired.status.code(), Some(2));
+    assert!(
+        !String::from_utf8_lossy(&retired.stdout).contains("upgrade"),
+        "the unsupported spelling must not run the updater"
+    );
 }
 
 #[test]

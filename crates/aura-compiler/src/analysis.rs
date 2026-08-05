@@ -6184,7 +6184,17 @@ fn recover_checked_program_after_member_errors_with(
         }
 
         match parser::parse(&candidate) {
-            Ok(_) => return check_program(&candidate).ok(),
+            Ok(_) => match check_program(&candidate) {
+                Ok(program) => return Some(program),
+                Err(error) => {
+                    let line = error.span.map(|span| span.line.saturating_sub(1))?;
+                    let next = replace_member_stmt(&candidate, line);
+                    if next == candidate {
+                        return None;
+                    }
+                    candidate = next;
+                }
+            },
             Err(error) if error.message.starts_with("expected member name") => {
                 let line = error.span.map(|span| span.line.saturating_sub(1))?;
                 let next = replace_member_stmt(&candidate, line);

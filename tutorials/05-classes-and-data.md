@@ -1,10 +1,13 @@
 # Classes And Data
 
-The implemented class model currently covers fields, default values, keyword construction, member access, `public` fields and methods, instance methods, associated methods, mutating methods, explicit `copy class` declarations, and indirect recursive fields.
+The implemented class model currently covers fields, default values,
+positional and named construction, member access, `public` fields and methods,
+instance methods, associated methods, mutating methods, explicit `copy class`
+declarations, and indirect recursive fields.
 
 ## Declaring A Class
 
-```aura
+```aura check-pass
 class Point:
     x: float64
     y: float64
@@ -14,14 +17,14 @@ See [examples/classes/point_distance.au](../examples/classes/point_distance.au).
 
 Generic classes are also supported:
 
-```aura
+```aura check-pass
 class Box[T]:
     value: T
 ```
 
 Aura also supports explicit copy classes when every field is itself copyable:
 
-```aura
+```aura check-pass
 copy class Point:
     x: int32
     y: int32
@@ -31,15 +34,15 @@ See [examples/classes/copy_class.au](../examples/classes/copy_class.au).
 
 ## Constructing A Value
 
-Aura currently uses keyword-style construction:
+Class construction accepts named fields:
 
-```aura
+```aura fragment
 p1 = Point(x=0.0, y=0.0)
 ```
 
 ## Accessing Fields
 
-```aura
+```aura fragment
 dx = a.x - b.x
 ```
 
@@ -52,7 +55,7 @@ explanation of move semantics, copy types, and common patterns for working with 
 
 The implemented subset supports field defaults:
 
-```aura
+```aura check-pass
 class ServerConfig:
     host: str = "localhost"
     port: int32 = 8080
@@ -60,7 +63,7 @@ class ServerConfig:
 
 You can then omit those fields during construction:
 
-```aura
+```aura fragment
 local = ServerConfig()
 named = ServerConfig(host="aura.dev")
 ```
@@ -72,7 +75,7 @@ See [examples/classes/default_fields.au](../examples/classes/default_fields.au).
 Recursive class fields must be marked `indirect`. This gives the child an
 out-of-line representation and keeps the parent size finite:
 
-```aura
+```aura check-pass
 class Node:
     value: int32
     next: indirect Node?
@@ -86,7 +89,7 @@ See [examples/classes/indirect_recursive.au](../examples/classes/indirect_recurs
 
 Aura enforces class visibility across module boundaries. Fields and methods are private by default and must be marked `public` to be used from another module:
 
-```aura
+```aura check-pass
 class User:
     public name: str
     age: int32
@@ -107,7 +110,7 @@ See [examples/modules/simple_import.au](../examples/modules/simple_import.au).
 
 Aura supports methods declared directly inside the class body.
 
-```aura
+```aura check-pass
 class Counter:
     value: int32
 
@@ -121,8 +124,6 @@ The current compiler accepts these receiver forms. For a full explanation of how
 
 - `self`
   - shared receiver and the default spelling; read-only access
-- `self`
-  - explicit synonym for shared `self`
 - `own self`
   - consuming receiver; takes ownership of a non-copy instance
 - `mut self`
@@ -132,12 +133,11 @@ The current compiler accepts these receiver forms. For a full explanation of how
 
 A receiver must be first and is never typed explicitly. `self: Counter` is
 rejected because it looks like an instance receiver but would otherwise be an
-ordinary parameter; use `self`, `self`, `own self`, or
-`mut self`.
+ordinary parameter; use `self`, `own self`, or `mut self`.
 
 Example:
 
-```aura
+```aura check-pass
 class Counter:
     value: int32
 
@@ -156,14 +156,14 @@ class Counter:
 
 Call them through an instance:
 
-```aura
+```aura fragment
 counter = Counter(value=4)
 print(counter.read())
 ```
 
 Method calls follow the same argument rules as ordinary functions, so methods and associated methods can also use named arguments:
 
-```aura
+```aura check-pass
 class Greeter:
     prefix: str
 
@@ -181,7 +181,7 @@ print(greeter.say(name="aura"))
 
 Methods without a receiver are called through the class name:
 
-```aura
+```aura check-pass
 class Counter:
     value: int32
 
@@ -189,7 +189,7 @@ class Counter:
         return Counter(value=0)
 ```
 
-```aura
+```aura fragment
 print(Counter.zero().read())
 ```
 
@@ -199,7 +199,7 @@ See [examples/classes/methods.au](../examples/classes/methods.au).
 
 Aura supports `mut self` methods and member-target assignment.
 
-```aura
+```aura check-pass
 class Counter:
     value: int32
 
@@ -210,7 +210,7 @@ class Counter:
         self.value = 0
 ```
 
-```aura
+```aura fragment
 mut counter = Counter(value=4)
 counter.bump()
 counter.reset()
@@ -220,7 +220,7 @@ See [examples/classes/mutating_methods.au](../examples/classes/mutating_methods.
 
 Constructors support positional field arguments as long as they come before any named fields:
 
-```aura
+```aura check-pass
 class Point:
     x: int32
     y: int32 = 9
@@ -234,4 +234,3 @@ second = Point(7)
 The bootstrap compiler does not yet support:
 
 - separate `impl` blocks
-- method visibility modifiers

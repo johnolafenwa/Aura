@@ -18,6 +18,9 @@
       "include": "#declarations"
     },
     {
+      "include": "#builtins"
+    },
+    {
       "include": "#keywords"
     },
     {
@@ -99,6 +102,9 @@
                 },
                 {
                   "include": "#keywords"
+                },
+                {
+                  "include": "#builtins"
                 },
                 {
                   "include": "#types"
@@ -325,6 +331,14 @@
         {
           "name": "constant.language.aura",
           "match": "\\b(None|Some|true|false|self|Self)\\b"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.aura",
+          "match": "(?<!\\.)\\b(print|range|cancelled|yield_now|sleep|select|wait_any|wait_all|abs|min|max|sqrt|round|divmod|parse_int32|parse_int64|parse_float64|len|str)\\b(?=\\s*\\()"
         }
       ]
     },
