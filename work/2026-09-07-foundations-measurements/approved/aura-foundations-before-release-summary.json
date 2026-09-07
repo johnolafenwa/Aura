@@ -1,0 +1,1248 @@
+{
+  "aura_qualification": {
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "-p",
+      "aura",
+      "--target-dir",
+      "/private/tmp/aura-foundations-before-approved-20260907/target"
+    ],
+    "fresh_locked_release_build": true,
+    "path": "/private/tmp/aura-foundations-before-approved-20260907/target/release/aura",
+    "returncode": 0,
+    "sha256": "053c7b2176342d681158820cc41a84dc6ec6ee8312e98ff3c8b185205003017b"
+  },
+  "benchmarks": {
+    "fib30": {
+      "performance_gate": null,
+      "primary_measurement": "protocol",
+      "protocol": {
+        "aura": {
+          "best_s": 0.110275625,
+          "mad_s": 0.00010416700000000223,
+          "median_s": 0.110397208,
+          "p95_s": 0.130173416,
+          "samples_s": [
+            0.110550917,
+            0.110501375,
+            0.110401375,
+            0.110275625,
+            0.110568291,
+            0.110397208,
+            0.110295625,
+            0.110376083,
+            0.110291834,
+            0.110385875,
+            0.130173416
+          ]
+        },
+        "cpython": {
+          "best_s": 0.15719775,
+          "mad_s": 0.00022095799999999333,
+          "median_s": 0.158086083,
+          "p95_s": 0.164905542,
+          "samples_s": [
+            0.157865125,
+            0.158438292,
+            0.158086083,
+            0.1584555,
+            0.159038375,
+            0.164905542,
+            0.157928083,
+            0.157899083,
+            0.158242583,
+            0.157971541,
+            0.15719775
+          ]
+        },
+        "paired_median_ratio": 0.698362391583831,
+        "paired_ratios": [
+          0.7002871406841759,
+          0.6974410895568098,
+          0.698362391583831,
+          0.6959406584182941,
+          0.6952302612498398,
+          0.6694572338872639,
+          0.6983914634105955,
+          0.6990292844195936,
+          0.696979484972133,
+          0.6987706412258142,
+          0.8280870177849237
+        ],
+        "ratio_of_medians": 0.6983360325272909
+      },
+      "whole_process": {
+        "aura": {
+          "best_s": 0.115790625,
+          "mad_s": 0.00036987499999999174,
+          "median_s": 0.116592375,
+          "p95_s": 0.145580958,
+          "samples_s": [
+            0.117018625,
+            0.116558667,
+            0.116592375,
+            0.116309625,
+            0.117236709,
+            0.116671375,
+            0.115790625,
+            0.1162225,
+            0.116247375,
+            0.117090625,
+            0.145580958
+          ]
+        },
+        "cpython": {
+          "best_s": 0.179070625,
+          "mad_s": 0.00021179199999998843,
+          "median_s": 0.1795995,
+          "p95_s": 0.201616667,
+          "samples_s": [
+            0.1795995,
+            0.180525,
+            0.179185208,
+            0.179643583,
+            0.180694375,
+            0.201616667,
+            0.179070625,
+            0.1794735,
+            0.179387708,
+            0.17940775,
+            0.179708375
+          ]
+        },
+        "paired_median_ratio": 0.6480230797084491,
+        "paired_ratios": [
+          0.6515531780433688,
+          0.6456649605317824,
+          0.6506808028484137,
+          0.6474465887267457,
+          0.6488121669531771,
+          0.5786792170311991,
+          0.6466198741418364,
+          0.6475747115869473,
+          0.6480230797084491,
+          0.6526508748925284,
+          0.8100955673323517
+        ],
+        "ratio_of_medians": 0.6491798418147043
+      }
+    },
+    "retrying_worker": {
+      "performance_gate": null,
+      "primary_measurement": "protocol",
+      "protocol": {
+        "aura": {
+          "best_s": 0.417025708,
+          "mad_s": 0.0022655420000000093,
+          "median_s": 0.427788875,
+          "p95_s": 0.433380916,
+          "samples_s": [
+            0.427788875,
+            0.425523333,
+            0.427015459,
+            0.429848083,
+            0.429733708,
+            0.433380916,
+            0.430866625,
+            0.427320791,
+            0.417025708,
+            0.430136666,
+            0.424517667
+          ]
+        },
+        "cpython": {
+          "best_s": 0.515079708,
+          "mad_s": 0.004173709000000025,
+          "median_s": 0.521302291,
+          "p95_s": 0.53001125,
+          "samples_s": [
+            0.51645625,
+            0.524431375,
+            0.515238417,
+            0.515079708,
+            0.525476,
+            0.522587583,
+            0.525918958,
+            0.519281542,
+            0.518777167,
+            0.53001125,
+            0.521302291
+          ]
+        },
+        "paired_median_ratio": 0.8192642962302188,
+        "paired_ratios": [
+          0.8283158060339091,
+          0.8113994571739724,
+          0.8287725544347366,
+          0.8345273097032974,
+          0.8177989251649932,
+          0.8292981503925247,
+          0.8192642962302188,
+          0.8229077223777,
+          0.8038628808811857,
+          0.8115613885554316,
+          0.8143406893256872
+        ],
+        "ratio_of_medians": 0.8206157586213255
+      },
+      "whole_process": {
+        "aura": {
+          "best_s": 0.424834709,
+          "mad_s": 0.0016481669999999782,
+          "median_s": 0.440981208,
+          "p95_s": 0.44560725,
+          "samples_s": [
+            0.440980708,
+            0.4395875,
+            0.439845708,
+            0.442946834,
+            0.441930833,
+            0.44560725,
+            0.44296675,
+            0.440981208,
+            0.424834709,
+            0.442629375,
+            0.437574625
+          ]
+        },
+        "cpython": {
+          "best_s": 0.568524416,
+          "mad_s": 0.006583458000000042,
+          "median_s": 0.588399083,
+          "p95_s": 0.606095,
+          "samples_s": [
+            0.577461334,
+            0.588399083,
+            0.581310333,
+            0.568524416,
+            0.60554275,
+            0.592912334,
+            0.606095,
+            0.594982541,
+            0.585509583,
+            0.59358625,
+            0.587611166
+          ]
+        },
+        "paired_median_ratio": 0.7456867051755326,
+        "paired_ratios": [
+          0.763654087357475,
+          0.7470907292355519,
+          0.7566452599080155,
+          0.7791166421953635,
+          0.7298094692736392,
+          0.7515567217058433,
+          0.7308536615547068,
+          0.7411666353416578,
+          0.725581137072525,
+          0.7456867051755326,
+          0.7446669674074914
+        ],
+        "ratio_of_medians": 0.749459373307691
+      }
+    },
+    "tasks_10000": {
+      "performance_gate": null,
+      "primary_measurement": "protocol",
+      "protocol": {
+        "aura": {
+          "best_s": 0.099558041,
+          "mad_s": 0.0006010840000000017,
+          "median_s": 0.100303375,
+          "p95_s": 0.104404875,
+          "samples_s": [
+            0.104404875,
+            0.103117958,
+            0.100120417,
+            0.099935292,
+            0.099915125,
+            0.103007833,
+            0.099904,
+            0.100303375,
+            0.100904459,
+            0.099558041,
+            0.103667042
+          ]
+        },
+        "cpython": {
+          "best_s": 0.051268583,
+          "mad_s": 0.000254540999999997,
+          "median_s": 0.051524875,
+          "p95_s": 0.052322667,
+          "samples_s": [
+            0.051955042,
+            0.052322667,
+            0.051769167,
+            0.051524875,
+            0.051452834,
+            0.052157583,
+            0.051268583,
+            0.051898375,
+            0.05133,
+            0.051456792,
+            0.051270334
+          ]
+        },
+        "paired_median_ratio": 1.9486397741868544,
+        "paired_ratios": [
+          2.009523445289487,
+          1.9708085216680562,
+          1.9339777477972555,
+          1.9395542832466843,
+          1.9418779731355515,
+          1.9749349389905586,
+          1.9486397741868544,
+          1.9326881622016105,
+          1.9657989285018507,
+          1.9347891139424316,
+          2.0219693127023515
+        ],
+        "ratio_of_medians": 1.9466980754441423
+      },
+      "whole_process": {
+        "aura": {
+          "best_s": 0.107113708,
+          "mad_s": 0.0012236669999999977,
+          "median_s": 0.108566625,
+          "p95_s": 0.112680791,
+          "samples_s": [
+            0.112680791,
+            0.111596541,
+            0.107900542,
+            0.107342958,
+            0.107677833,
+            0.110548209,
+            0.107113708,
+            0.108566625,
+            0.109216834,
+            0.107651375,
+            0.111630541
+          ]
+        },
+        "cpython": {
+          "best_s": 0.092936875,
+          "mad_s": 0.0006670420000000066,
+          "median_s": 0.094924708,
+          "p95_s": 0.0963395,
+          "samples_s": [
+            0.094528459,
+            0.0963395,
+            0.095334167,
+            0.095165541,
+            0.094924708,
+            0.095475875,
+            0.09559175,
+            0.093508583,
+            0.092936875,
+            0.093771625,
+            0.093149042
+          ]
+        },
+        "paired_median_ratio": 1.1578653665127447,
+        "paired_ratios": [
+          1.1920303387152436,
+          1.1583674505265233,
+          1.1318139696967195,
+          1.127960361198388,
+          1.134349899712096,
+          1.1578653665127447,
+          1.1205329748644626,
+          1.1610337951543976,
+          1.1751722230815271,
+          1.1480165241884206,
+          1.1984078268888692
+        ],
+        "ratio_of_medians": 1.1437130256961128
+      }
+    },
+    "tcp_fanout": {
+      "performance_gate": null,
+      "primary_measurement": "protocol",
+      "protocol": {
+        "aura": {
+          "best_s": 0.103492417,
+          "mad_s": 0.00045704099999999137,
+          "median_s": 0.104534666,
+          "p95_s": 0.105234917,
+          "samples_s": [
+            0.104541417,
+            0.10436025,
+            0.104457292,
+            0.105234917,
+            0.105233,
+            0.105198583,
+            0.103492417,
+            0.105014042,
+            0.104408208,
+            0.104077625,
+            0.104534666
+          ]
+        },
+        "cpython": {
+          "best_s": 0.107895875,
+          "mad_s": 0.00028358299999999004,
+          "median_s": 0.108592667,
+          "p95_s": 0.10887625,
+          "samples_s": [
+            0.10885125,
+            0.108775125,
+            0.108862167,
+            0.108024875,
+            0.108009125,
+            0.108011042,
+            0.108059125,
+            0.107895875,
+            0.10887625,
+            0.108592667,
+            0.108773125
+          ]
+        },
+        "paired_median_ratio": 0.9604062149033659,
+        "paired_ratios": [
+          0.9604062149033659,
+          0.9594128253127726,
+          0.9595371365333927,
+          0.9741730041344643,
+          0.9742973105281614,
+          0.9739613751712533,
+          0.9577388027156429,
+          0.9732906100441745,
+          0.9589621979081756,
+          0.9584222201670395,
+          0.9610339502519579
+        ],
+        "ratio_of_medians": 0.9626309850185372
+      },
+      "whole_process": {
+        "aura": {
+          "best_s": 0.111204959,
+          "mad_s": 0.0009703739999999961,
+          "median_s": 0.112175333,
+          "p95_s": 0.114932,
+          "samples_s": [
+            0.112011542,
+            0.111793541,
+            0.111204959,
+            0.114860333,
+            0.114932,
+            0.11484425,
+            0.113201791,
+            0.11490225,
+            0.111885458,
+            0.111579458,
+            0.112175333
+          ]
+        },
+        "cpython": {
+          "best_s": 0.154509292,
+          "mad_s": 0.0014822079999999849,
+          "median_s": 0.168562959,
+          "p95_s": 0.170045167,
+          "samples_s": [
+            0.169706625,
+            0.169664417,
+            0.168681292,
+            0.155341083,
+            0.15580975,
+            0.155935833,
+            0.155829375,
+            0.154509292,
+            0.170045167,
+            0.168745833,
+            0.168562959
+          ]
+        },
+        "paired_median_ratio": 0.6654803265526443,
+        "paired_ratios": [
+          0.6600304613918284,
+          0.6589097642082488,
+          0.6592607732693914,
+          0.7394073144191997,
+          0.7376431834336427,
+          0.7364840254516741,
+          0.7264470578798125,
+          0.7436591580524491,
+          0.6579749367413659,
+          0.6612279308846696,
+          0.6654803265526443
+        ],
+        "ratio_of_medians": 0.6654803265526443
+      }
+    },
+    "v6": {
+      "comparisons": {
+        "aura_int32_vs_cpython": {
+          "aura": {
+            "best_s": 0.033818208,
+            "mad_s": 0.0026276249999999945,
+            "median_s": 0.036445833,
+            "p95_s": 0.05615025,
+            "samples_s": [
+              0.051178708,
+              0.05615025,
+              0.033840417,
+              0.033951083,
+              0.03398175,
+              0.033818208,
+              0.034113167,
+              0.052197292,
+              0.042945709,
+              0.036445833,
+              0.05121275
+            ]
+          },
+          "cpython": {
+            "best_s": 0.315506292,
+            "mad_s": 0.00339333399999997,
+            "median_s": 0.319649209,
+            "p95_s": 0.340379625,
+            "samples_s": [
+              0.316255875,
+              0.317436125,
+              0.321711459,
+              0.324274541,
+              0.340379625,
+              0.337482709,
+              0.331534417,
+              0.319649209,
+              0.317420375,
+              0.315506292,
+              0.316644
+            ]
+          },
+          "paired_median_ratio": 0.11551539200365613,
+          "paired_ratios": [
+            0.16182690044888495,
+            0.17688676737721643,
+            0.10518872130072308,
+            0.10469857699991315,
+            0.0998348535109879,
+            0.10020723165405195,
+            0.1028947984003724,
+            0.16329554564923074,
+            0.13529600612437057,
+            0.11551539200365613,
+            0.16173605058046261
+          ],
+          "ratio_of_medians": 0.11401821738905038
+        },
+        "aura_int32_vs_cpython_startup_adjusted": {
+          "aura": {
+            "best_s": 0.021576167,
+            "mad_s": 0.003920458000000002,
+            "median_s": 0.031250791,
+            "p95_s": 0.049678415999999996,
+            "samples_s": [
+              0.035171249,
+              0.049678415999999996,
+              0.027269916999999998,
+              0.027657083,
+              0.027903417,
+              0.028629958000000004,
+              0.021576167,
+              0.045263167,
+              0.037220876,
+              0.031250791,
+              0.0347465
+            ]
+          },
+          "cpython": {
+            "best_s": 0.284021791,
+            "mad_s": 0.00430850100000002,
+            "median_s": 0.29376949999999996,
+            "p95_s": 0.319372292,
+            "samples_s": [
+              0.29300608300000003,
+              0.293715125,
+              0.290865043,
+              0.284021791,
+              0.319372292,
+              0.316172001,
+              0.31002716700000005,
+              0.298078001,
+              0.29589525,
+              0.285278917,
+              0.29376949999999996
+            ]
+          },
+          "excluded_pair_repetitions": [],
+          "paired_median_ratio": 0.10954469166047766,
+          "paired_ratios": [
+            0.12003590041507772,
+            0.16913809256503215,
+            0.09375453550119461,
+            0.09737662347182367,
+            0.0873695611640599,
+            0.0905518449117827,
+            0.06959443976727367,
+            0.15185007564513292,
+            0.12579071816800033,
+            0.10954469166047766,
+            0.11827810579382816
+          ],
+          "ratio_of_medians": 0.10637860976037337,
+          "valid_pair_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ]
+        },
+        "aura_int64_vs_cpython": {
+          "aura": {
+            "best_s": 0.011367333,
+            "mad_s": 0.0018102919999999998,
+            "median_s": 0.015148792,
+            "p95_s": 0.02988225,
+            "samples_s": [
+              0.015148792,
+              0.016498291,
+              0.02988225,
+              0.01350575,
+              0.011367333,
+              0.012976916,
+              0.0133385,
+              0.012491958,
+              0.024271875,
+              0.016206208,
+              0.015320833
+            ]
+          },
+          "cpython": {
+            "best_s": 0.315506292,
+            "mad_s": 0.00339333399999997,
+            "median_s": 0.319649209,
+            "p95_s": 0.340379625,
+            "samples_s": [
+              0.316255875,
+              0.317436125,
+              0.321711459,
+              0.324274541,
+              0.340379625,
+              0.337482709,
+              0.331534417,
+              0.319649209,
+              0.317420375,
+              0.315506292,
+              0.316644
+            ]
+          },
+          "paired_median_ratio": 0.04790042872721336,
+          "paired_ratios": [
+            0.04790042872721336,
+            0.0519735773614298,
+            0.09288525218494005,
+            0.0416491222479288,
+            0.03339604419624118,
+            0.038452091481818704,
+            0.04023262538079116,
+            0.039080209330347504,
+            0.07646602710994845,
+            0.0513657204655684,
+            0.04838504124505755
+          ],
+          "ratio_of_medians": 0.04739192706714941
+        },
+        "aura_int64_vs_cpython_startup_adjusted": {
+          "aura": {
+            "best_s": 0.0008015000000000001,
+            "mad_s": 0.0024996659999999993,
+            "median_s": 0.007788666,
+            "p95_s": 0.02331175,
+            "samples_s": [
+              0.010026457000000003,
+              0.02331175,
+              0.00721175,
+              0.005289,
+              0.007788666,
+              0.0008015000000000001,
+              0.005557832999999999,
+              0.018547042,
+              0.011011166
+            ]
+          },
+          "cpython": {
+            "best_s": 0.284021791,
+            "mad_s": 0.010616332999999978,
+            "median_s": 0.29589525,
+            "p95_s": 0.319372292,
+            "samples_s": [
+              0.293715125,
+              0.290865043,
+              0.284021791,
+              0.319372292,
+              0.316172001,
+              0.31002716700000005,
+              0.298078001,
+              0.29589525,
+              0.285278917
+            ]
+          },
+          "excluded_pair_repetitions": [
+            0,
+            10
+          ],
+          "paired_median_ratio": 0.025391537651419147,
+          "paired_ratios": [
+            0.03413667239642494,
+            0.080146275948327,
+            0.025391537651419147,
+            0.016560610085736557,
+            0.024634268611280354,
+            0.0025852573106923886,
+            0.01864556586314466,
+            0.06268110758790484,
+            0.03859789610740845
+          ],
+          "ratio_of_medians": 0.02632237590836622,
+          "valid_pair_repetitions": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ]
+        }
+      },
+      "performance_gate": null,
+      "primary_measurement": "whole_process",
+      "startup_adjusted": {
+        "aura_int32": {
+          "best_s": 0.021576167,
+          "invalid_nonpositive_pair_repetitions": [],
+          "mad_s": 0.003920458000000002,
+          "median_s": 0.031250791,
+          "p95_s": 0.049678415999999996,
+          "raw_samples_s": [
+            0.035171249,
+            0.049678415999999996,
+            0.027269916999999998,
+            0.027657083,
+            0.027903417,
+            0.028629958000000004,
+            0.021576167,
+            0.045263167,
+            0.037220876,
+            0.031250791,
+            0.0347465
+          ],
+          "samples_s": [
+            0.035171249,
+            0.049678415999999996,
+            0.027269916999999998,
+            0.027657083,
+            0.027903417,
+            0.028629958000000004,
+            0.021576167,
+            0.045263167,
+            0.037220876,
+            0.031250791,
+            0.0347465
+          ],
+          "valid_pair_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ]
+        },
+        "aura_int64": {
+          "best_s": 0.0008015000000000001,
+          "invalid_nonpositive_pair_repetitions": [
+            0,
+            10
+          ],
+          "mad_s": 0.0024996659999999993,
+          "median_s": 0.007788666,
+          "p95_s": 0.02331175,
+          "raw_samples_s": [
+            -0.0008586670000000022,
+            0.010026457000000003,
+            0.02331175,
+            0.00721175,
+            0.005289,
+            0.007788666,
+            0.0008015000000000001,
+            0.005557832999999999,
+            0.018547042,
+            0.011011166,
+            -0.001145417000000001
+          ],
+          "samples_s": [
+            0.010026457000000003,
+            0.02331175,
+            0.00721175,
+            0.005289,
+            0.007788666,
+            0.0008015000000000001,
+            0.005557832999999999,
+            0.018547042,
+            0.011011166
+          ],
+          "valid_pair_repetitions": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ]
+        },
+        "cpython_int": {
+          "best_s": 0.284021791,
+          "invalid_nonpositive_pair_repetitions": [],
+          "mad_s": 0.00430850100000002,
+          "median_s": 0.29376949999999996,
+          "p95_s": 0.319372292,
+          "raw_samples_s": [
+            0.29300608300000003,
+            0.293715125,
+            0.290865043,
+            0.284021791,
+            0.319372292,
+            0.316172001,
+            0.31002716700000005,
+            0.298078001,
+            0.29589525,
+            0.285278917,
+            0.29376949999999996
+          ],
+          "samples_s": [
+            0.29300608300000003,
+            0.293715125,
+            0.290865043,
+            0.284021791,
+            0.319372292,
+            0.316172001,
+            0.31002716700000005,
+            0.298078001,
+            0.29589525,
+            0.285278917,
+            0.29376949999999996
+          ],
+          "valid_pair_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ]
+        }
+      },
+      "whole_process": {
+        "aura_int32": {
+          "best_s": 0.033818208,
+          "mad_s": 0.0026276249999999945,
+          "median_s": 0.036445833,
+          "p95_s": 0.05615025,
+          "samples_s": [
+            0.051178708,
+            0.05615025,
+            0.033840417,
+            0.033951083,
+            0.03398175,
+            0.033818208,
+            0.034113167,
+            0.052197292,
+            0.042945709,
+            0.036445833,
+            0.05121275
+          ]
+        },
+        "aura_int64": {
+          "best_s": 0.011367333,
+          "mad_s": 0.0018102919999999998,
+          "median_s": 0.015148792,
+          "p95_s": 0.02988225,
+          "samples_s": [
+            0.015148792,
+            0.016498291,
+            0.02988225,
+            0.01350575,
+            0.011367333,
+            0.012976916,
+            0.0133385,
+            0.012491958,
+            0.024271875,
+            0.016206208,
+            0.015320833
+          ]
+        },
+        "aura_startup": {
+          "best_s": 0.00518825,
+          "mad_s": 0.0007470009999999997,
+          "median_s": 0.006471834,
+          "p95_s": 0.01646625,
+          "samples_s": [
+            0.016007459,
+            0.006471834,
+            0.0065705,
+            0.006294,
+            0.006078333,
+            0.00518825,
+            0.012537,
+            0.006934125,
+            0.005724833,
+            0.005195042,
+            0.01646625
+          ]
+        },
+        "cpython_int": {
+          "best_s": 0.315506292,
+          "mad_s": 0.00339333399999997,
+          "median_s": 0.319649209,
+          "p95_s": 0.340379625,
+          "samples_s": [
+            0.316255875,
+            0.317436125,
+            0.321711459,
+            0.324274541,
+            0.340379625,
+            0.337482709,
+            0.331534417,
+            0.319649209,
+            0.317420375,
+            0.315506292,
+            0.316644
+          ]
+        },
+        "cpython_startup": {
+          "best_s": 0.021007333,
+          "mad_s": 0.0013672500000000004,
+          "median_s": 0.0228745,
+          "p95_s": 0.04025275,
+          "samples_s": [
+            0.023249792,
+            0.023721,
+            0.030846416,
+            0.04025275,
+            0.021007333,
+            0.021310708,
+            0.02150725,
+            0.021571208,
+            0.021525125,
+            0.030227375,
+            0.0228745
+          ]
+        }
+      }
+    }
+  },
+  "contractual": true,
+  "evidence_policy": "measured release evidence only; no Aura-versus-CPython threshold",
+  "generated_at": "2026-09-07T08:33:16.043969+00:00",
+  "host": {
+    "boot_time": "{ sec = 1788744561, usec = 878295 } Mon Sep  7 02:29:21 2026",
+    "cpu_model": "Apple M2 Pro",
+    "hardware_model": "Mac14,9",
+    "load_average": [
+      1.6845703125,
+      3.03759765625,
+      2.62353515625
+    ],
+    "logical_cpus": 10,
+    "machine": "arm64",
+    "memory_bytes": 17179869184,
+    "physical_cores": 10,
+    "python": "3.9.6",
+    "release": "25.5.0",
+    "system": "Darwin",
+    "version": "Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:24 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6020"
+  },
+  "inputs": {
+    "aura": {
+      "path": "/private/tmp/aura-foundations-before-approved-20260907/target/release/aura",
+      "sha256": "053c7b2176342d681158820cc41a84dc6ec6ee8312e98ff3c8b185205003017b",
+      "version": "aura 0.3.3-dev (ddeaddf74301)"
+    },
+    "benchmark_process": {
+      "path": "/private/tmp/aura-foundations-before-approved-20260907/scripts/benchmark_process.py",
+      "sha256": "bbf4bca940b38bc84101ba4eaf93e568b16edafd91dc298d071ea96be52330de"
+    },
+    "python": {
+      "implementation": "CPython",
+      "path": "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+      "sha256": "271143990bc83af0fb2404a255038f5faafb96df1584ed7f085e5018c0f33ffb",
+      "version": "3.9.6"
+    },
+    "runner": {
+      "path": "/private/tmp/aura-foundations-before-approved-20260907/scripts/bench-release-performance.py",
+      "sha256": "be38eeae2d441e5c7c1d80f6c002fe56c1d17889a3a679b5f38899df74bab3c7"
+    },
+    "sources": {
+      "fib30.au": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/fib30.au",
+        "sha256": "9371911f2bf248caae575ca00e16643975dadcae608c09c063f04c85244a9b43"
+      },
+      "fib30.py": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/fib30.py",
+        "sha256": "c078d8eefd1e65fd39e2fd07213a928662b8619c76c3934859f98db28a3145d2"
+      },
+      "int32_loop.au": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/direct_integer_loops/int32_loop.au",
+        "sha256": "3c3e417d4a997e5533f36314ecc173753ba46418a17b2b8c75d5f973bb9fc6e2"
+      },
+      "int64_loop.au": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/direct_integer_loops/int64_loop.au",
+        "sha256": "2ef72e1f191b19c7615db77674a76c9d5192125bbe17b1571cfc2b7a5b48bd83"
+      },
+      "python_int_loop.py": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/python_int_loop.py",
+        "sha256": "0c3cc5c965d2365fe129f8951b8c4e386e28ebfde69100c3bb64c09bc829a431"
+      },
+      "python_startup.py": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/python_startup.py",
+        "sha256": "24e0764246a9e1005298be37eb64000affe8264fc86b195961e3a8c82cec33f7"
+      },
+      "retrying_worker.au": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/retrying_worker.au",
+        "sha256": "c38ce702aed666b6d19296b58787999228dae4f403f7f02556544bb6e82e61c3"
+      },
+      "retrying_worker.py": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/retrying_worker.py",
+        "sha256": "a4487580bdbbdcc4bd668f87c9168fc3df8e507a98933ed0d677e63672e1a795"
+      },
+      "startup.au": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/direct_integer_loops/startup.au",
+        "sha256": "36664202da5a831e2a5b82dd2b3c25f9d75939155dc3d225aa7b4302c6537c41"
+      },
+      "tasks_10000.au": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/tasks_10000.au",
+        "sha256": "51f57daeba570f8c65577f727f4b5a708a0c29fb339cd74580a7c06f120748b6"
+      },
+      "tasks_10000.py": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/tasks_10000.py",
+        "sha256": "4007a0838c4cb007046b36e14c6295d858a9798807cf2bc726e395455cb97208"
+      },
+      "tcp_fanout.au": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/tcp_fanout.au",
+        "sha256": "a48007bfb73e993aaf70546b26e2519ea2870cc672625af70f9198b748a51391"
+      },
+      "tcp_fanout.py": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/tcp_fanout.py",
+        "sha256": "ad1faf038cb78a65f53fea032b1150c0250ec0cbf57b82108295e97b4b0f89ae"
+      }
+    }
+  },
+  "label": "foundations-before",
+  "manifest": {
+    "protocol_workloads": {
+      "fib30": {
+        "aura_source": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/fib30.au",
+        "cpython_source": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/fib30.py",
+        "done": "DONE release-performance fib30 832040\n",
+        "go": "GO release-performance fib30\n",
+        "methodology": "Both lanes run the same naive recursive fib(30) algorithm with the measured interval bounded by GO and DONE.",
+        "primary_measurement": "GO-to-DONE",
+        "ready": "READY release-performance fib30 30\n"
+      },
+      "retrying_worker": {
+        "aura_source": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/retrying_worker.au",
+        "cpython_source": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/retrying_worker.py",
+        "done": "DONE release-performance retrying-worker 112 18112\n",
+        "go": "GO release-performance retrying-worker\n",
+        "methodology": "Both lanes run 16 deterministic reset cycles totaling 112 loopback HTTP requests and 288 ms of scheduled retry delay.",
+        "primary_measurement": "GO-to-DONE",
+        "ready": "READY release-performance retrying-worker 16 112 288\n"
+      },
+      "tasks_10000": {
+        "aura_source": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/tasks_10000.au",
+        "cpython_source": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/tasks_10000.py",
+        "done": "DONE release-performance tasks 10000 49995000\n",
+        "go": "GO release-performance tasks\n",
+        "methodology": "Both lanes create, join, verify, and clean up 10,000 short-lived tasks; the checksum is the sum of task indexes.",
+        "primary_measurement": "GO-to-DONE",
+        "ready": "READY release-performance tasks 10000\n"
+      },
+      "tcp_fanout": {
+        "aura_source": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/tcp_fanout.au",
+        "cpython_source": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/tcp_fanout.py",
+        "done": "DONE release-performance tcp-fanout 20 80\n",
+        "go": "GO release-performance tcp-fanout\n",
+        "methodology": "Both lanes pre-bind 20 ephemeral loopback listeners before READY, then fan out 20 clients to 20 owning server tasks with a 100 ms handler delay. Aura cannot transfer an accepted TcpStream to a handler task because host resources are non-Transfer (AU3008), so a one-listener shape would serialize the handlers and is deliberately not measured.",
+        "primary_measurement": "GO-to-DONE",
+        "ready": "READY release-performance tcp-fanout 20 100 4\n"
+      }
+    },
+    "v6": {
+      "lanes": {
+        "aura_int32": {
+          "expected_stdout": "10000000\n",
+          "implementation": "aura",
+          "source": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/direct_integer_loops/int32_loop.au"
+        },
+        "aura_int64": {
+          "expected_stdout": "10000000\n",
+          "implementation": "aura",
+          "source": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/direct_integer_loops/int64_loop.au"
+        },
+        "aura_startup": {
+          "expected_stdout": "",
+          "implementation": "aura",
+          "source": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/direct_integer_loops/startup.au"
+        },
+        "cpython_int": {
+          "expected_stdout": "10000000\n",
+          "implementation": "cpython",
+          "source": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/python_int_loop.py"
+        },
+        "cpython_startup": {
+          "expected_stdout": "",
+          "implementation": "cpython",
+          "source": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/python_startup.py"
+        }
+      },
+      "primary_measurement": "whole process",
+      "startup_adjustment": "paired loop duration minus paired startup duration"
+    }
+  },
+  "noncontractual_reasons": [],
+  "parameters": {
+    "allow_competing_processes": false,
+    "build_timeout_seconds": 300.0,
+    "cleared_environment_variables": [
+      "AURA_WORKERS",
+      "AURA_BLOCKING_WORKERS",
+      "AURA_BLOCKING_QUEUE_CAPACITY",
+      "AURA_CACHE_DIR",
+      "AURA_NATIVE_CACHE_DIR",
+      "PYTHONASYNCIODEBUG"
+    ],
+    "competing_cpu_percent": 50.0,
+    "completion_timeout_seconds": 120.0,
+    "controlled_environment": {
+      "PYTHONHASHSEED": "0"
+    },
+    "helper_timeout_seconds": 10.0,
+    "max_protocol_line_bytes": 512,
+    "pairs": 11,
+    "quiet_process_sample_interval_seconds": 0.25,
+    "ready_timeout_seconds": 120.0,
+    "whole_process_timeout_seconds": 120.0
+  },
+  "performance_gate": null,
+  "post_timing_verification": {
+    "input_identities_match": true,
+    "repository": {
+      "branch": null,
+      "commit": "ddeaddf74301322fc96d8c09742ea12faa1dd8c3",
+      "detached": true,
+      "dirty_files": [],
+      "root": "/private/tmp/aura-foundations-before-approved-20260907"
+    },
+    "source_hashes": {
+      "fib30.au": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/fib30.au",
+        "sha256": "9371911f2bf248caae575ca00e16643975dadcae608c09c063f04c85244a9b43"
+      },
+      "fib30.py": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/fib30.py",
+        "sha256": "c078d8eefd1e65fd39e2fd07213a928662b8619c76c3934859f98db28a3145d2"
+      },
+      "int32_loop.au": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/direct_integer_loops/int32_loop.au",
+        "sha256": "3c3e417d4a997e5533f36314ecc173753ba46418a17b2b8c75d5f973bb9fc6e2"
+      },
+      "int64_loop.au": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/direct_integer_loops/int64_loop.au",
+        "sha256": "2ef72e1f191b19c7615db77674a76c9d5192125bbe17b1571cfc2b7a5b48bd83"
+      },
+      "python_int_loop.py": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/python_int_loop.py",
+        "sha256": "0c3cc5c965d2365fe129f8951b8c4e386e28ebfde69100c3bb64c09bc829a431"
+      },
+      "python_startup.py": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/python_startup.py",
+        "sha256": "24e0764246a9e1005298be37eb64000affe8264fc86b195961e3a8c82cec33f7"
+      },
+      "retrying_worker.au": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/retrying_worker.au",
+        "sha256": "c38ce702aed666b6d19296b58787999228dae4f403f7f02556544bb6e82e61c3"
+      },
+      "retrying_worker.py": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/retrying_worker.py",
+        "sha256": "a4487580bdbbdcc4bd668f87c9168fc3df8e507a98933ed0d677e63672e1a795"
+      },
+      "startup.au": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/direct_integer_loops/startup.au",
+        "sha256": "36664202da5a831e2a5b82dd2b3c25f9d75939155dc3d225aa7b4302c6537c41"
+      },
+      "tasks_10000.au": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/tasks_10000.au",
+        "sha256": "51f57daeba570f8c65577f727f4b5a708a0c29fb339cd74580a7c06f120748b6"
+      },
+      "tasks_10000.py": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/tasks_10000.py",
+        "sha256": "4007a0838c4cb007046b36e14c6295d858a9798807cf2bc726e395455cb97208"
+      },
+      "tcp_fanout.au": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/tcp_fanout.au",
+        "sha256": "a48007bfb73e993aaf70546b26e2519ea2870cc672625af70f9198b748a51391"
+      },
+      "tcp_fanout.py": {
+        "path": "/private/tmp/aura-foundations-before-approved-20260907/benchmarks/release_performance/tcp_fanout.py",
+        "sha256": "ad1faf038cb78a65f53fea032b1150c0250ec0cbf57b82108295e97b4b0f89ae"
+      }
+    }
+  },
+  "raw_report": {
+    "path": "/private/tmp/aura-foundations-before-release-raw.json",
+    "sha256": "16aead5c0c9fe73ff2155e66b74edf982c8ec81958ab7ae3b4b2a6ae82498ec7"
+  },
+  "repository": {
+    "branch": null,
+    "commit": "ddeaddf74301322fc96d8c09742ea12faa1dd8c3",
+    "detached": true,
+    "dirty_files": [],
+    "root": "/private/tmp/aura-foundations-before-approved-20260907"
+  },
+  "schema_version": 1,
+  "scope": {
+    "external_array_evidence": {
+      "measured_commit": "0511adf61931953df096dc1b6721a543d856be25",
+      "measurement": "numeric Array add and sum against NumPy",
+      "merge_policy": "excluded from this runner; merge the separately qualified rows with their original commit and binary provenance",
+      "raw_path": "/private/tmp/aura-phase73-arrays-post-reboot-raw.json",
+      "raw_sha256": "f51b979977519b5cbca9be4119a77bb3aff1d1a2874e1cdd4269f315bc1f9e7d",
+      "summary_path": "/private/tmp/aura-phase73-arrays-post-reboot-summary.json",
+      "summary_sha256": "f6fc84c1f0fadfb4b93a5f07befb5a33cbaa6926d54ef88a795e103106b410ab"
+    },
+    "measured_here": [
+      "fib30",
+      "tasks_10000",
+      "tcp_fanout",
+      "retrying_worker",
+      "v6"
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+   Compiling powerfmt v0.2.0
+   Compiling time-core v0.1.8
+   Compiling num-conv v0.2.1
+   Compiling aura-compiler v0.3.3 (/Users/johnolafenwa/source2/Aurora/crates/aura-compiler)
+   Compiling pem v3.0.6
+   Compiling aura v0.3.3 (/Users/johnolafenwa/source2/Aurora/crates/aura)
+   Compiling deranged v0.5.8
+   Compiling time v0.3.47
+   Compiling yasna v0.5.2
+   Compiling rcgen v0.13.2
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.81s
+     Running tests/cli.rs (target/debug/deps/cli-2705f31dbe382fa0)
+
+running 1 test
+test release_performance_inputs_pass_checking ... FAILED
+
+failures:
+
+---- release_performance_inputs_pass_checking stdout ----
+
+thread 'release_performance_inputs_pass_checking' (266731) panicked at crates/aura/tests/cli.rs:73:5:
+tasks_10000: error[AU2002]: argument type mismatch for task_value: expected `int32`, found `int64`
+ --> /Users/johnolafenwa/source2/Aurora/benchmarks/release_performance/tasks_10000.au:40:50
+   |
+40 |             tasks.append(group.start(task_value, value))
+   |                                                  ^
+
+tcp_fanout: error[AU2002]: argument type mismatch for serve_one: expected `int32`, found `int64`
+ --> /Users/johnolafenwa/source2/Aurora/benchmarks/release_performance/tcp_fanout.au:62:56
+   |
+62 |             server_tasks.append(group.start(serve_one, index, addresses))
+   |                                                        ^
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    release_performance_inputs_pass_checking
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 375 filtered out; finished in 1.07s
+
+error: test failed, to rerun pass `-p aura --test cli`

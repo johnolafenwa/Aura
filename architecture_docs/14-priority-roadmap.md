@@ -36,8 +36,7 @@ completion. See the [ADR index](decisions/README.md).
 
 These items start before Batch 1 design and run in parallel with it, scheduled
 for the 0.3.4 update. Items 1–4 implementation status is recorded below;
-the post-reboot session has partial results, with release-suite input errors
-blocking completion.
+the post-reboot measurements and Rust comparisons are now recorded with hashes.
 The backend direction is recorded in
 [ADR-0064](decisions/0064-native-backend-strategy-and-codegen-boundary.md).
 
@@ -81,19 +80,18 @@ The backend direction is recorded in
 
 ### Items 1–4 delivery status (0.3.4)
 
-- Item 1: `opt_level=speed` delivered and adopted after all 385 forced parity fixtures
-  and the compiler/CLI acceptance suites passed.
-  Contractual Array before/after results are recorded; addition is 7.1740% slower
-  and sum changes by -0.0994%. These compare the full foundations bundle.
-  Item 1 is partially measured: release-suite and integer median deltas are
-  blocked by unchanged task/TCP benchmark compilation errors.
+- Item 1: `opt_level=speed` delivered and adopted after all 385 forced parity
+  fixtures and compiler/CLI acceptance passed; measured and published. The
+  before/after foundations comparison reduces fib/int32/int64 medians by
+  19.06%/20.56%/15.69%; Array add is 7.17% slower and sum is essentially unchanged.
+  It includes profile/link tuning, so it does not isolate the flag's effect.
 - Item 2: [backend boundary inventory and builder sketch](15-backend-boundary.md)
   delivered; no refactor performed.
-- Item 3: pinned standalone Rust programs, three runner lanes, provenance, unit
-  tests, and hosted protocol smoke verification delivered. Contractual Array
-  comparisons and diagnostic standalone integer comparisons are recorded in the
-  [Performance chapter](../docs/manual/performance.md). Item 3 remains partially
-  measured until the frozen release-suite input errors are resolved.
+- Item 3: pinned Rust programs, runner lanes, provenance and hosted smoke checks
+  delivered; measured and published in the [Performance chapter](../docs/manual/performance.md).
+  Control-plane/Array reports are contractual; standalone integer/Rust results
+  are diagnostic with explicit qualification limits. No Rust workload was excluded.
+  Both release source bases received the same approved task/TCP argument casts.
 - Item 4: release profile, section collection and post-link local/debug stripping,
   plus clean-ref size tooling delivered. Link/strip steps pass local packaging,
   standalone diagnostics, cache, and release-profile checks. The

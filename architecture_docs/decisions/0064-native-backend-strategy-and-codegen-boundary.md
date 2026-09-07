@@ -2,7 +2,7 @@
 
 - Status: Accepted direction; detailed design pending
 - Date: 2026-09-06
-- Implementation: Pre-Batch-1 items 1–4 delivered; timings pending
+- Implementation: Pre-Batch-1 items 1–4 delivered; measurements published with grades and provenance
 - Roadmap: Pre-Batch-1 foundations; incremental boundary work from Batch 1;
   release-backend decision in Batch 7
 - Related: ADR-0031, ADR-0038, ADR-0041, and ADR-0058
@@ -131,7 +131,7 @@ checks, and stripped direct/MIR source diagnostics under the release profile.
 Coverage remains above the unchanged floors. Hosted verification is required
 before merge. No backend refactor or switch is part of this task.
 
-The 7 September post-reboot session supplies partial timing evidence below;
+The 7 September post-reboot session supplies the timing evidence below;
 protocol smoke checks establish correctness only. The separate executable-size
 measurement records byte counts and hashes at clean refs, including an after
 build with Cargo's default release profile restored through environment overrides.
@@ -147,21 +147,32 @@ decision, with omitted-setting auto-stripping distinguished in the chapter.
 
 ## Post-reboot measurements and Batch 7 inputs
 
-At merge `50531b45797ae765ec8d885165c13042617ab567`, contractual Array
-add/sum Aura/Rust ratios of medians are 4.928642/1.338511. The before-tag
-comparison shows +7.1740%/-0.0994% Aura time changes and less than 0.04% NumPy
-drift. It includes the release/link changes alongside Cranelift `speed`, so it
-cannot isolate the flag's effect. Array runtime/kernel costs remain Batch 7
-inputs, alongside the existing size evidence and parity results.
+Items 1 and 3 are measured and published in the [Performance chapter](../../docs/manual/performance.md).
+The same-session foundations comparison reduces fib/int32/int64 medians by
+19.0566%/20.5553%/15.6863%. Task creation changes by -1.6061%, TCP by -0.2547%,
+and retry by +0.2398%. Array add changes by +7.1740% and sum by -0.0994%.
+All CPython/NumPy controls, including startup, drift by less than 5%; no repeat
+was required. The comparison includes release/link tuning with Cranelift speed
+and cannot isolate the flag's causal effect.
 
-Standalone int32/int64 paired Aura/Rust ratios are 1.478258/0.594855, with
-startup and the Rust per-update optimizer barrier included. These are
-diagnostic-grade because this runner lacks the release suite's complete
-qualification checks. They do not establish a general code-generator ranking.
+Contractual Aura/Rust protocol ratios of medians are fib 29.664884, tasks
+29.068501, TCP 0.996856 and retry 0.907338. Contractual Array add/sum ratios
+are 4.928642/1.338511. Standalone int32/int64 paired ratios are
+1.478258/0.594855, diagnostic-grade because that runner lacks the release
+suite's full qualification checks. Startup and Rust's per-update optimizer
+barrier are included; this is not a general code-generator ranking.
 
-Both frozen release suites fail before timing with task/TCP `AU2002` input
-errors. CPython drift, control-plane comparisons and before/after integer
-medians remain unavailable. Items 1 and 3 are partially measured, not complete;
-resolving those inputs and collecting qualified evidence remains required
-before the backend decision. The [session work note](../../work/2026-09-07-foundations-measurements.md)
-links all raw reports and hashes.
+Batch 7 inputs are the large fib/task gaps against these Rust references,
+Array runtime/kernel costs, integer-width and startup behavior, the existing
+size reductions and parity evidence, and source/measurement qualifications.
+TCP and retry results do not support assuming a uniform concurrency penalty.
+No backend switch or numeric target is ratified by these measurements.
+
+Initial frozen task/TCP inputs failed AU2002 at both bases. The user approved
+identical int64-to-int32 argument casts, preserved in corrected clean after
+`4e1e48c81bae6c62a54af763a4046901820038ec` and before
+`ddeaddf74301322fc96d8c09742ea12faa1dd8c3` commits. Compiler and runner code
+remained unchanged. All Rust protocols/checksums passed; no exclusion was needed.
+A verified Git bundle, source diffs, initial failures and successful reports
+are retained in the [session evidence](../../work/2026-09-07-foundations-measurements/).
+Its manifest SHA-256 is `911dc4a7901357b33679ad260923c56d0c8216440b200a0eb12e426ea60cac67`.

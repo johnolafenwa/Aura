@@ -2,25 +2,21 @@
 
 Last updated: 2026-09-07
 
-## Pre-Batch-1 measurement publication (partially measured; source-freeze decision pending)
+## Pre-Batch-1 measurement publication (measurements complete; integration in progress)
 
-- Post-reboot preconditions passed with the authorized personal-file exception.
-  Both detached release builds and pinned Rust references built successfully.
-- Quiet-host retries succeeded at retry 11; no override was used. Contractual
-  before/after Arrays and diagnostic standalone integer comparisons are recorded.
-- Array add became 7.1740% slower; sum changed by -0.0994%. NumPy drift stayed
-  below 0.04%. Rust Array ratios are 4.928642/1.338511 (ratios of medians).
-- Both frozen release suites fail on task/TCP int64-to-int32 arguments before
-  timing. The identical two-cast correction is checked and retained unapplied;
-  source-freeze exception remains pending. No CPython or before integer medians.
-- Cargo 1.95 reference lists strip=none; size column retained per decision 8,
-  with explicit-setting versus omitted-setting behavior documented.
-- Evidence and SHA-256 manifest copied; partial publication docs and generated
-  LLM documents prepared. Local benchmark, identity, Manual, tutorial, docs,
-  freshness and evidence checks pass. [Draft PR #7](https://github.com/johnolafenwa/Aura/pull/7)
-  is open; current hosted checks are linked there. Merge remains blocked by the
-  source-freeze decision and missing measurements. Both temporary measurement
-  checkouts were removed after hash verification; root target is 4.6 GiB.
+- Identical two-cast correction approved and applied at both clean source bases.
+  The CLI regression fails before and passes after; compiler/runner code is unchanged.
+- Both corrected release suites and original Array reports are contractual.
+  No override, Rust exclusion or drift-triggered repeat was needed. All CPython
+  and NumPy controls drift by less than 5%.
+- Before/after fib/int32/int64 medians improve 19.06%/20.56%/15.69%; Array add
+  is 7.17% slower and sum essentially unchanged. Separate standalone integer/Rust
+  results remain diagnostic-grade with qualification limits disclosed.
+- Full evidence, corrected-commit Git bundle and hashes retained. Chapters,
+  READMEs, changelog, roadmap measured statuses, ADR-0064 and generated docs updated.
+  Cargo's documented strip=none default was reconfirmed; size bytes retained.
+- [PR #7](https://github.com/johnolafenwa/Aura/pull/7): final-head hosted CI,
+  merge commit, green main CI and corrected-checkout cleanup remain.
 - Work note: `work/2026-09-07-foundations-measurements.md`.
 
 ## Pre-Batch-1 foundations items 1–4 (complete)

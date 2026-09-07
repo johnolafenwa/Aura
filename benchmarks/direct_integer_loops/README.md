@@ -135,7 +135,12 @@ the runner lacks the release suite's three-phase inventory and full hash recheck
 [Raw evidence](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/aura-foundations-after-integer-loops.json) SHA-256:
 `8747324a496b9280eb10bf54013b5dd06d358d3a4acf11772501b6b7dbf60dfb`.
 Before-tag output contains only rounded minima, not comparable medians. The
-release V6 comparison is blocked by task/TCP compilation errors at both refs.
+release V6 comparison is now complete using identically corrected task/TCP
+sources. Its contractual before/after whole-process medians are
+36.445833/28.954291 ms for int32 and 15.148792/12.772500 ms for int64.
+Keep these separate from standalone Aura/Rust ratios; their observations come
+from different runners. The [Performance chapter](../../docs/manual/performance.md)
+records both families, startup-adjusted estimates, controls and all hashes.
 
 ```bash
 python3 scripts/bench-direct-integer-loops.py --aura target/release/aura --repeats 11 --raw-json /tmp/aura-foundations-after-integer-loops.json

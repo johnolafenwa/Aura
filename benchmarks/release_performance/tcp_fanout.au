@@ -59,7 +59,7 @@ def run() -> Result[int32, io.Error]:
     with TaskGroup() as group:
         mut server_tasks = list[Task[Result[int32, io.Error]]]()
         for index in range(20):
-            server_tasks.append(group.start(serve_one, index, addresses))
+            server_tasks.append(group.start(serve_one, index as int32, addresses))
 
         mut address_count: int32 = 0
         while address_count < 20:

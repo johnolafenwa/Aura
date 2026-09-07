@@ -54,6 +54,26 @@ fn hosted_ci_safepoint_windows_scale_without_changing_local_windows() {
 }
 
 #[test]
+fn release_performance_inputs_pass_checking() {
+    let mut failures = Vec::new();
+    for workload in ["fib30", "tasks_10000", "tcp_fanout", "retrying_worker"] {
+        let source = repo_root().join(format!("benchmarks/release_performance/{workload}.au"));
+        let output = Command::new(aura_bin())
+            .arg("check")
+            .arg(&source)
+            .output()
+            .expect("failed to check release benchmark input");
+        if !output.status.success() {
+            failures.push(format!(
+                "{workload}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn check_reports_match_expression_and_literal_pattern_diagnostics() {
     let fixture = repo_root().join(
         "crates/aura-compiler/tests/fixtures/check-fail/match_expression_class_pattern_deferred.au",

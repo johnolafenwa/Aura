@@ -1,0 +1,26 @@
+diff --git a/benchmarks/release_performance/tasks_10000.au b/benchmarks/release_performance/tasks_10000.au
+index d44b045..888bf46 100644
+--- a/benchmarks/release_performance/tasks_10000.au
++++ b/benchmarks/release_performance/tasks_10000.au
+@@ -37,7 +37,7 @@ def main() -> int32:
+     with TaskGroup() as group:
+         mut tasks = list[Task[int32]]()
+         for value in range(task_count):
+-            tasks.append(group.start(task_value, value))
++            tasks.append(group.start(task_value, value as int32))
+ 
+         match wait_all(tasks):
+             case WaitAll.Ready(results):
+diff --git a/benchmarks/release_performance/tcp_fanout.au b/benchmarks/release_performance/tcp_fanout.au
+index 36d268a..1c643e7 100644
+--- a/benchmarks/release_performance/tcp_fanout.au
++++ b/benchmarks/release_performance/tcp_fanout.au
+@@ -59,7 +59,7 @@ def run() -> Result[int32, io.Error]:
+     with TaskGroup() as group:
+         mut server_tasks = list[Task[Result[int32, io.Error]]]()
+         for index in range(20):
+-            server_tasks.append(group.start(serve_one, index, addresses))
++            server_tasks.append(group.start(serve_one, index as int32, addresses))
+ 
+         mut address_count: int32 = 0
+         while address_count < 20:

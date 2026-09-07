@@ -77,6 +77,7 @@ This comparison includes profile/link tuning as well as Cranelift `speed`.
 [Before raw](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/aura-foundations-before-arrays-raw.json):
 `6f1f1c3b2d3fa288785204d54da2ec507a25a8c20e234584d72f8afe51c950fd`.
 [SHA256SUMS](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/SHA256SUMS) also covers both summaries and the control calculation.
+Manifest SHA-256: `911dc4a7901357b33679ad260923c56d0c8216440b200a0eb12e426ea60cac67`.
 
 Reproduce after building the pinned release compiler, from the after checkout:
 

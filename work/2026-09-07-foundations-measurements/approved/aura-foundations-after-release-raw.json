@@ -1,0 +1,5406 @@
+{
+  "aura_qualification": {
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "-p",
+      "aura",
+      "--target-dir",
+      "/private/tmp/aura-foundations-after-approved-20260907/target"
+    ],
+    "fresh_locked_release_build": true,
+    "path": "/private/tmp/aura-foundations-after-approved-20260907/target/release/aura",
+    "returncode": 0,
+    "sha256": "9b4ec24a61e4827155b125cfe21b706e381019232e827e54fe10ac16d6e4686d",
+    "stderr": "    Finished `release` profile [optimized] target(s) in 0.17s\n",
+    "stdout": ""
+  },
+  "builds": [
+    {
+      "binary": "/private/tmp/aura-release-performance-ng91rt69/fib30",
+      "binary_sha256": "e1f7136c79060b69f7e88c4d2694e66a9c78f3995fb73f5190c9ddaf386d23e4",
+      "command": [
+        "/private/tmp/aura-foundations-after-approved-20260907/target/release/aura",
+        "build",
+        "--backend",
+        "direct",
+        "-o",
+        "/tmp/aura-release-performance-ng91rt69/fib30",
+        "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.au"
+      ],
+      "name": "fib30",
+      "returncode": 0,
+      "source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.au",
+      "source_sha256": "9371911f2bf248caae575ca00e16643975dadcae608c09c063f04c85244a9b43",
+      "stderr": "aura: built `/tmp/aura-release-performance-ng91rt69/fib30` with direct backend\n",
+      "stdout": ""
+    },
+    {
+      "binary": "/private/tmp/aura-release-performance-ng91rt69/tasks_10000",
+      "binary_sha256": "1b7c60324a935ded1fb3bdb77707266cb7be657190a60ad60c9b5c36adc8127d",
+      "command": [
+        "/private/tmp/aura-foundations-after-approved-20260907/target/release/aura",
+        "build",
+        "--backend",
+        "direct",
+        "-o",
+        "/tmp/aura-release-performance-ng91rt69/tasks_10000",
+        "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.au"
+      ],
+      "name": "tasks_10000",
+      "returncode": 0,
+      "source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.au",
+      "source_sha256": "51f57daeba570f8c65577f727f4b5a708a0c29fb339cd74580a7c06f120748b6",
+      "stderr": "aura: built `/tmp/aura-release-performance-ng91rt69/tasks_10000` with direct backend\n",
+      "stdout": ""
+    },
+    {
+      "binary": "/private/tmp/aura-release-performance-ng91rt69/tcp_fanout",
+      "binary_sha256": "a8330d263a99903fb9869e9c22a43b9b86c034feefd967a4a0354533ca190b14",
+      "command": [
+        "/private/tmp/aura-foundations-after-approved-20260907/target/release/aura",
+        "build",
+        "--backend",
+        "direct",
+        "-o",
+        "/tmp/aura-release-performance-ng91rt69/tcp_fanout",
+        "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.au"
+      ],
+      "name": "tcp_fanout",
+      "returncode": 0,
+      "source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.au",
+      "source_sha256": "a48007bfb73e993aaf70546b26e2519ea2870cc672625af70f9198b748a51391",
+      "stderr": "aura: built `/tmp/aura-release-performance-ng91rt69/tcp_fanout` with direct backend\n",
+      "stdout": ""
+    },
+    {
+      "binary": "/private/tmp/aura-release-performance-ng91rt69/retrying_worker",
+      "binary_sha256": "116495af7498f11212f3bf9251595a96fef429038018cfa866308552490018c1",
+      "command": [
+        "/private/tmp/aura-foundations-after-approved-20260907/target/release/aura",
+        "build",
+        "--backend",
+        "direct",
+        "-o",
+        "/tmp/aura-release-performance-ng91rt69/retrying_worker",
+        "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.au"
+      ],
+      "name": "retrying_worker",
+      "returncode": 0,
+      "source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.au",
+      "source_sha256": "c38ce702aed666b6d19296b58787999228dae4f403f7f02556544bb6e82e61c3",
+      "stderr": "aura: built `/tmp/aura-release-performance-ng91rt69/retrying_worker` with direct backend\n",
+      "stdout": ""
+    },
+    {
+      "binary": "/private/tmp/aura-release-performance-ng91rt69/aura_startup",
+      "binary_sha256": "c11e7f503f987d90e68aeb170bc23a5654d7a742f7279a6ce18104230ad491f5",
+      "command": [
+        "/private/tmp/aura-foundations-after-approved-20260907/target/release/aura",
+        "build",
+        "--backend",
+        "direct",
+        "-o",
+        "/tmp/aura-release-performance-ng91rt69/aura_startup",
+        "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/startup.au"
+      ],
+      "name": "aura_startup",
+      "returncode": 0,
+      "source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/startup.au",
+      "source_sha256": "36664202da5a831e2a5b82dd2b3c25f9d75939155dc3d225aa7b4302c6537c41",
+      "stderr": "aura: built `/tmp/aura-release-performance-ng91rt69/aura_startup` with direct backend\n",
+      "stdout": ""
+    },
+    {
+      "binary": "/private/tmp/aura-release-performance-ng91rt69/aura_int32",
+      "binary_sha256": "e2333c0e798761330cf89072c9159b658b07958809340c1674466cfec7ed5e83",
+      "command": [
+        "/private/tmp/aura-foundations-after-approved-20260907/target/release/aura",
+        "build",
+        "--backend",
+        "direct",
+        "-o",
+        "/tmp/aura-release-performance-ng91rt69/aura_int32",
+        "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/int32_loop.au"
+      ],
+      "name": "aura_int32",
+      "returncode": 0,
+      "source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/int32_loop.au",
+      "source_sha256": "3c3e417d4a997e5533f36314ecc173753ba46418a17b2b8c75d5f973bb9fc6e2",
+      "stderr": "aura: built `/tmp/aura-release-performance-ng91rt69/aura_int32` with direct backend\n",
+      "stdout": ""
+    },
+    {
+      "binary": "/private/tmp/aura-release-performance-ng91rt69/aura_int64",
+      "binary_sha256": "9af820f3c1b38f2842b8dc5414d64f643f6df5de6213ba3ab590da7de3b5168b",
+      "command": [
+        "/private/tmp/aura-foundations-after-approved-20260907/target/release/aura",
+        "build",
+        "--backend",
+        "direct",
+        "-o",
+        "/tmp/aura-release-performance-ng91rt69/aura_int64",
+        "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/int64_loop.au"
+      ],
+      "name": "aura_int64",
+      "returncode": 0,
+      "source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/int64_loop.au",
+      "source_sha256": "2ef72e1f191b19c7615db77674a76c9d5192125bbe17b1571cfc2b7a5b48bd83",
+      "stderr": "aura: built `/tmp/aura-release-performance-ng91rt69/aura_int64` with direct backend\n",
+      "stdout": ""
+    }
+  ],
+  "contractual": true,
+  "evidence_policy": "measured release evidence only; no Aura-versus-CPython threshold",
+  "generated_at": "2026-09-07T08:31:33.815923+00:00",
+  "host": {
+    "boot_time": "{ sec = 1788744561, usec = 878295 } Mon Sep  7 02:29:21 2026",
+    "cpu_model": "Apple M2 Pro",
+    "hardware_model": "Mac14,9",
+    "load_average": [
+      4.6171875,
+      3.8466796875,
+      2.7138671875
+    ],
+    "logical_cpus": 10,
+    "machine": "arm64",
+    "memory_bytes": 17179869184,
+    "physical_cores": 10,
+    "python": "3.9.6",
+    "release": "25.5.0",
+    "system": "Darwin",
+    "version": "Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:24 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6020"
+  },
+  "inputs": {
+    "aura": {
+      "path": "/private/tmp/aura-foundations-after-approved-20260907/target/release/aura",
+      "sha256": "9b4ec24a61e4827155b125cfe21b706e381019232e827e54fe10ac16d6e4686d",
+      "version": "aura 0.3.3-dev (4e1e48c81bae)"
+    },
+    "benchmark_process": {
+      "path": "/private/tmp/aura-foundations-after-approved-20260907/scripts/benchmark_process.py",
+      "sha256": "bbf4bca940b38bc84101ba4eaf93e568b16edafd91dc298d071ea96be52330de"
+    },
+    "python": {
+      "implementation": "CPython",
+      "path": "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+      "sha256": "271143990bc83af0fb2404a255038f5faafb96df1584ed7f085e5018c0f33ffb",
+      "version": "3.9.6"
+    },
+    "runner": {
+      "path": "/private/tmp/aura-foundations-after-approved-20260907/scripts/bench-release-performance.py",
+      "sha256": "0b800893fe8a65a97e10e23613b1f0a917e0b2b6d058624c3f97426f6b919915"
+    },
+    "rust_helper_sha256": "dbcbab3d59d38d684fe6b70abfbaa5834ee9d7471173e4b002d5ca988aea9057",
+    "rust_sources": {
+      "Cargo.lock": "66ec0fa5d32b453c950160d8b2d9e9c03ec4e2962395ef6d936f7fd72482bc2c",
+      "Cargo.toml": "caf487def3eeed0cce06490500b22dd72acafe3342fdc2b2e50b8cdf3c082874",
+      "rust-toolchain.toml": "28ba63ba51f7635afd6b0663f2613a1037ab602a039a889e991b1164b84d4714",
+      "src/bin/fib30.rs": "25649ec59cd0a94d94aacf0c26a1c5c248084a5293c95415012e86f27fc9bc0c",
+      "src/bin/float64_add.rs": "5eceb77794ba5b03e611b3bded9cf11aad29267b11fc313debf66d0272db599b",
+      "src/bin/float64_sum.rs": "17c2ed939b8df2ba20f5447650299a051461471f7cf4a6bd75433b67915126a7",
+      "src/bin/int32_loop.rs": "88b1452987c2b4c618eb5d240314f044a5ba65f2b0cef2520c3e2e775aa1643f",
+      "src/bin/int64_loop.rs": "75eb7f40ec810e63b450df36a57516c15203ea98bebff6bb5d1fb20b23f408ac",
+      "src/bin/retrying_worker.rs": "280e77612f5f8145ea470abb240e03be9f13d4aa73a84f3f9a0d8b407d722634",
+      "src/bin/startup.rs": "0aac043da872bcbbba039d10660d9612fa90de1c802336b36bb25c84596662ce",
+      "src/bin/tasks_10000.rs": "6fca48624f108e0340e52f52865830163647745f76398cf5bb393728680b7145",
+      "src/bin/tcp_fanout.rs": "9dcdccfb754664c2eb226124eeae5b1ddcb99479b8851619530042f8dc6efbac",
+      "src/lib.rs": "94568d0619c2a3e3cad94337e9df1c4704b2e787b4fa9ce023f1251bad6b5c6d"
+    },
+    "sources": {
+      "fib30.au": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.au",
+        "sha256": "9371911f2bf248caae575ca00e16643975dadcae608c09c063f04c85244a9b43"
+      },
+      "fib30.py": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py",
+        "sha256": "c078d8eefd1e65fd39e2fd07213a928662b8619c76c3934859f98db28a3145d2"
+      },
+      "int32_loop.au": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/int32_loop.au",
+        "sha256": "3c3e417d4a997e5533f36314ecc173753ba46418a17b2b8c75d5f973bb9fc6e2"
+      },
+      "int64_loop.au": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/int64_loop.au",
+        "sha256": "2ef72e1f191b19c7615db77674a76c9d5192125bbe17b1571cfc2b7a5b48bd83"
+      },
+      "python_int_loop.py": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py",
+        "sha256": "0c3cc5c965d2365fe129f8951b8c4e386e28ebfde69100c3bb64c09bc829a431"
+      },
+      "python_startup.py": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py",
+        "sha256": "24e0764246a9e1005298be37eb64000affe8264fc86b195961e3a8c82cec33f7"
+      },
+      "retrying_worker.au": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.au",
+        "sha256": "c38ce702aed666b6d19296b58787999228dae4f403f7f02556544bb6e82e61c3"
+      },
+      "retrying_worker.py": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py",
+        "sha256": "a4487580bdbbdcc4bd668f87c9168fc3df8e507a98933ed0d677e63672e1a795"
+      },
+      "startup.au": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/startup.au",
+        "sha256": "36664202da5a831e2a5b82dd2b3c25f9d75939155dc3d225aa7b4302c6537c41"
+      },
+      "tasks_10000.au": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.au",
+        "sha256": "51f57daeba570f8c65577f727f4b5a708a0c29fb339cd74580a7c06f120748b6"
+      },
+      "tasks_10000.py": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py",
+        "sha256": "4007a0838c4cb007046b36e14c6295d858a9798807cf2bc726e395455cb97208"
+      },
+      "tcp_fanout.au": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.au",
+        "sha256": "a48007bfb73e993aaf70546b26e2519ea2870cc672625af70f9198b748a51391"
+      },
+      "tcp_fanout.py": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py",
+        "sha256": "ad1faf038cb78a65f53fea032b1150c0250ec0cbf57b82108295e97b4b0f89ae"
+      }
+    }
+  },
+  "label": "foundations-after-rust",
+  "manifest": {
+    "protocol_workloads": {
+      "fib30": {
+        "aura_source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.au",
+        "cpython_source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py",
+        "done": "DONE release-performance fib30 832040\n",
+        "go": "GO release-performance fib30\n",
+        "methodology": "Both lanes run the same naive recursive fib(30) algorithm with the measured interval bounded by GO and DONE.",
+        "primary_measurement": "GO-to-DONE",
+        "ready": "READY release-performance fib30 30\n"
+      },
+      "retrying_worker": {
+        "aura_source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.au",
+        "cpython_source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py",
+        "done": "DONE release-performance retrying-worker 112 18112\n",
+        "go": "GO release-performance retrying-worker\n",
+        "methodology": "Both lanes run 16 deterministic reset cycles totaling 112 loopback HTTP requests and 288 ms of scheduled retry delay.",
+        "primary_measurement": "GO-to-DONE",
+        "ready": "READY release-performance retrying-worker 16 112 288\n"
+      },
+      "tasks_10000": {
+        "aura_source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.au",
+        "cpython_source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py",
+        "done": "DONE release-performance tasks 10000 49995000\n",
+        "go": "GO release-performance tasks\n",
+        "methodology": "Both lanes create, join, verify, and clean up 10,000 short-lived tasks; the checksum is the sum of task indexes.",
+        "primary_measurement": "GO-to-DONE",
+        "ready": "READY release-performance tasks 10000\n"
+      },
+      "tcp_fanout": {
+        "aura_source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.au",
+        "cpython_source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py",
+        "done": "DONE release-performance tcp-fanout 20 80\n",
+        "go": "GO release-performance tcp-fanout\n",
+        "methodology": "Both lanes pre-bind 20 ephemeral loopback listeners before READY, then fan out 20 clients to 20 owning server tasks with a 100 ms handler delay. Aura cannot transfer an accepted TcpStream to a handler task because host resources are non-Transfer (AU3008), so a one-listener shape would serialize the handlers and is deliberately not measured.",
+        "primary_measurement": "GO-to-DONE",
+        "ready": "READY release-performance tcp-fanout 20 100 4\n"
+      }
+    },
+    "v6": {
+      "lanes": {
+        "aura_int32": {
+          "expected_stdout": "10000000\n",
+          "implementation": "aura",
+          "source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/int32_loop.au"
+        },
+        "aura_int64": {
+          "expected_stdout": "10000000\n",
+          "implementation": "aura",
+          "source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/int64_loop.au"
+        },
+        "aura_startup": {
+          "expected_stdout": "",
+          "implementation": "aura",
+          "source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/startup.au"
+        },
+        "cpython_int": {
+          "expected_stdout": "10000000\n",
+          "implementation": "cpython",
+          "source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py"
+        },
+        "cpython_startup": {
+          "expected_stdout": "",
+          "implementation": "cpython",
+          "source": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py"
+        }
+      },
+      "primary_measurement": "whole process",
+      "startup_adjustment": "paired loop duration minus paired startup duration"
+    }
+  },
+  "noncontractual_reasons": [],
+  "pairs": [
+    {
+      "repeat": 0,
+      "workload_order": [
+        "fib30",
+        "tasks_10000",
+        "tcp_fanout",
+        "retrying_worker",
+        "v6"
+      ],
+      "workloads": {
+        "fib30": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.089359292,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.0950595
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.157799125,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.179570042
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.003074042,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.005987792
+            }
+          }
+        },
+        "retrying_worker": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.425468708,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.437093666
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.522075416,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.600815625
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.473870416,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.482328417
+            }
+          }
+        },
+        "tasks_10000": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.097646417,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.105655917
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.051786208,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.094586291
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.003425375,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.006440709
+            }
+          }
+        },
+        "tcp_fanout": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.103957375,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.110489333
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.108886541,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.168838584
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104906834,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.110588792
+            }
+          }
+        },
+        "v6": {
+          "order": [
+            "aura_startup",
+            "aura_int32",
+            "aura_int64",
+            "cpython_startup",
+            "cpython_int"
+          ],
+          "runs": {
+            "aura_int32": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int32"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.038243166
+            },
+            "aura_int64": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int64"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.013152792
+            },
+            "aura_startup": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_startup"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.012054083
+            },
+            "cpython_int": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.318336875
+            },
+            "cpython_startup": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.023895667
+            }
+          }
+        }
+      }
+    },
+    {
+      "repeat": 1,
+      "workload_order": [
+        "tasks_10000",
+        "tcp_fanout",
+        "retrying_worker",
+        "v6",
+        "fib30"
+      ],
+      "workloads": {
+        "fib30": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.089172542,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.094272833
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.1583615,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.180100084
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.003073791,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.00566225
+            }
+          }
+        },
+        "retrying_worker": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.417202333,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.42992225
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.517913542,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.589446041
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.473490584,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.481767958
+            }
+          }
+        },
+        "tasks_10000": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.098692417,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.10593875
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.051987083,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.094622291
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.003327417,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.007041875
+            }
+          }
+        },
+        "tcp_fanout": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.103918625,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.110258792
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.108381958,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.162049709
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104691666,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.110527667
+            }
+          }
+        },
+        "v6": {
+          "order": [
+            "aura_int32",
+            "aura_int64",
+            "cpython_startup",
+            "cpython_int",
+            "aura_startup"
+          ],
+          "runs": {
+            "aura_int32": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int32"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.044556792
+            },
+            "aura_int64": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int64"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.013779542
+            },
+            "aura_startup": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_startup"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.005215
+            },
+            "cpython_int": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.319144375
+            },
+            "cpython_startup": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.0242465
+            }
+          }
+        }
+      }
+    },
+    {
+      "repeat": 2,
+      "workload_order": [
+        "tcp_fanout",
+        "retrying_worker",
+        "v6",
+        "fib30",
+        "tasks_10000"
+      ],
+      "workloads": {
+        "fib30": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.089307875,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.094554
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.159938667,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.181690334
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.003012292,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.005508292
+            }
+          }
+        },
+        "retrying_worker": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.425097792,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.436687083
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.527598583,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.611733375
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.469168791,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.478334958
+            }
+          }
+        },
+        "tasks_10000": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.100544625,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.107339083
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.051977958,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.096661292
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.003407083,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.007070792
+            }
+          }
+        },
+        "tcp_fanout": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104235625,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.110275
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.107684375,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.168461292
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104806416,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.110663333
+            }
+          }
+        },
+        "v6": {
+          "order": [
+            "aura_int64",
+            "cpython_startup",
+            "cpython_int",
+            "aura_startup",
+            "aura_int32"
+          ],
+          "runs": {
+            "aura_int32": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int32"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.025336625
+            },
+            "aura_int64": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int64"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.021633625
+            },
+            "aura_startup": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_startup"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.005472708
+            },
+            "cpython_int": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.323644833
+            },
+            "cpython_startup": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.029875959
+            }
+          }
+        }
+      }
+    },
+    {
+      "repeat": 3,
+      "workload_order": [
+        "retrying_worker",
+        "v6",
+        "fib30",
+        "tasks_10000",
+        "tcp_fanout"
+      ],
+      "workloads": {
+        "fib30": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.089273541,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.094455375
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.157843541,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.179347583
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.002995542,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.005622583
+            }
+          }
+        },
+        "retrying_worker": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.428814667,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.440257875
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.522391625,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.604572417
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.473468416,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.477636709
+            }
+          }
+        },
+        "tasks_10000": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.098967208,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.105649917
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.05222125,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.096617625
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.003553167,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.007123709
+            }
+          }
+        },
+        "tcp_fanout": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104268375,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.113097084
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.108793,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.17018375
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104559333,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.10820325
+            }
+          }
+        },
+        "v6": {
+          "order": [
+            "cpython_startup",
+            "cpython_int",
+            "aura_startup",
+            "aura_int32",
+            "aura_int64"
+          ],
+          "runs": {
+            "aura_int32": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int32"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.024877375
+            },
+            "aura_int64": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int64"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.010804375
+            },
+            "aura_startup": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_startup"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.00561
+            },
+            "cpython_int": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.332726791
+            },
+            "cpython_startup": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.043498917
+            }
+          }
+        }
+      }
+    },
+    {
+      "repeat": 4,
+      "workload_order": [
+        "v6",
+        "fib30",
+        "tasks_10000",
+        "tcp_fanout",
+        "retrying_worker"
+      ],
+      "workloads": {
+        "fib30": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.089165833,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.09421025
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.158287583,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.179766667
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.003073583,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.00579675
+            }
+          }
+        },
+        "retrying_worker": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.4293535,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.439735292
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.52146375,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.59395975
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.471487458,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.480001209
+            }
+          }
+        },
+        "tasks_10000": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.101206,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.107839125
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.051594167,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.095521917
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.003194291,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.006807916
+            }
+          }
+        },
+        "tcp_fanout": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104887917,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.113869709
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.108715875,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.169773
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104586333,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.108329375
+            }
+          }
+        },
+        "v6": {
+          "order": [
+            "cpython_int",
+            "aura_startup",
+            "aura_int32",
+            "aura_int64",
+            "cpython_startup"
+          ],
+          "runs": {
+            "aura_int32": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int32"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.025403042
+            },
+            "aura_int64": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int64"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.010243958
+            },
+            "aura_startup": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_startup"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.005474042
+            },
+            "cpython_int": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.342600917
+            },
+            "cpython_startup": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.021351292
+            }
+          }
+        }
+      }
+    },
+    {
+      "repeat": 5,
+      "workload_order": [
+        "fib30",
+        "tasks_10000",
+        "tcp_fanout",
+        "retrying_worker",
+        "v6"
+      ],
+      "workloads": {
+        "fib30": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.089158667,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.094768458
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.165198334,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.200131416
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.006627625,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.015282
+            }
+          }
+        },
+        "retrying_worker": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.429906417,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.441049542
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.518216959,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.597314916
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.473713625,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.481473875
+            }
+          }
+        },
+        "tasks_10000": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.100534917,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.107441208
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.051789833,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.09591225
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.003297208,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.006861416
+            }
+          }
+        },
+        "tcp_fanout": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104696667,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.114009042
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.108990417,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.169787792
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.103880042,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.107633541
+            }
+          }
+        },
+        "v6": {
+          "order": [
+            "cpython_int",
+            "cpython_startup",
+            "aura_int64",
+            "aura_int32",
+            "aura_startup"
+          ],
+          "runs": {
+            "aura_int32": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int32"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.0246165
+            },
+            "aura_int64": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int64"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.010204541
+            },
+            "aura_startup": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_startup"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.00407775
+            },
+            "cpython_int": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.350838
+            },
+            "cpython_startup": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.022220542
+            }
+          }
+        }
+      }
+    },
+    {
+      "repeat": 6,
+      "workload_order": [
+        "tasks_10000",
+        "tcp_fanout",
+        "retrying_worker",
+        "v6",
+        "fib30"
+      ],
+      "workloads": {
+        "fib30": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.089372459,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.094128
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.158791709,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.180365583
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.003000333,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.005959166
+            }
+          }
+        },
+        "retrying_worker": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.433921125,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.444338958
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.524805625,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.604731209
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.472903084,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.480558375
+            }
+          }
+        },
+        "tasks_10000": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.097422959,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.10389575
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.051722834,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.095693417
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.003395167,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.006859916
+            }
+          }
+        },
+        "tcp_fanout": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.105068875,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.114468125
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.107462458,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.168997292
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104093458,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.107671708
+            }
+          }
+        },
+        "v6": {
+          "order": [
+            "aura_startup",
+            "cpython_int",
+            "cpython_startup",
+            "aura_int64",
+            "aura_int32"
+          ],
+          "runs": {
+            "aura_int32": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int32"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.024712625
+            },
+            "aura_int64": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int64"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.010308917
+            },
+            "aura_startup": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_startup"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.014798459
+            },
+            "cpython_int": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.343000167
+            },
+            "cpython_startup": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.021792667
+            }
+          }
+        }
+      }
+    },
+    {
+      "repeat": 7,
+      "workload_order": [
+        "tcp_fanout",
+        "retrying_worker",
+        "v6",
+        "fib30",
+        "tasks_10000"
+      ],
+      "workloads": {
+        "fib30": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.097892375,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.102800375
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.158321541,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.180246792
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.002991791,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.005798792
+            }
+          }
+        },
+        "retrying_worker": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.426906041,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.437687125
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.524589125,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.601486417
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.4712155,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.479416917
+            }
+          }
+        },
+        "tasks_10000": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.096123667,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.103431792
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.05179,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.093946
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.002961167,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.00613375
+            }
+          }
+        },
+        "tcp_fanout": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104547625,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.113812375
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.108731834,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.169402042
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.10459725,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.108271125
+            }
+          }
+        },
+        "v6": {
+          "order": [
+            "aura_int32",
+            "aura_startup",
+            "cpython_int",
+            "cpython_startup",
+            "aura_int64"
+          ],
+          "runs": {
+            "aura_int32": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int32"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.044425
+            },
+            "aura_int64": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int64"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.011195833
+            },
+            "aura_startup": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_startup"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.006488166
+            },
+            "cpython_int": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.328618208
+            },
+            "cpython_startup": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.021833125
+            }
+          }
+        }
+      }
+    },
+    {
+      "repeat": 8,
+      "workload_order": [
+        "retrying_worker",
+        "v6",
+        "fib30",
+        "tasks_10000",
+        "tcp_fanout"
+      ],
+      "workloads": {
+        "fib30": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.089513791,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.09436825
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.158271333,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.180340709
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.003008333,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.006015042
+            }
+          }
+        },
+        "retrying_worker": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.416320583,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.423250667
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.519464834,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.5969315
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.469961708,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.478269916
+            }
+          }
+        },
+        "tasks_10000": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.096377625,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.103703792
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.05173475,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.093968625
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.00341,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.006462625
+            }
+          }
+        },
+        "tcp_fanout": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104478584,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.110968708
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.108813875,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.168804167
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104048834,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.109994167
+            }
+          }
+        },
+        "v6": {
+          "order": [
+            "aura_int64",
+            "aura_int32",
+            "aura_startup",
+            "cpython_int",
+            "cpython_startup"
+          ],
+          "runs": {
+            "aura_int32": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int32"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.037188208
+            },
+            "aura_int64": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int64"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.0264575
+            },
+            "aura_startup": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_startup"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.005635583
+            },
+            "cpython_int": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.333895583
+            },
+            "cpython_startup": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.0217475
+            }
+          }
+        }
+      }
+    },
+    {
+      "repeat": 9,
+      "workload_order": [
+        "v6",
+        "fib30",
+        "tasks_10000",
+        "tcp_fanout",
+        "retrying_worker"
+      ],
+      "workloads": {
+        "fib30": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.089836375,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.094948292
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.158133792,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.1798245
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.002998292,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.005885667
+            }
+          }
+        },
+        "retrying_worker": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.431971541,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.444573916
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.5326105,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.615358708
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.47260725,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.481486
+            }
+          }
+        },
+        "tasks_10000": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.096783125,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.104049333
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.051669833,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.093784292
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.003124125,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.006186916
+            }
+          }
+        },
+        "tcp_fanout": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.103306541,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.109782416
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.108824583,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.168458208
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.10485325,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.110395375
+            }
+          }
+        },
+        "v6": {
+          "order": [
+            "cpython_startup",
+            "aura_int64",
+            "aura_int32",
+            "aura_startup",
+            "cpython_int"
+          ],
+          "runs": {
+            "aura_int32": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int32"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.028954291
+            },
+            "aura_int64": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int64"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.013199792
+            },
+            "aura_startup": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_startup"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.0046115
+            },
+            "cpython_int": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.318216459
+            },
+            "cpython_startup": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.041579333
+            }
+          }
+        }
+      }
+    },
+    {
+      "repeat": 10,
+      "workload_order": [
+        "fib30",
+        "tasks_10000",
+        "tcp_fanout",
+        "retrying_worker",
+        "v6"
+      ],
+      "workloads": {
+        "fib30": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.108804875,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.1209325
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.158372,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.180658667
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/fib30"
+              ],
+              "done": "DONE release-performance fib30 832040\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance fib30\n",
+              "protocol_elapsed_s": 0.003030083,
+              "ready": "READY release-performance fib30 30\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.006024333
+            }
+          }
+        },
+        "retrying_worker": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.428888417,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.44032225
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.526505541,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.605021167
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/retrying_worker"
+              ],
+              "done": "DONE release-performance retrying-worker 112 18112\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance retrying-worker\n",
+              "protocol_elapsed_s": 0.472533333,
+              "ready": "READY release-performance retrying-worker 16 112 288\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.482657416
+            }
+          }
+        },
+        "tasks_10000": {
+          "order": [
+            "rust",
+            "cpython",
+            "aura"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.101016959,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.108724459
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.051702917,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.094321375
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tasks_10000"
+              ],
+              "done": "DONE release-performance tasks 10000 49995000\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tasks\n",
+              "protocol_elapsed_s": 0.003498125,
+              "ready": "READY release-performance tasks 10000\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.0066155
+            }
+          }
+        },
+        "tcp_fanout": {
+          "order": [
+            "aura",
+            "cpython",
+            "rust"
+          ],
+          "runs": {
+            "aura": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104152542,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.110981042
+            },
+            "cpython": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.108891667,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.169190666
+            },
+            "rust": {
+              "command": [
+                "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tcp_fanout"
+              ],
+              "done": "DONE release-performance tcp-fanout 20 80\n",
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "go": "GO release-performance tcp-fanout\n",
+              "protocol_elapsed_s": 0.104908292,
+              "ready": "READY release-performance tcp-fanout 20 100 4\n",
+              "returncode": 0,
+              "whole_process_elapsed_s": 0.110874125
+            }
+          }
+        },
+        "v6": {
+          "order": [
+            "aura_startup",
+            "aura_int32",
+            "aura_int64",
+            "cpython_startup",
+            "cpython_int"
+          ],
+          "runs": {
+            "aura_int32": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int32"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.03979575
+            },
+            "aura_int64": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_int64"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.0127725
+            },
+            "aura_startup": {
+              "command": [
+                "/tmp/aura-release-performance-ng91rt69/aura_startup"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.013157667
+            },
+            "cpython_int": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "10000000\n",
+              "whole_process_elapsed_s": 0.322699709
+            },
+            "cpython_startup": {
+              "command": [
+                "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+                "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py"
+              ],
+              "environment": {
+                "PYTHONHASHSEED": "0"
+              },
+              "returncode": 0,
+              "stderr": "",
+              "stdout": "",
+              "whole_process_elapsed_s": 0.024651833
+            }
+          }
+        }
+      }
+    }
+  ],
+  "parameters": {
+    "allow_competing_processes": false,
+    "build_timeout_seconds": 1800.0,
+    "cleared_environment_variables": [
+      "AURA_WORKERS",
+      "AURA_BLOCKING_WORKERS",
+      "AURA_BLOCKING_QUEUE_CAPACITY",
+      "AURA_CACHE_DIR",
+      "AURA_NATIVE_CACHE_DIR",
+      "PYTHONASYNCIODEBUG"
+    ],
+    "competing_cpu_percent": 50.0,
+    "completion_timeout_seconds": 120.0,
+    "controlled_environment": {
+      "PYTHONHASHSEED": "0"
+    },
+    "helper_timeout_seconds": 10.0,
+    "max_protocol_line_bytes": 512,
+    "pairs": 11,
+    "quiet_process_sample_interval_seconds": 0.25,
+    "ready_timeout_seconds": 120.0,
+    "whole_process_timeout_seconds": 120.0
+  },
+  "performance_gate": null,
+  "post_timing_verification": {
+    "input_identities_match": true,
+    "repository": {
+      "branch": null,
+      "commit": "4e1e48c81bae6c62a54af763a4046901820038ec",
+      "detached": true,
+      "dirty_files": [],
+      "root": "/private/tmp/aura-foundations-after-approved-20260907"
+    },
+    "source_hashes": {
+      "fib30.au": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.au",
+        "sha256": "9371911f2bf248caae575ca00e16643975dadcae608c09c063f04c85244a9b43"
+      },
+      "fib30.py": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py",
+        "sha256": "c078d8eefd1e65fd39e2fd07213a928662b8619c76c3934859f98db28a3145d2"
+      },
+      "int32_loop.au": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/int32_loop.au",
+        "sha256": "3c3e417d4a997e5533f36314ecc173753ba46418a17b2b8c75d5f973bb9fc6e2"
+      },
+      "int64_loop.au": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/int64_loop.au",
+        "sha256": "2ef72e1f191b19c7615db77674a76c9d5192125bbe17b1571cfc2b7a5b48bd83"
+      },
+      "python_int_loop.py": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py",
+        "sha256": "0c3cc5c965d2365fe129f8951b8c4e386e28ebfde69100c3bb64c09bc829a431"
+      },
+      "python_startup.py": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py",
+        "sha256": "24e0764246a9e1005298be37eb64000affe8264fc86b195961e3a8c82cec33f7"
+      },
+      "retrying_worker.au": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.au",
+        "sha256": "c38ce702aed666b6d19296b58787999228dae4f403f7f02556544bb6e82e61c3"
+      },
+      "retrying_worker.py": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py",
+        "sha256": "a4487580bdbbdcc4bd668f87c9168fc3df8e507a98933ed0d677e63672e1a795"
+      },
+      "startup.au": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/direct_integer_loops/startup.au",
+        "sha256": "36664202da5a831e2a5b82dd2b3c25f9d75939155dc3d225aa7b4302c6537c41"
+      },
+      "tasks_10000.au": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.au",
+        "sha256": "51f57daeba570f8c65577f727f4b5a708a0c29fb339cd74580a7c06f120748b6"
+      },
+      "tasks_10000.py": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py",
+        "sha256": "4007a0838c4cb007046b36e14c6295d858a9798807cf2bc726e395455cb97208"
+      },
+      "tcp_fanout.au": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.au",
+        "sha256": "a48007bfb73e993aaf70546b26e2519ea2870cc672625af70f9198b748a51391"
+      },
+      "tcp_fanout.py": {
+        "path": "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py",
+        "sha256": "ad1faf038cb78a65f53fea032b1150c0250ec0cbf57b82108295e97b4b0f89ae"
+      }
+    }
+  },
+  "quiet_process_checks": {
+    "after_timing": [],
+    "before_build": [],
+    "before_timing": []
+  },
+  "repository": {
+    "branch": null,
+    "commit": "4e1e48c81bae6c62a54af763a4046901820038ec",
+    "detached": true,
+    "dirty_files": [],
+    "root": "/private/tmp/aura-foundations-after-approved-20260907"
+  },
+  "runner_command": [
+    "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+    "/private/tmp/aura-foundations-after-approved-20260907/scripts/bench-release-performance.py",
+    "--label",
+    "foundations-after-rust",
+    "--aura",
+    "target/release/aura",
+    "--python",
+    "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+    "--pairs",
+    "11",
+    "--raw-json",
+    "/tmp/aura-foundations-after-release-raw.json",
+    "--summary-json",
+    "/tmp/aura-foundations-after-release-summary.json"
+  ],
+  "rust_build": {
+    "binaries": {
+      "fib30": {
+        "bytes": 376032,
+        "path": "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/fib30",
+        "sha256": "29059b1dbfae5b503674b5aea58f814943e650e966a3a01a665a56ac913b1493"
+      },
+      "float64_add": {
+        "bytes": 411504,
+        "path": "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/float64_add",
+        "sha256": "d6fc67c87c4935904666a560f1d366cf0610c9ec2e4c368e39fb48ed540fb892"
+      },
+      "float64_sum": {
+        "bytes": 411440,
+        "path": "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/float64_sum",
+        "sha256": "4408fcc7a9ee3a553040762a9bd39fbfc42f76d36d789321c9b5434986eec08a"
+      },
+      "int32_loop": {
+        "bytes": 374384,
+        "path": "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/int32_loop",
+        "sha256": "c62abf641fc577574cb4ba67293e3c9f772a2189e99ce645ec49302a66ca355a"
+      },
+      "int64_loop": {
+        "bytes": 374672,
+        "path": "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/int64_loop",
+        "sha256": "3ce359d3e2b745ed92b992e050dfd436495316afabf330a3e774d5a58910ce57"
+      },
+      "retrying_worker": {
+        "bytes": 647200,
+        "path": "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/retrying_worker",
+        "sha256": "fd4191a32591fd5e408a07416519c525ef68d22fd6e9bc1eee9abc291c02cfb9"
+      },
+      "startup": {
+        "bytes": 372800,
+        "path": "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/startup",
+        "sha256": "960d0767f3a9ac087411985fbdac05f2198e1f39c8f1b6ddf0cefac4f9a8b03d"
+      },
+      "tasks_10000": {
+        "bytes": 583936,
+        "path": "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tasks_10000",
+        "sha256": "c3a55dfabf870abd03af4b36d56b08177544fb603cfd8dc97cd96dbdc0479370"
+      },
+      "tcp_fanout": {
+        "bytes": 648400,
+        "path": "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tcp_fanout",
+        "sha256": "b21310967a2035345b5d25f700a3b56d17decefc8bbdc63d68649ffb1bc94b6f"
+      }
+    },
+    "command": [
+      "cargo",
+      "+1.95.0",
+      "build",
+      "--release",
+      "--locked",
+      "--manifest-path",
+      "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/rust_baselines/Cargo.toml",
+      "--target-dir",
+      "/private/tmp/aura-release-performance-ng91rt69/rust-target",
+      "--bins"
+    ],
+    "sources": {
+      "Cargo.lock": "66ec0fa5d32b453c950160d8b2d9e9c03ec4e2962395ef6d936f7fd72482bc2c",
+      "Cargo.toml": "caf487def3eeed0cce06490500b22dd72acafe3342fdc2b2e50b8cdf3c082874",
+      "rust-toolchain.toml": "28ba63ba51f7635afd6b0663f2613a1037ab602a039a889e991b1164b84d4714",
+      "src/bin/fib30.rs": "25649ec59cd0a94d94aacf0c26a1c5c248084a5293c95415012e86f27fc9bc0c",
+      "src/bin/float64_add.rs": "5eceb77794ba5b03e611b3bded9cf11aad29267b11fc313debf66d0272db599b",
+      "src/bin/float64_sum.rs": "17c2ed939b8df2ba20f5447650299a051461471f7cf4a6bd75433b67915126a7",
+      "src/bin/int32_loop.rs": "88b1452987c2b4c618eb5d240314f044a5ba65f2b0cef2520c3e2e775aa1643f",
+      "src/bin/int64_loop.rs": "75eb7f40ec810e63b450df36a57516c15203ea98bebff6bb5d1fb20b23f408ac",
+      "src/bin/retrying_worker.rs": "280e77612f5f8145ea470abb240e03be9f13d4aa73a84f3f9a0d8b407d722634",
+      "src/bin/startup.rs": "0aac043da872bcbbba039d10660d9612fa90de1c802336b36bb25c84596662ce",
+      "src/bin/tasks_10000.rs": "6fca48624f108e0340e52f52865830163647745f76398cf5bb393728680b7145",
+      "src/bin/tcp_fanout.rs": "9dcdccfb754664c2eb226124eeae5b1ddcb99479b8851619530042f8dc6efbac",
+      "src/lib.rs": "94568d0619c2a3e3cad94337e9df1c4704b2e787b4fa9ce023f1251bad6b5c6d"
+    },
+    "toolchain": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: aarch64-apple-darwin\nrelease: 1.95.0\nLLVM version: 22.1.2\n"
+  },
+  "schema_version": 2,
+  "scope": {
+    "external_array_evidence": {
+      "measured_commit": "0511adf61931953df096dc1b6721a543d856be25",
+      "measurement": "numeric Array add and sum against NumPy",
+      "merge_policy": "excluded from this runner; merge the separately qualified rows with their original commit and binary provenance",
+      "raw_path": "/private/tmp/aura-phase73-arrays-post-reboot-raw.json",
+      "raw_sha256": "f51b979977519b5cbca9be4119a77bb3aff1d1a2874e1cdd4269f315bc1f9e7d",
+      "summary_path": "/private/tmp/aura-phase73-arrays-post-reboot-summary.json",
+      "summary_sha256": "f6fc84c1f0fadfb4b93a5f07befb5a33cbaa6926d54ef88a795e103106b410ab"
+    },
+    "measured_here": [
+      "fib30",
+      "tasks_10000",
+      "tcp_fanout",
+      "retrying_worker",
+      "v6"
+    ]
+  },
+  "summaries": {
+    "fib30": {
+      "performance_gate": null,
+      "primary_measurement": "protocol",
+      "protocol": {
+        "aura": {
+          "best_s": 0.089158667,
+          "mad_s": 0.0001867500000000133,
+          "median_s": 0.089359292,
+          "p95_s": 0.108804875,
+          "samples_s": [
+            0.089359292,
+            0.089172542,
+            0.089307875,
+            0.089273541,
+            0.089165833,
+            0.089158667,
+            0.089372459,
+            0.097892375,
+            0.089513791,
+            0.089836375,
+            0.108804875
+          ]
+        },
+        "cpython": {
+          "best_s": 0.157799125,
+          "mad_s": 0.00018774900000001482,
+          "median_s": 0.158321541,
+          "p95_s": 0.165198334,
+          "samples_s": [
+            0.157799125,
+            0.1583615,
+            0.159938667,
+            0.157843541,
+            0.158287583,
+            0.165198334,
+            0.158791709,
+            0.158321541,
+            0.158271333,
+            0.158133792,
+            0.158372
+          ]
+        },
+        "paired_median_ratio": 0.5655717261192209,
+        "paired_ratios": [
+          0.5662850918850152,
+          0.5630948304985745,
+          0.5583882664221529,
+          0.565582477651081,
+          0.5633153991617902,
+          0.5397068168980445,
+          0.5628282456485181,
+          0.6183136822802906,
+          0.5655717261192209,
+          0.5681035904077985,
+          0.6870209064733664
+        ],
+        "ratio_of_medians": 0.5644165123430677
+      },
+      "protocol_vs_rust": {
+        "aura": {
+          "best_s": 0.089158667,
+          "mad_s": 0.0001867500000000133,
+          "median_s": 0.089359292,
+          "p95_s": 0.108804875,
+          "samples_s": [
+            0.089359292,
+            0.089172542,
+            0.089307875,
+            0.089273541,
+            0.089165833,
+            0.089158667,
+            0.089372459,
+            0.097892375,
+            0.089513791,
+            0.089836375,
+            0.108804875
+          ]
+        },
+        "paired_median_ratio": 29.75528008368754,
+        "paired_ratios": [
+          29.068988647520108,
+          29.01060677189828,
+          29.647814687287948,
+          29.802132969592815,
+          29.010387225593064,
+          13.452581731766658,
+          29.787513252695618,
+          32.72032538369157,
+          29.75528008368754,
+          29.962516993008016,
+          35.908216045567066
+        ],
+        "ratio_of_medians": 29.664883749649768,
+        "rust": {
+          "best_s": 0.002991791,
+          "mad_s": 1.779099999999964e-05,
+          "median_s": 0.003012292,
+          "p95_s": 0.006627625,
+          "samples_s": [
+            0.003074042,
+            0.003073791,
+            0.003012292,
+            0.002995542,
+            0.003073583,
+            0.006627625,
+            0.003000333,
+            0.002991791,
+            0.003008333,
+            0.002998292,
+            0.003030083
+          ]
+        }
+      },
+      "whole_process": {
+        "aura": {
+          "best_s": 0.094128,
+          "mad_s": 0.0003437500000000038,
+          "median_s": 0.094554,
+          "p95_s": 0.1209325,
+          "samples_s": [
+            0.0950595,
+            0.094272833,
+            0.094554,
+            0.094455375,
+            0.09421025,
+            0.094768458,
+            0.094128,
+            0.102800375,
+            0.09436825,
+            0.094948292,
+            0.1209325
+          ]
+        },
+        "cpython": {
+          "best_s": 0.179347583,
+          "mad_s": 0.0004222919999999908,
+          "median_s": 0.180246792,
+          "p95_s": 0.200131416,
+          "samples_s": [
+            0.179570042,
+            0.180100084,
+            0.181690334,
+            0.179347583,
+            0.179766667,
+            0.200131416,
+            0.180365583,
+            0.180246792,
+            0.180340709,
+            0.1798245,
+            0.180658667
+          ]
+        },
+        "paired_median_ratio": 0.5240696263228822,
+        "paired_ratios": [
+          0.5293728226671574,
+          0.5234469129953321,
+          0.5204129351206982,
+          0.526660986560382,
+          0.5240696263228822,
+          0.4735311421571114,
+          0.5218733997605297,
+          0.5703312323028751,
+          0.5232775812143448,
+          0.5280053162944983,
+          0.6693977211732665
+        ],
+        "ratio_of_medians": 0.5245807647994091
+      },
+      "whole_process_vs_rust": {
+        "aura": {
+          "best_s": 0.094128,
+          "mad_s": 0.0003437500000000038,
+          "median_s": 0.094554,
+          "p95_s": 0.1209325,
+          "samples_s": [
+            0.0950595,
+            0.094272833,
+            0.094554,
+            0.094455375,
+            0.09421025,
+            0.094768458,
+            0.094128,
+            0.102800375,
+            0.09436825,
+            0.094948292,
+            0.1209325
+          ]
+        },
+        "paired_median_ratio": 16.252253417863457,
+        "paired_ratios": [
+          15.875551455361176,
+          16.649359000397368,
+          17.165756644709468,
+          16.79928513282952,
+          16.252253417863457,
+          6.201312524538673,
+          15.795498900349479,
+          17.727894878795446,
+          15.688710070519873,
+          16.132120964369886,
+          20.074006533171392
+        ],
+        "ratio_of_medians": 16.06512906693498,
+        "rust": {
+          "best_s": 0.005508292,
+          "mad_s": 0.00012937500000000015,
+          "median_s": 0.005885667,
+          "p95_s": 0.015282,
+          "samples_s": [
+            0.005987792,
+            0.00566225,
+            0.005508292,
+            0.005622583,
+            0.00579675,
+            0.015282,
+            0.005959166,
+            0.005798792,
+            0.006015042,
+            0.005885667,
+            0.006024333
+          ]
+        }
+      }
+    },
+    "retrying_worker": {
+      "performance_gate": null,
+      "primary_measurement": "protocol",
+      "protocol": {
+        "aura": {
+          "best_s": 0.416320583,
+          "mad_s": 0.0031568740000000317,
+          "median_s": 0.428814667,
+          "p95_s": 0.433921125,
+          "samples_s": [
+            0.425468708,
+            0.417202333,
+            0.425097792,
+            0.428814667,
+            0.4293535,
+            0.429906417,
+            0.433921125,
+            0.426906041,
+            0.416320583,
+            0.431971541,
+            0.428888417
+          ]
+        },
+        "cpython": {
+          "best_s": 0.517913542,
+          "mad_s": 0.0029267910000000397,
+          "median_s": 0.522391625,
+          "p95_s": 0.5326105,
+          "samples_s": [
+            0.522075416,
+            0.517913542,
+            0.527598583,
+            0.522391625,
+            0.52146375,
+            0.518216959,
+            0.524805625,
+            0.524589125,
+            0.519464834,
+            0.5326105,
+            0.526505541
+          ]
+        },
+        "paired_median_ratio": 0.8145943083246677,
+        "paired_ratios": [
+          0.8149564123509696,
+          0.8055443605295804,
+          0.8057220123352757,
+          0.8208681886888979,
+          0.8233621224869418,
+          0.8295877036320611,
+          0.826822549777358,
+          0.8137912523443943,
+          0.8014413214350522,
+          0.8110458599670867,
+          0.8145943083246677
+        ],
+        "ratio_of_medians": 0.8208681886888979
+      },
+      "protocol_vs_rust": {
+        "aura": {
+          "best_s": 0.416320583,
+          "mad_s": 0.0031568740000000317,
+          "median_s": 0.428814667,
+          "p95_s": 0.433921125,
+          "samples_s": [
+            0.425468708,
+            0.417202333,
+            0.425097792,
+            0.428814667,
+            0.4293535,
+            0.429906417,
+            0.433921125,
+            0.426906041,
+            0.416320583,
+            0.431971541,
+            0.428888417
+          ]
+        },
+        "paired_median_ratio": 0.9060657915756378,
+        "paired_ratios": [
+          0.8978587682080579,
+          0.8811206539220218,
+          0.9060657915756378,
+          0.9056880089758722,
+          0.9106361001017337,
+          0.907523858955925,
+          0.9175688205069943,
+          0.9059677387522269,
+          0.8858606476083367,
+          0.9140180160164704,
+          0.9076363232982763
+        ],
+        "ratio_of_medians": 0.9073383173872174,
+        "rust": {
+          "best_s": 0.469168791,
+          "mad_s": 0.0011063750000000483,
+          "median_s": 0.47260725,
+          "p95_s": 0.473870416,
+          "samples_s": [
+            0.473870416,
+            0.473490584,
+            0.469168791,
+            0.473468416,
+            0.471487458,
+            0.473713625,
+            0.472903084,
+            0.4712155,
+            0.469961708,
+            0.47260725,
+            0.472533333
+          ]
+        }
+      },
+      "whole_process": {
+        "aura": {
+          "best_s": 0.423250667,
+          "mad_s": 0.002641626000000008,
+          "median_s": 0.439735292,
+          "p95_s": 0.444573916,
+          "samples_s": [
+            0.437093666,
+            0.42992225,
+            0.436687083,
+            0.440257875,
+            0.439735292,
+            0.441049542,
+            0.444338958,
+            0.437687125,
+            0.423250667,
+            0.444573916,
+            0.44032225
+          ]
+        },
+        "cpython": {
+          "best_s": 0.589446041,
+          "mad_s": 0.004171501000000077,
+          "median_s": 0.601486417,
+          "p95_s": 0.615358708,
+          "samples_s": [
+            0.600815625,
+            0.589446041,
+            0.611733375,
+            0.604572417,
+            0.59395975,
+            0.597314916,
+            0.604731209,
+            0.601486417,
+            0.5969315,
+            0.615358708,
+            0.605021167
+          ]
+        },
+        "paired_median_ratio": 0.7277799092275395,
+        "paired_ratios": [
+          0.7275004973447553,
+          0.7293665918438157,
+          0.7138519833089048,
+          0.7282136310231303,
+          0.7403452708706272,
+          0.7383869549977888,
+          0.7347710046828425,
+          0.727675825470885,
+          0.7090439472535794,
+          0.7224630288322823,
+          0.7277799092275395
+        ],
+        "ratio_of_medians": 0.7310810012855202
+      },
+      "whole_process_vs_rust": {
+        "aura": {
+          "best_s": 0.423250667,
+          "mad_s": 0.002641626000000008,
+          "median_s": 0.439735292,
+          "p95_s": 0.444573916,
+          "samples_s": [
+            0.437093666,
+            0.42992225,
+            0.436687083,
+            0.440257875,
+            0.439735292,
+            0.441049542,
+            0.444338958,
+            0.437687125,
+            0.423250667,
+            0.444573916,
+            0.44032225
+          ]
+        },
+        "paired_median_ratio": 0.9129571975450337,
+        "paired_ratios": [
+          0.9062158699225055,
+          0.8923844827388874,
+          0.9129315675062997,
+          0.9217421247243374,
+          0.9161128842073396,
+          0.9160404435235453,
+          0.9246305571097372,
+          0.9129571975450337,
+          0.8849619280674137,
+          0.9233371603743411,
+          0.9122873396396752
+        ],
+        "ratio_of_medians": 0.9150507303092991,
+        "rust": {
+          "best_s": 0.477636709,
+          "mad_s": 0.001209583000000014,
+          "median_s": 0.480558375,
+          "p95_s": 0.482657416,
+          "samples_s": [
+            0.482328417,
+            0.481767958,
+            0.478334958,
+            0.477636709,
+            0.480001209,
+            0.481473875,
+            0.480558375,
+            0.479416917,
+            0.478269916,
+            0.481486,
+            0.482657416
+          ]
+        }
+      }
+    },
+    "tasks_10000": {
+      "performance_gate": null,
+      "primary_measurement": "protocol",
+      "protocol": {
+        "aura": {
+          "best_s": 0.096123667,
+          "mad_s": 0.001852207999999994,
+          "median_s": 0.098692417,
+          "p95_s": 0.101206,
+          "samples_s": [
+            0.097646417,
+            0.098692417,
+            0.100544625,
+            0.098967208,
+            0.101206,
+            0.100534917,
+            0.097422959,
+            0.096123667,
+            0.096377625,
+            0.096783125,
+            0.101016959
+          ]
+        },
+        "cpython": {
+          "best_s": 0.051594167,
+          "mad_s": 8.329099999999923e-05,
+          "median_s": 0.051786208,
+          "p95_s": 0.05222125,
+          "samples_s": [
+            0.051786208,
+            0.051987083,
+            0.051977958,
+            0.05222125,
+            0.051594167,
+            0.051789833,
+            0.051722834,
+            0.05179,
+            0.05173475,
+            0.051669833,
+            0.051702917
+          ]
+        },
+        "paired_median_ratio": 1.8951520310218544,
+        "paired_ratios": [
+          1.8855680068330163,
+          1.8984026666777976,
+          1.934370430635232,
+          1.8951520310218544,
+          1.9615783311318893,
+          1.9412095227262076,
+          1.883558023908744,
+          1.8560275535817723,
+          1.8629185412126277,
+          1.8731069829468967,
+          1.9537961272088382
+        ],
+        "ratio_of_medians": 1.9057664349550367
+      },
+      "protocol_vs_rust": {
+        "aura": {
+          "best_s": 0.096123667,
+          "mad_s": 0.001852207999999994,
+          "median_s": 0.098692417,
+          "p95_s": 0.101206,
+          "samples_s": [
+            0.097646417,
+            0.098692417,
+            0.100544625,
+            0.098967208,
+            0.101206,
+            0.100534917,
+            0.097422959,
+            0.096123667,
+            0.096377625,
+            0.096783125,
+            0.101016959
+          ]
+        },
+        "paired_median_ratio": 29.5104712741075,
+        "paired_ratios": [
+          28.506781593256214,
+          29.66036928945185,
+          29.5104712741075,
+          27.853238533398518,
+          31.68340016610885,
+          30.490923532879943,
+          28.694600000530166,
+          32.461413692642125,
+          28.26323313782991,
+          30.979274196775094,
+          28.877458352688944
+        ],
+        "ratio_of_medians": 29.068501490501056,
+        "rust": {
+          "best_s": 0.002961167,
+          "mad_s": 9.795900000000033e-05,
+          "median_s": 0.003395167,
+          "p95_s": 0.003553167,
+          "samples_s": [
+            0.003425375,
+            0.003327417,
+            0.003407083,
+            0.003553167,
+            0.003194291,
+            0.003297208,
+            0.003395167,
+            0.002961167,
+            0.00341,
+            0.003124125,
+            0.003498125
+          ]
+        }
+      },
+      "whole_process": {
+        "aura": {
+          "best_s": 0.103431792,
+          "mad_s": 0.001760167000000007,
+          "median_s": 0.105655917,
+          "p95_s": 0.108724459,
+          "samples_s": [
+            0.105655917,
+            0.10593875,
+            0.107339083,
+            0.105649917,
+            0.107839125,
+            0.107441208,
+            0.10389575,
+            0.103431792,
+            0.103703792,
+            0.104049333,
+            0.108724459
+          ]
+        },
+        "cpython": {
+          "best_s": 0.093784292,
+          "mad_s": 0.0008379989999999921,
+          "median_s": 0.094622291,
+          "p95_s": 0.096661292,
+          "samples_s": [
+            0.094586291,
+            0.094622291,
+            0.096661292,
+            0.096617625,
+            0.095521917,
+            0.09591225,
+            0.095693417,
+            0.093946,
+            0.093968625,
+            0.093784292,
+            0.094321375
+          ]
+        },
+        "paired_median_ratio": 1.1104660488088656,
+        "paired_ratios": [
+          1.1170320337436637,
+          1.1195961213832795,
+          1.1104660488088656,
+          1.0934849309326327,
+          1.128946407137118,
+          1.1202031857244512,
+          1.085714704910161,
+          1.1009706852872927,
+          1.1036001857002804,
+          1.1094537345337105,
+          1.1527022268282243
+        ],
+        "ratio_of_medians": 1.1166070476987289
+      },
+      "whole_process_vs_rust": {
+        "aura": {
+          "best_s": 0.103431792,
+          "mad_s": 0.001760167000000007,
+          "median_s": 0.105655917,
+          "p95_s": 0.108724459,
+          "samples_s": [
+            0.105655917,
+            0.10593875,
+            0.107339083,
+            0.105649917,
+            0.107839125,
+            0.107441208,
+            0.10389575,
+            0.103431792,
+            0.103703792,
+            0.104049333,
+            0.108724459
+          ]
+        },
+        "paired_median_ratio": 15.840254932640178,
+        "paired_ratios": [
+          16.40439228041509,
+          15.044111120972751,
+          15.18063082608002,
+          14.830745753370891,
+          15.840254932640178,
+          15.65875148803104,
+          15.145338514349156,
+          16.8627335642959,
+          16.046698052262048,
+          16.81764113170439,
+          16.434805985942106
+        ],
+        "ratio_of_medians": 15.519568249667007,
+        "rust": {
+          "best_s": 0.00613375,
+          "mad_s": 0.00026287600000000043,
+          "median_s": 0.006807916,
+          "p95_s": 0.007123709,
+          "samples_s": [
+            0.006440709,
+            0.007041875,
+            0.007070792,
+            0.007123709,
+            0.006807916,
+            0.006861416,
+            0.006859916,
+            0.00613375,
+            0.006462625,
+            0.006186916,
+            0.0066155
+          ]
+        }
+      }
+    },
+    "tcp_fanout": {
+      "performance_gate": null,
+      "primary_measurement": "protocol",
+      "protocol": {
+        "aura": {
+          "best_s": 0.103306541,
+          "mad_s": 0.00031099999999999184,
+          "median_s": 0.104268375,
+          "p95_s": 0.105068875,
+          "samples_s": [
+            0.103957375,
+            0.103918625,
+            0.104235625,
+            0.104268375,
+            0.104887917,
+            0.104696667,
+            0.105068875,
+            0.104547625,
+            0.104478584,
+            0.103306541,
+            0.104152542
+          ]
+        },
+        "cpython": {
+          "best_s": 0.107462458,
+          "mad_s": 9.354100000000254e-05,
+          "median_s": 0.108793,
+          "p95_s": 0.108990417,
+          "samples_s": [
+            0.108886541,
+            0.108381958,
+            0.107684375,
+            0.108793,
+            0.108715875,
+            0.108990417,
+            0.107462458,
+            0.108731834,
+            0.108813875,
+            0.108824583,
+            0.108891667
+          ]
+        },
+        "paired_median_ratio": 0.9601586562375432,
+        "paired_ratios": [
+          0.9547311728820553,
+          0.9588184871138792,
+          0.9679735337647639,
+          0.958410697379427,
+          0.9647893373437871,
+          0.9606043345994354,
+          0.9777263330418146,
+          0.9615180867822022,
+          0.9601586562375432,
+          0.9492941590228744,
+          0.9564785338441003
+        ],
+        "ratio_of_medians": 0.958410697379427
+      },
+      "protocol_vs_rust": {
+        "aura": {
+          "best_s": 0.103306541,
+          "mad_s": 0.00031099999999999184,
+          "median_s": 0.104268375,
+          "p95_s": 0.105068875,
+          "samples_s": [
+            0.103957375,
+            0.103918625,
+            0.104235625,
+            0.104268375,
+            0.104887917,
+            0.104696667,
+            0.105068875,
+            0.104547625,
+            0.104478584,
+            0.103306541,
+            0.104152542
+          ]
+        },
+        "paired_median_ratio": 0.9972172928838403,
+        "paired_ratios": [
+          0.9909495028703278,
+          0.9926160216038591,
+          0.9945538544128825,
+          0.9972172928838403,
+          1.0028835890058407,
+          1.0078612309378927,
+          1.0093705888798508,
+          0.9995255611404698,
+          1.0041302721374081,
+          0.9852488215672858,
+          0.9927960889878943
+        ],
+        "ratio_of_medians": 0.996855796878025,
+        "rust": {
+          "best_s": 0.103880042,
+          "mad_s": 0.00025599999999999234,
+          "median_s": 0.10459725,
+          "p95_s": 0.104908292,
+          "samples_s": [
+            0.104906834,
+            0.104691666,
+            0.104806416,
+            0.104559333,
+            0.104586333,
+            0.103880042,
+            0.104093458,
+            0.10459725,
+            0.104048834,
+            0.10485325,
+            0.104908292
+          ]
+        }
+      },
+      "whole_process": {
+        "aura": {
+          "best_s": 0.109782416,
+          "mad_s": 0.0011986260000000082,
+          "median_s": 0.110981042,
+          "p95_s": 0.114468125,
+          "samples_s": [
+            0.110489333,
+            0.110258792,
+            0.110275,
+            0.113097084,
+            0.113869709,
+            0.114009042,
+            0.114468125,
+            0.113812375,
+            0.110968708,
+            0.109782416,
+            0.110981042
+          ]
+        },
+        "cpython": {
+          "best_s": 0.162049709,
+          "mad_s": 0.0005359999999999809,
+          "median_s": 0.168997292,
+          "p95_s": 0.17018375,
+          "samples_s": [
+            0.168838584,
+            0.162049709,
+            0.168461292,
+            0.17018375,
+            0.169773,
+            0.169787792,
+            0.168997292,
+            0.169402042,
+            0.168804167,
+            0.168458208,
+            0.169190666
+          ]
+        },
+        "paired_median_ratio": 0.6645586549832166,
+        "paired_ratios": [
+          0.6544080765330275,
+          0.6804010490386009,
+          0.6546014143118408,
+          0.6645586549832166,
+          0.6707174226761616,
+          0.6714796196890293,
+          0.6773370368561883,
+          0.6718477159797164,
+          0.657381331113704,
+          0.6516893258178313,
+          0.6559525098151692
+        ],
+        "ratio_of_medians": 0.65670307900555
+      },
+      "whole_process_vs_rust": {
+        "aura": {
+          "best_s": 0.109782416,
+          "mad_s": 0.0011986260000000082,
+          "median_s": 0.110981042,
+          "p95_s": 0.114468125,
+          "samples_s": [
+            0.110489333,
+            0.110258792,
+            0.110275,
+            0.113097084,
+            0.113869709,
+            0.114009042,
+            0.114468125,
+            0.113812375,
+            0.110968708,
+            0.109782416,
+            0.110981042
+          ]
+        },
+        "paired_median_ratio": 1.0088599334544712,
+        "paired_ratios": [
+          0.9991006412295379,
+          0.9975673511682825,
+          0.9964908611599471,
+          1.0452281608916554,
+          1.051143413317025,
+          1.059233403832733,
+          1.0631216605201432,
+          1.0511793887797878,
+          1.0088599334544712,
+          0.9944476025376968,
+          1.0009643097521626
+        ],
+        "ratio_of_medians": 1.0089720666733173,
+        "rust": {
+          "best_s": 0.107633541,
+          "mad_s": 0.0008799580000000001,
+          "median_s": 0.109994167,
+          "p95_s": 0.110874125,
+          "samples_s": [
+            0.110588792,
+            0.110527667,
+            0.110663333,
+            0.10820325,
+            0.108329375,
+            0.107633541,
+            0.107671708,
+            0.108271125,
+            0.109994167,
+            0.110395375,
+            0.110874125
+          ]
+        }
+      }
+    },
+    "v6": {
+      "comparisons": {
+        "aura_int32_vs_cpython": {
+          "aura": {
+            "best_s": 0.0246165,
+            "mad_s": 0.0043377910000000006,
+            "median_s": 0.028954291,
+            "p95_s": 0.044556792,
+            "samples_s": [
+              0.038243166,
+              0.044556792,
+              0.025336625,
+              0.024877375,
+              0.025403042,
+              0.0246165,
+              0.024712625,
+              0.044425,
+              0.037188208,
+              0.028954291,
+              0.03979575
+            ]
+          },
+          "cpython": {
+            "best_s": 0.318216459,
+            "mad_s": 0.009473833000000043,
+            "median_s": 0.328618208,
+            "p95_s": 0.350838,
+            "samples_s": [
+              0.318336875,
+              0.319144375,
+              0.323644833,
+              0.332726791,
+              0.342600917,
+              0.350838,
+              0.343000167,
+              0.328618208,
+              0.333895583,
+              0.318216459,
+              0.322699709
+            ]
+          },
+          "paired_median_ratio": 0.09098929417726943,
+          "paired_ratios": [
+            0.12013426342769747,
+            0.13961327690641578,
+            0.07828527576091412,
+            0.07476817519031703,
+            0.07414761823302417,
+            0.07016486241513177,
+            0.07204843430877979,
+            0.13518727483292708,
+            0.11137675936252203,
+            0.09098929417726943,
+            0.12332130736442652
+          ],
+          "ratio_of_medians": 0.08810921091749122
+        },
+        "aura_int32_vs_cpython_startup_adjusted": {
+          "aura": {
+            "best_s": 0.009914165999999999,
+            "mad_s": 0.004478873999999997,
+            "median_s": 0.024342791,
+            "p95_s": 0.039341792,
+            "samples_s": [
+              0.026189083000000002,
+              0.039341792,
+              0.019863917000000002,
+              0.019267375,
+              0.019929000000000002,
+              0.02053875,
+              0.009914165999999999,
+              0.037936834,
+              0.031552625,
+              0.024342791,
+              0.026638083
+            ]
+          },
+          "cpython": {
+            "best_s": 0.276637126,
+            "mad_s": 0.008820001999999938,
+            "median_s": 0.298047876,
+            "p95_s": 0.328617458,
+            "samples_s": [
+              0.294441208,
+              0.294897875,
+              0.293768874,
+              0.28922787400000005,
+              0.321249625,
+              0.328617458,
+              0.32120750000000003,
+              0.306785083,
+              0.312148083,
+              0.276637126,
+              0.298047876
+            ]
+          },
+          "excluded_pair_repetitions": [],
+          "paired_median_ratio": 0.08799538714120388,
+          "paired_ratios": [
+            0.08894503312865093,
+            0.13340819088642128,
+            0.06761750055249216,
+            0.06661659104129085,
+            0.06203587008078221,
+            0.06250048346488032,
+            0.030865300467766157,
+            0.12365931755554099,
+            0.10108223217888543,
+            0.08799538714120388,
+            0.08937518145574706
+          ],
+          "ratio_of_medians": 0.08167409654682457,
+          "valid_pair_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ]
+        },
+        "aura_int64_vs_cpython": {
+          "aura": {
+            "best_s": 0.010204541,
+            "mad_s": 0.001968125000000001,
+            "median_s": 0.0127725,
+            "p95_s": 0.0264575,
+            "samples_s": [
+              0.013152792,
+              0.013779542,
+              0.021633625,
+              0.010804375,
+              0.010243958,
+              0.010204541,
+              0.010308917,
+              0.011195833,
+              0.0264575,
+              0.013199792,
+              0.0127725
+            ]
+          },
+          "cpython": {
+            "best_s": 0.318216459,
+            "mad_s": 0.009473833000000043,
+            "median_s": 0.328618208,
+            "p95_s": 0.350838,
+            "samples_s": [
+              0.318336875,
+              0.319144375,
+              0.323644833,
+              0.332726791,
+              0.342600917,
+              0.350838,
+              0.343000167,
+              0.328618208,
+              0.333895583,
+              0.318216459,
+              0.322699709
+            ]
+          },
+          "paired_median_ratio": 0.039580141053055615,
+          "paired_ratios": [
+            0.04131721152317022,
+            0.04317651533103161,
+            0.06684372124674086,
+            0.032472212314276785,
+            0.02990055627901311,
+            0.029086190777509846,
+            0.030055136970239434,
+            0.034069423809894306,
+            0.07923884395919067,
+            0.041480544537138474,
+            0.039580141053055615
+          ],
+          "ratio_of_medians": 0.03886729246603402
+        },
+        "aura_int64_vs_cpython_startup_adjusted": {
+          "aura": {
+            "best_s": 0.0010987089999999998,
+            "mad_s": 0.002437751000000002,
+            "median_s": 0.0061267909999999995,
+            "p95_s": 0.020821917,
+            "samples_s": [
+              0.0010987089999999998,
+              0.008564542000000001,
+              0.016160917,
+              0.005194374999999999,
+              0.004769915999999999,
+              0.0061267909999999995,
+              0.0047076670000000004,
+              0.020821917,
+              0.008588292
+            ]
+          },
+          "cpython": {
+            "best_s": 0.276637126,
+            "mad_s": 0.011887208000000038,
+            "median_s": 0.294897875,
+            "p95_s": 0.328617458,
+            "samples_s": [
+              0.294441208,
+              0.294897875,
+              0.293768874,
+              0.28922787400000005,
+              0.321249625,
+              0.328617458,
+              0.306785083,
+              0.312148083,
+              0.276637126
+            ]
+          },
+          "excluded_pair_repetitions": [
+            6,
+            10
+          ],
+          "paired_median_ratio": 0.018644143367453108,
+          "paired_ratios": [
+            0.003731505543884332,
+            0.02904239984774391,
+            0.055012353010550734,
+            0.017959455042012993,
+            0.014848004880939547,
+            0.018644143367453108,
+            0.015345162659033197,
+            0.06670525348060521,
+            0.031045334095901503
+          ],
+          "ratio_of_medians": 0.02077597541182689,
+          "valid_pair_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            7,
+            8,
+            9
+          ]
+        }
+      },
+      "performance_gate": null,
+      "primary_measurement": "whole_process",
+      "startup_adjusted": {
+        "aura_int32": {
+          "best_s": 0.009914165999999999,
+          "invalid_nonpositive_pair_repetitions": [],
+          "mad_s": 0.004478873999999997,
+          "median_s": 0.024342791,
+          "p95_s": 0.039341792,
+          "raw_samples_s": [
+            0.026189083000000002,
+            0.039341792,
+            0.019863917000000002,
+            0.019267375,
+            0.019929000000000002,
+            0.02053875,
+            0.009914165999999999,
+            0.037936834,
+            0.031552625,
+            0.024342791,
+            0.026638083
+          ],
+          "samples_s": [
+            0.026189083000000002,
+            0.039341792,
+            0.019863917000000002,
+            0.019267375,
+            0.019929000000000002,
+            0.02053875,
+            0.009914165999999999,
+            0.037936834,
+            0.031552625,
+            0.024342791,
+            0.026638083
+          ],
+          "valid_pair_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ]
+        },
+        "aura_int64": {
+          "best_s": 0.0010987089999999998,
+          "invalid_nonpositive_pair_repetitions": [
+            6,
+            10
+          ],
+          "mad_s": 0.002437751000000002,
+          "median_s": 0.0061267909999999995,
+          "p95_s": 0.020821917,
+          "raw_samples_s": [
+            0.0010987089999999998,
+            0.008564542000000001,
+            0.016160917,
+            0.005194374999999999,
+            0.004769915999999999,
+            0.0061267909999999995,
+            -0.004489541999999999,
+            0.0047076670000000004,
+            0.020821917,
+            0.008588292,
+            -0.00038516699999999876
+          ],
+          "samples_s": [
+            0.0010987089999999998,
+            0.008564542000000001,
+            0.016160917,
+            0.005194374999999999,
+            0.004769915999999999,
+            0.0061267909999999995,
+            0.0047076670000000004,
+            0.020821917,
+            0.008588292
+          ],
+          "valid_pair_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            7,
+            8,
+            9
+          ]
+        },
+        "cpython_int": {
+          "best_s": 0.276637126,
+          "invalid_nonpositive_pair_repetitions": [],
+          "mad_s": 0.008820001999999938,
+          "median_s": 0.298047876,
+          "p95_s": 0.328617458,
+          "raw_samples_s": [
+            0.294441208,
+            0.294897875,
+            0.293768874,
+            0.28922787400000005,
+            0.321249625,
+            0.328617458,
+            0.32120750000000003,
+            0.306785083,
+            0.312148083,
+            0.276637126,
+            0.298047876
+          ],
+          "samples_s": [
+            0.294441208,
+            0.294897875,
+            0.293768874,
+            0.28922787400000005,
+            0.321249625,
+            0.328617458,
+            0.32120750000000003,
+            0.306785083,
+            0.312148083,
+            0.276637126,
+            0.298047876
+          ],
+          "valid_pair_repetitions": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ]
+        }
+      },
+      "whole_process": {
+        "aura_int32": {
+          "best_s": 0.0246165,
+          "mad_s": 0.0043377910000000006,
+          "median_s": 0.028954291,
+          "p95_s": 0.044556792,
+          "samples_s": [
+            0.038243166,
+            0.044556792,
+            0.025336625,
+            0.024877375,
+            0.025403042,
+            0.0246165,
+            0.024712625,
+            0.044425,
+            0.037188208,
+            0.028954291,
+            0.03979575
+          ]
+        },
+        "aura_int64": {
+          "best_s": 0.010204541,
+          "mad_s": 0.001968125000000001,
+          "median_s": 0.0127725,
+          "p95_s": 0.0264575,
+          "samples_s": [
+            0.013152792,
+            0.013779542,
+            0.021633625,
+            0.010804375,
+            0.010243958,
+            0.010204541,
+            0.010308917,
+            0.011195833,
+            0.0264575,
+            0.013199792,
+            0.0127725
+          ]
+        },
+        "aura_startup": {
+          "best_s": 0.00407775,
+          "mad_s": 0.0008781659999999997,
+          "median_s": 0.00561,
+          "p95_s": 0.014798459,
+          "samples_s": [
+            0.012054083,
+            0.005215,
+            0.005472708,
+            0.00561,
+            0.005474042,
+            0.00407775,
+            0.014798459,
+            0.006488166,
+            0.005635583,
+            0.0046115,
+            0.013157667
+          ]
+        },
+        "cpython_int": {
+          "best_s": 0.318216459,
+          "mad_s": 0.009473833000000043,
+          "median_s": 0.328618208,
+          "p95_s": 0.350838,
+          "samples_s": [
+            0.318336875,
+            0.319144375,
+            0.323644833,
+            0.332726791,
+            0.342600917,
+            0.350838,
+            0.343000167,
+            0.328618208,
+            0.333895583,
+            0.318216459,
+            0.322699709
+          ]
+        },
+        "cpython_startup": {
+          "best_s": 0.021351292,
+          "mad_s": 0.0021029999999999972,
+          "median_s": 0.023895667,
+          "p95_s": 0.043498917,
+          "samples_s": [
+            0.023895667,
+            0.0242465,
+            0.029875959,
+            0.043498917,
+            0.021351292,
+            0.022220542,
+            0.021792667,
+            0.021833125,
+            0.0217475,
+            0.041579333,
+            0.024651833
+          ]
+        }
+      }
+    }
+  },
+  "warmups": {
+    "fib30": {
+      "aura": {
+        "command": [
+          "/tmp/aura-release-performance-ng91rt69/fib30"
+        ],
+        "done": "DONE release-performance fib30 832040\n",
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "go": "GO release-performance fib30\n",
+        "protocol_elapsed_s": 0.119246875,
+        "ready": "READY release-performance fib30 30\n",
+        "returncode": 0,
+        "whole_process_elapsed_s": 0.415547958
+      },
+      "cpython": {
+        "command": [
+          "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+          "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/fib30.py"
+        ],
+        "done": "DONE release-performance fib30 832040\n",
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "go": "GO release-performance fib30\n",
+        "protocol_elapsed_s": 0.158798917,
+        "ready": "READY release-performance fib30 30\n",
+        "returncode": 0,
+        "whole_process_elapsed_s": 0.191094708
+      },
+      "rust": {
+        "command": [
+          "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/fib30"
+        ],
+        "done": "DONE release-performance fib30 832040\n",
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "go": "GO release-performance fib30\n",
+        "protocol_elapsed_s": 0.004627791,
+        "ready": "READY release-performance fib30 30\n",
+        "returncode": 0,
+        "whole_process_elapsed_s": 0.288944875
+      }
+    },
+    "retrying_worker": {
+      "aura": {
+        "command": [
+          "/tmp/aura-release-performance-ng91rt69/retrying_worker"
+        ],
+        "done": "DONE release-performance retrying-worker 112 18112\n",
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "go": "GO release-performance retrying-worker\n",
+        "protocol_elapsed_s": 0.432185583,
+        "ready": "READY release-performance retrying-worker 16 112 288\n",
+        "returncode": 0,
+        "whole_process_elapsed_s": 0.755091708
+      },
+      "cpython": {
+        "command": [
+          "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+          "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/retrying_worker.py"
+        ],
+        "done": "DONE release-performance retrying-worker 112 18112\n",
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "go": "GO release-performance retrying-worker\n",
+        "protocol_elapsed_s": 0.530492583,
+        "ready": "READY release-performance retrying-worker 16 112 288\n",
+        "returncode": 0,
+        "whole_process_elapsed_s": 0.604828584
+      },
+      "rust": {
+        "command": [
+          "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/retrying_worker"
+        ],
+        "done": "DONE release-performance retrying-worker 112 18112\n",
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "go": "GO release-performance retrying-worker\n",
+        "protocol_elapsed_s": 0.487106542,
+        "ready": "READY release-performance retrying-worker 16 112 288\n",
+        "returncode": 0,
+        "whole_process_elapsed_s": 0.789497792
+      }
+    },
+    "tasks_10000": {
+      "aura": {
+        "command": [
+          "/tmp/aura-release-performance-ng91rt69/tasks_10000"
+        ],
+        "done": "DONE release-performance tasks 10000 49995000\n",
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "go": "GO release-performance tasks\n",
+        "protocol_elapsed_s": 0.116730458,
+        "ready": "READY release-performance tasks 10000\n",
+        "returncode": 0,
+        "whole_process_elapsed_s": 0.393322792
+      },
+      "cpython": {
+        "command": [
+          "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+          "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tasks_10000.py"
+        ],
+        "done": "DONE release-performance tasks 10000 49995000\n",
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "go": "GO release-performance tasks\n",
+        "protocol_elapsed_s": 0.051440541,
+        "ready": "READY release-performance tasks 10000\n",
+        "returncode": 0,
+        "whole_process_elapsed_s": 0.105888583
+      },
+      "rust": {
+        "command": [
+          "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tasks_10000"
+        ],
+        "done": "DONE release-performance tasks 10000 49995000\n",
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "go": "GO release-performance tasks\n",
+        "protocol_elapsed_s": 0.008336459,
+        "ready": "READY release-performance tasks 10000\n",
+        "returncode": 0,
+        "whole_process_elapsed_s": 0.303177417
+      }
+    },
+    "tcp_fanout": {
+      "aura": {
+        "command": [
+          "/tmp/aura-release-performance-ng91rt69/tcp_fanout"
+        ],
+        "done": "DONE release-performance tcp-fanout 20 80\n",
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "go": "GO release-performance tcp-fanout\n",
+        "protocol_elapsed_s": 0.1075065,
+        "ready": "READY release-performance tcp-fanout 20 100 4\n",
+        "returncode": 0,
+        "whole_process_elapsed_s": 0.385244709
+      },
+      "cpython": {
+        "command": [
+          "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+          "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/tcp_fanout.py"
+        ],
+        "done": "DONE release-performance tcp-fanout 20 80\n",
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "go": "GO release-performance tcp-fanout\n",
+        "protocol_elapsed_s": 0.108956208,
+        "ready": "READY release-performance tcp-fanout 20 100 4\n",
+        "returncode": 0,
+        "whole_process_elapsed_s": 0.184110959
+      },
+      "rust": {
+        "command": [
+          "/private/tmp/aura-release-performance-ng91rt69/rust-target/release/tcp_fanout"
+        ],
+        "done": "DONE release-performance tcp-fanout 20 80\n",
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "go": "GO release-performance tcp-fanout\n",
+        "protocol_elapsed_s": 0.104755584,
+        "ready": "READY release-performance tcp-fanout 20 100 4\n",
+        "returncode": 0,
+        "whole_process_elapsed_s": 0.406540417
+      }
+    },
+    "v6": {
+      "aura_int32": {
+        "command": [
+          "/tmp/aura-release-performance-ng91rt69/aura_int32"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "10000000\n",
+        "whole_process_elapsed_s": 0.31145075
+      },
+      "aura_int64": {
+        "command": [
+          "/tmp/aura-release-performance-ng91rt69/aura_int64"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "10000000\n",
+        "whole_process_elapsed_s": 0.289146084
+      },
+      "aura_startup": {
+        "command": [
+          "/tmp/aura-release-performance-ng91rt69/aura_startup"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "",
+        "whole_process_elapsed_s": 0.312977625
+      },
+      "cpython_int": {
+        "command": [
+          "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+          "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_int_loop.py"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "10000000\n",
+        "whole_process_elapsed_s": 0.3256815
+      },
+      "cpython_startup": {
+        "command": [
+          "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+          "/private/tmp/aura-foundations-after-approved-20260907/benchmarks/release_performance/python_startup.py"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "",
+        "whole_process_elapsed_s": 0.037859166
+      }
+    }
+  }
+}

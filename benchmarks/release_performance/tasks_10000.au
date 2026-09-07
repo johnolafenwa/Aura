@@ -37,7 +37,7 @@ def main() -> int32:
     with TaskGroup() as group:
         mut tasks = list[Task[int32]]()
         for value in range(task_count):
-            tasks.append(group.start(task_value, value))
+            tasks.append(group.start(task_value, value as int32))
 
         match wait_all(tasks):
             case WaitAll.Ready(results):
