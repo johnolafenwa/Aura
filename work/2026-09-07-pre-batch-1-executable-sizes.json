@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-06T21:32:19.223508+00:00",
+  "generated_at": "2026-09-06T22:11:09.470999+00:00",
   "host": "macOS-26.5.2-arm64-arm-64bit",
   "machine": "arm64",
   "runner_sha256": "622048c07851658abef8ada5113aae297bde0e0e774f87b5b078a912315a4cdb",
@@ -36,36 +36,36 @@
       ],
       "program_builds": [
         [
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-t1utba3y/checkout/target-measured/installed/bin/aura",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-2k4zztfm/checkout/target-measured/installed/bin/aura",
           "build",
           "--backend",
           "direct",
           "-o",
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-t1utba3y/checkout/target-measured/hello_world",
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-t1utba3y/checkout/target-measured/hello_world.au"
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-2k4zztfm/checkout/target-measured/hello_world",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-2k4zztfm/checkout/target-measured/hello_world.au"
         ],
         [
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-t1utba3y/checkout/target-measured/installed/bin/aura",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-2k4zztfm/checkout/target-measured/installed/bin/aura",
           "build",
           "--backend",
           "direct",
           "-o",
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-t1utba3y/checkout/target-measured/reference_agent_standin",
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-t1utba3y/checkout/examples/agents/retrying_network_worker.au"
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-2k4zztfm/checkout/target-measured/reference_agent_standin",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-2k4zztfm/checkout/examples/agents/retrying_network_worker.au"
         ]
       ],
       "subjects": {
         "aura": {
           "bytes": 15424032,
-          "sha256": "bf5e0448bd34206a0cf1396bbf394967255c2b7dd28495edfd8fef35946157e5"
+          "sha256": "57dd88d5d897487774c556d4e20d5fd32322913b434f615f27be1a1b89026358"
         },
         "hello_world": {
           "bytes": 23646792,
-          "sha256": "e8e2c9b9c191d1b6994611fe1dc9922ffbfab07824c6b38c47a5e573214cfd55"
+          "sha256": "24e198798cf013621ce3e7e7db5cdd2c08da8d91a856e6bb90f5f59eae9d4a40"
         },
         "reference_agent_standin": {
           "bytes": 23715816,
-          "sha256": "82067ffac8ac988fd41ff3f382d207b537231e38aa3e2481516f37ddce84602c"
+          "sha256": "2f9aa5b0ec026b7806fcfb2e21dfefb309e032993e03c5373366de469b992b17"
         }
       },
       "sources": {
@@ -98,8 +98,8 @@
       "reference_agent": "retrying_network_worker is the stand-in until pre-Batch-1 item 6"
     },
     {
-      "ref": "11ce755dd97386c2aa230ba16b5f7e26a675e2cf",
-      "commit": "11ce755dd97386c2aa230ba16b5f7e26a675e2cf",
+      "ref": "7e1c54c0f505f3b8b31d3d51dc39ebed920ae753",
+      "commit": "7e1c54c0f505f3b8b31d3d51dc39ebed920ae753",
       "profile": "cargo-default",
       "profile_overrides": {
         "CARGO_PROFILE_RELEASE_PANIC": "unwind",
@@ -133,36 +133,36 @@
       ],
       "program_builds": [
         [
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-aj0vrtwr/checkout/target-default/installed/bin/aura",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-mu72ztn_/checkout/target-default/installed/bin/aura",
           "build",
           "--backend",
           "direct",
           "-o",
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-aj0vrtwr/checkout/target-default/hello_world",
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-aj0vrtwr/checkout/examples/basics/hello_world.au"
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-mu72ztn_/checkout/target-default/hello_world",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-mu72ztn_/checkout/examples/basics/hello_world.au"
         ],
         [
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-aj0vrtwr/checkout/target-default/installed/bin/aura",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-mu72ztn_/checkout/target-default/installed/bin/aura",
           "build",
           "--backend",
           "direct",
           "-o",
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-aj0vrtwr/checkout/target-default/reference_agent_standin",
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-aj0vrtwr/checkout/examples/agents/retrying_network_worker.au"
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-mu72ztn_/checkout/target-default/reference_agent_standin",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-mu72ztn_/checkout/examples/agents/retrying_network_worker.au"
         ]
       ],
       "subjects": {
         "aura": {
           "bytes": 15866008,
-          "sha256": "35ff4de130dfc77e1158464579e0e9c78f7090a96c0c43dd45278708e403a77c"
+          "sha256": "aabec88347dd971e307020a7c60037c11f6276a7d7a017e666fb42a2e4fa40f9"
         },
         "hello_world": {
           "bytes": 1702088,
-          "sha256": "453e4f2a7b90eff49bc18eba9d0199b7727a1ab8156c8575431234ae3ee94103"
+          "sha256": "2549d5ea877495e07f2505db068ced66f24976d92e4789e9a421c91e5c54bc7b"
         },
         "reference_agent_standin": {
           "bytes": 4049240,
-          "sha256": "cbee7211f80b043195a0a3e8cd587c464cec76fd7b86dc231f9050015712ab44"
+          "sha256": "59225df66fa5ab1a38eefecac06aad1419288fd6d64a1704a00e220040fc437e"
         }
       },
       "sources": {
@@ -195,8 +195,8 @@
       "reference_agent": "retrying_network_worker is the stand-in until pre-Batch-1 item 6"
     },
     {
-      "ref": "11ce755dd97386c2aa230ba16b5f7e26a675e2cf",
-      "commit": "11ce755dd97386c2aa230ba16b5f7e26a675e2cf",
+      "ref": "7e1c54c0f505f3b8b31d3d51dc39ebed920ae753",
+      "commit": "7e1c54c0f505f3b8b31d3d51dc39ebed920ae753",
       "profile": "release",
       "profile_overrides": {
         "CARGO_PROFILE_RELEASE_PANIC": "unwind"
@@ -225,36 +225,36 @@
       ],
       "program_builds": [
         [
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-eu201cu6/checkout/target-measured/installed/bin/aura",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-qd0zv9n8/checkout/target-measured/installed/bin/aura",
           "build",
           "--backend",
           "direct",
           "-o",
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-eu201cu6/checkout/target-measured/hello_world",
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-eu201cu6/checkout/examples/basics/hello_world.au"
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-qd0zv9n8/checkout/target-measured/hello_world",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-qd0zv9n8/checkout/examples/basics/hello_world.au"
         ],
         [
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-eu201cu6/checkout/target-measured/installed/bin/aura",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-qd0zv9n8/checkout/target-measured/installed/bin/aura",
           "build",
           "--backend",
           "direct",
           "-o",
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-eu201cu6/checkout/target-measured/reference_agent_standin",
-          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-eu201cu6/checkout/examples/agents/retrying_network_worker.au"
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-qd0zv9n8/checkout/target-measured/reference_agent_standin",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-qd0zv9n8/checkout/examples/agents/retrying_network_worker.au"
         ]
       ],
       "subjects": {
         "aura": {
           "bytes": 10897392,
-          "sha256": "80e6d690464a5d7d5203edb55ba0d3a9c2af52f38983e55c73f6fdb435da2c88"
+          "sha256": "537e742717483865620c0aded6ad489be8dbe2fd6591e3410abef775d18f2833"
         },
         "hello_world": {
           "bytes": 1586968,
-          "sha256": "2ebf27a46c7db7b1787821391e87d90d368d285d50a002ca95e73face21bbe95"
+          "sha256": "95982ef5290f900234480b470d39078119c418b7e5b21620efa560a7a30e8378"
         },
         "reference_agent_standin": {
           "bytes": 3666600,
-          "sha256": "52e976378144341e296afe46704ea85a450c2d97b13d995d04bcaa8c42a202ba"
+          "sha256": "695a079ee32b8edb5e050eac18a3ec4ed58cac5b0ce212d87f91b2bc5e1d2c87"
         }
       },
       "sources": {

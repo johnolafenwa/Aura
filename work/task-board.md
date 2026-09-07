@@ -1,18 +1,23 @@
 # Task Board
 
-Last updated: 2026-09-06
+Last updated: 2026-09-07
 
-## Pre-Batch-1 foundations items 1–4 (in progress)
+## Pre-Batch-1 foundations items 1–4 (complete)
 
-- Scope: optimization flag, backend boundary note, Rust baseline programs and
-  runners, release profile/linking, executable-size evidence; next release 0.3.4.
-- Implementation delivered with test-first flag, link, cache, and runner regressions.
-- Local verification: 385 forced parity fixtures; full serial workspace tests;
-  coverage 96.306815% lines / 97.210239% functions / 94.808289% regions;
-  release-profile direct/MIR diagnostics; 44 runner tests; nine Rust smoke programs.
-- Remaining: final-head size report, final documentation checks, branch/main
-  hosted CI and merge, measurement-session handoff.
-- No timing publication, release preparation, version bump, tag, or reboot.
+- Delivered Cranelift speed, the backend boundary inventory, nine pinned Rust
+  baselines and three Rust-enabled runners, release/link tuning, and size evidence.
+- No item reverted. Coverage floors remain 96.30/97.21/94.71; measured local
+  coverage is 96.306815% lines / 97.210239% functions / 94.808289% regions.
+- Local gates passed, including 385 forced parity fixtures, full serial workspace
+  tests, release-profile direct/MIR diagnostics, 100 benchmark-tooling tests,
+  all nine Rust smoke programs, packaging, docs, and audits.
+- PR #6 merged as `50531b45797ae765ec8d885165c13042617ab567`; complete hosted
+  branch CI `34063004465` and main CI `34067729115` passed on macOS and Linux.
+- Final-head clean-ref sizes reproduced the published table. The canonical JSON
+  and complete measurement handoff are recorded with the verified merge commit.
+- Final coverage cleanup completed; `target/` is 4.7 GiB, with 65 GiB free.
+- No implementation/integration work remains. Timing publication belongs to the
+  separate post-reboot session; no release, version bump, tag, or reboot occurred.
 - Work note: `work/2026-09-07-pre-batch-1-items-1-4.md`.
 
 ## Priority roadmap scheduling amendment (complete)
