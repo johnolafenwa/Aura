@@ -29,7 +29,8 @@ checkouts reject `tasks_10000.au:40` and `tcp_fanout.au:62` with `AU2002`:
 int64 range values are passed to int32 task parameters. The suite builds all
 inputs before timing, so fib30, tasks, TCP, retry, and the release V6 lanes
 have no observations from this session. This is an Aura input compilation
-failure, not a failed Rust checksum or protocol exclusion.
+failure, not a failed Rust checksum or protocol exclusion. Aura / CPython
+ratios are therefore unavailable for this session.
 
 The [failure logs and checked, unapplied two-cast proposal](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements)
 retain the blocker. Correcting both source snapshots requires an exception to

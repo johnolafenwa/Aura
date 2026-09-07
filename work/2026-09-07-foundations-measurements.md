@@ -150,3 +150,13 @@ used either checkout. Root target remains 4.6 GiB and available space is 92 GiB.
 The personal file SHA-256 still matches preflight. Other user files and unrelated
 worktree registrations remain untouched. Temporary evidence staging is retained
 as a second copy; the versioned evidence is self-contained.
+
+The first latest-head hosted CI attempt
+[`34081439590`](https://github.com/johnolafenwa/Aura/actions/runs/34081439590)
+passed the benchmark tests and all nine Rust protocol smoke programs on both
+systems, then failed a packaging assertion requiring the text “Aura / CPython”
+on the Performance page. The page now explicitly states that those ratios are
+unavailable. All 36 packaging tests pass locally after that documentation fix.
+The Docs workflow at that head passed; current full CI remains linked from the
+PR checks page. The prior-head CI attempt was cancelled after the cleanup-record
+commit superseded it.
