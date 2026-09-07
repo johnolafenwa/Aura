@@ -177,3 +177,48 @@ passed (local-ci-remaining.log). No timing-sensitive failure occurred.
 
 Exact compiler coverage: 101426/105311 lines, 6786/6980 functions,
 149749/157930 regions; floors remain 96.30/97.21/94.71.
+
+## Contractual Array publication
+
+After local gates passed, clean detached merge base a368dce and implementation
+head d9fc799 were built with Rust 1.95.0, release-profile/runtime overrides
+scrubbed. Both builds completed before timing. Each checkout's unchanged runner
+ran sequentially with all NumPy/Rust lanes, 11 observations per lane, excluded
+warmups, no competing-process override and all three inventories empty. Both
+reports are contractual, clean/detached, with verified raw-report hashes.
+Measurement label: **quiet host, not post-reboot; contractual re-measure
+scheduled with the 0.3.4 release session.** Raw generated-at fields record the
+actual 7 September session; the work-note name follows the requested 8 September
+name and is not a claim that the measurements happened on that date.
+
+Addition: 1.244817707 to 0.249472738 ms, -79.9591%, Aura/Rust 5.039359 to
+1.006524 (1.5x target met). Sum: 1.149271444 to 1.149843669 ms, +0.0498%,
+Aura/Rust 1.338990 to 1.339087. NumPy add/sum drift -2.2310%/-0.7639%; Rust
+add/sum drift +0.3387%/+0.0425%. Sequential reductions are unchanged; the NumPy
+sum gap is chiefly the required reduction-order policy. No repeat was needed.
+Full measurements and derived controls are in arrays-{before,after}-{raw,summary}
+and array-publication-comparison.json.
+
+## Executable-size publication
+
+The clean d9fc799 release measurement records compiler 10,897,408 bytes, hello
+world 1,586,968, and actual reference agent version 0 3,199,712. Compiler and
+runtime were installed together; hello/agent execute with Cargo unavailable
+and match pinned stdout. The script hashed all artifacts/package sources and
+removed its detached checkout/target. Final-head verification follows the
+publication commit; its report will be retained in the completion record.
+
+## Publication verification
+
+Final reference/Manual blocks, tutorials, docs build, 15 identity tests and
+hygiene pass. The size-command illustrative fence changed, so its existing
+reference-integrity metadata hash was refreshed. Two wording checks rejected
+SIMD and historical; the prose now uses measured instruction names and exact
+earlier-session identities. Both existing checks remain unchanged. Initial
+failures and successful reruns are retained. No existing executable fixture
+was adapted. A scoped whitespace check passes; the broad check reported only
+pre-existing whitespace in protected personal/file_ops.au, which is untouched
+and whose content is omitted from publication evidence.
+
+Remaining: exact-final-head size verification, PR/branch green, merge, main green,
+and cleanup/completion record. No release, tag or version bump is prepared.

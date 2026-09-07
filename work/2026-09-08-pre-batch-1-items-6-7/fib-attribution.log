@@ -1,0 +1,59 @@
+{
+  "recordings": 11,
+  "all_process_samples": 1502,
+  "fib_active_samples": 1402,
+  "excluded_non_fib_or_unwind_missing": 100,
+  "missing_backtraces": 10,
+  "method": "Exclusive leaf PC of samples whose stack contains aura_fn_fib; ASLR-normalized, aligned arm64 instruction PC. Frame category includes metadata UTF-8 validation. Other runtime includes TLS/task-state lookup, returned-view bookkeeping and runtime prologues/epilogues. Scalar argument/result register moves are separate; there is no boxing. No safepoints emitted in this non-tasking fib program. Unattributed is conditional on a recovered fib stack; excluded rows may include unwind failures as well as startup/protocol work.",
+  "categories": [
+    {
+      "category": "emitted Aura function body",
+      "samples": 48,
+      "percent": 3.4236804564907275
+    },
+    {
+      "category": "runtime call-frame push and pop",
+      "samples": 691,
+      "percent": 49.2867332382311
+    },
+    {
+      "category": "recursion-depth accounting",
+      "samples": 22,
+      "percent": 1.5691868758915835
+    },
+    {
+      "category": "safepoint and backedge yield polling",
+      "samples": 0,
+      "percent": 0.0
+    },
+    {
+      "category": "checked integer arithmetic",
+      "samples": 29,
+      "percent": 2.0684736091298146
+    },
+    {
+      "category": "argument and result marshalling",
+      "samples": 88,
+      "percent": 6.276747503566334
+    },
+    {
+      "category": "other runtime",
+      "samples": 524,
+      "percent": 37.375178316690445
+    },
+    {
+      "category": "unattributed",
+      "samples": 0,
+      "percent": 0.0
+    }
+  ],
+  "leaf_counts": {
+    "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8": 400,
+    "aura_direct_enter_call_with_frame": 265,
+    "aura_direct_exit_call": 223,
+    "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d": 189,
+    "aura_fn_fib": 165,
+    "core::ptr::drop_in_place$LT$aura_compiler..native_runtime..DirectCallFrameStorage$GT$::he81610866b0752da": 92,
+    "_tlv_get_addr": 68
+  }
+}

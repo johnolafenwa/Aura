@@ -1,0 +1,2584 @@
+{
+  "builds": [
+    {
+      "binary": "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add",
+      "binary_sha256": "a28843fd65438dcc5b2445b8467d496e9f650892523585b0b5c77e830f9b4df9",
+      "command": [
+        "/private/tmp/aura-items-6-7-after/target/release/aura",
+        "build",
+        "--backend",
+        "direct",
+        "-o",
+        "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add",
+        "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/float64_add.au"
+      ],
+      "returncode": 0,
+      "source": "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/float64_add.au",
+      "source_sha256": "df2d650a485f70d1dfdb3c0efe7d8bf68f9a957e3079dc73e3a1f241cbde18f1",
+      "stderr": "aura: built `/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add` with direct backend\n",
+      "stdout": "",
+      "workload": "add"
+    },
+    {
+      "binary": "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum",
+      "binary_sha256": "761431e5afdb4e7b06dafb5059fea579b5c51d1f24717ceaa67853599397f15f",
+      "command": [
+        "/private/tmp/aura-items-6-7-after/target/release/aura",
+        "build",
+        "--backend",
+        "direct",
+        "-o",
+        "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum",
+        "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/float64_sum.au"
+      ],
+      "returncode": 0,
+      "source": "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/float64_sum.au",
+      "source_sha256": "c4020f36c7db1e8f59261ef622ce4dac9a2e1ca10ee86484c250890afcf0448d",
+      "stderr": "aura: built `/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum` with direct backend\n",
+      "stdout": "",
+      "workload": "sum"
+    }
+  ],
+  "contractual": true,
+  "evidence_policy": "measured release evidence only; no Aura-versus-NumPy threshold",
+  "generated_at": "2026-09-07T17:02:09.545046+00:00",
+  "host": {
+    "boot_time": "{ sec = 1788744561, usec = 878295 } Mon Sep  7 02:29:21 2026",
+    "cpu_model": "Apple M2 Pro",
+    "hardware_model": "Mac14,9",
+    "load_average": [
+      1.11083984375,
+      2.14208984375,
+      2.2880859375
+    ],
+    "logical_cpus": 10,
+    "machine": "arm64",
+    "memory_bytes": 17179869184,
+    "physical_cores": 10,
+    "python": "3.9.6",
+    "release": "25.5.0",
+    "system": "Darwin",
+    "version": "Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:24 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6020"
+  },
+  "inputs": {
+    "aura": {
+      "path": "/private/tmp/aura-items-6-7-after/target/release/aura",
+      "sha256": "5ac47a6fd943aaaff98805b482a9e9a68f81a69bc2a71513bd580f09c4ab8c39",
+      "version": "aura 0.3.3-dev (d9fc79921ba9)"
+    },
+    "benchmark_process": {
+      "path": "/private/tmp/aura-items-6-7-after/scripts/benchmark_process.py",
+      "sha256": "bbf4bca940b38bc84101ba4eaf93e568b16edafd91dc298d071ea96be52330de"
+    },
+    "numpy": {
+      "configuration": {
+        "Build Dependencies": {
+          "blas": {
+            "detection method": "system",
+            "found": true,
+            "include directory": "unknown",
+            "lib directory": "unknown",
+            "name": "accelerate",
+            "openblas configuration": "unknown",
+            "pc file directory": "unknown",
+            "version": "unknown"
+          },
+          "lapack": {
+            "detection method": "system",
+            "found": true,
+            "include directory": "unknown",
+            "lib directory": "unknown",
+            "name": "accelerate",
+            "openblas configuration": "unknown",
+            "pc file directory": "unknown",
+            "version": "unknown"
+          }
+        },
+        "Compilers": {
+          "c": {
+            "commands": "cc",
+            "linker": "ld64",
+            "name": "clang",
+            "version": "15.0.0"
+          },
+          "c++": {
+            "commands": "c++",
+            "linker": "ld64",
+            "name": "clang",
+            "version": "15.0.0"
+          },
+          "cython": {
+            "commands": "cython",
+            "linker": "cython",
+            "name": "cython",
+            "version": "3.0.11"
+          }
+        },
+        "Machine Information": {
+          "build": {
+            "cpu": "aarch64",
+            "endian": "little",
+            "family": "aarch64",
+            "system": "darwin"
+          },
+          "host": {
+            "cpu": "aarch64",
+            "endian": "little",
+            "family": "aarch64",
+            "system": "darwin"
+          }
+        },
+        "Python Information": {
+          "path": "/private/var/folders/4d/0gnh84wj53j7wyk695q0tc_80000gn/T/build-env-kq4kuj35/bin/python",
+          "version": "3.9"
+        },
+        "SIMD Extensions": {
+          "baseline": [
+            "NEON",
+            "NEON_FP16",
+            "NEON_VFPV4",
+            "ASIMD"
+          ],
+          "found": [
+            "ASIMDHP"
+          ],
+          "not found": [
+            "ASIMDFHM"
+          ]
+        }
+      },
+      "float64_itemsize": 8,
+      "path": "/Users/johnolafenwa/Library/Python/3.9/lib/python/site-packages/numpy/__init__.py",
+      "version": "2.0.2"
+    },
+    "numpy_reference": {
+      "path": "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+      "sha256": "32bfbfa6cd05ec6e8c5cbfa4a5746aef716fc5e379a51cc9f4067cc13b4354f8"
+    },
+    "python": {
+      "path": "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+      "sha256": "271143990bc83af0fb2404a255038f5faafb96df1584ed7f085e5018c0f33ffb",
+      "version": "Python 3.9.6"
+    },
+    "runner": {
+      "path": "/private/tmp/aura-items-6-7-after/scripts/bench-numeric-arrays.py",
+      "sha256": "7d86f425b31b1b870160d7afa46b5288b92de8e3f5d0b550565794562f7f9636"
+    }
+  },
+  "label": "items-6-7-after",
+  "noncontractual_reasons": [],
+  "pairs": [
+    {
+      "order": [
+        "aura_add",
+        "numpy_add",
+        "aura_sum",
+        "numpy_sum",
+        "rust_add",
+        "rust_sum"
+      ],
+      "repeat": 0,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.130639042,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.177170333,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.126865542,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.177579083,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "rust_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.123815125,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "rust_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.878861416,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "rust_sum",
+        "rust_add",
+        "numpy_sum",
+        "aura_sum",
+        "numpy_add",
+        "aura_add"
+      ],
+      "repeat": 1,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.128874791,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.176809917,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.126145833,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.1773015,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "rust_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.128730333,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "rust_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.880514583,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "aura_add",
+        "numpy_add",
+        "aura_sum",
+        "numpy_sum",
+        "rust_add",
+        "rust_sum"
+      ],
+      "repeat": 2,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.10927825,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.175805375,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.127152708,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.175509375,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "rust_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.12517425,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "rust_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.880543584,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "rust_sum",
+        "rust_add",
+        "numpy_sum",
+        "aura_sum",
+        "numpy_add",
+        "aura_add"
+      ],
+      "repeat": 3,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.126350084,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.176185708,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.130758333,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.176202583,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "rust_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.127032084,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "rust_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.878909875,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "aura_add",
+        "numpy_add",
+        "aura_sum",
+        "numpy_sum",
+        "rust_add",
+        "rust_sum"
+      ],
+      "repeat": 4,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.128488834,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.179072208,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.125694,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.176002709,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "rust_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.123275667,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "rust_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.878482291,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "rust_sum",
+        "rust_add",
+        "numpy_sum",
+        "aura_sum",
+        "numpy_add",
+        "aura_add"
+      ],
+      "repeat": 5,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.127259875,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.177177125,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.124730542,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.177047875,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "rust_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.127202917,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "rust_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.87910825,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "aura_add",
+        "numpy_add",
+        "aura_sum",
+        "numpy_sum",
+        "rust_add",
+        "rust_sum"
+      ],
+      "repeat": 6,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.129231541,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.178476625,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.122975334,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.173412375,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "rust_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.12395275,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "rust_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.88050975,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "rust_sum",
+        "rust_add",
+        "numpy_sum",
+        "aura_sum",
+        "numpy_add",
+        "aura_add"
+      ],
+      "repeat": 7,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.127730042,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.18008325,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.129895875,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.177196583,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "rust_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.131394,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "rust_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.879787291,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "aura_add",
+        "numpy_add",
+        "aura_sum",
+        "numpy_sum",
+        "rust_add",
+        "rust_sum"
+      ],
+      "repeat": 8,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.1270155,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.191046417,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.12920925,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.174691791,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "rust_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.125442292,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "rust_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.879204209,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "rust_sum",
+        "rust_add",
+        "numpy_sum",
+        "aura_sum",
+        "numpy_add",
+        "aura_add"
+      ],
+      "repeat": 9,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.127263875,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.179722416,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.126845375,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.176391625,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "rust_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.131101375,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "rust_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.879285417,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "aura_add",
+        "numpy_add",
+        "aura_sum",
+        "numpy_sum",
+        "rust_add",
+        "rust_sum"
+      ],
+      "repeat": 10,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.130360833,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.177439917,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.125440333,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.174402708,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "rust_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.126902166,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "rust_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.879645,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    }
+  ],
+  "parameters": {
+    "add_iterations": 512,
+    "build_timeout_seconds": 1800.0,
+    "competing_cpu_percent": 50.0,
+    "completion_timeout_seconds": 120.0,
+    "dtype": "float64",
+    "elements": 1000000,
+    "pairs": 11,
+    "quiet_process_sample_interval_seconds": 0.25,
+    "ready_timeout_seconds": 30.0,
+    "single_thread_environment": {
+      "AURA_WORKERS": "1",
+      "MKL_NUM_THREADS": "1",
+      "NUMEXPR_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "VECLIB_MAXIMUM_THREADS": "1"
+    },
+    "sum_iterations": 1024
+  },
+  "performance_gate": null,
+  "quiet_process_checks": {
+    "after_timing": [],
+    "before_build": [],
+    "before_timing": []
+  },
+  "repository": {
+    "branch": null,
+    "commit": "d9fc79921ba9fed1116634ec9994bcb599aa9f90",
+    "detached": true,
+    "dirty_files": [],
+    "root": "/private/tmp/aura-items-6-7-after"
+  },
+  "runner_command": [
+    "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+    "/private/tmp/aura-items-6-7-after/scripts/bench-numeric-arrays.py",
+    "--label",
+    "items-6-7-after",
+    "--aura",
+    "target/release/aura",
+    "--python",
+    "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+    "--pairs",
+    "11",
+    "--raw-json",
+    "/Users/johnolafenwa/source2/Aurora/work/2026-09-08-pre-batch-1-items-6-7/arrays-after-raw.json",
+    "--summary-json",
+    "/Users/johnolafenwa/source2/Aurora/work/2026-09-08-pre-batch-1-items-6-7/arrays-after-summary.json"
+  ],
+  "rust_build": {
+    "binaries": {
+      "fib30": {
+        "bytes": 376032,
+        "path": "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/fib30",
+        "sha256": "b53fac6499d64c260dfd6750f6f8de16351e1710bbbf2c8f98c2beeb51680530"
+      },
+      "float64_add": {
+        "bytes": 411504,
+        "path": "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_add",
+        "sha256": "716333ea04115ddf5761f6155be859033b3039c78a5829be66df8d67a0414c21"
+      },
+      "float64_sum": {
+        "bytes": 411440,
+        "path": "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_sum",
+        "sha256": "91df9d37fc409d763efce9205464d2281365d26a5336320c1256115684dd61bf"
+      },
+      "int32_loop": {
+        "bytes": 374384,
+        "path": "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/int32_loop",
+        "sha256": "6b2828e83aae29c42892b5afc5368d611ade9d37bfd8a4af59f91156dc8e9ef8"
+      },
+      "int64_loop": {
+        "bytes": 374672,
+        "path": "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/int64_loop",
+        "sha256": "6708684a8b165b19717c8b10b78aff6592d4e22437673f9a7d4ed276efa5da6c"
+      },
+      "retrying_worker": {
+        "bytes": 647200,
+        "path": "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/retrying_worker",
+        "sha256": "10d4cb426a460d87409e1c376bf89b0f52d6137d906049fbb275d2f3575c2bf9"
+      },
+      "startup": {
+        "bytes": 372800,
+        "path": "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/startup",
+        "sha256": "4917fcac66732e5c929a489b4c1c0a5a5dad5a3fb0073bf708e31819ad26cc35"
+      },
+      "tasks_10000": {
+        "bytes": 583936,
+        "path": "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/tasks_10000",
+        "sha256": "e3f4e32d5493d9befb3c341c2914e2f8d9d0f4cfa38f0449ec42f8a9ca68a2ad"
+      },
+      "tcp_fanout": {
+        "bytes": 648400,
+        "path": "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/tcp_fanout",
+        "sha256": "6fc7bec6de220a183801b4da9d8f71530df27eba49f2fd083523b514c47f4d72"
+      }
+    },
+    "command": [
+      "cargo",
+      "+1.95.0",
+      "build",
+      "--release",
+      "--locked",
+      "--manifest-path",
+      "/private/tmp/aura-items-6-7-after/benchmarks/rust_baselines/Cargo.toml",
+      "--target-dir",
+      "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target",
+      "--bins"
+    ],
+    "sources": {
+      "Cargo.lock": "66ec0fa5d32b453c950160d8b2d9e9c03ec4e2962395ef6d936f7fd72482bc2c",
+      "Cargo.toml": "caf487def3eeed0cce06490500b22dd72acafe3342fdc2b2e50b8cdf3c082874",
+      "rust-toolchain.toml": "28ba63ba51f7635afd6b0663f2613a1037ab602a039a889e991b1164b84d4714",
+      "src/bin/fib30.rs": "25649ec59cd0a94d94aacf0c26a1c5c248084a5293c95415012e86f27fc9bc0c",
+      "src/bin/float64_add.rs": "5eceb77794ba5b03e611b3bded9cf11aad29267b11fc313debf66d0272db599b",
+      "src/bin/float64_sum.rs": "17c2ed939b8df2ba20f5447650299a051461471f7cf4a6bd75433b67915126a7",
+      "src/bin/int32_loop.rs": "88b1452987c2b4c618eb5d240314f044a5ba65f2b0cef2520c3e2e775aa1643f",
+      "src/bin/int64_loop.rs": "75eb7f40ec810e63b450df36a57516c15203ea98bebff6bb5d1fb20b23f408ac",
+      "src/bin/retrying_worker.rs": "280e77612f5f8145ea470abb240e03be9f13d4aa73a84f3f9a0d8b407d722634",
+      "src/bin/startup.rs": "0aac043da872bcbbba039d10660d9612fa90de1c802336b36bb25c84596662ce",
+      "src/bin/tasks_10000.rs": "6fca48624f108e0340e52f52865830163647745f76398cf5bb393728680b7145",
+      "src/bin/tcp_fanout.rs": "9dcdccfb754664c2eb226124eeae5b1ddcb99479b8851619530042f8dc6efbac",
+      "src/lib.rs": "94568d0619c2a3e3cad94337e9df1c4704b2e787b4fa9ce023f1251bad6b5c6d"
+    },
+    "toolchain": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: aarch64-apple-darwin\nrelease: 1.95.0\nLLVM version: 22.1.2\n"
+  },
+  "schema_version": 2,
+  "summaries": {
+    "add": {
+      "aura": {
+        "best_s": 0.10927825,
+        "mad_s": 0.0011447490000000005,
+        "median_per_operation_s": 0.00024947273828125,
+        "median_s": 0.127730042,
+        "p95_s": 0.130639042,
+        "samples_s": [
+          0.130639042,
+          0.128874791,
+          0.10927825,
+          0.126350084,
+          0.128488834,
+          0.127259875,
+          0.129231541,
+          0.127730042,
+          0.1270155,
+          0.127263875,
+          0.130360833
+        ]
+      },
+      "aura_vs_rust": {
+        "paired_median_ratio": 1.0011221752995854,
+        "paired_ratios": [
+          1.0551137593246382,
+          1.0011221752995854,
+          0.8730090254185665,
+          0.99463127755977,
+          1.0422886943292708,
+          1.0004477727503687,
+          1.0425871229157886,
+          0.9721147236555701,
+          1.0125412887066827,
+          0.970728758565652,
+          1.0272545939050401
+        ],
+        "ratio_of_medians": 1.0065237341969402
+      },
+      "dtype": "float64",
+      "elements": 1000000,
+      "iterations_per_observation": 512,
+      "numpy": {
+        "best_s": 0.122975334,
+        "mad_s": 0.001405042000000023,
+        "median_per_operation_s": 0.000247744873046875,
+        "median_s": 0.126845375,
+        "p95_s": 0.130758333,
+        "samples_s": [
+          0.126865542,
+          0.126145833,
+          0.127152708,
+          0.130758333,
+          0.125694,
+          0.124730542,
+          0.122975334,
+          0.129895875,
+          0.12920925,
+          0.126845375,
+          0.125440333
+        ]
+      },
+      "paired_median_ratio": 1.0202783773680708,
+      "paired_ratios": [
+        1.0297440892184895,
+        1.0216333582735149,
+        0.8594252668216865,
+        0.9662870510898911,
+        1.022235222047194,
+        1.0202783773680708,
+        1.0508736735774997,
+        0.9833263912345176,
+        0.9830217263856884,
+        1.0032992925441704,
+        1.0392258206138534
+      ],
+      "ratio_of_medians": 1.0069743733265795,
+      "rust": {
+        "best_s": 0.123275667,
+        "mad_s": 0.0018281669999999917,
+        "median_per_operation_s": 0.00024785579296875,
+        "median_s": 0.126902166,
+        "p95_s": 0.131394,
+        "samples_s": [
+          0.123815125,
+          0.128730333,
+          0.12517425,
+          0.127032084,
+          0.123275667,
+          0.127202917,
+          0.12395275,
+          0.131394,
+          0.125442292,
+          0.131101375,
+          0.126902166
+        ]
+      }
+    },
+    "sum": {
+      "aura": {
+        "best_s": 1.175805375,
+        "mad_s": 0.0012542090000000616,
+        "median_per_operation_s": 0.0011498436689453126,
+        "median_s": 1.177439917,
+        "p95_s": 1.191046417,
+        "samples_s": [
+          1.177170333,
+          1.176809917,
+          1.175805375,
+          1.176185708,
+          1.179072208,
+          1.177177125,
+          1.178476625,
+          1.18008325,
+          1.191046417,
+          1.179722416,
+          1.177439917
+        ]
+      },
+      "aura_vs_rust": {
+        "paired_median_ratio": 1.3390582160956856,
+        "paired_ratios": [
+          1.339426571208128,
+          1.3365024722140235,
+          1.335317633749291,
+          1.338232441636863,
+          1.3421695805134906,
+          1.3390582160956856,
+          1.3384026979826176,
+          1.3413279119532089,
+          1.3546868916320212,
+          1.3416831363188637,
+          1.338539884839907
+        ],
+        "ratio_of_medians": 1.3390872795516864
+      },
+      "dtype": "float64",
+      "elements": 1000000,
+      "iterations_per_observation": 1024,
+      "numpy": {
+        "best_s": 0.173412375,
+        "mad_s": 0.0009939999999999949,
+        "median_per_operation_s": 0.0001720728349609375,
+        "median_s": 0.176202583,
+        "p95_s": 0.177579083,
+        "samples_s": [
+          0.177579083,
+          0.1773015,
+          0.175509375,
+          0.176202583,
+          0.176002709,
+          0.177047875,
+          0.173412375,
+          0.177196583,
+          0.174691791,
+          0.176391625,
+          0.174402708
+        ]
+      },
+      "paired_median_ratio": 6.68808633062936,
+      "paired_ratios": [
+        6.628992069972566,
+        6.637337625457201,
+        6.699387853212969,
+        6.675189931807073,
+        6.699170795149522,
+        6.648919819003758,
+        6.795804653502958,
+        6.659740442060331,
+        6.817987326032966,
+        6.68808633062936,
+        6.751270840358741
+      ],
+      "ratio_of_medians": 6.6823079262124105,
+      "rust": {
+        "best_s": 0.878482291,
+        "mad_s": 0.00042400099999995167,
+        "median_per_operation_s": 0.0008586771650390625,
+        "median_s": 0.879285417,
+        "p95_s": 0.880543584,
+        "samples_s": [
+          0.878861416,
+          0.880514583,
+          0.880543584,
+          0.878909875,
+          0.878482291,
+          0.87910825,
+          0.88050975,
+          0.879787291,
+          0.879204209,
+          0.879285417,
+          0.879645
+        ]
+      }
+    }
+  },
+  "warmups": {
+    "aura_add": {
+      "checksum": 2048.0,
+      "command": [
+        "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_add"
+      ],
+      "done": {
+        "checksum": 2048.0,
+        "iterations": 512,
+        "workload": "add"
+      },
+      "elapsed_s": 0.160788667,
+      "environment": {
+        "AURA_WORKERS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "ready": {
+        "elements": 1000000,
+        "iterations": 512,
+        "workload": "add"
+      },
+      "returncode": 0
+    },
+    "aura_sum": {
+      "checksum": 4096000000.0,
+      "command": [
+        "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/aura_sum"
+      ],
+      "done": {
+        "checksum": 4096000000.0,
+        "iterations": 1024,
+        "workload": "sum"
+      },
+      "elapsed_s": 1.202933375,
+      "environment": {
+        "AURA_WORKERS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "ready": {
+        "elements": 1000000,
+        "iterations": 1024,
+        "workload": "sum"
+      },
+      "returncode": 0
+    },
+    "numpy_add": {
+      "checksum": 2048.0,
+      "command": [
+        "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+        "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+        "--workload",
+        "add"
+      ],
+      "done": {
+        "checksum": 2048.0,
+        "iterations": 512,
+        "workload": "add"
+      },
+      "elapsed_s": 0.128492666,
+      "environment": {
+        "AURA_WORKERS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "ready": {
+        "elements": 1000000,
+        "iterations": 512,
+        "workload": "add"
+      },
+      "returncode": 0
+    },
+    "numpy_sum": {
+      "checksum": 4096000000.0,
+      "command": [
+        "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+        "/private/tmp/aura-items-6-7-after/benchmarks/numeric_arrays/numpy_reference.py",
+        "--workload",
+        "sum"
+      ],
+      "done": {
+        "checksum": 4096000000.0,
+        "iterations": 1024,
+        "workload": "sum"
+      },
+      "elapsed_s": 0.177775959,
+      "environment": {
+        "AURA_WORKERS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "ready": {
+        "elements": 1000000,
+        "iterations": 1024,
+        "workload": "sum"
+      },
+      "returncode": 0
+    },
+    "rust_add": {
+      "checksum": 2048.0,
+      "command": [
+        "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_add"
+      ],
+      "done": {
+        "checksum": 2048.0,
+        "iterations": 512,
+        "workload": "add"
+      },
+      "elapsed_s": 0.156345083,
+      "environment": {
+        "AURA_WORKERS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "ready": {
+        "elements": 1000000,
+        "iterations": 512,
+        "workload": "add"
+      },
+      "returncode": 0
+    },
+    "rust_sum": {
+      "checksum": 4096000000.0,
+      "command": [
+        "/private/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-numeric-array-bench-9nf4nqs3/rust-target/release/float64_sum"
+      ],
+      "done": {
+        "checksum": 4096000000.0,
+        "iterations": 1024,
+        "workload": "sum"
+      },
+      "elapsed_s": 0.902491666,
+      "environment": {
+        "AURA_WORKERS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "ready": {
+        "elements": 1000000,
+        "iterations": 1024,
+        "workload": "sum"
+      },
+      "returncode": 0
+    }
+  }
+}

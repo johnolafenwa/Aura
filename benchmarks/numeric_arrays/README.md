@@ -15,8 +15,9 @@ unmeasured kernel warmup, emits `READY`, waits for the host's exact `GO` line,
 then reports a checksum in `DONE`. The host owns and verifies the whole
 process group.
 
-Run the benchmark only from a clean detached checkout on the maintained,
-post-reboot Mac14,9 baseline:
+Run the benchmark from a clean detached checkout on the maintained Mac14,9
+baseline. Release-session measurements use a post-reboot host; the explicitly
+authorized item 7 session below uses a quiet host and records that distinction:
 
 ```bash
 python3 scripts/bench-numeric-arrays.py \
@@ -127,3 +128,54 @@ fallible allocation retains precedence over divisor validation.
 contains the profile commands, binary hashes, full compressed disassemblies,
 selected kernel instructions, raw diagnostic timings and pre-change corpus
 identity. No existing fixture was changed.
+
+## Item 7 clean-detached publication
+
+The item 7 measurements are labeled **quiet host, not post-reboot; contractual re-measure scheduled with the 0.3.4 release session.**
+Both runs are contractual under the runner's qualification rules: clean detached
+sources, 11 rotating pairs, excluded warmups, exact protocol/checksum validation,
+three empty host inventories and successful input/hash rechecks. No override
+was used. The host is Mac14,9 / Apple M2 Pro / 16 GiB, with Xcode CPython 3.9.6,
+NumPy 2.0.2 and Rust 1.95.0. Measurements are single-threaded, per operation;
+ratios are ratios of medians.
+
+Before is merge base `a368dce7e7b335c1c0cb800ba5240501a21f02bc`;
+after is implementation head `d9fc79921ba9fed1116634ec9994bcb599aa9f90`.
+Each clean checkout used its own unchanged runner in the same measurement
+session, after the full local gates. Later publication edits do not change
+compiler/runtime sources.
+
+| Workload (one million `float64` elements) | Aura before | Aura after | Change in time | Before Aura / Rust | After Aura / Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fresh owned addition | 1.244818 ms | 0.249473 ms | -79.9591% | 5.039359 | 1.006524 |
+| Existing-array sum | 1.149271 ms | 1.149844 ms | +0.0498% | 1.338990 | 1.339087 |
+
+| Control | Before median | After median | Drift |
+| --- | ---: | ---: | ---: |
+| NumPy add | 0.253398 ms | 0.247745 ms | -2.2310% |
+| Rust add | 0.247019 ms | 0.247856 ms | +0.3387% |
+| NumPy sum | 0.173397 ms | 0.172073 ms | -0.7639% |
+| Rust sum | 0.858312 ms | 0.858677 ms | +0.0425% |
+
+Addition meets the task's 1.5x Rust target at 1.006524x, with 79.9591% less
+Aura time; its after Aura/NumPy ratio is 1.006974. The sum ratio is 6.682308
+against NumPy. That gap is chiefly the deterministic reduction-order policy:
+Aura remains within 1.34x of Rust under the same left-to-right order.
+Addition allocates a fresh owned result; sum reuses its input. These exact
+workloads do not establish a general language or Array-API performance ranking.
+
+[Before raw](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/arrays-before-raw.json),
+[after raw](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/arrays-after-raw.json),
+[comparison and controls](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/array-publication-comparison.json),
+and [SHA256SUMS](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/SHA256SUMS)
+retain all observations and source/binary identities.
+
+Reproduce after building each pinned release compiler, using each checkout's own runner:
+
+```bash
+python3 scripts/bench-numeric-arrays.py --label items-6-7-after --aura target/release/aura --python /Applications/Xcode.app/Contents/Developer/usr/bin/python3 --pairs 11 --raw-json /tmp/arrays-after-raw.json --summary-json /tmp/arrays-after-summary.json
+```
+
+Use `items-6-7-before` and distinct output paths in the before checkout. Complete
+both compiler builds before either measurement, and keep all other build/test
+work stopped until both runs finish. Never enable the competing-process override.

@@ -1,0 +1,122 @@
+Building d9fc79921ba9fed1116634ec9994bcb599aa9f90 (release profile)
+{
+  "schema_version": 2,
+  "generated_at": "2026-09-07T17:03:14.030063+00:00",
+  "host": "macOS-26.5.2-arm64-arm-64bit",
+  "machine": "arm64",
+  "runner_sha256": "6374f88f2fd16568ef63901df929d992e704906ea40810d2281e894f5665be6c",
+  "measurements": [
+    {
+      "ref": "d9fc799",
+      "commit": "d9fc79921ba9fed1116634ec9994bcb599aa9f90",
+      "profile": "release",
+      "profile_overrides": {
+        "CARGO_PROFILE_RELEASE_PANIC": "unwind"
+      },
+      "build_command": [
+        "cargo",
+        "+1.95.0",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "aura"
+      ],
+      "link_query_command": [
+        "cargo",
+        "+1.95.0",
+        "rustc",
+        "--release",
+        "--locked",
+        "-p",
+        "aura-compiler",
+        "--lib",
+        "--",
+        "--print",
+        "native-static-libs"
+      ],
+      "program_builds": [
+        [
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-r64ep0wr/checkout/target-measured/installed/bin/aura",
+          "build",
+          "--backend",
+          "direct",
+          "-o",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-r64ep0wr/checkout/target-measured/hello_world",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-r64ep0wr/checkout/examples/basics/hello_world.au"
+        ],
+        [
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-r64ep0wr/checkout/target-measured/installed/bin/aura",
+          "build",
+          "--backend",
+          "direct",
+          "-o",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-r64ep0wr/checkout/target-measured/reference_agent",
+          "/var/folders/v9/fdd3rcn92b16ngnbyc64fw3w0000gn/T/aura-size-r64ep0wr/checkout/examples/agents/tool_runner/src/main.au"
+        ]
+      ],
+      "subjects": {
+        "aura": {
+          "bytes": 10897408,
+          "sha256": "bee8d7967ab365b9e888878e7330fbf8a9681d403b9a12b09ef7766460718743"
+        },
+        "hello_world": {
+          "bytes": 1586968,
+          "sha256": "3e2b4b58cf22575c14b5b4f51f621c8b4edee38e2ad83557e7ec5c669c651de5"
+        },
+        "reference_agent": {
+          "bytes": 3199712,
+          "sha256": "61402c2730f1e4a0ba0f9aafaa41147bcd12cc2faf67f3715c603e04798dd951"
+        }
+      },
+      "sources": {
+        "hello_world": {
+          "path": "examples/basics/hello_world.au",
+          "bytes": 23,
+          "sha256": "51d2693342000ac090e8817796032592050e0f0b88d4d3a7ab1112058a169673"
+        },
+        "reference_agent": {
+          "path": "examples/agents/tool_runner/src/main.au",
+          "bytes": 4638,
+          "sha256": "6cbd00924bedaea3432cf4c89bd817eea6ab1c5b82509c70b7224ba7cc8720bf",
+          "package_files": {
+            "examples/agents/tool_runner/Aura.toml": {
+              "bytes": 66,
+              "sha256": "42cf9f584113408197cae0d66f8f1efee826b45bdd34c95447a3aeb071f254f2"
+            },
+            "examples/agents/tool_runner/Aura.lock": {
+              "bytes": 91,
+              "sha256": "d9a047c28931b0bfb67446f65713e6e3b1835916a36dc751d918f56d019201fb"
+            },
+            "examples/agents/tool_runner/stdout.txt": {
+              "bytes": 277,
+              "sha256": "820e7362b466bd244b166b01d5999c74d4c94c160dd2b195f9248b7a3531d4bc"
+            },
+            "examples/agents/tool_runner/src/main.au": {
+              "bytes": 4638,
+              "sha256": "6cbd00924bedaea3432cf4c89bd817eea6ab1c5b82509c70b7224ba7cc8720bf"
+            }
+          }
+        }
+      },
+      "standalone_verification": {
+        "hello_world": {
+          "returncode": 0,
+          "stdout": "Hello, world!\n",
+          "cargo_unavailable": true
+        },
+        "reference_agent": {
+          "returncode": 0,
+          "stdout": "tool-runner version 0\nrequest {\"tool\":\"double\",\"value\":21}\nresult {\"tool\":\"double\",\"value\":42}\nresult {\"tool\":\"increment\",\"value\":43}\nrejected invalid request\nunknown tool missing\nready after 3 attempts\nstream started\ntoken tools\ntoken ready\nstream finished\nclosed tool-runner\n",
+          "cargo_unavailable": true
+        }
+      },
+      "toolchain": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: aarch64-apple-darwin\nrelease: 1.95.0\nLLVM version: 22.1.2\n",
+      "linker": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.5.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+      "hello_before_input_policy": "identical single-print bytes staged outside the before source tree",
+      "reference_agent": "maintained tool_runner package, reference agent version 0",
+      "omitted_subjects": {}
+    }
+  ],
+  "process_helper_sha256": "bbf4bca940b38bc84101ba4eaf93e568b16edafd91dc298d071ea96be52330de"
+}

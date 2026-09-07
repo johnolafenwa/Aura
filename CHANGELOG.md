@@ -16,7 +16,9 @@ in this file.
 - Vectorize shared float32/float64 Array elementwise kernels and scalar
   broadcasts while retaining exact reductions, division traps and integer modes.
   Both runtime paths pass the frozen 1,008-case pre-change bit/diagnostic corpus
-  in debug and release; publication measurements follow the local gates.
+  in debug and release. Quiet-host clean-detached addition falls from 1.244818
+  to 0.249473 ms (79.96% less time), reaching 1.0065x Rust; sequential sum
+  remains within 1.34x Rust. A post-reboot re-measure accompanies 0.3.4.
 - Check every Aura source under `benchmarks/` in the CLI regression, repairing
   stale int32 task/Queue arguments in three scalable-runtime inputs.
 
@@ -29,7 +31,8 @@ in this file.
   and provenance.
 - Add pinned Rust baseline programs and lanes to all three timing harnesses,
   protocol smoke checks, and clean-ref executable-size tooling.
-- Publish post-reboot foundations measurements: fib/int32/int64 medians improve
+- Publish the earlier items 1–4 post-reboot foundations measurements:
+  fib/int32/int64 medians improve
   by 19.06%/20.56%/15.69%; Array add becomes 7.17% slower and sum is essentially
   unchanged. All CPython/NumPy controls drift by less than 5%. The comparison
   includes profile/link tuning alongside Cranelift speed.

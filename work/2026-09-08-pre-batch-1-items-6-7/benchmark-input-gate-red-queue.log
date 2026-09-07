@@ -1,0 +1,42 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.38
+   Compiling rustls-webpki v0.103.13
+   Compiling rcgen v0.13.2
+   Compiling tungstenite v0.24.0
+   Compiling aura-compiler v0.3.3 (/Users/johnolafenwa/source2/Aurora/crates/aura-compiler)
+   Compiling aura v0.3.3 (/Users/johnolafenwa/source2/Aurora/crates/aura)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.53s
+     Running tests/cli.rs (target/debug/deps/cli-2705f31dbe382fa0)
+
+running 1 test
+
+thread 'all_benchmark_inputs_pass_checking' (554592) panicked at crates/aura/tests/cli.rs:133:5:
+scalable_runtime/1000_timers.au: error[AU2999]: `put` expects `int32`, found `int64`
+ --> /Users/johnolafenwa/source2/Aurora/benchmarks/scalable_runtime/1000_timers.au:64:25
+   |
+64 |             release.put(token)
+   |                         ^
+
+scalable_runtime/100k_sleepers_1000_timers.au: error[AU2999]: `put` expects `int32`, found `int64`
+ --> /Users/johnolafenwa/source2/Aurora/benchmarks/scalable_runtime/100k_sleepers_1000_timers.au:93:31
+   |
+93 |             timer_release.put(token)
+   |                               ^
+
+scalable_runtime/cpu_scaling.au: error[AU2999]: `put` expects `int32`, found `int64`
+ --> /Users/johnolafenwa/source2/Aurora/benchmarks/scalable_runtime/cpu_scaling.au:100:25
+    |
+100 |             release.put(token)
+    |                         ^
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test all_benchmark_inputs_pass_checking ... FAILED
+
+failures:
+
+failures:
+    all_benchmark_inputs_pass_checking
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 376 filtered out; finished in 1.50s
+
+error: test failed, to rerun pass `-p aura --test cli`

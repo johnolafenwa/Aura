@@ -1,0 +1,62 @@
+
+> aura-monorepo@0.3.3 check:reference
+> bash scripts/check-reference.sh
+
+Build-derived LLM documentation is current.
+...........
+----------------------------------------------------------------------
+Ran 11 tests in 0.005s
+
+OK
+...........
+----------------------------------------------------------------------
+Ran 11 tests in 1.066s
+
+OK
+reference-integrity failures:
+  - stale sha256 for docs/manual/performance.md#bash-4: expected 95c68c33f6dfb963d1c6a19843b5fe9c0d2642ea23fef039265dc62fc400ec79, found '39533cfa8d2d906de15f8e166531d5af1b99847a02e1d06e0a5d841ff077f2ed'
+Manual reference inventory
+  pages: 39 (28 feature, 11 structural)
+  all fenced blocks: 274
+  fenced-block languages: aura=211, bash=20, ebnf=22, json=2, text=13, toml=6
+  verified fenced blocks: 132; illustrative fenced blocks: 142
+  verified modes: check=86, check-fail=4, command=3, package-check=2, run=37
+  Aura blocks: 211
+  verified Aura blocks: 129 (check=86, run=37, expected-rejection=4, package-check=2)
+  illustrative Aura blocks: 82
+  per-page fenced blocks:
+    docs/manual/assertions.md: total=2, verified=1, illustrative=1, aura=1
+    docs/manual/bytes.md: total=1, verified=1, illustrative=0, aura=1
+    docs/manual/classes.md: total=16, verified=10, illustrative=6, aura=16
+    docs/manual/cli-and-tooling.md: total=13, verified=3, illustrative=10, aura=0
+    docs/manual/closures.md: total=4, verified=3, illustrative=1, aura=3
+    docs/manual/collections.md: total=11, verified=8, illustrative=3, aura=11
+    docs/manual/concurrency.md: total=7, verified=3, illustrative=4, aura=7
+    docs/manual/control-plane.md: total=3, verified=2, illustrative=1, aura=2
+    docs/manual/diagnostics.md: total=2, verified=0, illustrative=2, aura=0
+    docs/manual/enums-and-match.md: total=13, verified=5, illustrative=8, aura=13
+    docs/manual/expressions.md: total=22, verified=9, illustrative=13, aura=20
+    docs/manual/ffi.md: total=3, verified=1, illustrative=2, aura=1
+    docs/manual/filesystem.md: total=6, verified=2, illustrative=4, aura=6
+    docs/manual/functions.md: total=19, verified=15, illustrative=4, aura=19
+    docs/manual/generics-and-traits.md: total=26, verified=14, illustrative=12, aura=26
+    docs/manual/grammar.md: total=19, verified=0, illustrative=19, aura=0
+    docs/manual/io.md: total=3, verified=2, illustrative=1, aura=3
+    docs/manual/json.md: total=1, verified=1, illustrative=0, aura=1
+    docs/manual/lexical-structure.md: total=16, verified=8, illustrative=8, aura=10
+    docs/manual/math.md: total=2, verified=1, illustrative=1, aura=1
+    docs/manual/names-and-scopes.md: total=6, verified=1, illustrative=5, aura=6
+    docs/manual/network.md: total=3, verified=3, illustrative=0, aura=3
+    docs/manual/numeric-arrays.md: total=2, verified=1, illustrative=1, aura=1
+    docs/manual/ownership-and-borrowing.md: total=13, verified=11, illustrative=2, aura=13
+    docs/manual/packages.md: total=10, verified=1, illustrative=9, aura=3
+    docs/manual/performance.md: total=4, verified=0, illustrative=4, aura=0
+    docs/manual/process.md: total=7, verified=1, illustrative=6, aura=7
+    docs/manual/randomness.md: total=1, verified=1, illustrative=0, aura=1
+    docs/manual/statements.md: total=22, verified=11, illustrative=11, aura=22
+    docs/manual/static-semantics.md: total=1, verified=0, illustrative=1, aura=0
+    docs/manual/tuples.md: total=5, verified=3, illustrative=2, aura=3
+    docs/manual/types.md: total=11, verified=10, illustrative=1, aura=11
+  feature pages missing normative sections: none
+  feature pages without a verified executable example: none
+reference check failed: python3 scripts/reference_integrity.py

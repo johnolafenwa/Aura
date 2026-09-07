@@ -1,0 +1,10 @@
+   Compiling aura-compiler v0.3.3 (/Users/johnolafenwa/source2/Aurora/crates/aura-compiler)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.66s
+     Running unittests src/lib.rs (target/debug/deps/aura_compiler-a1af07a7215d2a39)
+
+running 2 tests
+test mir_runtime::tests::mir_array_kernels_match_frozen_pre_vectorization_bits ... ok
+test native_runtime::tests::direct_array_kernels_match_frozen_pre_vectorization_bits ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1882 filtered out; finished in 60.89s
+

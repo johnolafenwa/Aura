@@ -2,7 +2,7 @@
 
 - Status: Accepted direction; detailed design pending
 - Date: 2026-09-06
-- Implementation: Pre-Batch-1 items 1–4 delivered; measurements published with grades and provenance
+- Implementation: Pre-Batch-1 items 1–7 delivered; measurements published with grades and provenance
 - Roadmap: Pre-Batch-1 foundations; incremental boundary work from Batch 1;
   release-backend decision in Batch 7
 - Related: ADR-0031, ADR-0038, ADR-0041, and ADR-0058
@@ -144,7 +144,8 @@ The [executable-size table](../../docs/manual/performance.md#executable-size)
 records before/default-after/tuned-after builds with hashes and clean-ref
 provenance. Tuned executable reductions from v0.3.3-preview are 29.35% for the
 compiler, 93.29% for hello world, and 84.54% for the historical retrying-worker example. The new reference-agent
-size is measured separately; it has no equivalent subject at the older tag.
+size is 3,199,712 bytes under the tuned release profile, measured separately
+at clean implementation ref d9fc799; it has no equivalent subject at the older tag.
 No flag or link step was reverted. Cargo 1.95's reference lists `strip="none"`;
 the explicit no-strip size control is retained under the session's conditional
 decision, with omitted-setting auto-stripping distinguished in the chapter.
@@ -204,3 +205,28 @@ would weaken the existing diagnostic boundary and is not adopted. Preserve
 ADR-0036 frames, ancestry, depth, arithmetic and cancellation unless a separate
 approved decision explicitly changes the contract. Measure these runtime
 options independently of the LLVM/C/Cranelift emitter comparison.
+
+## Item 7 Array outcome and task follow-up
+
+Shared float32/float64 elementwise loops and scalar broadcasts vectorize while
+both runtimes retain all 1,008 frozen pre-change bit/diagnostic cases. Integer
+kernels and sequential reductions are unchanged. The old default/tuned profile
+comparison identifies different scalar-loop selection, not a lost out-of-line
+kernel boundary; no inlining attribute was added. It does not isolate LTO from
+codegen-unit changes.
+
+The later contractual clean-detached comparison measures Array addition at
+1.244818 ms before and 0.249473 ms after: 79.96% less time, reducing Aura/Rust
+from 5.039359 to 1.006524 and meeting the 1.5x target. Sum remains within 1.34x
+Rust under deterministic order. The label is **quiet host, not post-reboot;
+contractual re-measure scheduled with the 0.3.4 release session.** Exact refs,
+controls, instructions and raw reports are in the
+[Performance chapter](../../docs/manual/performance.md#numeric-arrays) and
+[kernel evidence](../../benchmarks/numeric_arrays/README.md#pre-batch-1-item-7-kernel-investigation).
+
+The CLI gate now checks all 15 Aura files under benchmarks. Task scheduling is
+unchanged: [ADR-0032](0032-guarded-lightweight-task-stacks.md#future-extension-task-stack-reuse)
+scopes guarded-stack reuse for Batch 8 against the 9.869 microsecond Aura versus
+0.340 microsecond tokio spawn/join baseline, preserving stack bounds, guards,
+pinning, cleanup and TSan. These runtime investigations remain relevant even
+if Batch 7 later chooses a different emitter.

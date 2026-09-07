@@ -14,8 +14,11 @@ Last updated: 2026-09-07
 - Attribution complete; the optional frame-storage patch improved 11.10% and was
   reverted below the 20% gate. Shared float kernels vectorize and both runtimes
   match 1,008 pre-change corpus cases in debug/release. Task-stack reuse is scoped.
-- Remaining: full local gates, contractual quiet Array measurements, final size
-  row, publication, green branch/main CI, merge and cleanup. No current blocker.
+- All local gates pass; compiler coverage is 96.310927% lines / 97.220630%
+  functions / 94.819857% regions, LSP 100%. Contractual clean-detached Array
+  addition improves 79.96% to 1.0065x Rust; sum remains within 1.34x Rust.
+- Remaining: final size row, publication gates, green branch/main CI, merge and
+  cleanup. No current blocker.
 - Work note: `work/2026-09-08-pre-batch-1-items-6-7.md`.
 
 ## Pre-Batch-1 measurement publication (complete)

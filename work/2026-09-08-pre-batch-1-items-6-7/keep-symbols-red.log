@@ -1,0 +1,21 @@
+   Compiling aura v0.3.3 (/Users/johnolafenwa/source2/Aurora/crates/aura)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.33s
+     Running tests/cli.rs (target/debug/deps/cli-2705f31dbe382fa0)
+
+running 1 test
+
+thread 'native_keep_symbols_skips_strip_and_separates_cached_programs' (560422) panicked at crates/aura/tests/cli.rs:4883:9:
+assertion `left == right` failed: keep=1 must select its own cache policy
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test native_keep_symbols_skips_strip_and_separates_cached_programs ... FAILED
+
+failures:
+
+failures:
+    native_keep_symbols_skips_strip_and_separates_cached_programs
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 377 filtered out; finished in 38.72s
+
+error: test failed, to rerun pass `-p aura --test cli`

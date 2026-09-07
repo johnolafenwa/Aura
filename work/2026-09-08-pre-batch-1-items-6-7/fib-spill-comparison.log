@@ -1,0 +1,357 @@
+{
+  "status": "diagnostic, quiet host without profiler; not contractual release measurement",
+  "logical_calls": 2692537,
+  "warmups_per_lane": 2,
+  "pairs": [
+    {
+      "before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-before"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.0898615,
+        "whole_process_elapsed_s": 0.095400167,
+        "returncode": 0
+      },
+      "after": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-spill"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.080506292,
+        "whole_process_elapsed_s": 0.087071167,
+        "returncode": 0
+      }
+    },
+    {
+      "after": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-spill"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.079863708,
+        "whole_process_elapsed_s": 0.085260292,
+        "returncode": 0
+      },
+      "before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-before"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.091045791,
+        "whole_process_elapsed_s": 0.096965334,
+        "returncode": 0
+      }
+    },
+    {
+      "before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-before"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.099420584,
+        "whole_process_elapsed_s": 0.105175959,
+        "returncode": 0
+      },
+      "after": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-spill"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.079774666,
+        "whole_process_elapsed_s": 0.085573709,
+        "returncode": 0
+      }
+    },
+    {
+      "after": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-spill"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.079403917,
+        "whole_process_elapsed_s": 0.085437291,
+        "returncode": 0
+      },
+      "before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-before"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.089574375,
+        "whole_process_elapsed_s": 0.095909167,
+        "returncode": 0
+      }
+    },
+    {
+      "before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-before"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.091165375,
+        "whole_process_elapsed_s": 0.097375833,
+        "returncode": 0
+      },
+      "after": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-spill"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.082059209,
+        "whole_process_elapsed_s": 0.0881585,
+        "returncode": 0
+      }
+    },
+    {
+      "after": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-spill"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.081247291,
+        "whole_process_elapsed_s": 0.08733875,
+        "returncode": 0
+      },
+      "before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-before"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.09032425,
+        "whole_process_elapsed_s": 0.096540208,
+        "returncode": 0
+      }
+    },
+    {
+      "before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-before"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.092029833,
+        "whole_process_elapsed_s": 0.097927833,
+        "returncode": 0
+      },
+      "after": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-spill"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.081045542,
+        "whole_process_elapsed_s": 0.086637541,
+        "returncode": 0
+      }
+    },
+    {
+      "after": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-spill"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.0825185,
+        "whole_process_elapsed_s": 0.088887916,
+        "returncode": 0
+      },
+      "before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-before"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.092341916,
+        "whole_process_elapsed_s": 0.097708125,
+        "returncode": 0
+      }
+    },
+    {
+      "before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-before"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.090323917,
+        "whole_process_elapsed_s": 0.096219209,
+        "returncode": 0
+      },
+      "after": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-spill"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.08028225,
+        "whole_process_elapsed_s": 0.0867915,
+        "returncode": 0
+      }
+    },
+    {
+      "after": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-spill"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.082663458,
+        "whole_process_elapsed_s": 0.089203417,
+        "returncode": 0
+      },
+      "before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-before"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.092413125,
+        "whole_process_elapsed_s": 0.098592042,
+        "returncode": 0
+      }
+    },
+    {
+      "before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-before"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.092050542,
+        "whole_process_elapsed_s": 0.098205542,
+        "returncode": 0
+      },
+      "after": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/fib30-spill"
+        ],
+        "environment": {
+          "PYTHONHASHSEED": "0"
+        },
+        "ready": "READY release-performance fib30 30\n",
+        "go": "GO release-performance fib30\n",
+        "done": "DONE release-performance fib30 832040\n",
+        "protocol_elapsed_s": 0.081216084,
+        "whole_process_elapsed_s": 0.087587125,
+        "returncode": 0
+      }
+    }
+  ],
+  "binaries": {
+    "before": {
+      "path": "/private/tmp/aura-items-6-7-profile/fib30-before",
+      "sha256": "fe44951106cf10e85881760545e39fa6729d6581042495a093fafa23195d7f6b"
+    },
+    "after": {
+      "path": "/private/tmp/aura-items-6-7-profile/fib30-spill",
+      "sha256": "023b4dee51c466a324fdf5365d444a564ed1bdfde016930b2e413e2bba7c0146"
+    }
+  },
+  "median_seconds": {
+    "before": 0.091165375,
+    "after": 0.081045542
+  },
+  "nanoseconds_per_logical_call": {
+    "before": 33.858541219674976,
+    "after": 30.10006622007423
+  },
+  "improvement_percent": 11.10052253939613,
+  "eligible_20_percent": false
+}

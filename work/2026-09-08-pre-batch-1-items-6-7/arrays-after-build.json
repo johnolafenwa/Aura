@@ -1,0 +1,16 @@
+{
+  "checkout": "/private/tmp/aura-items-6-7-after",
+  "commit": "d9fc79921ba9fed1116634ec9994bcb599aa9f90",
+  "command": [
+    "cargo",
+    "+1.95.0",
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "aura"
+  ],
+  "release_overrides": {},
+  "generated_at": "2026-09-07T16:51:44.665525+00:00",
+  "returncode": 0
+}

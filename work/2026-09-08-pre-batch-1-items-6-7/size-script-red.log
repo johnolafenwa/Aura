@@ -1,0 +1,40 @@
+usage: bench-binary-size.py [-h] [--before-ref BEFORE_REF] --after-ref
+                            AFTER_REF --output OUTPUT
+bench-binary-size.py: error: unrecognized arguments: --after-only
+E..E.E..
+======================================================================
+ERROR: test_after_only_measures_one_release_profile_at_requested_ref (scripts.test_bench_binary_size.BinarySizeTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/johnolafenwa/source2/Aurora/scripts/test_bench_binary_size.py", line 31, in test_after_only_measures_one_release_profile_at_requested_ref
+    bench.main()
+  File "/Users/johnolafenwa/source2/Aurora/scripts/bench-binary-size.py", line 139, in main
+    args = parser.parse_args()
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/argparse.py", line 1821, in parse_args
+    self.error(msg % ' '.join(argv))
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/argparse.py", line 2575, in error
+    self.exit(2, _('%(prog)s: error: %(message)s\n') % args)
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/argparse.py", line 2562, in exit
+    _sys.exit(status)
+SystemExit: 2
+
+======================================================================
+ERROR: test_default_reference_subject_is_the_maintained_package (scripts.test_bench_binary_size.BinarySizeTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/johnolafenwa/source2/Aurora/scripts/test_bench_binary_size.py", line 16, in test_default_reference_subject_is_the_maintained_package
+    self.assertEqual(bench.SUBJECTS['reference_agent'], 'examples/agents/tool_runner/src/main.au')
+KeyError: 'reference_agent'
+
+======================================================================
+ERROR: test_reference_stdout_is_pinned_exactly (scripts.test_bench_binary_size.BinarySizeTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/johnolafenwa/source2/Aurora/scripts/test_bench_binary_size.py", line 22, in test_reference_stdout_is_pinned_exactly
+    bench.verify_subject_stdout('reference_agent', source, stdout)
+AttributeError: module 'size_bench' has no attribute 'verify_subject_stdout'
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.005s
+
+FAILED (errors=3)

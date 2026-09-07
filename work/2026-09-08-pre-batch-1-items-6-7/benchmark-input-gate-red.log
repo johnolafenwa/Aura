@@ -1,0 +1,43 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.38
+   Compiling rustls-webpki v0.103.13
+   Compiling rcgen v0.13.2
+   Compiling tungstenite v0.24.0
+   Compiling aura-compiler v0.3.3 (/Users/johnolafenwa/source2/Aurora/crates/aura-compiler)
+   Compiling aura v0.3.3 (/Users/johnolafenwa/source2/Aurora/crates/aura)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 28.61s
+     Running tests/cli.rs (target/debug/deps/cli-2705f31dbe382fa0)
+
+running 1 test
+
+thread 'all_benchmark_inputs_pass_checking' (550585) panicked at crates/aura/tests/cli.rs:117:5:
+scalable_runtime/1000_timers.au: error[AU2002]: argument type mismatch for timer: expected `int32`, found `int64`
+ --> /Users/johnolafenwa/source2/Aurora/benchmarks/scalable_runtime/1000_timers.au:44:17
+   |
+44 |                 index,
+   |                 ^
+
+scalable_runtime/100k_sleepers_1000_timers.au: error[AU2002]: argument type mismatch for timer: expected `int32`, found `int64`
+ --> /Users/johnolafenwa/source2/Aurora/benchmarks/scalable_runtime/100k_sleepers_1000_timers.au:73:17
+   |
+73 |                 index,
+   |                 ^
+
+scalable_runtime/cpu_scaling.au: error[AU2002]: argument type mismatch for cpu_worker: expected `int32`, found `int64`
+ --> /Users/johnolafenwa/source2/Aurora/benchmarks/scalable_runtime/cpu_scaling.au:74:17
+   |
+74 |                 index,
+   |                 ^
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test all_benchmark_inputs_pass_checking ... FAILED
+
+failures:
+
+failures:
+    all_benchmark_inputs_pass_checking
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 376 filtered out; finished in 1.65s
+
+error: test failed, to rerun pass `-p aura --test cli`

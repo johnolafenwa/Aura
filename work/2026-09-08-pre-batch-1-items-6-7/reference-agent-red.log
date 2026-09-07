@@ -1,0 +1,19 @@
+   Compiling aura v0.3.3 (/Users/johnolafenwa/source2/Aurora/crates/aura)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.18s
+     Running tests/cli.rs (target/debug/deps/cli-2705f31dbe382fa0)
+
+running 1 test
+
+thread 'reference_tool_runner_package_has_pinned_output_on_both_backends' (545143) panicked at crates/aura/tests/cli.rs:60:10:
+reference agent version 0 must exist: Os { code: 2, kind: NotFound, message: "No such file or directory" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test reference_tool_runner_package_has_pinned_output_on_both_backends ... FAILED
+
+failures:
+
+failures:
+    reference_tool_runner_package_has_pinned_output_on_both_backends
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 376 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aura --test cli`
