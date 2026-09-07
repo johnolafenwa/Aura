@@ -99,8 +99,20 @@ diagnostic runs. Do not use it for release evidence.
 The runner builds pinned Rust 1.95.0 references from `benchmarks/rust_baselines/`
 with `--release --locked`, fat LTO, and one codegen unit. Report schema is now 2.
 It records source/lockfile and binary SHA-256 identities and paired Aura/Rust
-samples. Rust timing results are pending the post-reboot measurement session;
-protocol smoke checks are not published as performance evidence.
+samples. Protocol smoke checks are not performance evidence.
+
+The 7 September 2026 session attempted both unchanged pinned runners at
+`50531b45797ae765ec8d885165c13042617ab567` and
+`d3cc6b96104dd597687a98e9624f800a0cb3cf1e`. Both fail before timing:
+`tasks_10000.au:40` and `tcp_fanout.au:62` pass int64 range values to int32
+parameters (`AU2002`). No control-plane, CPython, Rust protocol, or release V6
+medians were collected. This is not a Rust protocol/checksum exclusion.
+[Failure logs and the unapplied proposal](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements) are covered by
+`SHA256SUMS` (`db6f659c3466c16a8001639e6aca33ef6d56423ca5d2eab62e4d137b42c7f999`).
+The source freeze remains in force; repairing inputs requires authorization.
+The reproduction command above currently reproduces the compilation failure.
+Independent Array and standalone integer results are in the
+[Performance chapter](../../docs/manual/performance.md).
 
 See [the Rust baseline contract](../rust_baselines/README.md) for exact workload,
 allocation, arithmetic, scheduling, and protocol equivalence. The integer-loop

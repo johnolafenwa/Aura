@@ -1,0 +1,96 @@
+{
+  "observed_at": "2026-09-07T02:06:06.324474+00:00",
+  "phase": "after-integer retry 2 before invocation",
+  "inventories": [
+    [
+      {
+        "pid": 435,
+        "parent_pid": 1,
+        "command": "/usr/libexec/apf",
+        "arguments": "/usr/libexec/apfsd",
+        "cwd": null,
+        "cpu_percent_samples": [
+          57.1,
+          78.9
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      },
+      {
+        "pid": 19208,
+        "parent_pid": 1,
+        "command": "/System/Library/",
+        "arguments": "/System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          99.0,
+          99.6
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      }
+    ],
+    [
+      {
+        "pid": 435,
+        "parent_pid": 1,
+        "command": "/usr/libexec/apf",
+        "arguments": "/usr/libexec/apfsd",
+        "cwd": null,
+        "cpu_percent_samples": [
+          76.8,
+          67.1
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      },
+      {
+        "pid": 19208,
+        "parent_pid": 1,
+        "command": "/System/Library/",
+        "arguments": "/System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          100.0,
+          99.3
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      }
+    ],
+    [
+      {
+        "pid": 435,
+        "parent_pid": 1,
+        "command": "/usr/libexec/apf",
+        "arguments": "/usr/libexec/apfsd",
+        "cwd": null,
+        "cpu_percent_samples": [
+          66.9,
+          82.6
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      },
+      {
+        "pid": 19208,
+        "parent_pid": 1,
+        "command": "/System/Library/",
+        "arguments": "/System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          99.9,
+          99.8
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      }
+    ]
+  ]
+}

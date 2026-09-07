@@ -1,0 +1,214 @@
+{
+  "schema_version": 2,
+  "commit": "50531b45797ae765ec8d885165c13042617ab567",
+  "aura_sha256": "9f79a72a4675b5d4f6e0df0299babf23028232373ea2ec67884078628e862ffa",
+  "rust_build": {
+    "command": [
+      "cargo",
+      "+1.95.0",
+      "build",
+      "--release",
+      "--locked",
+      "--manifest-path",
+      "/private/tmp/aura-foundations-after-20260907/benchmarks/rust_baselines/Cargo.toml",
+      "--target-dir",
+      "/private/tmp/aura-integer-bench-pfch752v/rust-target",
+      "--bins"
+    ],
+    "toolchain": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: aarch64-apple-darwin\nrelease: 1.95.0\nLLVM version: 22.1.2\n",
+    "sources": {
+      "Cargo.lock": "66ec0fa5d32b453c950160d8b2d9e9c03ec4e2962395ef6d936f7fd72482bc2c",
+      "Cargo.toml": "caf487def3eeed0cce06490500b22dd72acafe3342fdc2b2e50b8cdf3c082874",
+      "rust-toolchain.toml": "28ba63ba51f7635afd6b0663f2613a1037ab602a039a889e991b1164b84d4714",
+      "src/bin/fib30.rs": "25649ec59cd0a94d94aacf0c26a1c5c248084a5293c95415012e86f27fc9bc0c",
+      "src/bin/float64_add.rs": "5eceb77794ba5b03e611b3bded9cf11aad29267b11fc313debf66d0272db599b",
+      "src/bin/float64_sum.rs": "17c2ed939b8df2ba20f5447650299a051461471f7cf4a6bd75433b67915126a7",
+      "src/bin/int32_loop.rs": "88b1452987c2b4c618eb5d240314f044a5ba65f2b0cef2520c3e2e775aa1643f",
+      "src/bin/int64_loop.rs": "75eb7f40ec810e63b450df36a57516c15203ea98bebff6bb5d1fb20b23f408ac",
+      "src/bin/retrying_worker.rs": "280e77612f5f8145ea470abb240e03be9f13d4aa73a84f3f9a0d8b407d722634",
+      "src/bin/startup.rs": "0aac043da872bcbbba039d10660d9612fa90de1c802336b36bb25c84596662ce",
+      "src/bin/tasks_10000.rs": "6fca48624f108e0340e52f52865830163647745f76398cf5bb393728680b7145",
+      "src/bin/tcp_fanout.rs": "9dcdccfb754664c2eb226124eeae5b1ddcb99479b8851619530042f8dc6efbac",
+      "src/lib.rs": "94568d0619c2a3e3cad94337e9df1c4704b2e787b4fa9ce023f1251bad6b5c6d"
+    },
+    "binaries": {
+      "fib30": {
+        "path": "/private/tmp/aura-integer-bench-pfch752v/rust-target/release/fib30",
+        "sha256": "249c96a6ec10fc6e70d591691576f773fbe22f645d4b09148b4e0df5aaa2870b",
+        "bytes": 376032
+      },
+      "tasks_10000": {
+        "path": "/private/tmp/aura-integer-bench-pfch752v/rust-target/release/tasks_10000",
+        "sha256": "66c062b7c914793d1b099fcfd1baf3acfabe540c30eed89798c9ad5d0d1f04da",
+        "bytes": 583936
+      },
+      "tcp_fanout": {
+        "path": "/private/tmp/aura-integer-bench-pfch752v/rust-target/release/tcp_fanout",
+        "sha256": "5fa1fd2167fb7b0a88840e45fdf8734abcde30352d440ad82e61e67bdfacfd13",
+        "bytes": 648400
+      },
+      "retrying_worker": {
+        "path": "/private/tmp/aura-integer-bench-pfch752v/rust-target/release/retrying_worker",
+        "sha256": "a4890c7600f4fe6a123d84f6808b055c447557cb97ac88de54dc34a66dcb6bf7",
+        "bytes": 647200
+      },
+      "int32_loop": {
+        "path": "/private/tmp/aura-integer-bench-pfch752v/rust-target/release/int32_loop",
+        "sha256": "cd7c57f4b946505c88759c701853ff28d6a159b30863852bfc08fce033a9810a",
+        "bytes": 374384
+      },
+      "int64_loop": {
+        "path": "/private/tmp/aura-integer-bench-pfch752v/rust-target/release/int64_loop",
+        "sha256": "5827bb5b6ad94374da1d5ce8a25748b10231747f356048dfad3a4c0d79788dae",
+        "bytes": 374672
+      },
+      "startup": {
+        "path": "/private/tmp/aura-integer-bench-pfch752v/rust-target/release/startup",
+        "sha256": "4cee76a2ddf6f99e593d7615daa7c52363cac306fa2e2a19393909c75a316b1b",
+        "bytes": 372800
+      },
+      "float64_add": {
+        "path": "/private/tmp/aura-integer-bench-pfch752v/rust-target/release/float64_add",
+        "sha256": "30b6f564124cc0de82f5f93db8b6232047ba07e449b2c13279c9460033c52140",
+        "bytes": 411504
+      },
+      "float64_sum": {
+        "path": "/private/tmp/aura-integer-bench-pfch752v/rust-target/release/float64_sum",
+        "sha256": "3108864f874a48002fc7e1532bc9ee1273654391ee2db8f5246b819174be9ba3",
+        "bytes": 411440
+      }
+    }
+  },
+  "builds": {
+    "int32": {
+      "command": [
+        "/private/tmp/aura-foundations-after-20260907/target/release/aura",
+        "build",
+        "--backend",
+        "direct",
+        "-o",
+        "/tmp/aura-integer-bench-pfch752v/int32",
+        "/private/tmp/aura-foundations-after-20260907/benchmarks/direct_integer_loops/int32_loop.au"
+      ],
+      "source_sha256": "3c3e417d4a997e5533f36314ecc173753ba46418a17b2b8c75d5f973bb9fc6e2",
+      "binary_sha256": "792736fc4fcbb6302ef8d03f37afbcc88b37671376f1d5b03e209e12116da124"
+    },
+    "int64": {
+      "command": [
+        "/private/tmp/aura-foundations-after-20260907/target/release/aura",
+        "build",
+        "--backend",
+        "direct",
+        "-o",
+        "/tmp/aura-integer-bench-pfch752v/int64",
+        "/private/tmp/aura-foundations-after-20260907/benchmarks/direct_integer_loops/int64_loop.au"
+      ],
+      "source_sha256": "2ef72e1f191b19c7615db77674a76c9d5192125bbe17b1571cfc2b7a5b48bd83",
+      "binary_sha256": "b231867b9a174a3c7b21a647bf6444c7556cc99740cb661ea44250277a63e3c2"
+    }
+  },
+  "summaries": {
+    "int32": {
+      "aura": {
+        "samples_s": [
+          0.03460316700000021,
+          0.024487791000000314,
+          0.023826083999999526,
+          0.024372915999999023,
+          0.024325417000000016,
+          0.024371667000000485,
+          0.024543166999999144,
+          0.0240847500000001,
+          0.023972207999999995,
+          0.024320540999999807,
+          0.024239666999999798
+        ],
+        "median_s": 0.024325417000000016,
+        "best_s": 0.023826083999999526
+      },
+      "rust": {
+        "samples_s": [
+          0.01927312499999978,
+          0.016845709000000042,
+          0.01644329099999986,
+          0.016309290999998893,
+          0.016455457999999368,
+          0.01642933400000146,
+          0.017333833000000354,
+          0.016399457999998646,
+          0.01639633400000129,
+          0.016255917000000508,
+          0.01629279199999978
+        ],
+        "median_s": 0.01642933400000146,
+        "best_s": 0.016255917000000508
+      },
+      "paired_ratios": [
+        1.7954102928300733,
+        1.4536515500772484,
+        1.4489851210441833,
+        1.4944191013576664,
+        1.478258277587956,
+        1.483423917244504,
+        1.4159111259465027,
+        1.468630853531994,
+        1.4620468209538857,
+        1.4961039109635614,
+        1.4877540325807956
+      ],
+      "paired_median_ratio": 1.478258277587956
+    },
+    "int64": {
+      "aura": {
+        "samples_s": [
+          0.010754874999999942,
+          0.009568083999999644,
+          0.0097782500000001,
+          0.009611500000000106,
+          0.009826874999999902,
+          0.009424166000000511,
+          0.009856375000000028,
+          0.009676667000000805,
+          0.010060999999998543,
+          0.010009499999998894,
+          0.00949162500000078
+        ],
+        "median_s": 0.0097782500000001,
+        "best_s": 0.009424166000000511
+      },
+      "rust": {
+        "samples_s": [
+          0.017587540999999263,
+          0.016337417000000798,
+          0.01622366700000022,
+          0.016276750000001172,
+          0.016393584000001127,
+          0.016337625000000244,
+          0.016569374999999553,
+          0.016452624999999443,
+          0.016246458999999547,
+          0.016294790999999975,
+          0.01624691700000014
+        ],
+        "median_s": 0.016337417000000798,
+        "best_s": 0.01622366700000022
+      },
+      "paired_ratios": [
+        0.6115053264126231,
+        0.5856546356134006,
+        0.6027151568138058,
+        0.5905048612284033,
+        0.5994342054793648,
+        0.5768381879251342,
+        0.5948549658632444,
+        0.5881533797798912,
+        0.6192734059771932,
+        0.6142760591405505,
+        0.5842108382778529
+      ],
+      "paired_median_ratio": 0.5948549658632444
+    }
+  },
+  "measurement": "whole process, checked arithmetic, paired alternating lanes",
+  "host": "Darwin mac 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:24 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6020 arm64"
+}

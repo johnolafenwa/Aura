@@ -1,0 +1,72 @@
+[
+  {
+    "ref": "after",
+    "source": "benchmarks/direct_integer_loops/int32_loop.au",
+    "returncode": 0,
+    "stdout": "ok\n",
+    "stderr": ""
+  },
+  {
+    "ref": "after",
+    "source": "benchmarks/direct_integer_loops/int64_loop.au",
+    "returncode": 0,
+    "stdout": "ok\n",
+    "stderr": ""
+  },
+  {
+    "ref": "after",
+    "source": "benchmarks/direct_integer_loops/startup.au",
+    "returncode": 0,
+    "stdout": "ok\n",
+    "stderr": ""
+  },
+  {
+    "ref": "after",
+    "source": "benchmarks/numeric_arrays/float64_add.au",
+    "returncode": 0,
+    "stdout": "ok\n",
+    "stderr": ""
+  },
+  {
+    "ref": "after",
+    "source": "benchmarks/numeric_arrays/float64_sum.au",
+    "returncode": 0,
+    "stdout": "ok\n",
+    "stderr": ""
+  },
+  {
+    "ref": "before",
+    "source": "benchmarks/direct_integer_loops/int32_loop.au",
+    "returncode": 0,
+    "stdout": "ok\n",
+    "stderr": ""
+  },
+  {
+    "ref": "before",
+    "source": "benchmarks/direct_integer_loops/int64_loop.au",
+    "returncode": 0,
+    "stdout": "ok\n",
+    "stderr": ""
+  },
+  {
+    "ref": "before",
+    "source": "benchmarks/direct_integer_loops/startup.au",
+    "returncode": 0,
+    "stdout": "ok\n",
+    "stderr": ""
+  },
+  {
+    "ref": "before",
+    "source": "benchmarks/numeric_arrays/float64_add.au",
+    "returncode": 0,
+    "stdout": "ok\n",
+    "stderr": ""
+  },
+  {
+    "ref": "before",
+    "source": "benchmarks/numeric_arrays/float64_sum.au",
+    "returncode": 0,
+    "stdout": "ok\n",
+    "stderr": ""
+  }
+]

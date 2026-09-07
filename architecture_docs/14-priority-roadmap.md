@@ -36,7 +36,8 @@ completion. See the [ADR index](decisions/README.md).
 
 These items start before Batch 1 design and run in parallel with it, scheduled
 for the 0.3.4 update. Items 1–4 implementation status is recorded below;
-optimization-level and Rust-baseline timing is reserved for a post-reboot session.
+the post-reboot session has partial results, with release-suite input errors
+blocking completion.
 The backend direction is recorded in
 [ADR-0064](decisions/0064-native-backend-strategy-and-codegen-boundary.md).
 
@@ -82,11 +83,17 @@ The backend direction is recorded in
 
 - Item 1: `opt_level=speed` delivered and adopted after all 385 forced parity fixtures
   and the compiler/CLI acceptance suites passed.
-  Publication-grade timing is deferred to the post-reboot measurement session.
+  Contractual Array before/after results are recorded; addition is 7.1740% slower
+  and sum changes by -0.0994%. These compare the full foundations bundle.
+  Item 1 is partially measured: release-suite and integer median deltas are
+  blocked by unchanged task/TCP benchmark compilation errors.
 - Item 2: [backend boundary inventory and builder sketch](15-backend-boundary.md)
   delivered; no refactor performed.
 - Item 3: pinned standalone Rust programs, three runner lanes, provenance, unit
-  tests, and hosted protocol smoke verification delivered. Timing remains pending.
+  tests, and hosted protocol smoke verification delivered. Contractual Array
+  comparisons and diagnostic standalone integer comparisons are recorded in the
+  [Performance chapter](../docs/manual/performance.md). Item 3 remains partially
+  measured until the frozen release-suite input errors are resolved.
 - Item 4: release profile, section collection and post-link local/debug stripping,
   plus clean-ref size tooling delivered. Link/strip steps pass local packaging,
   standalone diagnostics, cache, and release-profile checks. The

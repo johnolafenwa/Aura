@@ -54,41 +54,38 @@ so a canonical CPU burner such as `yes` is recorded even outside the checkout.
 The runner PID, its descendants, its direct parent, and the short-lived
 `ps`/`lsof` inventory helpers are excluded from classification.
 
-## Phase 7.3 measured result
+## 7 September 2026 foundations measurements
 
-The contractual run completed on the post-reboot Mac14,9 M2 Pro / 16 GiB host
-at commit `0511adf61931953df096dc1b6721a543d856be25`. The recorded boot time
-was `Thu Jul 30 23:02:25 2026`; the checkout was clean and detached, all three
-quiet-host inventories were empty, and no override was used. Xcode Python
-3.9.6 supplied NumPy 2.0.2 with Accelerate.
+The after clean detached revision is `50531b45797ae765ec8d885165c13042617ab567`;
+the before revision is `v0.3.3-preview` (`d3cc6b96104dd597687a98e9624f800a0cb3cf1e`).
+Both ran on Mac14,9 / Apple M2 Pro / 16 GiB after boot at 02:29:21 BST,
+7 September 2026, with Xcode CPython 3.9.6 / NumPy 2.0.2. Both reports are
+contractual: 11 pairs, excluded warmups, three empty inventories and no override.
+The after schema-2 run includes Rust 1.95.0; the unchanged before runner is schema 1.
 
-| workload | Aura median per operation | NumPy median per operation | ratio of medians |
-| --- | ---: | ---: | ---: |
-| fresh owned one-million-element `float64` add | 1.142461 ms | 0.251602 ms | 4.540751× |
-| existing one-million-element `float64` sum | 1.150392 ms | 0.174065 ms | 6.608975× |
+| Workload (one million `float64` elements) | Aura median | NumPy median | Rust median | Aura / NumPy | Aura / Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fresh owned addition | 1.205427 ms | 0.247190 ms | 0.244576 ms | 4.876520 | 4.928642 |
+| Existing-array sum | 1.148677 ms | 0.168981 ms | 0.858175 ms | 6.797687 | 1.338511 |
 
-The 11-pair raw report is retained at
-`/private/tmp/aura-phase73-arrays-post-reboot-raw.json`, SHA-256
-`f51b979977519b5cbca9be4119a77bb3aff1d1a2874e1cdd4269f315bc1f9e7d`.
-The summary is retained at
-`/private/tmp/aura-phase73-arrays-post-reboot-summary.json`, SHA-256
-`f6fc84c1f0fadfb4b93a5f07befb5a33cbaa6926d54ef88a795e103106b410ab`.
-The measured release `aura` binary hash is
-`a717e19d2f634087ae51c601632b428ed8cc5c98ed6745039d7f036b189ca035`.
+Ratios are ratios of medians. Before/after Aura changes are +7.1740% for addition
+and -0.0994% for sum; NumPy drift is -0.0208% / -0.0394%. No repeat was required.
+This comparison includes profile/link tuning as well as Cranelift `speed`.
 
-Release disassembly of the float64 add kernel emitted scalar `fadd d`
-instructions, and the deterministic floating reductions likewise remained
-scalar. Aura's Array API and NumPy cover different surfaces; the workloads
-above are the operations compared by this benchmark.
+[After raw](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/aura-foundations-after-arrays-raw.json):
+`58128b5331777b8a868aae952bbc21b02145a54331f233d02efbb69b4becd22f`.
+[Before raw](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/aura-foundations-before-arrays-raw.json):
+`6f1f1c3b2d3fa288785204d54da2ec507a25a8c20e234584d72f8afe51c950fd`.
+[SHA256SUMS](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/SHA256SUMS) also covers both summaries and the control calculation.
 
-## Rust comparison lane (0.3.4 foundations)
+Reproduce after building the pinned release compiler, from the after checkout:
 
-The runner builds pinned Rust 1.95.0 references from `benchmarks/rust_baselines/`
-with `--release --locked`, fat LTO, and one codegen unit. Report schema is now 2.
-It records source/lockfile and binary SHA-256 identities and paired Aura/Rust
-samples. Rust timing results are pending the post-reboot measurement session;
-protocol smoke checks are not published as performance evidence.
+```bash
+python3 scripts/bench-numeric-arrays.py --label foundations-after-rust --aura target/release/aura --python /Applications/Xcode.app/Contents/Developer/usr/bin/python3 --pairs 11 --raw-json /tmp/aura-foundations-after-arrays-raw.json --summary-json /tmp/aura-foundations-after-arrays-summary.json
+```
 
-See [the Rust baseline contract](../rust_baselines/README.md) for exact workload,
-allocation, arithmetic, scheduling, and protocol equivalence. The integer-loop
-lane retains its whole-process checksum protocol; other lanes use READY/GO/DONE.
+Use the before checkout's own runner with label `foundations-before` and
+before-specific JSON paths for the control. The Rust lane builds with
+`--release --locked`, fat LTO, and one codegen unit. See the
+[Rust baseline contract](../rust_baselines/README.md) for exact allocation,
+arithmetic, scheduling, and protocol equivalence.

@@ -1,0 +1,10 @@
+--- a/benchmarks/release_performance/tasks_10000.au
++++ b/benchmarks/release_performance/tasks_10000.au
+@@ -40 +40 @@
+-            tasks.append(group.start(task_value, value))
++            tasks.append(group.start(task_value, value as int32))
+--- a/benchmarks/release_performance/tcp_fanout.au
++++ b/benchmarks/release_performance/tcp_fanout.au
+@@ -62 +62 @@
+-            server_tasks.append(group.start(serve_one, index, addresses))
++            server_tasks.append(group.start(serve_one, index as int32, addresses))

@@ -1,0 +1,61 @@
+{
+  "observed_at": "2026-09-07T01:45:50.103435+00:00",
+  "checks": [
+    {
+      "ref": "after",
+      "source": "benchmarks/release_performance/fib30.au",
+      "returncode": 0,
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    {
+      "ref": "after",
+      "source": "benchmarks/release_performance/retrying_worker.au",
+      "returncode": 0,
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    {
+      "ref": "after",
+      "source": "benchmarks/release_performance/tasks_10000.au",
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "error[AU2002]: argument type mismatch for task_value: expected `int32`, found `int64`\n --> /private/tmp/aura-foundations-after-20260907/benchmarks/release_performance/tasks_10000.au:40:50\n   |\n40 |             tasks.append(group.start(task_value, value))\n   |                                                  ^\n"
+    },
+    {
+      "ref": "after",
+      "source": "benchmarks/release_performance/tcp_fanout.au",
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "error[AU2002]: argument type mismatch for serve_one: expected `int32`, found `int64`\n --> /private/tmp/aura-foundations-after-20260907/benchmarks/release_performance/tcp_fanout.au:62:56\n   |\n62 |             server_tasks.append(group.start(serve_one, index, addresses))\n   |                                                        ^\n"
+    },
+    {
+      "ref": "before",
+      "source": "benchmarks/release_performance/fib30.au",
+      "returncode": 0,
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    {
+      "ref": "before",
+      "source": "benchmarks/release_performance/retrying_worker.au",
+      "returncode": 0,
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    {
+      "ref": "before",
+      "source": "benchmarks/release_performance/tasks_10000.au",
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "error[AU2002]: argument type mismatch for task_value: expected `int32`, found `int64`\n --> /private/tmp/aura-foundations-before-20260907/benchmarks/release_performance/tasks_10000.au:40:50\n   |\n40 |             tasks.append(group.start(task_value, value))\n   |                                                  ^\n"
+    },
+    {
+      "ref": "before",
+      "source": "benchmarks/release_performance/tcp_fanout.au",
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "error[AU2002]: argument type mismatch for serve_one: expected `int32`, found `int64`\n --> /private/tmp/aura-foundations-before-20260907/benchmarks/release_performance/tcp_fanout.au:62:56\n   |\n62 |             server_tasks.append(group.start(serve_one, index, addresses))\n   |                                                        ^\n"
+    }
+  ]
+}

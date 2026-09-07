@@ -23,7 +23,11 @@ fixture's wire contract; the runner does not substitute a remote service.
 and Array kernels. Integer loops expose each counter update to the optimizer
 barrier; this overhead is part of the disclosed Rust reference. Array addition
 retains full fresh allocation; reduction does not use parallel or reassociated
-summation. No timing claims are made by this implementation task.
+summation. The [7 September measurement record](../../docs/manual/performance.md)
+contains contractual Array ratios and diagnostic standalone integer ratios.
+Control-plane comparisons remain blocked by frozen Aura task/TCP input errors.
+The session manifest is in `work/2026-09-07-foundations-measurements/SHA256SUMS`;
+its SHA-256 is `db6f659c3466c16a8001639e6aca33ef6d56423ca5d2eab62e4d137b42c7f999`.
 
 Build and protocol-only verification:
 

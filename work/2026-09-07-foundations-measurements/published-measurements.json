@@ -1,0 +1,53 @@
+{
+  "status": "partial; release suite blocked by unchanged task/TCP AU2002 inputs at both revisions",
+  "after_commit": "50531b45797ae765ec8d885165c13042617ab567",
+  "before_commit": "d3cc6b96104dd597687a98e9624f800a0cb3cf1e",
+  "array_grade": "contractual at both revisions",
+  "integer_grade": "diagnostic comparison; standalone runner lacks release-suite three-phase host inventory and full input/binary rechecks; external pre/post inventories were quiet",
+  "release_grade": "no timing; compilation failed",
+  "arrays": {
+    "add": {
+      "aura_before_ms": 1.124738119140625,
+      "aura_after_ms": 1.205427083984375,
+      "numpy_before_ms": 0.24724153710937496,
+      "numpy_after_ms": 0.2471900234375,
+      "rust_after_ms": 0.24457592773437503,
+      "aura_change_percent": 7.174022420917137,
+      "numpy_drift_percent": -0.02083536305317324,
+      "aura_numpy_ratio_of_medians": 4.876519963149555,
+      "aura_rust_ratio_of_medians": 4.928641568084106,
+      "aura_rust_paired_median_ratio": 4.942400375168533
+    },
+    "sum": {
+      "aura_before_ms": 1.149820271484375,
+      "aura_after_ms": 1.1486769208984375,
+      "numpy_before_ms": 0.16904711914062498,
+      "numpy_after_ms": 0.16898055078125002,
+      "rust_after_ms": 0.8581752929687501,
+      "aura_change_percent": -0.09943733071094973,
+      "numpy_drift_percent": -0.03937858255933513,
+      "aura_numpy_ratio_of_medians": 6.797687163331783,
+      "aura_rust_ratio_of_medians": 1.3385108267621333,
+      "aura_rust_paired_median_ratio": 1.3386005936691883
+    }
+  },
+  "integer": {
+    "int32": {
+      "aura_after_ms": 24.325417000000016,
+      "rust_after_ms": 16.42933400000146,
+      "aura_rust_ratio_of_medians": 1.4806088305221534,
+      "aura_rust_paired_median_ratio": 1.478258277587956,
+      "before_median_ms": null
+    },
+    "int64": {
+      "aura_after_ms": 9.7782500000001,
+      "rust_after_ms": 16.337417000000798,
+      "aura_rust_ratio_of_medians": 0.598518725450885,
+      "aura_rust_paired_median_ratio": 0.5948549658632444,
+      "before_median_ms": null
+    }
+  },
+  "control_drift_repeat_required": false,
+  "cpython_control_drift": null,
+  "attribution": "comparison includes Cranelift speed and release/link tuning; does not isolate opt_level"
+}

@@ -142,14 +142,14 @@
   },
   "blocks": {
     "docs/manual/performance.md#bash-1": {
-      "sha256": "18440010019a1b2dc80b580433aac5e3ba56e8a2b4f8e46c84aa1e9d2368d4af",
       "mode": "illustrative",
-      "reason": "Benchmark orchestration command that requires the pinned measurement host and a clean detached checkout."
+      "reason": "Pinned-host benchmark and build commands are executed in the measurement session, not the Manual gate.",
+      "sha256": "45c60a561f03157c16545a69759a9736d53a51be738bd8ba9459a7d577d102a2"
     },
     "docs/manual/performance.md#bash-2": {
-      "sha256": "39533cfa8d2d906de15f8e166531d5af1b99847a02e1d06e0a5d841ff077f2ed",
       "mode": "illustrative",
-      "reason": "Clean-ref executable-size orchestration requires full detached release builds; the runner is tested separately and its three-profile measurement is recorded in the work evidence."
+      "reason": "Pinned-host benchmark and build commands are executed in the measurement session, not the Manual gate.",
+      "sha256": "df24dab0a7e8048757ee103d225f87e9bac8442a3c7488574d11366314a7f75c"
     },
     "docs/manual/assertions.md#aura-1": {
       "sha256": "0d9e541caf7e08e73d098ddb3e77795743be6c4d9a0dbf7fde4d365ea7611acc",
@@ -165,7 +165,7 @@
     "docs/manual/bytes.md#aura-1": {
       "sha256": "7372253544a5893db4dcfd2bcf97218842aa6362a19b0815596ea4e25a357f89",
       "mode": "run",
-      "stdout": "4175726120f09f8c8c\nAura 🌌\nAAH+/w==\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n4175726120f09f8c8c\n",
+      "stdout": "4175726120f09f8c8c\nAura \ud83c\udf0c\nAAH+/w==\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n4175726120f09f8c8c\n",
       "stderr": ""
     },
     "docs/manual/classes.md#aura-1": {
@@ -1145,7 +1145,7 @@
     "docs/manual/lexical-structure.md#aura-10": {
       "sha256": "9c2610b6a412d0510f9e6cb83ff87cd0ec63863cf5f087feb2b70feeb48a8286",
       "mode": "run",
-      "stdout": "   1,234,567\n+87.50%\n······Aura······\n",
+      "stdout": "   1,234,567\n+87.50%\n\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7Aura\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\n",
       "stderr": ""
     },
     "docs/manual/lexical-structure.md#ebnf-1": {
@@ -1641,6 +1641,11 @@
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
+    },
+    "docs/manual/performance.md#bash-3": {
+      "mode": "illustrative",
+      "reason": "Pinned-host benchmark and build commands are executed in the measurement session, not the Manual gate.",
+      "sha256": "39533cfa8d2d906de15f8e166531d5af1b99847a02e1d06e0a5d841ff077f2ed"
     }
   }
 }

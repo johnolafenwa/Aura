@@ -1,0 +1,9 @@
+{
+  "observed_at": "2026-09-07T03:39:53.913316+00:00",
+  "phase": "after-integer retry 11 before invocation",
+  "inventories": [
+    [],
+    [],
+    []
+  ]
+}

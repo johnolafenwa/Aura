@@ -1,0 +1,4 @@
+width       best_s
+int32       0.0333
+int64       0.0114
+int32/int64 2.92x

@@ -131,7 +131,7 @@ checks, and stripped direct/MIR source diagnostics under the release profile.
 Coverage remains above the unchanged floors. Hosted verification is required
 before merge. No backend refactor or switch is part of this task.
 
-Optimization-level and Rust timing results will be collected after reboot;
+The 7 September post-reboot session supplies partial timing evidence below;
 protocol smoke checks establish correctness only. The separate executable-size
 measurement records byte counts and hashes at clean refs, including an after
 build with Cargo's default release profile restored through environment overrides.
@@ -141,4 +141,27 @@ The [executable-size table](../../docs/manual/performance.md#executable-size)
 records before/default-after/tuned-after builds with hashes and clean-ref
 provenance. Tuned executable reductions from v0.3.3-preview are 29.35% for the
 compiler, 93.29% for hello world, and 84.54% for the retrying-worker stand-in.
-No flag or link step was reverted. No timing result is published here.
+No flag or link step was reverted. Cargo 1.95's reference lists `strip="none"`;
+the explicit no-strip size control is retained under the session's conditional
+decision, with omitted-setting auto-stripping distinguished in the chapter.
+
+## Post-reboot measurements and Batch 7 inputs
+
+At merge `50531b45797ae765ec8d885165c13042617ab567`, contractual Array
+add/sum Aura/Rust ratios of medians are 4.928642/1.338511. The before-tag
+comparison shows +7.1740%/-0.0994% Aura time changes and less than 0.04% NumPy
+drift. It includes the release/link changes alongside Cranelift `speed`, so it
+cannot isolate the flag's effect. Array runtime/kernel costs remain Batch 7
+inputs, alongside the existing size evidence and parity results.
+
+Standalone int32/int64 paired Aura/Rust ratios are 1.478258/0.594855, with
+startup and the Rust per-update optimizer barrier included. These are
+diagnostic-grade because this runner lacks the release suite's complete
+qualification checks. They do not establish a general code-generator ranking.
+
+Both frozen release suites fail before timing with task/TCP `AU2002` input
+errors. CPython drift, control-plane comparisons and before/after integer
+medians remain unavailable. Items 1 and 3 are partially measured, not complete;
+resolving those inputs and collecting qualified evidence remains required
+before the backend decision. The [session work note](../../work/2026-09-07-foundations-measurements.md)
+links all raw reports and hashes.

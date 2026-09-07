@@ -2,6 +2,24 @@
 
 Last updated: 2026-09-07
 
+## Pre-Batch-1 measurement publication (partially measured; source-freeze decision pending)
+
+- Post-reboot preconditions passed with the authorized personal-file exception.
+  Both detached release builds and pinned Rust references built successfully.
+- Quiet-host retries succeeded at retry 11; no override was used. Contractual
+  before/after Arrays and diagnostic standalone integer comparisons are recorded.
+- Array add became 7.1740% slower; sum changed by -0.0994%. NumPy drift stayed
+  below 0.04%. Rust Array ratios are 4.928642/1.338511 (ratios of medians).
+- Both frozen release suites fail on task/TCP int64-to-int32 arguments before
+  timing. The identical two-cast correction is checked and retained unapplied;
+  source-freeze exception remains pending. No CPython or before integer medians.
+- Cargo 1.95 reference lists strip=none; size column retained per decision 8,
+  with explicit-setting versus omitted-setting behavior documented.
+- Evidence and SHA-256 manifest copied; partial publication docs and generated
+  LLM documents prepared. Local benchmark, identity, Manual, tutorial, docs,
+  freshness and evidence checks pass. PR/CI/merge completion remains pending.
+- Work note: `work/2026-09-07-foundations-measurements.md`.
+
 ## Pre-Batch-1 foundations items 1–4 (complete)
 
 - Delivered Cranelift speed, the backend boundary inventory, nine pinned Rust
