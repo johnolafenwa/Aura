@@ -1,0 +1,23 @@
+{
+  "status": "complete",
+  "reference_agent_v0": "fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc",
+  "final_branch_head": "cbbd220cc3f0492e3e52d1704126d0526649b98e",
+  "merge_commit": "52a7ae2672f70202a21e10b4d9dda7e16bdfff9d",
+  "pr": "https://github.com/johnolafenwa/Aura/pull/8",
+  "branch_ci": "https://github.com/johnolafenwa/Aura/actions/runs/34147227517",
+  "main_ci": "https://github.com/johnolafenwa/Aura/actions/runs/34154181644",
+  "main_docs": "https://github.com/johnolafenwa/Aura/actions/runs/34154181549",
+  "coverage_floors": {
+    "lines": 96.3,
+    "functions": 97.21,
+    "regions": 94.71
+  },
+  "hosted_failures": 0,
+  "hosted_reruns": 0,
+  "optional_per_call_fix_adopted": false,
+  "scheduler_implementation_changed": false,
+  "array_add_rust_target_met": true,
+  "release_prepared": false,
+  "cleanup_complete": true,
+  "completion_record_policy": "Work-only commit after green main and cleanup; tested source/docs tree is the merge commit."
+}

@@ -1,0 +1,22 @@
+{
+  "run_id": 34154181644,
+  "job_id": 101842451065,
+  "source": "main-macos-ci.log.gz",
+  "counts": {
+    "regions": {
+      "count": 157930,
+      "notcovered": 8183,
+      "percent": 94.81859051478503
+    },
+    "functions": {
+      "count": 6980,
+      "notcovered": 194,
+      "percent": 97.22063037249283
+    },
+    "lines": {
+      "count": 105311,
+      "notcovered": 3887,
+      "percent": 96.30902754697989
+    }
+  }
+}

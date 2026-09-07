@@ -1,0 +1,49 @@
+{
+  "pre_cleanup_manifest_sha256": "e950d28191efef5d3d293d7f0c6d20dc58a382a083d3ce8e3100b89ac79be1f0",
+  "before": {
+    "root_target_kib": 17069884,
+    "free_bytes": 80241872896
+  },
+  "commands": [
+    [
+      "git",
+      "worktree",
+      "remove",
+      "--force",
+      "/private/tmp/aura-items-6-7-before"
+    ],
+    [
+      "git",
+      "worktree",
+      "remove",
+      "--force",
+      "/private/tmp/aura-items-6-7-after"
+    ],
+    [
+      "cargo",
+      "llvm-cov",
+      "clean",
+      "--workspace"
+    ]
+  ],
+  "removed_detached_checkouts": [
+    "/private/tmp/aura-items-6-7-before",
+    "/private/tmp/aura-items-6-7-after"
+  ],
+  "removed_profile_directory": "/private/tmp/aura-items-6-7-profile",
+  "removed_temporary_helpers": [
+    "/private/tmp/aura-items-6-7-publish-docs.py",
+    "/private/tmp/aura-items-6-7-pr-body.md",
+    "/private/tmp/aura-items-6-7-base-ci-macos.log",
+    "/private/tmp/aura-items-6-7-main-fast-forward.log",
+    "/private/tmp/aura-items-6-7-branch-macos.log",
+    "/private/tmp/aura-items-6-7-branch-ubuntu.log",
+    "/private/tmp/aura-items-6-7-ubuntu-live.log"
+  ],
+  "open_file_checks": "No open files in task-owned before/after/profile directories or root coverage target.",
+  "after": {
+    "root_target_kib": 13356364,
+    "free_bytes": 86112923648
+  },
+  "coverage_clean_exit_code": 0
+}

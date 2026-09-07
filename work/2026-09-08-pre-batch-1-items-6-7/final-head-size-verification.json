@@ -1,0 +1,21 @@
+{
+  "implementation_head": "d9fc79921ba9fed1116634ec9994bcb599aa9f90",
+  "final_pr_head": "cbbd220cc3f0492e3e52d1704126d0526649b98e",
+  "published_bytes": {
+    "aura": 10897408,
+    "hello_world": 1586968,
+    "reference_agent": 3199712
+  },
+  "final_head_bytes": {
+    "aura": 10897408,
+    "hello_world": 1586968,
+    "reference_agent": 3199712
+  },
+  "all_byte_counts_match": true,
+  "standalone_outputs_match": true,
+  "report_sha256": {
+    "executable-sizes.json": "a5108139351289f9832fe9b00d7948fb7ccfa734de33608e04ea69260768d36c",
+    "final-head-executable-sizes.json": "331c743c1d1d8d6d905168812ee5defb661b4c16775204ae538e4a95b704c65d"
+  },
+  "note": "Compiler embeds each exact commit identity; binary hashes are retained per build. Publication compares exact byte counts, not identity bytes."
+}

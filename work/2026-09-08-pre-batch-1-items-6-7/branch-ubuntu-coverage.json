@@ -1,0 +1,22 @@
+{
+  "run_id": 34147227517,
+  "job_id": 101821766462,
+  "source": "branch-ubuntu-ci.log.gz",
+  "counts": {
+    "regions": {
+      "count": 157930,
+      "notcovered": 8174,
+      "percent": 94.82428924206927
+    },
+    "functions": {
+      "count": 6980,
+      "notcovered": 194,
+      "percent": 97.22063037249283
+    },
+    "lines": {
+      "count": 105311,
+      "notcovered": 3881,
+      "percent": 96.31472495750681
+    }
+  }
+}

@@ -12,12 +12,13 @@ protected. The note name follows the user's requested 2026-09-08 artifact name.
 
 ## Current status
 
-In progress: implementation, profiling, Array bit proof and stack-reuse scoping
-are complete. The full local gate is running. Quiet contractual Array
-measurements, final executable sizes, final documentation, hosted branch/main CI,
-merge and cleanup remain. The optional frame optimization was measured and
-reverted because it did not reach the required 20% improvement.
-No blocker currently identified.
+Complete on main. PR #8 merged final head cbbd220 with merge commit
+52a7ae2672f70202a21e10b4d9dda7e16bdfff9d after green Ubuntu/macOS and Docs CI.
+Main CI and docs deployment are green. All local gates, contractual Array
+measurements, exact-final-head size verification, documentation, evidence hashes
+and cleanup are complete. No hosted failure or rerun occurred. The optional
+frame optimization was reverted because its 11.10% improvement missed the 20%
+gate. No remaining work or blockers in this authorized task.
 
 ## Completed foundation changes
 
@@ -39,7 +40,7 @@ No blocker currently identified.
   94.8063882% regions; exact counts and the green main run are in
   `base-coverage.json`. The base's subsequent commit changes work records only.
 
-## Delivery and verification plan
+## Delivered scope and verification
 
 1. Reference agent version 0: package below 400 Aura lines, typed JSON request
    and result methods, named-function dictionary registry, typed errors, retry,
@@ -61,8 +62,8 @@ No blocker currently identified.
 ## Evidence and build hygiene
 
 Evidence belongs in `work/2026-09-08-pre-batch-1-items-6-7/` with SHA256SUMS.
-Initial root target is 4.7 GiB with 92 GiB free. Measurements and source identities
-will be recorded separately from estimates and diagnostic profiling samples.
+Initial root target was 4.7 GiB with 92 GiB free. Measurements and source
+identities are recorded separately from estimates and diagnostic profiling samples.
 
 ## Per-call investigation
 
@@ -149,16 +150,14 @@ contractual before run. Full local CI output is captured in `local-ci.log`.
 The first full Rust pass is green: 378 CLI tests, 1,885 compiler unit tests,
 all fixture categories and native-codegen acceptance. The forced MIR/direct
 matrix is green; LSP and extension checks also pass. The unchanged-floor
-compiler coverage run is in progress. No isolated timing rerun has been needed.
+compiler coverage run passed. No isolated timing rerun was needed.
 
-After all local gates, measure clean detached merge-base and implementation-head
-Array sources with nothing else running, then run the size script for the table.
-After documentation and evidence commits establish the final PR head, run the
-size script once more at that exact head. Keep that final verification report
-for the post-merge work-only completion record, so its measured commit does not
-change merely to embed its own provenance. Verify branch CI, merge commit, and
-main CI before the completion record and cleanup. No source change is planned
-after final-head measurement; any required source fix invalidates that check.
+After all local gates passed, clean detached merge-base and implementation-head
+Arrays were measured with nothing else running, followed by the size table.
+The size script then ran again at the exact final publication head. Its report
+is included in this post-merge work-only completion record, avoiding a measured
+commit identity self-reference. Branch CI, merge and main CI all completed
+before cleanup. No source changed after final-head measurement.
 
 During coverage, target reached about 17 GiB. All 38 selected profiling/sample/
 disassembly identity artifacts were hashed and verified in
@@ -205,8 +204,8 @@ The clean d9fc799 release measurement records compiler 10,897,408 bytes, hello
 world 1,586,968, and actual reference agent version 0 3,199,712. Compiler and
 runtime were installed together; hello/agent execute with Cargo unavailable
 and match pinned stdout. The script hashed all artifacts/package sources and
-removed its detached checkout/target. Final-head verification follows the
-publication commit; its report will be retained in the completion record.
+removed its detached checkout/target. Final-head verification then passed at
+cbbd220; its report is retained in the completion record.
 
 ## Publication verification
 
@@ -220,5 +219,62 @@ was adapted. A scoped whitespace check passes; the broad check reported only
 pre-existing whitespace in protected personal/file_ops.au, which is untouched
 and whose content is omitted from publication evidence.
 
-Remaining: exact-final-head size verification, PR/branch green, merge, main green,
-and cleanup/completion record. No release, tag or version bump is prepared.
+Exact-final-head size verification, PR/branch green, merge, main green and
+cleanup/completion recording are complete. No release, tag or version bump.
+
+## Hosted branch verification and merge
+
+Final PR head cbbd220cc3f0492e3e52d1704126d0526649b98e was rebuilt cleanly
+under the release profile. All published byte counts match exactly, and both
+standalone outputs match with Cargo unavailable. The exact-head report and
+comparison are retained for this work-only completion record.
+
+PR https://github.com/johnolafenwa/Aura/pull/8 merged with merge commit
+52a7ae2672f70202a21e10b4d9dda7e16bdfff9d after one complete green CI run:
+https://github.com/johnolafenwa/Aura/actions/runs/34147227517
+Both Ubuntu and macOS passed; Docs run 34147227808 also passed. No hosted
+failure or rerun occurred. Hosted macOS coverage exactly matches local totals;
+Ubuntu covered four additional lines and seven additional regions, with the
+same function count. Compressed job logs and coverage records are retained.
+
+The merge has the expected two parents and a tree identical to the final PR
+head. Local main was fast-forwarded while preserving the protected personal
+changes. Main CI https://github.com/johnolafenwa/Aura/actions/runs/34154181644
+passed on both Ubuntu and macOS. Main Docs run 34154181549 built and deployed
+successfully. No release/tag/version bump.
+
+## Final verification and cleanup
+
+| Compiler coverage | Baseline hosted macOS | Final main hosted macOS |
+| --- | ---: | ---: |
+| Lines | 96.303966% | 96.309028% |
+| Functions | 97.210239% | 97.220630% |
+| Regions | 94.806388% | 94.818591% |
+
+Floors stay 96.30/97.21/94.71. Final main Ubuntu measured 96.312826% lines,
+97.220630% functions and 94.822390% regions. Local and branch macOS measured
+96.310927/97.220630/94.819857. All are above the floors; small covered-line/
+region variation did not justify rerunning a green job. LSP coverage is 100%.
+All existing fixtures pass unchanged, and all requested local/hosted gates pass.
+
+The 111 pre-cleanup evidence artifacts were hashed and both earlier manifests
+verified. Open-file checks were empty for each task-owned detached/profile
+directory and the root coverage target. Removed the before/after detached
+checkouts and their targets, profiling directory and task-owned temporary helpers;
+`cargo llvm-cov clean --workspace` completed successfully. Root target fell from
+16.279 to 12.738 GiB; free disk rose from 74.731 to 80.199 GiB. Exact byte counts
+and commands are in cleanup.json. Earlier obsolete profiling output was already
+removed under the build-hygiene gate. Unrelated build trees, worktrees, caches,
+source files and protected personal changes were preserved.
+
+The final SHA256SUMS includes hosted CI/log/coverage records, exact-head size
+verification and cleanup evidence. This completion commit changes work records
+only; the green merge commit remains the tested source/docs tree. The workflows
+exclude work-only changes, so this record does not require another CI run.
+
+## Follow-up
+
+The 0.3.4 release session re-measures Arrays after reboot. Batch 7 evaluates the
+recorded call-bookkeeping/backend options; Batch 8 evaluates guarded-stack reuse.
+Later usability batches compare the maintained agent against version 0 fc0361b.
+These are roadmap follow-ups, not unfinished items 6 or 7. No release is prepared.

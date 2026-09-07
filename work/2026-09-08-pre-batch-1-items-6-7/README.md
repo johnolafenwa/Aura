@@ -94,3 +94,19 @@ the post-merge completion record, avoiding a commit identity self-reference.
 `local-ci-remaining.log` cover all local gates; `publication-gates*.log` records
 final document verification and its corrected metadata/wording failures.
 Protected personal-file content is excluded from the publication log.
+
+## Integration completion
+
+`branch-ci.json` and `main-ci.json` retain the successful Ubuntu/macOS runs
+on final head cbbd220 and merge 52a7ae2. The matching Docs records include the
+successful main deployment. `pull-request.json` records PR #8 and its merge.
+No hosted failure or rerun occurred. Compressed branch/main job logs and
+per-platform coverage JSON retain the exact gate evidence; every floor passed.
+
+`final-head-executable-sizes.json` and `final-head-size-verification.json`
+confirm all three published byte counts and standalone outputs at the exact
+final PR head. Compiler hashes differ because each build embeds its commit.
+`pre-cleanup-SHA256SUMS` freezes the evidence before deleting the task-owned
+checkouts/profiling builds. `cleanup.json` and `cleanup.log` record removal,
+coverage cleaning and disk checks. The final SHA256SUMS also covers those
+completion records.

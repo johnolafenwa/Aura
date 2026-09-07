@@ -2,7 +2,7 @@
 
 Last updated: 2026-09-07
 
-## Pre-Batch-1 foundations items 6 and 7 (in progress)
+## Pre-Batch-1 foundations items 6 and 7 (complete)
 
 - Authorized target: reference agent version 0, profiling support and attribution,
   Array kernel optimization with bit-identity evidence, task-stack reuse design,
@@ -17,8 +17,15 @@ Last updated: 2026-09-07
 - All local gates pass; compiler coverage is 96.310927% lines / 97.220630%
   functions / 94.819857% regions, LSP 100%. Contractual clean-detached Array
   addition improves 79.96% to 1.0065x Rust; sum remains within 1.34x Rust.
-- Remaining: final size row, publication gates, green branch/main CI, merge and
-  cleanup. No current blocker.
+- Final-head release size verification and publication gates pass. PR #8 merged
+  as `52a7ae2` after green Ubuntu/macOS CI `34147227517` and Docs.
+- Main CI `34154181644` passed on Ubuntu/macOS; Docs `34154181549` deployed.
+  Main macOS coverage is 96.309028% lines / 97.220630% functions / 94.818591%
+  regions, above unchanged floors. No hosted failure or rerun.
+- Exact final-head compiler/hello/agent sizes are 10,897,408 / 1,586,968 /
+  3,199,712 bytes. All evidence is hashed; detached/profile builds are removed
+  and workspace coverage cleaned. Root target is 12.74 GiB, free disk 80.2 GiB.
+  Completion is recorded with work-only changes; no remaining work or blocker.
 - Work note: `work/2026-09-08-pre-batch-1-items-6-7.md`.
 
 ## Pre-Batch-1 measurement publication (complete)
