@@ -1732,3 +1732,6 @@ fn insert_aliased_namespace_import(
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod array_kernel_corpus;

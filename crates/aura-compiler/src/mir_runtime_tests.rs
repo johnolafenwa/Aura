@@ -20483,3 +20483,54 @@ def main():
         "unsupported channel method `missing`"
     );
 }
+
+#[test]
+fn mir_array_kernels_match_frozen_pre_vectorization_bits() {
+    use crate::array_kernel_corpus::{verify, Kernel};
+    verify(|kernel, left, right| {
+        let mut runtime = test_runtime();
+        match kernel {
+            Kernel::Binary {
+                operation, mode: 0, ..
+            } => runtime.eval_array_binary(
+                match operation {
+                    0 => crate::ast::BinaryOp::Add,
+                    1 => crate::ast::BinaryOp::Sub,
+                    2 => crate::ast::BinaryOp::Mul,
+                    _ => crate::ast::BinaryOp::Div,
+                },
+                &left,
+                &right.unwrap(),
+                None,
+            ),
+            _ => {
+                let mut env = Env::default();
+                env.define_typed("left", Type::named("Unknown"), left);
+                let (method, args) = match kernel {
+                    Kernel::Reduce(code) => (
+                        ["sum", "min", "max", "mean"][code as usize].to_string(),
+                        Vec::new(),
+                    ),
+                    Kernel::Binary {
+                        operation, mode, ..
+                    } => {
+                        env.define_typed("right", Type::named("Unknown"), right.unwrap());
+                        (
+                            format!(
+                                "{}_{}",
+                                if mode == 1 { "wrapping" } else { "saturating" },
+                                ["add", "sub", "mul"][operation as usize]
+                            ),
+                            vec![MirArg {
+                                name: None,
+                                value: Operand::Place("right".to_string()),
+                                writeback_place: None,
+                            }],
+                        )
+                    }
+                };
+                runtime.evaluate_array_place_method("left", &method, &args, &mut env)
+            }
+        }
+    });
+}
