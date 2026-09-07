@@ -297,6 +297,12 @@ printed-output order unless they explicitly coordinate that order.
 
 ### `agents/`
 
+- `tool_runner/`
+  - version-0 reference agent package: named-function dictionary registry, typed
+    JSON request/result methods, Result errors, `control.retry`, Queue events
+    produced by a TaskGroup child and consumed with `for`, and user-resource cleanup
+  - no network, filesystem, or process access; both backends match `tool_runner/stdout.txt`
+  - run `aura run --backend mir examples/agents/tool_runner/src/main.au` or select `direct`
 - `control_plane_foundations.au`
   - typed JSON/TOML metadata, path operations, process-local counters, and structured log/trace events
   - prints the artifact path, deterministic JSON, TOML validity, and counter value

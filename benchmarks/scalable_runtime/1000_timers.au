@@ -41,7 +41,7 @@ def main() -> int32:
         for index in range(1000):
             group.start_soon(
                 timer,
-                index,
+                index as int32,
                 prepared,
                 release,
                 armed,
@@ -61,7 +61,7 @@ def main() -> int32:
                     return 1
 
         for token in range(1000):
-            release.put(token)
+            release.put(token as int32)
 
         mut armed_count: int32 = 0
         mut min_start_ms: int64 = 0

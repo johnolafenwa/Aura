@@ -173,6 +173,10 @@ aura deps update util
   - caching is optional for an installed immutable runtime layout: an empty or unavailable cache does not prevent an otherwise valid direct build, but that build is not retained for a later hit
 - `aura build -o <output> <file.au>`
   - compile a standalone native binary for a program
+  - `AURA_NATIVE_KEEP_SYMBOLS=1` skips post-link stripping for profiling; the
+    same setting selects a separate native-cache entry for direct runs. Only
+    exact `1` enables it. Build the runtime with `CARGO_PROFILE_RELEASE_STRIP=none`
+    when its symbols are needed; this option cannot restore stripped archive symbols.
   - this accepts `--backend auto|direct`
   - this also accepts `--format human|json` for compile and build diagnostics
   - in human mode, a source-checkout build flushes

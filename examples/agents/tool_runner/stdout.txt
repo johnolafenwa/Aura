@@ -1,0 +1,12 @@
+tool-runner version 0
+request {"tool":"double","value":21}
+result {"tool":"double","value":42}
+result {"tool":"increment","value":43}
+rejected invalid request
+unknown tool missing
+ready after 3 attempts
+stream started
+token tools
+token ready
+stream finished
+closed tool-runner

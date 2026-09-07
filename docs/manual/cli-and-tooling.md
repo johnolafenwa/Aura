@@ -107,6 +107,21 @@ cargo run -p aura -- build --backend direct -o ./target/app app.au
 
 An installed release archive resolves its native runtime relative to `bin/aura`, under `lib/aura`, and needs only a host C compiler for the final link. A source-checkout binary falls back to Cargo-built runtime artifacts for contributor convenience.
 
+### Keeping native symbols for profiling
+
+Set `AURA_NATIVE_KEEP_SYMBOLS=1` when building a user executable or running with
+the direct backend to skip its post-link `strip` step. For example,
+`AURA_NATIVE_KEEP_SYMBOLS=1 aura build --backend direct -o fib fib30.au` keeps
+the available symbols. Only the exact value `1` enables the option; absent or
+other values keep the normal stripping policy. The option participates in the
+native cache key, so profiling and normally stripped executables use separate
+cache entries. It applies to both direct binaries and generated MIR launchers.
+
+This does not restore symbols already removed from the runtime archive. When
+profiling a source build, build the release compiler/runtime with
+`CARGO_PROFILE_RELEASE_STRIP=none` and keep native symbols during the user build.
+The setting changes symbol retention, not language behavior or source diagnostics.
+
 ## Stdin Buffers
 
 Editor-style commands can read from stdin while using a supplied path for package roots and local imports:
