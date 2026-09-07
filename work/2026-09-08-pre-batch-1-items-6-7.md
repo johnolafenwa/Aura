@@ -143,3 +143,37 @@ these are diagnostic controls, separate from the required detached publication.
 Build hygiene before full CI: root target 8.4 GiB, detached diagnostic target
 532 MiB, 87 GiB free. The detached merge-base checkout is retained for the later
 contractual before run. Full local CI output is captured in `local-ci.log`.
+
+## Local gate progress and final-head publication
+
+The first full Rust pass is green: 378 CLI tests, 1,885 compiler unit tests,
+all fixture categories and native-codegen acceptance. The forced MIR/direct
+matrix is green; LSP and extension checks also pass. The unchanged-floor
+compiler coverage run is in progress. No isolated timing rerun has been needed.
+
+After all local gates, measure clean detached merge-base and implementation-head
+Array sources with nothing else running, then run the size script for the table.
+After documentation and evidence commits establish the final PR head, run the
+size script once more at that exact head. Keep that final verification report
+for the post-merge work-only completion record, so its measured commit does not
+change merely to embed its own provenance. Verify branch CI, merge commit, and
+main CI before the completion record and cleanup. No source change is planned
+after final-head measurement; any required source fix invalidates that check.
+
+During coverage, target reached about 17 GiB. All 38 selected profiling/sample/
+disassembly identity artifacts were hashed and verified in
+`profiling-artifact-SHA256SUMS`; the no-longer-used, task-owned
+`target/foundations-profile` build directory was removed after checking that no
+process was executing from it. Root target returned to about 15 GiB with
+80 GiB free. Active coverage and native-runtime build trees were preserved.
+
+All local gates are green. The first full CI run passed Rust tests, forced
+parity, compiler coverage and 100% LSP coverage, then the reference checker
+rejected the word SIMD in the new Array prose under its existing Phase 7.3
+rule. Reworded that sentence to describe unchanged arithmetic policy; retained
+the measured vector instructions and left the gate unchanged. Regenerated LLM
+docs. Resumed reference, tutorials, docs build, audits, Clippy and hygiene all
+passed (local-ci-remaining.log). No timing-sensitive failure occurred.
+
+Exact compiler coverage: 101426/105311 lines, 6786/6980 functions,
+149749/157930 regions; floors remain 96.30/97.21/94.71.

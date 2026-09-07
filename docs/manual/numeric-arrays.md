@@ -244,7 +244,7 @@ their original implementations.
 Both runtime paths match 1,008 frozen pre-change output-bit and diagnostic cases
 in debug and optimized release builds. The corpus covers all four element types,
 empty and vector-boundary lengths, 1,000,001 elements, NaN payloads, infinities,
-signed zero, arithmetic modes and first-trap indices. SIMD does not introduce
+signed zero, arithmetic modes and first-trap indices. The rewrite does not introduce
 reassociation, approximate division or a new numeric policy.
 
 ## Status
