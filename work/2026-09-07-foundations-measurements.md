@@ -134,3 +134,19 @@ qualified release suites and their control drift/repetition handling, completion
 of the remaining tables/statuses, final-head hosted branch CI, merge commit and
 green main CI. No version bump or tag. Cleanup/hosted run status is recorded
 below when available.
+
+## Draft publication and cleanup
+
+[PR #7](https://github.com/johnolafenwa/Aura/pull/7) is open as a draft, titled
+“Publish pre-Batch-1 foundation measurements.” Hosted validation for the current
+head is linked from its [checks page](https://github.com/johnolafenwa/Aura/pull/7/checks).
+This is an evidence/publication draft, not a claim that the complete measurement
+mission or merge gate is satisfied. No merge commit or main CI exists for it.
+
+After all 37 manifest files were verified both tracked and hash-correct, both
+clean detached measurement checkouts were removed with `git worktree remove`,
+including their target trees (810 MiB after, 637 MiB before). No live process
+used either checkout. Root target remains 4.6 GiB and available space is 92 GiB.
+The personal file SHA-256 still matches preflight. Other user files and unrelated
+worktree registrations remain untouched. Temporary evidence staging is retained
+as a second copy; the versioned evidence is self-contained.

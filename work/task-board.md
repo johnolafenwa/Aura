@@ -17,7 +17,10 @@ Last updated: 2026-09-07
   with explicit-setting versus omitted-setting behavior documented.
 - Evidence and SHA-256 manifest copied; partial publication docs and generated
   LLM documents prepared. Local benchmark, identity, Manual, tutorial, docs,
-  freshness and evidence checks pass. PR/CI/merge completion remains pending.
+  freshness and evidence checks pass. [Draft PR #7](https://github.com/johnolafenwa/Aura/pull/7)
+  is open; current hosted checks are linked there. Merge remains blocked by the
+  source-freeze decision and missing measurements. Both temporary measurement
+  checkouts were removed after hash verification; root target is 4.6 GiB.
 - Work note: `work/2026-09-07-foundations-measurements.md`.
 
 ## Pre-Batch-1 foundations items 1–4 (complete)
