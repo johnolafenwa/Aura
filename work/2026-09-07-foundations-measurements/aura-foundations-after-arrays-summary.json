@@ -1,0 +1,359 @@
+{
+  "benchmarks": {
+    "add": {
+      "aura": {
+        "best_s": 0.6010985,
+        "mad_s": 0.006827376000000052,
+        "median_per_operation_s": 0.001205427083984375,
+        "median_s": 0.617178667,
+        "p95_s": 0.630866916,
+        "samples_s": [
+          0.620893959,
+          0.617178667,
+          0.610351291,
+          0.624853958,
+          0.61356625,
+          0.628657125,
+          0.6010985,
+          0.630866916,
+          0.621834916,
+          0.60620125,
+          0.611264958
+        ]
+      },
+      "aura_vs_rust": {
+        "paired_median_ratio": 4.942400375168533,
+        "paired_ratios": [
+          4.958311003480794,
+          4.840417684762,
+          4.825159324392162,
+          5.026952435926573,
+          4.986306407341716,
+          4.859273133791081,
+          4.717886925146295,
+          5.04419632939314,
+          4.991293667544583,
+          4.757971469497479,
+          4.942400375168533
+        ],
+        "ratio_of_medians": 4.928641568084106
+      },
+      "dtype": "float64",
+      "elements": 1000000,
+      "iterations_per_observation": 512,
+      "numpy": {
+        "best_s": 0.125482333,
+        "mad_s": 0.0009017919999999846,
+        "median_per_operation_s": 0.0002471900234375,
+        "median_s": 0.126561292,
+        "p95_s": 0.131159292,
+        "samples_s": [
+          0.126760042,
+          0.1256595,
+          0.13080275,
+          0.125692,
+          0.125482333,
+          0.126561292,
+          0.131159292,
+          0.127916375,
+          0.126083167,
+          0.129151542,
+          0.126509166
+        ]
+      },
+      "paired_median_ratio": 4.8981836011067275,
+      "paired_ratios": [
+        4.8981836011067275,
+        4.911516176651984,
+        4.666196169423043,
+        4.971310489132164,
+        4.8896624355876455,
+        4.967214817939754,
+        4.582965421923747,
+        4.931869872015995,
+        4.931942390057508,
+        4.6937205751674265,
+        4.831783951528066
+      ],
+      "ratio_of_medians": 4.876519963149555,
+      "rust": {
+        "best_s": 0.12305025,
+        "mad_s": 0.0015451250000000083,
+        "median_per_operation_s": 0.000244575927734375,
+        "median_s": 0.125222875,
+        "p95_s": 0.129372667,
+        "samples_s": [
+          0.125222875,
+          0.12750525,
+          0.1264935,
+          0.12430075,
+          0.12305025,
+          0.129372667,
+          0.127408416,
+          0.125067875,
+          0.124583917,
+          0.1274075,
+          0.12367775
+        ]
+      }
+    },
+    "sum": {
+      "aura": {
+        "best_s": 1.175063292,
+        "mad_s": 0.00048245800000001893,
+        "median_per_operation_s": 0.0011486769208984375,
+        "median_s": 1.176245167,
+        "p95_s": 1.190494875,
+        "samples_s": [
+          1.175853625,
+          1.190494875,
+          1.175748708,
+          1.178163833,
+          1.176245167,
+          1.176975375,
+          1.175822959,
+          1.175762709,
+          1.175063292,
+          1.176286083,
+          1.176268667
+        ]
+      },
+      "aura_vs_rust": {
+        "paired_median_ratio": 1.3386005936691883,
+        "paired_ratios": [
+          1.3389126570852072,
+          1.3519301492738767,
+          1.337804619029629,
+          1.3401616193755255,
+          1.3385108267621333,
+          1.3401036837254978,
+          1.3376812156188127,
+          1.3384364413912473,
+          1.3371120200229374,
+          1.3392652944813146,
+          1.3386005936691883
+        ],
+        "ratio_of_medians": 1.3385108267621333
+      },
+      "dtype": "float64",
+      "elements": 1000000,
+      "iterations_per_observation": 1024,
+      "numpy": {
+        "best_s": 0.172353417,
+        "mad_s": 0.00021679199999999343,
+        "median_per_operation_s": 0.00016898055078125,
+        "median_s": 0.173036084,
+        "p95_s": 0.174743458,
+        "samples_s": [
+          0.172819292,
+          0.17314425,
+          0.172353417,
+          0.173078625,
+          0.173036084,
+          0.173793125,
+          0.172799917,
+          0.174509958,
+          0.172956292,
+          0.174743458,
+          0.173011375
+        ]
+      },
+      "paired_median_ratio": 6.798793819192524,
+      "paired_ratios": [
+        6.803948861218572,
+        6.875740170407044,
+        6.821731349834509,
+        6.807101876387104,
+        6.797687163331783,
+        6.772278103636149,
+        6.80453428111311,
+        6.737510698386622,
+        6.793989848024724,
+        6.731502835430898,
+        6.798793819192524
+      ],
+      "ratio_of_medians": 6.797687163331783,
+      "rust": {
+        "best_s": 0.878215333,
+        "mad_s": 0.00031162500000003757,
+        "median_per_operation_s": 0.00085817529296875,
+        "median_s": 0.8787715,
+        "p95_s": 0.880589042,
+        "samples_s": [
+          0.878215333,
+          0.880589042,
+          0.878864291,
+          0.879120709,
+          0.8787715,
+          0.878271875,
+          0.879000875,
+          0.878459875,
+          0.878806917,
+          0.878307,
+          0.878730125
+        ]
+      }
+    }
+  },
+  "contractual": true,
+  "evidence_policy": "measured release evidence only; no Aura-versus-NumPy threshold",
+  "generated_at": "2026-09-07T03:41:40.541592+00:00",
+  "host": {
+    "boot_time": "{ sec = 1788744561, usec = 878295 } Mon Sep  7 02:29:21 2026",
+    "cpu_model": "Apple M2 Pro",
+    "hardware_model": "Mac14,9",
+    "load_average": [
+      1.6435546875,
+      1.4716796875,
+      1.58154296875
+    ],
+    "logical_cpus": 10,
+    "machine": "arm64",
+    "memory_bytes": 17179869184,
+    "physical_cores": 10,
+    "python": "3.9.6",
+    "release": "25.5.0",
+    "system": "Darwin",
+    "version": "Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:24 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6020"
+  },
+  "inputs": {
+    "aura": {
+      "path": "/private/tmp/aura-foundations-after-20260907/target/release/aura",
+      "sha256": "9f79a72a4675b5d4f6e0df0299babf23028232373ea2ec67884078628e862ffa",
+      "version": "aura 0.3.3-dev (50531b45797a)"
+    },
+    "benchmark_process": {
+      "path": "/private/tmp/aura-foundations-after-20260907/scripts/benchmark_process.py",
+      "sha256": "bbf4bca940b38bc84101ba4eaf93e568b16edafd91dc298d071ea96be52330de"
+    },
+    "numpy": {
+      "configuration": {
+        "Build Dependencies": {
+          "blas": {
+            "detection method": "system",
+            "found": true,
+            "include directory": "unknown",
+            "lib directory": "unknown",
+            "name": "accelerate",
+            "openblas configuration": "unknown",
+            "pc file directory": "unknown",
+            "version": "unknown"
+          },
+          "lapack": {
+            "detection method": "system",
+            "found": true,
+            "include directory": "unknown",
+            "lib directory": "unknown",
+            "name": "accelerate",
+            "openblas configuration": "unknown",
+            "pc file directory": "unknown",
+            "version": "unknown"
+          }
+        },
+        "Compilers": {
+          "c": {
+            "commands": "cc",
+            "linker": "ld64",
+            "name": "clang",
+            "version": "15.0.0"
+          },
+          "c++": {
+            "commands": "c++",
+            "linker": "ld64",
+            "name": "clang",
+            "version": "15.0.0"
+          },
+          "cython": {
+            "commands": "cython",
+            "linker": "cython",
+            "name": "cython",
+            "version": "3.0.11"
+          }
+        },
+        "Machine Information": {
+          "build": {
+            "cpu": "aarch64",
+            "endian": "little",
+            "family": "aarch64",
+            "system": "darwin"
+          },
+          "host": {
+            "cpu": "aarch64",
+            "endian": "little",
+            "family": "aarch64",
+            "system": "darwin"
+          }
+        },
+        "Python Information": {
+          "path": "/private/var/folders/4d/0gnh84wj53j7wyk695q0tc_80000gn/T/build-env-kq4kuj35/bin/python",
+          "version": "3.9"
+        },
+        "SIMD Extensions": {
+          "baseline": [
+            "NEON",
+            "NEON_FP16",
+            "NEON_VFPV4",
+            "ASIMD"
+          ],
+          "found": [
+            "ASIMDHP"
+          ],
+          "not found": [
+            "ASIMDFHM"
+          ]
+        }
+      },
+      "float64_itemsize": 8,
+      "path": "/Users/johnolafenwa/Library/Python/3.9/lib/python/site-packages/numpy/__init__.py",
+      "version": "2.0.2"
+    },
+    "numpy_reference": {
+      "path": "/private/tmp/aura-foundations-after-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+      "sha256": "32bfbfa6cd05ec6e8c5cbfa4a5746aef716fc5e379a51cc9f4067cc13b4354f8"
+    },
+    "python": {
+      "path": "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+      "sha256": "271143990bc83af0fb2404a255038f5faafb96df1584ed7f085e5018c0f33ffb",
+      "version": "Python 3.9.6"
+    },
+    "runner": {
+      "path": "/private/tmp/aura-foundations-after-20260907/scripts/bench-numeric-arrays.py",
+      "sha256": "7d86f425b31b1b870160d7afa46b5288b92de8e3f5d0b550565794562f7f9636"
+    }
+  },
+  "label": "foundations-after-rust",
+  "noncontractual_reasons": [],
+  "parameters": {
+    "add_iterations": 512,
+    "build_timeout_seconds": 1800.0,
+    "competing_cpu_percent": 50.0,
+    "completion_timeout_seconds": 120.0,
+    "dtype": "float64",
+    "elements": 1000000,
+    "pairs": 11,
+    "quiet_process_sample_interval_seconds": 0.25,
+    "ready_timeout_seconds": 30.0,
+    "single_thread_environment": {
+      "AURA_WORKERS": "1",
+      "MKL_NUM_THREADS": "1",
+      "NUMEXPR_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "VECLIB_MAXIMUM_THREADS": "1"
+    },
+    "sum_iterations": 1024
+  },
+  "performance_gate": null,
+  "raw_report": {
+    "path": "/private/tmp/aura-foundations-after-arrays-raw.json",
+    "sha256": "58128b5331777b8a868aae952bbc21b02145a54331f233d02efbb69b4becd22f"
+  },
+  "repository": {
+    "branch": null,
+    "commit": "50531b45797ae765ec8d885165c13042617ab567",
+    "detached": true,
+    "dirty_files": [],
+    "root": "/private/tmp/aura-foundations-after-20260907"
+  },
+  "schema_version": 2
+}

@@ -1,0 +1,44 @@
+{
+  "observed_at": "2026-09-07T01:35:55.926652+00:00",
+  "repository": {
+    "root": "/Users/johnolafenwa/source2/Aurora",
+    "commit": "c43789e0958aabfeee97ca6c9ba4af2e8164b6a5",
+    "branch": "main",
+    "detached": false,
+    "dirty_files": [
+      " M personal/file_ops.au",
+      "?? .swp",
+      "?? architecture_docs/decisions/0022-implicit-shared-capability-syntax.md"
+    ]
+  },
+  "host": {
+    "system": "Darwin",
+    "release": "25.5.0",
+    "version": "Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:24 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6020",
+    "machine": "arm64",
+    "hardware_model": "Mac14,9",
+    "cpu_model": "Apple M2 Pro",
+    "logical_cpus": 10,
+    "physical_cores": 10,
+    "memory_bytes": 17179869184,
+    "boot_time": "{ sec = 1788744561, usec = 878295 } Mon Sep  7 02:29:21 2026",
+    "python": "3.9.6",
+    "load_average": [
+      5.2939453125,
+      20.08349609375,
+      13.52294921875
+    ]
+  },
+  "quiet_host_inventories": [
+    [],
+    [],
+    []
+  ],
+  "allowed_dirty_files": [
+    "personal/file_ops.au",
+    ".swp",
+    "architecture_docs/decisions/0022-implicit-shared-capability-syntax.md"
+  ],
+  "personal_file_sha256": "70c359fe35e5b7c82ecba741d54f8b7b5374fb3244de2f20b50c3832cdc3a32d",
+  "exception_authorization": "User: ignore that personal file and continue"
+}

@@ -1,0 +1,8 @@
+   Compiling libc v0.2.189
+   Compiling pin-project-lite v0.2.17
+   Compiling bytes v1.12.1
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.3
+   Compiling tokio v1.53.1
+   Compiling aura-rust-baselines v0.1.0 (/private/tmp/aura-foundations-after-approved-20260907/benchmarks/rust_baselines)
+    Finished `release` profile [optimized] target(s) in 8.64s

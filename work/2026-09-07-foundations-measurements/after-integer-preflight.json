@@ -1,0 +1,113 @@
+{
+  "phase": "before after-integer invocation",
+  "inventories": [
+    [
+      {
+        "pid": 737,
+        "parent_pid": 1,
+        "command": "/usr/libexec/due",
+        "arguments": "/usr/libexec/duetexpertd",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          99.4,
+          98.8
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      },
+      {
+        "pid": 19208,
+        "parent_pid": 1,
+        "command": "/System/Library/",
+        "arguments": "/System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          99.3,
+          98.7
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      }
+    ],
+    [
+      {
+        "pid": 737,
+        "parent_pid": 1,
+        "command": "/usr/libexec/due",
+        "arguments": "/usr/libexec/duetexpertd",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          98.8,
+          99.6
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      },
+      {
+        "pid": 19208,
+        "parent_pid": 1,
+        "command": "/System/Library/",
+        "arguments": "/System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          98.7,
+          99.0
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      }
+    ],
+    [
+      {
+        "pid": 737,
+        "parent_pid": 1,
+        "command": "/usr/libexec/due",
+        "arguments": "/usr/libexec/duetexpertd",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          98.5,
+          99.8
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      },
+      {
+        "pid": 19208,
+        "parent_pid": 1,
+        "command": "/System/Library/",
+        "arguments": "/System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          98.7,
+          99.0
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      }
+    ]
+  ],
+  "host": {
+    "system": "Darwin",
+    "release": "25.5.0",
+    "version": "Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:24 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6020",
+    "machine": "arm64",
+    "hardware_model": "Mac14,9",
+    "cpu_model": "Apple M2 Pro",
+    "logical_cpus": 10,
+    "physical_cores": 10,
+    "memory_bytes": 17179869184,
+    "boot_time": "{ sec = 1788744561, usec = 878295 } Mon Sep  7 02:29:21 2026",
+    "python": "3.9.6",
+    "load_average": [
+      4.421875,
+      7.51953125,
+      9.5693359375
+    ]
+  }
+}

@@ -74,12 +74,12 @@ with no competing sustained-CPU process:
 ```bash
 /Applications/Xcode.app/Contents/Developer/usr/bin/python3 \
   scripts/bench-release-performance.py \
-  --label batch6-final-post-reboot \
+  --label foundations-after-rust \
   --aura target/release/aura \
   --python /Applications/Xcode.app/Contents/Developer/usr/bin/python3 \
   --pairs 11 \
-  --raw-json /private/tmp/aura-b6-release-performance-raw.json \
-  --summary-json /private/tmp/aura-b6-release-performance-summary.json
+  --raw-json /tmp/aura-foundations-after-release-raw.json \
+  --summary-json /tmp/aura-foundations-after-release-summary.json
 ```
 
 The runner requires exactly 11 rotating pairs, performs one excluded warmup
@@ -99,8 +99,36 @@ diagnostic runs. Do not use it for release evidence.
 The runner builds pinned Rust 1.95.0 references from `benchmarks/rust_baselines/`
 with `--release --locked`, fat LTO, and one codegen unit. Report schema is now 2.
 It records source/lockfile and binary SHA-256 identities and paired Aura/Rust
-samples. Rust timing results are pending the post-reboot measurement session;
-protocol smoke checks are not published as performance evidence.
+samples. Protocol smoke checks are not performance evidence.
+
+The 7 September 2026 runs are contractual at corrected after
+`4e1e48c81bae6c62a54af763a4046901820038ec` and before
+`ddeaddf74301322fc96d8c09742ea12faa1dd8c3`. Both include the identical two casts
+from int64 range values to int32 task parameters; initial unchanged inputs
+failed at both bases. Compiler/runner sources remain unchanged. The
+[Git bundle](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/approved/approved-measurement-commits.bundle) preserves both
+exact commits; its prerequisites are merge `50531b4` and tag `d3cc6b9`.
+
+Both reports have 11 rotating pairs, excluded warmups, exact protocol/checksum
+validation, three empty inventories, clean detached sources and input hash
+rechecks. No override or Rust exclusion was used. The same Mac14,9/M2 Pro boot
+and Xcode CPython 3.9.6 interpreter were used; every CPython control drifted by
+less than 5%, so no repeat was required.
+
+| Exact protocol workload | Aura median | CPython median | Rust median | Aura / CPython | Aura / Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Naive recursive fib(30) | 89.359292 ms | 158.321541 ms | 3.012292 ms | 0.564417 | 29.664884 |
+| Create and join 10,000 tasks | 98.692417 ms | 51.786208 ms | 3.395167 ms | 1.905766 | 29.068501 |
+| 20-client delayed loopback TCP fan-out | 104.268375 ms | 108.793000 ms | 104.597250 ms | 0.958411 | 0.996856 |
+| 16-cycle retrying HTTP worker | 428.814667 ms | 522.391625 ms | 472.607250 ms | 0.820868 | 0.907338 |
+
+Ratios are ratios of medians. The [Performance chapter](../../docs/manual/performance.md)
+records before/after effects, V6 medians, startup-adjustment exclusions, and
+all controls. After raw SHA-256: `a2a31328af601c32783519d9658ab164d9b415046b03b5b7856b6e09c4c79441`.
+Before raw SHA-256: `16aead5c0c9fe73ff2155e66b74edf982c8ec81958ab7ae3b4b2a6ae82498ec7`.
+The [manifest](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/SHA256SUMS) covers both raw/summary reports and source records.
+Run the command above in the corrected after checkout; run the before checkout's
+own runner with label `foundations-before` and distinct output paths.
 
 See [the Rust baseline contract](../rust_baselines/README.md) for exact workload,
 allocation, arithmetic, scheduling, and protocol equivalence. The integer-loop

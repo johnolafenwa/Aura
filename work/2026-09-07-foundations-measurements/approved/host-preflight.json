@@ -1,0 +1,33 @@
+{
+  "observed_at": "2026-09-07T08:28:41.895631+00:00",
+  "host": {
+    "system": "Darwin",
+    "release": "25.5.0",
+    "version": "Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:24 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6020",
+    "machine": "arm64",
+    "hardware_model": "Mac14,9",
+    "cpu_model": "Apple M2 Pro",
+    "logical_cpus": 10,
+    "physical_cores": 10,
+    "memory_bytes": 17179869184,
+    "boot_time": "{ sec = 1788744561, usec = 878295 } Mon Sep  7 02:29:21 2026",
+    "python": "3.9.6",
+    "load_average": [
+      5.43408203125,
+      3.958984375,
+      2.73291015625
+    ]
+  },
+  "quiet_host_inventories": [
+    [],
+    [],
+    []
+  ],
+  "repository": {
+    "root": "/private/tmp/aura-foundations-after-approved-20260907",
+    "commit": "4e1e48c81bae6c62a54af763a4046901820038ec",
+    "branch": null,
+    "detached": true,
+    "dirty_files": []
+  }
+}

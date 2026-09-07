@@ -1,0 +1,68 @@
+{
+  "observed_at": "2026-09-07T02:16:40.620571+00:00",
+  "phase": "after-integer retry 3 before invocation",
+  "inventories": [
+    [
+      {
+        "pid": 775,
+        "parent_pid": 1,
+        "command": "/System/Library/",
+        "arguments": "/System/Library/PrivateFrameworks/MediaAnalysis.framework/Versions/A/mediaanalysisd",
+        "cwd": "/Users/johnolafenwa/Library/Containers/com.apple.mediaanalysisd/Data",
+        "cpu_percent_samples": [
+          76.1,
+          62.7
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      },
+      {
+        "pid": 19208,
+        "parent_pid": 1,
+        "command": "/System/Library/",
+        "arguments": "/System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          99.8,
+          99.7
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      }
+    ],
+    [
+      {
+        "pid": 19208,
+        "parent_pid": 1,
+        "command": "/System/Library/",
+        "arguments": "/System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          99.7,
+          100.0
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      }
+    ],
+    [
+      {
+        "pid": 19208,
+        "parent_pid": 1,
+        "command": "/System/Library/",
+        "arguments": "/System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          100.0,
+          99.8
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      }
+    ]
+  ]
+}

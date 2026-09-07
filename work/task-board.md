@@ -2,6 +2,23 @@
 
 Last updated: 2026-09-07
 
+## Pre-Batch-1 measurement publication (measurements complete; integration in progress)
+
+- Identical two-cast correction approved and applied at both clean source bases.
+  The CLI regression fails before and passes after; compiler/runner code is unchanged.
+- Both corrected release suites and original Array reports are contractual.
+  No override, Rust exclusion or drift-triggered repeat was needed. All CPython
+  and NumPy controls drift by less than 5%.
+- Before/after fib/int32/int64 medians improve 19.06%/20.56%/15.69%; Array add
+  is 7.17% slower and sum essentially unchanged. Separate standalone integer/Rust
+  results remain diagnostic-grade with qualification limits disclosed.
+- Full evidence, corrected-commit Git bundle and hashes retained. Chapters,
+  READMEs, changelog, roadmap measured statuses, ADR-0064 and generated docs updated.
+  Cargo's documented strip=none default was reconfirmed; size bytes retained.
+- [PR #7](https://github.com/johnolafenwa/Aura/pull/7): final-head hosted CI,
+  merge commit, green main CI and corrected-checkout cleanup remain.
+- Work note: `work/2026-09-07-foundations-measurements.md`.
+
 ## Pre-Batch-1 foundations items 1–4 (complete)
 
 - Delivered Cranelift speed, the backend boundary inventory, nine pinned Rust

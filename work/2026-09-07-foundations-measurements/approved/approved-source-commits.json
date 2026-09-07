@@ -1,0 +1,21 @@
+{
+  "authorization": "User: go ahead; identical two-cast correction in before/after clean measurement commits",
+  "observed_at": "2026-09-07T08:21:44.577776+00:00",
+  "patch_sha256": "e624b981bf09dfad66bf6cd8000ee66bfaca85490fea2c1203ed76b50eb86098",
+  "checkouts": {
+    "after": {
+      "root": "/private/tmp/aura-foundations-after-approved-20260907",
+      "parent": "50531b45797ae765ec8d885165c13042617ab567",
+      "commit": "4e1e48c81bae6c62a54af763a4046901820038ec",
+      "dirty_files": [],
+      "diff_sha256": "f5161a05eff7e243e6c862282759e7945158ac1feb29c814263c87ffa11899ff"
+    },
+    "before": {
+      "root": "/private/tmp/aura-foundations-before-approved-20260907",
+      "parent": "d3cc6b96104dd597687a98e9624f800a0cb3cf1e",
+      "commit": "ddeaddf74301322fc96d8c09742ea12faa1dd8c3",
+      "dirty_files": [],
+      "diff_sha256": "f5161a05eff7e243e6c862282759e7945158ac1feb29c814263c87ffa11899ff"
+    }
+  }
+}

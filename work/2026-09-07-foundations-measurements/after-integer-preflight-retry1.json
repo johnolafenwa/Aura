@@ -1,0 +1,54 @@
+{
+  "observed_at": "2026-09-07T01:55:35.693169+00:00",
+  "phase": "after-integer retry 1 before invocation",
+  "inventories": [
+    [
+      {
+        "pid": 19208,
+        "parent_pid": 1,
+        "command": "/System/Library/",
+        "arguments": "/System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          99.3,
+          99.4
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      }
+    ],
+    [
+      {
+        "pid": 19208,
+        "parent_pid": 1,
+        "command": "/System/Library/",
+        "arguments": "/System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          100.0,
+          100.0
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      }
+    ],
+    [
+      {
+        "pid": 19208,
+        "parent_pid": 1,
+        "command": "/System/Library/",
+        "arguments": "/System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged",
+        "cwd": "/",
+        "cpu_percent_samples": [
+          100.0,
+          100.0
+        ],
+        "reasons": [
+          "sustained high CPU (>= 50.0%)"
+        ]
+      }
+    ]
+  ]
+}

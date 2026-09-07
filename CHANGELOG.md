@@ -15,7 +15,19 @@ in this file.
   than clean v0.3.3-preview builds; see the Performance chapter for byte counts
   and provenance.
 - Add pinned Rust baseline programs and lanes to all three timing harnesses,
-  protocol smoke checks, and clean-ref executable-size tooling. Timings deferred.
+  protocol smoke checks, and clean-ref executable-size tooling.
+- Publish post-reboot foundations measurements: fib/int32/int64 medians improve
+  by 19.06%/20.56%/15.69%; Array add becomes 7.17% slower and sum is essentially
+  unchanged. All CPython/NumPy controls drift by less than 5%. The comparison
+  includes profile/link tuning alongside Cranelift speed.
+- Publish contractual Rust control-plane and Array comparisons, plus separately
+  qualified diagnostic standalone integer comparisons. Correct the task/TCP
+  benchmark argument widths identically at both measurement bases, and add a
+  CLI regression checking every release benchmark input. Exact corrected source
+  commits, raw evidence and hashes are retained; no Rust workload was excluded.
+- Verify Cargo 1.95's documented `strip="none"` release default and retain the
+  existing size bytes, with explicit-setting versus omitted-setting behavior
+  documented in the Performance chapter.
 - Document the native semantic boundary and incremental Batch 1 builder plan.
 - Correct the documented compiler coverage floors and `aura test` lifecycle and
   parameterized-registration support.

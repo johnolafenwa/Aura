@@ -1,0 +1,1787 @@
+{
+  "builds": [
+    {
+      "binary": "/tmp/aura-numeric-array-bench-1c37a4um/aura_add",
+      "binary_sha256": "0d98710fb67fa62587377d9348288af7e5f8c9d9da0745d33b1d2000be150cc4",
+      "command": [
+        "/private/tmp/aura-foundations-before-20260907/target/release/aura",
+        "build",
+        "--backend",
+        "direct",
+        "-o",
+        "/tmp/aura-numeric-array-bench-1c37a4um/aura_add",
+        "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/float64_add.au"
+      ],
+      "returncode": 0,
+      "source": "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/float64_add.au",
+      "source_sha256": "df2d650a485f70d1dfdb3c0efe7d8bf68f9a957e3079dc73e3a1f241cbde18f1",
+      "stderr": "aura: built `/tmp/aura-numeric-array-bench-1c37a4um/aura_add` with direct backend\n",
+      "stdout": "",
+      "workload": "add"
+    },
+    {
+      "binary": "/tmp/aura-numeric-array-bench-1c37a4um/aura_sum",
+      "binary_sha256": "8412697913a6c058796b1f5fd3549d14b24ce9308694f65aea451e51becbb2de",
+      "command": [
+        "/private/tmp/aura-foundations-before-20260907/target/release/aura",
+        "build",
+        "--backend",
+        "direct",
+        "-o",
+        "/tmp/aura-numeric-array-bench-1c37a4um/aura_sum",
+        "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/float64_sum.au"
+      ],
+      "returncode": 0,
+      "source": "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/float64_sum.au",
+      "source_sha256": "c4020f36c7db1e8f59261ef622ce4dac9a2e1ca10ee86484c250890afcf0448d",
+      "stderr": "aura: built `/tmp/aura-numeric-array-bench-1c37a4um/aura_sum` with direct backend\n",
+      "stdout": "",
+      "workload": "sum"
+    }
+  ],
+  "contractual": true,
+  "evidence_policy": "measured release evidence only; no Aura-versus-NumPy threshold",
+  "generated_at": "2026-09-07T03:44:15.175886+00:00",
+  "host": {
+    "boot_time": "{ sec = 1788744561, usec = 878295 } Mon Sep  7 02:29:21 2026",
+    "cpu_model": "Apple M2 Pro",
+    "hardware_model": "Mac14,9",
+    "load_average": [
+      1.7646484375,
+      1.6337890625,
+      1.6240234375
+    ],
+    "logical_cpus": 10,
+    "machine": "arm64",
+    "memory_bytes": 17179869184,
+    "physical_cores": 10,
+    "python": "3.9.6",
+    "release": "25.5.0",
+    "system": "Darwin",
+    "version": "Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:24 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6020"
+  },
+  "inputs": {
+    "aura": {
+      "path": "/private/tmp/aura-foundations-before-20260907/target/release/aura",
+      "sha256": "ec314c1ddc3f912dbf34d86eb32b4aca7406561064bf97946deedebe5d39d954",
+      "version": "aura 0.3.3-dev (d3cc6b96104d)"
+    },
+    "benchmark_process": {
+      "path": "/private/tmp/aura-foundations-before-20260907/scripts/benchmark_process.py",
+      "sha256": "bbf4bca940b38bc84101ba4eaf93e568b16edafd91dc298d071ea96be52330de"
+    },
+    "numpy": {
+      "configuration": {
+        "Build Dependencies": {
+          "blas": {
+            "detection method": "system",
+            "found": true,
+            "include directory": "unknown",
+            "lib directory": "unknown",
+            "name": "accelerate",
+            "openblas configuration": "unknown",
+            "pc file directory": "unknown",
+            "version": "unknown"
+          },
+          "lapack": {
+            "detection method": "system",
+            "found": true,
+            "include directory": "unknown",
+            "lib directory": "unknown",
+            "name": "accelerate",
+            "openblas configuration": "unknown",
+            "pc file directory": "unknown",
+            "version": "unknown"
+          }
+        },
+        "Compilers": {
+          "c": {
+            "commands": "cc",
+            "linker": "ld64",
+            "name": "clang",
+            "version": "15.0.0"
+          },
+          "c++": {
+            "commands": "c++",
+            "linker": "ld64",
+            "name": "clang",
+            "version": "15.0.0"
+          },
+          "cython": {
+            "commands": "cython",
+            "linker": "cython",
+            "name": "cython",
+            "version": "3.0.11"
+          }
+        },
+        "Machine Information": {
+          "build": {
+            "cpu": "aarch64",
+            "endian": "little",
+            "family": "aarch64",
+            "system": "darwin"
+          },
+          "host": {
+            "cpu": "aarch64",
+            "endian": "little",
+            "family": "aarch64",
+            "system": "darwin"
+          }
+        },
+        "Python Information": {
+          "path": "/private/var/folders/4d/0gnh84wj53j7wyk695q0tc_80000gn/T/build-env-kq4kuj35/bin/python",
+          "version": "3.9"
+        },
+        "SIMD Extensions": {
+          "baseline": [
+            "NEON",
+            "NEON_FP16",
+            "NEON_VFPV4",
+            "ASIMD"
+          ],
+          "found": [
+            "ASIMDHP"
+          ],
+          "not found": [
+            "ASIMDFHM"
+          ]
+        }
+      },
+      "float64_itemsize": 8,
+      "path": "/Users/johnolafenwa/Library/Python/3.9/lib/python/site-packages/numpy/__init__.py",
+      "version": "2.0.2"
+    },
+    "numpy_reference": {
+      "path": "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+      "sha256": "32bfbfa6cd05ec6e8c5cbfa4a5746aef716fc5e379a51cc9f4067cc13b4354f8"
+    },
+    "python": {
+      "path": "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+      "sha256": "271143990bc83af0fb2404a255038f5faafb96df1584ed7f085e5018c0f33ffb",
+      "version": "Python 3.9.6"
+    },
+    "runner": {
+      "path": "/private/tmp/aura-foundations-before-20260907/scripts/bench-numeric-arrays.py",
+      "sha256": "59960cd411f3479e923da781f68e15906807dbffb19ec63939e7a8843c7140a4"
+    }
+  },
+  "label": "foundations-before",
+  "noncontractual_reasons": [],
+  "pairs": [
+    {
+      "order": [
+        "aura_add",
+        "numpy_add",
+        "aura_sum",
+        "numpy_sum"
+      ],
+      "repeat": 0,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.579896791,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.179554959,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.126587667,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.172964709,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "numpy_sum",
+        "aura_sum",
+        "numpy_add",
+        "aura_add"
+      ],
+      "repeat": 1,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.60449575,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.177415958,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.126246209,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.172931333,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "aura_add",
+        "numpy_add",
+        "aura_sum",
+        "numpy_sum"
+      ],
+      "repeat": 2,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.575164542,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.178809333,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.125208917,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.173099042,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "numpy_sum",
+        "aura_sum",
+        "numpy_add",
+        "aura_add"
+      ],
+      "repeat": 3,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.572050541,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.173890792,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.127811333,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.17310425,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "aura_add",
+        "numpy_add",
+        "aura_sum",
+        "numpy_sum"
+      ],
+      "repeat": 4,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.57108325,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.1775655,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.126624792,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.1731535,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "numpy_sum",
+        "aura_sum",
+        "numpy_add",
+        "aura_add"
+      ],
+      "repeat": 5,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.636007917,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.175974875,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.126544459,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.174810542,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "aura_add",
+        "numpy_add",
+        "aura_sum",
+        "numpy_sum"
+      ],
+      "repeat": 6,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.586061375,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.176742416,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.127383417,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.173091042,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "numpy_sum",
+        "aura_sum",
+        "numpy_add",
+        "aura_add"
+      ],
+      "repeat": 7,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.578525791,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.177060459,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.126813166,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.173466,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "aura_add",
+        "numpy_add",
+        "aura_sum",
+        "numpy_sum"
+      ],
+      "repeat": 8,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.563560708,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.178317541,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.126316834,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.173188208,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "numpy_sum",
+        "aura_sum",
+        "numpy_add",
+        "aura_add"
+      ],
+      "repeat": 9,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.575865917,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.17554125,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.113203583,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.172772709,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    },
+    {
+      "order": [
+        "aura_add",
+        "numpy_add",
+        "aura_sum",
+        "numpy_sum"
+      ],
+      "repeat": 10,
+      "runs": {
+        "aura_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.568887167,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "aura_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/tmp/aura-numeric-array-bench-1c37a4um/aura_sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 1.17780025,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        },
+        "numpy_add": {
+          "checksum": 2048.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "add"
+          ],
+          "done": {
+            "checksum": 2048.0,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "elapsed_s": 0.129164791,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 512,
+            "workload": "add"
+          },
+          "returncode": 0
+        },
+        "numpy_sum": {
+          "checksum": 4096000000.0,
+          "command": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+            "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+            "--workload",
+            "sum"
+          ],
+          "done": {
+            "checksum": 4096000000.0,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "elapsed_s": 0.174123417,
+          "environment": {
+            "AURA_WORKERS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1"
+          },
+          "ready": {
+            "elements": 1000000,
+            "iterations": 1024,
+            "workload": "sum"
+          },
+          "returncode": 0
+        }
+      }
+    }
+  ],
+  "parameters": {
+    "add_iterations": 512,
+    "build_timeout_seconds": 300.0,
+    "competing_cpu_percent": 50.0,
+    "completion_timeout_seconds": 120.0,
+    "dtype": "float64",
+    "elements": 1000000,
+    "pairs": 11,
+    "quiet_process_sample_interval_seconds": 0.25,
+    "ready_timeout_seconds": 30.0,
+    "single_thread_environment": {
+      "AURA_WORKERS": "1",
+      "MKL_NUM_THREADS": "1",
+      "NUMEXPR_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "VECLIB_MAXIMUM_THREADS": "1"
+    },
+    "sum_iterations": 1024
+  },
+  "performance_gate": null,
+  "quiet_process_checks": {
+    "after_timing": [],
+    "before_build": [],
+    "before_timing": []
+  },
+  "repository": {
+    "branch": null,
+    "commit": "d3cc6b96104dd597687a98e9624f800a0cb3cf1e",
+    "detached": true,
+    "dirty_files": [],
+    "root": "/private/tmp/aura-foundations-before-20260907"
+  },
+  "runner_command": [
+    "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+    "/private/tmp/aura-foundations-before-20260907/scripts/bench-numeric-arrays.py",
+    "--label",
+    "foundations-before",
+    "--aura",
+    "target/release/aura",
+    "--python",
+    "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+    "--pairs",
+    "11",
+    "--raw-json",
+    "/tmp/aura-foundations-before-arrays-raw.json",
+    "--summary-json",
+    "/tmp/aura-foundations-before-arrays-summary.json"
+  ],
+  "schema_version": 1,
+  "summaries": {
+    "add": {
+      "aura": {
+        "best_s": 0.563560708,
+        "mad_s": 0.004782666999999963,
+        "median_per_operation_s": 0.001124738119140625,
+        "median_s": 0.575865917,
+        "p95_s": 0.636007917,
+        "samples_s": [
+          0.579896791,
+          0.60449575,
+          0.575164542,
+          0.572050541,
+          0.57108325,
+          0.636007917,
+          0.586061375,
+          0.578525791,
+          0.563560708,
+          0.575865917,
+          0.568887167
+        ]
+      },
+      "dtype": "float64",
+      "elements": 1000000,
+      "iterations_per_observation": 512,
+      "numpy": {
+        "best_s": 0.113203583,
+        "mad_s": 0.00034145799999998894,
+        "median_per_operation_s": 0.000247241537109375,
+        "median_s": 0.126587667,
+        "p95_s": 0.129164791,
+        "samples_s": [
+          0.126587667,
+          0.126246209,
+          0.125208917,
+          0.127811333,
+          0.126624792,
+          0.126544459,
+          0.127383417,
+          0.126813166,
+          0.126316834,
+          0.113203583,
+          0.129164791
+        ]
+      },
+      "paired_median_ratio": 4.580989639377745,
+      "paired_ratios": [
+        4.580989639377745,
+        4.788228928125675,
+        4.593638822065684,
+        4.475741920319382,
+        4.510042946408157,
+        5.025964171216695,
+        4.600766636680817,
+        4.5620325495225,
+        4.4614853789004885,
+        5.086993730578298,
+        4.404351701385868
+      ],
+      "ratio_of_medians": 4.549147090292769
+    },
+    "sum": {
+      "aura": {
+        "best_s": 1.173890792,
+        "mad_s": 0.0009015829999998726,
+        "median_per_operation_s": 0.001149820271484375,
+        "median_s": 1.177415958,
+        "p95_s": 1.179554959,
+        "samples_s": [
+          1.179554959,
+          1.177415958,
+          1.178809333,
+          1.173890792,
+          1.1775655,
+          1.175974875,
+          1.176742416,
+          1.177060459,
+          1.178317541,
+          1.17554125,
+          1.17780025
+        ]
+      },
+      "dtype": "float64",
+      "elements": 1000000,
+      "iterations_per_observation": 1024,
+      "numpy": {
+        "best_s": 0.172772709,
+        "mad_s": 0.00013954099999999303,
+        "median_per_operation_s": 0.000169047119140625,
+        "median_s": 0.17310425,
+        "p95_s": 0.174810542,
+        "samples_s": [
+          0.172964709,
+          0.172931333,
+          0.173099042,
+          0.17310425,
+          0.1731535,
+          0.174810542,
+          0.173091042,
+          0.173466,
+          0.173188208,
+          0.172772709,
+          0.174123417
+        ]
+      },
+      "paired_median_ratio": 6.800702844585874,
+      "paired_ratios": [
+        6.819627921901687,
+        6.808575042904458,
+        6.810028058965225,
+        6.781409422356759,
+        6.800702844585874,
+        6.727139344948659,
+        6.798401594924825,
+        6.785539869484509,
+        6.803682274950266,
+        6.8039753315438265,
+        6.764169175476265
+      ],
+      "ratio_of_medians": 6.8017738328203965
+    }
+  },
+  "warmups": {
+    "aura_add": {
+      "checksum": 2048.0,
+      "command": [
+        "/tmp/aura-numeric-array-bench-1c37a4um/aura_add"
+      ],
+      "done": {
+        "checksum": 2048.0,
+        "iterations": 512,
+        "workload": "add"
+      },
+      "elapsed_s": 0.597331083,
+      "environment": {
+        "AURA_WORKERS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "ready": {
+        "elements": 1000000,
+        "iterations": 512,
+        "workload": "add"
+      },
+      "returncode": 0
+    },
+    "aura_sum": {
+      "checksum": 4096000000.0,
+      "command": [
+        "/tmp/aura-numeric-array-bench-1c37a4um/aura_sum"
+      ],
+      "done": {
+        "checksum": 4096000000.0,
+        "iterations": 1024,
+        "workload": "sum"
+      },
+      "elapsed_s": 1.206760584,
+      "environment": {
+        "AURA_WORKERS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "ready": {
+        "elements": 1000000,
+        "iterations": 1024,
+        "workload": "sum"
+      },
+      "returncode": 0
+    },
+    "numpy_add": {
+      "checksum": 2048.0,
+      "command": [
+        "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+        "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+        "--workload",
+        "add"
+      ],
+      "done": {
+        "checksum": 2048.0,
+        "iterations": 512,
+        "workload": "add"
+      },
+      "elapsed_s": 0.125956,
+      "environment": {
+        "AURA_WORKERS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "ready": {
+        "elements": 1000000,
+        "iterations": 512,
+        "workload": "add"
+      },
+      "returncode": 0
+    },
+    "numpy_sum": {
+      "checksum": 4096000000.0,
+      "command": [
+        "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9",
+        "/private/tmp/aura-foundations-before-20260907/benchmarks/numeric_arrays/numpy_reference.py",
+        "--workload",
+        "sum"
+      ],
+      "done": {
+        "checksum": 4096000000.0,
+        "iterations": 1024,
+        "workload": "sum"
+      },
+      "elapsed_s": 0.173965458,
+      "environment": {
+        "AURA_WORKERS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "ready": {
+        "elements": 1000000,
+        "iterations": 1024,
+        "workload": "sum"
+      },
+      "returncode": 0
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "before_contractual": true,
+  "before_host_checks": {
+    "after_timing": [],
+    "before_build": [],
+    "before_timing": []
+  },
+  "array_comparison": {
+    "add": {
+      "aura_before_ms": 1.124738119140625,
+      "aura_after_ms": 1.205427083984375,
+      "numpy_before_ms": 0.24724153710937496,
+      "numpy_after_ms": 0.2471900234375,
+      "numpy_drift_percent": -0.02083536305317324
+    },
+    "sum": {
+      "aura_before_ms": 1.149820271484375,
+      "aura_after_ms": 1.1486769208984375,
+      "numpy_before_ms": 0.16904711914062498,
+      "numpy_after_ms": 0.16898055078125002,
+      "numpy_drift_percent": -0.03937858255934623
+    }
+  }
+}

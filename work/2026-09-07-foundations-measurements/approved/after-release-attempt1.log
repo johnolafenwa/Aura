@@ -1,0 +1,6 @@
+
+> aura-monorepo@0.3.3 bench:release-performance
+> python3 scripts/bench-release-performance.py --label foundations-after-rust --aura target/release/aura --python /Applications/Xcode.app/Contents/Developer/usr/bin/python3 --pairs 11 --raw-json /tmp/aura-foundations-after-release-raw.json --summary-json /tmp/aura-foundations-after-release-summary.json
+
+wrote /private/tmp/aura-foundations-after-release-raw.json
+wrote /private/tmp/aura-foundations-after-release-summary.json

@@ -211,21 +211,26 @@ Allocation is limited by host memory and the maintained element-count checks.
 Floating arithmetic follows the existing host IEEE-754 contract. This surface
 is narrower than NumPy's API.
 
-The maintained one-million-element `float64` add/sum comparison records
-post-reboot measurements from one named Mac14,9 host.
+The 7 September 2026 post-reboot Mac14,9 / Apple M2 Pro (16 GiB) run at
+`50531b45797ae765ec8d885165c13042617ab567` has 11 rotating single-thread
+observations per lane with excluded warmups and exact protocol validation.
+All three host inventories are empty; this is contractual evidence.
+Xcode CPython 3.9.6 supplies NumPy 2.0.2; Rust is pinned to 1.95.0.
+Ratios below are ratios of medians per one-million-element operation.
 
-On the post-reboot Mac14,9 M2 Pro host at commit `0511adf`, across 11 paired
-single-thread observations, the direct native backend measured these medians
-per one-million-element operation:
+| Workload (one million `float64` elements) | Aura median | NumPy median | Rust median | Aura / NumPy | Aura / Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fresh owned addition | 1.205427 ms | 0.247190 ms | 0.244576 ms | 4.876520 | 4.928642 |
+| Existing-array sum | 1.148677 ms | 0.168981 ms | 0.858175 ms | 6.797687 | 1.338511 |
 
-| workload | Aura | NumPy 2.0.2 | Aura / NumPy |
-| --- | ---: | ---: | ---: |
-| fresh owned `float64` add | 1.142461 ms | 0.251602 ms | 4.540751× |
-| existing-array `float64` sum | 1.150392 ms | 0.174065 ms | 6.608975× |
-
-Release disassembly showed scalar floating-point instructions for these
-kernels. The table covers the two operations named above; Aura's Array API is
-narrower than NumPy's.
+[Raw observations](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/aura-foundations-after-arrays-raw.json) have SHA-256
+`58128b5331777b8a868aae952bbc21b02145a54331f233d02efbb69b4becd22f`.
+The [Performance chapter](/manual/performance#optimization-level) records the
+before comparison and controls: addition became 7.1740% slower, while sum
+changed by -0.0994%. NumPy drift remained below 0.04%. These are effects of the
+combined foundations changes, not an isolated Cranelift experiment.
+The table covers only these exact operations; Aura's Array API is narrower
+than NumPy's, and its deterministic reductions retain left-to-right order.
 
 ## Status
 

@@ -1,0 +1,79 @@
+{
+  "after_contractual": true,
+  "before_contractual": true,
+  "after_host_checks": {
+    "after_timing": [],
+    "before_build": [],
+    "before_timing": []
+  },
+  "before_host_checks": {
+    "after_timing": [],
+    "before_build": [],
+    "before_timing": []
+  },
+  "controls": {
+    "fib30": {
+      "before_ms": 158.086083,
+      "after_ms": 158.321541,
+      "drift_percent": 0.14894290220348605
+    },
+    "tasks_10000": {
+      "before_ms": 51.524874999999994,
+      "after_ms": 51.786208,
+      "drift_percent": 0.5071977370153746
+    },
+    "tcp_fanout": {
+      "before_ms": 108.592667,
+      "after_ms": 108.793,
+      "drift_percent": 0.18448114917373193
+    },
+    "retrying_worker": {
+      "before_ms": 521.3022910000001,
+      "after_ms": 522.391625,
+      "drift_percent": 0.20896397710248316
+    },
+    "cpython_int": {
+      "before_ms": 319.649209,
+      "after_ms": 328.61820800000004,
+      "drift_percent": 2.8058880633738736
+    },
+    "cpython_startup": {
+      "before_ms": 22.874499999999998,
+      "after_ms": 23.895667,
+      "drift_percent": 4.464215611270195
+    }
+  },
+  "aura_changes": {
+    "fib30": {
+      "before_ms": 110.39720799999999,
+      "after_ms": 89.35929200000001,
+      "change_percent": -19.056565271107207
+    },
+    "tasks_10000": {
+      "before_ms": 100.303375,
+      "after_ms": 98.692417,
+      "change_percent": -1.6060855379990913
+    },
+    "tcp_fanout": {
+      "before_ms": 104.534666,
+      "after_ms": 104.26837499999999,
+      "change_percent": -0.2547394182136675
+    },
+    "retrying_worker": {
+      "before_ms": 427.788875,
+      "after_ms": 428.814667,
+      "change_percent": 0.23978931195907105
+    },
+    "aura_int32": {
+      "before_ms": 36.445833,
+      "after_ms": 28.954291,
+      "change_percent": -20.555277197258725
+    },
+    "aura_int64": {
+      "before_ms": 15.148792,
+      "after_ms": 12.7725,
+      "change_percent": -15.686346475679368
+    }
+  },
+  "repeat_required": false
+}

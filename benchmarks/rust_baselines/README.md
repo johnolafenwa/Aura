@@ -23,7 +23,14 @@ fixture's wire contract; the runner does not substitute a remote service.
 and Array kernels. Integer loops expose each counter update to the optimizer
 barrier; this overhead is part of the disclosed Rust reference. Array addition
 retains full fresh allocation; reduction does not use parallel or reassociated
-summation. No timing claims are made by this implementation task.
+summation. The [7 September measurement record](../../docs/manual/performance.md)
+contains contractual control-plane/Array ratios and diagnostic standalone
+integer ratios. No Rust workload was excluded. Aura/Rust protocol ratios of
+medians are fib 29.664884, tasks 29.068501, TCP 0.996856 and retry 0.907338.
+Release sources use the same approved two-cast correction at both compiler bases;
+the benchmark sources and optimizer-barrier qualifications are recorded there.
+The session manifest is in `work/2026-09-07-foundations-measurements/SHA256SUMS`;
+its SHA-256 is `911dc4a7901357b33679ad260923c56d0c8216440b200a0eb12e426ea60cac67`.
 
 Build and protocol-only verification:
 

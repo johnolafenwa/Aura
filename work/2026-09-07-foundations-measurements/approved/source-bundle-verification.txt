@@ -1,0 +1,8 @@
+The bundle contains these 2 refs:
+4e1e48c81bae6c62a54af763a4046901820038ec refs/heads/codex/foundations-measured-after
+ddeaddf74301322fc96d8c09742ea12faa1dd8c3 refs/heads/codex/foundations-measured-before
+The bundle requires these 2 refs:
+d3cc6b96104dd597687a98e9624f800a0cb3cf1e 
+50531b45797ae765ec8d885165c13042617ab567 
+The bundle uses this hash algorithm: sha1
+/private/tmp/aura-foundations-approved-20260907/approved-measurement-commits.bundle is okay

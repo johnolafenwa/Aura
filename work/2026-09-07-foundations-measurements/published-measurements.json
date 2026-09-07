@@ -1,0 +1,225 @@
+{
+  "status": "measurements complete; release and Arrays contractual, standalone integer comparison diagnostic",
+  "array_grade": "contractual at both revisions",
+  "integer_grade": "diagnostic comparison; standalone runner lacks release-suite three-phase host inventory and full input/binary rechecks; external pre/post inventories were quiet",
+  "release_grade": "contractual at both corrected revisions",
+  "arrays": {
+    "add": {
+      "aura_before_ms": 1.124738119140625,
+      "aura_after_ms": 1.205427083984375,
+      "numpy_before_ms": 0.24724153710937496,
+      "numpy_after_ms": 0.2471900234375,
+      "rust_after_ms": 0.24457592773437503,
+      "aura_change_percent": 7.174022420917137,
+      "numpy_drift_percent": -0.02083536305317324,
+      "aura_numpy_ratio_of_medians": 4.876519963149555,
+      "aura_rust_ratio_of_medians": 4.928641568084106,
+      "aura_rust_paired_median_ratio": 4.942400375168533
+    },
+    "sum": {
+      "aura_before_ms": 1.149820271484375,
+      "aura_after_ms": 1.1486769208984375,
+      "numpy_before_ms": 0.16904711914062498,
+      "numpy_after_ms": 0.16898055078125002,
+      "rust_after_ms": 0.8581752929687501,
+      "aura_change_percent": -0.09943733071094973,
+      "numpy_drift_percent": -0.03937858255933513,
+      "aura_numpy_ratio_of_medians": 6.797687163331783,
+      "aura_rust_ratio_of_medians": 1.3385108267621333,
+      "aura_rust_paired_median_ratio": 1.3386005936691883
+    }
+  },
+  "integer": {
+    "int32": {
+      "aura_after_ms": 24.325417000000016,
+      "rust_after_ms": 16.42933400000146,
+      "aura_rust_ratio_of_medians": 1.4806088305221534,
+      "aura_rust_paired_median_ratio": 1.478258277587956,
+      "before_median_ms": null
+    },
+    "int64": {
+      "aura_after_ms": 9.7782500000001,
+      "rust_after_ms": 16.337417000000798,
+      "aura_rust_ratio_of_medians": 0.598518725450885,
+      "aura_rust_paired_median_ratio": 0.5948549658632444,
+      "before_median_ms": null
+    }
+  },
+  "control_drift_repeat_required": false,
+  "cpython_control_drift": {
+    "fib30": {
+      "before_ms": 158.086083,
+      "after_ms": 158.321541,
+      "drift_percent": 0.14894290220348605
+    },
+    "tasks_10000": {
+      "before_ms": 51.524874999999994,
+      "after_ms": 51.786208,
+      "drift_percent": 0.5071977370153746
+    },
+    "tcp_fanout": {
+      "before_ms": 108.592667,
+      "after_ms": 108.793,
+      "drift_percent": 0.18448114917373193
+    },
+    "retrying_worker": {
+      "before_ms": 521.3022910000001,
+      "after_ms": 522.391625,
+      "drift_percent": 0.20896397710248316
+    },
+    "cpython_int": {
+      "before_ms": 319.649209,
+      "after_ms": 328.61820800000004,
+      "drift_percent": 2.8058880633738736
+    },
+    "cpython_startup": {
+      "before_ms": 22.874499999999998,
+      "after_ms": 23.895667,
+      "drift_percent": 4.464215611270195
+    }
+  },
+  "attribution": "comparison includes Cranelift speed and release/link tuning; does not isolate opt_level",
+  "array_source_commits": {
+    "after": "50531b45797ae765ec8d885165c13042617ab567",
+    "before": "d3cc6b96104dd597687a98e9624f800a0cb3cf1e"
+  },
+  "release_source_commits": {
+    "after": "4e1e48c81bae6c62a54af763a4046901820038ec",
+    "before": "ddeaddf74301322fc96d8c09742ea12faa1dd8c3"
+  },
+  "release_protocol": {
+    "fib30": {
+      "aura_before_ms": 110.39720799999999,
+      "aura_after_ms": 89.35929200000001,
+      "cpython_before_ms": 158.086083,
+      "cpython_after_ms": 158.321541,
+      "rust_after_ms": 3.012292,
+      "aura_cpython_ratio_of_medians": 0.5644165123430677,
+      "aura_rust_ratio_of_medians": 29.664883749649768,
+      "aura_rust_paired_median_ratio": 29.75528008368754
+    },
+    "tasks_10000": {
+      "aura_before_ms": 100.303375,
+      "aura_after_ms": 98.692417,
+      "cpython_before_ms": 51.524874999999994,
+      "cpython_after_ms": 51.786208,
+      "rust_after_ms": 3.3951670000000003,
+      "aura_cpython_ratio_of_medians": 1.9057664349550367,
+      "aura_rust_ratio_of_medians": 29.068501490501056,
+      "aura_rust_paired_median_ratio": 29.5104712741075
+    },
+    "tcp_fanout": {
+      "aura_before_ms": 104.534666,
+      "aura_after_ms": 104.26837499999999,
+      "cpython_before_ms": 108.592667,
+      "cpython_after_ms": 108.793,
+      "rust_after_ms": 104.59725,
+      "aura_cpython_ratio_of_medians": 0.958410697379427,
+      "aura_rust_ratio_of_medians": 0.996855796878025,
+      "aura_rust_paired_median_ratio": 0.9972172928838403
+    },
+    "retrying_worker": {
+      "aura_before_ms": 427.788875,
+      "aura_after_ms": 428.814667,
+      "cpython_before_ms": 521.3022910000001,
+      "cpython_after_ms": 522.391625,
+      "rust_after_ms": 472.60724999999996,
+      "aura_cpython_ratio_of_medians": 0.8208681886888979,
+      "aura_rust_ratio_of_medians": 0.9073383173872174,
+      "aura_rust_paired_median_ratio": 0.9060657915756378
+    }
+  },
+  "v6": {
+    "after": {
+      "whole_process_ms": {
+        "aura_int32": 28.954291,
+        "aura_int64": 12.7725,
+        "aura_startup": 5.61,
+        "cpython_int": 328.61820800000004,
+        "cpython_startup": 23.895667
+      },
+      "startup_adjusted": {
+        "aura_int32": {
+          "median_ms": 24.342791,
+          "valid_pairs": 11,
+          "excluded_pairs": []
+        },
+        "aura_int64": {
+          "median_ms": 6.126791,
+          "valid_pairs": 9,
+          "excluded_pairs": [
+            6,
+            10
+          ]
+        },
+        "cpython_int": {
+          "median_ms": 298.047876,
+          "valid_pairs": 11,
+          "excluded_pairs": []
+        }
+      }
+    },
+    "before": {
+      "whole_process_ms": {
+        "aura_int32": 36.445833,
+        "aura_int64": 15.148792,
+        "aura_startup": 6.471834,
+        "cpython_int": 319.649209,
+        "cpython_startup": 22.874499999999998
+      },
+      "startup_adjusted": {
+        "aura_int32": {
+          "median_ms": 31.250791,
+          "valid_pairs": 11,
+          "excluded_pairs": []
+        },
+        "aura_int64": {
+          "median_ms": 7.788665999999999,
+          "valid_pairs": 9,
+          "excluded_pairs": [
+            0,
+            10
+          ]
+        },
+        "cpython_int": {
+          "median_ms": 293.76949999999994,
+          "valid_pairs": 11,
+          "excluded_pairs": []
+        }
+      }
+    }
+  },
+  "release_aura_changes": {
+    "fib30": {
+      "before_ms": 110.39720799999999,
+      "after_ms": 89.35929200000001,
+      "change_percent": -19.056565271107207
+    },
+    "tasks_10000": {
+      "before_ms": 100.303375,
+      "after_ms": 98.692417,
+      "change_percent": -1.6060855379990913
+    },
+    "tcp_fanout": {
+      "before_ms": 104.534666,
+      "after_ms": 104.26837499999999,
+      "change_percent": -0.2547394182136675
+    },
+    "retrying_worker": {
+      "before_ms": 427.788875,
+      "after_ms": 428.814667,
+      "change_percent": 0.23978931195907105
+    },
+    "aura_int32": {
+      "before_ms": 36.445833,
+      "after_ms": 28.954291,
+      "change_percent": -20.555277197258725
+    },
+    "aura_int64": {
+      "before_ms": 15.148792,
+      "after_ms": 12.7725,
+      "change_percent": -15.686346475679368
+    }
+  },
+  "rust_exclusions": []
+}

@@ -1,0 +1,6 @@
+benchmark error: failed to build /private/tmp/aura-foundations-after-20260907/benchmarks/release_performance/tasks_10000.au: error[AU2002]: argument type mismatch for task_value: expected `int32`, found `int64`
+ --> /private/tmp/aura-foundations-after-20260907/benchmarks/release_performance/tasks_10000.au:40:50
+   |
+40 |             tasks.append(group.start(task_value, value))
+   |                                                  ^
+
