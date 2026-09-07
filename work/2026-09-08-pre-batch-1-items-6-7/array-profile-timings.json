@@ -1,0 +1,910 @@
+{
+  "status": "diagnostic quiet-host profile control; not contractual detached-checkout evidence",
+  "pre_inventory": [],
+  "post_inventory": [],
+  "warmups_per_lane": 2,
+  "observations_per_lane": 11,
+  "pairs": [
+    {
+      "default": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-default"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.525675125,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "tuned_before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-before"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.616523625,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "vectorized": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-vectorized"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.12808875,
+        "checksum": 2048.0,
+        "returncode": 0
+      }
+    },
+    {
+      "vectorized": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-vectorized"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.125719916,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "tuned_before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-before"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.609210417,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "default": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-default"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.5778595,
+        "checksum": 2048.0,
+        "returncode": 0
+      }
+    },
+    {
+      "default": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-default"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.585180291,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "tuned_before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-before"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.626385042,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "vectorized": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-vectorized"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.128358042,
+        "checksum": 2048.0,
+        "returncode": 0
+      }
+    },
+    {
+      "vectorized": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-vectorized"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.124946042,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "tuned_before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-before"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.625239125,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "default": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-default"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.569141625,
+        "checksum": 2048.0,
+        "returncode": 0
+      }
+    },
+    {
+      "default": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-default"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.593344125,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "tuned_before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-before"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.603298792,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "vectorized": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-vectorized"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.131518083,
+        "checksum": 2048.0,
+        "returncode": 0
+      }
+    },
+    {
+      "vectorized": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-vectorized"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.126020125,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "tuned_before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-before"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.625256625,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "default": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-default"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.577764208,
+        "checksum": 2048.0,
+        "returncode": 0
+      }
+    },
+    {
+      "default": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-default"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.577878208,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "tuned_before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-before"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.628298833,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "vectorized": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-vectorized"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.125362,
+        "checksum": 2048.0,
+        "returncode": 0
+      }
+    },
+    {
+      "vectorized": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-vectorized"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.113480167,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "tuned_before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-before"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.623590417,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "default": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-default"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.592477208,
+        "checksum": 2048.0,
+        "returncode": 0
+      }
+    },
+    {
+      "default": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-default"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.566113333,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "tuned_before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-before"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.62037325,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "vectorized": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-vectorized"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.124902292,
+        "checksum": 2048.0,
+        "returncode": 0
+      }
+    },
+    {
+      "vectorized": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-vectorized"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.126811958,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "tuned_before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-before"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.620805917,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "default": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-default"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.6149895,
+        "checksum": 2048.0,
+        "returncode": 0
+      }
+    },
+    {
+      "default": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-default"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.614491667,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "tuned_before": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-before"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.610784459,
+        "checksum": 2048.0,
+        "returncode": 0
+      },
+      "vectorized": {
+        "command": [
+          "/private/tmp/aura-items-6-7-profile/array-add-vectorized"
+        ],
+        "environment": {
+          "AURA_WORKERS": "1",
+          "OMP_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "NUMEXPR_NUM_THREADS": "1"
+        },
+        "ready": {
+          "workload": "add",
+          "elements": 1000000,
+          "iterations": 512
+        },
+        "done": {
+          "workload": "add",
+          "iterations": 512,
+          "checksum": 2048.0
+        },
+        "elapsed_s": 0.131307459,
+        "checksum": 2048.0,
+        "returncode": 0
+      }
+    }
+  ],
+  "median_ms_per_add": {
+    "default": 1.128668375,
+    "tuned_before": 1.212511556640625,
+    "vectorized": 0.24613305664062501
+  },
+  "tuned_regression_percent": 7.428504554371429,
+  "vectorized_improvement_percent": 79.70055994166691,
+  "binaries": {
+    "default": {
+      "path": "/private/tmp/aura-items-6-7-profile/array-add-default",
+      "sha256": "424e4ea2fcc99ffb0955a7d8251edd04f2372a011fa600c38e40f363bfccc980"
+    },
+    "tuned_before": {
+      "path": "/private/tmp/aura-items-6-7-profile/array-add-before",
+      "sha256": "f96a906368af1d1f9e8fdfff4d1e5cd02fd03ead4ab8a02b7cf77aa3b2f76e7d"
+    },
+    "vectorized": {
+      "path": "/private/tmp/aura-items-6-7-profile/array-add-vectorized",
+      "sha256": "72d7c823d70109d3a18c422f486b1a29c6d1f39ade91b5aba878863b9614ca30"
+    }
+  }
+}

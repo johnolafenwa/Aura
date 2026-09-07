@@ -1,0 +1,20 @@
+{
+  "source_commit": "052d342658c8b3344ad291d4136cc5705746d2d4",
+  "base_commit": "a368dce7e7b335c1c0cb800ba5240501a21f02bc",
+  "base_difference": "work records only",
+  "ci_url": "https://github.com/johnolafenwa/Aura/actions/runs/34109940364",
+  "job": "verify (macos-15)",
+  "counts": {
+    "regions": 157790,
+    "missed_regions": 8195,
+    "functions": 6954,
+    "missed_functions": 194,
+    "lines": 105275,
+    "missed_lines": 3891
+  },
+  "percentages": {
+    "lines": 96.30396580384706,
+    "functions": 97.21023871153292,
+    "regions": 94.8063882375309
+  }
+}

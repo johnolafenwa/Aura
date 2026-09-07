@@ -1,0 +1,28 @@
+{
+  "status": "diagnostic quiet-host profile control; not contractual detached-checkout evidence",
+  "pre_inventory": [],
+  "post_inventory": [],
+  "warmups_per_lane": 2,
+  "observations_per_lane": 11,
+  "median_ms_per_add": {
+    "default": 1.128668375,
+    "tuned_before": 1.212511556640625,
+    "vectorized": 0.24613305664062501
+  },
+  "tuned_regression_percent": 7.428504554371429,
+  "vectorized_improvement_percent": 79.70055994166691,
+  "binaries": {
+    "default": {
+      "path": "/private/tmp/aura-items-6-7-profile/array-add-default",
+      "sha256": "424e4ea2fcc99ffb0955a7d8251edd04f2372a011fa600c38e40f363bfccc980"
+    },
+    "tuned_before": {
+      "path": "/private/tmp/aura-items-6-7-profile/array-add-before",
+      "sha256": "f96a906368af1d1f9e8fdfff4d1e5cd02fd03ead4ab8a02b7cf77aa3b2f76e7d"
+    },
+    "vectorized": {
+      "path": "/private/tmp/aura-items-6-7-profile/array-add-vectorized",
+      "sha256": "72d7c823d70109d3a18c422f486b1a29c6d1f39ade91b5aba878863b9614ca30"
+    }
+  }
+}

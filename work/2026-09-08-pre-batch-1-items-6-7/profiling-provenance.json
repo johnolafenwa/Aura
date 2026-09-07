@@ -1,0 +1,77 @@
+{
+  "reference_agent_version_0": "fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc",
+  "frozen_corpus_commit": "b1c40b6eff649e7b28c6359c996b7b577e8db42a",
+  "kernel_implementation_commit": "7f93a6c4d6b64f5ece510203c54058fe44a041b8",
+  "profile_environment": {
+    "CARGO_TARGET_DIR": "target/foundations-profile",
+    "CARGO_PROFILE_RELEASE_STRIP": "none",
+    "AURA_NATIVE_KEEP_SYMBOLS": "1"
+  },
+  "tool_versions": [
+    {
+      "command": [
+        "rustc",
+        "+1.95.0",
+        "-Vv"
+      ],
+      "output": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: aarch64-apple-darwin\nrelease: 1.95.0\nLLVM version: 22.1.2"
+    },
+    {
+      "command": [
+        "xcrun",
+        "xctrace",
+        "version"
+      ],
+      "output": "xctrace version 16.0 (17F113)"
+    },
+    {
+      "command": [
+        "xcrun",
+        "llvm-objdump",
+        "--version"
+      ],
+      "output": "Apple LLVM version 21.0.0\n  Optimized build.\n\n\n  Registered Targets:\n    aarch64    - AArch64 (little endian)\n    aarch64_32 - AArch64 (little endian ILP32)\n    aarch64_be - AArch64 (big endian)\n    arm        - ARM\n    arm64      - ARM64 (little endian)\n    arm64_32   - ARM64 (little endian ILP32)\n    armeb      - ARM (big endian)\n    thumb      - Thumb\n    thumbeb    - Thumb (big endian)\n    x86        - 32-bit X86: Pentium-Pro and above\n    x86-64     - 64-bit X86: EM64T and AMD64"
+    },
+    {
+      "command": [
+        "sysctl",
+        "-n",
+        "hw.model"
+      ],
+      "output": "Mac14,9"
+    },
+    {
+      "command": [
+        "sw_vers"
+      ],
+      "output": "ProductName:\t\tmacOS\nProductVersion:\t\t26.5.2\nBuildVersion:\t\t25F84"
+    }
+  ],
+  "binaries": {
+    "fib30-before": {
+      "bytes": 1961056,
+      "sha256": "fe44951106cf10e85881760545e39fa6729d6581042495a093fafa23195d7f6b"
+    },
+    "fib30-spill": {
+      "bytes": 1960856,
+      "sha256": "023b4dee51c466a324fdf5365d444a564ed1bdfde016930b2e413e2bba7c0146"
+    },
+    "array-add-before": {
+      "bytes": 2036480,
+      "sha256": "f96a906368af1d1f9e8fdfff4d1e5cd02fd03ead4ab8a02b7cf77aa3b2f76e7d"
+    },
+    "array-add-default": {
+      "bytes": 2268016,
+      "sha256": "424e4ea2fcc99ffb0955a7d8251edd04f2372a011fa600c38e40f363bfccc980"
+    },
+    "array-add-vectorized": {
+      "bytes": 2036920,
+      "sha256": "72d7c823d70109d3a18c422f486b1a29c6d1f39ade91b5aba878863b9614ca30"
+    }
+  },
+  "source_identity": {
+    "benchmarks/release_performance/fib30.au": "9371911f2bf248caae575ca00e16643975dadcae608c09c063f04c85244a9b43",
+    "benchmarks/numeric_arrays/float64_add.au": "df2d650a485f70d1dfdb3c0efe7d8bf68f9a957e3079dc73e3a1f241cbde18f1",
+    "crates/aura-compiler/src/array_kernel_expected.json": "fc37226fad31e9983ad6a337051829ef06ab832b0fee72e3d5837d3f17f985ce"
+  }
+}

@@ -1,0 +1,38 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.38
+   Compiling rustls-webpki v0.103.13
+   Compiling rcgen v0.13.2
+   Compiling tungstenite v0.24.0
+   Compiling aura-compiler v0.3.3 (/Users/johnolafenwa/source2/Aurora/crates/aura-compiler)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.79s
+     Running unittests src/lib.rs (target/debug/deps/aura_compiler-a1af07a7215d2a39)
+
+running 2 tests
+test mir_runtime::tests::mir_array_kernels_match_frozen_pre_vectorization_bits ... FAILED
+test native_runtime::tests::direct_array_kernels_match_frozen_pre_vectorization_bits ... FAILED
+
+failures:
+
+---- mir_runtime::tests::mir_array_kernels_match_frozen_pre_vectorization_bits stdout ----
+
+thread 'mir_runtime::tests::mir_array_kernels_match_frozen_pre_vectorization_bits' (626245) panicked at crates/aura-compiler/src/array_kernel_corpus.rs:99:5:
+assertion `left == right` failed: the frozen corpus must cover every case
+  left: 984
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- native_runtime::tests::direct_array_kernels_match_frozen_pre_vectorization_bits stdout ----
+
+thread 'native_runtime::tests::direct_array_kernels_match_frozen_pre_vectorization_bits' (626608) panicked at crates/aura-compiler/src/array_kernel_corpus.rs:99:5:
+assertion `left == right` failed: the frozen corpus must cover every case
+  left: 984
+ right: 0
+
+
+failures:
+    mir_runtime::tests::mir_array_kernels_match_frozen_pre_vectorization_bits
+    native_runtime::tests::direct_array_kernels_match_frozen_pre_vectorization_bits
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1882 filtered out; finished in 61.60s
+
+error: test failed, to rerun pass `-p aura-compiler --lib`

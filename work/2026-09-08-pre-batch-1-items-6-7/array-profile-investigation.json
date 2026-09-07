@@ -1,0 +1,42 @@
+{
+  "status": "disassembly investigation and diagnostic quiet profile control complete",
+  "source_commit": "a368dce7e7b335c1c0cb800ba5240501a21f02bc",
+  "unchanged_kernel_since_v0_3_3_preview": true,
+  "compiler_commit": "fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc",
+  "compiler_note": "Symbol-preserving CLI; unchanged Cranelift speed setup and Array source. Default-profile archive built from the clean merge-base checkout. Tuned archive built before kernel changes from matching runtime sources.",
+  "profiles": {
+    "default": {
+      "lto": false,
+      "codegen_units": 16,
+      "opt_level": 3,
+      "strip": "none"
+    },
+    "tuned": {
+      "lto": "fat",
+      "codegen_units": 1,
+      "opt_level": 3,
+      "strip": "none"
+    }
+  },
+  "binaries": {
+    "default": {
+      "path": "/private/tmp/aura-items-6-7-profile/array-add-default",
+      "sha256": "424e4ea2fcc99ffb0955a7d8251edd04f2372a011fa600c38e40f363bfccc980"
+    },
+    "tuned": {
+      "path": "/private/tmp/aura-items-6-7-profile/array-add-before",
+      "sha256": "f96a906368af1d1f9e8fdfff4d1e5cd02fd03ead4ab8a02b7cf77aa3b2f76e7d"
+    }
+  },
+  "observed": "Both profiles call an out-of-line array_float64_binary from ArrayValue::binary; neither has a per-element helper call. The default profile has separately selected scalar add/sub/mul loops. The tuned profile performs scalar fadd, fsub and fmul plus two fcsel instructions per non-dividing element, then Vec push capacity checks. This is a loop-selection/code-generation difference rather than disappearance of kernel inlining. The explicit operation match outside the new loops removes the dependency on LLVM choosing loop unswitching. No inlining attribute is justified by this evidence.",
+  "causality_limit": "The earlier published comparison changed more than LTO; these profile controls also differ in codegen units. Instruction evidence identifies extra work but does not prove the historical 7.174% was solely due to LTO.",
+  "timing_summary": {
+    "median_ms_per_add": {
+      "default": 1.128668375,
+      "tuned_before": 1.212511556640625,
+      "vectorized": 0.24613305664062501
+    },
+    "tuned_regression_percent": 7.428504554371429,
+    "vectorized_improvement_percent": 79.70055994166691
+  }
+}

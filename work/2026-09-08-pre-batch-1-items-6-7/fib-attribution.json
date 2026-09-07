@@ -1,0 +1,656 @@
+{
+  "recordings": 11,
+  "all_process_samples": 1502,
+  "fib_active_samples": 1402,
+  "excluded_non_fib_or_unwind_missing": 100,
+  "missing_backtraces": 10,
+  "method": "Exclusive leaf PC of samples whose stack contains aura_fn_fib; ASLR-normalized, aligned arm64 instruction PC. Frame category includes metadata UTF-8 validation. Other runtime includes TLS/task-state lookup, returned-view bookkeeping and runtime prologues/epilogues. Scalar argument/result register moves are separate; there is no boxing. No safepoints emitted in this non-tasking fib program. Unattributed is conditional on a recovered fib stack; excluded rows may include unwind failures as well as startup/protocol work.",
+  "categories": [
+    {
+      "category": "emitted Aura function body",
+      "samples": 48,
+      "percent": 3.4236804564907275
+    },
+    {
+      "category": "runtime call-frame push and pop",
+      "samples": 691,
+      "percent": 49.2867332382311
+    },
+    {
+      "category": "recursion-depth accounting",
+      "samples": 22,
+      "percent": 1.5691868758915835
+    },
+    {
+      "category": "safepoint and backedge yield polling",
+      "samples": 0,
+      "percent": 0.0
+    },
+    {
+      "category": "checked integer arithmetic",
+      "samples": 29,
+      "percent": 2.0684736091298146
+    },
+    {
+      "category": "argument and result marshalling",
+      "samples": 88,
+      "percent": 6.276747503566334
+    },
+    {
+      "category": "other runtime",
+      "samples": 524,
+      "percent": 37.375178316690445
+    },
+    {
+      "category": "unattributed",
+      "samples": 0,
+      "percent": 0.0
+    }
+  ],
+  "leaf_counts": {
+    "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8": 400,
+    "aura_direct_enter_call_with_frame": 265,
+    "aura_direct_exit_call": 223,
+    "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d": 189,
+    "aura_fn_fib": 165,
+    "core::ptr::drop_in_place$LT$aura_compiler..native_runtime..DirectCallFrameStorage$GT$::he81610866b0752da": 92,
+    "_tlv_get_addr": 68
+  },
+  "leaf_pcs": [
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b54",
+      "samples": 91
+    },
+    {
+      "name": "aura_fn_fib",
+      "pc": "0x100004138",
+      "samples": 64
+    },
+    {
+      "name": "core::ptr::drop_in_place$LT$aura_compiler..native_runtime..DirectCallFrameStorage$GT$::he81610866b0752da",
+      "pc": "0x100037f74",
+      "samples": 44
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b24",
+      "samples": 43
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b08",
+      "samples": 42
+    },
+    {
+      "name": "_tlv_get_addr",
+      "pc": "0x10001d394",
+      "samples": 41
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b34",
+      "samples": 37
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112ad4",
+      "samples": 36
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b10",
+      "samples": 34
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x100019004",
+      "samples": 34
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x100019094",
+      "samples": 33
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b44",
+      "samples": 32
+    },
+    {
+      "name": "core::ptr::drop_in_place$LT$aura_compiler..native_runtime..DirectCallFrameStorage$GT$::he81610866b0752da",
+      "pc": "0x1000380a8",
+      "samples": 31
+    },
+    {
+      "name": "aura_fn_fib",
+      "pc": "0x100004030",
+      "samples": 28
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112ce4",
+      "samples": 28
+    },
+    {
+      "name": "_tlv_get_addr",
+      "pc": "0x10001d39c",
+      "samples": 23
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x100019070",
+      "samples": 23
+    },
+    {
+      "name": "aura_fn_fib",
+      "pc": "0x100004050",
+      "samples": 23
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052efc",
+      "samples": 20
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052e5c",
+      "samples": 19
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x100018ff4",
+      "samples": 18
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x10005342c",
+      "samples": 17
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052c7c",
+      "samples": 17
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x100019048",
+      "samples": 17
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x100053480",
+      "samples": 17
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x1000531b0",
+      "samples": 16
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052d38",
+      "samples": 16
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052ce4",
+      "samples": 16
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x10001900c",
+      "samples": 16
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052af0",
+      "samples": 15
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052ed4",
+      "samples": 15
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b00",
+      "samples": 14
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b28",
+      "samples": 13
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052ea4",
+      "samples": 13
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052e24",
+      "samples": 13
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052e9c",
+      "samples": 13
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052b6c",
+      "samples": 13
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x100018fec",
+      "samples": 13
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x10005341c",
+      "samples": 13
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x1000190b8",
+      "samples": 12
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x10005345c",
+      "samples": 12
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x10005316c",
+      "samples": 12
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x1000531d0",
+      "samples": 11
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x1000533c0",
+      "samples": 11
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052c4c",
+      "samples": 11
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x1000532f0",
+      "samples": 10
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052ef4",
+      "samples": 10
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052ac4",
+      "samples": 10
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052a90",
+      "samples": 10
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x10005320c",
+      "samples": 10
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x1000532ec",
+      "samples": 10
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052d00",
+      "samples": 10
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x100053288",
+      "samples": 10
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x100019008",
+      "samples": 10
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x10005329c",
+      "samples": 9
+    },
+    {
+      "name": "aura_fn_fib",
+      "pc": "0x100004044",
+      "samples": 9
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b30",
+      "samples": 9
+    },
+    {
+      "name": "aura_fn_fib",
+      "pc": "0x100004068",
+      "samples": 9
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x10005347c",
+      "samples": 8
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x100053200",
+      "samples": 8
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052adc",
+      "samples": 8
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x1000534e0",
+      "samples": 8
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052b84",
+      "samples": 7
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052b90",
+      "samples": 7
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x100053268",
+      "samples": 6
+    },
+    {
+      "name": "aura_fn_fib",
+      "pc": "0x100004084",
+      "samples": 6
+    },
+    {
+      "name": "core::ptr::drop_in_place$LT$aura_compiler..native_runtime..DirectCallFrameStorage$GT$::he81610866b0752da",
+      "pc": "0x1000380ac",
+      "samples": 6
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b04",
+      "samples": 6
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052c40",
+      "samples": 6
+    },
+    {
+      "name": "aura_fn_fib",
+      "pc": "0x1000040b4",
+      "samples": 5
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x1000532c8",
+      "samples": 5
+    },
+    {
+      "name": "aura_fn_fib",
+      "pc": "0x100004098",
+      "samples": 5
+    },
+    {
+      "name": "core::ptr::drop_in_place$LT$aura_compiler..native_runtime..DirectCallFrameStorage$GT$::he81610866b0752da",
+      "pc": "0x100037f6c",
+      "samples": 5
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x100018ff0",
+      "samples": 5
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x100053294",
+      "samples": 5
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b4c",
+      "samples": 4
+    },
+    {
+      "name": "aura_fn_fib",
+      "pc": "0x100004048",
+      "samples": 4
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052ad4",
+      "samples": 4
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b40",
+      "samples": 4
+    },
+    {
+      "name": "aura_fn_fib",
+      "pc": "0x100004154",
+      "samples": 4
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x100053438",
+      "samples": 4
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x100053178",
+      "samples": 4
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x100053204",
+      "samples": 3
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x1000531c4",
+      "samples": 3
+    },
+    {
+      "name": "core::ptr::drop_in_place$LT$aura_compiler..native_runtime..DirectCallFrameStorage$GT$::he81610866b0752da",
+      "pc": "0x100037f68",
+      "samples": 3
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b18",
+      "samples": 3
+    },
+    {
+      "name": "_tlv_get_addr",
+      "pc": "0x10001d398",
+      "samples": 3
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x1000534e4",
+      "samples": 3
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x1000190c0",
+      "samples": 3
+    },
+    {
+      "name": "aura_fn_fib",
+      "pc": "0x100004078",
+      "samples": 3
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052c28",
+      "samples": 3
+    },
+    {
+      "name": "aura_fn_fib",
+      "pc": "0x10000408c",
+      "samples": 3
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x100019060",
+      "samples": 2
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x100053398",
+      "samples": 2
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b3c",
+      "samples": 2
+    },
+    {
+      "name": "core::ptr::drop_in_place$LT$aura_compiler..native_runtime..DirectCallFrameStorage$GT$::he81610866b0752da",
+      "pc": "0x100037f84",
+      "samples": 2
+    },
+    {
+      "name": "aura_fn_fib",
+      "pc": "0x1000040b0",
+      "samples": 2
+    },
+    {
+      "name": "_tlv_get_addr",
+      "pc": "0x10001d3a0",
+      "samples": 1
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x100019010",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x100053400",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052e4c",
+      "samples": 1
+    },
+    {
+      "name": "core::ptr::drop_in_place$LT$aura_compiler..native_runtime..DirectCallFrameStorage$GT$::he81610866b0752da",
+      "pc": "0x100037f60",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052a98",
+      "samples": 1
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b1c",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x100053454",
+      "samples": 1
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x1000190b0",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052c88",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052e20",
+      "samples": 1
+    },
+    {
+      "name": "aura_compiler::native_runtime::direct_task_runtime_key::h9edc8b91ee6a1b3d",
+      "pc": "0x100019054",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052e38",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x1000533cc",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x100053428",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052f00",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x100053418",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052b94",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_exit_call",
+      "pc": "0x1000532f8",
+      "samples": 1
+    },
+    {
+      "name": "_RNvNtNtCsl8K0bEFm1U0_4core3str8converts9from_utf8",
+      "pc": "0x100112b50",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052ed0",
+      "samples": 1
+    },
+    {
+      "name": "aura_direct_enter_call_with_frame",
+      "pc": "0x100052ec4",
+      "samples": 1
+    }
+  ]
+}

@@ -2797,6 +2797,7 @@ fn native_cache_key_for_semantic_schema(
     let lowered = serde_json::to_vec(mir).ok()?;
     let runtime = native_runtime_identity_material(runtime_identity)?;
     let semantic_schema = semantic_schema_version.to_le_bytes();
+    let keep_symbols = [u8::from(native_keep_symbols())];
     let mut material = Vec::with_capacity(lowered.len() + 256);
     for part in [
         NATIVE_CACHE_FORMAT.as_bytes(),
@@ -2805,6 +2806,7 @@ fn native_cache_key_for_semantic_schema(
         std::env::consts::ARCH.as_bytes(),
         std::env::consts::OS.as_bytes(),
         b"direct",
+        keep_symbols.as_slice(),
         runtime.as_slice(),
     ] {
         material.extend_from_slice(part);
@@ -4062,7 +4064,7 @@ fn user_binary_strip_command(path: &Path) -> Command {
 }
 
 fn strip_user_binary(path: &Path) -> std::result::Result<(), String> {
-    if !matches!(std::env::consts::OS, "macos" | "linux") {
+    if native_keep_symbols() || !matches!(std::env::consts::OS, "macos" | "linux") {
         return Ok(());
     }
     let output = user_binary_strip_command(path)
@@ -4075,6 +4077,10 @@ fn strip_user_binary(path: &Path) -> std::result::Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn native_keep_symbols() -> bool {
+    std::env::var_os("AURA_NATIVE_KEEP_SYMBOLS").is_some_and(|value| value == "1")
 }
 
 fn user_binary_link_args(os: &str) -> &'static [&'static str] {

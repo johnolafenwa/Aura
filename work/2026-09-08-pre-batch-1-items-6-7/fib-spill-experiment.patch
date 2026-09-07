@@ -1,0 +1,27 @@
+diff --git a/crates/aura-compiler/src/native_runtime.rs b/crates/aura-compiler/src/native_runtime.rs
+index f8a98c5..656decf 100644
+--- a/crates/aura-compiler/src/native_runtime.rs
++++ b/crates/aura-compiler/src/native_runtime.rs
+@@ -347,6 +347,10 @@ enum DirectCallFrameStorage {
+ 
+ impl DirectCallFrameStorage {
+     fn push(&mut self, frame: DirectRuntimeCallFrame) {
++        if let Self::Spill(frames) = self {
++            frames.push(frame);
++            return;
++        }
+         match std::mem::take(self) {
+             Self::Empty => *self = Self::Inline(frame),
+             Self::Inline(first) => {
+@@ -363,6 +367,11 @@ impl DirectCallFrameStorage {
+     }
+ 
+     fn pop(&mut self) -> Option<DirectRuntimeCallFrame> {
++        if let Self::Spill(frames) = self {
++            if frames.len() > 2 {
++                return frames.pop();
++            }
++        }
+         match std::mem::take(self) {
+             Self::Empty => None,
+             Self::Inline(frame) => Some(frame),

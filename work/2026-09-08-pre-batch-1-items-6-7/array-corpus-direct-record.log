@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running unittests src/lib.rs (target/debug/deps/aura_compiler-a1af07a7215d2a39)
+
+running 1 test
+test native_runtime::tests::direct_array_kernels_match_frozen_pre_vectorization_bits ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1883 filtered out; finished in 30.44s
+

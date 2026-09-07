@@ -1,0 +1,131 @@
+import control
+import json
+import metrics
+
+
+enum ToolError:
+    InvalidRequest
+    UnknownTool(str)
+    NotReady
+
+
+class ToolRequest:
+    tool: str
+    value: int64
+
+    def to_json(self) -> json.Value:
+        return json.Value.Object({"tool": json.Value.String(self.tool.clone()), "value": json.Value.Int(self.value)})
+
+    def from_json(value: own json.Value) -> Result[ToolRequest, ToolError]:
+        match own json.into_object(value):
+            case Option.Some(fields):
+                if fields.len() != 2:
+                    return Result.Err(ToolError.InvalidRequest)
+                match own fields.get("tool"):
+                    case Option.Some(json.Value.String(tool)):
+                        match fields.get("value"):
+                            case Option.Some(json.Value.Int(number)):
+                                return Result.Ok(ToolRequest(tool=tool, value=number))
+                            case _:
+                                return Result.Err(ToolError.InvalidRequest)
+                    case _:
+                        return Result.Err(ToolError.InvalidRequest)
+            case Option.None:
+                return Result.Err(ToolError.InvalidRequest)
+
+
+class ToolResult:
+    tool: str
+    value: int64
+
+    def to_json(self) -> json.Value:
+        return json.Value.Object({"tool": json.Value.String(self.tool.clone()), "value": json.Value.Int(self.value)})
+
+    def from_json(value: own json.Value) -> Result[ToolResult, ToolError]:
+        match own ToolRequest.from_json(value):
+            case Result.Ok(request):
+                return Result.Ok(ToolResult(tool=request.tool.clone(), value=request.value))
+            case Result.Err(error):
+                return Result.Err(error)
+
+
+class Session:
+    name: str
+
+    def close(mut self) -> None:
+        print(f"closed {self.name}")
+
+
+def double(value: int64) -> Result[ToolResult, ToolError]:
+    return Result.Ok(ToolResult(tool="double", value=value * 2))
+
+
+def increment(value: int64) -> Result[ToolResult, ToolError]:
+    return Result.Ok(ToolResult(tool="increment", value=value + 1))
+
+
+def dispatch(request: ToolRequest, registry: dict[str, def(int64) -> Result[ToolResult, ToolError]]) -> Result[ToolResult, ToolError]:
+    match registry.get(request.tool):
+        case Option.Some(tool):
+            return tool(request.value)
+        case Option.None:
+            return Result.Err(ToolError.UnknownTool(request.tool.clone()))
+
+
+def connect_tools() -> Result[int64, ToolError]:
+    metrics.increment("tool-runner-attempts", 1)
+    if metrics.get("tool-runner-attempts") < 3:
+        return Result.Err(ToolError.NotReady)
+    return Result.Ok(metrics.get("tool-runner-attempts"))
+
+
+def stream_events(events: Queue[str]) -> None:
+    events.put("stream started")
+    events.put("token tools")
+    events.put("token ready")
+    events.put("stream finished")
+    events.close()
+
+
+def run_tools() -> Result[int32, ToolError]:
+    registry: dict[str, def(int64) -> Result[ToolResult, ToolError]] = {"double": double, "increment": increment}
+    request = try ToolRequest.from_json(json.Value.Object({"tool": json.Value.String("double"), "value": json.Value.Int(21)}))
+    print(f"request {json.dumps(request.to_json())}")
+    result = try dispatch(request, registry)
+    decoded = try ToolResult.from_json(result.to_json())
+    print(f"result {json.dumps(decoded.to_json())}")
+    next_request = ToolRequest(tool="increment", value=decoded.value)
+    next_result = try dispatch(next_request, registry)
+    print(f"result {json.dumps(next_result.to_json())}")
+
+    match ToolRequest.from_json(json.Value.Null):
+        case Result.Err(ToolError.InvalidRequest):
+            print("rejected invalid request")
+        case _:
+            return Result.Err(ToolError.InvalidRequest)
+    match dispatch(ToolRequest(tool="missing", value=0), registry):
+        case Result.Err(ToolError.UnknownTool(name)):
+            print(f"unknown tool {name}")
+        case _:
+            return Result.Err(ToolError.InvalidRequest)
+
+    metrics.reset()
+    attempts = try control.retry(connect_tools, max_attempts=3, initial_backoff=0ms)
+    print(f"ready after {attempts} attempts")
+    events = Queue[str]()
+    with TaskGroup() as group:
+        group.start(stream_events, events)
+        for event in events:
+            print(event)
+    return Result.Ok(0)
+
+
+def main() -> int32:
+    print("tool-runner version 0")
+    with session = Session(name="tool-runner"):
+        match run_tools():
+            case Result.Ok(code):
+                return code
+            case Result.Err(error):
+                print(error)
+                return 1

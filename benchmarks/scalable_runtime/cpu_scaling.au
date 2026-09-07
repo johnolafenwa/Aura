@@ -71,7 +71,7 @@ def main() -> int32:
         for index in range(task_count):
             group.start_soon(
                 cpu_worker,
-                index,
+                index as int32,
                 iterations,
                 prepared,
                 release,
@@ -97,7 +97,7 @@ def main() -> int32:
             return 5
 
         for token in range(task_count):
-            release.put(token)
+            release.put(token as int32)
 
         mut checksum: int64 = 0
         mut result_count: int32 = 0

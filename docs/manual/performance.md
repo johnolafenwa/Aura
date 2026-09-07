@@ -6,10 +6,12 @@ semantic guarantees or ratified numeric targets.
 
 ## Current Measurements
 
-The 7 September 2026 post-reboot measurements cover the foundations changes
-and pinned Rust baselines. The release-performance and Array reports are
-**contractual**. The separate standalone integer/Rust comparison is
-**diagnostic-grade**, with its qualification limits disclosed below.
+The earlier 7 September 2026 post-reboot session covers foundations items 1–4
+and pinned Rust baselines. Item 7 adds a later quiet-host Array comparison,
+labeled separately below. The release-performance and Array reports are
+**contractual** under their runner rules. The standalone integer/Rust and
+per-call profiling comparisons are **diagnostic-grade**, with their limits
+disclosed below.
 
 The host is Mac14,9 / Apple M2 Pro (10 cores, 16 GiB), arm64 macOS 26.5.2
 (build 25F84). Boot identity is `1788744561`, 7 September 2026 at 02:29:21 BST.
@@ -95,24 +97,48 @@ qualified release V6 runner, not those minima.
 
 ### Numeric Arrays
 
-Both Array runs are **contractual**: 11 rotating pairs, excluded warmups,
-exact protocol/checksum validation, clean detached sources, three empty host
-inventories per run and successful input/hash rechecks. No override was used.
-Measurements are single-threaded and reported per operation; ratios are ratios
-of medians.
+The item 7 measurements are labeled **quiet host, not post-reboot; contractual re-measure scheduled with the 0.3.4 release session.**
+Both runs are contractual under the runner's qualification rules: clean detached
+sources, 11 rotating pairs, excluded warmups, exact protocol/checksum validation,
+three empty host inventories and successful input/hash rechecks. No override
+was used. The host is Mac14,9 / Apple M2 Pro / 16 GiB, with Xcode CPython 3.9.6,
+NumPy 2.0.2 and Rust 1.95.0. Measurements are single-threaded, per operation;
+ratios are ratios of medians.
 
-| Workload (one million `float64` elements) | Aura median | NumPy median | Rust median | Aura / NumPy | Aura / Rust |
+Before is merge base `a368dce7e7b335c1c0cb800ba5240501a21f02bc`;
+after is implementation head `d9fc79921ba9fed1116634ec9994bcb599aa9f90`.
+Each clean checkout used its own unchanged runner in the same measurement
+session, after the full local gates. Later publication edits do not change
+compiler/runtime sources.
+
+| Workload (one million `float64` elements) | Aura before | Aura after | Change in time | Before Aura / Rust | After Aura / Rust |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Fresh owned addition | 1.205427 ms | 0.247190 ms | 0.244576 ms | 4.876520 | 4.928642 |
-| Existing-array sum | 1.148677 ms | 0.168981 ms | 0.858175 ms | 6.797687 | 1.338511 |
+| Fresh owned addition | 1.244818 ms | 0.249473 ms | -79.9591% | 5.039359 | 1.006524 |
+| Existing-array sum | 1.149271 ms | 1.149844 ms | +0.0498% | 1.338990 | 1.339087 |
 
-Paired median Aura/Rust ratios are 4.942400 for add and 1.338601 for sum.
-Addition allocates a fresh owned result each time; sum reduces an existing
-array left to right. The [Numeric Arrays](/manual/numeric-arrays) chapter
-records API and reduction-order boundaries.
+| Control | Before median | After median | Drift |
+| --- | ---: | ---: | ---: |
+| NumPy add | 0.253398 ms | 0.247745 ms | -2.2310% |
+| Rust add | 0.247019 ms | 0.247856 ms | +0.3387% |
+| NumPy sum | 0.173397 ms | 0.172073 ms | -0.7639% |
+| Rust sum | 0.858312 ms | 0.858677 ms | +0.0425% |
+
+Addition meets the task's 1.5x Rust target at 1.006524x, with 79.9591% less
+Aura time; its after Aura/NumPy ratio is 1.006974. The sum ratio is 6.682308
+against NumPy. That gap is chiefly the deterministic reduction-order policy:
+Aura remains within 1.34x of Rust under the same left-to-right order.
+Addition allocates a fresh owned result; sum reuses its input. These exact
+workloads do not establish a general language or Array-API performance ranking.
+
+[Before raw](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/arrays-before-raw.json),
+[after raw](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/arrays-after-raw.json),
+[comparison and controls](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/array-publication-comparison.json),
+and [SHA256SUMS](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/SHA256SUMS)
+retain all observations and source/binary identities.
 
 ## Optimization Level
 
+This earlier items 1–4 comparison predates the item 7 kernel rewrite.
 The same-session before/after comparison includes Cranelift `speed`, Cargo
 release-profile tuning and user link/strip changes. It does not isolate the
 optimization flag's causal effect. Protocol rows use GO-to-DONE medians,
@@ -156,9 +182,19 @@ decision.
 
 Aura fib and task creation take 29.664884 and 29.068501 times their exact Rust
 comparisons; TCP is near parity and the retry workload favors Aura. Array
-addition/reduction cost 4.876520/6.797687 times NumPy, or 4.928642/1.338511 times
-these Rust kernels. These are workload-specific gaps; scheduling, runtime
+addition/reduction now cost 1.006974/6.682308 times NumPy, or
+1.006524/1.339087 times the same-session Rust kernels. These are workload-specific gaps; scheduling, runtime
 implementation, allocation and optimizer-barrier choices affect interpretation.
+
+### Per-call Attribution
+
+Eleven symbol-preserving xctrace recordings attribute 49.29% of recovered
+Fibonacci samples to call-frame push/pop and metadata validation, 37.38% to
+other runtime work, and 6.28% to scalar argument/result moves. The unprofiled
+estimate is 33.85854 ns per logical recursive call. A safe frame-storage
+experiment improved time by 11.10%, below the required 20%, and was reverted.
+No call-overhead fix ships in this item. The [boundary note](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/15-backend-boundary.md#per-call-cost-attribution)
+contains all eight categories, sample exclusions and Batch 7 options.
 
 ## Performance Direction
 
@@ -170,14 +206,14 @@ the native emitter alone does not establish a solution to these gaps.
 
 ## Evidence And Reproduction
 
-The [session evidence directory](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements) retains unchanged raw and summary
+The earlier items 1–4 [session evidence directory](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements) retains unchanged raw and summary
 JSON, commands, compiler/source/binary identities, interpreter/toolchain and
 boot/host records, warmups, observations, dispersion, hash rechecks, and failure
 logs. Eleven ten-minute host retries preceded the earlier independent runs;
 the approved continuation's host checks were quiet immediately. No timed
 observations were collected during host refusals, and no override was used.
 
-The current [SHA256SUMS](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/SHA256SUMS) covers every evidence file.
+The earlier session [SHA256SUMS](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-foundations-measurements/SHA256SUMS) covers every evidence file.
 The initial partial manifest is preserved as `initial-SHA256SUMS`; each summary
 links its raw report by SHA-256. Temporary paths inside raw reports are retained
 unchanged; the copied basenames below identify the versioned files.
@@ -229,46 +265,63 @@ measurement families and source identities separate.
 
 ## Executable Size
 
-The pre-Batch-1 implementation reduces executable sizes while retaining panic
-unwinding and Aura's embedded diagnostic metadata. Counts below are exact bytes
-from separate clean detached builds; the table counts each executable, while
-installed toolchains also ship the separate runtime archive.
+Current counts are exact executable bytes from a clean detached release build
+at `d9fc79921ba9fed1116634ec9994bcb599aa9f90`. They include the actual maintained
+reference agent version 0, `examples/agents/tool_runner/`, whose initial source
+commit is `fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc`.
+
+| Executable | Tuned release bytes |
+| --- | ---: |
+| `aura` compiler | 10,897,408 |
+| Native hello world | 1,586,968 |
+| Reference agent version 0 (`tool_runner`) | 3,199,712 |
+
+The profile uses level 3, fat LTO, one codegen unit, no debug data and stripped
+compiler symbols, retaining unwinding and Aura diagnostic metadata. User
+executables use unused-section removal and debug/local-symbol stripping;
+the separately installed runtime archive retains its linkable symbols.
+Both programs ran with Cargo unavailable. Hello world matched its single-print
+output; the agent matched every byte of its package's pinned stdout.
+
+[Size provenance](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-08-pre-batch-1-items-6-7/executable-sizes.json)
+records the exact commit, commands, profile settings, source/package identities,
+compiler and executable SHA-256 hashes, toolchain and standalone output.
+The final PR head is rebuilt and checked against this table after publication
+commits; that exact-head report is retained in the completion evidence.
+The clean size checkout and target are removed after hashing.
+
+The following items 1–4 comparison predates item 7. The older tag has
+no equivalent `tool_runner` package, so no before-size reduction is claimed
+for the new reference agent.
 
 | Executable | Before: v0.3.3-preview, Cargo default | After: Cargo default | After: tuned release | Reduction from before |
 | --- | ---: | ---: | ---: | ---: |
 | `aura` compiler | 15,424,032 | 15,866,008 | 10,897,392 | 29.35% |
 | Native hello world | 23,646,792 | 1,702,088 | 1,586,968 | 93.29% |
-| Retrying-worker stand-in | 23,715,816 | 4,049,240 | 3,666,600 | 84.54% |
+| Retrying-network-worker example | 23,715,816 | 4,049,240 | 3,666,600 | 84.54% |
 
-The tuned profile uses level 3, fat LTO, one codegen unit, no debug data, and
-stripped compiler symbols. The after-default control explicitly sets the documented release
-values through `CARGO_PROFILE_RELEASE_*` overrides in a separate target
-directory; it retains the new Cranelift flag and user-executable link/strip steps.
-Both after columns use macOS unused-section removal and debug/local-symbol
-stripping of user binaries. The runtime archive retains its linkable symbols.
+The earlier after-default control explicitly sets the documented release
+values through `CARGO_PROFILE_RELEASE_*` in a separate target directory. It
+retains Cranelift speed and the user-executable link/strip steps. The before
+ref is `v0.3.3-preview` (`d3cc6b96104dd597687a98e9624f800a0cb3cf1e`); exact
+earlier commits, hashes and commands remain in the
+[original size evidence](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-pre-batch-1-executable-sizes.json).
+Both size sessions use Mac14,9 / Apple M2 Pro, arm64 macOS 26.5.2, Rust 1.95.0
+(`59807616e`, LLVM 22.1.2), and Apple clang 21.0.0 (`clang-2100.1.1.101`).
 
-Provenance: Mac14,9 / Apple M2 Pro, arm64, macOS 26.5.2; Rust 1.95.0
-(`59807616e`, LLVM 22.1.2); Apple clang 21.0.0 (`clang-2100.1.1.101`). The before
-ref is `v0.3.3-preview` (`d3cc6b96104dd597687a98e9624f800a0cb3cf1e`). The after
-comparison uses the delivered pre-Batch-1 implementation. Exact measured commits,
-commands, profile overrides, source and executable SHA-256 hashes, and standalone
-output are retained in the [versioned raw evidence](https://github.com/johnolafenwa/Aura/blob/main/work/2026-09-07-pre-batch-1-executable-sizes.json).
-
-The hello input is `examples/basics/hello_world.au`, a single print. Because the
-before ref predates that file, the tool stages identical source bytes in its
-build area. `examples/agents/retrying_network_worker.au` is the reference-agent
-stand-in until pre-Batch-1 item 6 lands. Both subjects produce identical output
-across all three builds with Cargo unavailable during standalone execution.
-Each detached checkout and target directory is removed after hashing.
-
-Reproduce from the desired after checkout:
+Reproduce the current table from the desired final ref:
 
 ```bash
 python3 scripts/bench-binary-size.py \
-  --before-ref v0.3.3-preview \
-  --after-ref "$(git rev-parse HEAD)" \
+  --after-ref "$(git rev-parse HEAD)" --after-only \
   --output /tmp/aura-executable-sizes.json
 ```
+
+Omit `--after-only` and pass `--before-ref v0.3.3-preview` to collect the
+before/default/tuned profile comparison. The script explicitly records
+that the older reference-agent subject is absent; it never substitutes
+a different program. The hello input is identical single-print source, staged
+outside old source trees that predate its maintained path.
 
 ### Cargo 1.95 default-profile check
 

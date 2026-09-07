@@ -7,6 +7,21 @@ in this file.
 
 ## 0.3.4 — Unreleased (technical preview)
 
+- Add the maintained `examples/agents/tool_runner/` reference package with a
+  named-function tool registry, explicit typed JSON request/result methods,
+  typed errors, retry, child Queue streaming, and structured resource cleanup.
+  Both backends produce the same pinned stdout.
+- Add cache-keyed `AURA_NATIVE_KEEP_SYMBOLS=1` for profiling native user binaries,
+  and publish Fibonacci call-cost attribution and future optimization options.
+- Vectorize shared float32/float64 Array elementwise kernels and scalar
+  broadcasts while retaining exact reductions, division traps and integer modes.
+  Both runtime paths pass the frozen 1,008-case pre-change bit/diagnostic corpus
+  in debug and release. Quiet-host clean-detached addition falls from 1.244818
+  to 0.249473 ms (79.96% less time), reaching 1.0065x Rust; sequential sum
+  remains within 1.34x Rust. A post-reboot re-measure accompanies 0.3.4.
+- Check every Aura source under `benchmarks/` in the CLI regression, repairing
+  stale int32 task/Queue arguments in three scalable-runtime inputs.
+
 - Enable Cranelift speed optimization, validated by the full forced-backend gate.
 - Tune release artifacts with fat LTO, one codegen unit, stripped compiler
   symbols, platform section collection and user debug/local-symbol stripping;
@@ -16,7 +31,8 @@ in this file.
   and provenance.
 - Add pinned Rust baseline programs and lanes to all three timing harnesses,
   protocol smoke checks, and clean-ref executable-size tooling.
-- Publish post-reboot foundations measurements: fib/int32/int64 medians improve
+- Publish the earlier items 1–4 post-reboot foundations measurements:
+  fib/int32/int64 medians improve
   by 19.06%/20.56%/15.69%; Array add becomes 7.17% slower and sum is essentially
   unchanged. All CPython/NumPy controls drift by less than 5%. The comparison
   includes profile/link tuning alongside Cranelift speed.

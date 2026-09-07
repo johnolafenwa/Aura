@@ -54,18 +54,109 @@ fn hosted_ci_safepoint_windows_scale_without_changing_local_windows() {
 }
 
 #[test]
-fn release_performance_inputs_pass_checking() {
+fn reference_tool_runner_package_has_pinned_output_on_both_backends() {
+    let package = repo_root().join("examples/agents/tool_runner");
+    let expected = fs::read(package.join("stdout.txt")).expect("pinned reference agent output");
+    let temp = TempDir::new("aura-reference-tool-runner");
+    let mut directories = vec![package.clone()];
+    let mut total_lines = 0;
+    while let Some(directory) = directories.pop() {
+        for entry in fs::read_dir(directory).expect("reference package directory") {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if entry.file_type().unwrap().is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "au") {
+                total_lines += fs::read_to_string(&path).unwrap().lines().count();
+                let destination = temp.path().join(path.strip_prefix(&package).unwrap());
+                fs::create_dir_all(destination.parent().unwrap()).unwrap();
+                fs::copy(path, destination).unwrap();
+            }
+        }
+    }
+    assert!(total_lines > 0 && total_lines < 400);
+    for name in ["Aura.toml", "Aura.lock"] {
+        fs::copy(package.join(name), temp.path().join(name)).unwrap();
+    }
+    for backend in ["mir", "direct"] {
+        let mut command = if backend == "mir" {
+            let mut command = Command::new(aura_bin());
+            command
+                .current_dir(temp.path())
+                .args(["run", "--backend", "mir", "src/main.au"]);
+            command
+        } else {
+            // Compilation may build the runtime archive on a cold checkout;
+            // the execution watchdog must measure only the agent itself.
+            let binary = temp.path().join("tool-runner");
+            let build = Command::new(aura_bin())
+                .current_dir(temp.path())
+                .args(["build", "--backend", "direct", "-o"])
+                .arg(&binary)
+                .arg("src/main.au")
+                .output()
+                .expect("build reference package");
+            assert!(
+                build.status.success(),
+                "{}",
+                String::from_utf8_lossy(&build.stderr)
+            );
+            generated_binary(&binary)
+        };
+        command.env("AURA_WORKERS", "2");
+        let output = command_output_with_timeout(
+            command,
+            std::time::Duration::from_secs(60),
+            "reference tool runner package",
+        );
+        assert!(
+            output.status.success(),
+            "{backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "{backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, expected, "{backend} reference output");
+    }
+}
+
+#[test]
+fn all_benchmark_inputs_pass_checking() {
+    let root = repo_root().join("benchmarks");
+    let mut directories = vec![root.clone()];
+    let mut sources = Vec::new();
+    while let Some(directory) = directories.pop() {
+        for entry in fs::read_dir(&directory).expect("benchmark directory must be readable") {
+            let entry = entry.expect("benchmark entry must be readable");
+            let kind = entry
+                .file_type()
+                .expect("benchmark entry type must be readable");
+            if kind.is_dir() {
+                directories.push(entry.path());
+            } else if kind.is_file() && entry.path().extension().is_some_and(|ext| ext == "au") {
+                sources.push(entry.path());
+            }
+        }
+    }
+    sources.sort();
+    assert!(
+        !sources.is_empty(),
+        "benchmark gate must discover Aura inputs"
+    );
     let mut failures = Vec::new();
-    for workload in ["fib30", "tasks_10000", "tcp_fanout", "retrying_worker"] {
-        let source = repo_root().join(format!("benchmarks/release_performance/{workload}.au"));
+    for source in sources {
         let output = Command::new(aura_bin())
             .arg("check")
             .arg(&source)
             .output()
-            .expect("failed to check release benchmark input");
+            .expect("failed to check benchmark input");
         if !output.status.success() {
             failures.push(format!(
-                "{workload}: {}",
+                "{}: {}",
+                source.strip_prefix(&root).unwrap().display(),
                 String::from_utf8_lossy(&output.stderr)
             ));
         }
@@ -4790,6 +4881,62 @@ impl NativeCacheFixture {
 
     fn digest(&self) -> PathBuf {
         self.entry.join("program.sha256")
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_keep_symbols_skips_strip_and_separates_cached_programs() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = NativeCacheFixture::new("aura-keep-symbols");
+    let temp = TempDir::new("aura-keep-symbols-strip");
+    let tools = temp.path().join("tools");
+    fs::create_dir(&tools).unwrap();
+    let strip = tools.join("strip");
+    fs::write(
+        &strip,
+        "#!/bin/sh\nprintf 'strip\\n' >> \"$AURA_TEST_STRIP_LOG\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&strip, fs::Permissions::from_mode(0o755)).unwrap();
+    let log = temp.path().join("strip.log");
+    let cache = temp.path().join("cache");
+    let mut paths = vec![tools];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(paths).unwrap();
+
+    for (keep, expected_entries, expected_strips) in
+        [("0", 1, 1), ("1", 2, 1), ("true", 2, 1), ("1", 2, 1)]
+    {
+        let mut command = fixture.command();
+        command
+            .env("AURA_CACHE_DIR", &cache)
+            .env("AURA_NATIVE_KEEP_SYMBOLS", keep)
+            .env("AURA_TEST_STRIP_LOG", &log)
+            .env("PATH", &path);
+        let output = command_output_with_timeout(
+            command,
+            std::time::Duration::from_secs(30),
+            "symbol-preserving native cache",
+        );
+        assert!(
+            output.status.success(),
+            "keep={keep}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read_dir(cache.join("programs")).unwrap().count(),
+            expected_entries,
+            "keep={keep} must select its own cache policy"
+        );
+        assert_eq!(
+            fs::read_to_string(&log).unwrap().lines().count(),
+            expected_strips,
+            "keep={keep} strip invocations"
+        );
     }
 }
 

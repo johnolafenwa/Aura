@@ -1,0 +1,56 @@
+{
+  "label": "quiet host, not post-reboot; contractual re-measure scheduled with the 0.3.4 release session.",
+  "refs": {
+    "before": "a368dce7e7b335c1c0cb800ba5240501a21f02bc",
+    "after": "d9fc79921ba9fed1116634ec9994bcb599aa9f90"
+  },
+  "unit": "milliseconds per operation",
+  "rows": {
+    "add": {
+      "before": {
+        "aura": 1.24481770703125,
+        "numpy": 0.25339811328125,
+        "rust": 0.24701904296875
+      },
+      "after": {
+        "aura": 0.24947273828124997,
+        "numpy": 0.247744873046875,
+        "rust": 0.24785579296875002
+      },
+      "before_aura_rust": 5.03935928206446,
+      "after_aura_rust": 1.0065237341969402,
+      "before_aura_numpy": 4.912497930280996,
+      "after_aura_numpy": 1.0069743733265795,
+      "change_percent": {
+        "aura": -79.95909466324878,
+        "numpy": -2.230971715286756,
+        "rust": 0.33873906640706775
+      }
+    },
+    "sum": {
+      "before": {
+        "aura": 1.1492714443359375,
+        "numpy": 0.1733973388671875,
+        "rust": 0.8583122958984376
+      },
+      "after": {
+        "aura": 1.1498436689453126,
+        "numpy": 0.1720728349609375,
+        "rust": 0.8586771650390624
+      },
+      "before_aura_rust": 1.338989840676742,
+      "after_aura_rust": 1.3390872795516864,
+      "before_aura_numpy": 6.627964718744698,
+      "after_aura_numpy": 6.6823079262124105,
+      "change_percent": {
+        "aura": 0.04979020510735843,
+        "numpy": -0.763854805905928,
+        "rust": 0.04251006799838031
+      }
+    }
+  },
+  "source_raw_sha256": {
+    "before": "7332ee83cab2a1f2dca41a73d69496799ee4de179f73467021a661d22cf2f601",
+    "after": "721831876cdf0385318bb80d38d708f9acab2f0f75362a041413b106081aa1a6"
+  }
+}

@@ -1,0 +1,9 @@
+    Blocking waiting for file lock on artifact directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.11s
+     Running tests/cli.rs (target/debug/deps/cli-2705f31dbe382fa0)
+
+running 1 test
+test reference_tool_runner_package_has_pinned_output_on_both_backends ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 376 filtered out; finished in 26.02s
+

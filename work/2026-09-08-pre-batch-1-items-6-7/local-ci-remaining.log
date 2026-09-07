@@ -1,0 +1,443 @@
+Generated docs/public/llms.txt and docs/public/llms-full.txt.
+
+> aura-monorepo@0.3.3 check:reference
+> bash scripts/check-reference.sh
+
+Build-derived LLM documentation is current.
+...........
+----------------------------------------------------------------------
+Ran 11 tests in 0.006s
+
+OK
+...........
+----------------------------------------------------------------------
+Ran 11 tests in 1.029s
+
+OK
+Manual reference inventory
+  pages: 39 (28 feature, 11 structural)
+  all fenced blocks: 274
+  fenced-block languages: aura=211, bash=20, ebnf=22, json=2, text=13, toml=6
+  verified fenced blocks: 132; illustrative fenced blocks: 142
+  verified modes: check=86, check-fail=4, command=3, package-check=2, run=37
+  Aura blocks: 211
+  verified Aura blocks: 129 (check=86, run=37, expected-rejection=4, package-check=2)
+  illustrative Aura blocks: 82
+  per-page fenced blocks:
+    docs/manual/assertions.md: total=2, verified=1, illustrative=1, aura=1
+    docs/manual/bytes.md: total=1, verified=1, illustrative=0, aura=1
+    docs/manual/classes.md: total=16, verified=10, illustrative=6, aura=16
+    docs/manual/cli-and-tooling.md: total=13, verified=3, illustrative=10, aura=0
+    docs/manual/closures.md: total=4, verified=3, illustrative=1, aura=3
+    docs/manual/collections.md: total=11, verified=8, illustrative=3, aura=11
+    docs/manual/concurrency.md: total=7, verified=3, illustrative=4, aura=7
+    docs/manual/control-plane.md: total=3, verified=2, illustrative=1, aura=2
+    docs/manual/diagnostics.md: total=2, verified=0, illustrative=2, aura=0
+    docs/manual/enums-and-match.md: total=13, verified=5, illustrative=8, aura=13
+    docs/manual/expressions.md: total=22, verified=9, illustrative=13, aura=20
+    docs/manual/ffi.md: total=3, verified=1, illustrative=2, aura=1
+    docs/manual/filesystem.md: total=6, verified=2, illustrative=4, aura=6
+    docs/manual/functions.md: total=19, verified=15, illustrative=4, aura=19
+    docs/manual/generics-and-traits.md: total=26, verified=14, illustrative=12, aura=26
+    docs/manual/grammar.md: total=19, verified=0, illustrative=19, aura=0
+    docs/manual/io.md: total=3, verified=2, illustrative=1, aura=3
+    docs/manual/json.md: total=1, verified=1, illustrative=0, aura=1
+    docs/manual/lexical-structure.md: total=16, verified=8, illustrative=8, aura=10
+    docs/manual/math.md: total=2, verified=1, illustrative=1, aura=1
+    docs/manual/names-and-scopes.md: total=6, verified=1, illustrative=5, aura=6
+    docs/manual/network.md: total=3, verified=3, illustrative=0, aura=3
+    docs/manual/numeric-arrays.md: total=2, verified=1, illustrative=1, aura=1
+    docs/manual/ownership-and-borrowing.md: total=13, verified=11, illustrative=2, aura=13
+    docs/manual/packages.md: total=10, verified=1, illustrative=9, aura=3
+    docs/manual/performance.md: total=4, verified=0, illustrative=4, aura=0
+    docs/manual/process.md: total=7, verified=1, illustrative=6, aura=7
+    docs/manual/randomness.md: total=1, verified=1, illustrative=0, aura=1
+    docs/manual/statements.md: total=22, verified=11, illustrative=11, aura=22
+    docs/manual/static-semantics.md: total=1, verified=0, illustrative=1, aura=0
+    docs/manual/tuples.md: total=5, verified=3, illustrative=2, aura=3
+    docs/manual/types.md: total=11, verified=10, illustrative=1, aura=11
+  feature pages missing normative sections: none
+  feature pages without a verified executable example: none
+Reference integrity passed.
+.........
+----------------------------------------------------------------------
+Ran 9 tests in 0.085s
+
+OK
+TAP version 13
+# Subtest: the maintained documentation source identifies the 0.3.3 technical preview
+ok 1 - the maintained documentation source identifies the 0.3.3 technical preview
+  ---
+  duration_ms: 0.570667
+  ...
+# Subtest: AURA_DOCS_COMMIT takes precedence over GITHUB_SHA and the local checkout
+ok 2 - AURA_DOCS_COMMIT takes precedence over GITHUB_SHA and the local checkout
+  ---
+  duration_ms: 0.114125
+  ...
+# Subtest: GITHUB_SHA is used when an explicit documentation commit is absent
+ok 3 - GITHUB_SHA is used when an explicit documentation commit is absent
+  ---
+  duration_ms: 0.06575
+  ...
+# Subtest: an invalid environment value falls back to the local checkout commit
+ok 4 - an invalid environment value falls back to the local checkout commit
+  ---
+  duration_ms: 0.35575
+  ...
+# Subtest: a missing or invalid local checkout has an honest non-commit fallback
+ok 5 - a missing or invalid local checkout has an honest non-commit fallback
+  ---
+  duration_ms: 0.075709
+  ...
+# Subtest: a dirty checkout never claims its committed HEAD as the rendered baseline
+ok 6 - a dirty checkout never claims its committed HEAD as the rendered baseline
+  ---
+  duration_ms: 0.110542
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 40.408625
+TAP version 13
+# Subtest: the homepage gives AI agents prominent machine-readable entry points
+ok 1 - the homepage gives AI agents prominent machine-readable entry points
+  ---
+  duration_ms: 0.905583
+  ...
+# Subtest: the agent briefing contains long URLs at mobile widths
+ok 2 - the agent briefing contains long URLs at mobile widths
+  ---
+  duration_ms: 0.37575
+  ...
+# Subtest: the machine-readable homepage summary remains descriptive
+ok 3 - the machine-readable homepage summary remains descriptive
+  ---
+  duration_ms: 0.508583
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 41.142458
+TAP version 13
+# Subtest: every Aura example on the landing page runs
+ok 1 - every Aura example on the landing page runs
+  ---
+  duration_ms: 13.90275
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 51.546625
+
+> aura-monorepo@0.3.3 check:tutorials
+> python3 scripts/check_tutorials.py
+
+tutorial fence gate passed: 340 total, 215 check-pass, 5 check-fail, 120 fragments
+
+> aura-monorepo@0.3.3 docs:build
+> vitepress build docs
+
+
+  vitepress v2.0.0-alpha.17
+
+- building client + server bundles...
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+
+The language 'ebnf' is not loaded, falling back to 'txt' for syntax highlighting.
+[32m✓[0m building client + server bundles...
+- rendering pages...
+[32m✓[0m rendering pages...
+build complete in 3.56s.
+
+> aura-monorepo@0.3.3 check:audit
+> npm audit --audit-level=moderate && cargo audit
+
+found 0 vulnerabilities
+    Fetching advisory database from `https://github.com/RustSec/advisory-db.git`
+      Loaded 1240 security advisories (from /Users/johnolafenwa/.cargo/advisory-db)
+    Updating crates.io index
+    Scanning Cargo.lock for vulnerabilities (175 crate dependencies)
+Crate:     rustls-pemfile
+Version:   2.2.0
+Warning:   unmaintained
+Title:     rustls-pemfile is unmaintained
+Date:      2025-11-28
+ID:        RUSTSEC-2025-0134
+URL:       https://rustsec.org/advisories/RUSTSEC-2025-0134
+
+warning: 1 allowed warning found
+
+> aura-monorepo@0.3.3 check:clippy
+> cargo clippy -p aura-compiler -p aura -- -D warnings
+
+    Checking cfg-if v1.0.4
+    Checking stable_deref_trait v1.2.1
+    Checking equivalent v1.0.2
+   Compiling libc v0.2.183
+    Checking smallvec v1.15.1
+    Checking hashbrown v0.16.1
+    Checking log v0.4.29
+    Checking zerofrom v0.1.7
+    Checking zeroize v1.8.2
+   Compiling cranelift-assembler-x64 v0.118.0
+   Compiling cranelift-codegen-shared v0.118.0
+    Checking foldhash v0.1.5
+    Checking yoke v0.8.2
+    Checking rustls-pki-types v1.14.0
+    Checking typenum v1.19.0
+    Checking writeable v0.6.3
+    Checking allocator-api2 v0.2.21
+    Checking hashbrown v0.15.5
+    Checking zerovec v0.11.6
+    Checking litemap v0.8.2
+    Checking cranelift-bitset v0.118.0
+    Checking zerotrie v0.2.4
+   Compiling jobserver v0.1.34
+    Checking getrandom v0.2.17
+    Checking bumpalo v3.20.2
+    Checking cranelift-entity v0.118.0
+    Checking indexmap v2.13.0
+    Checking generic-array v0.14.7
+    Checking serde_core v1.0.228
+    Checking arbitrary v1.4.2
+   Compiling cc v1.2.60
+    Checking rustc-hash v2.1.1
+    Checking utf8_iter v1.0.4
+    Checking tinystr v0.8.3
+    Checking potential_utf v0.1.5
+    Checking regalloc2 v0.11.2
+    Checking cranelift-bforest v0.118.0
+    Checking icu_collections v2.2.0
+    Checking icu_locale_core v2.2.0
+    Checking target-lexicon v0.13.5
+   Compiling cranelift-codegen-meta v0.118.0
+    Checking gimli v0.31.1
+    Checking cranelift-control v0.118.0
+    Checking core-foundation-sys v0.8.7
+    Checking crypto-common v0.1.7
+    Checking block-buffer v0.10.4
+    Checking icu_normalizer_data v2.2.0
+    Checking zerocopy v0.8.48
+    Checking icu_properties_data v2.2.0
+    Checking untrusted v0.9.0
+    Checking icu_provider v2.2.0
+    Checking digest v0.10.7
+   Compiling cmake v0.1.58
+    Checking core-foundation v0.9.4
+    Checking icu_normalizer v2.2.0
+    Checking icu_properties v2.2.0
+    Checking security-framework-sys v2.17.0
+    Checking rand_core v0.6.4
+    Checking cpufeatures v0.2.17
+    Checking itoa v1.0.17
+    Checking memchr v2.8.0
+    Checking bitflags v2.11.1
+    Checking anyhow v1.0.103
+    Checking crc32fast v1.5.0
+    Checking security-framework v2.11.1
+    Checking rustls-pemfile v2.2.0
+    Checking winnow v0.7.15
+   Compiling aws-lc-sys v0.40.0
+   Compiling ring v0.17.14
+   Compiling libffi-sys v4.2.0
+    Checking serde v1.0.228
+    Checking idna_adapter v1.2.1
+    Checking toml_write v0.1.2
+    Checking serde_spanned v0.6.9
+    Checking toml_datetime v0.6.11
+    Checking once_cell v1.21.4
+    Checking subtle v2.6.1
+    Checking percent-encoding v2.3.2
+    Checking bytes v1.11.1
+    Checking rustls-native-certs v0.7.3
+    Checking form_urlencoded v1.2.2
+    Checking idna v1.1.0
+    Checking object v0.36.7
+    Checking http v1.4.0
+    Checking thiserror v1.0.69
+    Checking httparse v1.10.1
+    Checking toml_edit v0.22.27
+    Checking zmij v1.0.21
+   Compiling cranelift-codegen v0.118.0
+    Checking sha1 v0.10.6
+    Checking webpki-roots v1.0.7
+    Checking byteorder v1.5.0
+   Compiling aura-compiler v0.3.3 (/Users/johnolafenwa/source2/Aurora/crates/aura-compiler)
+    Checking utf-8 v0.7.6
+    Checking scopeguard v1.2.0
+    Checking data-encoding v2.10.0
+    Checking corosensei v0.3.3
+    Checking ppv-lite86 v0.2.21
+    Checking webpki-roots v0.26.11
+    Checking rand_chacha v0.3.1
+    Checking serde_json v1.0.149
+    Checking url v2.5.8
+    Checking rand v0.8.6
+    Checking toml v0.8.23
+    Checking sha2 v0.10.9
+    Checking mio v0.8.11
+    Checking base64 v0.22.1
+   Compiling aura v0.3.3 (/Users/johnolafenwa/source2/Aurora/crates/aura)
+    Checking cranelift-module v0.118.0
+    Checking cranelift-frontend v0.118.0
+    Checking cranelift-native v0.118.0
+    Checking cranelift-object v0.118.0
+   Compiling aws-lc-rs v1.16.3
+   Compiling rustls v0.23.38
+    Checking rustls-webpki v0.103.13
+    Checking tungstenite v0.24.0
+    Checking libffi v5.1.1
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 22.60s
+
+> aura-monorepo@0.3.3 check:hygiene
+> bash scripts/check-hygiene.sh

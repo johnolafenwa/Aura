@@ -133,3 +133,19 @@ own runner with label `foundations-before` and distinct output paths.
 See [the Rust baseline contract](../rust_baselines/README.md) for exact workload,
 allocation, arithmetic, scheduling, and protocol equivalence. The integer-loop
 lane retains its whole-process checksum protocol; other lanes use READY/GO/DONE.
+
+## Item 7 profiling and task-cost follow-up
+
+`AURA_NATIVE_KEEP_SYMBOLS=1` keeps user-binary symbols and participates in the
+native cache identity. Build the profiling compiler/runtime with
+`CARGO_PROFILE_RELEASE_STRIP=none`, then build `fib30.au` with symbols kept.
+The [per-call attribution](../../architecture_docs/15-backend-boundary.md#per-call-cost-attribution)
+records eleven xctrace traces, all eight categories and the diagnostic estimate
+of 33.85854 ns per logical call. A safe storage experiment improved 11.10%, below
+the 20% adoption gate, and was reverted. No call-overhead change ships.
+
+The [Task stack reuse proposal](../../architecture_docs/decisions/0032-guarded-lightweight-task-stacks.md#future-extension-task-stack-reuse)
+scopes Batch 8 against the observed 9.869 microseconds per Aura task and 0.340
+microseconds per tokio task. It does not assign the entire gap to allocation;
+no scheduler code changes in item 7. The CLI now checks every Aura input under
+`benchmarks/`, including the scalable-runtime inputs.

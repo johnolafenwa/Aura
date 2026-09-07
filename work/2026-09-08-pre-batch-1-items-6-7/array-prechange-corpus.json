@@ -1,0 +1,13 @@
+{
+  "production_source_commit": "fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc",
+  "cases_per_backend": 1008,
+  "mir_equals_direct": true,
+  "expected_recorded_before_kernel_rewrite": true,
+  "hashes": {
+    "crates/aura-compiler/src/runtime_value.rs": "e8e01ddd01e11b51f7e42dc950c32e697c35841e12723c0c3b9759e491376e5f",
+    "crates/aura-compiler/src/native_runtime.rs": "d7047bbdd61c3f2bd64c0dc5b6c0608b7affa4eb75af8f3f8e54a355d2a277d7",
+    "crates/aura-compiler/src/mir_runtime.rs": "e1a4219995c1af37c1fd5f71088d174a20e29f0a38c9b84c5e8b4bb1939524a4",
+    "crates/aura-compiler/src/array_kernel_corpus.rs": "81d23ad4b330778c9ed4d4ea54c30f693ae74f8a9a40740428fddfee0df6b4db",
+    "crates/aura-compiler/src/array_kernel_expected.json": "fc37226fad31e9983ad6a337051829ef06ab832b0fee72e3d5837d3f17f985ce"
+  }
+}

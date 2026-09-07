@@ -35,8 +35,9 @@ completion. See the [ADR index](decisions/README.md).
 ## Pre-Batch-1 foundations
 
 These items start before Batch 1 design and run in parallel with it, scheduled
-for the 0.3.4 update. Items 1–4 implementation status is recorded below;
-the post-reboot measurements and Rust comparisons are now recorded with hashes.
+for the 0.3.4 update. Items 1–7 are delivered with implementation and measurement
+status below. Earlier post-reboot comparisons and the later quiet-host item 7
+Array measurements are recorded separately with hashes.
 The backend direction is recorded in
 [ADR-0064](decisions/0064-native-backend-strategy-and-codegen-boundary.md).
 
@@ -76,7 +77,29 @@ The backend direction is recorded in
    tool schemas, retries, a streaming loop, and structured cleanup. Add no new
    library surface. Completion: run it on both backends and include it in the
    example smoke tests. Its before/after diff is the usability evidence for
-   each Batch 1–4 and 6 feature.
+   each Batch 1–4 and 6 feature. **Delivered: reference agent version 0** is
+   `fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc`, the 131-line
+   `examples/agents/tool_runner/` package with pinned byte-identical MIR/direct
+   stdout. Its clean release executable is 3,199,712 bytes, with exact-ref
+   provenance in the Performance chapter.
+7. **Performance triage.**
+   - **a — Attribution delivered.** Cache-keyed `AURA_NATIVE_KEEP_SYMBOLS=1`,
+     eleven xctrace recordings and the [per-call attribution](15-backend-boundary.md#per-call-cost-attribution).
+     The estimate is 33.85854 ns per logical Fibonacci call. A safe storage
+     experiment improved 11.10%, missed the 20% gate and was reverted.
+   - **b — Delivered and measured.** Shared float32/float64 elementwise loops
+     vectorize, including scalar broadcasts. MIR/direct each pass 1,008 frozen
+     pre-change bit/diagnostic cases in debug and release. Reductions and integer
+     arithmetic retain their contracts. Full local gates pass. Contractual clean
+     detached addition improves 79.96%, from 5.0394x to 1.0065x Rust, meeting
+     the 1.5x target; sum remains within 1.34x Rust. Measurement label: quiet
+     host, not post-reboot; contractual re-measure scheduled with the 0.3.4 release
+     session. The [Performance chapter](../docs/manual/performance.md#numeric-arrays)
+     records both refs, raw medians and NumPy/Rust controls.
+   - **c — Scoping delivered.** [Task stack reuse](decisions/0032-guarded-lightweight-task-stacks.md#future-extension-task-stack-reuse)
+     and the Batch 8 acceptance baseline below; no scheduler implementation change.
+   - **d — Gate delivered.** The CLI checks all 15 Aura inputs under `benchmarks/`;
+     six explicit int32 conversions repair three stale scalable-runtime inputs.
 
 ### Items 1–4 delivery status (0.3.4)
 
@@ -97,7 +120,7 @@ The backend direction is recorded in
   standalone diagnostics, cache, and release-profile checks. The
   [executable-size table](../docs/manual/performance.md#executable-size) is published
   with clean-ref provenance and a default-profile control.
-- Items 5 and 6 retain their recorded scope and status above.
+- Items 5–7 have their scope and delivery status recorded above.
 
 ## Priority Batches
 
@@ -136,6 +159,15 @@ constructed in a `with` header exposes a scoped entry view when temporaries
 cannot currently be view origins. The shared partial-construction cleanup
 mechanism is an extension of the existing exit-action stack, not three
 independent initializer, manager, and decoder mechanisms.
+
+**Batch 8 task-creation acceptance:** evaluate guarded stack reuse under
+[ADR-0032](decisions/0032-guarded-lightweight-task-stacks.md#future-extension-task-stack-reuse)
+against the measured **9.869 microseconds per Aura spawn-and-join** versus
+**0.340 microseconds for tokio** (10,000-task protocol). Report cold and reused
+medians, allocation counts and bounded retained memory. Preserve guard pages,
+the 256 KiB–64 MiB override API, worker pinning, cleanup/ancestry and TSan
+cleanliness. Stack pooling is scoped here; no scheduler change is included in
+the pre-Batch-1 triage.
 
 ## Approved Decisions
 
