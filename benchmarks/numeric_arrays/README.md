@@ -90,3 +90,40 @@ before-specific JSON paths for the control. The Rust lane builds with
 `--release --locked`, fat LTO, and one codegen unit. See the
 [Rust baseline contract](../rust_baselines/README.md) for exact allocation,
 arithmetic, scheduling, and protocol equivalence.
+
+## Pre-Batch-1 item 7 kernel investigation
+
+The shared `runtime_value.rs` float32/float64 slice kernels now hoist operation
+selection and fill a preallocated result through exact-length iterators. Release
+arm64 instructions include **`fadd.4s`, `fadd.2d`, `fsub.4s`, `fsub.2d`,
+`fmul.4s`, `fmul.2d`, `fdiv.4s`, and `fdiv.2d`**. Scalar division uses four
+outlined `Vec::extend_trusted` specializations; the other scalar broadcasts are
+visible in `ArrayValue::scalar_binary`. Scalar tails retain the same operations.
+These vector instructions replace the earlier scalar implementation.
+
+The earlier/default profile selects separate scalar add/sub/mul loops. The tuned
+profile's old kernel instead executes all three scalar operations and two
+`fcsel` instructions per element. Both retain an out-of-line
+`array_float64_binary` call, so this evidence identifies loop selection, not a
+lost kernel-inlining boundary. No inlining attribute is warranted. The explicit
+new outer match removes that optimizer dependency. These controls differ in both
+LTO and codegen units; they do not isolate LTO as the sole historical cause.
+
+An eleven-observation diagnostic control reproduced a 7.43% regression
+(1.128668 ms default versus 1.212512 ms tuned). The vectorized kernel measured
+0.246133 ms, a 79.70% reduction from tuned. These symbol-preserving, quiet-host
+controls are diagnostic; the clean-detached NumPy/Rust publication is separate.
+
+Before editing the kernels, MIR operator/method execution and the direct runtime
+ABI recorded identical results for 1,008 fixed-seed cases. Frozen hashes include
+every element's exact bits and shape, or reduction bits / diagnostic code and
+message. Debug and optimized release checks pass after the rewrite. Cases cover
+all four element types, lengths 0/1/7/8/9/1,000,001, integer modes, scalar
+broadcasts, payload-bearing NaNs, both infinities, signed zero and first traps
+at indices 0/7/8. Reductions retain their sequential deterministic order, and
+fallible allocation retains precedence over divisor validation.
+
+[Investigation evidence](https://github.com/johnolafenwa/Aura/tree/main/work/2026-09-08-pre-batch-1-items-6-7)
+contains the profile commands, binary hashes, full compressed disassemblies,
+selected kernel instructions, raw diagnostic timings and pre-change corpus
+identity. No existing fixture was changed.

@@ -21041,26 +21041,28 @@ fn direct_array_kernels_match_frozen_pre_vectorization_bits() {
     }
     verify(|kernel, left, right| {
         run_lightweight_root_task(move || {
-            super::with_task_runtime_error_capture(|| {
-                let left = Owned(boxed_value(left));
-                let right = right.map(|value| Owned(boxed_value(value)));
-                let result = match kernel {
-                    Kernel::Binary {
-                        operation,
-                        mode,
-                        scalar_left,
-                    } => super::aura_direct_array_binary(
-                        left.0,
-                        right.as_ref().unwrap().0,
-                        i64::from(scalar_left),
-                        operation,
-                        mode,
-                        0,
-                        0,
-                    ),
-                    Kernel::Reduce(code) => super::aura_direct_array_reduce(left.0, code, 0, 0),
-                };
-                Ok(unsafe { take_value(result) })
+            super::with_direct_task_runtime_scope(|| {
+                super::with_task_runtime_error_capture(|| {
+                    let left = Owned(boxed_value(left));
+                    let right = right.map(|value| Owned(boxed_value(value)));
+                    let result = match kernel {
+                        Kernel::Binary {
+                            operation,
+                            mode,
+                            scalar_left,
+                        } => super::aura_direct_array_binary(
+                            left.0,
+                            right.as_ref().unwrap().0,
+                            i64::from(scalar_left),
+                            operation,
+                            mode,
+                            0,
+                            0,
+                        ),
+                        Kernel::Reduce(code) => super::aura_direct_array_reduce(left.0, code, 0, 0),
+                    };
+                    Ok(unsafe { super::consume_owned_value(result) })
+                })
             })
         })
     });

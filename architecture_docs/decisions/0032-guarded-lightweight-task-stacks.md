@@ -203,3 +203,34 @@ massive-concurrency claim follows from this decision.
   100,000-sleeper timer/RSS result. The clean `0dddb43` report publishes the
   measured 10,000-task cost and records the explicit massive-concurrency
   escape-hatch result without turning it into a product claim.
+
+## Future extension: Task stack reuse
+
+Batch 8 will evaluate a bounded pool of freed guard-protected coroutine stacks.
+The 7 September 2026 spawn-and-join baseline is 98.692417 ms for 10,000 Aura
+children, or **9.869 microseconds per task**, against tokio's 3.395167 ms,
+or **0.340 microseconds per task**. These include creation, execution, joining,
+verification and cleanup; they do not isolate stack allocation. Stack reuse is
+an investigation into that gap, not a claim that stacks explain all of it.
+
+A stack becomes reusable only after its coroutine is destroyed and all task
+cleanup, captured values, diagnostic ancestry and scheduler registrations have
+finished. The pool must preserve guard pages and their inaccessible protection,
+page rounding, and the exact inclusive **256 KiB–64 MiB** override API. Match
+reused capacity to the accepted request without silently changing its contract.
+Bound cached stack count and mapped bytes so reuse cannot retain every past
+peak indefinitely; trim unused entries without touching a live coroutine.
+
+Preserve worker pinning and existing frame affinity. A worker-local pool is the
+initial candidate; any cross-worker transfer requires the separate Batch 8
+migration decision. Reinitialization must prevent stale task state from becoming
+observable. TSan fiber registration/switch/destruction must remain correct when
+a mapping is reused, including cancellation and failure paths.
+
+Acceptance requires unchanged guard-fault and override diagnostics, MIR/direct
+parity, structured cleanup and ancestry, plus TSan-clean stress evidence. Report
+cold and reused spawn/join medians against the 9.869/0.340-microsecond baseline,
+with identical work, allocation counts, cached/mapped/resident bytes, and a
+bounded-retention test. Demonstrate the improvement instead of attributing the
+whole gap to allocation. This section scopes future work; it changes no current
+scheduler implementation, default capacity, or stack API.

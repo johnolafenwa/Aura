@@ -21,7 +21,7 @@ except ImportError:
 ROOT = Path(__file__).resolve().parent.parent
 HELLO_SOURCE = 'print("Hello, world!")\n'
 SUBJECTS = {'hello_world': 'examples/basics/hello_world.au',
-            'reference_agent_standin': 'examples/agents/retrying_network_worker.au'}
+            'reference_agent': 'examples/agents/tool_runner/src/main.au'}
 
 
 def run(command, **kwargs):
@@ -65,7 +65,13 @@ def detached_checkout(ref):
             run(['git', 'worktree', 'remove', '--force', str(path)], cwd=ROOT)
 
 
-def measure(ref, default_profile=False):
+def verify_subject_stdout(name, source, stdout):
+    expected = 'Hello, world!\n' if name == 'hello_world' else (source.parent.parent / 'stdout.txt').read_text()
+    if stdout != expected:
+        raise RuntimeError(f'{name} executable differs from pinned stdout')
+
+
+def measure(ref, default_profile=False, *, allow_missing_reference_agent=False):
     with detached_checkout(ref) as checkout:
         commit = run(['git', 'rev-parse', 'HEAD'], cwd=checkout).stdout.strip()
         if run(['git', 'status', '--porcelain'], cwd=checkout).stdout:
@@ -96,9 +102,13 @@ def measure(ref, default_profile=False):
         run([str(compiler), '--version'], cwd=target, env=smoke_env)
         verification = {}
         sources = {}
+        omitted_subjects = {}
         commands = []
         for name, relative in SUBJECTS.items():
             source = checkout / relative
+            if name == 'reference_agent' and not source.exists() and allow_missing_reference_agent:
+                omitted_subjects[name] = 'This historical ref predates the maintained tool_runner package; no equivalent before size exists.'
+                continue
             # The before ref predates the maintained hello fixture. Use identical
             # source bytes outside its source tree and disclose that input below.
             if name == 'hello_world' and not source.exists():
@@ -110,10 +120,7 @@ def measure(ref, default_profile=False):
             command = [str(compiler), 'build', '--backend', 'direct', '-o', str(binary), str(source)]
             run(command, cwd=target, env=smoke_env)
             execution = run([str(binary)], cwd=target, env=smoke_env, timeout=120)
-            if name == 'hello_world' and execution.stdout != 'Hello, world!\n':
-                raise RuntimeError('hello executable smoke failed')
-            if name == 'reference_agent_standin' and not execution.stdout.endswith('requests 7\n'):
-                raise RuntimeError('reference-agent stand-in smoke failed')
+            verify_subject_stdout(name, source, execution.stdout)
             if execution.stderr:
                 raise RuntimeError('unexpected standalone stderr')
             verification[name] = {'returncode': execution.returncode, 'stdout': execution.stdout,
@@ -121,6 +128,10 @@ def measure(ref, default_profile=False):
             commands.append(command)
             records[name] = artifact(binary)
             sources[name] = {'path': relative, **artifact(source)}
+            if name == 'reference_agent':
+                package_root = source.parent.parent
+                package_files = [package_root / 'Aura.toml', package_root / 'Aura.lock', package_root / 'stdout.txt', *sorted(package_root.rglob('*.au'))]
+                sources[name]['package_files'] = {str(path.relative_to(checkout)): artifact(path) for path in package_files}
         return {'ref': ref, 'commit': commit, 'profile': 'cargo-default' if default_profile else 'release',
                 'profile_overrides': {k: v for k, v in env.items() if k.startswith('CARGO_PROFILE_RELEASE_')},
                 'build_command': build, 'link_query_command': link_command, 'program_builds': commands,
@@ -128,21 +139,28 @@ def measure(ref, default_profile=False):
                 'toolchain': run(['rustc', '+1.95.0', '-Vv']).stdout,
                 'linker': run(['cc', '--version']).stdout,
                 'hello_before_input_policy': 'identical single-print bytes staged outside the before source tree',
-                'reference_agent': 'retrying_network_worker is the stand-in until pre-Batch-1 item 6'}
+                'reference_agent': 'maintained tool_runner package, reference agent version 0',
+                'omitted_subjects': omitted_subjects}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--before-ref', default='v0.3.3-preview')
     parser.add_argument('--after-ref', required=True)
+    parser.add_argument('--after-only', action='store_true', help='Measure only the requested after ref under its release profile')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    report = {'schema_version': 1, 'generated_at': datetime.now(timezone.utc).isoformat(),
+    report = {'schema_version': 2, 'generated_at': datetime.now(timezone.utc).isoformat(),
               'host': platform.platform(), 'machine': platform.machine(),
               'runner_sha256': artifact(Path(__file__))['sha256'], 'measurements': []}
     report['process_helper_sha256'] = artifact(ROOT / 'scripts/benchmark_process.py')['sha256']
-    for ref, default in [(args.before_ref, False), (args.after_ref, True), (args.after_ref, False)]:
-        report['measurements'].append(measure(ref, default))
+    plan = [(args.after_ref, False)] if args.after_only else [(args.before_ref, False), (args.after_ref, True), (args.after_ref, False)]
+    for index, (ref, default) in enumerate(plan):
+        if not args.after_only and index == 0:
+            measurement = measure(ref, default, allow_missing_reference_agent=True)
+        else:
+            measurement = measure(ref, default)
+        report['measurements'].append(measurement)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

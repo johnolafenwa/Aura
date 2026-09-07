@@ -232,6 +232,21 @@ combined foundations changes, not an isolated Cranelift experiment.
 The table covers only these exact operations; Aura's Array API is narrower
 than NumPy's, and its deterministic reductions retain left-to-right order.
 
+## Kernel implementation
+
+The shared runtime used by MIR and direct execution selects each floating-point
+operation before its slice loop. Release arm64 disassembly contains `fadd.4s`
+and `fadd.2d`, plus the corresponding `fsub`, `fmul` and `fdiv` vector forms,
+including scalar broadcasts. Division validates the first zero divisor after
+fallible output allocation. Integer arithmetic and sequential reductions retain
+their original implementations.
+
+Both runtime paths match 1,008 frozen pre-change output-bit and diagnostic cases
+in debug and optimized release builds. The corpus covers all four element types,
+empty and vector-boundary lengths, 1,000,001 elements, NaN payloads, infinities,
+signed zero, arithmetic modes and first-trap indices. SIMD does not introduce
+reassociation, approximate division or a new numeric policy.
+
 ## Status
 
 Contiguous numeric Arrays and explicit scalar/Array integer arithmetic modes

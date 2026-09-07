@@ -1419,50 +1419,9 @@ fn validate_float_array_mode(mode: IntegerArithmeticMode) -> Result<()> {
     Ok(())
 }
 
-fn apply_float32_array_operation(
-    left: f32,
-    right: f32,
-    operation: ArrayBinaryOp,
-    index: usize,
-) -> Result<f32> {
-    if operation == ArrayBinaryOp::Div && right == 0.0 {
-        return Err(array_arithmetic_error(
-            "AU4004",
-            operation,
-            index,
-            "has a zero divisor",
-        ));
-    }
-    Ok(match operation {
-        ArrayBinaryOp::Add => left + right,
-        ArrayBinaryOp::Sub => left - right,
-        ArrayBinaryOp::Mul => left * right,
-        ArrayBinaryOp::Div => left / right,
-    })
-}
-
-fn apply_float64_array_operation(
-    left: f64,
-    right: f64,
-    operation: ArrayBinaryOp,
-    index: usize,
-) -> Result<f64> {
-    if operation == ArrayBinaryOp::Div && right == 0.0 {
-        return Err(array_arithmetic_error(
-            "AU4004",
-            operation,
-            index,
-            "has a zero divisor",
-        ));
-    }
-    Ok(match operation {
-        ArrayBinaryOp::Add => left + right,
-        ArrayBinaryOp::Sub => left - right,
-        ArrayBinaryOp::Mul => left * right,
-        ArrayBinaryOp::Div => left / right,
-    })
-}
-
+// Keep allocation and divisor validation before publishing any output.
+// Hoist operation selection out of the slice loop so LLVM can vectorize
+// independent elements; reductions below deliberately retain their order.
 fn array_float32_binary(
     left: &[f32],
     right: &[f32],
@@ -1471,26 +1430,27 @@ fn array_float32_binary(
 ) -> Result<Vec<f32>> {
     validate_float_array_mode(mode)?;
     let mut output = try_array_buffer(left.len(), "array arithmetic result")?;
-    for (index, (&left, &right)) in left.iter().zip(right).enumerate() {
-        output.push(apply_float32_array_operation(
-            left, right, operation, index,
-        )?);
-    }
-    Ok(output)
-}
-
-fn array_float64_binary(
-    left: &[f64],
-    right: &[f64],
-    operation: ArrayBinaryOp,
-    mode: IntegerArithmeticMode,
-) -> Result<Vec<f64>> {
-    validate_float_array_mode(mode)?;
-    let mut output = try_array_buffer(left.len(), "array arithmetic result")?;
-    for (index, (&left, &right)) in left.iter().zip(right).enumerate() {
-        output.push(apply_float64_array_operation(
-            left, right, operation, index,
-        )?);
+    match operation {
+        ArrayBinaryOp::Add => {
+            output.extend(left.iter().zip(right).map(|(&left, &right)| left + right))
+        }
+        ArrayBinaryOp::Sub => {
+            output.extend(left.iter().zip(right).map(|(&left, &right)| left - right))
+        }
+        ArrayBinaryOp::Mul => {
+            output.extend(left.iter().zip(right).map(|(&left, &right)| left * right))
+        }
+        ArrayBinaryOp::Div => {
+            if let Some(index) = right.iter().position(|value| *value == 0.0) {
+                return Err(array_arithmetic_error(
+                    "AU4004",
+                    operation,
+                    index,
+                    "has a zero divisor",
+                ));
+            }
+            output.extend(left.iter().zip(right).map(|(&left, &right)| left / right));
+        }
     }
     Ok(output)
 }
@@ -1504,15 +1464,63 @@ fn array_float32_scalar_binary(
 ) -> Result<Vec<f32>> {
     validate_float_array_mode(mode)?;
     let mut output = try_array_buffer(values.len(), "array arithmetic result")?;
-    for (index, &value) in values.iter().enumerate() {
-        let (left, right) = if scalar_left {
-            (scalar, value)
+    if operation == ArrayBinaryOp::Div {
+        let zero = if scalar_left {
+            values.iter().position(|value| *value == 0.0)
         } else {
-            (value, scalar)
+            (scalar == 0.0 && !values.is_empty()).then_some(0)
         };
-        output.push(apply_float32_array_operation(
-            left, right, operation, index,
-        )?);
+        if let Some(index) = zero {
+            return Err(array_arithmetic_error(
+                "AU4004",
+                operation,
+                index,
+                "has a zero divisor",
+            ));
+        }
+    }
+    match (operation, scalar_left) {
+        (ArrayBinaryOp::Add, false) => output.extend(values.iter().map(|&value| value + scalar)),
+        (ArrayBinaryOp::Add, true) => output.extend(values.iter().map(|&value| scalar + value)),
+        (ArrayBinaryOp::Sub, false) => output.extend(values.iter().map(|&value| value - scalar)),
+        (ArrayBinaryOp::Sub, true) => output.extend(values.iter().map(|&value| scalar - value)),
+        (ArrayBinaryOp::Mul, false) => output.extend(values.iter().map(|&value| value * scalar)),
+        (ArrayBinaryOp::Mul, true) => output.extend(values.iter().map(|&value| scalar * value)),
+        (ArrayBinaryOp::Div, false) => output.extend(values.iter().map(|&value| value / scalar)),
+        (ArrayBinaryOp::Div, true) => output.extend(values.iter().map(|&value| scalar / value)),
+    }
+    Ok(output)
+}
+
+fn array_float64_binary(
+    left: &[f64],
+    right: &[f64],
+    operation: ArrayBinaryOp,
+    mode: IntegerArithmeticMode,
+) -> Result<Vec<f64>> {
+    validate_float_array_mode(mode)?;
+    let mut output = try_array_buffer(left.len(), "array arithmetic result")?;
+    match operation {
+        ArrayBinaryOp::Add => {
+            output.extend(left.iter().zip(right).map(|(&left, &right)| left + right))
+        }
+        ArrayBinaryOp::Sub => {
+            output.extend(left.iter().zip(right).map(|(&left, &right)| left - right))
+        }
+        ArrayBinaryOp::Mul => {
+            output.extend(left.iter().zip(right).map(|(&left, &right)| left * right))
+        }
+        ArrayBinaryOp::Div => {
+            if let Some(index) = right.iter().position(|value| *value == 0.0) {
+                return Err(array_arithmetic_error(
+                    "AU4004",
+                    operation,
+                    index,
+                    "has a zero divisor",
+                ));
+            }
+            output.extend(left.iter().zip(right).map(|(&left, &right)| left / right));
+        }
     }
     Ok(output)
 }
@@ -1526,15 +1534,30 @@ fn array_float64_scalar_binary(
 ) -> Result<Vec<f64>> {
     validate_float_array_mode(mode)?;
     let mut output = try_array_buffer(values.len(), "array arithmetic result")?;
-    for (index, &value) in values.iter().enumerate() {
-        let (left, right) = if scalar_left {
-            (scalar, value)
+    if operation == ArrayBinaryOp::Div {
+        let zero = if scalar_left {
+            values.iter().position(|value| *value == 0.0)
         } else {
-            (value, scalar)
+            (scalar == 0.0 && !values.is_empty()).then_some(0)
         };
-        output.push(apply_float64_array_operation(
-            left, right, operation, index,
-        )?);
+        if let Some(index) = zero {
+            return Err(array_arithmetic_error(
+                "AU4004",
+                operation,
+                index,
+                "has a zero divisor",
+            ));
+        }
+    }
+    match (operation, scalar_left) {
+        (ArrayBinaryOp::Add, false) => output.extend(values.iter().map(|&value| value + scalar)),
+        (ArrayBinaryOp::Add, true) => output.extend(values.iter().map(|&value| scalar + value)),
+        (ArrayBinaryOp::Sub, false) => output.extend(values.iter().map(|&value| value - scalar)),
+        (ArrayBinaryOp::Sub, true) => output.extend(values.iter().map(|&value| scalar - value)),
+        (ArrayBinaryOp::Mul, false) => output.extend(values.iter().map(|&value| value * scalar)),
+        (ArrayBinaryOp::Mul, true) => output.extend(values.iter().map(|&value| scalar * value)),
+        (ArrayBinaryOp::Div, false) => output.extend(values.iter().map(|&value| value / scalar)),
+        (ArrayBinaryOp::Div, true) => output.extend(values.iter().map(|&value| scalar / value)),
     }
     Ok(output)
 }

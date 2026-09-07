@@ -135,12 +135,16 @@ The 7 September post-reboot session supplies the timing evidence below;
 protocol smoke checks establish correctness only. The separate executable-size
 measurement records byte counts and hashes at clean refs, including an after
 build with Cargo's default release profile restored through environment overrides.
-`retrying_network_worker.au` is the reference-agent stand-in until item 6 lands.
+`examples/agents/tool_runner/` now supplies the maintained reference agent
+(version 0: `fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc`). Its explicit typed JSON
+methods, callable registry, retries, child Queue streaming and resource cleanup
+run with pinned identical stdout on both backends.
 
 The [executable-size table](../../docs/manual/performance.md#executable-size)
 records before/default-after/tuned-after builds with hashes and clean-ref
 provenance. Tuned executable reductions from v0.3.3-preview are 29.35% for the
-compiler, 93.29% for hello world, and 84.54% for the retrying-worker stand-in.
+compiler, 93.29% for hello world, and 84.54% for the historical retrying-worker example. The new reference-agent
+size is measured separately; it has no equivalent subject at the older tag.
 No flag or link step was reverted. Cargo 1.95's reference lists `strip="none"`;
 the explicit no-strip size control is retained under the session's conditional
 decision, with omitted-setting auto-stripping distinguished in the chapter.
@@ -176,3 +180,27 @@ remained unchanged. All Rust protocols/checksums passed; no exclusion was needed
 A verified Git bundle, source diffs, initial failures and successful reports
 are retained in the [session evidence](../../work/2026-09-07-foundations-measurements/).
 Its manifest SHA-256 is `911dc4a7901357b33679ad260923c56d0c8216440b200a0eb12e426ea60cac67`.
+
+## Item 7 per-call investigation and Batch 7 options
+
+The [per-call attribution](../15-backend-boundary.md#per-call-cost-attribution)
+uses eleven symbol-preserving xctrace recordings of unchanged `fib30.au`.
+Of 1,402 recovered Fibonacci samples, frame push/pop and metadata validation
+account for 49.29%, other runtime for 37.38%, scalar argument/result moves for
+6.28%, the remaining emitted body for 3.42%, checked arithmetic for 2.07%, and
+depth accounting for 1.57%. No polling is emitted for this input. Another 100
+process samples are outside recovered Fibonacci stacks, including ten missing
+backtraces; fine-grained shares are sampling estimates.
+
+The unprofiled diagnostic estimate is 33.85854 ns per logical call. An in-place
+frame-storage experiment reduced it to 30.10007 ns (11.10%), below the required
+20% gate, and was reverted. Item 7a therefore delivers attribution and profiling
+support, with no optional call-overhead fix.
+
+Batch 7 should investigate safe metadata-validation amortization (28.53% UTF-8
+helper leaves), repeated task-key/TLS/state lookup (18.33% helper leaves plus
+inline lookup), and the measured storage candidate. An unchecked exported ABI
+would weaken the existing diagnostic boundary and is not adopted. Preserve
+ADR-0036 frames, ancestry, depth, arithmetic and cancellation unless a separate
+approved decision explicitly changes the contract. Measure these runtime
+options independently of the LLVM/C/Cranelift emitter comparison.

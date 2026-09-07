@@ -2,6 +2,22 @@
 
 Last updated: 2026-09-07
 
+## Pre-Batch-1 foundations items 6 and 7 (in progress)
+
+- Authorized target: reference agent version 0, profiling support and attribution,
+  Array kernel optimization with bit-identity evidence, task-stack reuse design,
+  benchmark-input gate, publication and green branch/main CI. No release or tag.
+- Branch `codex/pre-batch-1-items-6-7` starts at `a368dce`. Reference agent v0
+  is `fc0361b` (131 Aura lines), with pinned MIR/direct output. The 15-input
+  benchmark gate and cache-keyed profiling-symbol option pass their regressions.
+- Coverage floors remain 96.30/97.21/94.71. Protected user files stay untouched.
+- Attribution complete; the optional frame-storage patch improved 11.10% and was
+  reverted below the 20% gate. Shared float kernels vectorize and both runtimes
+  match 1,008 pre-change corpus cases in debug/release. Task-stack reuse is scoped.
+- Remaining: full local gates, contractual quiet Array measurements, final size
+  row, publication, green branch/main CI, merge and cleanup. No current blocker.
+- Work note: `work/2026-09-08-pre-batch-1-items-6-7.md`.
+
 ## Pre-Batch-1 measurement publication (complete)
 
 - Identical two-cast correction approved and applied at both clean source bases.

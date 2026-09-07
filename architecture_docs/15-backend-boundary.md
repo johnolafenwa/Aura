@@ -135,3 +135,74 @@ is permitted to accommodate a semantic change.
 
 The runtime/compiler crate split remains Batch 5. A second native backend is a
 Batch 7 evidence-based decision under [ADR-0064](decisions/0064-native-backend-strategy-and-codegen-boundary.md).
+
+## Per-call cost attribution
+
+Pre-Batch-1 item 7a profiles the unchanged naive `fib30.au` input using Xcode
+16.0 `xctrace` Time Profiler on the maintained arm64 Mac14,9. The compiler and
+runtime are built with `CARGO_PROFILE_RELEASE_STRIP=none`; user linking uses
+`AURA_NATIVE_KEEP_SYMBOLS=1`. Compiler source is
+`fc0361bc76b8b47d300a3089b1b4bb7c2b739dfc`. All eleven recordings succeeded;
+no `sample` fallback was needed.
+
+The table assigns each recovered Fibonacci-stack sample to one category by
+its leaf symbol and ASLR-normalized arm64 instruction address. Inlined depth
+and arithmetic instructions are separated using the retained disassembly.
+
+| Category | Samples | Share of recovered Fibonacci samples |
+| --- | ---: | ---: |
+| Emitted Aura function body | 48 | 3.42% |
+| Runtime call-frame push and pop, including metadata validation | 691 | 49.29% |
+| Recursion-depth accounting | 22 | 1.57% |
+| Safepoint and backedge yield polling | 0 | 0.00% |
+| Checked integer arithmetic | 29 | 2.07% |
+| Argument and result marshalling | 88 | 6.28% |
+| Other runtime | 524 | 37.38% |
+| Unattributed within recovered Fibonacci stacks | 0 | 0.00% |
+
+There are **1,402 recovered Fibonacci samples out of 1,502 process samples**.
+The 100 excluded samples include startup/protocol work and ten rows with no
+recovered backtrace; zero in the last row does not mean every process sample
+was attributable. Sampling skid and optimized instruction scheduling limit
+fine-grained attribution. The argument/result category counts scalar register
+moves, not boxing. This non-tasking program has no emitted safepoint polling.
+Other runtime includes task-key/TLS/state lookup, returned-view bookkeeping,
+and runtime prologues/epilogues. Source frames and task ancestry remain intact;
+this input creates no child-task ancestry.
+
+Separate diagnostic timings use the unchanged READY/GO/DONE protocol, two
+warmups and eleven alternating observations per lane without the profiler.
+The original binary's median is **91.165375 ms**, or **33.85854 ns per logical
+call** for `2 × F(31) − 1 = 2,692,537` calls. This divides whole recursive-work
+elapsed time by the naive algorithm's call count; it is not isolated entry
+latency or a new contractual release measurement.
+
+A safe in-place `DirectCallFrameStorage::Spill` push/pop experiment measured
+81.045542 ms, **30.10007 ns per logical call**, an **11.10% improvement**. It
+failed the task's required 20% acceptance threshold and was reverted. Its patch
+and paired observations are retained; no optional per-call optimization ships.
+The unchanged fixtures and full parity gate remain the acceptance requirement
+for any future adopted implementation.
+
+Batch 7 inputs are:
+
+- Metadata UTF-8 validation accounts for **400/1,402 samples (28.53%)**. Seek
+  validation amortization that retains all current invalid-metadata diagnostics
+  and lifetime guarantees. An unchecked exported helper is not an acceptable
+  shortcut: runtime globals remain reachable through process-global FFI, and
+  readable invalid UTF-8 must not become undefined behavior.
+- Task-key and TLS helper leaves account for **257/1,402 samples (18.33%)**,
+  before inline state-map lookup. Investigate repeated lookup while preserving
+  task identity, nesting, worker pinning, frame capture and cancellation.
+- Frame-storage movement has a measured **11.10%** candidate improvement,
+  below this task's threshold. Revisit it as part of a broader measured design.
+- Changes to the ADR-0036 frame contract, recursion-depth policy, safepoint
+  placement or checked arithmetic require their own approved design. Their
+  sampled shares are not permission to remove those semantics. A different
+  emitter alone does not remove the dominant Rust-runtime work.
+
+[Versioned evidence](https://github.com/johnolafenwa/Aura/tree/main/work/2026-09-08-pre-batch-1-items-6-7)
+includes lossless raw sample XML, exact record/export commands, selected
+instructions, an executable attribution script, binary hashes, the reverted
+experiment and all paired timings. These are diagnostic quiet-host observations,
+not post-reboot release results.

@@ -17601,3 +17601,54 @@ fn unix_tls_and_websocket_resources_use_nonblocking_descriptors_internally() {
         .join()
         .expect("websocket server thread should join");
 }
+
+#[test]
+fn vectorized_float_division_preserves_empty_and_allocation_error_precedence() {
+    for dtype in [ArrayDType::Float32, ArrayDType::Float64] {
+        let empty = ArrayValue::zeros(dtype, vec![0].into()).unwrap();
+        for scalar_left in [false, true] {
+            let result = empty
+                .scalar_binary(
+                    &Value::Float(-0.0),
+                    scalar_left,
+                    ArrayBinaryOp::Div,
+                    IntegerArithmeticMode::Checked,
+                )
+                .unwrap();
+            assert_eq!(result.dtype(), dtype);
+            assert!(result.is_empty());
+        }
+        let numerator = ArrayValue::full(dtype, vec![9].into(), &Value::Float(1.0)).unwrap();
+        let zero = ArrayValue::zeros(dtype, vec![9].into()).unwrap();
+        let division = zero
+            .scalar_binary(
+                &Value::Float(-0.0),
+                false,
+                ArrayBinaryOp::Div,
+                IntegerArithmeticMode::Checked,
+            )
+            .unwrap_err();
+        assert_eq!(division.code, "AU4004");
+        assert_eq!(
+            division.message,
+            "array division has a zero divisor at flat index 0"
+        );
+        for scalar in [false, true] {
+            let error = super::with_array_allocation_budget(1, || {
+                if scalar {
+                    numerator.scalar_binary(
+                        &Value::Float(0.0),
+                        false,
+                        ArrayBinaryOp::Div,
+                        IntegerArithmeticMode::Checked,
+                    )
+                } else {
+                    numerator.binary(&zero, ArrayBinaryOp::Div, IntegerArithmeticMode::Checked)
+                }
+            })
+            .unwrap_err();
+            assert_eq!(error.code, "AU4005");
+            assert!(error.message.contains("array arithmetic result"));
+        }
+    }
+}

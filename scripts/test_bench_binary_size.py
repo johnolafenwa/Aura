@@ -12,6 +12,26 @@ spec.loader.exec_module(bench)
 
 
 class BinarySizeTests(unittest.TestCase):
+    def test_default_reference_subject_is_the_maintained_package(self):
+        self.assertEqual(bench.SUBJECTS['reference_agent'], 'examples/agents/tool_runner/src/main.au')
+        self.assertNotIn('reference_agent_standin', bench.SUBJECTS)
+
+    def test_reference_stdout_is_pinned_exactly(self):
+        source = bench.ROOT / 'examples/agents/tool_runner/src/main.au'
+        stdout = (source.parent.parent / 'stdout.txt').read_text()
+        bench.verify_subject_stdout('reference_agent', source, stdout)
+        for changed in (stdout + 'extra\n', stdout.replace('42', '41'), stdout.rstrip()):
+            with self.assertRaisesRegex(RuntimeError, 'pinned stdout'):
+                bench.verify_subject_stdout('reference_agent', source, changed)
+
+    def test_after_only_measures_one_release_profile_at_requested_ref(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'result.json'
+            with mock.patch('sys.argv', ['bench-binary-size.py', '--after-ref', 'exact-head', '--after-only', '--output', str(output)]), mock.patch.object(bench, 'measure', return_value={'commit': 'exact-head'}) as measure, mock.patch('builtins.print'):
+                bench.main()
+            measure.assert_called_once_with('exact-head', False)
+            self.assertTrue(output.exists())
+
     def test_commands_finish_owned_process_cleanup_before_checkout_removal(self):
         result = subprocess.CompletedProcess(['probe'], 0, 'output', '')
         with mock.patch.object(benchmark_process, 'run_process_group', return_value=result) as owned, mock.patch.object(bench.subprocess, 'run', return_value=result):

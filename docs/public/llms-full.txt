@@ -2870,6 +2870,21 @@ cargo run -p aura -- build --backend direct -o ./target/app app.au
 
 An installed release archive resolves its native runtime relative to `bin/aura`, under `lib/aura`, and needs only a host C compiler for the final link. A source-checkout binary falls back to Cargo-built runtime artifacts for contributor convenience.
 
+### Keeping native symbols for profiling
+
+Set `AURA_NATIVE_KEEP_SYMBOLS=1` when building a user executable or running with
+the direct backend to skip its post-link `strip` step. For example,
+`AURA_NATIVE_KEEP_SYMBOLS=1 aura build --backend direct -o fib fib30.au` keeps
+the available symbols. Only the exact value `1` enables the option; absent or
+other values keep the normal stripping policy. The option participates in the
+native cache key, so profiling and normally stripped executables use separate
+cache entries. It applies to both direct binaries and generated MIR launchers.
+
+This does not restore symbols already removed from the runtime archive. When
+profiling a source build, build the release compiler/runtime with
+`CARGO_PROFILE_RELEASE_STRIP=none` and keep native symbols during the user build.
+The setting changes symbol retention, not language behavior or source diagnostics.
+
 ## Stdin Buffers
 
 Editor-style commands can read from stdin while using a supplied path for package roots and local imports:
@@ -12611,6 +12626,21 @@ changed by -0.0994%. NumPy drift remained below 0.04%. These are effects of the
 combined foundations changes, not an isolated Cranelift experiment.
 The table covers only these exact operations; Aura's Array API is narrower
 than NumPy's, and its deterministic reductions retain left-to-right order.
+
+## Kernel implementation
+
+The shared runtime used by MIR and direct execution selects each floating-point
+operation before its slice loop. Release arm64 disassembly contains `fadd.4s`
+and `fadd.2d`, plus the corresponding `fsub`, `fmul` and `fdiv` vector forms,
+including scalar broadcasts. Division validates the first zero divisor after
+fallible output allocation. Integer arithmetic and sequential reductions retain
+their original implementations.
+
+Both runtime paths match 1,008 frozen pre-change output-bit and diagnostic cases
+in debug and optimized release builds. The corpus covers all four element types,
+empty and vector-boundary lengths, 1,000,001 elements, NaN payloads, infinities,
+signed zero, arithmetic modes and first-trap indices. SIMD does not introduce
+reassociation, approximate division or a new numeric policy.
 
 ## Status
 

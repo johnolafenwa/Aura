@@ -1734,4 +1734,5 @@ fn insert_aliased_namespace_import(
 mod tests;
 
 #[cfg(test)]
+#[path = "array_kernel_corpus_tests.rs"]
 mod array_kernel_corpus;

@@ -56,14 +56,28 @@ fn hosted_ci_safepoint_windows_scale_without_changing_local_windows() {
 #[test]
 fn reference_tool_runner_package_has_pinned_output_on_both_backends() {
     let package = repo_root().join("examples/agents/tool_runner");
-    let source = fs::read_to_string(package.join("src/main.au"))
-        .expect("reference agent version 0 must exist");
-    assert!(source.lines().count() < 400);
     let expected = fs::read(package.join("stdout.txt")).expect("pinned reference agent output");
     let temp = TempDir::new("aura-reference-tool-runner");
-    fs::create_dir(temp.path().join("src")).unwrap();
-    fs::copy(package.join("Aura.toml"), temp.path().join("Aura.toml")).unwrap();
-    fs::write(temp.path().join("src/main.au"), source).unwrap();
+    let mut directories = vec![package.clone()];
+    let mut total_lines = 0;
+    while let Some(directory) = directories.pop() {
+        for entry in fs::read_dir(directory).expect("reference package directory") {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if entry.file_type().unwrap().is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "au") {
+                total_lines += fs::read_to_string(&path).unwrap().lines().count();
+                let destination = temp.path().join(path.strip_prefix(&package).unwrap());
+                fs::create_dir_all(destination.parent().unwrap()).unwrap();
+                fs::copy(path, destination).unwrap();
+            }
+        }
+    }
+    assert!(total_lines > 0 && total_lines < 400);
+    for name in ["Aura.toml", "Aura.lock"] {
+        fs::copy(package.join(name), temp.path().join(name)).unwrap();
+    }
     for backend in ["mir", "direct"] {
         let mut command = if backend == "mir" {
             let mut command = Command::new(aura_bin());
