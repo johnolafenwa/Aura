@@ -6,10 +6,10 @@ The authorized target is post-reboot before/after and Rust measurement,
 publication in the maintained docs and roadmap, one green final-head hosted CI
 run, a merge commit and green main CI. No tag or version bump.
 
-Measurement and publication edits are complete. Final-head hosted verification,
-merge, main CI and final checkout cleanup are the remaining integration steps.
-No measurement blocker remains. The user's “go ahead” authorized the identical
-two-cast correction described below.
+Complete: measurement and publication are merged after green final-head CI,
+main CI passed on both platforms, and both corrected measurement checkouts and
+their targets have been removed. No remaining work or blocker. The user's
+“go ahead” authorized the identical two-cast correction described below.
 
 ## Source, host and protocol
 
@@ -141,10 +141,38 @@ foundation measurements,” contains the work. The prior partial draft's full
 hosted CI [34081578524](https://github.com/johnolafenwa/Aura/actions/runs/34081578524)
 passed on both Ubuntu and macOS. An earlier packaging text assertion was fixed
 by documenting Aura / CPython explicitly; its final version has the full table.
-The completed publication receives one full green final-head run before merge,
+The completed publication passed one full green final-head run before merge,
 followed by one green main run. No version bump or tag.
 
 Root target was 4.6 GiB with 92 GiB free before continuation builds; after local
-checks it is 4.7 GiB with 90 GiB free. Both original temporary checkouts were
-removed after their evidence was hashed. Corrected checkouts remain for final
-verification and will be removed after the evidence and integration gates.
+checks it was 4.7 GiB with 90 GiB free. Both original temporary checkouts were
+removed after their evidence was hashed. After main CI passed, the two corrected
+checkouts were confirmed clean and lsof reported no open files beneath them;
+both were removed with git worktree remove, including their 810 MiB / 637 MiB
+targets. Their two temporary local refs were deleted with expected-old-SHA
+checks; the verified versioned bundle preserves the exact commits. Unrelated
+worktree registrations were left alone. Root target remains 4.7 GiB and free
+space is now 92 GiB. User files remain unchanged by this work.
+
+## Completed integration
+
+Final-head CI [34102193853](https://github.com/johnolafenwa/Aura/actions/runs/34102193853)
+passed on macOS and Ubuntu at `5e045cdfb7a5d927cb5bddadfeb21747a26c0e20`.
+Final-head Docs [34102193940](https://github.com/johnolafenwa/Aura/actions/runs/34102193940)
+also passed. PR #7 merged with merge commit
+`052d342658c8b3344ad291d4136cc5705746d2d4`; its tree is byte-identical to the
+validated PR head. The local checkout is now main with user files preserved.
+
+Main CI [34109940364](https://github.com/johnolafenwa/Aura/actions/runs/34109940364)
+passed at the merge commit: macOS completed at 11:19:30 UTC and Ubuntu at
+11:50:33 UTC on 7 September 2026. Main Docs [34109940381](https://github.com/johnolafenwa/Aura/actions/runs/34109940381)
+passed and deployed. An HTTP 200 check of
+https://johnolafenwa.github.io/Aura/manual/performance verified the new fib/Rust
+values, corrected source commit and current manifest hash. The returned HTML
+SHA-256 was `d812c9b0a6b4a26ab16c7b75d7038553b780f1a2a6a46b1c6e51a37c794e573e`.
+
+All 58 evidence manifest entries and the corrected-source bundle verified again
+before cleanup; the manifest hash remains unchanged. This work note and task
+board record the final CI and cleanup results in a work-only follow-up on main.
+The repository's CI path filters exclude work-only changes; the complete green
+main run above validates the merged implementation and publication tree.

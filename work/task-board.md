@@ -2,7 +2,7 @@
 
 Last updated: 2026-09-07
 
-## Pre-Batch-1 measurement publication (measurements complete; integration in progress)
+## Pre-Batch-1 measurement publication (complete)
 
 - Identical two-cast correction approved and applied at both clean source bases.
   The CLI regression fails before and passes after; compiler/runner code is unchanged.
@@ -15,8 +15,15 @@ Last updated: 2026-09-07
 - Full evidence, corrected-commit Git bundle and hashes retained. Chapters,
   READMEs, changelog, roadmap measured statuses, ADR-0064 and generated docs updated.
   Cargo's documented strip=none default was reconfirmed; size bytes retained.
-- [PR #7](https://github.com/johnolafenwa/Aura/pull/7): final-head hosted CI,
-  merge commit, green main CI and corrected-checkout cleanup remain.
+- [PR #7](https://github.com/johnolafenwa/Aura/pull/7) merged as `052d342` after
+  final-head CI `34102193853` passed on both platforms. The public docs deployment
+  passed and the live Performance page contains the new values and evidence hash.
+- Main CI `34109940364` passed on macOS and Ubuntu at merge commit `052d342`.
+  Both corrected measurement checkouts and targets were removed after evidence
+  verification; the exact source commits remain in the versioned Git bundle.
+  Root target is 4.7 GiB with 92 GiB free. User files remain untouched.
+- No remaining work, version bump, or tag. Final CI and cleanup are recorded in
+  a work-only follow-up on main.
 - Work note: `work/2026-09-07-foundations-measurements.md`.
 
 ## Pre-Batch-1 foundations items 1–4 (complete)
