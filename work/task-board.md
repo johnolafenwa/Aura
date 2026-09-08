@@ -1,6 +1,23 @@
 # Task Board
 
-Last updated: 2026-09-07
+Last updated: 2026-09-08
+
+## Batch 1 design checkpoint (documentation complete; awaiting user ratification)
+
+- Authorized target: one detailed proposed design, roadmap/index links, a work
+  note and this board entry; no compiler, runtime, example, Manual or ADR-body changes.
+- Deliverable: [Batch 1 design checkpoint](../architecture_docs/16-batch-1-design-checkpoint.md),
+  with 24 ratification questions, all 39 public Option APIs audited, owned
+  callable storage costs, a complete hypothetical reference-agent rewrite,
+  the sema extraction plan and two implementation phases.
+- The ten Approved Decisions and deferred stored-loan boundary remain intact.
+  Protected user files are outside the change.
+- Verification passed: scoped links/anchors/index/fence/newline/whitespace
+  checks, all 15 identity tests, and Manual/tutorial inventory and gate-scope
+  confirmation. The ten Approved Decisions remain byte-identical.
+- Documentation is complete for one isolated commit on main. Remaining:
+  user ratification and all implementation belong to a later task.
+- Work note: [2026-09-08-batch-1-design-checkpoint.md](2026-09-08-batch-1-design-checkpoint.md).
 
 ## Pre-Batch-1 foundations items 6 and 7 (complete)
 

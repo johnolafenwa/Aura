@@ -18,6 +18,11 @@ their implemented contracts and link to future extensions; future approval
 does not change the current Manual or compiler. In particular, the global
 `Option[T]` replacement belongs to ADR-0052's later implementation family.
 
+The [Batch 1 detailed design checkpoint](../16-batch-1-design-checkpoint.md)
+is **Proposed; awaiting user ratification**. Its numbered questionnaire supplies
+the remaining union, alias, owned-callable, and Option-removal choices for
+ADR-0052/0058. It changes neither ADR body nor implemented behavior.
+
 1. [ADR-0001: Contextual `None` and `Option` equality](0001-contextual-none-and-option-equality.md)
 2. [ADR-0002: Integer division and modulo](0002-integer-division-and-modulo.md)
 3. [ADR-0003: Default integer type](0003-default-integer-type.md)
