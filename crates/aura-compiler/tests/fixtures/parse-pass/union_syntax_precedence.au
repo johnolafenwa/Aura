@@ -1,0 +1,5 @@
+type Scalar = int64 | str | None
+type Cells = list[int64 | str]
+type Pair = (int64 | str, None)
+type Reader = def() -> (int64 | str)
+type Choice = (def() -> int64) | None

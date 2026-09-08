@@ -154,9 +154,9 @@ pub(super) fn default_argument_references_param(
         ExprKind::Group(inner) | ExprKind::Try(inner) => {
             default_argument_references_param(inner, param_names)
         }
-        ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } => {
-            default_argument_references_param(expr, param_names)
-        }
+        ExprKind::IsNone { value: expr, .. }
+        | ExprKind::Unary { expr, .. }
+        | ExprKind::Cast { expr, .. } => default_argument_references_param(expr, param_names),
         ExprKind::Specialize { expr, .. } => default_argument_references_param(expr, param_names),
         ExprKind::Member { object, .. } => default_argument_references_param(object, param_names),
         ExprKind::Index { object, index } => default_argument_references_param(object, param_names)
@@ -732,6 +732,7 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Group(inner)
             | ExprKind::Try(inner)
             | ExprKind::Unary { expr: inner, .. }
+            | ExprKind::IsNone { value: inner, .. }
             | ExprKind::Cast { expr: inner, .. }
             | ExprKind::Specialize { expr: inner, .. } => {
                 Self::collect_lambda_capture_uses(inner, bound, seen, captures);
@@ -1460,6 +1461,7 @@ impl<'a> FunctionChecker<'a> {
             .iter()
             .enumerate()
             .map(|(index, param)| Param {
+                keyword_only: false,
                 name: if param.name.is_empty() {
                     format!("argument{}", index + 1)
                 } else {

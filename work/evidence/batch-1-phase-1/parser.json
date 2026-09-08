@@ -1,0 +1,62 @@
+{
+  "family": "parser surface",
+  "parent_commit": "e600cb4a2cab36a6ca6ca0512173e0f1ae1144a7",
+  "new_fixtures": {
+    "parse_pass": 10,
+    "parse_fail": 14
+  },
+  "ratified_fixture_migrations": {
+    "parse_fail_to_parse_pass": 3,
+    "python_hint_to_parse_pass": 1
+  },
+  "new_ast_tests": 7,
+  "existing_parser_tests": 84,
+  "fixture_suites": 9,
+  "compiler_units": {
+    "full_run_passed": 1883,
+    "full_run_failures": [
+      "ast::tests::function_type_pretty_json_preserves_the_public_wire_shape",
+      "ast::tests::type_ref_json_preserves_named_tuple_and_function_shapes"
+    ],
+    "reason": "new callable AST fields changed the expected JSON; explicit new fields pinned",
+    "repair_suite_passed": 11
+  },
+  "cli_tests": 378,
+  "native_acceptance_tests": 1,
+  "forced_parity": {
+    "run_pass": 291,
+    "run_fail": 94,
+    "fallback": false,
+    "failed": 0
+  },
+  "semantic_schema": {
+    "before": 6,
+    "after": 7,
+    "tests": 2,
+    "stale_lsp_schema_rejected": 6
+  },
+  "compiler_bridge_tests": 96,
+  "format": "pass",
+  "clippy": "pass",
+  "coverage_floors_unchanged": [
+    96.3,
+    97.21,
+    94.71
+  ],
+  "log_sha256": {
+    "parser_red": "af8d2c8c225896172ef77dc9a725bd7fc415d0224b7ce3f426e2b11cefb82788",
+    "parser_fixture_red": "6be6cc17da253ac0ef1715b42bfa73bd14656f86ba5c2ce4023277f777ccd9fa",
+    "lookahead_red": "bcb0e64b1943e006529851be000d13b4701dfc28481f4cf280a47d2b96a58588",
+    "parser_green": "2c411ac4841fe10dd1107058f13fbdf42b5d4580d3cba242b994ec5764853341",
+    "fixtures_green": "1a7f6b2904f1eb99aa6133db5f81511c3cc9314c3127e42238fdde312d0c2666",
+    "compiler_units": "45743da6ad06df95c5fe36e7fb97a31edbb8c2b1eeb3284627c47464e01609dc",
+    "ast_repairs": "17d06201f7067310290324b19202e5e1f2a6955b6b3d8fc906e134b2b2fbcdc9",
+    "parity": "cc0ab4816f0edc43055c6401789f6de011a73174c2f58e66221909c4252b7fcb",
+    "cli": "5ff4fccfd0d113f1fee027e532f50616e29d8abf9afd139d2621467e2bedbfca",
+    "native_acceptance": "3420c2bccf77dd2d38501d620c4071b529e218c4ba390b4ecc530af92ce0ba05",
+    "schema": "fdeca98d290a7f75041e50a4043967c585d74b82177822fcfecc0ce81c34a93c",
+    "lsp_bridge": "fa0ccafb7d7dd7e0783f27ae85efef08b254b7ec1e90ab4c6dfdb2cdff92e693",
+    "clippy": "75313021f688ffaa4f151d85bd44d5f827e406f410fef357e896e96e199cc21b",
+    "format": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

@@ -1,0 +1,5 @@
+error[AU1101]: `mut def` is only valid inside Callable[...] or TaskCallable[...]
+ --> crates/aura-compiler/tests/fixtures/parse-fail/callable_store_syntax_thin_mut.au:1:12
+  |
+1 | type Bad = mut def() -> None
+  |            ^

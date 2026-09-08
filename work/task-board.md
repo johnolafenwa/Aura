@@ -16,9 +16,14 @@ Last updated: 2026-09-08
   gates successfully, with 404 semantic unit tests, committed as `38c995c`.
   E2.3 passes complete compiler/fixture/CLI/native acceptance and all 385
   forced parity cases. Coverage is 96.314750% lines / 97.221029% functions /
-  94.821287% regions, above unchanged floors. Feature implementation is next.
-- Next: finish E2 steps 1–3 with byte-identical fixture behavior, then every H1
-  feature family, editor/docs/reference-agent updates, full gates and integration.
+  94.821287% regions, above unchanged floors. E2.3 commit: `e600cb4`.
+- Parser family is complete: ten positive/fourteen negative fixtures added
+  failing first; seven AST tests, 84 parser tests, full fixtures, 385 forced
+  parity cases, 378 CLI tests, and native acceptance pass. The two changed JSON
+  assertions pass after pinning new metadata. Schema 7 and all 96 bridge tests
+  are green. Union/alias tests are now red before semantic implementation.
+- Next: union normalization and alias expansion, then the ordered families,
+  editor/docs/reference-agent updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.
 - Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).

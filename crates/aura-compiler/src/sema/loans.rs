@@ -179,6 +179,7 @@ pub(super) fn last_name_reference_span_in_expr(
         | ExprKind::Try(inner)
         | ExprKind::Specialize { expr: inner, .. }
         | ExprKind::Unary { expr: inner, .. }
+        | ExprKind::IsNone { value: inner, .. }
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::Member { object: inner, .. } => last_name_reference_span_in_expr(inner, name),
         ExprKind::Index { object, index } => combine(vec![
@@ -2202,7 +2203,8 @@ impl<'a> FunctionChecker<'a> {
                     self.reject_mutable_returned_view_value(&entry.value, locals, false)?;
                 }
             }
-            ExprKind::Unary { expr, .. }
+            ExprKind::IsNone { value: expr, .. }
+            | ExprKind::Unary { expr, .. }
             | ExprKind::Cast { expr, .. }
             | ExprKind::Specialize { expr, .. }
             | ExprKind::Try(expr) => {
@@ -2857,7 +2859,7 @@ impl<'a> FunctionChecker<'a> {
             | ExprKind::Try(inner) => {
                 self.collect_expr_call_places(inner, locals, places, include_consumed)
             }
-            ExprKind::Unary { expr: inner, .. } => {
+            ExprKind::Unary { expr: inner, .. } | ExprKind::IsNone { value: inner, .. } => {
                 self.collect_expr_call_places(inner, locals, places, include_consumed)
             }
             ExprKind::Binary { left, right, .. } => {
@@ -2987,7 +2989,8 @@ impl<'a> FunctionChecker<'a> {
             | ExprKind::Cast { expr: inner, .. }
             | ExprKind::Specialize { expr: inner, .. }
             | ExprKind::Try(inner)
-            | ExprKind::Unary { expr: inner, .. } => {
+            | ExprKind::Unary { expr: inner, .. }
+            | ExprKind::IsNone { value: inner, .. } => {
                 self.collect_expr_place_reads(inner, locals, label, places)
             }
             ExprKind::Binary { left, right, .. } => {

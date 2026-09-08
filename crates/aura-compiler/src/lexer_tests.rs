@@ -41,7 +41,7 @@ fn lexes_keywords_operators_and_delimiters() {
     assert!(tokens.contains(&TokenKind::KwCase));
     assert!(tokens.contains(&TokenKind::KwFor));
     assert!(tokens.contains(&TokenKind::KwIn));
-    assert!(tokens.contains(&TokenKind::KwIs));
+    assert!(tokens.contains(&TokenKind::Identifier("is".to_string())));
     assert!(tokens.contains(&TokenKind::KwWhile));
     assert!(tokens.contains(&TokenKind::KwBreak));
     assert!(tokens.contains(&TokenKind::KwContinue));

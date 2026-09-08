@@ -1,0 +1,4 @@
+def inspect(value: int64 | None, flag: bool) -> bool:
+    if not (value is None) and flag or value is not None:
+        return true
+    return false

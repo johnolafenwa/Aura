@@ -62,6 +62,7 @@ fn keyword_only_binding_rejects_positional_arguments() {
 fn callable_params_follow_default_presence() {
     let params = vec![
         Param {
+            keyword_only: false,
             name: "required".to_string(),
             mode: ParamMode::Default,
             ty: dummy_type("int32"),
@@ -69,6 +70,7 @@ fn callable_params_follow_default_presence() {
             span: Span::new(1, 1),
         },
         Param {
+            keyword_only: false,
             name: "optional".to_string(),
             mode: ParamMode::Default,
             ty: dummy_type("int32"),
@@ -301,6 +303,7 @@ fn builtin_function_bind_args_cover_remaining_variants() {
 #[test]
 fn call_binding_helpers_cover_argument_count_and_decl_metadata_paths() {
     let params = vec![Param {
+        keyword_only: false,
         name: "value".to_string(),
         mode: ParamMode::Default,
         ty: dummy_type("str"),

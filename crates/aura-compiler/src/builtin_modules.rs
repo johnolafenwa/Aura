@@ -32,6 +32,9 @@ fn lower_type_ref_with_type_params(
     type_params: Option<&BTreeSet<String>>,
 ) -> Type {
     match &type_ref.kind {
+        crate::ast::TypeRefKind::Union(_) | crate::ast::TypeRefKind::Callable { .. } => {
+            Type::named("Unknown")
+        }
         crate::ast::TypeRefKind::Tuple(elements) => Type::Tuple(
             elements
                 .iter()
@@ -72,6 +75,7 @@ fn lower_type_ref_with_type_params(
 
 fn value_param(name: &str, ty: TypeRef) -> Param {
     Param {
+        keyword_only: false,
         name: name.to_string(),
         mode: ParamMode::Default,
         ty,
@@ -82,6 +86,7 @@ fn value_param(name: &str, ty: TypeRef) -> Param {
 
 fn value_param_with_default(name: &str, ty: TypeRef, default: Expr) -> Param {
     Param {
+        keyword_only: false,
         name: name.to_string(),
         mode: ParamMode::Default,
         ty,
@@ -92,6 +97,7 @@ fn value_param_with_default(name: &str, ty: TypeRef, default: Expr) -> Param {
 
 fn borrow_param(name: &str, ty: TypeRef) -> Param {
     Param {
+        keyword_only: false,
         name: name.to_string(),
         mode: ParamMode::Default,
         ty,
@@ -102,6 +108,7 @@ fn borrow_param(name: &str, ty: TypeRef) -> Param {
 
 fn own_param(name: &str, ty: TypeRef) -> Param {
     Param {
+        keyword_only: false,
         name: name.to_string(),
         mode: ParamMode::Own,
         ty,

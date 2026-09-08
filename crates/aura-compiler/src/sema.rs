@@ -5044,6 +5044,10 @@ impl<'a> FunctionChecker<'a> {
             );
         }
         match &expr.kind {
+            ExprKind::IsNone { .. } => Err(Diagnostic::at(
+                expr.span,
+                "None tests require Batch 1 flow checking",
+            )),
             ExprKind::Lambda {
                 captures,
                 params,

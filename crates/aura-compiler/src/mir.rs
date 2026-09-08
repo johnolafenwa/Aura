@@ -4848,6 +4848,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_type_ref_with_provenance(&self, type_ref: &crate::ast::TypeRef) -> Type {
         match &type_ref.kind {
+            TypeRefKind::Union(_) | TypeRefKind::Callable { .. } => Type::named("Unknown"),
             TypeRefKind::Tuple(elements) => Type::Tuple(
                 elements
                     .iter()
@@ -8879,6 +8880,11 @@ impl<'a> Lowerer<'a> {
             return function;
         }
         match &expr.kind {
+            ExprKind::IsNone { value, negated, .. } => {
+                let is_none = self.infer_expr_type(value) == Some(Type::Unit);
+                self.lower_expr(value);
+                Operand::Bool(is_none != *negated)
+            }
             ExprKind::Name(name) if name == "None" => Operand::Unit,
             ExprKind::BuiltinOmitted => Operand::Unit,
             ExprKind::Lambda { params, body, .. } => self.lower_lambda(expr, params, body),
@@ -13285,9 +13291,9 @@ impl<'a> Lowerer<'a> {
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {
         match &expr.kind {
-            ExprKind::Membership { .. } | ExprKind::CompareChain { .. } => {
-                Some(Type::named("bool"))
-            }
+            ExprKind::IsNone { .. }
+            | ExprKind::Membership { .. }
+            | ExprKind::CompareChain { .. } => Some(Type::named("bool")),
             ExprKind::Lambda { .. } => self.closure_info_at(expr.span).map(ClosureInfo::ty),
             ExprKind::Name(name) if name == "None" => Some(Type::Unit),
             ExprKind::Name(name) => {
@@ -15436,6 +15442,7 @@ fn array_coordinate_type(expr: &Expr) -> Type {
 #[cfg(test)]
 fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
     match &type_ref.kind {
+        TypeRefKind::Union(_) | TypeRefKind::Callable { .. } => Type::named("Unknown"),
         TypeRefKind::Tuple(elements) => Type::Tuple(elements.iter().map(lower_type_ref).collect()),
         TypeRefKind::Function {
             params,

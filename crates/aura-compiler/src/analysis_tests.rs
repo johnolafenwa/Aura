@@ -337,6 +337,7 @@ fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
         type_param_bounds: Default::default(),
         receiver: Some(ReceiverKind::Borrow),
         params: vec![crate::ast::Param {
+            keyword_only: false,
             name: "value".to_string(),
             mode: ParamMode::Default,
             ty: type_ref("int32"),

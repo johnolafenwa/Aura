@@ -84,7 +84,7 @@ pub const MAX_INTERNAL_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
 /// Every persisted artifact or long-lived tooling cache that can contain
 /// compiler semantic metadata must bind this value. Bump it whenever the
 /// meaning or representation of checked source changes incompatibly.
-pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 6;
+pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 7;
 
 /// Lowercase hexadecimal SHA-256 of `bytes`, for content-addressed identities.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -1111,7 +1111,10 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
 fn qualify_export_type_ref(program: &Program, type_ref: &ast::TypeRef) -> ast::TypeRef {
     let mut qualified = type_ref.clone();
     match &mut qualified.kind {
-        ast::TypeRefKind::Tuple(elements) => {
+        ast::TypeRefKind::Callable { signature, .. } => {
+            **signature = qualify_export_type_ref(program, signature);
+        }
+        ast::TypeRefKind::Tuple(elements) | ast::TypeRefKind::Union(elements) => {
             *elements = elements
                 .iter()
                 .map(|element| qualify_export_type_ref(program, element))

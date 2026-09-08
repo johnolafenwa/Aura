@@ -1,0 +1,4 @@
+type Repeated = int | int64
+type Nested = ((int64 | None) | str) | None
+type Unit = None | None
+type Optional[T] = T | None

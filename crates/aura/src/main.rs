@@ -908,6 +908,7 @@ fn discover_test_hooks(syntax: &aura_compiler::ast::Module) -> Result<TestHooks,
             return Err(Diagnostic::coded_at(
                 "AU2999",
                 match item {
+                    Item::TypeAlias(decl) => decl.span,
                     Item::Class(decl) => decl.span,
                     Item::Enum(decl) => decl.span,
                     Item::ExternFunction(decl) => decl.name_span,

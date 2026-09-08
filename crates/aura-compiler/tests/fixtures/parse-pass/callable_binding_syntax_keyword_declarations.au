@@ -1,0 +1,5 @@
+def configure(path: str, *, retries: int32 = 2) -> int32:
+    return retries
+
+def main():
+    print(configure("test", retries=3))

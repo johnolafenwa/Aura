@@ -194,16 +194,19 @@ fn p63_lambda_parameters_are_contextual_and_the_body_is_an_expression() {
         params.as_slice(),
         [
             LambdaParam {
+                keyword_only: false,
                 name: value,
                 mode: ParamMode::Default,
                 ..
             },
             LambdaParam {
+                keyword_only: false,
                 name: text,
                 mode: ParamMode::Own,
                 ..
             },
             LambdaParam {
+                keyword_only: false,
                 name: output,
                 mode: ParamMode::BorrowMut,
                 ..
@@ -372,7 +375,7 @@ fn named_type_ref(ty: &TypeRef) -> Option<(&str, &[TypeRef])> {
     match &ty.kind {
         TypeRefKind::Named { name, args } => Some((name, args)),
         TypeRefKind::Tuple(_) => None,
-        TypeRefKind::Function { .. } => None,
+        TypeRefKind::Function { .. } | TypeRefKind::Union(_) | TypeRefKind::Callable { .. } => None,
     }
 }
 
@@ -651,13 +654,14 @@ fn function_type_parameter_capabilities_reject_invalid_placements_precisely() {
         "expected a type after the function parameter capability"
     );
 
-    let named = parse_stmt_from("callback: def(value: str) -> None = factory\n")
-        .expect_err("function type parameters contain types, not names");
-    assert!(named.message.contains("contain types only"));
+    parse_stmt_from("callback: def(value: str) -> None = factory\n")
+        .expect("Batch 1 function type slots retain optional binding names");
 
     let default = parse_stmt_from("callback: def(str = \"x\") -> None = factory\n")
         .expect_err("function type parameters cannot have defaults");
-    assert!(default.message.contains("cannot declare default values"));
+    assert!(default
+        .message
+        .contains("callable types use '= ...' to promise a default"));
 
     let nested_default = parse_stmt_from(
         "callback: def(str = build((1, 2), [3, 4], {5: 6}), int32) -> None = factory\n",
@@ -667,7 +671,7 @@ fn function_type_parameter_capabilities_reject_invalid_placements_precisely() {
     );
     assert_eq!(
         nested_default.message,
-        "function type parameters cannot declare default values"
+        "callable types use '= ...' to promise a default"
     );
 
     let return_capability = parse_stmt_from("callback: def() -> own str = factory\n")
@@ -855,11 +859,12 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
         }
     }
 
-    let missing_type_comma = parse_item_from("def read(value: (str)):\n    pass\n")
-        .expect_err("a singleton tuple type needs a comma");
-    assert!(missing_type_comma
-        .message
-        .contains("tuple types need a comma"));
+    let grouped_type = parse_item_from("def read(value: (str)):\n    pass\n")
+        .expect("Batch 1 permits grouping a type without forming a tuple");
+    let Item::Function(function) = grouped_type else {
+        panic!("expected function")
+    };
+    assert_eq!(function.params[0].ty.named_parts().unwrap().0, "str");
 
     let duplicate = parse_stmt_from("left, left = pair\n")
         .expect_err("duplicate destructuring names should fail in the parser");
@@ -1352,11 +1357,11 @@ fn parse_expression_reports_trailing_tokens_and_primary_errors() {
     assert!(borrow_sequence.edits.is_empty());
     assert_eq!(borrow_sequence.code, "AU1101");
 
-    let identity = parse_expression("value is None").expect_err("`is` should be rejected");
-    assert_eq!(
-        identity.message,
-        "`is` is not supported; use `== None` or `match` for optional values"
-    );
+    let identity = parse_expression("value is None").expect("Batch 1 admits contextual None tests");
+    assert!(matches!(
+        identity.kind,
+        ExprKind::IsNone { negated: false, .. }
+    ));
 
     let bool_expr = parse_expression("true").expect("bool literal should parse");
     assert!(matches!(bool_expr.kind, ExprKind::Bool(true)));
@@ -1704,17 +1709,14 @@ fn parse_import_aliases_preserve_target_and_local_names() {
 }
 
 #[test]
-fn keyword_only_parameter_markers_receive_a_focused_rejection() {
-    let error = parse("def configure(path: str, *, retries: int32):\n    return\n")
-        .expect_err("keyword-only parameters remain outside Aura 0.3");
-    assert_eq!(error.code, "AU1101");
-    assert!(
-        error.message.contains(
-            "keyword-only parameters are not part of Aura 0.3's structural callable model"
-        ),
-        "unexpected diagnostic: {}",
-        error.message
-    );
+fn keyword_only_parameter_markers_preserve_the_binding_boundary() {
+    let item = parse_item_from("def configure(path: str, *, retries: int32):\n    return\n")
+        .expect("Batch 1 ratifies keyword-only parameters");
+    let Item::Function(function) = item else {
+        panic!("expected function")
+    };
+    assert!(!function.params[0].keyword_only);
+    assert!(function.params[1].keyword_only);
 }
 
 #[test]

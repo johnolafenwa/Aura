@@ -67,7 +67,7 @@ end after conservative final use; reborrows preserve source identity; and
 mutable views write through immediately. One declared receiver or parameter
 may be the origin of `-> view [mut] T from source`. MIR execution, direct
 native builds, analysis/LSP, and editor tooling share semantic-interface
-schema 6 for this surface. Views and loan closures remain task-local and
+schema 7 for this surface. Views and loan closures remain task-local and
 non-Transfer.
 
 Phase 6.4 adds explicitly authorized FFI v0 packages. Bodyless
@@ -213,7 +213,7 @@ youngest-first task ancestry. Each public schema-version-1 frame span has its
 own required source `path`; the analysis/LSP editor shape permits an optional
 `file_path` for source-only analysis. The public diagnostic schema remains
 version `1` because the always-present arrays are an additive extension;
-compiler-service/editor transport uses semantic schema version `6`. This
+compiler-service/editor transport uses semantic schema version `7`. This
 version includes structural function values, import aliases, and the expanded
 numeric expression surface, and forwards the same diagnostic records.
 

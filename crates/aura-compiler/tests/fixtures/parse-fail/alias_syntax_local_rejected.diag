@@ -1,0 +1,5 @@
+error[AU1101]: type aliases are only allowed at module scope
+ --> crates/aura-compiler/tests/fixtures/parse-fail/alias_syntax_local_rejected.au:2:5
+  |
+2 |     type Inner = int64
+  |     ^

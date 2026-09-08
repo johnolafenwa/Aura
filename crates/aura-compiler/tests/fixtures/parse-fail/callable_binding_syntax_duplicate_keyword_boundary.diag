@@ -1,0 +1,5 @@
+error[AU1101]: only one '*' keyword-only boundary is allowed
+ --> crates/aura-compiler/tests/fixtures/parse-fail/callable_binding_syntax_duplicate_keyword_boundary.au:1:20
+  |
+1 | def f(*, x: int64, *, y: int64):
+  |                    ^

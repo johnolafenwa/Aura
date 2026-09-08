@@ -1,0 +1,2 @@
+def f(cb: def(value: int64 = 1) -> None):
+    pass

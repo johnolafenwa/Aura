@@ -240,6 +240,7 @@ fn type_ref_json_preserves_named_tuple_and_function_shapes() {
         serde_json::to_value(&function).expect("function type reference should serialize"),
         serde_json::json!({
             "params": [{
+                "name": null, "keyword_only": false, "has_default": false,
                 "mode": "BorrowMut",
                 "ty": {
                     "name": "str",
@@ -249,6 +250,7 @@ fn type_ref_json_preserves_named_tuple_and_function_shapes() {
                 },
                 "span": {"line": 3, "column": 5}
             }, {
+                "name": null, "keyword_only": false, "has_default": false,
                 "mode": "Own",
                 "ty": {
                     "name": "int32",
@@ -340,6 +342,7 @@ fn function_type_pretty_json_preserves_the_public_wire_shape() {
             .expect("the public function-type JSON should round trip as a JSON value"),
         serde_json::json!({
             "params": [{
+                "name": null, "keyword_only": false, "has_default": false,
                 "mode": "Own",
                 "ty": {
                     "elements": [{

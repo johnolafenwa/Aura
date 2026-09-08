@@ -1,0 +1,5 @@
+error[AU1101]: expected a named parameter after '*'
+ --> crates/aura-compiler/tests/fixtures/parse-fail/callable_binding_syntax_lambda_empty_keyword_boundary.au:1:19
+  |
+1 | callback = lambda *, : 1
+  |                   ^

@@ -1,0 +1,1 @@
+callback = lambda *, : 1

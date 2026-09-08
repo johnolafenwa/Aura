@@ -1,0 +1,5 @@
+error[AU1101]: expected a named parameter after '*'
+ --> crates/aura-compiler/tests/fixtures/parse-fail/callable_binding_syntax_unnamed_keyword_slot.au:1:18
+  |
+1 | def f(cb: def(*, int64) -> None):
+  |                  ^

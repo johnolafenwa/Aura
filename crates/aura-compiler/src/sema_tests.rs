@@ -7561,6 +7561,7 @@ fn function_decl(name: &str) -> FunctionDecl {
 fn unary_function_decl(name: &str) -> FunctionDecl {
     let mut decl = function_decl(name);
     decl.params.push(Param {
+        keyword_only: false,
         name: "value".to_string(),
         mode: ParamMode::Own,
         ty: type_ref("int32"),
@@ -14791,6 +14792,7 @@ fn builtin_omitted_marker_is_valid_only_while_checking_generated_defaults() {
         span: Span::new(1, 1),
     };
     let param = Param {
+        keyword_only: false,
         name: "timeout".to_string(),
         mode: ParamMode::Default,
         ty: type_ref("Option"),
@@ -16025,6 +16027,7 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
     impl_method_with_default.receiver = Some(ReceiverKind::Borrow);
     impl_method_with_default.return_type = type_ref("int32");
     impl_method_with_default.params = vec![Param {
+        keyword_only: false,
         name: "value".to_string(),
         ty: type_ref("int32"),
         mode: ParamMode::Default,
@@ -17990,6 +17993,7 @@ fn operator_method_from_type_param_reports_ambiguity_when_multiple_bounds_match(
     let mut add_decl = function_decl("add");
     add_decl.receiver = Some(ReceiverKind::Borrow);
     add_decl.params = vec![Param {
+        keyword_only: false,
         name: "rhs".to_string(),
         mode: ParamMode::Default,
         ty: type_ref("Rhs"),
@@ -18679,6 +18683,7 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
     let mut merge_decl = function_decl("merge");
     merge_decl.params = vec![
         Param {
+            keyword_only: false,
             name: "left".to_string(),
             ty: type_ref("Widget"),
             mode: ParamMode::BorrowMut,
@@ -18686,6 +18691,7 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
             span,
         },
         Param {
+            keyword_only: false,
             name: "right".to_string(),
             ty: type_ref("Widget"),
             mode: ParamMode::BorrowMut,
@@ -19511,6 +19517,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
         .require_task_startable_function(
             "work",
             &[Param {
+                keyword_only: false,
                 name: "value".to_string(),
                 ty: type_ref("str"),
                 mode: ParamMode::Default,
@@ -19525,6 +19532,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
         .require_task_startable_function(
             "work",
             &[Param {
+                keyword_only: false,
                 name: "value".to_string(),
                 ty: type_ref("int32"),
                 mode: ParamMode::BorrowMut,

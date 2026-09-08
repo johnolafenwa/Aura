@@ -299,7 +299,8 @@ impl<'a> AnalysisBuilder<'a> {
                         self.visit_stmts(&method.body, &mut scope);
                     }
                 }
-                Item::Enum(_)
+                Item::TypeAlias(_)
+                | Item::Enum(_)
                 | Item::ExternFunction(_)
                 | Item::ExternOpaqueClass(_)
                 | Item::Trait(_)
@@ -844,6 +845,7 @@ impl<'a> AnalysisBuilder<'a> {
             | ExprKind::Specialize { expr: object, .. }
             | ExprKind::Cast { expr: object, .. }
             | ExprKind::Unary { expr: object, .. }
+            | ExprKind::IsNone { value: object, .. }
             | ExprKind::Try(object)
             | ExprKind::Group(object) => {
                 self.extend_lambda_scope_from_expr(object, target_line, character, scope);
@@ -2607,7 +2609,9 @@ impl<'a> AnalysisBuilder<'a> {
                 self.visit_expr(body, &lambda_scope);
             }
             ExprKind::Cast { expr, .. } => self.visit_expr(expr, scope),
-            ExprKind::Unary { expr, .. } => self.visit_expr(expr, scope),
+            ExprKind::IsNone { value: expr, .. } | ExprKind::Unary { expr, .. } => {
+                self.visit_expr(expr, scope)
+            }
             ExprKind::Try(inner) | ExprKind::Group(inner) => self.visit_expr(inner, scope),
             ExprKind::Tuple(elements) | ExprKind::List(elements) | ExprKind::Set(elements) => {
                 for element in elements {
@@ -3861,6 +3865,9 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn lower_analysis_type_ref(&self, ty: &TypeRef) -> Type {
         match &ty.kind {
+            crate::ast::TypeRefKind::Union(_) | crate::ast::TypeRefKind::Callable { .. } => {
+                Type::named("Unknown")
+            }
             crate::ast::TypeRefKind::Tuple(elements) => Type::Tuple(
                 elements
                     .iter()
@@ -3938,9 +3945,9 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn infer_expr_type(&self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) -> Option<Type> {
         match &expr.kind {
-            ExprKind::Membership { .. } | ExprKind::CompareChain { .. } => {
-                Some(Type::named("bool"))
-            }
+            ExprKind::IsNone { .. }
+            | ExprKind::Membership { .. }
+            | ExprKind::CompareChain { .. } => Some(Type::named("bool")),
             ExprKind::Int(_) => Some(Type::named("int64")),
             ExprKind::DurationNanos(_) => Some(Type::named("Duration")),
             ExprKind::BuiltinOmitted => None,
@@ -5046,6 +5053,15 @@ fn symbols_from_module(module: &Module) -> Vec<AnalysisSymbol> {
         .collect::<Vec<_>>();
     for item in &module.items {
         match item {
+            Item::TypeAlias(alias) => symbols.push(AnalysisSymbol {
+                name: alias.name.clone(),
+                kind: "type".to_string(),
+                detail: String::new(),
+                line: alias.span.line.saturating_sub(1),
+                start_character: alias.span.column.saturating_sub(1),
+                end_character: alias.span.column.saturating_sub(1) + alias.name.len(),
+                children: Vec::new(),
+            }),
             Item::Class(class_decl) => {
                 symbols.push(AnalysisSymbol {
                     name: class_decl.name.clone(),
@@ -5294,6 +5310,9 @@ fn is_identifier_continue(ch: char) -> bool {
 
 fn lower_type_ref(ty: &TypeRef) -> Type {
     match &ty.kind {
+        crate::ast::TypeRefKind::Union(_) | crate::ast::TypeRefKind::Callable { .. } => {
+            Type::named("Unknown")
+        }
         crate::ast::TypeRefKind::Tuple(elements) => {
             Type::Tuple(elements.iter().map(lower_type_ref).collect())
         }
@@ -5346,7 +5365,8 @@ fn expression_start_span(expr: &Expr) -> Span {
         | ExprKind::Cast { expr: object, .. }
         | ExprKind::Try(object)
         | ExprKind::Group(object)
-        | ExprKind::Unary { expr: object, .. } => Some(object.as_ref()),
+        | ExprKind::Unary { expr: object, .. }
+        | ExprKind::IsNone { value: object, .. } => Some(object.as_ref()),
         ExprKind::Call { callee, .. } => Some(callee.as_ref()),
         ExprKind::Binary { left, .. } => Some(left.as_ref()),
         ExprKind::Conditional { then_expr, .. } => Some(then_expr.as_ref()),
@@ -5389,6 +5409,7 @@ fn expression_end_line(expr: &Expr) -> usize {
         | ExprKind::Specialize { expr: object, .. }
         | ExprKind::Cast { expr: object, .. }
         | ExprKind::Unary { expr: object, .. }
+        | ExprKind::IsNone { value: object, .. }
         | ExprKind::Try(object)
         | ExprKind::Group(object) => expression_end_line(object),
         ExprKind::Lambda { body, .. } => expression_end_line(body),

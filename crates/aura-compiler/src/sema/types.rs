@@ -236,6 +236,12 @@ pub(super) fn lower_type_with_self(
     self_type: Option<&Type>,
 ) -> Result<Type> {
     let (name, type_args) = match &type_ref.kind {
+        crate::ast::TypeRefKind::Union(_) | crate::ast::TypeRefKind::Callable { .. } => {
+            return Err(Diagnostic::at(
+                type_ref.span,
+                "this type form requires Batch 1 semantic lowering",
+            ));
+        }
         crate::ast::TypeRefKind::Tuple(elements) => {
             return elements
                 .iter()
@@ -495,7 +501,10 @@ pub(super) fn collect_type_ref_type_params(
     include_self: bool,
 ) {
     match &type_ref.kind {
-        crate::ast::TypeRefKind::Tuple(elements) => {
+        crate::ast::TypeRefKind::Callable { signature, .. } => {
+            collect_type_ref_type_params(signature, type_names, collected, true);
+        }
+        crate::ast::TypeRefKind::Tuple(elements) | crate::ast::TypeRefKind::Union(elements) => {
             for element in elements {
                 collect_type_ref_type_params(element, type_names, collected, true);
             }

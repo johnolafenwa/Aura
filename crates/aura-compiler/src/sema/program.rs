@@ -359,6 +359,12 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
 
     for item in &module.items {
         match item {
+            Item::TypeAlias(alias) => {
+                return Err(Diagnostic::at(
+                    alias.span,
+                    "type aliases require Batch 1 alias expansion",
+                ));
+            }
             Item::Class(class_decl) => {
                 reject_reserved_type_name(&class_decl.name, class_decl.span)?;
                 if let Some((kind, existing)) =
