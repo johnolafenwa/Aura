@@ -8,8 +8,12 @@ Last updated: 2026-09-08
   extraction and feature commits in the prescribed order, and merge after
   green branch and main CI. Branch: `codex/batch-1-phase-1`, from `7685199`.
 - Stage 1: ADR answer records and dated dependent amendments pass 14-document
-  scope/link checks and all 15 identity tests. No code changed yet.
-- Next: E2 steps 1–3 with byte-identical fixture behavior, then every H1
+  scope/link checks and all 15 identity tests; committed as `b05ddda`.
+- Pre-extraction baseline: nine fixture suites, two semantic characterizations,
+  378 CLI tests, and native-codegen acceptance pass. E2.1 repeats those gates
+  successfully, plus all 1,885 compiler unit tests; all fixture hashes remain
+  unchanged. Next extraction: E2.2 places/loans.
+- Next: finish E2 steps 1–3 with byte-identical fixture behavior, then every H1
   feature family, editor/docs/reference-agent updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.
