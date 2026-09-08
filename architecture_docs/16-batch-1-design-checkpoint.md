@@ -1,15 +1,15 @@
 # Batch 1 design checkpoint: callable and type foundations
 
-Status: **Ratified; implementation pending**
+Status: **Ratified; phase 1 implementation in progress**
 
 Date: 2026-09-08. Source baseline: `de3d6cc44a376502f2aaf3f3ef8faba59c523884`.
 
 This is the ratified design checkpoint for [roadmap Batch 1](14-priority-roadmap.md#priority-batches).
-It implements nothing and amends no ADR. The user accepted all recommended
+The checkpoint itself specifies the target. The user accepted all recommended
 options except **Q6: B** and **Q20: B**, with a Batch 2 follow-up attached to
 **Q23: A**. The [ratification record](#ratification-record) and
-[questionnaire](#ratification-questionnaire) record those answers. A later task
-folds them into ADR-0052 and ADR-0058 before implementation. The design below
+[questionnaire](#ratification-questionnaire) record those answers. Batch 1
+phase 1 records them in ADR-0052 and ADR-0058 before code changes. The design below
 incorporates the overrides; it describes the accepted target, not current
 compiler behavior.
 
@@ -64,8 +64,9 @@ design to revisit an app-facing `V | None` form of `dict.get`.
   proposal commit `fe9c6c0` remain in the questionnaire, with a separate
   **Ratified** line recording the selected answer to each question.
 
-This records design ratification only. ADR-body reconciliation and compiler,
-runtime, example, Manual, and editor implementation remain a later task.
+The ratification record is complete. The active Batch 1 phase 1 task covers
+ADR-body reconciliation and compiler, runtime, example, Manual, and editor
+implementation; it leaves phase 2 Option removal for a later task.
 
 ## A. Unions and narrowing
 
@@ -347,8 +348,8 @@ and no new public `Hash` trait or `hash()` API is introduced. Ordering a union
 remains unavailable even if all members are orderable. The unselected Q6 A
 would require explicit union-typed operands and allow tag/domain-salted union
 hashes; those restrictions are not the ratified contract.
-ADR-0052's existing tag-inclusive hashing text must be reconciled with this
-payload hash law in the later ADR-body amendment.
+The stage 1 ADR-0052 amendment marks its tag-inclusive hashing alternative
+unratified and records this payload hash law.
 
 ### A7. Generic members and specialization — Q7
 

@@ -167,3 +167,17 @@ Batch 6 accepts this decision. The Batch 5 implementation completed the
 semantic, ownership, Transfer, backend-parity, editor, reference, tutorial,
 and example matrix above. Expression closures and value capture are therefore
 part of the binding Aurora 0.2 language design.
+
+## 2026-09-08 — Batch 1 detailed design amendment
+
+Accepted under Q13/Q14/Q17 in the
+[ratified checkpoint](../16-batch-1-design-checkpoint.md#ratification-record).
+
+Owned captures may mutate under the Mutable call kind. Explicit Callable
+packing provides heterogeneous owned storage and explicit common branch
+contracts. Capture-free thin def values retain their Copy representation.
+Loan capture storage remains deferred; existing immediate loan callbacks keep
+their containment rules.
+
+Implementation is in Batch 1 phase 1; this dated amendment extends the
+recorded baseline without claiming the feature is already delivered.

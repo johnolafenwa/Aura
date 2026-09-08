@@ -2,6 +2,19 @@
 
 Last updated: 2026-09-08
 
+## Batch 1 phase 1 (in progress)
+
+- Target: implement the ratified foundations and owned callables, complete
+  extraction and feature commits in the prescribed order, and merge after
+  green branch and main CI. Branch: `codex/batch-1-phase-1`, from `7685199`.
+- Stage 1: ADR answer records and dated dependent amendments pass 14-document
+  scope/link checks and all 15 identity tests. No code changed yet.
+- Next: E2 steps 1–3 with byte-identical fixture behavior, then every H1
+  feature family, editor/docs/reference-agent updates, full gates and integration.
+- Option removal and all phase 2 signature changes remain excluded; protected
+  user files and coverage floors remain unchanged.
+- Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).
+
 ## Batch 1 design checkpoint (ratified; implementation pending)
 
 - Authorized target: the detailed design and ratification, roadmap/index links, a work
@@ -19,8 +32,8 @@ Last updated: 2026-09-08
 - Ratification verification passed: six scoped documents, 150 links/anchors,
   all 24 recorded answers, all 15 identity tests, and Manual/tutorial gate-scope
   checks. Original questionnaire options and the ten Approved Decisions are unchanged.
-- Ratification recording is complete. Remaining: fold answers into ADR-0052/0058
-  and begin implementation in a later task. No implementation is in progress.
+- Ratification recording is complete. ADR amendments and phase 1 implementation
+  now proceed under the active Batch 1 phase 1 entry above.
 - Work note: [2026-09-08-batch-1-design-checkpoint.md](2026-09-08-batch-1-design-checkpoint.md).
 
 ## Pre-Batch-1 foundations items 6 and 7 (complete)
