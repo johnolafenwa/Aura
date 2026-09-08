@@ -2,21 +2,25 @@
 
 Last updated: 2026-09-08
 
-## Batch 1 design checkpoint (documentation complete; awaiting user ratification)
+## Batch 1 design checkpoint (ratified; implementation pending)
 
-- Authorized target: one detailed proposed design, roadmap/index links, a work
+- Authorized target: the detailed design and ratification, roadmap/index links, a work
   note and this board entry; no compiler, runtime, example, Manual or ADR-body changes.
 - Deliverable: [Batch 1 design checkpoint](../architecture_docs/16-batch-1-design-checkpoint.md),
-  with 24 ratification questions, all 39 public Option APIs audited, owned
+  with 24 recorded ratification answers, all 39 public Option APIs audited, owned
   callable storage costs, a complete hypothetical reference-agent rewrite,
   the sema extraction plan and two implementation phases.
 - The ten Approved Decisions and deferred stored-loan boundary remain intact.
   Protected user files are outside the change.
-- Verification passed: scoped links/anchors/index/fence/newline/whitespace
-  checks, all 15 identity tests, and Manual/tutorial inventory and gate-scope
-  confirmation. The ten Approved Decisions remain byte-identical.
-- Documentation is complete for one isolated commit on main. Remaining:
-  user ratification and all implementation belong to a later task.
+- User ratification: all recommended except Q6 B and Q20 B. Q6 admits
+  symmetric union/member equality with a matching payload hash law; Q20 adds
+  no wrapper helper. Q23 A retains Lookup/Poll and requires the Batch 2
+  element-loan design to revisit an app-facing `V | None` form of `dict.get`.
+- Ratification verification passed: six scoped documents, 150 links/anchors,
+  all 24 recorded answers, all 15 identity tests, and Manual/tutorial gate-scope
+  checks. Original questionnaire options and the ten Approved Decisions are unchanged.
+- Ratification recording is complete. Remaining: fold answers into ADR-0052/0058
+  and begin implementation in a later task. No implementation is in progress.
 - Work note: [2026-09-08-batch-1-design-checkpoint.md](2026-09-08-batch-1-design-checkpoint.md).
 
 ## Pre-Batch-1 foundations items 6 and 7 (complete)

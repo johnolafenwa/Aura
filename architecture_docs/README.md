@@ -42,7 +42,7 @@ flowchart LR
 14. [13-end-to-end-walkthrough.md](13-end-to-end-walkthrough.md)
 15. [14-priority-roadmap.md](14-priority-roadmap.md)
 16. [15-backend-boundary.md](15-backend-boundary.md)
-17. [16-batch-1-design-checkpoint.md](16-batch-1-design-checkpoint.md) — Proposed; awaiting user ratification; no implementation or ADR amendment
+17. [16-batch-1-design-checkpoint.md](16-batch-1-design-checkpoint.md) — Ratified; implementation pending; ADR-body reconciliation remains a later task
 
 Accepted language and runtime decisions are recorded separately in
 [`decisions/`](decisions/README.md). The architecture chapters describe the

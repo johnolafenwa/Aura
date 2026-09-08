@@ -1,15 +1,17 @@
 # Batch 1 design checkpoint: callable and type foundations
 
-Status: **Proposed; awaiting user ratification**
+Status: **Ratified; implementation pending**
 
 Date: 2026-09-08. Source baseline: `de3d6cc44a376502f2aaf3f3ef8faba59c523884`.
 
-This is the detailed proposal for [roadmap Batch 1](14-priority-roadmap.md#priority-batches).
-It implements nothing and amends no ADR. The user may answer **all recommended**
-or override individual questions in the [ratification questionnaire](#ratification-questionnaire).
-A later task records those answers in ADR-0052 and ADR-0058 before implementation.
-Recommendations below describe one coherent candidate, not accepted language.
-Alternative answers require reconciling their dependent sections before coding.
+This is the ratified design checkpoint for [roadmap Batch 1](14-priority-roadmap.md#priority-batches).
+It implements nothing and amends no ADR. The user accepted all recommended
+options except **Q6: B** and **Q20: B**, with a Batch 2 follow-up attached to
+**Q23: A**. The [ratification record](#ratification-record) and
+[questionnaire](#ratification-questionnaire) record those answers. A later task
+folds them into ADR-0052 and ADR-0058 before implementation. The design below
+incorporates the overrides; it describes the accepted target, not current
+compiler behavior.
 
 The ten [Approved Decisions](14-priority-roadmap.md#approved-decisions) remain
 binding and unchanged: explicit union boundaries, deterministic normalization,
@@ -42,6 +44,28 @@ claims. No new reserved keyword is proposed. `type` and `is` use complete
 contextual productions; `Callable`, `TaskCallable`, `Lookup`, and `Poll` are
 proposed builtin type names, not lexical keywords. Existing `mut`, `own`,
 `def`, `as`, `None`, and `*` supply the other notation.
+
+## Ratification record
+
+On 2026-09-08 the user accepted **all recommended, except Q6: B and Q20: B**.
+For **Q23**, the user accepted **A** and required the Batch 2 element-loan
+design to revisit an app-facing `V | None` form of `dict.get`.
+
+- **Q6: B:** allow symmetric union/member equality through unique-member
+  contextual injection, retaining literal ambiguity checks. Hashing delegates
+  to the active member so cross-type equal values have equal hashes.
+- **Q20: B:** add no `base.wrap(body)` intrinsic. Handwritten wrappers supply
+  inner arguments or deliberately invoke inner defaults and define their own
+  public default policy.
+- **Q23: A, with follow-up:** Batch 1 uses `Lookup`/`Poll` as specified in D.
+  Batch 2 revisits the app-facing optional dictionary lookup surface together
+  with element loans, including present-None distinctions and result lifetime.
+- **All other questions: A.** The original options and recommendations from
+  proposal commit `fe9c6c0` remain in the questionnaire, with a separate
+  **Ratified** line recording the selected answer to each question.
+
+This records design ratification only. ADR-body reconciliation and compiler,
+runtime, example, Manual, and editor implementation remain a later task.
 
 ## A. Unions and narrowing
 
@@ -282,29 +306,49 @@ mutable callers to replace the whole union outside a match.
 
 ### A6. Equality and hashing — Q6
 
-**Recommend equality only between the same normalized static type**. Two
-values of the same union are equal iff their tags agree and their payloads
-are equal. All members must support equality; adding an incomparable member
-removes equality for the union, irrespective of its current tag. Callable,
-opaque-handle, and Array restrictions remain structural. `None == None`
-retains unit equality. For an optional containing an incomparable member,
-`is None` still works because it tests only the discriminant.
+**Ratified Q6: B — symmetric union/member equality with contextual injection.**
+Two values of the same normalized union are equal iff their tags agree and
+their payloads are equal. All members must support equality; adding an
+incomparable member removes equality for the union, irrespective of its
+current tag. Callable, opaque-handle, and Array restrictions remain structural.
+`None == None` retains unit equality.
 
-Equality between a union and a member is rejected: explicitly bind the member
-to that union before comparing, or narrow the union first. This includes
-`optional == None`; the simple test is `optional is None`. The alternative
-contextually injects a member operand for symmetric union/member equality,
-but adds literal ambiguity and complicates a future heterogeneous hash law.
-Different unions remain incomparable; neither option adds union subtyping.
+For `==` and `!=`, when exactly one operand has a union type U, check the other
+operand against U using A2's unique-member rule. The already declared union
+provides the expected comparison type; the comparison does not infer a new
+union. Either operand order is admitted with the same result. A typed member
+selects its exact member; a literal that fits multiple members is AU2011 and
+requires a member annotation. Thus comparing `int64 | float64` with bare `1`
+is ambiguous, while an explicitly int64 operand selects the int64 tag. A
+nonmember is rejected, and two different normalized unions remain
+incomparable. There is no union widening or container conversion.
+
+The injected operand is a comparison-only typed adaptation. Evaluate each
+operand once in source order and use the normal equality access rules;
+comparison does not move or clone an owned payload or allocate a union box.
+`optional == None`, `None == optional`, and their `!=` forms work when the
+entire optional supports equality. These comparisons do not establish
+narrowing facts. `is None` and `is not None` remain the tag-only narrowing
+tests and work even when another member cannot be compared.
 
 Where a hashing operation is available, derive it only if every member
-supports hashing and combine canonical type domain, member tag, and active
-payload hash. Equal values of the same union must hash equally, including the
-existing signed-zero rule of a hashable floating member. Different tags do
-not imply mathematically collision-free hashes. No hash value or algorithm is
-stabilized across runs/releases. Current dict/set equality-based eligibility
-does not become a new public `Hash` trait or `hash()` API in Batch 1.
-Ordering a union remains unavailable even if all members are orderable.
+supports hashing, and **delegate to the active payload's hash without adding
+the union type domain or tag**. For a member t that compares equal to a union
+value u, `hash(u) = hash(t)`; this notation states the law and does not add a
+public hash operation. Equal same-union values also hash equally, including
+the existing signed-zero rule of a hashable floating member. Different tags
+still compare unequal but may hash alike: collisions are permitted. Nominal
+enums such as Lookup retain their own equality/hash rules.
+
+Dictionary/set keys still use their declared key type and ordinary injection
+rules; comparison does not add heterogeneous key lookup or relax key
+eligibility. No hash value or algorithm is stabilized across runs/releases,
+and no new public `Hash` trait or `hash()` API is introduced. Ordering a union
+remains unavailable even if all members are orderable. The unselected Q6 A
+would require explicit union-typed operands and allow tag/domain-salted union
+hashes; those restrictions are not the ratified contract.
+ADR-0052's existing tag-inclusive hashing text must be reconciled with this
+payload hash law in the later ADR-body amendment.
 
 ### A7. Generic members and specialization — Q7
 
@@ -785,7 +829,7 @@ parameter lists gain the keyword-only `*` boundary. Lambdas still have no
 inline types, defaults, generic parameters, or statement bodies; their body
 names must match exposed names in the expected contract, and their `*`
 boundary must match. A lambda cannot satisfy a contract promising defaults
-without an explicit forwarding adapter below. Trait/impl methods still cannot
+without an ordinary named callable that declares them. Trait/impl methods still cannot
 declare ordinary defaults. Trait-bound callers use the trait's public names
 and keyword restrictions; implementation-local parameter names may differ
 by ordinal as today. Conformance adds keyword-only comparison, and concrete
@@ -821,49 +865,41 @@ inner default evaluation. A wrapper that intentionally omits inner slots
 invokes that target's defaults there; this is an ordinary new call, not a
 claim of transparent wrapping.
 
-**Q20 recommends a limited compiler-checked `base.wrap(body)` adapter** for
-transparent wrapping of a concrete signature. This is an explicit new
-callable operation proposed for Batch 1, not general decorator execution or
-source parameter packs. The adapter owns `base` and `body`, preserves the
-base's complete public contract and default references, and resolves supplied
-and defaulted arguments **before entering the wrapper body**. Its body
-receives an additional first parameter denoting the base with all defaults
-removed, followed by the resolved original parameters with their exact
-capabilities and keyword-only restrictions. The body is contextually typed;
-its target parameter can have any noncolliding local name.
+**Ratified Q20: B — no wrapper helper.** Batch 1 adds no `base.wrap(body)`
+intrinsic or signature-copying operation. Handwritten wrappers are ordinary
+functions, methods, or closures with their own declared or expected contract.
+Names, keyword-only restrictions, and available defaults belong to that
+wrapper's contract; they are not automatically inherited from a selected
+inner callable. A lambda still cannot promise defaults of its own.
 
 ```text
-type RenderBody = Callable[def(value: int64, *, prefix: str = ...) -> str]
-base = RenderBody(render)
-wrapped = base.wrap(lambda target, value, *, prefix: target(value, prefix=prefix))
+def render_with_prefix(base: Renderer, value: int64, *, prefix: str = "wrapped") -> str:
+    return base(value, prefix=prefix)
+
+type RequiredRenderer = Callable[def(value: int64) -> str]
+
+def use_target_default(base: own Renderer) -> RequiredRenderer:
+    return RequiredRenderer(lambda value: base(value))
 ```
 
-The body receives shared base access for Shared, `mut` base access for
-Mutable, and `own` base access for Consuming. It must support that call kind;
-a Shared wrapper cannot hide a mutating/consuming body environment. The
-wrapper's declared result must be exact. Forwarding the resolved slots
-evaluates no default twice; an `own` argument cannot be replayed without an
-explicit permitted reconstruction/clone. The all-required base contract is
-also enforced if the wrapper tries to omit a slot. Dropping an unused wrapper
-drops body then base; construction moves base then body, and C3 handles any
-overflow allocation. Wrapper bodies may intentionally call the base zero
-times or several times when its kind and input capabilities permit that.
-This operation provides no implicit retry, logging, or resource duplication.
+The first wrapper evaluates its own omitted prefix before entering its body
+and supplies every inner argument, so the inner prefix default does not run.
+The second owns the selected base and exposes an all-required outer contract;
+each invocation enters the lambda body and then evaluates that base's prefix
+default as part of the inner call. There is no synthesized default forwarding
+before wrapper entry. If a wrapper deliberately omits a slot at several inner
+calls, that target's default runs freshly for each call under ADR-0015.
 
-For C9's view result, the wrapper preserves the ordinary argument origin and
-shifts its ordinal by one in the body contract. The added target parameter
-cannot become a new result origin. A lambda body returning an eligible
-view-producing call is checked against that contextual result contract;
-an owned temporary cannot satisfy it.
-
-For `TaskCallable`, wrapping returns `TaskCallable` only when both owned
-components independently pass its compiler-derived admission check; wrapping
-an ordinary `Callable` yields ordinary `Callable`. Names and defaults never
-become runtime-reflectable objects. The alternative adds no wrapping helper:
-named wrappers supply all inner arguments and spell their own default policy.
-That is smaller, but cannot transparently inherit a runtime-selected target's
-default policy in a reusable wrapper. General signature polymorphism and
-decorator registration remain Batch 6.
+Ordinary capture, call-kind, destruction, and argument-origin view rules apply
+without wrapper-specific metadata or origin remapping. Replaying an owned
+argument still requires an explicit permitted reconstruction/clone. A wrapper
+can enter TaskCallable only through C8's normal structural admission rules;
+capturing an ordinary erased Callable cannot recover Transfer evidence.
+Defaults and names do not become runtime-reflectable objects. The cost of Q20
+B is that a reusable wrapper cannot automatically inherit the full default
+policy of a runtime-selected target. General signature polymorphism and
+decorator registration remain Batch 6; the unselected Q20 A adapter is absent
+from this implementation plan.
 
 ### C8. Structural Transfer and task targets — Q21
 
@@ -988,7 +1024,7 @@ accounts for all 39 and was cross-checked against
 
 ### D2. Absent versus present None — Q23
 
-**Recommend two operation-specific nominal outcome families**, using the
+**Ratified Q23: A — two operation-specific nominal outcome families**, using the
 existing enum mechanism and qualified constructors/patterns:
 
 ```text
@@ -1026,7 +1062,16 @@ dictionary replacement operation also needs the previous-value distinction.
 An `Array[T]` scalar cannot be None, and `json.Value.Null` is already nominally
 distinct from Aura None. The future iterator protocol likewise needs tagged
 item/end outcomes, but its public names remain owned by Batch 9 under the
-roadmap; this proposal does not ratify those names ahead of that batch.
+roadmap; this checkpoint does not ratify those names ahead of that batch.
+
+**Required Batch 2 follow-up:** the element-loan design revisits an app-facing
+`V | None` form of `dict.get`. Review its access capability and result lifetime
+together with dictionary-entry loans, and state how callers distinguish a
+missing entry from a present None when V is itself optional. Batch 1 retains
+`dict.get -> Lookup[V]` uniformly, including its clone-safe observation rule;
+the follow-up neither changes that accepted replacement now nor silently
+flattens the information-preserving generic result. Batch 2 must make its
+app-facing choice explicit alongside any retained tagged lookup surface.
 
 ### D3. Every public Option signature and its replacement
 
@@ -1141,7 +1186,7 @@ questionnaire items.
 | `sema/places.rs` | `PlaceProjection`, `ProjectionPath`, `PlacePath`, overlap and generation-facing identity, currently around 5804–5918 | Canonical union payload projections and tag locks; no indexed/keyed place extension |
 | `sema/loans.rs` | `ViewBinding`, active match loans, return-origin footprints, last-use/reborrow/escape analysis | Containment of narrowed payload access, stored argument-origin view results, explicit loan-pack rejection |
 | `sema/flow.rs` | Local initialization/move state, branch joins, loop flow and expression-result state | Member-set facts, invalidation, short-circuit conditions, distinct return/break/continue successors |
-| `sema/callables.rs` | `FunctionParamContract`, `ClosureInfo`, lambda typing, callable merging and metadata erasure | Complete contract identity, owned packing, bound receiver plans, default/keyword metadata, wrap adapter |
+| `sema/callables.rs` | `FunctionParamContract`, `ClosureInfo`, lambda typing, callable merging and metadata erasure | Complete contract identity, owned packing, bound receiver plans, default/keyword metadata, ordinary forwarding |
 | `sema/patterns.rs` | Pattern checking, match capabilities, guard and exhaustiveness logic | Type patterns, union coverage, generic overlap rejection and singleton pattern normalization |
 | `sema/resolve.rs` and `sema/traits.rs` | Imports, visible types/functions, trait applicability/conformance and inferred obligations | Alias visibility, complete callable contract conformance, all-member nominal trait dispatch |
 | `sema/expressions.rs` and `sema/builtins.rs` | `FunctionChecker` expression visitors and builtin result typing | Expected-union propagation, FFI adapter eligibility, all audited library result types |
@@ -1464,10 +1509,11 @@ than postponing foundational correctness until the removal patch.
 | `union_narrow_*` | Positive locals/params/fields/views, negation/and/or and return/loop edges; negative stale/overlap uses AU2014/AU3002, capability violations AU3003/AU3004 | Present/absent branches print pinned `present`/`missing`; mutation prints updated payload immediately; disjoint changes preserve access |
 | `union_match_*` | Positive nested/guard/or-pattern/own/mut coverage; AU2013 for missing/duplicate/nonmember coverage; AU3001 for consumed roots | Pin one-time scrutinee/guard evaluation, committed ownership, every exit path, and tag-preserving mutable payload changes |
 | `union_properties_*`, `union_generic_*` | Copy/clone/Transfer/equality positives and negatives; unresolved/colliding generic member proofs AU2010/AU2013; no ordering AU2003 | Tagged equality differs for same numeric magnitude; nested optional flattening prints one None; tagged-presence controls remain distinct |
+| `union_member_equality_*` | Both operand orders and None pass for eligible unions; ambiguous literal AU2011; nonmembers, different union types, or an incomparable member AU2003; equality alone does not narrow | Branches print pinned `equal`/`different` labels; each operand runs once; internal hash assertions equate union/member hashes, including None and signed zero, while different tags remain unequal |
 | `callable_store_*`, `callable_merge_*` | Shared/Mutable/Consuming through params/results/fields/list/dict/imports; AU2015 contract/erasure failures; AU3010 loan escape | Factory-owned state survives return; Shared repeated reads print `2`, `2`; Mutable owned counter prints `1`, `2`; Consuming yields one value |
 | `callable_storage_*` | Inline/overflow and zero-capture shape checking; non-cloneable collection get AU3007, moved callable AU3001 | Allocation counters: zero new environment allocations for fitting capture, one for overflow; failed packing AU4005; prefix cleanup order pinned |
 | `bound_method_*`, `callable_view_result_*` | Owned/Copy/shared/mut/own receiver cases; reject non-Copy borrowed binding and hidden self-origin AU3010 | Copy snapshot mutations do not change original; moved receiver cleanup once; explicit argument-origin view writes through |
-| `callable_binding_*`, `callable_wrap_*` | Names, named/default/keyword-only declarations/contracts, generic and trait conformance; AU2004 binding errors, AU2015 metadata mismatch | Trace supplied arguments in source order, then defaults in slot order, then wrapper/body; selected targets use their own defaults exactly once |
+| `callable_binding_*`, `callable_forwarding_*` | Names, named/default/keyword-only declarations/contracts, generic and trait conformance; AU2004 binding errors, AU2015 metadata mismatch; no builtin wrap member | Trace supplied arguments, outer defaults, wrapper entry, then each ordinary inner call; supplied inner slots suppress defaults, omitted slots evaluate the selected target's defaults freshly per inner call |
 | `stored_task_target_*` | All start methods; concrete structural Transfer passes; forbidden captures/results AU3008; ordinary mut arguments AU3004 | Stored target moved once; parent defaults finish before child scheduling; task ancestry/diagnostic identity preserved |
 | `ffi_nullable_handle_*` | Package-authorized exact handle/None results pass; scalar/multiple-member/parameter unions AU2010; invalid opt-in uses existing code | Linked C test shim returns null/non-null; optional null is None, non-optional null AU4005; mutable bytes write back before result validation |
 
@@ -1563,7 +1609,7 @@ than treating an estimate as a stopping condition.
 **Recommend a focused AU2010–AU2015 family** for new type-foundation failures,
 while reusing established parser, call-binding, ownership, task, and runtime
 codes. These six codes are unused in the checked baseline; reserve them only
-in implementation after ratification. Message templates below describe
+in implementation. Message templates below describe
 semantics; substitute canonical types, paths, and names and attach origin/use
 spans. The alternative uses existing AU2002/AU2999 for all new type errors,
 reducing registry growth but making diagnostics less distinguishable in tools.
@@ -1573,7 +1619,7 @@ reducing registry growth but making diagnostics less distinguishable in tools.
 | AU1101 | `expected a type after '\|'`; `expected a named parameter after '*'`; ordinary malformed contextual syntax or unexpected `?` |
 | AU2001 | ``unknown type `Option` `` when no such type is declared; ordinary unresolved alias/type/member names |
 | AU2002 | Existing exact argument/result mismatch, generic arity/bounds and unsupported ordinary FFI type |
-| AU2003 | `equality requires the same normalized type; found '{U}' and '{T}'`; unsupported union ordering/hash or callable equality |
+| AU2003 | `cannot compare '{U}' and '{T}': expected the same union type or an eligible member`; incomparable union member, unsupported union ordering/hash or callable equality; ambiguous literals use AU2011 |
 | AU2004 | `parameter '{name}' is keyword-only`; `missing required argument '{name}'`; duplicate/unknown argument, default on mut/origin/trait slot |
 | AU2010 | `union value requires an explicit expected type`; `'{T}' is not a member of '{U}'`; invalid/incomplete union member; forbidden FFI union shape; ambiguous inverse generic normalization |
 | AU2011 | `literal matches multiple members of '{U}': {members}; annotate one member before injection` |
@@ -1596,17 +1642,18 @@ error. No dedicated old-to-new Option diagnostic or automatic fix is added.
 
 ## Reconciliation and confidence
 
-| Records pulling in different directions | Proposed resolution and ratification dependency |
+| Records pulling in different directions | Ratified resolution and remaining reconciliation |
 | --- | --- |
 | Approved Decision 2 versus ADR-0052's one-member rejection and unspecialized-generic baseline | Idempotent flattening requires designed singleton/generic behavior; Q1/Q7 collapse singleton substitutions and distinguish a type parameter from a bare generic constructor |
 | ADR-0052's unconstrained-None rejection versus implemented unit None | Keep existing standalone unit None; it never infers an optional member set |
-| Approved Decision 2 versus Option's nested present-None distinctions and ADR-0033 observations | Q23's Lookup/Poll preserve information and the existing conservative task observation right; no flattened generic result silently loses an item |
+| ADR-0052's tag-inclusive hashing versus ratified Q6 B union/member equality | A6 delegates union hashing to the active member so equal union/member values hash equally; different-tag collisions are permitted. Amend the ADR hashing paragraph before implementation |
+| Approved Decision 2 versus Option's nested present-None distinctions and ADR-0033 observations | Q23 A's Lookup/Poll preserve information and the existing conservative task observation right; Batch 2 revisits app-facing optional dict.get with element loans and an explicit present-None policy |
 | ADR-0052's blanket C-union exclusion versus the roadmap nullable-result criterion | Q10 makes exactly handle-plus-None a result marshalling exception; C still receives one pointer. FFI v0 has no Option ABI to preserve |
 | ADR-0037's capture-free stored def, read-only owned captures, and branch-merge rejection versus Approved Decision 6 / ADR-0058 | Q13/Q14/Q17 introduce explicit erased ownership and Mutable environments; concrete and thin function categories keep their existing ownership meaning |
 | Approved Decision 6's full eventual storage promise versus ADR-0038/0061's lifetime restrictions | C10 retains the explicit owned-only delivery split; Q22 exposes only ordinary argument-origin returned views, not stored loans or captured-self origins |
 | ADR-0033 derives Transfer from complete state, while an open Callable hides that state | Q21 checks the environment before erasure into TaskCallable; ordinary erased Callable cannot recover that proof or assert it through a user trait |
 | ADR-0051/implemented function types erase names/defaults, versus ADR-0058's preserved keyword/default contract | Q17/Q19 make binding metadata part of type identity and allow only explicit restrictions; no assignment turns keyword-only into positional |
-| ADR-0015's target-specific fresh defaults versus heterogeneous storage and wrapper forwarding | Q19 retains per-target default references outside structural identity; Q20 resolves defaults once before a transparent wrapper body |
+| ADR-0015's target-specific fresh defaults versus heterogeneous storage and wrapper forwarding | Q19 retains per-target default references outside structural identity; Q20 B adds no helper, so wrappers declare their own contracts and defaults follow each ordinary call boundary |
 | ADR-0052's all-member trait rule versus ADR-0055's structural rendering fallback | Q8 separates rendering eligibility from nominal trait satisfaction; no early Display implementation or purity claim |
 | General exact-once cleanup promises versus ADR-0038's forced-frame-reset boundary | A9/C4 preserve host containment without promising arbitrary source cleanup on destroyed frames; the existing Batch 3 cancellation conflict is not resolved here |
 
@@ -1614,15 +1661,17 @@ The ten Approved Decisions are constraints throughout this table, not subjects
 being reopened. Later ADR edits must distinguish earlier implementation
 limits from changes to those accepted directions.
 
-The three least certain recommendations are **Q15's three-word buffer**,
-because environment-size/allocation measurements may favor another capacity;
-**Q20's wrap operation**, because it provides exact default forwarding at the
-cost of a signature-aware primitive before general decorators; and **Q23's
-Lookup/Poll naming split**, because it preserves semantics uniformly but
-introduces ceremony even when a concrete payload cannot be None. These need
-usability and implementation feedback, not an unreported engineering choice.
+Proposal commit `fe9c6c0` identified three least certain recommendations:
+**Q15's three-word buffer**, because measurements may favor another capacity;
+**Q20 A's wrap operation**, because exact default forwarding added a
+signature-aware primitive before general decorators; and **Q23 A's Lookup/Poll
+naming split**, because uniform presence semantics add ceremony for concrete
+non-optional payloads. Ratification accepts Q15 A, selects Q20 B and therefore
+removes that operation, and accepts Q23 A with the explicit Batch 2 app-facing
+dictionary lookup review. The buffer remains an accepted design choice whose
+allocation behavior must be measured during implementation.
 
-The questionnaire covers each proposed syntax/observable contract bundle:
+The questionnaire covers each ratified syntax/observable contract bundle:
 A1–A10 map to Q1–Q10, B1–B2 to Q11–Q12, C1–C9 to Q13–Q22, D's replacement
 API spellings to Q23, and H4's diagnostic policy to Q24. Section E contains
 engineering extraction choices only. Phase ordering, clean-slate removal,
@@ -1631,10 +1680,12 @@ storage are required constraints rather than optional answers.
 
 ## Ratification questionnaire
 
-Answer **all recommended** to accept the candidate as written, or give
-overrides such as `Q6: B, Q20: B`. An override replaces that contract bundle;
-dependent examples, diagnostics, and implementation tests must be reconciled
-before implementation. Each question has exactly one recommended option.
+Ratification recorded on 2026-09-08: **all recommended, except Q6: B and
+Q20: B**; **Q23: A** includes the required Batch 2 app-facing dictionary lookup
+review. The original options and single recommendation per question are
+retained from proposal commit `fe9c6c0`. Each **Ratified** line records the
+user's selected answer; the sections above reconcile the dependent contracts,
+examples, diagnostics, and implementation tests with those answers.
 
 ### Union rules — Q1–Q10
 
@@ -1643,60 +1694,70 @@ before implementation. Each question has exactly one recommended option.
 - A. Collapse to that member, including unit None; generic substitution stays compositional.
 - B. Reject a redundant one-member union; users must avoid duplicate-producing specializations.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q2 — A2: How should ambiguous injection and sub-expression annotation work?**
 
 - A. Require exactly one member; use existing numeric casts or a hoisted typed local/helper when context does not reach the expression.
 - B. Keep unique-member injection but extend `as` to general static type ascription; shorter expressions gain another meaning of `as`.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q3 — A3: Which places narrow, and when do facts expire?**
 
 - A. Use the full existing root/fixed-field/tuple/view place model with generation, overlap, loan, and mutable-call invalidation; capabilities remain unchanged.
 - B. Narrow only locals and parameters; fields and views require explicit matching or owned snapshots.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q4 — A4: How much conditional flow narrowing should Batch 1 support?**
 
 - A. Contextual `is None`/`is not None`, negation, short-circuit `and`/`or`, and reachable return/break/continue joins; no identity or truthiness narrowing.
 - B. Support only direct optional tests; Boolean combinations require nested control flow.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q5 — A5: How should type patterns and mutable narrowing behave?**
 
 - A. Use `case Type as name` with existing shared/own/mut match modes, exhaustive direct-member coverage, and tag changes only through an unlocked whole union place.
 - B. Add shared/owned type patterns first and defer mutable type-pattern bindings; mutation uses whole-union replacement outside matching.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q6 — A6: May a union compare directly with a member?**
 
 - A. Require the same normalized type for equality, derive tag-sensitive equality/hash across all members, and use `is None` for absence tests.
 - B. Contextually inject member operands for symmetric equality; comparisons inherit injection ambiguity and require a carefully scoped hashing law.
 - **Recommended: A.**
+- **Ratified: B.**
 
 **Q7 — A7: How should generic union members specialize?**
 
 - A. Admit declared type parameters, renormalize after substitution, and check generic narrowing/patterns universally; optional substitutions flatten.
 - B. Admit `V | None` but reject optional substitutions for V; generic API composition needs additional constraints or explicit tagged specialization.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q8 — A8: Does structural rendering imply nominal Display satisfaction?**
 
 - A. Keep all-member nominal trait obligations distinct from active-payload structural rendering; Batch 4 can attach the shared Display dispatcher.
 - B. Let structural rendering satisfy Display bounds automatically; generic display is easier but changes nominal trait coherence.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q9 — A9: Should Batch 1 use union niches?**
 
 - A. Use one shared explicit-tag layout now; retain the niche clause only for a later centrally specified, ABI-consistent optimization.
 - B. Also implement eligible nullable-handle niches now; some values shrink but the first backend/layout matrix grows.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q10 — A10: What is the nullable FFI-result boundary?**
 
 - A. Permit exactly `Handle | None` as an extern result marshalled to one C pointer; keep every other union FFI shape excluded.
 - B. Keep all union extern annotations excluded; nullable native APIs need reviewed C shims using existing scalar/status and non-null-handle contracts.
 - **Recommended: A.**
+- **Ratified: A.**
 
 ### Alias rules — Q11–Q12
 
@@ -1705,12 +1766,14 @@ before implementation. Each question has exactly one recommended option.
 - A. Contextual module-level `type Name[T] = T`, existing `public`/imports/bounds, transparent expansion, and rejection of every alias-expansion cycle.
 - B. Start with the same module/visibility/cycle rules but nongeneric aliases only; common generic signatures remain repetitive.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q12 — B2: How should aliases appear in tools and hashes?**
 
 - A. Retain source/import alias names plus canonical expansions for diagnostics/hover, while semantic keys use expansion and interface hashes include exported alias records.
 - B. Erase alias presentation after resolution; canonical expanded types simplify tooling but lose users' chosen names.
 - **Recommended: A.**
+- **Ratified: A.**
 
 ### Callable rules — Q13–Q22
 
@@ -1719,12 +1782,14 @@ before implementation. Each question has exactly one recommended option.
 - A. Keep thin Copy `def` values and add explicit `Callable[def(...)]`, `Callable[mut def(...)]`, and `Callable[own def(...)]` packing.
 - B. Extend stored `def` itself to environments and call kinds; signatures shorten but general stored function values become affine and larger.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q14 — C2: How should owned mutation and call-kind restrictions work?**
 
 - A. Infer Shared/Mutable/Consuming from owned-capture use and permit explicit Shared-to-Mutable/Consuming or Mutable-to-Consuming restriction adapters.
 - B. Infer the same kinds but require exact-kind assignment/packing; every restriction needs a source wrapper.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q15 — C3: What owned callable storage/allocation policy should land?**
 
@@ -1732,48 +1797,56 @@ before implementation. Each question has exactly one recommended option.
 - B. Require explicit inline capacity and reject oversized packing; allocation is avoided but capacity becomes part of public contracts.
 - C. Require statically enumerated environment families with tag dispatch; allocation is avoided but factories cannot hide an open set of captures.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q16 — C4: How should erased destruction be represented?**
 
 - A. Use one per-value operations-table pointer with an indirect drop entry; reverse capture destruction shares metadata across values.
 - B. Store invocation and destructor pointers directly per value; one lookup is saved at the cost of at least one additional word.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q17 — C5: How should heterogeneous storage and contract conversion work?**
 
 - A. Require an explicit common contract for branch/storage merges, invariant types, and explicit safe name/default/keyword restrictions; never make keyword-only positional.
 - B. Allow safe restrictions implicitly during assignment and joins; code is shorter but exposed metadata can disappear through inference.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q18 — C6: How should owned or Copy methods bind?**
 
 - A. Use `receiver.method`, moving an owned receiver or snapshotting a Copy receiver; method receiver capability determines call kind and mutates only captured state.
 - B. Require an explicit `receiver.bind(method=Type.method)` operation; capture is more visible but needs a new selector operation.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q19 — C7: What belongs in callable default/name/keyword identity?**
 
 - A. Include names, modes, `*`, and `= ...` availability in structural identity; retain target-specific default code separately and evaluate it freshly after supplied arguments.
 - B. Also include default-expression identity in the type; unrelated defaulted targets cannot share one structural storage contract.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q20 — C7: How should transparent wrappers preserve selected defaults?**
 
 - A. Add the concrete-signature `base.wrap(body)` adapter: bind defaults once before the body and pass an all-required target contract for forwarding.
 - B. Add no wrapper helper; handwritten wrappers supply inner arguments and explicitly define their own default policy.
 - **Recommended: A.**
+- **Ratified: B.**
 
 **Q21 — C8: How should erased callables retain Transfer evidence?**
 
 - A. Add compiler-checked `TaskCallable[contract]`; ordinary erased Callable is non-Transfer, while admitted task callables move into child-owned invocation storage.
 - B. Add a compiler-owned Transfer constraint slot to Callable; one constructor remains but its marker must be distinguished from an ordinary user trait.
 - **Recommended: A.**
+- **Ratified: A.**
 
 **Q22 — C9: May stored callables return views in Batch 1?**
 
 - A. Permit only the existing single explicit argument-origin view contract; reject captured-self origins and every stored loan environment.
 - B. Defer all stored view-returning callables; those functions remain direct-call-only for now.
 - **Recommended: A.**
+- **Ratified: A.**
 
 ### Library and diagnostic rules — Q23–Q24
 
@@ -1782,9 +1855,12 @@ before implementation. Each question has exactly one recommended option.
 - A. Use `Lookup.Found/Missing` for list/dict lookup/removal and `Poll.Ready/Unavailable` for renamed Queue/Task `poll`; use `T | None` for the remaining audited optional positions.
 - B. Use separate nominal result types for each lookup/poll operation; distinctions remain exact but more type names and handlers are required.
 - **Recommended: A.**
+- **Ratified: A.**
+- **Required follow-up:** Batch 2 element-loan design revisits an app-facing `V | None` form of `dict.get`.
 
 **Q24 — H4: Which diagnostic policy should accompany the design?**
 
 - A. Add AU2010–AU2015 for union, alias, narrowing, and callable-contract errors; reuse existing ownership/binding/runtime codes and ordinary AU2001 for unknown Option.
 - B. Use existing AU2002/AU2999 for every new type-foundation failure; the registry stays smaller but tools distinguish fewer causes by code.
 - **Recommended: A.**
+- **Ratified: A.**
