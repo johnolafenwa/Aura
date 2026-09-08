@@ -12,7 +12,8 @@ Last updated: 2026-09-08
 - Pre-extraction baseline: nine fixture suites, two semantic characterizations,
   378 CLI tests, and native-codegen acceptance pass. E2.1 repeats those gates
   successfully, plus all 1,885 compiler unit tests; all fixture hashes remain
-  unchanged. Next extraction: E2.2 places/loans.
+  unchanged. E2.1 commit: `83ee945`. E2.2 places/loans repeats all required
+  gates successfully, with 404 semantic unit tests. E2.3 is next.
 - Next: finish E2 steps 1–3 with byte-identical fixture behavior, then every H1
   feature family, editor/docs/reference-agent updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected

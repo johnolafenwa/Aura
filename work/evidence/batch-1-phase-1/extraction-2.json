@@ -1,0 +1,21 @@
+{
+  "step": "E2.2 places/loans",
+  "reference_commit": "83ee945bdc81a3739eb2dc27001db65c6d52fa67",
+  "semantic_unit_tests": 404,
+  "fixture_suites": 9,
+  "semantic_characterization_tests": 2,
+  "cli_tests": 378,
+  "native_codegen_acceptance_tests": 1,
+  "failed": 0,
+  "unchanged_fixture_categories": 9,
+  "unchanged_fixture_files": 1807,
+  "existing_functions_token_compared": 434,
+  "token_comparison_ignores": [
+    "module visibility",
+    "comments",
+    "whitespace",
+    "formatter trailing commas"
+  ],
+  "target_gib": 15,
+  "available_disk_gib": 103
+}
