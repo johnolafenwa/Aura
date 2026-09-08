@@ -1,6 +1,8 @@
 //! Canonical place paths, projections, overlap, and expression paths.
 
-use super::*;
+use super::{
+    fmt, Diagnostic, Expr, ExprKind, FunctionChecker, HashMap, LocalBinding, Result, Type,
+};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum PlaceProjection {

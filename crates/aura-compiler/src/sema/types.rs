@@ -1,6 +1,12 @@
 //! Semantic type identity, lowering, substitution, and unification.
 
-use super::*;
+use super::{
+    erase_type_callable_contracts, fmt, function_type_mismatch_message, is_array_dtype,
+    is_builtin_copy_named_type, is_builtin_type, merge_type_callable_contracts,
+    preserves_qualified_builtin_type_name, resolve_param_passing, BTreeMap, BTreeSet,
+    ClosureCallKind, ClosureCapture, Deserialize, Diagnostic, FunctionParamContract, HashMap,
+    ReceiverKind, Result, Serialize, TraitImplInfo, TypeRef,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TraitBound {

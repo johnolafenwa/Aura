@@ -1,6 +1,10 @@
 //! Structural Copy, clone, equality, task observation, and Transfer queries.
 
-use super::*;
+use super::{
+    find_namespace_in_modules, integer_type_bounds_impl, substitute_type,
+    substitutions_from_decl_type_args, BTreeMap, BTreeSet, ClassInfo, ClosureCaptureMode, EnumInfo,
+    FunctionChecker, IntegerBounds, ModuleNamespace, Type,
+};
 
 #[derive(Clone, Debug)]
 pub(super) enum TransferNominal {

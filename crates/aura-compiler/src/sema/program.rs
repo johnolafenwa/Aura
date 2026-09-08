@@ -1,6 +1,20 @@
 //! Checked declarations, module inventory, and program checking.
 
-use super::*;
+use super::{
+    collect_type_ref_type_params, lower_supertraits, lower_trait_bounds,
+    lower_trait_bounds_with_self, lower_type, lower_type_with_self, merge_trait_bounds,
+    merged_type_param_scope, recursive_field_message, reject_builtin_trait_method_collisions,
+    reject_reserved_type_name, resolve_param_passings,
+    rng_clone_obligation_params_in_context_with_modules, rng_clone_safety_in_context_with_modules,
+    self_type_substitutions, substitute_trait_bounds, substitute_type, type_contains_named,
+    type_is_copy_in_context_with_modules, type_param_scope,
+    type_reaches_class_through_non_indirect_fields, validate_ffi_signature, validate_params,
+    validate_type_params, view_return_contract_key, AssignStmt, AssignTarget, BTreeMap, BTreeSet,
+    BuiltinClassConstructor, BuiltinFunction, ClassDecl, ClosureId, ClosureInfo, ComprehensionId,
+    ComprehensionInfo, Diagnostic, EnumDecl, ExprKind, FunctionChecker, FunctionDecl, HashMap,
+    ImplDecl, Item, Module, Rc, ReceiverKind, RefCell, Result, RngCloneSafety, Stmt, TraitBound,
+    TraitDecl, Type,
+};
 
 #[derive(Clone, Debug)]
 pub struct Program {

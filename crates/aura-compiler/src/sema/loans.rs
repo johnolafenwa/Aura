@@ -1,6 +1,15 @@
 //! Loan provenance, returned-view footprints, last use, reborrows, and access conflicts.
 
-use super::*;
+use super::{
+    bind_call_arguments, block_references_name, callable_params_from_decl, expr_references_name,
+    grouped_expr, grouped_specialized_expr, resolve_param_passing, statement_span,
+    stmt_references_name, substitute_type, substitutions_from_decl_type_args, unify_type_pattern,
+    Argument, AssignTarget, BTreeMap, BTreeSet, BuiltinAssociatedFunction, BuiltinMember,
+    CallConvention, ClassInfo, ClosureOwner, ComprehensionOutput, Diagnostic, Expr, ExprKind,
+    FunctionChecker, FunctionDecl, FunctionInfo, FunctionSignature, HashMap, LocalBinding,
+    MatchStmt, MethodInfo, ParamMode, PlacePath, ProjectedField, ReceiverKind, Result, Stmt,
+    TraitBound, TraitInfo, Type,
+};
 
 pub(super) fn view_return_contract_key(decl: &FunctionDecl) -> Option<(bool, bool, usize)> {
     let contract = decl.view_return.as_ref()?;

@@ -1,0 +1,233 @@
+{
+  "step": "E2.3 capabilities/callables/resolve/traits",
+  "reference_commit": "38c995c1714c0e7e13173f15c2e3e6a70ce524ab",
+  "compiler_unit_tests": 1885,
+  "fixture_suites": 9,
+  "semantic_characterization_tests": 2,
+  "cli_tests": 378,
+  "native_codegen_acceptance_tests": 1,
+  "forced_parity": {
+    "run_pass": 291,
+    "run_fail": 94,
+    "fallback": false,
+    "failed": 0
+  },
+  "failed": 0,
+  "unchanged_fixture_categories": 9,
+  "unchanged_fixture_files": 1807,
+  "existing_functions_token_compared": 434,
+  "coverage": {
+    "totals": {
+      "lines": {
+        "count": 105366,
+        "covered": 101483,
+        "percent": 96.31475048877248
+      },
+      "functions": {
+        "count": 6981,
+        "covered": 6787,
+        "percent": 97.2210285059447
+      },
+      "regions": {
+        "count": 157935,
+        "covered": 149756,
+        "notcovered": 8179,
+        "percent": 94.82128723842087
+      }
+    },
+    "floors": {
+      "lines": 96.3,
+      "functions": 97.21,
+      "regions": 94.71
+    },
+    "test_workers": 4,
+    "ignore_filename_regex": "crates/aura-compiler/src/.*_tests\\.rs$|crates/aura/.*",
+    "full_workspace_passed": true,
+    "isolated_reruns": 0,
+    "modules": {
+      "crates/aura-compiler/src/sema.rs": {
+        "lines": {
+          "count": 13426,
+          "covered": 12712,
+          "percent": 94.68196037539103
+        },
+        "functions": {
+          "count": 440,
+          "covered": 428,
+          "percent": 97.27272727272728
+        },
+        "regions": {
+          "count": 17624,
+          "covered": 16659,
+          "notcovered": 965,
+          "percent": 94.5245120290513
+        }
+      },
+      "crates/aura-compiler/src/sema/callables.rs": {
+        "lines": {
+          "count": 1925,
+          "covered": 1841,
+          "percent": 95.63636363636364
+        },
+        "functions": {
+          "count": 110,
+          "covered": 109,
+          "percent": 99.0909090909091
+        },
+        "regions": {
+          "count": 2482,
+          "covered": 2386,
+          "notcovered": 96,
+          "percent": 96.13215149073328
+        }
+      },
+      "crates/aura-compiler/src/sema/capabilities.rs": {
+        "lines": {
+          "count": 656,
+          "covered": 637,
+          "percent": 97.10365853658537
+        },
+        "functions": {
+          "count": 41,
+          "covered": 40,
+          "percent": 97.5609756097561
+        },
+        "regions": {
+          "count": 977,
+          "covered": 914,
+          "notcovered": 63,
+          "percent": 93.55168884339818
+        }
+      },
+      "crates/aura-compiler/src/sema/loans.rs": {
+        "lines": {
+          "count": 3342,
+          "covered": 3136,
+          "percent": 93.83602633153802
+        },
+        "functions": {
+          "count": 234,
+          "covered": 218,
+          "percent": 93.16239316239316
+        },
+        "regions": {
+          "count": 5008,
+          "covered": 4587,
+          "notcovered": 421,
+          "percent": 91.59345047923323
+        }
+      },
+      "crates/aura-compiler/src/sema/places.rs": {
+        "lines": {
+          "count": 153,
+          "covered": 151,
+          "percent": 98.69281045751636
+        },
+        "functions": {
+          "count": 23,
+          "covered": 23,
+          "percent": 100.0
+        },
+        "regions": {
+          "count": 261,
+          "covered": 251,
+          "notcovered": 10,
+          "percent": 96.16858237547893
+        }
+      },
+      "crates/aura-compiler/src/sema/program.rs": {
+        "lines": {
+          "count": 1665,
+          "covered": 1646,
+          "percent": 98.85885885885885
+        },
+        "functions": {
+          "count": 33,
+          "covered": 33,
+          "percent": 100.0
+        },
+        "regions": {
+          "count": 2289,
+          "covered": 2260,
+          "notcovered": 29,
+          "percent": 98.73307121013542
+        }
+      },
+      "crates/aura-compiler/src/sema/properties.rs": {
+        "lines": {
+          "count": 1775,
+          "covered": 1725,
+          "percent": 97.1830985915493
+        },
+        "functions": {
+          "count": 129,
+          "covered": 127,
+          "percent": 98.44961240310077
+        },
+        "regions": {
+          "count": 2588,
+          "covered": 2539,
+          "notcovered": 49,
+          "percent": 98.10664605873262
+        }
+      },
+      "crates/aura-compiler/src/sema/resolve.rs": {
+        "lines": {
+          "count": 336,
+          "covered": 330,
+          "percent": 98.21428571428571
+        },
+        "functions": {
+          "count": 51,
+          "covered": 49,
+          "percent": 96.07843137254902
+        },
+        "regions": {
+          "count": 470,
+          "covered": 458,
+          "notcovered": 12,
+          "percent": 97.44680851063829
+        }
+      },
+      "crates/aura-compiler/src/sema/traits.rs": {
+        "lines": {
+          "count": 979,
+          "covered": 952,
+          "percent": 97.2420837589377
+        },
+        "functions": {
+          "count": 65,
+          "covered": 61,
+          "percent": 93.84615384615384
+        },
+        "regions": {
+          "count": 1154,
+          "covered": 1120,
+          "notcovered": 34,
+          "percent": 97.05372616984403
+        }
+      },
+      "crates/aura-compiler/src/sema/types.rs": {
+        "lines": {
+          "count": 821,
+          "covered": 813,
+          "percent": 99.02557856272838
+        },
+        "functions": {
+          "count": 49,
+          "covered": 48,
+          "percent": 97.95918367346938
+        },
+        "regions": {
+          "count": 1063,
+          "covered": 1022,
+          "notcovered": 41,
+          "percent": 96.14299153339604
+        }
+      }
+    },
+    "full_report_sha256": "0972f92f4515305a12dccafa6ffa86f5fc28844bd12070e7092fce9ad8b76be3"
+  },
+  "target_gib": 11,
+  "available_disk_gib": 108
+}
