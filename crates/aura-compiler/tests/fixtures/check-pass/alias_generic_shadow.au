@@ -1,0 +1,4 @@
+type T = str
+type Values[T] = list[T]
+def accept(values: Values[int64]):
+    pass

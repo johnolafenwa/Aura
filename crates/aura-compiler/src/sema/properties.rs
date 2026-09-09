@@ -136,6 +136,21 @@ pub(super) fn rng_clone_safety_in_context_inner(
 ) -> RngCloneSafety {
     let Type::Named(name, args) = ty else {
         return match ty {
+            Type::Union(union) => {
+                union
+                    .members
+                    .iter()
+                    .fold(RngCloneSafety::Safe, |safety, member| {
+                        safety.combine(rng_clone_safety_in_context_inner(
+                            member,
+                            classes,
+                            enums,
+                            imported_modules,
+                            module_registry,
+                            visiting,
+                        ))
+                    })
+            }
             Type::TypeParam(_) => RngCloneSafety::Unknown,
             Type::Unit | Type::Module(_) | Type::Function { .. } => RngCloneSafety::Safe,
             Type::Closure { captures, .. } => {
@@ -329,6 +344,19 @@ pub(super) fn collect_rng_clone_obligation_params_in_context_inner(
     params: &mut BTreeSet<String>,
 ) {
     match ty {
+        Type::Union(union) => {
+            for member in &union.members {
+                collect_rng_clone_obligation_params_in_context_inner(
+                    member,
+                    classes,
+                    enums,
+                    imported_modules,
+                    module_registry,
+                    visiting,
+                    params,
+                );
+            }
+        }
         Type::TypeParam(name) => {
             params.insert(name.clone());
         }
@@ -572,6 +600,7 @@ pub(super) fn type_is_copy_in_context_inner(
     visiting: &mut BTreeSet<String>,
 ) -> bool {
     match ty {
+        Type::Union(_) => false,
         Type::Unit => true,
         Type::Module(_) => false,
         Type::TypeParam(_) => false,
@@ -701,6 +730,10 @@ pub(super) fn type_is_copy_in_context_inner(
 
 pub(super) fn type_contains_named(ty: &Type, target: &str) -> bool {
     match ty {
+        Type::Union(union) => union
+            .members
+            .iter()
+            .any(|member| type_contains_named(member, target)),
         Type::Tuple(elements) => elements
             .iter()
             .any(|element| type_contains_named(element, target)),
@@ -718,6 +751,7 @@ pub(super) fn type_contains_named(ty: &Type, target: &str) -> bool {
 
 pub(super) fn type_contains_closure_value(ty: &Type) -> bool {
     match ty {
+        Type::Union(union) => union.members.iter().any(type_contains_closure_value),
         Type::Closure { .. } => true,
         Type::Tuple(elements) | Type::Named(_, elements) => {
             elements.iter().any(type_contains_closure_value)
@@ -730,6 +764,7 @@ pub(super) fn type_contains_closure_value(ty: &Type) -> bool {
 
 pub(super) fn type_contains_loan_closure(ty: &Type) -> bool {
     match ty {
+        Type::Union(union) => union.members.iter().any(type_contains_loan_closure),
         Type::Closure { captures, .. } => captures.iter().any(|capture| {
             matches!(
                 capture.mode,
@@ -750,6 +785,9 @@ pub(super) fn type_reaches_class_through_non_indirect_fields(
     visiting: &mut BTreeSet<String>,
 ) -> bool {
     match ty {
+        Type::Union(union) => union.members.iter().any(|member| {
+            type_reaches_class_through_non_indirect_fields(member, target, classes, visiting)
+        }),
         Type::Tuple(elements) => elements.iter().any(|element| {
             type_reaches_class_through_non_indirect_fields(element, target, classes, visiting)
         }),
@@ -1140,6 +1178,12 @@ impl<'a> FunctionChecker<'a> {
             };
         }
         match ty {
+            Type::Union(_) => TransferSummary {
+                failure: Some(format!(
+                    "union `{ty}` requires all-member Transfer validation"
+                )),
+                requirements: Vec::new(),
+            },
             Type::Unit | Type::Function { .. } => TransferSummary::default(),
             Type::Closure { captures, .. } => {
                 if let Some(capture) = captures.iter().find(|capture| {
@@ -1500,6 +1544,16 @@ impl<'a> FunctionChecker<'a> {
         summaries: &BTreeMap<String, TaskObservationSummary>,
     ) -> TaskObservationSummary {
         match ty {
+            Type::Union(union) => {
+                let mut result = TaskObservationSummary::default();
+                for member in &union.members {
+                    Self::merge_task_observation_summary(
+                        &mut result,
+                        self.task_observation_shape(member, formals, summaries),
+                    );
+                }
+                result
+            }
             Type::Unit | Type::Module(_) | Type::Function { .. } => {
                 TaskObservationSummary::default()
             }
@@ -1660,6 +1714,10 @@ impl<'a> FunctionChecker<'a> {
         visiting: &mut BTreeSet<String>,
     ) -> SymbolicCopyShape {
         match ty {
+            Type::Union(_) => SymbolicCopyShape {
+                intrinsic_noncopy: true,
+                noncopy_formals: Vec::new(),
+            },
             Type::Unit | Type::Function { .. } => SymbolicCopyShape::default(),
             Type::Closure { .. } => SymbolicCopyShape {
                 intrinsic_noncopy: true,
@@ -1816,6 +1874,10 @@ impl<'a> FunctionChecker<'a> {
         visiting: &mut BTreeSet<String>,
     ) -> Option<Type> {
         match ty {
+            Type::Union(union) => union
+                .members
+                .iter()
+                .find_map(|member| self.callable_in_equality_type_inner(member, visiting)),
             Type::Function { .. } | Type::Closure { .. } => Some(ty.clone()),
             Type::Tuple(elements) => elements
                 .iter()
@@ -1876,6 +1938,10 @@ impl<'a> FunctionChecker<'a> {
         visiting: &mut BTreeSet<String>,
     ) -> Option<Type> {
         match ty {
+            Type::Union(union) => union
+                .members
+                .iter()
+                .find_map(|member| self.array_in_equality_type_inner(member, visiting)),
             Type::Tuple(elements) => elements
                 .iter()
                 .find_map(|element| self.array_in_equality_type_inner(element, visiting)),
@@ -1945,6 +2011,11 @@ impl<'a> FunctionChecker<'a> {
         params: &mut BTreeSet<String>,
     ) {
         match ty {
+            Type::Union(union) => {
+                for member in &union.members {
+                    self.collect_array_equality_type_params_inner(member, visiting, params);
+                }
+            }
             Type::TypeParam(name) => {
                 params.insert(name.clone());
             }
@@ -2011,6 +2082,10 @@ impl<'a> FunctionChecker<'a> {
         visiting: &mut BTreeSet<String>,
     ) -> Option<Type> {
         match ty {
+            Type::Union(union) => union
+                .members
+                .iter()
+                .find_map(|member| self.noncloneable_closure_in_type_inner(member, visiting)),
             Type::Closure { .. } => Some(ty.clone()),
             Type::Tuple(elements) => elements
                 .iter()

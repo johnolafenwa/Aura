@@ -1,0 +1,2 @@
+def accept(count: int | int64, unit: None | None, pair: (str | str, int | int64)):
+    pass

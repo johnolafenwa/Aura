@@ -2985,6 +2985,7 @@ impl<'a> AnalysisBuilder<'a> {
                             .zip(&function.signature.params)
                             .zip(&function.signature.param_passings)
                             .map(|((decl, ty), passing)| FunctionParamContract {
+                                keyword_only: decl.keyword_only,
                                 name: decl.name.clone(),
                                 ty: ty.clone(),
                                 passing: *passing,
@@ -3008,6 +3009,7 @@ impl<'a> AnalysisBuilder<'a> {
                             .zip(&function.signature.params)
                             .zip(&function.signature.param_passings)
                             .map(|((decl, ty), passing)| FunctionParamContract {
+                                keyword_only: decl.keyword_only,
                                 name: decl.name.clone(),
                                 ty: ty.clone(),
                                 passing: *passing,
@@ -3865,9 +3867,16 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn lower_analysis_type_ref(&self, ty: &TypeRef) -> Type {
         match &ty.kind {
-            crate::ast::TypeRefKind::Union(_) | crate::ast::TypeRefKind::Callable { .. } => {
-                Type::named("Unknown")
-            }
+            crate::ast::TypeRefKind::Union(members) => Type::normalize_union(
+                members
+                    .iter()
+                    .map(|member| self.lower_analysis_type_ref(member))
+                    .collect(),
+                &self.program.module_name,
+                &self.program.canonical_type_names,
+            )
+            .expect("checked union has members"),
+            crate::ast::TypeRefKind::Callable { .. } => Type::named("Unknown"),
             crate::ast::TypeRefKind::Tuple(elements) => Type::Tuple(
                 elements
                     .iter()
@@ -3881,11 +3890,12 @@ impl<'a> AnalysisBuilder<'a> {
                 params: params
                     .iter()
                     .map(|param| FunctionParamContract {
-                        name: String::new(),
+                        keyword_only: param.keyword_only,
+                        name: param.name.clone().unwrap_or_default(),
                         ty: self.lower_analysis_type_ref(&param.ty),
                         passing: resolve_param_passing(param.mode),
-                        has_default: false,
-                        default_erased: true,
+                        has_default: param.has_default,
+                        default_erased: !param.has_default,
                     })
                     .collect(),
                 return_type: Box::new(self.lower_analysis_type_ref(return_type)),
@@ -3903,6 +3913,12 @@ impl<'a> AnalysisBuilder<'a> {
                     .iter()
                     .map(|arg| self.lower_analysis_type_ref(arg))
                     .collect::<Vec<_>>();
+                if let Some(expanded) =
+                    self.program
+                        .resolve_alias_type(name, &args, &self.program.module_name)
+                {
+                    return expanded;
+                }
                 self.program
                     .classes
                     .get(name)
@@ -4097,6 +4113,7 @@ impl<'a> AnalysisBuilder<'a> {
                             .zip(&function.signature.params)
                             .zip(&function.signature.param_passings)
                             .map(|((decl, ty), passing)| FunctionParamContract {
+                                keyword_only: decl.keyword_only,
                                 name: decl.name.clone(),
                                 ty: ty.clone(),
                                 passing: *passing,
@@ -5310,9 +5327,13 @@ fn is_identifier_continue(ch: char) -> bool {
 
 fn lower_type_ref(ty: &TypeRef) -> Type {
     match &ty.kind {
-        crate::ast::TypeRefKind::Union(_) | crate::ast::TypeRefKind::Callable { .. } => {
-            Type::named("Unknown")
-        }
+        crate::ast::TypeRefKind::Union(members) => Type::normalize_union(
+            members.iter().map(lower_type_ref).collect(),
+            "<main>",
+            &BTreeMap::new(),
+        )
+        .unwrap_or_else(|_| Type::named("Unknown")),
+        crate::ast::TypeRefKind::Callable { .. } => Type::named("Unknown"),
         crate::ast::TypeRefKind::Tuple(elements) => {
             Type::Tuple(elements.iter().map(lower_type_ref).collect())
         }
@@ -5323,6 +5344,7 @@ fn lower_type_ref(ty: &TypeRef) -> Type {
             params: params
                 .iter()
                 .map(|param| FunctionParamContract {
+                    keyword_only: param.keyword_only,
                     name: String::new(),
                     ty: lower_type_ref(&param.ty),
                     passing: resolve_param_passing(param.mode),
@@ -5346,6 +5368,7 @@ fn lower_type_ref(ty: &TypeRef) -> Type {
 
 fn base_type_name(ty: &Type) -> &str {
     match ty {
+        Type::Union(_) => "union",
         Type::Unit => "None",
         Type::Module(name) => name.as_str(),
         Type::TypeParam(name) => name.as_str(),
@@ -5595,6 +5618,7 @@ trait TypeExt {
 impl TypeExt for Type {
     fn type_arguments(&self) -> &[Type] {
         match self {
+            Type::Union(_) => &[],
             Type::Unit => &[],
             Type::Module(_) => &[],
             Type::TypeParam(_) => &[],

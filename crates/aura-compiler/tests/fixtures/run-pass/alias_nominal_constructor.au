@@ -1,0 +1,6 @@
+class Box:
+    value: int64
+type Container = Box
+def main():
+    value = Container(value=42)
+    print(value.value)

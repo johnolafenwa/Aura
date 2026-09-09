@@ -1,0 +1,2 @@
+def accept(value: ((int64 | str) | None) | int | None):
+    pass

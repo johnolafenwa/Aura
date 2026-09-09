@@ -141,6 +141,36 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "equality unavailable",
     },
     DiagnosticCodeInfo {
+        code: "AU2010",
+        band: "names/types",
+        title: "union member or context",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2011",
+        band: "names/types",
+        title: "ambiguous union injection",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2012",
+        band: "names/types",
+        title: "cyclic type alias",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2013",
+        band: "names/types",
+        title: "union pattern coverage",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2014",
+        band: "names/types",
+        title: "invalidated narrowing",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2015",
+        band: "names/types",
+        title: "callable contract mismatch",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",

@@ -206,3 +206,19 @@ includes lossless raw sample XML, exact record/export commands, selected
 instructions, an executable attribution script, binary hashes, the reverted
 experiment and all paired timings. These are diagnostic quiet-host observations,
 not post-reboot release results.
+
+## Batch 1 phase 1: normalized types and alias expansion
+
+The first type family establishes a shared producer in `sema/types.rs` for
+flattened union members and canonical structural keys. Alias constructor and
+member adaptation lives in `sema/aliases.rs` and uses checked `AliasInfo`
+metadata in both semantic checking and MIR lowering. Imported implementation
+bodies retain private alias metadata without exporting those names for lookup.
+The direct emitter receives expanded nominal types; it does not resolve aliases
+or choose a preferred union-member order. Checked lowering uses the same
+bounded expansion with no duplicate charge to semantic aggregate accounting.
+
+This establishes type identity inputs for the ordered moves below the original
+inventory. Injection, explicit union layout/tag plans, callable ABI and binding
+plans, and property dispatch are still pending their respective families; no
+native emission decision is claimed moved merely because a type is accepted.

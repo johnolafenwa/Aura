@@ -1,0 +1,7 @@
+error[AU2012]: cyclic type alias: Left -> Right -> Left
+ --> crates/aura-compiler/tests/fixtures/check-fail/alias_cycle_indirect.au:2:14
+  |
+2 | type Right = Left
+  |              ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/alias_cycle_indirect.au:1:1: alias `Left` declared here
+  = related crates/aura-compiler/tests/fixtures/check-fail/alias_cycle_indirect.au:2:1: alias `Right` declared here

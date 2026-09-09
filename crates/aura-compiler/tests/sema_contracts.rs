@@ -7,6 +7,7 @@ use aura_compiler::sema::{FunctionParamContract, Type};
 fn exported_type_serialization_preserves_names_modes_defaults_and_nested_types() {
     let ty = Type::Function {
         params: vec![FunctionParamContract {
+            keyword_only: false,
             name: "input".into(),
             ty: Type::Named("Option".into(), vec![Type::TypeParam("T".into())]),
             passing: ReceiverKind::Value,
@@ -16,7 +17,7 @@ fn exported_type_serialization_preserves_names_modes_defaults_and_nested_types()
         return_type: Box::new(Type::Tuple(vec![Type::named("int32"), Type::Unit])),
     };
     let expected = concat!(
-        "{\"Function\":{\"params\":[{\"name\":\"input\",",
+        "{\"Function\":{\"params\":[{\"keyword_only\":false,\"name\":\"input\",",
         "\"ty\":{\"Named\":[\"Option\",[{\"TypeParam\":\"T\"}]]},",
         "\"passing\":\"Value\",\"has_default\":false,\"default_erased\":true}],",
         "\"return_type\":{\"Tuple\":[{\"Named\":[\"int32\",[]]},\"Unit\"]}}}"

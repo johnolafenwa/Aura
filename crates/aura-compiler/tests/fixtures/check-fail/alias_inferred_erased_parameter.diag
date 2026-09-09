@@ -1,0 +1,5 @@
+error[AU2002]: cannot infer type parameter `T` for type alias `Hidden`
+ --> crates/aura-compiler/tests/fixtures/check-fail/alias_inferred_erased_parameter.au:5:13
+  |
+5 |     value = Hidden(value=42)
+  |             ^

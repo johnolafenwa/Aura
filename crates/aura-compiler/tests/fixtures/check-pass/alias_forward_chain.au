@@ -1,0 +1,5 @@
+type First = Second
+type Second = Third
+type Third = int64
+def accept(value: First):
+    pass

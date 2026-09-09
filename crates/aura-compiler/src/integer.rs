@@ -934,6 +934,7 @@ impl IntegerValue {
 
 pub fn integer_type_bounds(ty: &Type) -> Option<IntegerBounds> {
     match ty {
+        Type::Union(_) => None,
         Type::Unit => None,
         Type::Module(_) => None,
         Type::TypeParam(_) => None,

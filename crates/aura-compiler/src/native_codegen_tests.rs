@@ -683,6 +683,7 @@ fn direct_runtime_type_substitutions_respect_callable_structure_and_capabilities
     use crate::sema::{ClosureCallKind, ClosureCapture, ClosureCaptureMode, FunctionParamContract};
 
     let param = |name: &str, ty: Type, passing| FunctionParamContract {
+        keyword_only: false,
         name: name.to_string(),
         ty,
         passing,
@@ -1036,6 +1037,7 @@ fn test_function_operand(name: &str, params: Vec<Type>, return_type: Type) -> Op
             params: params
                 .into_iter()
                 .map(|ty| crate::sema::FunctionParamContract {
+                    keyword_only: false,
                     name: String::new(),
                     ty,
                     passing: crate::ast::ReceiverKind::Value,
@@ -7698,6 +7700,7 @@ fn native_codegen_function_value_signature_errors_are_precise() {
         passing: crate::ast::ReceiverKind,
     ) -> crate::sema::FunctionParamContract {
         crate::sema::FunctionParamContract {
+            keyword_only: false,
             name: name.to_string(),
             ty: Type::named("int32"),
             passing,
@@ -8815,6 +8818,7 @@ def main() -> int32:
         name: "worker".to_string(),
         signature: Box::new(Type::Function {
             params: vec![crate::sema::FunctionParamContract {
+                keyword_only: false,
                 name: "value".to_string(),
                 ty: Type::named("int32"),
                 passing: crate::ast::ReceiverKind::Value,

@@ -8,6 +8,144 @@ use super::{
     ReceiverKind, Result, Serialize, TraitImplInfo, TypeRef,
 };
 
+/// Name inventory and transparent alias templates used by semantic type lowering.
+/// AST declarations remain intact for source-facing tooling.
+#[derive(Clone, Debug, Default)]
+pub struct TypeDefinitions {
+    pub(super) module_name: String,
+    names: BTreeMap<String, crate::diag::Span>,
+    pub(super) aliases: BTreeMap<String, crate::ast::TypeAliasDecl>,
+    pub(super) checked_aliases: BTreeMap<String, super::AliasInfo>,
+    pub(super) imported_aliases: BTreeMap<String, super::AliasInfo>,
+    pub(super) non_value_names: BTreeSet<String>,
+    alias_templates: std::cell::RefCell<BTreeMap<String, Type>>,
+    budget: super::type_budget::ExpansionBudget,
+}
+
+impl std::ops::Deref for TypeDefinitions {
+    type Target = BTreeMap<String, crate::diag::Span>;
+    fn deref(&self) -> &Self::Target {
+        &self.names
+    }
+}
+
+impl std::ops::DerefMut for TypeDefinitions {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.names
+    }
+}
+
+impl From<BTreeMap<String, crate::diag::Span>> for TypeDefinitions {
+    fn from(names: BTreeMap<String, crate::diag::Span>) -> Self {
+        Self {
+            module_name: String::new(),
+            names,
+            aliases: BTreeMap::new(),
+            checked_aliases: BTreeMap::new(),
+            imported_aliases: BTreeMap::new(),
+            non_value_names: BTreeSet::new(),
+            alias_templates: std::cell::RefCell::new(BTreeMap::new()),
+            budget: Default::default(),
+        }
+    }
+}
+
+impl TypeDefinitions {
+    pub(crate) fn expansion_budget(&self) -> &super::type_budget::ExpansionBudget {
+        &self.budget
+    }
+
+    /// Validate declaration dependencies, not instantiated argument strings.
+    /// In particular Grow[T] = Grow[list[T]] closes a one-node cycle.
+    pub(super) fn validate_alias_cycles(&self, declaration_order: &[String]) -> Result<()> {
+        fn dependencies<'a>(
+            ty: &'a TypeRef,
+            aliases: &BTreeMap<String, crate::ast::TypeAliasDecl>,
+            parameters: &[String],
+        ) -> Vec<(&'a str, crate::diag::Span)> {
+            let mut work = vec![ty];
+            let mut found = Vec::new();
+            while let Some(ty) = work.pop() {
+                match &ty.kind {
+                    crate::ast::TypeRefKind::Named { name, args } => {
+                        if !parameters.contains(name) && aliases.contains_key(name) {
+                            found.push((name.as_str(), ty.span));
+                        }
+                        work.extend(args.iter().rev());
+                    }
+                    crate::ast::TypeRefKind::Tuple(members)
+                    | crate::ast::TypeRefKind::Union(members) => work.extend(members.iter().rev()),
+                    crate::ast::TypeRefKind::Function {
+                        params,
+                        return_type,
+                    } => {
+                        work.push(return_type);
+                        work.extend(params.iter().rev().map(|param| &param.ty));
+                    }
+                    crate::ast::TypeRefKind::Callable { signature, .. } => work.push(signature),
+                }
+            }
+            found
+        }
+        let graph = self
+            .aliases
+            .iter()
+            .map(|(name, alias)| {
+                let mut edges = dependencies(&alias.target, &self.aliases, &alias.type_params);
+                for bounds in alias.type_param_bounds.values() {
+                    for bound in bounds {
+                        edges.extend(dependencies(bound, &self.aliases, &alias.type_params));
+                    }
+                }
+                (name.as_str(), edges)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut complete = BTreeSet::new();
+        for root in declaration_order {
+            if complete.contains(root.as_str()) {
+                continue;
+            }
+            let mut path = vec![(root.as_str(), 0usize)];
+            let mut active = BTreeMap::from([(root.as_str(), 0usize)]);
+            while let Some((name, next)) = path.last_mut() {
+                let edges = &graph[name];
+                if *next == edges.len() {
+                    complete.insert(*name);
+                    active.remove(name);
+                    path.pop();
+                    continue;
+                }
+                let (dependency, closing_span) = edges[*next];
+                *next += 1;
+                if let Some(&start) = active.get(dependency) {
+                    let mut names = path[start..]
+                        .iter()
+                        .map(|(name, _)| *name)
+                        .collect::<Vec<_>>();
+                    names.push(dependency);
+                    let mut error = Diagnostic::coded_at(
+                        "AU2012",
+                        closing_span,
+                        format!("cyclic type alias: {}", names.join(" -> ")),
+                    );
+                    for (name, _) in &path[start..] {
+                        error = error.with_secondary(
+                            self.aliases[*name].span,
+                            format!("alias `{name}` declared here"),
+                        );
+                    }
+                    return Err(error);
+                }
+                if !complete.contains(dependency) {
+                    active.insert(dependency, path.len());
+                    path.push((dependency, 0));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TraitBound {
     pub trait_name: String,
@@ -35,6 +173,7 @@ impl fmt::Display for TraitBound {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Type {
+    Union(Box<UnionType>),
     Named(String, Vec<Type>),
     Tuple(Vec<Type>),
     Function {
@@ -57,9 +196,288 @@ pub enum Type {
     Unit,
 }
 
+/// Normalized members and their defining-module structural identities.
+/// Keys determine tags; written aliases and source ordering do not.
+#[derive(Clone, Debug, Serialize)]
+pub struct UnionType {
+    pub(crate) members: Vec<Type>,
+    pub(crate) keys: Vec<String>,
+    pub(crate) module_name: String,
+}
+
+impl<'de> Deserialize<'de> for UnionType {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct EncodedUnion {
+            members: Vec<Type>,
+            keys: Vec<String>,
+            module_name: String,
+        }
+        let encoded = EncodedUnion::deserialize(deserializer)?;
+        let invalid =
+            |reason: &str| serde::de::Error::custom(format!("invalid union metadata: {reason}"));
+        if encoded.members.len() < 2 {
+            return Err(invalid("a stored union requires at least two members"));
+        }
+        if encoded.members.len() != encoded.keys.len() {
+            return Err(invalid("member and key counts differ"));
+        }
+        if encoded.keys.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(invalid("keys must be strictly ordered and unique"));
+        }
+        for (member, key) in encoded.members.iter().zip(&encoded.keys) {
+            if matches!(member, Type::Union(_)) {
+                return Err(invalid("nested members must be flattened"));
+            }
+            super::type_budget::ExpansionBudget::default()
+                .check_canonical_key(
+                    member,
+                    &encoded.module_name,
+                    &BTreeMap::new(),
+                    crate::diag::Span::new(1, 1),
+                )
+                .map_err(|error| invalid(&error.message))?;
+            if member.canonical_key(&encoded.module_name, &BTreeMap::new()) != *key {
+                return Err(invalid("member key does not match its resolved type"));
+            }
+        }
+        Ok(Self {
+            members: encoded.members,
+            keys: encoded.keys,
+            module_name: encoded.module_name,
+        })
+    }
+}
+
+impl Type {
+    pub(crate) fn source_type_ref(&self, span: crate::diag::Span) -> Result<TypeRef> {
+        use crate::ast::{FunctionTypeParam, ParamMode, TypeRefKind};
+        let kind = match self {
+            Type::Named(name, args) => TypeRefKind::Named {
+                name: name.clone(),
+                args: args
+                    .iter()
+                    .map(|arg| arg.source_type_ref(span))
+                    .collect::<Result<Vec<_>>>()?,
+            },
+            Type::TypeParam(name) => TypeRefKind::Named {
+                name: name.clone(),
+                args: Vec::new(),
+            },
+            Type::Unit => TypeRefKind::Named {
+                name: "None".into(),
+                args: Vec::new(),
+            },
+            Type::Tuple(members) => TypeRefKind::Tuple(
+                members
+                    .iter()
+                    .map(|member| member.source_type_ref(span))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+            Type::Union(union) => TypeRefKind::Union(
+                union
+                    .members
+                    .iter()
+                    .map(|member| member.source_type_ref(span))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+            Type::Function {
+                params,
+                return_type,
+            } => TypeRefKind::Function {
+                params: params
+                    .iter()
+                    .map(|param| {
+                        Ok(FunctionTypeParam {
+                            name: (!param.name.is_empty()).then(|| param.name.clone()),
+                            mode: match param.passing {
+                                ReceiverKind::Value => ParamMode::Own,
+                                ReceiverKind::BorrowMut => ParamMode::BorrowMut,
+                                ReceiverKind::Borrow => ParamMode::Default,
+                            },
+                            ty: param.ty.source_type_ref(span)?,
+                            keyword_only: param.keyword_only,
+                            has_default: param.has_default,
+                            span,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+                return_type: Box::new(return_type.source_type_ref(span)?),
+            },
+            Type::Module(_) | Type::Closure { .. } => {
+                return Err(Diagnostic::coded_at(
+                    "AU2010",
+                    span,
+                    format!("`{self}` is not a complete source type"),
+                ))
+            }
+        };
+        Ok(TypeRef {
+            kind,
+            indirect: false,
+            span,
+        })
+    }
+    pub(crate) fn canonical_key(
+        &self,
+        module_name: &str,
+        canonical_names: &BTreeMap<String, String>,
+    ) -> String {
+        fn key(ty: &Type, module: &str, names: &BTreeMap<String, String>) -> serde_json::Value {
+            use serde_json::json;
+            match ty {
+                Type::Unit => json!(["~unit"]),
+                Type::Module(name) => json!(["module", name]),
+                Type::TypeParam(name) => json!(["parameter", name]),
+                Type::Named(name, args) => {
+                    let resolved = names.get(name).unwrap_or(name);
+                    let nominal =
+                        if is_builtin_type(resolved) || resolved.contains('.') || module.is_empty()
+                        {
+                            resolved.clone()
+                        } else {
+                            format!("{module}.{resolved}")
+                        };
+                    json!([
+                        "named",
+                        nominal,
+                        args.iter()
+                            .map(|arg| key(arg, module, names))
+                            .collect::<Vec<_>>()
+                    ])
+                }
+                Type::Tuple(elements) => json!([
+                    "tuple",
+                    elements
+                        .iter()
+                        .map(|arg| key(arg, module, names))
+                        .collect::<Vec<_>>()
+                ]),
+                Type::Union(union) => json!([
+                    "union",
+                    union
+                        .members
+                        .iter()
+                        .map(|member| key(member, &union.module_name, &BTreeMap::new()))
+                        .collect::<Vec<_>>()
+                ]),
+                Type::Function {
+                    params,
+                    return_type,
+                } => json!([
+                    "function",
+                    params
+                        .iter()
+                        .map(|p| json!([
+                            p.name,
+                            p.passing,
+                            p.has_default,
+                            p.default_erased,
+                            p.keyword_only,
+                            key(&p.ty, module, names)
+                        ]))
+                        .collect::<Vec<_>>(),
+                    key(return_type, module, names)
+                ]),
+                Type::Closure {
+                    params,
+                    return_type,
+                    captures,
+                    call_kind,
+                } => json!([
+                    "closure",
+                    call_kind,
+                    params
+                        .iter()
+                        .map(|p| json!([
+                            p.name,
+                            p.passing,
+                            p.has_default,
+                            p.default_erased,
+                            p.keyword_only,
+                            key(&p.ty, module, names)
+                        ]))
+                        .collect::<Vec<_>>(),
+                    key(return_type, module, names),
+                    captures
+                        .iter()
+                        .map(|capture| json!([
+                            capture.name,
+                            capture.mode,
+                            key(&capture.ty, module, names)
+                        ]))
+                        .collect::<Vec<_>>()
+                ]),
+            }
+        }
+        format!(
+            "aura-type-key-v1:{}",
+            key(self, module_name, canonical_names)
+        )
+    }
+
+    pub(crate) fn normalize_union(
+        members: Vec<Type>,
+        module_name: &str,
+        canonical_names: &BTreeMap<String, String>,
+    ) -> Result<Type> {
+        Self::normalize_union_with_budget(
+            members,
+            module_name,
+            canonical_names,
+            &super::type_budget::ExpansionBudget::default(),
+            crate::diag::Span::new(1, 1),
+        )
+    }
+
+    fn normalize_union_with_budget(
+        members: Vec<Type>,
+        module_name: &str,
+        canonical_names: &BTreeMap<String, String>,
+        budget: &super::type_budget::ExpansionBudget,
+        span: crate::diag::Span,
+    ) -> Result<Type> {
+        let mut ordered = BTreeMap::new();
+        for member in members {
+            if let Type::Union(union) = member {
+                if union.members.len() != union.keys.len() {
+                    return Err(Diagnostic::coded("AU2010", "invalid union member metadata"));
+                }
+                for (member, key) in union.members.into_iter().zip(union.keys) {
+                    ordered.entry(key).or_insert(member);
+                }
+            } else {
+                budget.check_canonical_key(&member, module_name, canonical_names, span)?;
+                ordered
+                    .entry(member.canonical_key(module_name, canonical_names))
+                    .or_insert(member);
+            }
+        }
+        match ordered.len() {
+            0 => Err(Diagnostic::coded(
+                "AU2010",
+                "a union requires at least one member",
+            )),
+            1 => Ok(ordered.into_values().next().expect("one normalized member")),
+            _ => {
+                let (keys, members) = ordered.into_iter().unzip();
+                Ok(Type::Union(Box::new(UnionType {
+                    members,
+                    keys,
+                    module_name: module_name.to_string(),
+                })))
+            }
+        }
+    }
+}
+
 impl PartialEq for Type {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Union(left), Self::Union(right)) => left.keys == right.keys,
             (Self::Named(left_name, left_args), Self::Named(right_name, right_args)) => {
                 left_name == right_name && left_args == right_args
             }
@@ -121,6 +539,7 @@ impl Type {
 
     pub fn is_copy(&self) -> bool {
         match self {
+            Type::Union(_) => false,
             Type::Unit => true,
             Type::Module(_) => false,
             Type::TypeParam(_) => false,
@@ -136,6 +555,15 @@ impl Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Type::Union(union) => {
+                for (index, member) in union.members.iter().enumerate() {
+                    if index != 0 {
+                        write!(f, " | ")?;
+                    }
+                    write!(f, "{member}")?;
+                }
+                Ok(())
+            }
             Type::Unit => write!(f, "None"),
             Type::Module(name) => write!(f, "module {}", name),
             Type::TypeParam(name) => write!(f, "{}", name),
@@ -168,7 +596,11 @@ impl fmt::Display for Type {
                     }
                     write!(f, "{}", param.ty)?;
                 }
-                write!(f, ") -> {return_type}")
+                if matches!(return_type.as_ref(), Type::Union(_)) {
+                    write!(f, ") -> ({return_type})")
+                } else {
+                    write!(f, ") -> {return_type}")
+                }
             }
             Type::Closure {
                 params,
@@ -193,7 +625,11 @@ impl fmt::Display for Type {
                     }
                     write!(f, "{}", param.ty)?;
                 }
-                write!(f, ") -> {return_type}")
+                if matches!(return_type.as_ref(), Type::Union(_)) {
+                    write!(f, ") -> ({return_type})")
+                } else {
+                    write!(f, ") -> {return_type}")
+                }
             }
             Type::Named(name, args) if args.is_empty() => write!(f, "{}", name),
             Type::Named(name, args) => {
@@ -212,7 +648,7 @@ impl fmt::Display for Type {
 
 pub(super) fn lower_type(
     type_ref: &TypeRef,
-    type_names: &BTreeMap<String, crate::diag::Span>,
+    type_names: &TypeDefinitions,
     type_arities: &BTreeMap<String, usize>,
     canonical_type_names: &BTreeMap<String, String>,
     type_params: &BTreeMap<String, ()>,
@@ -229,14 +665,61 @@ pub(super) fn lower_type(
 
 pub(super) fn lower_type_with_self(
     type_ref: &TypeRef,
-    type_names: &BTreeMap<String, crate::diag::Span>,
+    type_names: &TypeDefinitions,
     type_arities: &BTreeMap<String, usize>,
     canonical_type_names: &BTreeMap<String, String>,
     type_params: &BTreeMap<String, ()>,
     self_type: Option<&Type>,
 ) -> Result<Type> {
     let (name, type_args) = match &type_ref.kind {
-        crate::ast::TypeRefKind::Union(_) | crate::ast::TypeRefKind::Callable { .. } => {
+        crate::ast::TypeRefKind::Union(members) => {
+            let members = members
+                .iter()
+                .map(|member| {
+                    let invalid = || {
+                        let label = match &member.kind {
+                            crate::ast::TypeRefKind::Named { name, .. } => name.as_str(),
+                            _ => "type expression",
+                        };
+                        Diagnostic::coded_at(
+                            "AU2010",
+                            member.span,
+                            format!("invalid or incomplete union member `{label}`"),
+                        )
+                    };
+                    if let crate::ast::TypeRefKind::Named { name, .. } = &member.kind {
+                        if !type_params.contains_key(name)
+                            && type_names.non_value_names.contains(name)
+                        {
+                            return Err(invalid());
+                        }
+                    }
+                    lower_type_with_self(
+                        member,
+                        type_names,
+                        type_arities,
+                        canonical_type_names,
+                        type_params,
+                        self_type,
+                    )
+                    .map_err(|error| {
+                        if error.code == "AU2002" {
+                            invalid()
+                        } else {
+                            error
+                        }
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Type::normalize_union_with_budget(
+                members,
+                &type_names.module_name,
+                canonical_type_names,
+                &type_names.budget,
+                type_ref.span,
+            );
+        }
+        crate::ast::TypeRefKind::Callable { .. } => {
             return Err(Diagnostic::at(
                 type_ref.span,
                 "this type form requires Batch 1 semantic lowering",
@@ -274,11 +757,12 @@ pub(super) fn lower_type_with_self(
                         self_type,
                     )?;
                     Ok(FunctionParamContract {
-                        name: String::new(),
+                        keyword_only: param.keyword_only,
+                        name: param.name.clone().unwrap_or_default(),
                         ty,
                         passing: resolve_param_passing(param.mode),
-                        has_default: false,
-                        default_erased: true,
+                        has_default: param.has_default,
+                        default_erased: !param.has_default,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -355,6 +839,111 @@ pub(super) fn lower_type_with_self(
             )
         })
         .collect::<Result<Vec<_>>>()?;
+
+    if let Some(alias) = type_names.imported_aliases.get(type_name) {
+        if args.len() != alias.decl.type_params.len() {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                type_ref.span,
+                format!(
+                    "`{type_name}` expects exactly {} type arguments, found {}",
+                    alias.decl.type_params.len(),
+                    args.len()
+                ),
+            ));
+        }
+        let _depth = type_names.budget.enter(type_ref.span)?;
+        let substitutions = alias.decl.type_params.iter().cloned().zip(args).collect();
+        type_names
+            .budget
+            .check_substitution(&alias.target, &substitutions, type_ref.span)?;
+        type_names.budget.check_substitution_key(
+            &alias.target,
+            &substitutions,
+            &type_names.module_name,
+            canonical_type_names,
+            type_ref.span,
+        )?;
+        return Ok(substitute_alias_type(
+            &alias.target,
+            &substitutions,
+            &type_names.module_name,
+            canonical_type_names,
+        ));
+    }
+    if let Some(alias) = type_names.aliases.get(type_name) {
+        if args.len() != alias.type_params.len() {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                type_ref.span,
+                format!(
+                    "`{type_name}` expects exactly {} type argument{}, found {}",
+                    alias.type_params.len(),
+                    if alias.type_params.len() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    },
+                    args.len()
+                ),
+            ));
+        }
+        let _depth = type_names.budget.enter(type_ref.span)?;
+        let substitutions = alias.type_params.iter().cloned().zip(args).collect();
+        {
+            let templates = type_names.alias_templates.borrow();
+            if let Some(template) = templates.get(type_name) {
+                type_names
+                    .budget
+                    .check_substitution(template, &substitutions, type_ref.span)?;
+                type_names.budget.check_substitution_key(
+                    template,
+                    &substitutions,
+                    &type_names.module_name,
+                    canonical_type_names,
+                    type_ref.span,
+                )?;
+                return Ok(substitute_alias_type(
+                    template,
+                    &substitutions,
+                    &type_names.module_name,
+                    canonical_type_names,
+                ));
+            }
+        }
+        let template = lower_type_with_self(
+            &alias.target,
+            type_names,
+            type_arities,
+            canonical_type_names,
+            &type_param_scope(&alias.type_params),
+            None,
+        )?;
+        type_names
+            .budget
+            .check_substitution(&template, &HashMap::new(), type_ref.span)?;
+        type_names
+            .budget
+            .check_substitution(&template, &substitutions, type_ref.span)?;
+        type_names.budget.check_substitution_key(
+            &template,
+            &substitutions,
+            &type_names.module_name,
+            canonical_type_names,
+            type_ref.span,
+        )?;
+        let result = substitute_alias_type(
+            &template,
+            &substitutions,
+            &type_names.module_name,
+            canonical_type_names,
+        );
+        type_names
+            .alias_templates
+            .borrow_mut()
+            .insert(type_name.to_string(), template);
+        return Ok(result);
+    }
 
     if type_name == "Option" {
         if args.len() != 1 {
@@ -458,14 +1047,13 @@ pub(super) fn lower_type_with_self(
     }
 
     if is_builtin_type(type_name) || type_names.contains_key(type_name) {
-        let canonical_name =
-            if preserves_qualified_builtin_type_name(type_name) || type_name.contains('.') {
-                type_name.to_string()
-            } else if let Some(canonical_name) = canonical_type_names.get(type_name) {
-                canonical_name.clone()
-            } else {
-                type_name.to_string()
-            };
+        let canonical_name = if preserves_qualified_builtin_type_name(type_name) {
+            type_name.to_string()
+        } else if let Some(canonical_name) = canonical_type_names.get(type_name) {
+            canonical_name.clone()
+        } else {
+            type_name.to_string()
+        };
         Ok(Type::Named(canonical_name, args))
     } else {
         Err(Diagnostic::at(
@@ -496,7 +1084,7 @@ pub(super) fn merged_type_param_scope(
 
 pub(super) fn collect_type_ref_type_params(
     type_ref: &TypeRef,
-    type_names: &BTreeMap<String, crate::diag::Span>,
+    type_names: &TypeDefinitions,
     collected: &mut BTreeSet<String>,
     include_self: bool,
 ) {
@@ -539,7 +1127,38 @@ pub(super) fn collect_type_ref_type_params(
 }
 
 pub(crate) fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
+    substitute_type_in_context(ty, substitutions, None)
+}
+
+pub(crate) fn substitute_alias_type(
+    ty: &Type,
+    substitutions: &HashMap<String, Type>,
+    module_name: &str,
+    canonical_names: &BTreeMap<String, String>,
+) -> Type {
+    substitute_type_in_context(ty, substitutions, Some((module_name, canonical_names)))
+}
+
+fn substitute_type_in_context(
+    ty: &Type,
+    substitutions: &HashMap<String, Type>,
+    context: Option<(&str, &BTreeMap<String, String>)>,
+) -> Type {
     match ty {
+        Type::Union(union) => {
+            let empty = BTreeMap::new();
+            let (module, names) = context.unwrap_or((&union.module_name, &empty));
+            Type::normalize_union(
+                union
+                    .members
+                    .iter()
+                    .map(|member| substitute_type_in_context(member, substitutions, context))
+                    .collect(),
+                module,
+                names,
+            )
+            .expect("substitution preserves nonempty normalized union members")
+        }
         Type::Unit => Type::Unit,
         Type::Module(name) => Type::Module(name.clone()),
         Type::TypeParam(name) => substitutions
@@ -549,7 +1168,7 @@ pub(crate) fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) 
         Type::Tuple(elements) => Type::Tuple(
             elements
                 .iter()
-                .map(|element| substitute_type(element, substitutions))
+                .map(|element| substitute_type_in_context(element, substitutions, context))
                 .collect(),
         ),
         Type::Function {
@@ -559,14 +1178,19 @@ pub(crate) fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) 
             params: params
                 .iter()
                 .map(|param| FunctionParamContract {
+                    keyword_only: param.keyword_only,
                     name: param.name.clone(),
-                    ty: substitute_type(&param.ty, substitutions),
+                    ty: substitute_type_in_context(&param.ty, substitutions, context),
                     passing: param.passing,
                     has_default: param.has_default,
                     default_erased: param.default_erased,
                 })
                 .collect(),
-            return_type: Box::new(substitute_type(return_type, substitutions)),
+            return_type: Box::new(substitute_type_in_context(
+                return_type,
+                substitutions,
+                context,
+            )),
         },
         Type::Closure {
             params,
@@ -578,21 +1202,26 @@ pub(crate) fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) 
                 params
                     .iter()
                     .map(|param| FunctionParamContract {
+                        keyword_only: param.keyword_only,
                         name: param.name.clone(),
-                        ty: substitute_type(&param.ty, substitutions),
+                        ty: substitute_type_in_context(&param.ty, substitutions, context),
                         passing: param.passing,
                         has_default: param.has_default,
                         default_erased: param.default_erased,
                     })
                     .collect(),
             ),
-            return_type: Box::new(substitute_type(return_type, substitutions)),
+            return_type: Box::new(substitute_type_in_context(
+                return_type,
+                substitutions,
+                context,
+            )),
             captures: Box::new(
                 captures
                     .iter()
                     .map(|capture| ClosureCapture {
                         name: capture.name.clone(),
-                        ty: substitute_type(&capture.ty, substitutions),
+                        ty: substitute_type_in_context(&capture.ty, substitutions, context),
                         mode: capture.mode,
                         span: capture.span,
                     })
@@ -603,9 +1232,9 @@ pub(crate) fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) 
         Type::Named(name, args) => {
             let mut substituted_args = args
                 .iter()
-                .map(|arg| substitute_type(arg, substitutions))
+                .map(|arg| substitute_type_in_context(arg, substitutions, context))
                 .collect::<Vec<_>>();
-            if matches!(name.as_str(), "list" | "dict" | "set") {
+            if context.is_none() && matches!(name.as_str(), "list" | "dict" | "set") {
                 substituted_args = substituted_args
                     .iter()
                     .map(erase_type_callable_contracts)
@@ -650,6 +1279,11 @@ pub(super) fn substitute_trait_bounds(
 
 pub(super) fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
     match ty {
+        Type::Union(union) => {
+            for member in &union.members {
+                collect_type_params_from_type(member, collected);
+            }
+        }
         Type::TypeParam(name) => {
             collected.insert(name.clone());
         }
@@ -693,6 +1327,13 @@ pub(super) fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<
 
 pub(crate) fn type_pattern_specificity(ty: &Type) -> usize {
     match ty {
+        Type::Union(union) => {
+            1 + union
+                .members
+                .iter()
+                .map(type_pattern_specificity)
+                .sum::<usize>()
+        }
         Type::TypeParam(_) => 0,
         Type::Named(_, args) => 1 + args.iter().map(type_pattern_specificity).sum::<usize>(),
         Type::Tuple(elements) => 1 + elements.iter().map(type_pattern_specificity).sum::<usize>(),
@@ -741,6 +1382,7 @@ pub(crate) fn type_pattern_matches(
     substitutions: &mut HashMap<String, Type>,
 ) -> bool {
     match pattern {
+        Type::Union(_) => pattern == actual,
         Type::TypeParam(name) if type_params.contains(name) => {
             if let Some(existing) = substitutions.get(name) {
                 if existing != actual {
@@ -860,6 +1502,7 @@ pub(crate) fn type_pattern_matches(
 
 pub(super) fn has_unresolved_type_params(ty: &Type) -> bool {
     match ty {
+        Type::Union(union) => union.members.iter().any(has_unresolved_type_params),
         Type::Unit => false,
         Type::Module(_) => false,
         Type::TypeParam(_) => true,
@@ -909,6 +1552,15 @@ pub(super) fn unify_type_pattern(
     substitutions: &mut HashMap<String, Type>,
 ) -> Result<()> {
     match pattern {
+        Type::Union(_) => {
+            if pattern == actual {
+                Ok(())
+            } else {
+                Err(Diagnostic::new(format!(
+                    "expected `{pattern}`, found `{actual}`"
+                )))
+            }
+        }
         Type::Unit => {
             if actual == &Type::Unit {
                 Ok(())

@@ -32,9 +32,16 @@ fn lower_type_ref_with_type_params(
     type_params: Option<&BTreeSet<String>>,
 ) -> Type {
     match &type_ref.kind {
-        crate::ast::TypeRefKind::Union(_) | crate::ast::TypeRefKind::Callable { .. } => {
-            Type::named("Unknown")
-        }
+        crate::ast::TypeRefKind::Union(members) => Type::normalize_union(
+            members
+                .iter()
+                .map(|member| lower_type_ref_with_type_params(member, type_params))
+                .collect(),
+            "<builtin>",
+            &BTreeMap::new(),
+        )
+        .expect("builtin union declarations have bounded normalized types"),
+        crate::ast::TypeRefKind::Callable { .. } => Type::named("Unknown"),
         crate::ast::TypeRefKind::Tuple(elements) => Type::Tuple(
             elements
                 .iter()
@@ -49,7 +56,11 @@ fn lower_type_ref_with_type_params(
             Type::TypeParam(name.clone())
         }
         crate::ast::TypeRefKind::Named { name, args } => Type::Named(
-            name.clone(),
+            if name == "int" {
+                "int64".to_string()
+            } else {
+                name.clone()
+            },
             args.iter()
                 .map(|arg| lower_type_ref_with_type_params(arg, type_params))
                 .collect(),
@@ -61,6 +72,7 @@ fn lower_type_ref_with_type_params(
             params: params
                 .iter()
                 .map(|param| FunctionParamContract {
+                    keyword_only: param.keyword_only,
                     name: String::new(),
                     ty: lower_type_ref_with_type_params(&param.ty, type_params),
                     passing: resolve_param_passing(param.mode),
@@ -931,6 +943,8 @@ fn io_namespace() -> ModuleNamespace {
     enums.insert(error.decl.name.clone(), error.clone());
 
     ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "io".to_string(),
@@ -1079,6 +1093,8 @@ fn fs_namespace() -> ModuleNamespace {
     }
 
     ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "fs".to_string(),
@@ -1304,6 +1320,8 @@ fn net_namespace() -> ModuleNamespace {
     }
 
     ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "net".to_string(),
@@ -1458,6 +1476,8 @@ fn process_namespace() -> ModuleNamespace {
     }
 
     ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "process".to_string(),
@@ -1508,6 +1528,8 @@ fn random_namespace() -> ModuleNamespace {
     .collect::<BTreeMap<_, _>>();
 
     ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "random".to_string(),
@@ -1571,6 +1593,8 @@ fn function_only_namespace(name: &str, functions: Vec<FunctionInfo>) -> ModuleNa
         .map(|function| (function.decl.name.clone(), function))
         .collect::<BTreeMap<_, _>>();
     ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: name.to_string(),
@@ -1971,6 +1995,8 @@ fn json_namespace() -> ModuleNamespace {
         (error.decl.name.clone(), error),
     ]);
     ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "json".to_string(),
@@ -2088,6 +2114,8 @@ fn bytes_namespace() -> ModuleNamespace {
     let error = bytes_error_enum_info();
     let enums = BTreeMap::from([(error.decl.name.clone(), error)]);
     ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "bytes".to_string(),

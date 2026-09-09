@@ -1,0 +1,6 @@
+class Pair[A, B]:
+    first: A
+    second: B
+type Nested[T] = Pair[list[T], T]
+def main():
+    value = Nested(first=[42], second="wrong")

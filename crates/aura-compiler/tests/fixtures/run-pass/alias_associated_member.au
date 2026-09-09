@@ -1,0 +1,6 @@
+class Box:
+    def answer() -> int64:
+        return 42
+type Container = Box
+def main():
+    print(Container.answer())

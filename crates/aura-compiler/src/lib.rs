@@ -84,7 +84,7 @@ pub const MAX_INTERNAL_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
 /// Every persisted artifact or long-lived tooling cache that can contain
 /// compiler semantic metadata must bind this value. Bump it whenever the
 /// meaning or representation of checked source changes incompatibly.
-pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 7;
+pub const SEMANTIC_INTERFACE_SCHEMA_VERSION: u32 = 8;
 
 /// Lowercase hexadecimal SHA-256 of `bytes`, for content-addressed identities.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -1022,6 +1022,15 @@ fn find_type_namespace_path(
 
 fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
     match ty {
+        sema::Type::Union(union) => {
+            let mut qualified = union.clone();
+            qualified.members = union
+                .members
+                .iter()
+                .map(|member| qualify_export_type(program, member))
+                .collect();
+            sema::Type::Union(qualified)
+        }
         sema::Type::Named(name, args) => {
             let qualified_args = args
                 .iter()
@@ -1061,6 +1070,7 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
             params: params
                 .iter()
                 .map(|param| sema::FunctionParamContract {
+                    keyword_only: param.keyword_only,
                     name: param.name.clone(),
                     ty: qualify_export_type(program, &param.ty),
                     passing: param.passing,
@@ -1080,6 +1090,7 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
                 params
                     .iter()
                     .map(|param| sema::FunctionParamContract {
+                        keyword_only: param.keyword_only,
                         name: param.name.clone(),
                         ty: qualify_export_type(program, &param.ty),
                         passing: param.passing,
@@ -1261,11 +1272,44 @@ fn qualify_impl_decl_for_export(program: &Program, decl: &ast::ImplDecl) -> ast:
     qualified
 }
 
+fn qualify_checked_trait_bound(program: &Program, bound: &sema::TraitBound) -> sema::TraitBound {
+    let qualified = qualify_export_type(
+        program,
+        &sema::Type::Named(bound.trait_name.clone(), bound.trait_args.clone()),
+    );
+    let sema::Type::Named(trait_name, trait_args) = qualified else {
+        unreachable!("qualification preserves named trait identity")
+    };
+    sema::TraitBound {
+        trait_name,
+        trait_args,
+    }
+}
+
+fn qualify_checked_bounds(
+    program: &Program,
+    bounds: &BTreeMap<String, Vec<sema::TraitBound>>,
+) -> BTreeMap<String, Vec<sema::TraitBound>> {
+    bounds
+        .iter()
+        .map(|(param, bounds)| {
+            (
+                param.clone(),
+                bounds
+                    .iter()
+                    .map(|bound| qualify_checked_trait_bound(program, bound))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
 fn qualify_function_info_for_export(
     program: &Program,
     info: &sema::FunctionInfo,
 ) -> sema::FunctionInfo {
     let mut qualified = info.clone();
+    qualified.type_param_bounds = qualify_checked_bounds(program, &info.type_param_bounds);
     qualified.decl = qualify_function_decl_for_export(program, &qualified.decl);
     qualified.signature.params = qualified
         .signature
@@ -1300,11 +1344,13 @@ fn qualify_extern_function_info_for_export(
 
 fn qualify_class_info_for_export(program: &Program, info: &sema::ClassInfo) -> sema::ClassInfo {
     let mut qualified = info.clone();
+    qualified.type_param_bounds = qualify_checked_bounds(program, &info.type_param_bounds);
     qualified.decl = qualify_class_decl_for_export(program, &qualified.decl);
     for field in qualified.fields.values_mut() {
         field.ty = qualify_export_type(program, &field.ty);
     }
     for method in qualified.methods.values_mut() {
+        method.type_param_bounds = qualify_checked_bounds(program, &method.type_param_bounds);
         method.decl = qualify_function_decl_for_export(program, &method.decl);
         method.signature.params = method
             .signature
@@ -1319,6 +1365,7 @@ fn qualify_class_info_for_export(program: &Program, info: &sema::ClassInfo) -> s
 
 fn qualify_enum_info_for_export(program: &Program, info: &sema::EnumInfo) -> sema::EnumInfo {
     let mut qualified = info.clone();
+    qualified.type_param_bounds = qualify_checked_bounds(program, &info.type_param_bounds);
     qualified.decl = qualify_enum_decl_for_export(program, &qualified.decl);
     for variant in qualified.variants.values_mut() {
         variant.payloads = variant
@@ -1338,6 +1385,7 @@ fn qualify_trait_info_for_export(program: &Program, info: &sema::TraitInfo) -> s
     let mut qualified = info.clone();
     qualified.decl = qualify_trait_decl_for_export(program, &qualified.decl);
     for method in qualified.methods.values_mut() {
+        method.type_param_bounds = qualify_checked_bounds(program, &method.type_param_bounds);
         method.decl = qualify_function_decl_for_export(program, &method.decl);
         method.signature.params = method
             .signature
@@ -1355,6 +1403,7 @@ fn qualify_trait_impl_info_for_export(
     info: &sema::TraitImplInfo,
 ) -> sema::TraitImplInfo {
     let mut qualified = info.clone();
+    qualified.type_param_bounds = qualify_checked_bounds(program, &info.type_param_bounds);
     qualified.decl = qualify_impl_decl_for_export(program, &qualified.decl);
     qualified.trait_args = qualified
         .trait_args
@@ -1363,6 +1412,7 @@ fn qualify_trait_impl_info_for_export(
         .collect();
     qualified.for_type = qualify_export_type(program, &qualified.for_type);
     for method in qualified.methods.values_mut() {
+        method.type_param_bounds = qualify_checked_bounds(program, &method.type_param_bounds);
         method.decl = qualify_function_decl_for_export(program, &method.decl);
         method.signature.params = method
             .signature
@@ -1384,7 +1434,25 @@ fn qualify_constant_info_for_export(
     qualified
 }
 
+fn qualify_alias_info_for_export(program: &Program, alias: &sema::AliasInfo) -> sema::AliasInfo {
+    let mut qualified = alias.clone();
+    qualified.target = qualify_export_type(program, &alias.target);
+    qualified.type_param_bounds = qualify_checked_bounds(program, &alias.type_param_bounds);
+    qualified.decl.type_param_bounds =
+        qualify_export_bounds(program, &alias.decl.type_param_bounds);
+    qualified
+}
+
 fn exported_binding(program: &Program, name: &str) -> Option<ImportedBinding> {
+    if let Some(alias) = program
+        .aliases
+        .get(name)
+        .filter(|alias| alias.module_name == program.module_name && alias.decl.public)
+    {
+        return Some(ImportedBinding::Alias(qualify_alias_info_for_export(
+            program, alias,
+        )));
+    }
     if let Some(constant) = program
         .constants
         .get(name)
@@ -1450,6 +1518,16 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
         .cloned()
         .unwrap_or_else(|| program.module_name.clone());
     let mut namespace = ModuleNamespace {
+        all_aliases: program
+            .aliases_in_scope()
+            .map(|(name, info)| (name.clone(), qualify_alias_info_for_export(program, info)))
+            .collect(),
+        aliases: program
+            .aliases
+            .iter()
+            .filter(|(_, info)| info.module_name == program.module_name && info.decl.public)
+            .map(|(name, info)| (name.clone(), qualify_alias_info_for_export(program, info)))
+            .collect(),
         constants: program
             .constants
             .iter()
@@ -1533,6 +1611,7 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
                     .params
                     .iter()
                     .map(|param| sema::FunctionParamContract {
+                        keyword_only: param.keyword_only,
                         name: param.name.clone(),
                         ty: qualify_export_type(program, &param.ty),
                         passing: param.passing,
@@ -1641,6 +1720,8 @@ fn insert_namespace_import(
     let root_name = path[0].clone();
     let root = bindings.entry(root_name.clone()).or_insert_with(|| {
         ImportedBinding::Module(ModuleNamespace {
+            all_aliases: BTreeMap::new(),
+            aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
             all_constants: BTreeMap::new(),
             name: root_name.clone(),
@@ -1685,6 +1766,8 @@ fn insert_namespace_import(
             .modules
             .entry(segment.clone())
             .or_insert_with(|| ModuleNamespace {
+                all_aliases: BTreeMap::new(),
+                aliases: BTreeMap::new(),
                 constants: BTreeMap::new(),
                 all_constants: BTreeMap::new(),
                 name: segment.clone(),

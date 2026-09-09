@@ -1694,6 +1694,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
         &crate::sema::Type::Function {
             params: vec![
                 crate::sema::FunctionParamContract {
+                    keyword_only: false,
                     name: "local".to_string(),
                     ty: crate::sema::Type::named("Box"),
                     passing: crate::ast::ReceiverKind::BorrowMut,
@@ -1701,6 +1702,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
                     default_erased: false,
                 },
                 crate::sema::FunctionParamContract {
+                    keyword_only: false,
                     name: "remote".to_string(),
                     ty: crate::sema::Type::Tuple(vec![crate::sema::Type::named("Remote")]),
                     passing: crate::ast::ReceiverKind::Value,
@@ -1719,6 +1721,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
         crate::sema::Type::Function {
             params: vec![
                 crate::sema::FunctionParamContract {
+                    keyword_only: false,
                     name: "local".to_string(),
                     ty: crate::sema::Type::named("pkg.user.Box"),
                     passing: crate::ast::ReceiverKind::BorrowMut,
@@ -1726,6 +1729,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
                     default_erased: false,
                 },
                 crate::sema::FunctionParamContract {
+                    keyword_only: false,
                     name: "remote".to_string(),
                     ty: crate::sema::Type::Tuple(vec![crate::sema::Type::named(
                         "pkg.named.Remote"

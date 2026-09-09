@@ -15283,6 +15283,10 @@ impl<'a> FunctionCompiler<'a> {
         ty: &Type,
     ) -> std::result::Result<Value, String> {
         match ty {
+            Type::Union(_) => {
+                let pattern = crate::native_runtime::canonical_runtime_type_name(ty);
+                self.value_matches_type(value, &pattern)
+            }
             Type::TypeParam(_) => Ok(self.builder.ins().iconst(types::I64, 1)),
             Type::Unit => self.value_matches_type(value, "None"),
             Type::Module(path) => self.value_matches_type(value, &format!("module {}", path)),
@@ -15783,6 +15787,7 @@ fn declare_root_variables(
 fn direct_type_contains_unknown(ty: &DirectType) -> bool {
     fn type_contains_unknown(ty: &Type) -> bool {
         match ty {
+            Type::Union(union) => union.members.iter().any(type_contains_unknown),
             Type::Named(name, args) => name == "Unknown" || args.iter().any(type_contains_unknown),
             Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
             Type::Function {
@@ -16276,6 +16281,12 @@ fn direct_type_inner(
     visiting: &mut BTreeSet<String>,
 ) -> Option<DirectType> {
     match ty {
+        Type::Union(union) => {
+            for member in &union.members {
+                direct_type_inner(member, classes, visiting)?;
+            }
+            Some(DirectType::Opaque(ty.clone()))
+        }
         Type::Unit => Some(DirectType::Scalar(ScalarKind::Unit)),
         Type::TypeParam(name) => Some(DirectType::Opaque(Type::TypeParam(name.clone()))),
         Type::Module(path) => Some(DirectType::Opaque(Type::Module(path.clone()))),
@@ -16343,6 +16354,11 @@ fn direct_type_inner(
 
 fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
     match ty {
+        Type::Union(union) => {
+            for member in &union.members {
+                collect_type_params_from_type(member, collected);
+            }
+        }
         Type::TypeParam(name) => {
             collected.insert(name.clone());
         }
@@ -18275,6 +18291,7 @@ fn collect_direct_runtime_type_substitutions(
     substitutions: &mut HashMap<String, Type>,
 ) {
     match pattern {
+        Type::Union(_) => {}
         Type::TypeParam(name) => {
             substitutions
                 .entry(name.clone())
@@ -18390,6 +18407,7 @@ fn is_numeric_type_name(ty: &Type) -> bool {
 
 fn runtime_type_is_wildcard(ty: &Type) -> bool {
     match ty {
+        Type::Union(union) => union.members.iter().any(runtime_type_is_wildcard),
         Type::TypeParam(_) => true,
         Type::Named(name, _) if name == "Unknown" => true,
         Type::Named(_, args) => args.iter().any(runtime_type_is_wildcard),

@@ -10478,6 +10478,7 @@ fn collect_runtime_type_substitutions(
     substitutions: &mut HashMap<String, Type>,
 ) {
     match pattern {
+        Type::Union(_) => {}
         Type::TypeParam(name) => {
             substitutions
                 .entry(name.clone())
@@ -10614,6 +10615,11 @@ fn public_runtime_function_name(name: &str) -> String {
 
 fn collect_type_params_from_type(ty: &Type, collected: &mut std::collections::BTreeSet<String>) {
     match ty {
+        Type::Union(union) => {
+            for member in &union.members {
+                collect_type_params_from_type(member, collected);
+            }
+        }
         Type::TypeParam(name) => {
             collected.insert(name.clone());
         }

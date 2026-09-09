@@ -1,0 +1,3 @@
+trait Named:
+    def name(self) -> str
+type Broken = Named | None

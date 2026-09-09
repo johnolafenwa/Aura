@@ -1,0 +1,6 @@
+class Box[T]:
+    value: T
+type Container[T] = Box[T]
+def main():
+    value = Container(value=42)
+    print(value.value)

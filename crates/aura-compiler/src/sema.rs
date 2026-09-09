@@ -45,11 +45,16 @@ use properties::{
 use types::type_pattern_specificity;
 mod program;
 pub use program::{
-    ClassInfo, ConstantInfo, EnumInfo, EnumPayloadFieldInfo, EnumVariantInfo, ExternFunctionInfo,
-    FieldInfo, FunctionInfo, FunctionSignature, ImportedBinding, MethodInfo, ModuleContext,
-    ModuleNamespace, OpaqueHandleInfo, Program, TraitImplInfo, TraitImplMethodInfo, TraitInfo,
-    TraitMethodInfo,
+    AliasInfo, ClassInfo, ConstantInfo, EnumInfo, EnumPayloadFieldInfo, EnumVariantInfo,
+    ExternFunctionInfo, FieldInfo, FunctionInfo, FunctionSignature, ImportedBinding, MethodInfo,
+    ModuleContext, ModuleNamespace, OpaqueHandleInfo, Program, TraitImplInfo, TraitImplMethodInfo,
+    TraitInfo, TraitMethodInfo,
 };
+mod aliases;
+pub(crate) use aliases::expand_alias_callee;
+mod type_budget;
+#[cfg(test)]
+mod type_budget_tests;
 mod types;
 use types::{
     collect_type_params_from_type, collect_type_ref_type_params, has_unresolved_type_params,
@@ -57,10 +62,11 @@ use types::{
     type_param_scope, unify_type_pattern,
 };
 pub(crate) use types::{
-    substitute_trait_bound, substitute_type, substitutions_from_decl_type_args,
-    trait_impl_specificity, trait_impl_specificity_parts, type_pattern_matches,
+    substitute_alias_type, substitute_trait_bound, substitute_type,
+    substitutions_from_decl_type_args, trait_impl_specificity, trait_impl_specificity_parts,
+    type_pattern_matches,
 };
-pub use types::{TraitBound, Type};
+pub use types::{TraitBound, Type, TypeDefinitions};
 mod properties;
 pub(crate) use properties::integer_type_bounds;
 use properties::{
@@ -211,7 +217,7 @@ fn validate_params(receiver: Option<ReceiverKind>, params: &[Param], owner: &str
 fn validate_ffi_signature(
     decl: &crate::ast::ExternFunctionDecl,
     opaque_handles: &BTreeMap<String, OpaqueHandleInfo>,
-    type_names: &BTreeMap<String, crate::diag::Span>,
+    type_names: &TypeDefinitions,
     type_arities: &BTreeMap<String, usize>,
     canonical_type_names: &BTreeMap<String, String>,
 ) -> Result<()> {
@@ -777,7 +783,7 @@ struct ResolvedBinaryOperatorAccess {
 struct FunctionChecker<'a> {
     root_module_name: &'a str,
     module_name: &'a str,
-    type_names: &'a BTreeMap<String, crate::diag::Span>,
+    type_names: &'a TypeDefinitions,
     type_arities: &'a BTreeMap<String, usize>,
     canonical_type_names: &'a BTreeMap<String, String>,
     classes: &'a BTreeMap<String, ClassInfo>,
@@ -1083,6 +1089,10 @@ impl<'a> FunctionChecker<'a> {
             return Some(ty.clone());
         }
         match ty {
+            Type::Union(union) => union
+                .members
+                .iter()
+                .find_map(|member| self.opaque_handle_in_type_inner(member, visiting)),
             Type::Tuple(elements) => elements
                 .iter()
                 .find_map(|element| self.opaque_handle_in_type_inner(element, visiting)),
@@ -1587,7 +1597,7 @@ impl<'a> FunctionChecker<'a> {
     #[allow(clippy::too_many_arguments)]
     fn new(
         module_name: &'a str,
-        type_names: &'a BTreeMap<String, crate::diag::Span>,
+        type_names: &'a TypeDefinitions,
         type_arities: &'a BTreeMap<String, usize>,
         canonical_type_names: &'a BTreeMap<String, String>,
         classes: &'a BTreeMap<String, ClassInfo>,
@@ -4291,6 +4301,17 @@ impl<'a> FunctionChecker<'a> {
             annotation_ty.unwrap_or_else(|| value_ty.clone())
         };
         if value_ty != final_ty {
+            if let Some(expected) = assign
+                .annotation
+                .as_ref()
+                .and_then(|source| self.written_alias_type(source, &final_ty))
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    assign.span,
+                    format!("binding `{binding_name}`: expected {expected}, found {value_ty}"),
+                ));
+            }
             if matches!(value_ty, Type::Function { .. })
                 && matches!(final_ty, Type::Function { .. })
             {
@@ -5132,6 +5153,20 @@ impl<'a> FunctionChecker<'a> {
                     .with_help(
                         "obtain opaque handles from extern function returns and pass them only according to the declared handle capability",
                     ));
+                }
+                if let Some(alias) = self
+                    .current_module_namespace()
+                    .and_then(|namespace| namespace.all_aliases.get(name))
+                    .or_else(|| self.type_names.checked_aliases.get(name))
+                    .or_else(|| self.type_names.imported_aliases.get(name))
+                {
+                    if let Type::Named(target, _) = &alias.target {
+                        if self.resolve_class_info(target).is_some()
+                            || self.resolve_enum_info(target).is_some()
+                        {
+                            return Ok(alias.target.clone());
+                        }
+                    }
                 }
                 if let Some(class_info) = self.resolve_class_info(name) {
                     return Ok(Type::named(self.canonical_class_name(name, class_info)));
@@ -7664,6 +7699,64 @@ impl<'a> FunctionChecker<'a> {
             (Some(base), Some(type_args)) => (base, Some(type_args)),
             _ => self.peel_specialization(callee),
         };
+
+        let resolve_alias = |expr: &Expr| match &expr.kind {
+            ExprKind::Name(name) if !locals.contains_key(name) => self
+                .current_module_namespace()
+                .and_then(|namespace| namespace.all_aliases.get(name))
+                .or_else(|| self.type_names.checked_aliases.get(name))
+                .or_else(|| self.type_names.imported_aliases.get(name)),
+            ExprKind::Member { .. } => {
+                self.qualified_module_item(expr).and_then(|(module, name)| {
+                    self.module_namespace(&module)
+                        .and_then(|namespace| namespace.aliases.get(&name))
+                })
+            }
+            _ => None,
+        };
+        let inferred_alias = resolve_alias(grouped_expr(callee));
+        if let Some(expanded) = expand_alias_callee(
+            callee,
+            &resolve_alias,
+            &|ty| {
+                lower_type(
+                    ty,
+                    self.type_names,
+                    self.type_arities,
+                    self.canonical_type_names,
+                    &self.type_params,
+                )
+            },
+            &|alias, types, span| {
+                self.check_alias_constructor_bounds(
+                    alias,
+                    &substitutions_from_decl_type_args(&alias.decl.type_params, types),
+                    span,
+                )
+            },
+            self.module_name,
+            self.canonical_type_names,
+            self.type_names.expansion_budget(),
+        )? {
+            let result = self.type_of_call(&expanded, args, span, locals, expected)?;
+            if let Some(alias) = inferred_alias {
+                let mut substitutions = HashMap::new();
+                unify_type_pattern(&alias.target, &result, &mut substitutions).map_err(
+                    |error| {
+                        Diagnostic::coded_at(
+                            "AU2002",
+                            span,
+                            format!(
+                                "constructor for alias `{}`: {}",
+                                alias.decl.name, error.message
+                            ),
+                        )
+                    },
+                )?;
+                self.check_alias_constructor_bounds(alias, &substitutions, span)?;
+            }
+            return Ok(result);
+        }
 
         let extern_target = match &base_callee.kind {
             ExprKind::Name(name) if !locals.contains_key(name) => self
@@ -10824,6 +10917,7 @@ impl<'a> FunctionChecker<'a> {
                                         let capture_params = params
                                             .iter()
                                             .map(|param| FunctionParamContract {
+                                                keyword_only: param.keyword_only,
                                                 name: param.name.clone(),
                                                 ty: param.ty.clone(),
                                                 passing: ReceiverKind::Value,
@@ -14165,6 +14259,14 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
     ) -> Result<Type> {
         let (name, args) = match object_ty {
+            Type::Union(_) => {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "cannot access field `{field}` on union `{object_ty}` without narrowing"
+                    ),
+                ))
+            }
             Type::Module(path) => {
                 let namespace = self.module_namespace(path).ok_or_else(|| {
                     Diagnostic::at(span, format!("unknown module namespace `{}`", path))

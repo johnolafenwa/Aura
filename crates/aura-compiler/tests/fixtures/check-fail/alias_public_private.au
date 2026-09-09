@@ -1,0 +1,3 @@
+class Secret:
+    pass
+public type Visible = list[Secret]

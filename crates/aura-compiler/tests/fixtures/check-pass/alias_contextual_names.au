@@ -1,0 +1,6 @@
+type = 1
+def is(type: int64) -> int64:
+    return type
+type Count = int64
+def accept(value: Count):
+    pass

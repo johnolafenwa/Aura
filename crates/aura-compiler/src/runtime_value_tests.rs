@@ -2528,6 +2528,7 @@ fn function_signature(parameter_name: &str, has_default: bool, default_erased: b
     Type::Function {
         params: vec![
             FunctionParamContract {
+                keyword_only: false,
                 name: parameter_name.to_string(),
                 ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
@@ -2535,6 +2536,7 @@ fn function_signature(parameter_name: &str, has_default: bool, default_erased: b
                 default_erased,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "items".to_string(),
                 ty: Type::Named("list".to_string(), vec![Type::named("int32")]),
                 passing: ReceiverKind::BorrowMut,
@@ -2542,9 +2544,11 @@ fn function_signature(parameter_name: &str, has_default: bool, default_erased: b
                 default_erased: false,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "predicate".to_string(),
                 ty: Type::Function {
                     params: vec![FunctionParamContract {
+                        keyword_only: false,
                         name: String::new(),
                         ty: Type::named("bool"),
                         passing: ReceiverKind::Value,

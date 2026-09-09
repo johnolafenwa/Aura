@@ -39,6 +39,7 @@ fn test_function_operand(name: &str, params: Vec<Type>, return_type: Type) -> Op
             params: params
                 .into_iter()
                 .map(|ty| crate::sema::FunctionParamContract {
+                    keyword_only: false,
                     name: String::new(),
                     ty,
                     passing: crate::ast::ReceiverKind::Value,
@@ -19318,6 +19319,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
     let string_type = Type::named("str");
     let consume_signature = Type::Function {
         params: vec![crate::sema::FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: string_type.clone(),
             passing: crate::ast::ReceiverKind::Value,
@@ -19351,6 +19353,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
     let int_type = Type::named("int32");
     let mutate_signature = Type::Function {
         params: vec![crate::sema::FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: int_type.clone(),
             passing: crate::ast::ReceiverKind::BorrowMut,
@@ -19684,6 +19687,7 @@ fn mir_function_value_runtime_rejects_missing_targets_defaults_and_malformed_tas
 #[test]
 fn mir_function_value_runtime_type_parameter_discovery_descends_into_signatures() {
     let contract = |ty: Type| crate::sema::FunctionParamContract {
+        keyword_only: false,
         name: String::new(),
         ty,
         passing: crate::ast::ReceiverKind::Value,
@@ -19864,6 +19868,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
 
     let repeatable_signature = Type::Closure {
         params: Box::new(vec![crate::sema::FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: int_type.clone(),
             passing: crate::ast::ReceiverKind::Borrow,

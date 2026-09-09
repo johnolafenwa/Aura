@@ -11,9 +11,9 @@ use super::{
     type_reaches_class_through_non_indirect_fields, validate_ffi_signature, validate_params,
     validate_type_params, view_return_contract_key, AssignStmt, AssignTarget, BTreeMap, BTreeSet,
     BuiltinClassConstructor, BuiltinFunction, ClassDecl, ClosureId, ClosureInfo, ComprehensionId,
-    ComprehensionInfo, Diagnostic, EnumDecl, ExprKind, FunctionChecker, FunctionDecl, HashMap,
-    ImplDecl, Item, Module, Rc, ReceiverKind, RefCell, Result, RngCloneSafety, Stmt, TraitBound,
-    TraitDecl, Type,
+    ComprehensionInfo, Diagnostic, EnumDecl, Expr, ExprKind, FunctionChecker, FunctionDecl,
+    HashMap, ImplDecl, Item, Module, Rc, ReceiverKind, RefCell, Result, RngCloneSafety, Stmt,
+    TraitBound, TraitDecl, Type, TypeDefinitions,
 };
 
 #[derive(Clone, Debug)]
@@ -21,6 +21,8 @@ pub struct Program {
     pub module: Module,
     pub module_name: String,
     pub source_path: Option<String>,
+    pub aliases: BTreeMap<String, AliasInfo>,
+    pub type_definitions: TypeDefinitions,
     pub classes: BTreeMap<String, ClassInfo>,
     pub enums: BTreeMap<String, EnumInfo>,
     pub functions: BTreeMap<String, FunctionInfo>,
@@ -54,6 +56,79 @@ pub struct Program {
 }
 
 #[derive(Clone, Debug)]
+pub struct AliasInfo {
+    pub module_name: String,
+    pub decl: crate::ast::TypeAliasDecl,
+    pub target: Type,
+    pub type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
+}
+
+impl AliasInfo {
+    /// A constructor alias reuses the expanded nominal constructor. No scalar
+    /// or union constructor is synthesized by this adapter.
+    pub(crate) fn constructor_callee(
+        &self,
+        type_args: Option<&[Type]>,
+        span: crate::diag::Span,
+        module_name: &str,
+        canonical_names: &BTreeMap<String, String>,
+        budget: &super::type_budget::ExpansionBudget,
+    ) -> Result<Option<Expr>> {
+        let target = if let Some(args) = type_args {
+            if args.len() != self.decl.type_params.len() {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    span,
+                    format!(
+                        "type alias `{}` expects {} type arguments, found {}",
+                        self.decl.name,
+                        self.decl.type_params.len(),
+                        args.len()
+                    ),
+                ));
+            }
+            let substitutions =
+                super::substitutions_from_decl_type_args(&self.decl.type_params, args);
+            budget.check_substitution(&self.target, &substitutions, span)?;
+            budget.check_substitution_key(
+                &self.target,
+                &substitutions,
+                module_name,
+                canonical_names,
+                span,
+            )?;
+            super::substitute_alias_type(&self.target, &substitutions, module_name, canonical_names)
+        } else {
+            budget.check_substitution(&self.target, &HashMap::new(), span)?;
+            self.target.clone()
+        };
+        let Type::Named(name, args) = target else {
+            return Ok(None);
+        };
+        let base = Expr {
+            kind: ExprKind::Name(name),
+            span,
+        };
+        if args.is_empty()
+            || (type_args.is_none() && args.iter().any(super::has_unresolved_type_params))
+        {
+            return Ok(Some(base));
+        }
+        let type_args = args
+            .iter()
+            .map(|arg| arg.source_type_ref(span))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Some(Expr {
+            kind: ExprKind::Specialize {
+                expr: Box::new(base),
+                type_args,
+            },
+            span,
+        }))
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct ConstantInfo {
     pub module_name: String,
     pub decl: crate::ast::ConstantDecl,
@@ -61,6 +136,42 @@ pub struct ConstantInfo {
 }
 
 impl Program {
+    pub(crate) fn aliases_in_scope(&self) -> impl Iterator<Item = (&String, &AliasInfo)> {
+        self.type_definitions
+            .imported_aliases
+            .iter()
+            .chain(self.aliases.iter())
+    }
+
+    pub(crate) fn alias_info(&self, name: &str, module_name: &str) -> Option<&AliasInfo> {
+        if module_name == self.module_name {
+            self.aliases
+                .get(name)
+                .or_else(|| self.type_definitions.imported_aliases.get(name))
+        } else {
+            self.module_registry
+                .get(module_name)
+                .and_then(|namespace| namespace.all_aliases.get(name))
+        }
+    }
+    pub(crate) fn resolve_alias_type(
+        &self,
+        name: &str,
+        args: &[Type],
+        module_name: &str,
+    ) -> Option<Type> {
+        let alias = self.alias_info(name, module_name)?;
+        if alias.decl.type_params.len() != args.len() {
+            return None;
+        }
+        let substitutions = super::substitutions_from_decl_type_args(&alias.decl.type_params, args);
+        Some(super::substitute_alias_type(
+            &alias.target,
+            &substitutions,
+            module_name,
+            &self.canonical_type_names,
+        ))
+    }
     pub fn closure_info(&self, id: &ClosureId) -> Option<&ClosureInfo> {
         self.closures.get(id)
     }
@@ -179,6 +290,7 @@ pub struct TraitImplMethodInfo {
 
 #[derive(Clone, Debug)]
 pub enum ImportedBinding {
+    Alias(AliasInfo),
     Function(FunctionInfo),
     ExternFunction(ExternFunctionInfo),
     OpaqueHandle(OpaqueHandleInfo),
@@ -191,6 +303,8 @@ pub enum ImportedBinding {
 
 #[derive(Clone, Debug)]
 pub struct ModuleNamespace {
+    pub all_aliases: BTreeMap<String, AliasInfo>,
+    pub aliases: BTreeMap<String, AliasInfo>,
     pub name: String,
     pub path: String,
     pub source_path: Option<String>,
@@ -263,12 +377,14 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
     } else {
         context.module_name.clone()
     };
-    let mut type_names = BTreeMap::<String, crate::diag::Span>::new();
+    let mut type_names = TypeDefinitions::default();
+    type_names.module_name = module_name.clone();
     let mut type_arities = BTreeMap::<String, usize>::new();
     let mut canonical_type_names = BTreeMap::<String, String>::new();
     let mut item_names = BTreeMap::<String, (&'static str, crate::diag::Span)>::new();
     let mut imported_modules = BTreeMap::new();
 
+    let mut aliases = BTreeMap::new();
     let mut imported_functions = BTreeMap::new();
     let mut constants = BTreeMap::new();
     let mut imported_extern_functions = BTreeMap::new();
@@ -279,6 +395,18 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
 
     for (name, binding) in &context.imported_bindings {
         match binding {
+            ImportedBinding::Alias(alias) => {
+                item_names.insert(name.clone(), ("type alias", alias.decl.span));
+                type_names.insert(name.clone(), alias.decl.span);
+                type_arities.insert(name.clone(), alias.decl.type_params.len());
+                type_names
+                    .imported_aliases
+                    .insert(name.clone(), alias.clone());
+                aliases.insert(name.clone(), alias.clone());
+                if let Some(namespace) = context.module_registry.get(&alias.module_name) {
+                    register_module_namespace_types(namespace, &mut type_names, &mut type_arities);
+                }
+            }
             ImportedBinding::Function(function) => {
                 item_names.insert(name.clone(), ("function", function.decl.span));
                 if let Some(namespace) = context.module_registry.get(&function.module_name) {
@@ -333,6 +461,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 imported_enums.insert(name.clone(), enum_info.clone());
             }
             ImportedBinding::Trait(trait_info) => {
+                type_names.non_value_names.insert(name.clone());
                 canonical_type_names.insert(
                     name.clone(),
                     format!("{}.{}", trait_info.module_name, trait_info.decl.name),
@@ -352,6 +481,13 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             ImportedBinding::Module(namespace) => {
                 item_names.insert(name.clone(), ("module", crate::diag::Span::new(1, 1)));
                 register_module_namespace_types(namespace, &mut type_names, &mut type_arities);
+                register_visible_namespace_types(
+                    namespace,
+                    name,
+                    &mut type_names,
+                    &mut type_arities,
+                    &mut canonical_type_names,
+                );
                 imported_modules.insert(name.clone(), namespace.clone());
             }
         }
@@ -360,10 +496,22 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
     for item in &module.items {
         match item {
             Item::TypeAlias(alias) => {
-                return Err(Diagnostic::at(
-                    alias.span,
-                    "type aliases require Batch 1 alias expansion",
-                ));
+                reject_reserved_type_name(&alias.name, alias.span)?;
+                validate_type_params(&alias.type_params, alias.span, "type alias")?;
+                if let Some((kind, existing)) =
+                    item_names.insert(alias.name.clone(), ("type alias", alias.span))
+                {
+                    return Err(Diagnostic::at(
+                        alias.span,
+                        format!(
+                            "duplicate item `{}` (previously declared as {} at {})",
+                            alias.name, kind, existing
+                        ),
+                    ));
+                }
+                type_names.insert(alias.name.clone(), alias.span);
+                type_arities.insert(alias.name.clone(), alias.type_params.len());
+                type_names.aliases.insert(alias.name.clone(), alias.clone());
             }
             Item::Class(class_decl) => {
                 reject_reserved_type_name(&class_decl.name, class_decl.span)?;
@@ -464,6 +612,7 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
                 }
             }
             Item::Trait(trait_decl) => {
+                type_names.non_value_names.insert(trait_decl.name.clone());
                 reject_reserved_type_name(&trait_decl.name, trait_decl.span)?;
                 if let Some((kind, existing)) =
                     item_names.insert(trait_decl.name.clone(), ("trait", trait_decl.span))
@@ -479,6 +628,35 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
             }
             Item::Impl(_) => {}
         }
+    }
+
+    let alias_order = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::TypeAlias(alias) => Some(alias.name.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    type_names.validate_alias_cycles(&alias_order)?;
+    for name in &alias_order {
+        let alias = &type_names.aliases[name];
+        let target = lower_type(
+            &alias.target,
+            &type_names,
+            &type_arities,
+            &canonical_type_names,
+            &type_param_scope(&alias.type_params),
+        )?;
+        aliases.insert(
+            name.clone(),
+            AliasInfo {
+                module_name: module_name.clone(),
+                decl: alias.clone(),
+                target,
+                type_param_bounds: BTreeMap::new(),
+            },
+        );
     }
 
     let mut traits = imported_traits.clone();
@@ -641,6 +819,21 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         );
     }
 
+    for alias in aliases
+        .values_mut()
+        .filter(|alias| alias.module_name == module_name)
+    {
+        alias.type_param_bounds = lower_trait_bounds(
+            &alias.decl.type_param_bounds,
+            &traits,
+            &type_names,
+            &type_arities,
+            &canonical_type_names,
+            &type_param_scope(&alias.decl.type_params),
+        )?;
+    }
+
+    type_names.checked_aliases = aliases.clone();
     let mut classes = imported_classes.clone();
     for item in &module.items {
         let Item::Class(class_decl) = item else {
@@ -1493,6 +1686,8 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
     local_constants.sort_by_key(|constant| (constant.decl.span.line, constant.decl.span.column));
     constant_init_plan.extend(local_constants);
     let mut program = Program {
+        aliases,
+        type_definitions: type_names.clone(),
         module: module.clone(),
         module_name,
         source_path: None,
@@ -2065,14 +2260,93 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
         .comprehensions
         .extend(top_level_checker.comprehension_infos.borrow().clone());
 
+    super::aliases::validate_alias_contracts(&program, &type_names, &type_arities)?;
     Ok(program)
+}
+
+fn register_visible_namespace_types(
+    namespace: &ModuleNamespace,
+    prefix: &str,
+    definitions: &mut TypeDefinitions,
+    arities: &mut BTreeMap<String, usize>,
+    canonical_names: &mut BTreeMap<String, String>,
+) {
+    definitions.non_value_names.insert(prefix.to_string());
+    for (name, alias) in &namespace.aliases {
+        let visible = format!("{prefix}.{name}");
+        definitions.insert(visible.clone(), alias.decl.span);
+        arities.insert(visible.clone(), alias.decl.type_params.len());
+        definitions.imported_aliases.insert(visible, alias.clone());
+    }
+    let nominals = namespace
+        .classes
+        .iter()
+        .map(|(name, info)| {
+            (
+                name,
+                &info.module_name,
+                &info.decl.name,
+                info.decl.span,
+                info.decl.type_params.len(),
+            )
+        })
+        .chain(namespace.enums.iter().map(|(name, info)| {
+            (
+                name,
+                &info.module_name,
+                &info.decl.name,
+                info.decl.span,
+                info.decl.type_params.len(),
+            )
+        }))
+        .chain(
+            namespace
+                .opaque_handles
+                .iter()
+                .map(|(name, info)| (name, &info.module_name, &info.decl.name, info.decl.span, 0)),
+        )
+        .chain(namespace.traits.iter().map(|(name, info)| {
+            (
+                name,
+                &info.module_name,
+                &info.decl.name,
+                info.decl.span,
+                info.decl.type_params.len(),
+            )
+        }));
+    for (name, module, original, span, arity) in nominals {
+        let visible = format!("{prefix}.{name}");
+        definitions.insert(visible.clone(), span);
+        arities.insert(visible.clone(), arity);
+        canonical_names.insert(visible.clone(), format!("{module}.{original}"));
+        if namespace.traits.contains_key(name) {
+            definitions.non_value_names.insert(visible);
+        }
+    }
+    for (name, child) in &namespace.modules {
+        register_visible_namespace_types(
+            child,
+            &format!("{prefix}.{name}"),
+            definitions,
+            arities,
+            canonical_names,
+        );
+    }
 }
 
 pub(super) fn register_module_namespace_types(
     namespace: &ModuleNamespace,
-    type_names: &mut BTreeMap<String, crate::diag::Span>,
+    type_names: &mut TypeDefinitions,
     type_arities: &mut BTreeMap<String, usize>,
 ) {
+    for alias in namespace.aliases.values() {
+        let qualified_name = format!("{}.{}", namespace.path, alias.decl.name);
+        type_names.insert(qualified_name.clone(), alias.decl.span);
+        type_arities.insert(qualified_name.clone(), alias.decl.type_params.len());
+        type_names
+            .imported_aliases
+            .insert(qualified_name, alias.clone());
+    }
     for handle in namespace.opaque_handles.values() {
         let qualified_name = format!("{}.{}", namespace.path, handle.decl.name);
         type_names.insert(qualified_name.clone(), handle.decl.span);
@@ -2090,6 +2364,7 @@ pub(super) fn register_module_namespace_types(
     }
     for trait_info in namespace.traits.values() {
         let qualified_name = format!("{}.{}", namespace.path, trait_info.decl.name);
+        type_names.non_value_names.insert(qualified_name.clone());
         type_names.insert(qualified_name.clone(), trait_info.decl.span);
         type_arities.insert(qualified_name, trait_info.decl.type_params.len());
     }

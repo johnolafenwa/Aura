@@ -35,6 +35,7 @@ pub(super) struct LambdaTypingRequest<'a> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FunctionParamContract {
+    pub keyword_only: bool,
     /// Empty for a written `def(T) -> R` type, which has no parameter-name
     /// contract. Inferred values retain the declaration name.
     pub name: String,
@@ -374,6 +375,7 @@ pub(super) fn merge_type_callable_contracts(left: &Type, right: &Type) -> Type {
                 .iter()
                 .zip(right_params)
                 .map(|(left, right)| FunctionParamContract {
+                    keyword_only: left.keyword_only || right.keyword_only,
                     name: if left.name == right.name {
                         left.name.clone()
                     } else {
@@ -418,6 +420,7 @@ pub(super) fn merge_type_callable_contracts(left: &Type, right: &Type) -> Type {
 /// value outside mutable storage.
 pub(super) fn erase_type_callable_contracts(ty: &Type) -> Type {
     match ty {
+        Type::Union(_) => ty.clone(),
         Type::Function {
             params,
             return_type,
@@ -425,6 +428,7 @@ pub(super) fn erase_type_callable_contracts(ty: &Type) -> Type {
             params: params
                 .iter()
                 .map(|param| FunctionParamContract {
+                    keyword_only: param.keyword_only,
                     name: String::new(),
                     ty: erase_type_callable_contracts(&param.ty),
                     passing: param.passing,
@@ -444,6 +448,7 @@ pub(super) fn erase_type_callable_contracts(ty: &Type) -> Type {
                 params
                     .iter()
                     .map(|param| FunctionParamContract {
+                        keyword_only: param.keyword_only,
                         name: String::new(),
                         ty: erase_type_callable_contracts(&param.ty),
                         passing: param.passing,
@@ -518,6 +523,7 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Type> {
         let contextual_params = [FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: element_ty.clone(),
             passing: ReceiverKind::Borrow,
@@ -1165,6 +1171,7 @@ impl<'a> FunctionChecker<'a> {
             .iter()
             .enumerate()
             .map(|(index, param)| FunctionParamContract {
+                keyword_only: param.keyword_only,
                 name: param.name.clone(),
                 ty: expected_params
                     .and_then(|params| params.get(index))
@@ -1334,6 +1341,7 @@ impl<'a> FunctionChecker<'a> {
                         .zip(&function.signature.params)
                         .zip(&function.signature.param_passings)
                         .map(|((decl, ty), passing)| FunctionParamContract {
+                            keyword_only: decl.keyword_only,
                             name: decl.name.clone(),
                             ty: ty.clone(),
                             passing: *passing,
@@ -1404,6 +1412,7 @@ impl<'a> FunctionChecker<'a> {
                 .zip(&function.signature.params)
                 .zip(&function.signature.param_passings)
                 .map(|((decl, ty), passing)| FunctionParamContract {
+                    keyword_only: decl.keyword_only,
                     name: decl.name.clone(),
                     ty: substitute_type(ty, &substitutions),
                     passing: *passing,
@@ -2012,12 +2021,13 @@ impl<'a> FunctionChecker<'a> {
                 let span = argument
                     .map(|argument| argument.span)
                     .unwrap_or(param_decl.span);
+                let detail = self
+                    .written_alias_type(&param_decl.ty, &hinted_expected)
+                    .map(|expected| format!("expected {expected}, found {actual}"))
+                    .unwrap_or(error.message);
                 return Err(Diagnostic::at(
                     span,
-                    format!(
-                        "argument type mismatch for {}: {}",
-                        callee_name, error.message
-                    ),
+                    format!("argument type mismatch for {}: {}", callee_name, detail),
                 ));
             }
             resolved_args.push((

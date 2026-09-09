@@ -1,0 +1,5 @@
+error[AU2002]: type `Missing` does not implement trait `Named`
+ --> crates/aura-compiler/tests/fixtures/check-fail/alias_constructor_bound_inferred.au:9:13
+  |
+9 |     value = Container(value=Missing())
+  |             ^

@@ -1,0 +1,5 @@
+error[AU2002]: type alias `Number` expects 0 type arguments, found 1
+ --> crates/aura-compiler/tests/fixtures/check-fail/alias_fixed_constructor_arity.au:5:13
+  |
+5 |     value = Number[str](value=42)
+  |             ^

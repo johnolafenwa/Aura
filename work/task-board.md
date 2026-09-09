@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-09-08
+Last updated: 2026-09-09
 
 ## Batch 1 phase 1 (in progress)
 
@@ -21,8 +21,11 @@ Last updated: 2026-09-08
   failing first; seven AST tests, 84 parser tests, full fixtures, 385 forced
   parity cases, 378 CLI tests, and native acceptance pass. The two changed JSON
   assertions pass after pinning new metadata. Schema 7 and all 96 bridge tests
-  are green. Union/alias tests are now red before semantic implementation.
-- Next: union normalization and alias expansion, then the ordered families,
+  are green. The normalization/alias family passes all nine fixture suites,
+  378 CLI tests, native acceptance, and 400 forced parity cases. It adds 49
+  top-level fixtures plus type/alias and bounded metadata regressions. Schema 8
+  rejection/current-schema tests pass; all 111 LSP tests retain 100% coverage.
+- Next: injection, then the ordered families,
   editor/docs/reference-agent updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.

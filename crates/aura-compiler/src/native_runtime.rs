@@ -1401,6 +1401,15 @@ fn runtime_type_from_name(name: &str) -> Type {
 fn runtime_type_pattern_from_name(name: &str) -> Type {
     fn decode_pattern(ty: Type) -> Type {
         match ty {
+            Type::Union(union) => {
+                let module = union.module_name.clone();
+                Type::normalize_union(
+                    union.members.into_iter().map(decode_pattern).collect(),
+                    &module,
+                    &BTreeMap::new(),
+                )
+                .expect("decoding retains union members")
+            }
             Type::Named(name, args) if args.is_empty() && name.starts_with('?') => {
                 Type::TypeParam(name[1..].to_string())
             }
@@ -1461,6 +1470,7 @@ fn runtime_type_pattern_matches(
     substitutions: &mut BTreeMap<String, Type>,
 ) -> bool {
     match pattern {
+        Type::Union(_) => pattern == actual,
         Type::TypeParam(name) => match substitutions.get(name) {
             Some(existing) => existing == actual,
             None => {
@@ -6904,6 +6914,7 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
                 ));
             }
             let untagged_outer_wildcard = match &pattern {
+                Type::Union(_) => false,
                 Type::Named(name, args) => {
                     value_type_name(&actual) == *name
                         && args.iter().all(|arg| matches!(arg, Type::TypeParam(_)))

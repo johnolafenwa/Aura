@@ -43,6 +43,7 @@ fn builtin_type_lowering_preserves_nested_function_signatures() {
         Type::Function {
             params: vec![
                 FunctionParamContract {
+                    keyword_only: false,
                     name: String::new(),
                     ty: Type::named("Duration"),
                     passing: ReceiverKind::Borrow,
@@ -50,6 +51,7 @@ fn builtin_type_lowering_preserves_nested_function_signatures() {
                     default_erased: true,
                 },
                 FunctionParamContract {
+                    keyword_only: false,
                     name: String::new(),
                     ty: Type::named("str"),
                     passing: ReceiverKind::BorrowMut,
@@ -57,6 +59,7 @@ fn builtin_type_lowering_preserves_nested_function_signatures() {
                     default_erased: true,
                 },
                 FunctionParamContract {
+                    keyword_only: false,
                     name: String::new(),
                     ty: Type::Tuple(vec![Type::named("int32")]),
                     passing: ReceiverKind::Value,
@@ -66,6 +69,7 @@ fn builtin_type_lowering_preserves_nested_function_signatures() {
             ],
             return_type: Box::new(Type::Function {
                 params: vec![FunctionParamContract {
+                    keyword_only: false,
                     name: String::new(),
                     ty: Type::named("Duration"),
                     passing: ReceiverKind::Borrow,
@@ -726,4 +730,17 @@ fn json_namespace_exposes_dynamic_tree_contract() {
             "legacy json helper {legacy} must remain available"
         );
     }
+}
+
+#[test]
+fn union_annotation_helpers_preserve_normalized_members() {
+    let ty = crate::ast::TypeRef::union(
+        vec![
+            crate::ast::TypeRef::named("None", vec![], false, crate::diag::Span::new(1, 1)),
+            crate::ast::TypeRef::named("int", vec![], false, crate::diag::Span::new(1, 1)),
+            crate::ast::TypeRef::named("int64", vec![], false, crate::diag::Span::new(1, 1)),
+        ],
+        crate::diag::Span::new(1, 1),
+    );
+    assert_eq!(super::lower_type_ref(&ty).to_string(), "int64 | None");
 }

@@ -1,0 +1,4 @@
+from alias_support.types import Choice, Token
+
+def identity(value: own Choice) -> (None | str | Token):
+    return value

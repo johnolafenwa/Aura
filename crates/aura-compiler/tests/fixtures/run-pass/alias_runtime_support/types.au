@@ -1,0 +1,9 @@
+public class Box[T]:
+    public value: T
+
+public type Container[T] = Box[T]
+type Fixed = Box[int64]
+
+public def make() -> Box[int64]:
+    value: Fixed = Fixed(value=42)
+    return value

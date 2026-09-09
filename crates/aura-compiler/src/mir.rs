@@ -229,6 +229,7 @@ fn is_float_literal_expr(expr: &Expr) -> bool {
 
 fn type_contains_unknown(ty: &Type) -> bool {
     match ty {
+        Type::Union(union) => union.members.iter().any(type_contains_unknown),
         Type::Named(name, args) => name == "Unknown" || args.iter().any(type_contains_unknown),
         Type::Tuple(elements) => elements.iter().any(type_contains_unknown),
         Type::Function {
@@ -276,6 +277,11 @@ fn contextual_float_literal_operand(
 
 fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
     match ty {
+        Type::Union(union) => {
+            for member in &union.members {
+                collect_type_params_from_type(member, collected);
+            }
+        }
         Type::TypeParam(name) => {
             collected.insert(name.clone());
         }
@@ -1570,6 +1576,7 @@ impl<'a> MirLoanValidationContext<'a> {
                         .collect::<std::collections::HashMap<_, _>>();
                     substitute_type(&field.ty, &substitutions)
                 }
+                Type::Union(_) => return Err(format!("invalid MIR projection `{segment}` in `{place}` traverses a union without a payload projection")),
                 Type::TypeParam(_) => return Ok(None),
                 Type::Function { .. }
                 | Type::Closure { .. }
@@ -4311,6 +4318,7 @@ fn task_param_contracts(
         .iter()
         .enumerate()
         .map(|(index, ty)| FunctionParamContract {
+            keyword_only: params.get(index).is_some_and(|param| param.keyword_only),
             name: params
                 .get(index)
                 .map(|param| param.name.clone())
@@ -4359,6 +4367,14 @@ struct BasicBlockBuilder {
 
 impl<'a> Lowerer<'a> {
     fn trait_info_in_scope(&self, name: &str) -> Option<&crate::sema::TraitInfo> {
+        if let Some((module, item)) = name.rsplit_once('.') {
+            return self.module_namespace(module).and_then(|namespace| {
+                namespace
+                    .all_traits
+                    .get(item)
+                    .or_else(|| namespace.traits.get(item))
+            });
+        }
         self.program.traits.get(name).or_else(|| {
             self.program
                 .module_registry
@@ -4560,6 +4576,11 @@ impl<'a> Lowerer<'a> {
                 .iter()
                 .enumerate()
                 .map(|(index, param)| FunctionParamContract {
+                    keyword_only: function
+                        .decl
+                        .params
+                        .get(index)
+                        .is_some_and(|decl| decl.keyword_only),
                     name: function
                         .decl
                         .params
@@ -4848,7 +4869,16 @@ impl<'a> Lowerer<'a> {
 
     fn lower_type_ref_with_provenance(&self, type_ref: &crate::ast::TypeRef) -> Type {
         match &type_ref.kind {
-            TypeRefKind::Union(_) | TypeRefKind::Callable { .. } => Type::named("Unknown"),
+            TypeRefKind::Union(members) => Type::normalize_union(
+                members
+                    .iter()
+                    .map(|member| self.lower_type_ref_with_provenance(member))
+                    .collect(),
+                self.module_name,
+                &self.program.canonical_type_names,
+            )
+            .expect("checked union has members"),
+            TypeRefKind::Callable { .. } => Type::named("Unknown"),
             TypeRefKind::Tuple(elements) => Type::Tuple(
                 elements
                     .iter()
@@ -4862,11 +4892,12 @@ impl<'a> Lowerer<'a> {
                 params: params
                     .iter()
                     .map(|param| FunctionParamContract {
-                        name: String::new(),
+                        keyword_only: param.keyword_only,
+                        name: param.name.clone().unwrap_or_default(),
                         ty: self.lower_type_ref_with_provenance(&param.ty),
                         passing: resolve_param_passing(param.mode),
-                        has_default: false,
-                        default_erased: true,
+                        has_default: param.has_default,
+                        default_erased: !param.has_default,
                     })
                     .collect(),
                 return_type: Box::new(self.lower_type_ref_with_provenance(return_type)),
@@ -4883,6 +4914,16 @@ impl<'a> Lowerer<'a> {
                     "int" => "int64",
                     name => name,
                 };
+                let lowered_args = args
+                    .iter()
+                    .map(|arg| self.lower_type_ref_with_provenance(arg))
+                    .collect::<Vec<_>>();
+                if let Some(expanded) =
+                    self.program
+                        .resolve_alias_type(source_name, &lowered_args, self.module_name)
+                {
+                    return expanded;
+                }
                 let name = if let Some(class) = self.resolve_class_info(source_name) {
                     mir_class_type_name(self.program, class, source_name)
                 } else if let Some(enum_info) = self.resolve_enum_info(source_name) {
@@ -11576,6 +11617,35 @@ impl<'a> Lowerer<'a> {
         target
     }
 
+    fn expanded_alias_callee(&self, callee: &Expr) -> Option<Expr> {
+        let checked_lowering_budget = self
+            .program
+            .type_definitions
+            .expansion_budget()
+            .for_checked_lowering();
+        crate::sema::expand_alias_callee(
+            callee,
+            &|expr| match &expr.kind {
+                ExprKind::Name(name)
+                    if !self.local_types.contains_key(&self.render_local_name(name)) =>
+                {
+                    self.program.alias_info(name, self.module_name)
+                }
+                ExprKind::Member { object, field } => self
+                    .infer_module_path(object)
+                    .and_then(|module| self.module_namespace(&module))
+                    .and_then(|namespace| namespace.aliases.get(field)),
+                _ => None,
+            },
+            &|ty| Ok(self.lower_type_ref_with_provenance(ty)),
+            &|_, _, _| Ok(()),
+            self.module_name,
+            &self.program.canonical_type_names,
+            &checked_lowering_budget,
+        )
+        .expect("checked alias callee")
+    }
+
     fn lower_call(
         &mut self,
         expr: &Expr,
@@ -11583,6 +11653,16 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        if let Some(expanded) = self.expanded_alias_callee(callee) {
+            let expanded_expr = Expr {
+                kind: ExprKind::Call {
+                    callee: Box::new(expanded.clone()),
+                    args: args.to_vec(),
+                },
+                span: expr.span,
+            };
+            return self.lower_call(&expanded_expr, &expanded, args, expected);
+        }
         let temp = expected
             .cloned()
             .map(|ty| self.new_typed_temp(ty))
@@ -13054,7 +13134,7 @@ impl<'a> Lowerer<'a> {
             );
             if let Some(method) = trait_info.methods.get(field) {
                 matches.push((
-                    bound.trait_name.clone(),
+                    trait_info.decl.name.clone(),
                     trait_info,
                     method,
                     substitutions.clone(),
@@ -13290,6 +13370,17 @@ impl<'a> Lowerer<'a> {
     }
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {
+        if let ExprKind::Call { callee, args } = &expr.kind {
+            if let Some(expanded) = self.expanded_alias_callee(callee) {
+                return self.infer_expr_type(&Expr {
+                    kind: ExprKind::Call {
+                        callee: Box::new(expanded),
+                        args: args.clone(),
+                    },
+                    span: expr.span,
+                });
+            }
+        }
         match &expr.kind {
             ExprKind::IsNone { .. }
             | ExprKind::Membership { .. }
@@ -15451,6 +15542,7 @@ fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
             params: params
                 .iter()
                 .map(|param| FunctionParamContract {
+                    keyword_only: param.keyword_only,
                     name: String::new(),
                     ty: lower_type_ref(&param.ty),
                     passing: resolve_param_passing(param.mode),

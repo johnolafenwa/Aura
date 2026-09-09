@@ -381,6 +381,7 @@ def main():
         name: "borrow_pair".to_string(),
         signature: Box::new(Type::Function {
             params: vec![crate::sema::FunctionParamContract {
+                keyword_only: false,
                 name: "origin".to_string(),
                 ty: Type::named("Pair"),
                 passing: crate::ast::ReceiverKind::Borrow,
@@ -541,6 +542,7 @@ def main():
             .params
             .iter()
             .map(|param| crate::sema::FunctionParamContract {
+                keyword_only: false,
                 name: param.name.clone(),
                 ty: param.ty.clone(),
                 passing: match param.passing {
@@ -834,6 +836,7 @@ def main():
             .params
             .iter()
             .map(|param| crate::sema::FunctionParamContract {
+                keyword_only: false,
                 name: param.name.clone(),
                 ty: param.ty.clone(),
                 passing: match param.passing {
@@ -3565,6 +3568,7 @@ fn mir_projection_and_unknown_type_helpers_preserve_fallback_contracts() {
     assert!(return_view_projection_set(&expr(ExprKind::Int(1)), "origin", &aliases).is_empty());
 
     let contract = |ty| crate::sema::FunctionParamContract {
+        keyword_only: false,
         name: "value".to_string(),
         ty,
         passing: ReceiverKind::Value,
@@ -7899,6 +7903,8 @@ fn namespace_from_program(name: &str, path: &str, program: &Program) -> ModuleNa
         function.module_name = path.to_string();
     }
     ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: name.to_string(),
@@ -7981,6 +7987,8 @@ def generic_helper[T](value: own T) -> T:
     reexport.classes.clear();
     reexport.enums.clear();
     let mut pkg = ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "pkg".to_string(),
@@ -8013,6 +8021,8 @@ def generic_helper[T](value: own T) -> T:
         .insert("reexport".to_string(), reexport.clone());
 
     let mut current = ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "main".to_string(),
@@ -8325,6 +8335,8 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         Some("RemoteTrait")
     );
     let mut imported_only_root = ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "pkg".to_string(),
@@ -11019,6 +11031,7 @@ def main():
 #[test]
 fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization() {
     let contract = |ty: Type, passing: ReceiverKind| crate::sema::FunctionParamContract {
+        keyword_only: false,
         name: String::new(),
         ty,
         passing,
@@ -11116,6 +11129,7 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
         .expect("an imported generic function should specialize as a value");
     let expected = Type::Function {
         params: vec![crate::sema::FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: Type::named("str"),
             passing: ReceiverKind::Value,

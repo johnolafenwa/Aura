@@ -1,0 +1,5 @@
+import alias_runtime_support.types as models
+
+public def make() -> models.Container[int64]:
+    value: models.Container[int64] = models.Container[int64](value=42)
+    return value

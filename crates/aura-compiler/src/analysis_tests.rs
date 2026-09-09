@@ -47,6 +47,8 @@ fn analysis_resolves_canonical_enums_from_the_module_registry() {
     program.module_registry.insert(
         "json".to_string(),
         crate::sema::ModuleNamespace {
+            all_aliases: BTreeMap::new(),
+            aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
             all_constants: BTreeMap::new(),
             name: "json".to_string(),
@@ -3456,6 +3458,8 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     .join("\n");
     let remote_program = checked_program(&remote_source);
     let mut tools_namespace = crate::sema::ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "tools".to_string(),
@@ -3482,6 +3486,8 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     tools_namespace.modules.insert(
         "inner".to_string(),
         crate::sema::ModuleNamespace {
+            all_aliases: BTreeMap::new(),
+            aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
             all_constants: BTreeMap::new(),
             name: "inner".to_string(),
@@ -3509,6 +3515,8 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            all_aliases: BTreeMap::new(),
+            aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
             all_constants: BTreeMap::new(),
             name: "pkg".to_string(),
@@ -4428,6 +4436,8 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            all_aliases: BTreeMap::new(),
+            aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
             all_constants: BTreeMap::new(),
             name: "pkg".to_string(),
@@ -4438,6 +4448,8 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
             modules: std::collections::BTreeMap::from([(
                 "types".to_string(),
                 crate::sema::ModuleNamespace {
+                    all_aliases: BTreeMap::new(),
+                    aliases: BTreeMap::new(),
                     constants: BTreeMap::new(),
                     all_constants: BTreeMap::new(),
                     name: "types".to_string(),
@@ -4655,6 +4667,8 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     .join("\n");
     let remote_program = checked_program(&remote_source);
     let tools_namespace = crate::sema::ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "tools".to_string(),
@@ -4681,6 +4695,8 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            all_aliases: BTreeMap::new(),
+            aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
             all_constants: BTreeMap::new(),
             name: "pkg".to_string(),
@@ -8338,6 +8354,7 @@ fn lambda_scope_navigation_reaches_assignment_targets_and_assert_operands() {
 fn closure_types_preserve_analysis_shape_unknown_detection_and_call_results() {
     let closure_type = |param_ty: Type, return_ty: Type, capture_ty: Type| Type::Closure {
         params: Box::new(vec![crate::sema::FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: param_ty,
             passing: ReceiverKind::Borrow,
@@ -8611,6 +8628,7 @@ fn conditional_function_type_inference_prefers_concrete_nested_contracts() {
     let builder = AnalysisBuilder::new("", &program, Vec::new());
     let function_type = |param_ty: Type, return_type: Type| Type::Function {
         params: vec![crate::sema::FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: param_ty,
             passing: ReceiverKind::Borrow,
@@ -8696,4 +8714,17 @@ fn path_aware_analysis_handles_large_repo_scratch_corpus_without_panicking() {
             "expected scratch corpus analysis to produce some symbols"
         );
     });
+}
+
+#[test]
+fn union_annotation_helpers_preserve_normalized_members() {
+    let ty = crate::ast::TypeRef::union(
+        vec![
+            crate::ast::TypeRef::named("None", vec![], false, crate::diag::Span::new(1, 1)),
+            crate::ast::TypeRef::named("int", vec![], false, crate::diag::Span::new(1, 1)),
+            crate::ast::TypeRef::named("int64", vec![], false, crate::diag::Span::new(1, 1)),
+        ],
+        crate::diag::Span::new(1, 1),
+    );
+    assert_eq!(super::lower_type_ref(&ty).to_string(), "int64 | None");
 }

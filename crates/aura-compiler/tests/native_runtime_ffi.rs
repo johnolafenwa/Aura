@@ -530,6 +530,7 @@ fn direct_callable_ffi_symbols_preserve_the_public_runtime_contract() {
     let signature = Type::Function {
         params: vec![
             FunctionParamContract {
+                keyword_only: false,
                 name: "path".to_string(),
                 ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
@@ -537,6 +538,7 @@ fn direct_callable_ffi_symbols_preserve_the_public_runtime_contract() {
                 default_erased: false,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "buffer".to_string(),
                 ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 passing: ReceiverKind::BorrowMut,
@@ -1164,6 +1166,7 @@ fn direct_runtime_exported_array_symbols_execute_typed_kernels_through_the_libra
 
         let callback_type = Type::Function {
             params: vec![FunctionParamContract {
+                keyword_only: false,
                 name: "value".to_string(),
                 ty: Type::named("int32"),
                 passing: ReceiverKind::Borrow,
@@ -1299,6 +1302,7 @@ fn direct_runtime_exported_array_kernels_cover_int64_float32_and_float64() {
 
         let callback_type = Type::Function {
             params: vec![FunctionParamContract {
+                keyword_only: false,
                 name: "value".to_string(),
                 ty: Type::named("float64"),
                 passing: ReceiverKind::Borrow,

@@ -1,0 +1,4 @@
+public type Text = str
+public type OptionalText = Text | None
+public def accept(value: OptionalText):
+    pass

@@ -1,0 +1,4 @@
+type Count = int64
+def main():
+    value: Count = 42
+    print(value)

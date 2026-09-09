@@ -5,8 +5,8 @@ use std::path::PathBuf;
 #[test]
 fn the_current_language_surface_has_a_compiler_owned_semantic_interface_schema() {
     assert_eq!(
-        SEMANTIC_INTERFACE_SCHEMA_VERSION, 7,
-        "the Batch 1 syntax metadata requires schema 7 across compiler services and native cache keys"
+        SEMANTIC_INTERFACE_SCHEMA_VERSION, 8,
+        "the Batch 1 normalized type and callable metadata requires schema 8 across compiler services and native cache keys"
     );
 }
 

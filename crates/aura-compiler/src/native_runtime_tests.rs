@@ -734,6 +734,7 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
 
     let signature = Type::Function {
         params: vec![FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: Type::named("int32"),
             passing: ReceiverKind::Value,
@@ -5105,6 +5106,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     let concrete_function_signature = Type::Function {
         params: vec![
             FunctionParamContract {
+                keyword_only: false,
                 name: "shared".to_string(),
                 ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
@@ -5112,6 +5114,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
                 default_erased: false,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "mutable".to_string(),
                 ty: Type::Named("list".to_string(), vec![Type::named("int32")]),
                 passing: ReceiverKind::BorrowMut,
@@ -5119,6 +5122,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
                 default_erased: false,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "owned".to_string(),
                 ty: nested_callback,
                 passing: ReceiverKind::Value,
@@ -5133,6 +5137,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
         signature: Type::Function {
             params: vec![
                 FunctionParamContract {
+                    keyword_only: false,
                     name: "shared".to_string(),
                     ty: Type::TypeParam("A".to_string()),
                     passing: ReceiverKind::Borrow,
@@ -5140,6 +5145,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
                     default_erased: false,
                 },
                 FunctionParamContract {
+                    keyword_only: false,
                     name: "mutable".to_string(),
                     ty: Type::TypeParam("B".to_string()),
                     passing: ReceiverKind::BorrowMut,
@@ -5147,6 +5153,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
                     default_erased: false,
                 },
                 FunctionParamContract {
+                    keyword_only: false,
                     name: "owned".to_string(),
                     ty: Type::TypeParam("C".to_string()),
                     passing: ReceiverKind::Value,
@@ -5230,6 +5237,7 @@ fn direct_function_value_abi_preserves_signature_capabilities_defaults_and_metad
     let signature = Type::Function {
         params: vec![
             FunctionParamContract {
+                keyword_only: false,
                 name: "shared".to_string(),
                 ty: Type::named("str"),
                 passing: ReceiverKind::Borrow,
@@ -5237,6 +5245,7 @@ fn direct_function_value_abi_preserves_signature_capabilities_defaults_and_metad
                 default_erased: false,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "mutable".to_string(),
                 ty: Type::Named("list".to_string(), vec![Type::named("int32")]),
                 passing: ReceiverKind::BorrowMut,
@@ -5244,6 +5253,7 @@ fn direct_function_value_abi_preserves_signature_capabilities_defaults_and_metad
                 default_erased: false,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "owned".to_string(),
                 ty: Type::named("str"),
                 passing: ReceiverKind::Value,
@@ -5310,6 +5320,7 @@ fn direct_function_value_abi_preserves_signature_capabilities_defaults_and_metad
 fn direct_function_value_type_patterns_bind_nested_types_and_capabilities() {
     fn contract(name: &str, ty: Type, passing: ReceiverKind) -> FunctionParamContract {
         FunctionParamContract {
+            keyword_only: false,
             name: name.to_string(),
             ty,
             passing,
@@ -5449,6 +5460,7 @@ fn direct_function_value_type_patterns_bind_nested_types_and_capabilities() {
 #[test]
 fn direct_closure_type_matching_preserves_callable_and_capture_contracts() {
     let param = |ty, passing| FunctionParamContract {
+        keyword_only: false,
         name: "value".to_string(),
         ty,
         passing,
@@ -16871,6 +16883,7 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
                 name: "main::__lambda_repeatable".to_string(),
                 signature: Type::Closure {
                     params: Box::new(vec![FunctionParamContract {
+                        keyword_only: false,
                         name: "value".to_string(),
                         ty: Type::named("int64"),
                         passing: ReceiverKind::BorrowMut,
@@ -16999,6 +17012,7 @@ fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebac
                 signature: Type::Closure {
                     params: Box::new(vec![
                         FunctionParamContract {
+                            keyword_only: false,
                             name: "owned".to_string(),
                             ty: Type::named("int64"),
                             passing: ReceiverKind::Value,
@@ -17006,6 +17020,7 @@ fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebac
                             default_erased: false,
                         },
                         FunctionParamContract {
+                            keyword_only: false,
                             name: "mutable".to_string(),
                             ty: Type::named("int64"),
                             passing: ReceiverKind::BorrowMut,
@@ -17167,6 +17182,7 @@ fn native_runtime_selected_default_callbacks_bind_functions_but_not_closures() {
                 name: "selected".to_string(),
                 signature: Type::Function {
                     params: vec![FunctionParamContract {
+                        keyword_only: false,
                         name: "value".to_string(),
                         ty: Type::named("int64"),
                         passing: ReceiverKind::Value,
@@ -17203,6 +17219,7 @@ fn native_runtime_selected_default_callbacks_bind_functions_but_not_closures() {
                 name: "main::__lambda_no_defaults".to_string(),
                 signature: Type::Closure {
                     params: Box::new(vec![FunctionParamContract {
+                        keyword_only: false,
                         name: "value".to_string(),
                         ty: Type::named("int64"),
                         passing: ReceiverKind::Value,
@@ -17338,6 +17355,7 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
     let external_address = external as usize;
     let signature = Type::Closure {
         params: Box::new(vec![FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: Type::named("str"),
             passing: ReceiverKind::BorrowMut,
@@ -20522,6 +20540,7 @@ fn direct_capacity_format_and_detailed_assertion_abis_pin_observable_contracts()
 fn coverage_native_runtime_decodes_closure_patterns_and_uses_type_fallbacks() {
     let encoded_closure = super::canonical_runtime_type_name(&Type::Closure {
         params: Box::new(vec![FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: Type::named("?Item"),
             passing: ReceiverKind::Borrow,

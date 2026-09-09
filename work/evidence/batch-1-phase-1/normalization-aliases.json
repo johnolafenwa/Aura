@@ -1,0 +1,164 @@
+{
+  "family": "union normalization and alias expansion",
+  "parent_commit": "a4b152855271ec63b02246ccd0c7b63ee6d1f21b",
+  "new_top_level_fixtures": {
+    "check-fail": 18,
+    "check-pass": 10,
+    "check-path-pass": 6,
+    "run-pass": 15
+  },
+  "test_first": "Initial family fixtures and semantic/security regression tests failed before implementation. Thirteen diagnostic fixtures promote already tested cycle, bound, visibility and inference cases to full rendered oracles.",
+  "compiler_units": {
+    "passed_full_run": 1903,
+    "failed_full_run": [
+      "sema::tests::closure_type_keeps_compact_runtime_layout_and_stable_serialization"
+    ],
+    "repair": "Explicit keyword_only field pinned; isolated test passes. Final namespace changes validated by 41 imported unit regressions and full fixtures/CLI/parity."
+  },
+  "public_type_alias_tests": 26,
+  "alias_security_tests": 6,
+  "expansion_budget_unit_tests": 17,
+  "key_growth_tests": 2,
+  "malformed_union_metadata_tests": 10,
+  "annotation_helper_tests": 2,
+  "fixture_suites": 9,
+  "cli_tests": 378,
+  "native_acceptance_tests": 1,
+  "forced_parity": {
+    "run_pass": 306,
+    "run_fail": 94,
+    "fallback": false,
+    "failed": 0
+  },
+  "semantic_schema": {
+    "before": 7,
+    "after": 8,
+    "stale_schema_rejected": 7,
+    "native_cache_container": "v6; semantic schema independently participates in cache identity"
+  },
+  "lsp": {
+    "tests": 111,
+    "statements": [
+      944,
+      944
+    ],
+    "branches": [
+      254,
+      254
+    ],
+    "functions": [
+      49,
+      49
+    ],
+    "lines": [
+      944,
+      944
+    ]
+  },
+  "format": "pass",
+  "clippy": "pass",
+  "coverage_floors_unchanged": [
+    96.3,
+    97.21,
+    94.71
+  ],
+  "integration_note": "One CLI attempt was stopped because concurrent source edits invalidated its rebuild snapshot; the complete final frozen-source run passed.",
+  "planned_integration": [
+    "Injection extends retained alias presentation across new expected-type boundaries",
+    "Complete callable contracts extend callable canonical keys",
+    "Generic specialization remaps normalized tags",
+    "Layout/interfaces family finalizes MIR/cache identities and checked exported-alias records",
+    "Editor family adds full alias hover/navigation"
+  ],
+  "log_sha256": {
+    "initial_types_red": "3c8062496fcf99c7cef713f821fda34444b6f972765b3498b6f2cd1fd399f473",
+    "constructor_inference_red": "3f129ce8f5a5d93927f494ce845f0c32c91b91912dd60760268450279ebf06ca",
+    "invalid_members_red": "a14e2225205152b6aaab889e5b7eed458e9dcf8fa4dc5cd496a796f84e59ec94",
+    "alias_presentation_red": "ebe20655c721ac00914a20119f01c865defe429be8decd313a30bbc239fa50d1",
+    "renamed_module_red": "c3dd1f2539683ca45d13a6e08f996a5dd106e0699382534b9b7602d69be8076b",
+    "compiler_units": "0ca8484361cfc385040074f4b6e2ad4cef9efc980129a5fbb4da9dce0412af10",
+    "closure_serialization_repair": "6b3b3287ca0f06942ca490ad5562298e7fb906e77eff01e2024b0a11b1bdd276",
+    "expanded_fixtures": "9cac37735a23472c8611ae81ce0edfcbd93f922e4ddd248fe2f84056f32d8c7f",
+    "clippy": "7c65bbd993339a93dba719d16bfb1548f526482c74d4991bf4c0b44cb056801d",
+    "lsp_coverage": "d72ff25396ce3f47c4ed3fdeac4bb003e378b1128cb29d48f4d99227c27f9894",
+    "imported-units": "939598a9f8d84747b07dea5dcf7c12d9e6619b6fb7334979bffce4dfbbe7a89a",
+    "budget-units": "21b22b552049d7755621472b15426c8ef80ed3f0af27af2083c70ba64cf60363",
+    "annotation-units": "c9ad22554f585cb5b613aca641de536abd9c0656a82dbd70868715e9a8795e2a",
+    "contracts": "c7f52ad864e273014498c197c4760269cde0437a56d0c3af0f1cfc11e4bf2c18",
+    "fixtures": "23ec8d0c2f33926e7dc53440a366edc4e30d0217db6a0231d88a8e6db7eaffbd",
+    "cli": "f2f4d247b5f3a837f36e611136961da2709da8b292efc3cf94b4a9fce6063bd6",
+    "native-acceptance": "ab9d730ae7100317c39133d25c12a8cc516e925b68becf4294a16017e9ca86ce",
+    "parity": "f70d5e0948edffc8ece674b0d46f778df42934d9d197e25b8ba92d652f27f196",
+    "format": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "gates": [
+    {
+      "step": "imported-units",
+      "exit_code": 0,
+      "log": "/tmp/aura-batch1-alias-gate-imported-units.log",
+      "target_bytes": 18902466560,
+      "free_bytes": 108794470400
+    },
+    {
+      "step": "budget-units",
+      "exit_code": 0,
+      "log": "/tmp/aura-batch1-alias-gate-budget-units.log",
+      "target_bytes": 18902466560,
+      "free_bytes": 108794224640
+    },
+    {
+      "step": "annotation-units",
+      "exit_code": 0,
+      "log": "/tmp/aura-batch1-alias-gate-annotation-units.log",
+      "target_bytes": 18902466560,
+      "free_bytes": 108794220544
+    },
+    {
+      "step": "contracts",
+      "exit_code": 0,
+      "log": "/tmp/aura-batch1-alias-gate-contracts.log",
+      "target_bytes": 18923450368,
+      "free_bytes": 108770209792
+    },
+    {
+      "step": "fixtures",
+      "exit_code": 0,
+      "log": "/tmp/aura-batch1-alias-gate-fixtures.log",
+      "target_bytes": 18923634688,
+      "free_bytes": 108772741120
+    },
+    {
+      "step": "cli",
+      "exit_code": 0,
+      "log": "/tmp/aura-batch1-alias-gate-cli.log",
+      "target_bytes": 20720066560,
+      "free_bytes": 107425083392
+    },
+    {
+      "step": "native-acceptance",
+      "exit_code": 0,
+      "log": "/tmp/aura-batch1-alias-gate-native-acceptance.log",
+      "target_bytes": 20912635904,
+      "free_bytes": 107229921280
+    },
+    {
+      "step": "parity",
+      "exit_code": 0,
+      "log": "/tmp/aura-batch1-alias-gate-parity.log",
+      "target_bytes": 21094797312,
+      "free_bytes": 107036147712
+    },
+    {
+      "step": "format",
+      "exit_code": 0,
+      "log": "/tmp/aura-batch1-alias-gate-format.log",
+      "target_bytes": 21094797312,
+      "free_bytes": 107036196864
+    }
+  ],
+  "post_gate_hygiene": {
+    "target_bytes": 20639297536,
+    "free_bytes": 107472392192,
+    "cleanup": "cargo llvm-cov clean --workspace; then cargo clean --target-dir target/llvm-cov-target after lsof found no open handles in the obsolete coverage tree"
+  }
+}

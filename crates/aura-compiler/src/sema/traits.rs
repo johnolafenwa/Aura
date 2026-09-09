@@ -7,7 +7,7 @@ use super::{
     BTreeSet, BinaryOp, BlockFlow, BuiltinMember, ClosureOwner, Diagnostic, FunctionChecker,
     FunctionDecl, FunctionSignature, HashMap, ImplDecl, LocalBinding, ReceiverKind, Result,
     TraitBound, TraitDecl, TraitImplInfo, TraitImplMethodInfo, TraitInfo, TraitMethodInfo, Type,
-    TypeRef, UnaryOp,
+    TypeDefinitions, TypeRef, UnaryOp,
 };
 
 pub(super) type TraitMethodMatch<'a> = (
@@ -116,7 +116,7 @@ pub(crate) fn self_type_substitutions(
 pub(super) fn lower_trait_bounds(
     bounds: &BTreeMap<String, Vec<TypeRef>>,
     traits: &BTreeMap<String, TraitInfo>,
-    type_names: &BTreeMap<String, crate::diag::Span>,
+    type_names: &TypeDefinitions,
     type_arities: &BTreeMap<String, usize>,
     canonical_type_names: &BTreeMap<String, String>,
     type_param_scope: &BTreeMap<String, ()>,
@@ -135,7 +135,7 @@ pub(super) fn lower_trait_bounds(
 pub(super) fn lower_supertraits(
     supertraits: &[TypeRef],
     traits: &BTreeMap<String, TraitInfo>,
-    type_names: &BTreeMap<String, crate::diag::Span>,
+    type_names: &TypeDefinitions,
     type_arities: &BTreeMap<String, usize>,
     canonical_type_names: &BTreeMap<String, String>,
     type_param_scope: &BTreeMap<String, ()>,
@@ -190,7 +190,7 @@ pub(super) fn lower_supertraits(
 pub(super) fn lower_trait_bounds_with_self(
     bounds: &BTreeMap<String, Vec<TypeRef>>,
     traits: &BTreeMap<String, TraitInfo>,
-    type_names: &BTreeMap<String, crate::diag::Span>,
+    type_names: &TypeDefinitions,
     type_arities: &BTreeMap<String, usize>,
     canonical_type_names: &BTreeMap<String, String>,
     type_param_scope: &BTreeMap<String, ()>,
@@ -878,6 +878,25 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn trait_bound_identity(&self, bound: &TraitBound, module: &str) -> String {
+        let name = if bound.trait_name.contains('.') {
+            bound.trait_name.clone()
+        } else {
+            let info = self
+                .module_registry
+                .get(module)
+                .and_then(|namespace| namespace.all_traits.get(&bound.trait_name))
+                .or_else(|| {
+                    self.traits
+                        .get(&bound.trait_name)
+                        .filter(|info| module == self.module_name || info.module_name == module)
+                });
+            info.map(|info| format!("{}.{}", info.module_name, info.decl.name))
+                .unwrap_or_else(|| format!("{module}.{}", bound.trait_name))
+        };
+        Type::Named(name, bound.trait_args.clone()).canonical_key(module, self.canonical_type_names)
+    }
+
     pub(super) fn type_implements_trait_bound(&self, ty: &Type, bound: &TraitBound) -> bool {
         self.trait_impls_in_scope().any(|trait_impl| {
             let Some(substitutions) = self.trait_impl_substitutions(trait_impl, ty) else {
@@ -886,7 +905,10 @@ impl<'a> FunctionChecker<'a> {
             let implemented = self.resolved_trait_bound_for_impl(trait_impl, &substitutions);
             self.trait_bound_closure(&implemented, ty)
                 .into_iter()
-                .any(|candidate| candidate == *bound)
+                .any(|candidate| {
+                    self.trait_bound_identity(&candidate, &trait_impl.module_name)
+                        == self.trait_bound_identity(bound, self.module_name)
+                })
         })
     }
 
@@ -907,6 +929,15 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
         for bound in bounds {
+            let mut presentation = bound.clone();
+            if let Some((_, leaf)) = bound.trait_name.rsplit_once('.') {
+                let conflicts = self.traits.get(leaf).is_some_and(|info| {
+                    format!("{}.{}", info.module_name, info.decl.name) != bound.trait_name
+                });
+                if !conflicts {
+                    presentation.trait_name = leaf.to_string();
+                }
+            }
             match ty {
                 Type::TypeParam(name) => {
                     let current_bounds = self
@@ -918,14 +949,17 @@ impl<'a> FunctionChecker<'a> {
                     let satisfies = current_bounds.into_iter().any(|current| {
                         self.trait_bound_closure(&current, &self_ty)
                             .into_iter()
-                            .any(|candidate| candidate == *bound)
+                            .any(|candidate| {
+                                self.trait_bound_identity(&candidate, self.module_name)
+                                    == self.trait_bound_identity(bound, self.module_name)
+                            })
                     });
                     if !satisfies {
                         return Err(Diagnostic::at(
                             span,
                             format!(
                                 "type parameter `{}` does not satisfy trait bound `{}`",
-                                name, bound
+                                name, presentation
                             ),
                         ));
                     }
@@ -934,7 +968,7 @@ impl<'a> FunctionChecker<'a> {
                     if !self.type_implements_trait_bound(ty, bound) {
                         return Err(Diagnostic::at(
                             span,
-                            format!("type `{}` does not implement trait `{}`", ty, bound),
+                            format!("type `{}` does not implement trait `{}`", ty, presentation),
                         ));
                     }
                 }

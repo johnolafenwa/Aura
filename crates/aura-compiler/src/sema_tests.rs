@@ -609,6 +609,7 @@ fn s1_sema_final_task_specializations_preserve_matching_type_arguments() {
 fn s1_sema_type_pattern_unification_rejects_callable_kind_and_capture_mismatches() {
     let function = Type::Function {
         params: vec![FunctionParamContract {
+            keyword_only: false,
             name: String::new(),
             ty: Type::named("int64"),
             passing: ReceiverKind::Borrow,
@@ -1068,6 +1069,8 @@ fn public_ffi_handle_namespace(module_name: &str) -> ModuleNamespace {
     let mut handle = remote.opaque_handles["Handle"].clone();
     handle.module_name = module_name.to_string();
     ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: module_name.to_string(),
@@ -1100,6 +1103,8 @@ fn public_ffi_function_namespace(module_name: &str) -> ModuleNamespace {
     let mut scalar = remote.extern_functions["scalar"].clone();
     scalar.module_name = module_name.to_string();
     ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: module_name.to_string(),
@@ -2906,6 +2911,8 @@ fn ffi_extern_metadata_supports_from_and_qualified_import_calls() {
     let mut scalar = remote.extern_functions["scalar"].clone();
     scalar.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "ffi_api".to_string(),
@@ -2974,6 +2981,8 @@ fn ffi_qualified_imports_do_not_expose_private_extern_declarations() {
     let mut hidden = remote.extern_functions["hidden"].clone();
     hidden.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "ffi_api".to_string(),
@@ -3028,6 +3037,8 @@ fn ffi_qualified_imports_do_not_expose_private_opaque_handles() {
     let mut hidden = remote.opaque_handles["Hidden"].clone();
     hidden.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "ffi_api".to_string(),
@@ -3230,7 +3241,7 @@ fn tuple_type_helpers_preserve_generic_matching_and_recursive_storage_semantics(
     let mut collected_ref_params = BTreeSet::new();
     collect_type_ref_type_params(
         &tuple_ref,
-        &BTreeMap::new(),
+        &TypeDefinitions::default(),
         &mut collected_ref_params,
         false,
     );
@@ -7173,7 +7184,7 @@ def main() -> int32:
     assert_eq!(
         lower_type(
             &type_ref("int"),
-            &BTreeMap::new(),
+            &TypeDefinitions::default(),
             &BTreeMap::new(),
             &BTreeMap::new(),
             &BTreeMap::new(),
@@ -7459,6 +7470,11 @@ fn nested_type_ref(name: &str, args: Vec<TypeRef>) -> TypeRef {
 
 fn type_to_ref(ty: &Type) -> TypeRef {
     match ty {
+        Type::Union(union) => TypeRef {
+            kind: crate::ast::TypeRefKind::Union(union.members.iter().map(type_to_ref).collect()),
+            indirect: false,
+            span: Span::new(1, 1),
+        },
         Type::Named(name, args) => TypeRef::named(
             name,
             args.iter().map(type_to_ref).collect(),
@@ -7700,6 +7716,8 @@ fn enum_info(name: &str, payload: Option<Type>) -> EnumInfo {
 
 fn namespace(path: &str) -> ModuleNamespace {
     ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: path.rsplit('.').next().unwrap_or(path).to_string(),
@@ -7727,7 +7745,7 @@ fn namespace(path: &str) -> ModuleNamespace {
 
 fn checker<'a>(
     module_name: &'a str,
-    type_names: &'a BTreeMap<String, Span>,
+    type_names: &'a TypeDefinitions,
     type_arities: &'a BTreeMap<String, usize>,
     classes: &'a BTreeMap<String, ClassInfo>,
     enums: &'a BTreeMap<String, EnumInfo>,
@@ -7803,8 +7821,8 @@ fn assign_stmt(
     }
 }
 
-fn type_maps_from_program(program: &Program) -> (BTreeMap<String, Span>, BTreeMap<String, usize>) {
-    let mut type_names = BTreeMap::new();
+fn type_maps_from_program(program: &Program) -> (TypeDefinitions, BTreeMap<String, usize>) {
+    let mut type_names = TypeDefinitions::default();
     let mut type_arities = BTreeMap::new();
     for (name, class_info) in &program.classes {
         type_names.insert(name.clone(), class_info.decl.span);
@@ -7824,7 +7842,8 @@ fn type_maps_from_program(program: &Program) -> (BTreeMap<String, Span>, BTreeMa
 #[test]
 fn checker_small_helper_utilities_cover_default_arg_and_recursive_type_paths() {
     let mut collected = BTreeSet::new();
-    let type_names = BTreeMap::from([("Known".to_string(), Span::new(1, 1))]);
+    let type_names =
+        TypeDefinitions::from(BTreeMap::from([("Known".to_string(), Span::new(1, 1))]));
     collect_type_ref_type_params(&type_ref("T"), &type_names, &mut collected, true);
     collect_type_ref_type_params(
         &nested_type_ref("list", vec![type_ref("U")]),
@@ -8409,6 +8428,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             .expect("functions should resolve to first-class callable types"),
         Type::Function {
             params: vec![FunctionParamContract {
+                keyword_only: false,
                 name: "value".to_string(),
                 ty: Type::named("int32"),
                 passing: ReceiverKind::Borrow,
@@ -9192,7 +9212,8 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
             ],
         ),
     )]);
-    let type_names = BTreeMap::from([("Counter".to_string(), Span::new(1, 1))]);
+    let type_names =
+        TypeDefinitions::from(BTreeMap::from([("Counter".to_string(), Span::new(1, 1))]));
     let type_arities = BTreeMap::from([("Counter".to_string(), 0usize)]);
     let enums = BTreeMap::new();
     let functions = BTreeMap::new();
@@ -9652,10 +9673,10 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         ("Box".to_string(), box_class),
         ("Phantom".to_string(), phantom_class),
     ]);
-    let type_names = BTreeMap::from([
+    let type_names = TypeDefinitions::from(BTreeMap::from([
         ("Box".to_string(), Span::new(1, 1)),
         ("Phantom".to_string(), Span::new(1, 1)),
-    ]);
+    ]));
     let type_arities =
         BTreeMap::from([("Box".to_string(), 1usize), ("Phantom".to_string(), 1usize)]);
     let enums = BTreeMap::new();
@@ -10286,12 +10307,12 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
     let traits = BTreeMap::new();
     let imported_modules = BTreeMap::new();
     let module_registry = BTreeMap::new();
-    let type_names = BTreeMap::from([
+    let type_names = TypeDefinitions::from(BTreeMap::from([
         ("Widget".to_string(), span),
         ("SecretBox".to_string(), span),
         ("Shape".to_string(), span),
         ("Status".to_string(), span),
-    ]);
+    ]));
     let type_arities = BTreeMap::from([
         ("Widget".to_string(), 0usize),
         ("SecretBox".to_string(), 0usize),
@@ -10693,7 +10714,7 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
 
 #[test]
 fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -10965,7 +10986,7 @@ fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
 
 #[test]
 fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfaces() {
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -13726,7 +13747,7 @@ fn sema_helper_edges_cover_copy_defaults_literal_patterns_and_module_members() {
     imported_modules.insert("pkg".to_string(), root.clone());
     registry.insert("pkg".to_string(), root);
 
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let functions = BTreeMap::new();
     let traits = BTreeMap::new();
@@ -13842,7 +13863,7 @@ fn sema_helper_edges_cover_copy_defaults_literal_patterns_and_module_members() {
 
 #[test]
 fn sema_render_and_builtin_enum_hint_helpers_cover_remaining_paths() {
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -13922,7 +13943,7 @@ fn sema_render_and_builtin_enum_hint_helpers_cover_remaining_paths() {
 
 #[test]
 fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption() {
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -14112,7 +14133,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
         "Holder".to_string(),
         class_info("Holder", false, vec![("text", Type::named("str"), false)]),
     )]);
-    let type_names = BTreeMap::from([("Holder".to_string(), span)]);
+    let type_names = TypeDefinitions::from(BTreeMap::from([("Holder".to_string(), span)]));
     let type_arities = BTreeMap::from([("Holder".to_string(), 0usize)]);
     let enums = BTreeMap::new();
     let functions = BTreeMap::new();
@@ -14391,7 +14412,7 @@ fn namespace_and_type_parameter_helpers_cover_registration_lookup_and_collection
     root.imported_modules
         .insert("external".to_string(), imported.clone());
 
-    let mut type_names = BTreeMap::new();
+    let mut type_names = TypeDefinitions::default();
     let mut type_arities = BTreeMap::new();
     register_module_namespace_types(&root, &mut type_names, &mut type_arities);
 
@@ -14438,7 +14459,7 @@ fn namespace_and_type_parameter_helpers_cover_registration_lookup_and_collection
     let mut collected = BTreeSet::new();
     collect_type_ref_type_params(
         &nested_type_ref("list", vec![nested_type_ref("Boxed", vec![type_ref("T")])]),
-        &BTreeMap::from([("list".to_string(), Span::new(1, 1))]),
+        &TypeDefinitions::from(BTreeMap::from([("list".to_string(), Span::new(1, 1))])),
         &mut collected,
         false,
     );
@@ -14474,10 +14495,10 @@ fn default_argument_and_trait_bound_helpers_cover_nested_expression_cases() {
         ("Named".to_string(), trait_info("Named", vec![])),
         ("Mapper".to_string(), trait_info("Mapper", vec!["T"])),
     ]);
-    let type_names = BTreeMap::from([
+    let type_names = TypeDefinitions::from(BTreeMap::from([
         ("str".to_string(), Span::new(1, 1)),
         ("int32".to_string(), Span::new(1, 1)),
-    ]);
+    ]));
     let type_arities = BTreeMap::from([("str".to_string(), 0), ("int32".to_string(), 0)]);
     let lowered = lower_trait_bounds(
         &BTreeMap::from([(
@@ -15132,10 +15153,10 @@ fn check_rejects_duplicate_ordinary_parameter_names() {
 
 #[test]
 fn lower_type_covers_builtin_generic_and_error_paths() {
-    let type_names = BTreeMap::from([
+    let type_names = TypeDefinitions::from(BTreeMap::from([
         ("Box".to_string(), Span::new(1, 1)),
         ("pkg.Counter".to_string(), Span::new(1, 1)),
-    ]);
+    ]));
     let type_arities = BTreeMap::from([
         ("Box".to_string(), 1usize),
         ("pkg.Counter".to_string(), 0usize),
@@ -15310,7 +15331,7 @@ fn lower_trait_bounds_reports_unknown_traits_and_arity_mismatches() {
         ("Named".to_string(), trait_info("Named", vec![])),
         ("Mapper".to_string(), trait_info("Mapper", vec!["T"])),
     ]);
-    let type_names = BTreeMap::from([("str".to_string(), Span::new(1, 1))]);
+    let type_names = TypeDefinitions::from(BTreeMap::from([("str".to_string(), Span::new(1, 1))]));
     let type_arities = BTreeMap::from([("str".to_string(), 0usize)]);
     let scope = type_param_scope(&["T".to_string()]);
 
@@ -15364,10 +15385,10 @@ fn lower_supertraits_reports_unknown_arity_and_lowers_self_args() {
         ("Base".to_string(), trait_info("Base", vec![])),
         ("Mapper".to_string(), trait_info("Mapper", vec!["T"])),
     ]);
-    let type_names = BTreeMap::from([
+    let type_names = TypeDefinitions::from(BTreeMap::from([
         ("str".to_string(), Span::new(1, 1)),
         ("Widget".to_string(), Span::new(1, 1)),
-    ]);
+    ]));
     let type_arities = BTreeMap::from([("str".to_string(), 0usize), ("Widget".to_string(), 0)]);
     let scope = type_param_scope(&["T".to_string()]);
 
@@ -15848,7 +15869,8 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
             vec![("value", Type::named("int32"), false)],
         ),
     )]);
-    let type_names = BTreeMap::from([("Counter".to_string(), Span::new(1, 1))]);
+    let type_names =
+        TypeDefinitions::from(BTreeMap::from([("Counter".to_string(), Span::new(1, 1))]));
     let type_arities = BTreeMap::from([("Counter".to_string(), 0usize)]);
     let enums = BTreeMap::new();
     let functions = BTreeMap::new();
@@ -16068,7 +16090,8 @@ fn checker_select_and_assignment_direct_helpers_cover_remaining_error_and_succes
             vec![("value", Type::named("int32"), false)],
         ),
     )]);
-    let type_names = BTreeMap::from([("Counter".to_string(), Span::new(1, 1))]);
+    let type_names =
+        TypeDefinitions::from(BTreeMap::from([("Counter".to_string(), Span::new(1, 1))]));
     let type_arities = BTreeMap::from([("Counter".to_string(), 0usize)]);
     let enums = BTreeMap::new();
     let functions = BTreeMap::new();
@@ -16286,7 +16309,7 @@ fn builtin_call_and_member_resolution_surface_type_checks() {
 
 #[test]
 fn checker_builtin_function_success_surface_infers_expected_types() {
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -16523,7 +16546,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
 
 #[test]
 fn checker_builtin_constructor_and_variant_error_edges_cover_direct_paths() {
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -16758,7 +16781,10 @@ fn checker_builtin_constructor_and_variant_error_edges_cover_direct_paths() {
 #[test]
 fn checker_class_constructor_direct_errors_cover_field_binding_edges() {
     let span = Span::new(1, 1);
-    let type_names = BTreeMap::from([("Pair".to_string(), span), ("Widget".to_string(), span)]);
+    let type_names = TypeDefinitions::from(BTreeMap::from([
+        ("Pair".to_string(), span),
+        ("Widget".to_string(), span),
+    ]));
     let type_arities = BTreeMap::from([("Pair".to_string(), 0usize), ("Widget".to_string(), 0)]);
     let mut widget = class_info(
         "Widget",
@@ -17331,11 +17357,11 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
         ),
         ("Status".to_string(), enum_info("Status", None)),
     ]);
-    let type_names = BTreeMap::from([
+    let type_names = TypeDefinitions::from(BTreeMap::from([
         ("Other".to_string(), span),
         ("PayloadStatus".to_string(), span),
         ("Status".to_string(), span),
-    ]);
+    ]));
     let type_arities = BTreeMap::from([
         ("Other".to_string(), 0usize),
         ("PayloadStatus".to_string(), 0usize),
@@ -17449,7 +17475,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
 #[test]
 fn checker_module_member_type_edges_cover_private_and_uncalled_members() {
     let span = Span::new(1, 1);
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let enums = BTreeMap::new();
     let functions = BTreeMap::new();
@@ -18013,7 +18039,7 @@ fn operator_method_from_type_param_reports_ambiguity_when_multiple_bounds_match(
         },
     );
 
-    let type_names = BTreeMap::from([("Add".to_string(), Span::new(1, 1))]);
+    let type_names = TypeDefinitions::from(BTreeMap::from([("Add".to_string(), Span::new(1, 1))]));
     let type_arities = BTreeMap::from([("Add".to_string(), 2usize)]);
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -18067,7 +18093,7 @@ fn operator_method_from_type_param_reports_ambiguity_when_multiple_bounds_match(
 #[test]
 fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
     let span = Span::new(1, 1);
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -18656,7 +18682,7 @@ fn module_qualified_builtin_io_error_variants_type_check() {
 #[test]
 fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
     let span = Span::new(1, 1);
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let classes = BTreeMap::new();
     let enums = BTreeMap::new();
@@ -18995,7 +19021,7 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
 
 #[test]
 fn spawn_callable_resolution_covers_module_and_associated_targets() {
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let mut worker = class_info("Worker", false, vec![]);
     worker.methods.insert(
@@ -19164,7 +19190,7 @@ fn spawn_callable_resolution_covers_module_and_associated_targets() {
 #[test]
 fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
     let span = Span::new(1, 1);
-    let type_names = BTreeMap::new();
+    let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
 
     let mut resource = class_info(
@@ -19767,6 +19793,8 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
     let remote_enum = enum_info("RemoteStatus", Some(Type::named("int32")));
     let remote_trait = trait_info("RemoteShow", Vec::new());
     let namespace = ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "tools".to_string(),
@@ -20333,10 +20361,10 @@ def main():
 
 #[test]
 fn lower_type_and_imported_context_helpers_cover_builtin_and_context_paths() {
-    let mut type_names = BTreeMap::from([
+    let mut type_names = TypeDefinitions::from(BTreeMap::from([
         ("Pair".to_string(), Span::new(1, 1)),
         ("pkg.tools.Widget".to_string(), Span::new(1, 1)),
-    ]);
+    ]));
     let mut type_arities = BTreeMap::from([
         ("Pair".to_string(), 2usize),
         ("pkg.tools.Widget".to_string(), 0usize),
@@ -23287,6 +23315,7 @@ fn capture_free_function_types_are_copy_values_with_declaration_spelling() {
     let function = Type::Function {
         params: vec![
             FunctionParamContract {
+                keyword_only: false,
                 name: "left".to_string(),
                 ty: Type::named("int32"),
                 passing: ReceiverKind::Borrow,
@@ -23294,6 +23323,7 @@ fn capture_free_function_types_are_copy_values_with_declaration_spelling() {
                 default_erased: false,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "right".to_string(),
                 ty: Type::named("str"),
                 passing: ReceiverKind::Value,
@@ -23301,6 +23331,7 @@ fn capture_free_function_types_are_copy_values_with_declaration_spelling() {
                 default_erased: false,
             },
             FunctionParamContract {
+                keyword_only: false,
                 name: "counter".to_string(),
                 ty: Type::named("int64"),
                 passing: ReceiverKind::BorrowMut,
@@ -23579,6 +23610,7 @@ def choose(use_second: bool) -> int32:
 fn repeated_generic_evidence_intersects_callable_contract_metadata() {
     let callback = |name: &str, has_default: bool| Type::Function {
         params: vec![FunctionParamContract {
+            keyword_only: false,
             name: name.to_string(),
             ty: Type::named("int32"),
             passing: ReceiverKind::Borrow,
@@ -23935,6 +23967,8 @@ fn imported_module_functions_are_first_class_values() {
         type_param_bounds: BTreeMap::new(),
     };
     let namespace = ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "tools".to_string(),
@@ -23986,6 +24020,8 @@ fn nested_imported_module_functions_are_first_class_values() {
         type_param_bounds: BTreeMap::new(),
     };
     let helpers = ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "helpers".to_string(),
@@ -24010,6 +24046,8 @@ fn nested_imported_module_functions_are_first_class_values() {
         comprehensions: BTreeMap::new(),
     };
     let support = ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "function_value_imported_support".to_string(),
@@ -24111,7 +24149,12 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
         span,
     );
     let mut ref_params = BTreeSet::new();
-    collect_type_ref_type_params(&function_ref, &BTreeMap::new(), &mut ref_params, false);
+    collect_type_ref_type_params(
+        &function_ref,
+        &TypeDefinitions::default(),
+        &mut ref_params,
+        false,
+    );
     assert_eq!(
         ref_params,
         BTreeSet::from(["T".to_string(), "U".to_string()]),
@@ -24120,6 +24163,7 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
 
     let pattern = Type::Function {
         params: vec![FunctionParamContract {
+            keyword_only: false,
             name: String::new(),
             ty: Type::TypeParam("T".to_string()),
             passing: ReceiverKind::BorrowMut,
@@ -24141,6 +24185,7 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
     assert!(
         has_unresolved_type_params(&Type::Function {
             params: vec![FunctionParamContract {
+                keyword_only: false,
                 name: String::new(),
                 ty: Type::named("int32"),
                 passing: ReceiverKind::Borrow,
@@ -24159,6 +24204,7 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
 
     let actual = Type::Function {
         params: vec![FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: Type::named("int32"),
             passing: ReceiverKind::BorrowMut,
@@ -24196,6 +24242,7 @@ fn function_type_helpers_preserve_nested_generic_shape_and_capability_diagnostic
 
     let wrong_capability = Type::Function {
         params: vec![FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: Type::named("int32"),
             passing: ReceiverKind::Value,
@@ -24479,6 +24526,8 @@ fn imported_generic_function_values_specialize_as_values_and_task_targets() {
         type_param_bounds: BTreeMap::new(),
     };
     let namespace = ModuleNamespace {
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         all_constants: BTreeMap::new(),
         name: "tools".to_string(),
@@ -25146,6 +25195,7 @@ def main():
 fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
     let closure = Type::Closure {
         params: Box::new(vec![FunctionParamContract {
+            keyword_only: false,
             name: "value".to_string(),
             ty: Type::named("int32"),
             passing: ReceiverKind::Borrow,
@@ -25199,6 +25249,7 @@ fn closure_type_keeps_compact_runtime_layout_and_stable_serialization() {
         serde_json::json!({
             "Closure": {
                 "params": [{
+                    "keyword_only": false,
                     "name": "value",
                     "ty": {"Named": ["int32", []]},
                     "passing": "Borrow",
