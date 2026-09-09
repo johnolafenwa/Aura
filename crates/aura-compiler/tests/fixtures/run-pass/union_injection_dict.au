@@ -1,0 +1,3 @@
+def main():
+    values: dict[str, int64 | str] = {"number": 42, "text": "text"}
+    print(len(values) + 40)

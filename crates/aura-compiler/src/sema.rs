@@ -52,6 +52,10 @@ pub use program::{
 };
 mod aliases;
 pub(crate) use aliases::expand_alias_callee;
+mod unions;
+#[cfg(test)]
+mod unions_security_tests;
+pub use unions::{UnionInjection, UnionInjectionId};
 mod type_budget;
 #[cfg(test)]
 mod type_budget_tests;
@@ -780,6 +784,7 @@ struct ResolvedBinaryOperatorAccess {
     rhs_passing: ReceiverKind,
 }
 
+#[derive(Clone)]
 struct FunctionChecker<'a> {
     root_module_name: &'a str,
     module_name: &'a str,
@@ -807,6 +812,7 @@ struct FunctionChecker<'a> {
     closure_owner: ClosureOwner,
     closure_infos: Rc<RefCell<BTreeMap<ClosureId, ClosureInfo>>>,
     comprehension_infos: Rc<RefCell<BTreeMap<ComprehensionId, ComprehensionInfo>>>,
+    union_injections: Rc<RefCell<BTreeMap<UnionInjectionId, UnionInjection>>>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1640,6 +1646,7 @@ impl<'a> FunctionChecker<'a> {
             closure_owner: ClosureOwner::TopLevel,
             closure_infos: Rc::new(RefCell::new(BTreeMap::new())),
             comprehension_infos: Rc::new(RefCell::new(BTreeMap::new())),
+            union_injections: type_names.union_injections.clone(),
         }
     }
 
@@ -1681,6 +1688,7 @@ impl<'a> FunctionChecker<'a> {
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
+            union_injections: self.union_injections.clone(),
         }
     }
 
@@ -1716,6 +1724,7 @@ impl<'a> FunctionChecker<'a> {
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
+            union_injections: self.union_injections.clone(),
         }
     }
 
@@ -1747,6 +1756,7 @@ impl<'a> FunctionChecker<'a> {
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
+            union_injections: self.union_injections.clone(),
         }
     }
 
@@ -1778,6 +1788,7 @@ impl<'a> FunctionChecker<'a> {
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
+            union_injections: self.union_injections.clone(),
         }
     }
 
@@ -5055,6 +5066,14 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        if let Some(Type::Union(union)) = expected {
+            if !matches!(
+                expr.kind,
+                ExprKind::Group(_) | ExprKind::Conditional { .. } | ExprKind::Match { .. }
+            ) {
+                return self.type_union_injection(expr, locals, union);
+            }
+        }
         if Self::result_consumption_needs_replay(expr) {
             self.expr_result_entries.borrow_mut().insert(
                 expr as *const Expr as usize,

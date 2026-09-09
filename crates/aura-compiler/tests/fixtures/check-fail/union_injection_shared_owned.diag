@@ -1,0 +1,8 @@
+error[AU3002]: parameter `value` is borrowed; declare it as `own list[int64]` to take ownership, or copy the value before consuming it
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_injection_shared_owned.au:2:12
+  |
+2 |     return value
+  |            ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/union_injection_shared_owned.au:1:10: parameter `value` is borrowed here
+  = help: declare the parameter as `own list[int64]` when the function should consume it, or call `.copy()` to consume an independent copy
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/union_injection_shared_owned.au:2:17-2:17 with `.copy()`

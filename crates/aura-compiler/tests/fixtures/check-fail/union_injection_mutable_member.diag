@@ -1,0 +1,5 @@
+error[AU2010]: mutable argument requires exact type 'int64 | str', found 'int64'
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_injection_mutable_member.au:5:19
+  |
+5 |     replace(value=value)
+  |                   ^

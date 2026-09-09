@@ -926,6 +926,19 @@ impl<'a> FunctionChecker<'a> {
                 ),
             ));
         };
+        let context = self.returned_view_summary_context(&owner_module, &decl);
+        if let Some(pattern) = context.locals.get(&contract.origin) {
+            let expected = substitute_type(pattern, &substitutions);
+            if matches!(expected, Type::Union(_)) {
+                let actual = self.type_of_expr_without_move_state(&argument.value, locals, None)?;
+                if actual != expected {
+                    return Err(Diagnostic::coded_at(
+                        "AU2010", argument.value.span,
+                        format!("returned view origin requires exact union storage '{expected}', found '{actual}'"),
+                    ).with_help("construct a union local first and pass that local as the returned view origin"));
+                }
+            }
+        }
         let conservative = self.view_expr_has_conservative_footprint(&argument.value, locals)?;
         self.view_place(&argument.value, locals)?
             .ok_or_else(|| {

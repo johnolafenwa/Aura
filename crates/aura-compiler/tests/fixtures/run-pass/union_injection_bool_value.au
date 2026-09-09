@@ -1,0 +1,4 @@
+def main():
+    value: bool | int64 = true
+    other: bool | int64 = 42
+    print(42)

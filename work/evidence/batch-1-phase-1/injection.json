@@ -1,0 +1,18 @@
+{
+  "family": "union injection",
+  "base_commit": "7ad4089",
+  "fixtures_added": {"run_pass": 24, "check_fail": 11, "support_modules": 1},
+  "final_forced_parity": {"run_pass": 330, "run_fail": 94, "total": 424, "fallback": false, "exit_code": 0},
+  "final_gates": {"fixture_suites": 9, "cli_tests": 378, "native_acceptance": 1, "format": "passed", "configured_clippy": "passed"},
+  "focused_checks": {"injection": 34, "malformed_injection_metadata": 6, "literal_probe_limits": 3, "loan_and_call_argument_security": 10},
+  "earlier_compiler_unit_gate": {"passed": 1906, "scope": "before final loan containment follow-up"},
+  "frozen_source_manifest": {"files": 94, "changed_at_final_verification": 0, "path": "/tmp/aura-batch1-injection-frozen-sources.json"},
+  "logs": {
+    "final_gate_results": "/tmp/aura-batch1-injection-final-gates.json",
+    "loan_security": "/tmp/aura-batch1-injection-loan-verified.log",
+    "clippy": "/tmp/aura-batch1-injection-loan-clippy.log",
+    "earlier_compiler_units": "/tmp/aura-batch1-injection-units.log"
+  },
+  "coverage_floors_unchanged": {"lines": 96.30, "functions": 97.21, "regions": 94.71},
+  "pending_ordered_work": ["type patterns", "narrowing", "generic tag remapping", "union properties", "native inline layout and drop plans", "FFI adapter", "owned callables and remaining phase 1 surface"]
+}

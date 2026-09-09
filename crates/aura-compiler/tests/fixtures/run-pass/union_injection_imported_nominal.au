@@ -1,0 +1,5 @@
+from union_injection_support.values import make_packet
+
+def main():
+    value = make_packet()
+    print(value)

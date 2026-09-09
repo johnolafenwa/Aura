@@ -1,0 +1,3 @@
+def main():
+    source: list[int64] = [1]
+    value: list[int64 | str] = source

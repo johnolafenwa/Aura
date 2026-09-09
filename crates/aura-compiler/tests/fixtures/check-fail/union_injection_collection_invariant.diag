@@ -1,0 +1,5 @@
+error[AU2002]: binding `value` has annotated type `list[int64 | str]`, but value has type `list[int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_injection_collection_invariant.au:3:5
+  |
+3 |     value: list[int64 | str] = source
+  |     ^

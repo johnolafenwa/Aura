@@ -310,6 +310,7 @@ fn args_materialize_process_run(args: &[MirArg]) -> bool {
 fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
     match value {
         Rvalue::Use(value)
+        | Rvalue::UnionInject { value, .. }
         | Rvalue::Unary { value, .. }
         | Rvalue::Cast { value, .. }
         | Rvalue::Try { value }
@@ -2577,6 +2578,7 @@ impl MirRuntime {
 
     fn infer_value_type(value: &Value) -> Option<Type> {
         match value {
+            Value::Union(union) => Some(union.union_type.clone()),
             Value::Int(value) => Some(Type::named(value.runtime_type_name().unwrap_or("int64"))),
             Value::Float(_) => Some(Type::named("float64")),
             Value::Bool(_) => Some(Type::named("bool")),
@@ -4069,6 +4071,21 @@ impl MirRuntime {
                     class_name: class_name.clone(),
                     fields: values,
                 })))
+            }
+            Rvalue::UnionInject {
+                value,
+                union_type,
+                member_index,
+                ..
+            } => {
+                let payload = self.evaluate_owned_operand(value, env)?;
+                Ok(RvalueOutcome::Value(Value::Union(Box::new(
+                    crate::runtime_value::UnionValue {
+                        union_type: union_type.clone(),
+                        member_index: *member_index,
+                        payload,
+                    },
+                ))))
             }
             Rvalue::EnumVariant {
                 enum_name,

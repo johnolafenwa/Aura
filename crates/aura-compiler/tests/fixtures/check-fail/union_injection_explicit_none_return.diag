@@ -1,0 +1,5 @@
+error[AU2002]: return type mismatch: expected `int64 | None`, found `None`
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_injection_explicit_none_return.au:2:5
+  |
+2 |     return
+  |     ^

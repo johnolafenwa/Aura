@@ -723,6 +723,12 @@ pub enum Instruction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Rvalue {
     Use(Operand),
+    UnionInject {
+        value: Operand,
+        union_type: Type,
+        member_type: Type,
+        member_index: usize,
+    },
     /// Read a once-initialized immutable module value. The initializer thunk
     /// is shared by MIR and direct execution and guarded against re-entry.
     ModuleConstant {
@@ -1854,6 +1860,14 @@ impl<'a> MirLoanValidationContext<'a> {
                 }
                 continue;
             };
+            if matches!(param.ty, Type::Union(_))
+                && self.operand_type(caller, &arg.value)?.as_ref() != Some(&param.ty)
+            {
+                return Err(format!(
+                    "invalid MIR call to `{}` in `{}` requires exact union type '{}' for parameter `{}`",
+                    callee.name, caller.name, param.ty, param.name
+                ));
+            }
             match param.passing {
                 MirReceiverKind::BorrowMut => {
                     let Operand::Place(place) = &arg.value else {
@@ -2016,6 +2030,76 @@ impl<'a> MirLoanValidationContext<'a> {
             .collect()
     }
 
+    fn validate_indirect_union_args(
+        &self,
+        caller: &MirFunction,
+        target: &Operand,
+        args: &[MirArg],
+    ) -> std::result::Result<(), String> {
+        let signature = self.operand_type(caller, target)?;
+        let params = match signature.as_ref() {
+            Some(Type::Function { params, .. }) => params.as_slice(),
+            Some(Type::Closure { params, .. }) => params.as_slice(),
+            _ => return Ok(()),
+        };
+        if !params
+            .iter()
+            .any(|param| matches!(param.ty, Type::Union(_)))
+        {
+            return Ok(());
+        }
+        let mut bound = vec![false; params.len()];
+        let mut next = 0;
+        for arg in args {
+            let index = if let Some(name) = &arg.name {
+                params
+                    .iter()
+                    .position(|param| &param.name == name)
+                    .ok_or_else(|| {
+                        format!(
+                            "invalid MIR indirect call in `{}` has unknown argument `{name}`",
+                            caller.name
+                        )
+                    })?
+            } else {
+                while next < bound.len() && bound[next] {
+                    next += 1;
+                }
+                if next == bound.len() {
+                    return Err(format!(
+                        "invalid MIR indirect call in `{}` has too many arguments",
+                        caller.name
+                    ));
+                }
+                let index = next;
+                next += 1;
+                index
+            };
+            let param = &params[index];
+            if std::mem::replace(&mut bound[index], true) {
+                return Err(format!(
+                    "invalid MIR indirect call in `{}` binds parameter {} more than once",
+                    caller.name,
+                    index + 1
+                ));
+            }
+            if matches!(param.ty, Type::Union(_))
+                && self.operand_type(caller, &arg.value)?.as_ref() != Some(&param.ty)
+            {
+                let label = if param.name.is_empty() {
+                    (index + 1).to_string()
+                } else {
+                    format!("{} `{}`", index + 1, param.name)
+                };
+                return Err(format!(
+                    "invalid MIR indirect call in `{}` requires exact union type '{}' for parameter {label}",
+                    caller.name, param.ty
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn pending_call(
         &self,
         caller: &MirFunction,
@@ -2044,7 +2128,10 @@ impl<'a> MirLoanValidationContext<'a> {
                     None,
                 )
             }
-            CallTarget::Value(_) => ("<indirect>".to_string(), Vec::new(), None),
+            CallTarget::Value(value) => {
+                self.validate_indirect_union_args(caller, value, args)?;
+                ("<indirect>".to_string(), Vec::new(), None)
+            }
             CallTarget::Extern(call) => (format!("extern {}", call.symbol), Vec::new(), None),
             CallTarget::Member {
                 object,
@@ -2622,6 +2709,40 @@ fn validate_loan_rvalue(
         Ok(())
     };
     match value {
+        Rvalue::UnionInject {
+            value,
+            union_type,
+            member_type,
+            member_index,
+        } => {
+            let Type::Union(union) = union_type else {
+                return Err("invalid MIR union injection requires a union type".to_owned());
+            };
+            if union.members.get(*member_index) != Some(member_type) {
+                return Err("invalid MIR union injection member index and type disagree".to_owned());
+            }
+            let actual = context.operand_type(function, value)?;
+            let literal_matches = match value {
+                Operand::Int(magnitude) => match crate::sema::integer_type_bounds(member_type) {
+                    Some(crate::integer::IntegerBounds::Signed { max, .. }) => {
+                        *magnitude <= max as u128
+                    }
+                    Some(crate::integer::IntegerBounds::Unsigned { max }) => *magnitude <= max,
+                    None => false,
+                },
+                Operand::Float(_) => {
+                    matches!(member_type, Type::Named(name, args) if args.is_empty() && matches!(name.as_str(), "float32" | "float64"))
+                }
+                _ => false,
+            };
+            if !literal_matches && actual.as_ref() != Some(member_type) {
+                return Err(
+                    "invalid MIR union injection operand does not have its selected member type"
+                        .to_owned(),
+                );
+            }
+            validate_loan_operand(function, value, context, state)
+        }
         Rvalue::Use(value)
         | Rvalue::Unary { value, .. }
         | Rvalue::Cast { value, .. }
@@ -3340,6 +3461,14 @@ fn validate_loan_instruction(
         }
         Instruction::Assign { target, value } => {
             validate_loan_rvalue(function, value, context, state)?;
+            if let Rvalue::UnionInject { union_type, .. } = value {
+                if context.place_type(function, target)?.as_ref() != Some(union_type) {
+                    return Err(
+                        "invalid MIR union injection destination does not have its union type"
+                            .to_owned(),
+                    );
+                }
+            }
             validate_loan_place_access(function, target, LoanPlaceAccess::Mutate, state)?;
             if let Rvalue::Call { callee, args } = value {
                 state.pending_handoff = Some(PendingLoanHandoff::IncomingCall(
@@ -9447,7 +9576,7 @@ impl<'a> Lowerer<'a> {
                 scrutinee,
                 capability,
                 arms,
-            } => self.lower_match_expr(expr, scrutinee, *capability, arms),
+            } => self.lower_match_expr(expr, scrutinee, *capability, arms, None),
             ExprKind::Membership {
                 value,
                 container,
@@ -10626,6 +10755,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_expr_with_expected(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {
+        if let Some(value) = self.lower_union_injection(expr, expected, false) {
+            return value;
+        }
         if let Some(expected @ Type::Function { .. }) = expected {
             if let Some(Operand::Function { name, .. }) = self.lower_function_value(expr) {
                 // Contextual typing is what gives a generic named function
@@ -10666,6 +10798,7 @@ impl<'a> Lowerer<'a> {
         }
         match &expr.kind {
             ExprKind::Group(inner) => self.lower_expr_with_expected(inner, expected),
+            ExprKind::Match { scrutinee, capability, arms } => self.lower_match_expr(expr, scrutinee, *capability, arms, expected),
             ExprKind::Tuple(elements) => match expected {
                 Some(Type::Tuple(element_types)) if element_types.len() == elements.len() => {
                     self.lower_tuple_literal(elements, Some(element_types))
@@ -10699,6 +10832,9 @@ impl<'a> Lowerer<'a> {
                 op: UnaryOp::Neg,
                 expr: inner,
             } => match &inner.kind {
+                ExprKind::Float(value) if expected.is_some_and(|ty| matches!(ty, Type::Named(name, args) if args.is_empty() && matches!(name.as_str(), "float32" | "float64"))) => {
+                    Operand::Float(-value)
+                }
                 ExprKind::Int(value) => {
                     if let Some(value) = expected.and_then(|expected| {
                         contextual_float_literal_operand(*value, true, expected)
@@ -10810,6 +10946,9 @@ impl<'a> Lowerer<'a> {
         passing: ReceiverKind,
     ) -> Operand {
         if matches!(passing, ReceiverKind::Borrow | ReceiverKind::BorrowMut) {
+            if let Some(value) = self.lower_union_injection(expr, expected, false) {
+                return value;
+            }
             if let Some(place) = self.render_place_expr_option(expr) {
                 let root = place.split('.').next().unwrap_or_default();
                 if self.view_sources.contains_key(root) {
@@ -10848,6 +10987,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_expr_for_owned_value(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {
+        if let Some(value) = self.lower_union_injection(expr, expected, true) {
+            return value;
+        }
         if let ExprKind::Conditional {
             then_expr,
             condition,
@@ -10914,6 +11056,41 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn lower_union_injection(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+        owned: bool,
+    ) -> Option<Operand> {
+        let expected = expected.filter(|expected| matches!(expected, Type::Union(_)))?;
+        if let ExprKind::Group(inner) = &expr.kind {
+            return self.lower_union_injection(inner, Some(expected), owned);
+        }
+        let injection = self
+            .program
+            .union_injection(self.module_name, expr.span, expected)?;
+        let value = if owned {
+            self.lower_expr_for_owned_value(expr, Some(&injection.member_type))
+        } else {
+            self.lower_expr_with_expected(expr, Some(&injection.member_type))
+        };
+        let target = self.new_typed_temp(injection.union_type.clone());
+        self.emit(Instruction::Assign {
+            target: target.clone(),
+            value: Rvalue::UnionInject {
+                value,
+                union_type: injection.union_type,
+                member_type: injection.member_type,
+                member_index: injection.member_index,
+            },
+        });
+        Some(if owned {
+            self.move_place_for_type(target, expected)
+        } else {
+            Operand::Place(target)
+        })
+    }
+
     fn is_contextual_none_expr(expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::Name(name) => name == "None",
@@ -10928,6 +11105,7 @@ impl<'a> Lowerer<'a> {
         scrutinee_expr: &Expr,
         borrow_mode: ReceiverKind,
         arms: &[crate::ast::MatchExprArm],
+        expected: Option<&Type>,
     ) -> Operand {
         let scrutinee_ty = self.infer_expr_type(scrutinee_expr);
         let consumes_scrutinee = borrow_mode == ReceiverKind::Value
@@ -10953,7 +11131,10 @@ impl<'a> Lowerer<'a> {
         } else {
             None
         };
-        let result = self.new_temp_for_expr(expr);
+        let result = match expected {
+            Some(expected) => self.new_typed_temp(expected.clone()),
+            None => self.new_temp_for_expr(expr),
+        };
         let after_block = self.new_block("match_expr_end");
         let mut next_case_block = self.current_block;
 
@@ -11020,7 +11201,9 @@ impl<'a> Lowerer<'a> {
                     scrutinee_ty.as_ref(),
                 );
             }
-            let arm_type = self.infer_expr_type(&arm.value);
+            let arm_type = expected
+                .cloned()
+                .or_else(|| self.infer_expr_type(&arm.value));
             let value = self.lower_expr_for_owned_value(&arm.value, arm_type.as_ref());
             self.emit(Instruction::Assign {
                 target: result.clone(),

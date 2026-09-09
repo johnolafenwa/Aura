@@ -1959,13 +1959,24 @@ impl<'a> FunctionChecker<'a> {
             }
         }
         let mut resolved_args = Vec::new();
-        for ((argument, expected), param_decl) in ordered_args
+        for (((argument, expected), param_decl), passing) in ordered_args
             .into_iter()
             .zip(param_types.iter())
             .zip(param_decls.iter())
+            .zip(param_passings.iter())
         {
             let locals_before = locals.clone();
             let hinted_expected = substitute_type(expected, &substitutions);
+            if *passing == ReceiverKind::BorrowMut && matches!(hinted_expected, Type::Union(_)) {
+                if let Some(argument) = argument {
+                    let actual =
+                        self.type_of_expr_without_move_state(&argument.value, locals, None)?;
+                    if actual != hinted_expected {
+                        return Err(Diagnostic::coded_at("AU2010", argument.value.span,
+                            format!("mutable argument requires exact type '{hinted_expected}', found '{actual}'")));
+                    }
+                }
+            }
             let actual = if let Some(argument) = argument {
                 match self.type_of_expr_hint(&argument.value, locals, Some(&hinted_expected)) {
                     Ok(actual) => actual,
@@ -1999,6 +2010,15 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
             };
+            if *passing == ReceiverKind::Borrow && matches!(hinted_expected, Type::Union(_)) {
+                if let Some(argument) = argument {
+                    self.validate_borrowed_union_injection(
+                        &argument.value,
+                        &hinted_expected,
+                        locals,
+                    )?;
+                }
+            }
             let nested_move_span = argument
                 .map(|argument| argument.value.span)
                 .or_else(|| param_decl.default.as_ref().map(|default| default.span))

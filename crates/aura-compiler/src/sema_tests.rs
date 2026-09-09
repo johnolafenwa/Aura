@@ -1069,6 +1069,7 @@ fn public_ffi_handle_namespace(module_name: &str) -> ModuleNamespace {
     let mut handle = remote.opaque_handles["Handle"].clone();
     handle.module_name = module_name.to_string();
     ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -1103,6 +1104,7 @@ fn public_ffi_function_namespace(module_name: &str) -> ModuleNamespace {
     let mut scalar = remote.extern_functions["scalar"].clone();
     scalar.module_name = module_name.to_string();
     ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -2911,6 +2913,7 @@ fn ffi_extern_metadata_supports_from_and_qualified_import_calls() {
     let mut scalar = remote.extern_functions["scalar"].clone();
     scalar.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -2981,6 +2984,7 @@ fn ffi_qualified_imports_do_not_expose_private_extern_declarations() {
     let mut hidden = remote.extern_functions["hidden"].clone();
     hidden.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -3037,6 +3041,7 @@ fn ffi_qualified_imports_do_not_expose_private_opaque_handles() {
     let mut hidden = remote.opaque_handles["Hidden"].clone();
     hidden.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -7716,6 +7721,7 @@ fn enum_info(name: &str, payload: Option<Type>) -> EnumInfo {
 
 fn namespace(path: &str) -> ModuleNamespace {
     ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -19793,6 +19799,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
     let remote_enum = enum_info("RemoteStatus", Some(Type::named("int32")));
     let remote_trait = trait_info("RemoteShow", Vec::new());
     let namespace = ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -23967,6 +23974,7 @@ fn imported_module_functions_are_first_class_values() {
         type_param_bounds: BTreeMap::new(),
     };
     let namespace = ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -24020,6 +24028,7 @@ fn nested_imported_module_functions_are_first_class_values() {
         type_param_bounds: BTreeMap::new(),
     };
     let helpers = ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -24046,6 +24055,7 @@ fn nested_imported_module_functions_are_first_class_values() {
         comprehensions: BTreeMap::new(),
     };
     let support = ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -24526,6 +24536,7 @@ fn imported_generic_function_values_specialize_as_values_and_task_targets() {
         type_param_bounds: BTreeMap::new(),
     };
     let namespace = ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),

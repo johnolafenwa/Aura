@@ -1,0 +1,2 @@
+def pack(value: list[int64]) -> list[int64] | None:
+    return value

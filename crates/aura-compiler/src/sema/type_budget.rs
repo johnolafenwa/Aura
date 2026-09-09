@@ -647,5 +647,5 @@ fn aggregate_error(span: Span, limit: usize) -> Diagnostic {
 }
 
 fn capacity_error(span: Span, message: impl Into<String>) -> Diagnostic {
-    Diagnostic::coded_at("AU2999", span, message)
+    Diagnostic::capacity_at(span, message)
 }

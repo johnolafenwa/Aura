@@ -3115,6 +3115,7 @@ fn runtime_span(line: i64, column: i64) -> Option<Span> {
 
 fn value_type_name(value: impl Borrow<Value>) -> String {
     match value.borrow() {
+        Value::Union(union) => union.union_type.to_string(),
         Value::Int(_) => "integer".to_string(),
         Value::Float(_) => "float64".to_string(),
         Value::Bool(_) => "bool".to_string(),
@@ -3160,6 +3161,9 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
 }
 
 fn inferred_collection_type(value: &Value) -> Type {
+    if let Value::Union(union) = value {
+        return union.union_type.clone();
+    }
     if let Value::Function(function) = value {
         return function.signature.clone();
     }
@@ -3167,6 +3171,7 @@ fn inferred_collection_type(value: &Value) -> Type {
         return runtime_type_from_name(&runtime_type_name);
     }
     match value {
+        Value::Union(union) => union.union_type.clone(),
         Value::String(_) => Type::named("str"),
         Value::Bool(_) => Type::named("bool"),
         Value::Float(_) => Type::named("float64"),
@@ -6943,6 +6948,7 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
             Value::EnumVariant(variant) => {
                 nominal_runtime_base_name(&variant.enum_name) == expected
             }
+            Value::Union(union) => union.union_type.to_string() == expected,
             Value::String(_) => expected == "str",
             Value::Tuple(tuple) => {
                 expected == "tuple"
@@ -6997,6 +7003,37 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_value_has_runtime_type(value: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| i64::from(unsafe { effective_runtime_type_name(value) }.is_some()))
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_inject(
+    type_ptr: *const u8,
+    type_len: usize,
+    member_index: usize,
+    payload: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let name = decode_bytes(type_ptr, type_len);
+        let union_type = canonical_runtime_type_from_name(&name)
+            .unwrap_or_else(|| runtime_error("invalid union injection type"));
+        let Type::Union(union) = &union_type else {
+            runtime_error("union injection requires a union type");
+        };
+        if member_index >= union.members.len() {
+            runtime_error("union injection member index is out of range");
+        }
+        // Immediate owned calls pass a registered handle. Unlike an argument
+        // buffer, this boundary has not already detached its registration.
+        let payload = unsafe { consume_owned_value(payload) };
+        boxed_typed_value(
+            Value::Union(Box::new(crate::runtime_value::UnionValue {
+                union_type,
+                member_index,
+                payload,
+            })),
+            &name,
+        )
+    })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -12464,3 +12501,6 @@ pub extern "C-unwind" fn aura_direct_fail_integer_overflow(
 
 #[path = "native_runtime_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "native_union_injection_security_tests.rs"]
+mod union_injection_security_tests;

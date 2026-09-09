@@ -1,0 +1,4 @@
+def accept(value: own (int64 | str)) -> int64:
+    return 42
+def main():
+    print(accept(value=1))

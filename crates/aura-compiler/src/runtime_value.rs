@@ -275,6 +275,7 @@ pub enum Value {
     FfiHandle(FfiHandleValue),
     Instance(InstanceValue),
     EnumVariant(EnumVariantValue),
+    Union(Box<UnionValue>),
     Channel(ChannelValue),
     Task(TaskValue),
     TaskGroup(TaskGroupValue),
@@ -296,6 +297,15 @@ pub enum Value {
     UnixStream(UnixStreamValue),
     TlsListener(TlsListenerValue),
     TlsStream(TlsStreamValue),
+}
+
+/// Interpreter and opaque boundary transport for a selected union payload.
+/// Native local layout is planned independently by the shared MIR layout plan.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnionValue {
+    pub union_type: Type,
+    pub member_index: usize,
+    pub payload: Value,
 }
 
 /// A non-null foreign-owned opaque address tagged with its Aura nominal
@@ -3058,6 +3068,7 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
 
     fn render_source_type(value: &Value) -> String {
         match value {
+            Value::Union(union) => union.union_type.to_string(),
             Value::Int(_) | Value::Float(_) => {
                 unreachable!("numeric source types are handled before render_source_type")
             }
@@ -6659,6 +6670,7 @@ impl Clone for Value {
             Self::FfiHandle(value) => Self::FfiHandle(value.clone()),
             Self::Instance(value) => Self::Instance(value.clone()),
             Self::EnumVariant(value) => Self::EnumVariant(value.clone()),
+            Self::Union(value) => Self::Union(value.clone()),
             Self::Channel(value) => Self::Channel(value.clone()),
             Self::Task(value) => Self::Task(value.clone()),
             Self::TaskGroup(value) => Self::TaskGroup(value.clone()),
@@ -6865,6 +6877,7 @@ impl Value {
                             }
                         }
                     }
+                    Value::Union(union) => actions.push(RenderAction::Value(&union.payload)),
                     Value::EnumVariant(variant) => {
                         rendered.push_str(nominal_runtime_base_name(&variant.enum_name));
                         rendered.push('.');
@@ -7709,6 +7722,7 @@ impl ChannelValue {
 
 pub(crate) fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
     match value {
+        Value::Union(union) => collect_queue_values(&union.payload, queues),
         Value::Channel(channel) => queues.push(channel.clone()),
         Value::Tuple(tuple) => {
             for element in &tuple.elements {

@@ -20,6 +20,9 @@ pub struct TypeDefinitions {
     pub(super) non_value_names: BTreeSet<String>,
     alias_templates: std::cell::RefCell<BTreeMap<String, Type>>,
     budget: super::type_budget::ExpansionBudget,
+    pub(crate) union_injections:
+        std::rc::Rc<std::cell::RefCell<BTreeMap<super::UnionInjectionId, super::UnionInjection>>>,
+    pub(super) union_probe_work: std::rc::Rc<std::cell::Cell<usize>>,
 }
 
 impl std::ops::Deref for TypeDefinitions {
@@ -46,6 +49,8 @@ impl From<BTreeMap<String, crate::diag::Span>> for TypeDefinitions {
             non_value_names: BTreeSet::new(),
             alias_templates: std::cell::RefCell::new(BTreeMap::new()),
             budget: Default::default(),
+            union_injections: Default::default(),
+            union_probe_work: Default::default(),
         }
     }
 }

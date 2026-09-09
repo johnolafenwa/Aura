@@ -25,7 +25,14 @@ Last updated: 2026-09-09
   378 CLI tests, native acceptance, and 400 forced parity cases. It adds 49
   top-level fixtures plus type/alias and bounded metadata regressions. Schema 8
   rejection/current-schema tests pass; all 111 LSP tests retain 100% coverage.
-- Next: injection, then the ordered families,
+- Normalization/aliases committed as `7ad4089`. Injection verification is complete:
+  transactional member selection, shared typed MIR injection, and metadata
+  validation are implemented. All 24 new run-pass fixtures match both forced
+  backends; 11 new check-fail fixtures pin diagnostics. Final gates pass all
+  nine fixture suites, 378 CLI tests, native acceptance, and 424 forced parity
+  cases. Borrowed storage and named/method/indirect call-layout regressions
+  are closed. Clippy and formatting pass; frozen source hashes are unchanged.
+- Next: commit injection, then type patterns/exhaustiveness and the ordered families,
   editor/docs/reference-agent updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.

@@ -222,3 +222,26 @@ This establishes type identity inputs for the ordered moves below the original
 inventory. Injection, explicit union layout/tag plans, callable ABI and binding
 plans, and property dispatch are still pending their respective families; no
 native emission decision is claimed moved merely because a type is accepted.
+
+## Batch 1 phase 1: checked union injection
+
+`sema/unions.rs` selects an injection member exactly once under the expected
+type boundary. Literal probes isolate ownership, loan, obligation, and
+expression metadata; shared compilation budgets still charge their work.
+The resulting module/source-position/type identity record is retained with
+imported bodies. MIR consumes it as `UnionInject`, including the canonical tag,
+member type, union type, and payload operand. Conditional and match arms receive
+their expected result context in shared lowering.
+
+Both runtime paths execute this operation without another member search.
+The common MIR validator checks the selected member, operand and destination
+types before either backend executes. Immediate owned payload transfer uses
+the existing tracked ownership ABI; it does not change frame or scheduler
+contracts. Dense tag selection has moved into shared checking/lowering.
+Borrowed injection builds real union storage for Copy snapshots and fresh
+values; it rejects implicit cloning of non-Copy member places. Returned-view
+origins require an exact union place. Common call validation checks union
+operand storage for named, method, and indirect function-signature calls,
+including metadata supplied through the public MIR interface.
+Native storage layout, allocation-free union locals, generic tag remapping,
+property dispatch, and callable layouts remain the later ordered families.

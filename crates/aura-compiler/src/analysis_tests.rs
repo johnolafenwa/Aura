@@ -47,6 +47,7 @@ fn analysis_resolves_canonical_enums_from_the_module_registry() {
     program.module_registry.insert(
         "json".to_string(),
         crate::sema::ModuleNamespace {
+            union_injections: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -3458,6 +3459,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     .join("\n");
     let remote_program = checked_program(&remote_source);
     let mut tools_namespace = crate::sema::ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -3486,6 +3488,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     tools_namespace.modules.insert(
         "inner".to_string(),
         crate::sema::ModuleNamespace {
+            union_injections: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -3515,6 +3518,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            union_injections: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -4436,6 +4440,7 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            union_injections: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -4448,6 +4453,7 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
             modules: std::collections::BTreeMap::from([(
                 "types".to_string(),
                 crate::sema::ModuleNamespace {
+                    union_injections: Default::default(),
                     all_aliases: BTreeMap::new(),
                     aliases: BTreeMap::new(),
                     constants: BTreeMap::new(),
@@ -4667,6 +4673,7 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     .join("\n");
     let remote_program = checked_program(&remote_source);
     let tools_namespace = crate::sema::ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -4695,6 +4702,7 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     program.imported_modules.insert(
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
+            union_injections: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),

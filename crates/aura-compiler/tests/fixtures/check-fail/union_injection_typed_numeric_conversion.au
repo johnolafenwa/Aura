@@ -1,0 +1,3 @@
+def main():
+    source: int64 = 1
+    value: float64 | str = source

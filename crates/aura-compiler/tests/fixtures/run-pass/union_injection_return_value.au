@@ -1,0 +1,5 @@
+def make() -> int64 | str:
+    return 42
+def main():
+    value = make()
+    print(42)

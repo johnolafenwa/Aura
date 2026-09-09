@@ -551,6 +551,7 @@ struct NativeCodegen<'a> {
     tuple_new: FuncId,
     tuple_element: FuncId,
     tuple_take_element: FuncId,
+    union_inject: FuncId,
     enum_variant: FuncId,
     variant_matches: FuncId,
     variant_payload: FuncId,
@@ -1068,6 +1069,7 @@ impl<'a> NativeCodegen<'a> {
             tuple_new => ("aura_direct_tuple_new", [types::I64, types::I64], Some(types::I64)),
             tuple_element => ("aura_direct_tuple_element", [types::I64, types::I64], Some(types::I64)),
             tuple_take_element => ("aura_direct_tuple_take_element", [types::I64, types::I64], Some(types::I64)),
+            union_inject => ("aura_direct_union_inject", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             enum_variant => ("aura_direct_enum_variant", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_matches => ("aura_direct_variant_matches", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_payload => ("aura_direct_variant_payload", [types::I64, types::I64], Some(types::I64)),
@@ -1524,6 +1526,7 @@ impl<'a> NativeCodegen<'a> {
             tuple_new,
             tuple_element,
             tuple_take_element,
+            union_inject,
             enum_variant,
             variant_matches,
             variant_payload,
@@ -2545,6 +2548,9 @@ impl<'a> NativeCodegen<'a> {
         let tuple_take_element = self
             .object
             .declare_func_in_func(self.tuple_take_element, builder.func);
+        let union_inject = self
+            .object
+            .declare_func_in_func(self.union_inject, builder.func);
         let enum_variant = self
             .object
             .declare_func_in_func(self.enum_variant, builder.func);
@@ -3305,6 +3311,7 @@ impl<'a> NativeCodegen<'a> {
             tuple_new,
             tuple_element,
             tuple_take_element,
+            union_inject,
             enum_variant,
             variant_matches,
             variant_payload,
@@ -4562,6 +4569,7 @@ struct FunctionCompiler<'a> {
     tuple_new: cranelift_codegen::ir::FuncRef,
     tuple_element: cranelift_codegen::ir::FuncRef,
     tuple_take_element: cranelift_codegen::ir::FuncRef,
+    union_inject: cranelift_codegen::ir::FuncRef,
     enum_variant: cranelift_codegen::ir::FuncRef,
     variant_matches: cranelift_codegen::ir::FuncRef,
     variant_payload: cranelift_codegen::ir::FuncRef,
@@ -5607,6 +5615,29 @@ impl<'a> FunctionCompiler<'a> {
             Rvalue::Member { object, field } => {
                 let object = self.load_operand(object)?;
                 self.extract_field(object, field)
+            }
+            Rvalue::UnionInject {
+                value,
+                union_type,
+                member_type,
+                member_index,
+            } => {
+                let member_target = ensure_direct_type(member_type, &self.classes, "union member")?;
+                let loaded = self.load_operand_for_target(value, &member_target)?;
+                let loaded = self.coerce_value(loaded, &member_target)?;
+                let payload = self.ensure_opaque(loaded)?;
+                let transferred = self.transfer_owned_opaque_value(&payload);
+                let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
+                let (ptr, len) = self.string_constant(encoded.as_bytes())?;
+                let tag = self.builder.ins().iconst(types::I64, *member_index as i64);
+                let call = self
+                    .builder
+                    .ins()
+                    .call(self.union_inject, &[ptr, len, tag, transferred]);
+                Ok(self.owned_opaque_result(
+                    self.builder.inst_results(call).to_vec(),
+                    union_type.clone(),
+                ))
             }
             Rvalue::EnumVariant {
                 enum_name,
@@ -15977,7 +16008,9 @@ fn validate_rvalue(
     classes: &HashMap<String, MirClass>,
 ) -> std::result::Result<(), String> {
     match rvalue {
-        Rvalue::Use(operand) => validate_operand(operand),
+        Rvalue::Use(operand) | Rvalue::UnionInject { value: operand, .. } => {
+            validate_operand(operand)
+        }
         Rvalue::ModuleConstant { .. } => Ok(()),
         Rvalue::Closure {
             signature,
@@ -16411,6 +16444,7 @@ fn infer_rvalue_type(
 ) -> Option<DirectType> {
     match rvalue {
         Rvalue::Use(operand) => infer_operand_type(operand, variable_types, classes),
+        Rvalue::UnionInject { union_type, .. } => direct_type(union_type, classes),
         Rvalue::ModuleConstant { .. } => None,
         Rvalue::Closure { signature, .. } => Some(DirectType::Opaque(signature.clone())),
         Rvalue::FormatString { .. } => Some(DirectType::Opaque(Type::named("str"))),

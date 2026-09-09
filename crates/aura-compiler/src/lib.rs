@@ -170,17 +170,18 @@ pub mod native_runtime_coverage {
         aura_direct_udp_socket_recv, aura_direct_udp_socket_recv_from,
         aura_direct_udp_socket_send_bytes, aura_direct_unary_value, aura_direct_unary_value_at,
         aura_direct_unbox_bool, aura_direct_unbox_f64, aura_direct_unbox_i64,
-        aura_direct_unbox_int64, aura_direct_unbox_u64, aura_direct_unix_listener_accept,
-        aura_direct_unix_listener_close, aura_direct_unix_stream_close,
-        aura_direct_unix_stream_read_exact, aura_direct_unix_stream_write_all,
-        aura_direct_value_as_condition, aura_direct_variant_payload,
-        aura_direct_vec_clear_in_place, aura_direct_vec_contains, aura_direct_vec_empty,
-        aura_direct_vec_extend_in_place, aura_direct_vec_get, aura_direct_vec_index,
-        aura_direct_vec_index_option, aura_direct_vec_insert_in_place, aura_direct_vec_is_empty,
-        aura_direct_vec_len, aura_direct_vec_pop_in_place, aura_direct_vec_push_in_place,
-        aura_direct_vec_remove_in_place, aura_direct_vec_reverse_in_place,
-        aura_direct_vec_set_in_place, aura_direct_vec_set_index_in_place, aura_direct_vec_slice,
-        aura_direct_vec_swap_in_place, aura_direct_vec_take_index_in_place, aura_direct_wait_all,
+        aura_direct_unbox_int64, aura_direct_unbox_u64, aura_direct_union_inject,
+        aura_direct_unix_listener_accept, aura_direct_unix_listener_close,
+        aura_direct_unix_stream_close, aura_direct_unix_stream_read_exact,
+        aura_direct_unix_stream_write_all, aura_direct_value_as_condition,
+        aura_direct_variant_payload, aura_direct_vec_clear_in_place, aura_direct_vec_contains,
+        aura_direct_vec_empty, aura_direct_vec_extend_in_place, aura_direct_vec_get,
+        aura_direct_vec_index, aura_direct_vec_index_option, aura_direct_vec_insert_in_place,
+        aura_direct_vec_is_empty, aura_direct_vec_len, aura_direct_vec_pop_in_place,
+        aura_direct_vec_push_in_place, aura_direct_vec_remove_in_place,
+        aura_direct_vec_reverse_in_place, aura_direct_vec_set_in_place,
+        aura_direct_vec_set_index_in_place, aura_direct_vec_slice, aura_direct_vec_swap_in_place,
+        aura_direct_vec_take_index_in_place, aura_direct_wait_all,
         aura_direct_wait_all_timeout_value, aura_direct_wait_any,
         aura_direct_wait_any_timeout_value, aura_direct_websocket_close,
         aura_direct_websocket_listener_accept, aura_direct_websocket_listener_local_addr,
@@ -1518,6 +1519,7 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
         .cloned()
         .unwrap_or_else(|| program.module_name.clone());
     let mut namespace = ModuleNamespace {
+        union_injections: program.type_definitions.union_injections.borrow().clone(),
         all_aliases: program
             .aliases_in_scope()
             .map(|(name, info)| (name.clone(), qualify_alias_info_for_export(program, info)))
@@ -1720,6 +1722,7 @@ fn insert_namespace_import(
     let root_name = path[0].clone();
     let root = bindings.entry(root_name.clone()).or_insert_with(|| {
         ImportedBinding::Module(ModuleNamespace {
+            union_injections: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -1766,6 +1769,7 @@ fn insert_namespace_import(
             .modules
             .entry(segment.clone())
             .or_insert_with(|| ModuleNamespace {
+                union_injections: Default::default(),
                 all_aliases: BTreeMap::new(),
                 aliases: BTreeMap::new(),
                 constants: BTreeMap::new(),

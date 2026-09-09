@@ -943,6 +943,7 @@ fn io_namespace() -> ModuleNamespace {
     enums.insert(error.decl.name.clone(), error.clone());
 
     ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -1093,6 +1094,7 @@ fn fs_namespace() -> ModuleNamespace {
     }
 
     ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -1320,6 +1322,7 @@ fn net_namespace() -> ModuleNamespace {
     }
 
     ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -1476,6 +1479,7 @@ fn process_namespace() -> ModuleNamespace {
     }
 
     ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -1528,6 +1532,7 @@ fn random_namespace() -> ModuleNamespace {
     .collect::<BTreeMap<_, _>>();
 
     ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -1593,6 +1598,7 @@ fn function_only_namespace(name: &str, functions: Vec<FunctionInfo>) -> ModuleNa
         .map(|function| (function.decl.name.clone(), function))
         .collect::<BTreeMap<_, _>>();
     ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -1995,6 +2001,7 @@ fn json_namespace() -> ModuleNamespace {
         (error.decl.name.clone(), error),
     ]);
     ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -2114,6 +2121,7 @@ fn bytes_namespace() -> ModuleNamespace {
     let error = bytes_error_enum_info();
     let enums = BTreeMap::from([(error.decl.name.clone(), error)]);
     ModuleNamespace {
+        union_injections: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
