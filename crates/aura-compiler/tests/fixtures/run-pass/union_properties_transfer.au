@@ -1,0 +1,18 @@
+def worker(value: own int64 | None) -> int64:
+    if value is None:
+        return 0
+    return value + 1
+
+def label(value: own str | None) -> str:
+    if value is None:
+        return "none"
+    return value
+
+def main():
+    payload: int64 | None = 41
+    absent: str | None = None
+    with TaskGroup() as group:
+        first = group.start(worker, payload)
+        second = group.start(label, absent)
+        print(first.result_or(-1, timeout=500ms))
+        print(second.result_or("timeout", timeout=500ms))

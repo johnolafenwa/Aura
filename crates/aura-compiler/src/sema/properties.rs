@@ -600,7 +600,18 @@ pub(super) fn type_is_copy_in_context_inner(
     visiting: &mut BTreeSet<String>,
 ) -> bool {
     match ty {
-        Type::Union(_) => false,
+        // A union is Copy exactly when every member is Copy (ADR-0052 A6):
+        // its storage is a tag plus one member payload.
+        Type::Union(union) => union.members.iter().all(|member| {
+            type_is_copy_in_context_inner(
+                member,
+                classes,
+                enums,
+                imported_modules,
+                module_registry,
+                visiting,
+            )
+        }),
         Type::Unit => true,
         Type::Module(_) => false,
         Type::TypeParam(_) => false,
@@ -1178,12 +1189,20 @@ impl<'a> FunctionChecker<'a> {
             };
         }
         match ty {
-            Type::Union(_) => TransferSummary {
-                failure: Some(format!(
-                    "union `{ty}` requires all-member Transfer validation"
-                )),
-                requirements: Vec::new(),
-            },
+            Type::Union(union) => {
+                let mut result = TransferSummary::default();
+                for member in &union.members {
+                    let member_summary = Self::prefix_transfer_summary(
+                        self.transfer_shape(member, formals, summaries),
+                        &format!("member `{member}` of `{ty}`"),
+                    );
+                    Self::merge_transfer_summary(&mut result, member_summary);
+                    if result.failure.is_some() {
+                        break;
+                    }
+                }
+                result
+            }
             Type::Unit | Type::Function { .. } => TransferSummary::default(),
             Type::Closure { captures, .. } => {
                 if let Some(capture) = captures.iter().find(|capture| {
@@ -1714,10 +1733,9 @@ impl<'a> FunctionChecker<'a> {
         visiting: &mut BTreeSet<String>,
     ) -> SymbolicCopyShape {
         match ty {
-            Type::Union(_) => SymbolicCopyShape {
-                intrinsic_noncopy: true,
-                noncopy_formals: Vec::new(),
-            },
+            Type::Union(union) => {
+                self.combine_symbolic_copy_shapes(union.members.iter(), formals, visiting)
+            }
             Type::Unit | Type::Function { .. } => SymbolicCopyShape::default(),
             Type::Closure { .. } => SymbolicCopyShape {
                 intrinsic_noncopy: true,

@@ -278,6 +278,23 @@ are the same value. The interpreter's `NoneTest` and the native
 value at run time. The common validator accepts a union argument that is
 the specialization of a generic callee's symbolic union, and the semantic
 interface schema is version 10.
+
+## Batch 1 phase 1: union properties
+
+Union equality lives in the shared `PartialEq for Value` and routes through
+`union_runtime::union_values_equal`: the active member identities must
+match and the payloads must be equal, and a bare member value compares by
+the same rule, which is the checker's comparison-only injection with no
+runtime union box. Dictionary and set keys of union type reuse that
+equality, so a union hashes as its active member. Copy, symbolic copy, and
+Transfer classification fold over every member in `sema/properties.rs`;
+`.clone()` on a union clones the active payload on both paths. A trait call
+on a union receiver lowers to `TraitMember` when every member resolves the
+method through one trait: the interpreter dispatches on the payload and
+writes a mutable receiver back through the active payload projection, and
+the direct backend takes or copies the payload with
+`aura_direct_union_active_payload` and writes back through its private
+`__union_payload_active` spelling, which never appears in MIR.
 No native emitter chooses a preferred member or decides exhaustiveness.
 
 Alternative arms lower separately where their payload sources differ. A failed

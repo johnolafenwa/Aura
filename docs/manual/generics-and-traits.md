@@ -231,6 +231,16 @@ Two implementations with exactly the same trait specialization and target are du
 
 Aura 0.3 does not impose a separate orphan-rule restriction, but an implementation must refer to known visible types and traits and participates only where that implementation is present in the loaded module/package context.
 
+A union value dispatches a trait method when every member implements the
+same trait specialization with one contract: the same receiver mode,
+parameter modes and types, and owned result type after substituting each
+member for `Self`. The active member's implementation runs; a `mut self`
+method mutates the payload in place while the tag stays fixed, and an
+`own self` method consumes the union. A result written as `Self` that would
+differ per member is not one contract; match the member and declare the
+result union explicitly. There is no duck typing over common method names,
+no `impl` for an anonymous union, and no inferred trait intersection.
+
 ## Implementation Method Conformance
 
 An implementation may define only methods belonging to the trait. It must provide every signature-only required method; a trait method with a default body is inherited when omitted. An implementation may override a default method.

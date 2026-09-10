@@ -1,0 +1,3 @@
+def main():
+    left: int64 | str | None = 1
+    print(left == 1.5)

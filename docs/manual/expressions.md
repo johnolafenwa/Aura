@@ -250,6 +250,23 @@ has static type `Option[T]`, a bare `None` on the other side denotes
 `None == None` is `true` and unit `None != None` is `false`; a qualified
 `Option.None` with no context for its type argument is rejected.
 
+Union equality follows the ratified member rule. Two values of the same
+normalized union are equal exactly when their active members agree and the
+payloads are equal; equality is available only when every member defines
+it, so a union with a callable, `random.Rng`, opaque handle, or `Array`
+member reports `AU2008` whatever its current member. When exactly one operand
+has a union type, the other operand is injected for the comparison only under
+the [union injection](/manual/types#scalar-types) rules: a typed member value
+selects its member, a literal that fits several members is `AU2011`, and a
+nonmember or a different normalized union is `AU2003`. The rule is symmetric
+(`value == 1` and `1 == value`), evaluates each operand once, and neither moves
+nor clones a payload. Comparing with `None` works when the union has a `None`
+member and establishes no narrowing fact. Where a hashing operation is
+available, a union hashes as its active member, so a member value and the
+union holding it hash alike and may share a dictionary or set slot; different
+members compare unequal but may collide. Ordering and arithmetic are never
+available on a union, even when every member supports them (`AU2003`).
+
 `value is None` and `value is not None` are the two `None` tests. They sit at
 the comparison level, produce `bool`, and evaluate their operand exactly once
 as its declared type. `is` is contextual to these complete forms only:

@@ -378,6 +378,16 @@ impl<'a> FunctionChecker<'a> {
     }
 
     pub(super) fn builtin_duplication_member(&self, ty: &Type) -> Option<&'static str> {
+        if let Type::Union(union) = ty {
+            // A union clones when every member is Copy or clones itself.
+            return union
+                .members
+                .iter()
+                .all(|member| {
+                    self.is_copy_type(member) || self.builtin_duplication_member(member).is_some()
+                })
+                .then_some("clone");
+        }
         let Type::Named(name, _) = ty else {
             return None;
         };

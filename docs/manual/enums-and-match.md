@@ -47,6 +47,15 @@ Shared and mutable matches lock the original source for the arm, including
 when the selected payload is Copy. Replacing the whole union to change its
 tag is allowed after the conflicting arm access ends.
 
+A union is Copy when every member is Copy and otherwise moves; `.clone()`
+is available when every member is Copy or clones itself, and cloning copies
+the active payload. A union crosses a task boundary when every member is
+Transfer. Two values of one union are equal when their active members agree
+and the payloads are equal, and a union compares symmetrically with a value
+that injects as one of its members; see
+[equality](/manual/expressions#arithmetic-and-comparison). Printing a union
+renders its active payload, or `None`, without a tag. Unions have no ordering.
+
 The existing `Option[T]` library and `T?` spelling remain available during
 Batch 1 phase 1; their removal belongs to phase 2.
 
@@ -519,7 +528,9 @@ implementation-defined.
 Batch 1 phase 1 adds normalized union type arms, unit-member cases, singleton
 type arms, nested union payload patterns, and AU2013 coverage diagnostics on
 both backends, together with `is None` and `is not None` conditional
-narrowing of stable places and AU2014 stale-narrowing diagnostics. Guards preserve candidate ownership until commitment, and
+narrowing of stable places and AU2014 stale-narrowing diagnostics, generic
+union members, and the union property rules: all-member Copy, clone, and
+Transfer, member-injected equality, and active-member trait dispatch. Guards preserve candidate ownership until commitment, and
 mutable arms retain member type and source locks.
 
 Nominal and generic enums, positional and named payloads, qualified and

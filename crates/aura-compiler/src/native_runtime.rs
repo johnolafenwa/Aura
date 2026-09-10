@@ -7029,6 +7029,36 @@ pub extern "C-unwind" fn aura_direct_union_tag_test(
     })
 }
 
+/// The direct backend's spelling for the active member payload of a union
+/// place, used only for trait-method receiver write-back.
+pub(crate) const DIRECT_UNION_ACTIVE_PAYLOAD_PROJECTION: &str = "__union_payload_active";
+
+/// The active member payload of a union receiver for trait dispatch
+/// (ADR-0052 A8): a copy for shared and mutable receivers, or the payload
+/// moved out when the call consumes the union.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_active_payload(
+    value: *mut OpaqueValue,
+    consume: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let payload = unsafe {
+            value_mut(value, |value| {
+                let Value::Union(union) = value else {
+                    runtime_error("union member dispatch requires an active union");
+                };
+                if consume != 0 {
+                    std::mem::replace(&mut union.payload, Value::Unit)
+                } else {
+                    try_clone_array_containing_value(&union.payload)
+                        .unwrap_or_else(|error| runtime_error(error.message))
+                }
+            })
+        };
+        boxed_value(payload)
+    })
+}
+
 /// `value is None` on a type-parameter value: unit `None` itself or a union
 /// currently holding it (ADR-0052 A7).
 #[cfg_attr(not(coverage), no_mangle)]
@@ -7072,6 +7102,12 @@ pub extern "C-unwind" fn aura_direct_union_take_payload(
 
 fn direct_union_projection(union: &crate::runtime_value::UnionValue, field: &str) -> bool {
     if field == format!("__union_payload_{}", union.member_index) {
+        return true;
+    }
+    // The direct backend writes a trait method's mutated receiver back into
+    // whichever member is active (ADR-0052 A8); this spelling never appears
+    // in MIR.
+    if field == DIRECT_UNION_ACTIVE_PAYLOAD_PROJECTION {
         return true;
     }
     // A value tagged by a generic frame keeps that frame's symbolic layout

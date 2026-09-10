@@ -1,0 +1,16 @@
+trait Named:
+    def name(self) -> str
+
+class Dog:
+    tag: str
+
+class Rock:
+    weight: int64
+
+impl Named for Dog:
+    def name(self) -> str:
+        return self.tag.clone()
+
+def main():
+    thing: Dog | Rock = Rock(weight=3)
+    print(thing.name())

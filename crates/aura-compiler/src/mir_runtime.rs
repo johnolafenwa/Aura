@@ -4898,8 +4898,19 @@ impl MirRuntime {
                 if let CallTarget::TraitMember { trait_name, .. } = callee {
                     let receiver_static_ty = self
                         .resolve_operand_type(object, env)
-                        .filter(|ty| !matches!(ty, Type::TypeParam(_)));
-                    let receiver = self.evaluate_owned_operand(object, env)?;
+                        .filter(|ty| !matches!(ty, Type::TypeParam(_) | Type::Union(_)));
+                    let mut receiver = self.evaluate_owned_operand(object, env)?;
+                    // A union receiver dispatches on its active member
+                    // (ADR-0052 A8): the payload is the receiver, and a
+                    // mutable method writes back through the payload
+                    // projection so the tag cannot change during the call.
+                    let mut union_receiver_place = None;
+                    if let Value::Union(union) = receiver {
+                        union_receiver_place = receiver_place
+                            .as_deref()
+                            .map(|place| format!("{place}.__union_payload_{}", union.member_index));
+                        receiver = union.payload;
+                    }
                     let resolved_receiver_ty = receiver_static_ty
                         .or_else(|| self.infer_runtime_value_type(&receiver))
                         .ok_or_else(|| {
@@ -4919,12 +4930,15 @@ impl MirRuntime {
                                 "type `{resolved_receiver_ty}` has no MIR implementation of `{trait_name}.{field}`"
                             ))
                         })?;
+                    let effective_receiver_place = union_receiver_place
+                        .as_deref()
+                        .or(receiver_place.as_deref());
                     return self.evaluate_resolved_trait_method_call(
                         receiver,
                         &resolved_receiver_ty,
                         field,
                         method,
-                        receiver_place.as_deref(),
+                        effective_receiver_place,
                         args,
                         expected_return_type,
                         env,
@@ -4990,6 +5004,15 @@ impl MirRuntime {
                     .resolve_operand_type(object, env)
                     .filter(|ty| !matches!(ty, Type::TypeParam(_)));
                 let mut receiver = self.evaluate_owned_operand(object, env)?;
+
+                if field == "clone" && matches!(receiver, Value::Union(_)) {
+                    // A union clones as its active member (ADR-0052 A6); the
+                    // checker admits this only when every member clones.
+                    if !args.is_empty() {
+                        return Err(Diagnostic::new("`clone` does not take arguments"));
+                    }
+                    return Ok(receiver);
+                }
 
                 if field == "__take_index_option" {
                     let receiver = std::mem::replace(&mut receiver, Value::Unit);

@@ -6737,6 +6737,14 @@ impl PartialEq for Value {
             (Value::UnixStream(left), Value::UnixStream(right)) => left == right,
             (Value::TlsListener(left), Value::TlsListener(right)) => left == right,
             (Value::TlsStream(left), Value::TlsStream(right)) => left == right,
+            // Union equality is active-member equality (ADR-0052 A6, Q6 B):
+            // the same member identity and equal payloads, regardless of the
+            // union each side was built with. A bare member value compares
+            // through the same rule, which is the comparison-only injection
+            // the checker admits without allocating a union box.
+            (Value::Union(_), _) | (_, Value::Union(_)) => {
+                crate::union_runtime::union_values_equal(self, other)
+            }
             _ => false,
         }
     }

@@ -230,3 +230,39 @@ fn none_tests_see_through_union_tags() {
         Value::Unit
     )));
 }
+
+#[test]
+fn union_equality_is_active_member_equality() {
+    let concrete = union(vec![Type::named("int64"), Type::named("str"), Type::Unit]);
+    let symbolic = union(vec![Type::TypeParam("V".to_string()), Type::Unit]);
+    let one = union_value(&concrete, &Type::named("int64"), int(1));
+    let another_one = union_value(&concrete, &Type::named("int64"), int(1));
+    let two = union_value(&concrete, &Type::named("int64"), int(2));
+    let text = union_value(
+        &concrete,
+        &Type::named("str"),
+        Value::String("1".to_string()),
+    );
+    let none = union_value(&concrete, &Type::Unit, Value::Unit);
+    assert!(union_values_equal(&one, &another_one));
+    assert!(!union_values_equal(&one, &two));
+    assert!(
+        !union_values_equal(&one, &text),
+        "different tags stay unequal"
+    );
+    assert!(
+        union_values_equal(&one, &int(1)),
+        "a bare member compares by injection"
+    );
+    assert!(union_values_equal(&int(1), &one));
+    assert!(!union_values_equal(&text, &int(1)));
+    assert!(union_values_equal(&none, &Value::Unit));
+    assert!(!union_values_equal(&none, &one));
+    let symbolic_one = union_value(&symbolic, &Type::TypeParam("V".to_string()), int(1));
+    assert!(
+        union_values_equal(&symbolic_one, &one),
+        "a generic frame's layout compares by the active member"
+    );
+    assert_eq!(one, another_one, "the shared PartialEq routes unions here");
+    assert_ne!(one, text);
+}

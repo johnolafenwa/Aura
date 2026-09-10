@@ -63,6 +63,21 @@ mod type_budget_tests;
 mod types;
 pub(crate) use types::builtin_enum_variants;
 pub(crate) use types::UnionType;
+
+/// The one contract a union receiver's trait method resolves to across
+/// every member (ADR-0052 A8).
+struct UnionTraitMethod {
+    receiver: Option<crate::ast::ReceiverKind>,
+    decl_type_params: Vec<String>,
+    decl_params: Vec<crate::ast::Param>,
+    param_passings: Vec<ReceiverKind>,
+    param_types: Vec<Type>,
+    return_type: Type,
+    type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
+    rng_clone_safe_type_params: BTreeSet<String>,
+    array_equality_safe_type_params: BTreeSet<String>,
+    substitutions: HashMap<String, Type>,
+}
 use types::{
     collect_type_params_from_type, collect_type_ref_type_params, lower_type, lower_type_with_self,
     merged_type_param_scope, substitute_trait_bounds, type_param_scope, unify_type_pattern,
@@ -640,6 +655,32 @@ pub(crate) fn membership_member_name(container_ty: &Type) -> Option<&'static str
         }
         Type::Named(name, args) if name == "str" && args.is_empty() => Some("contains"),
         _ => None,
+    }
+}
+
+/// The source spelling of a binary operator for diagnostics.
+fn binary_operator_symbol(op: BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::And => "and",
+        BinaryOp::Or => "or",
+        BinaryOp::Add => "+",
+        BinaryOp::Sub => "-",
+        BinaryOp::Mul => "*",
+        BinaryOp::Div => "/",
+        BinaryOp::FloorDiv => "//",
+        BinaryOp::Mod => "%",
+        BinaryOp::Pow => "**",
+        BinaryOp::BitAnd => "&",
+        BinaryOp::BitOr => "|",
+        BinaryOp::BitXor => "^",
+        BinaryOp::Shl => "<<",
+        BinaryOp::Shr => ">>",
+        BinaryOp::Eq => "==",
+        BinaryOp::NotEq => "!=",
+        BinaryOp::Less => "<",
+        BinaryOp::LessEq => "<=",
+        BinaryOp::Greater => ">",
+        BinaryOp::GreaterEq => ">=",
     }
 }
 
@@ -5639,6 +5680,131 @@ impl<'a> FunctionChecker<'a> {
         Ok(then_ty)
     }
 
+    /// Resolves a trait method on a union receiver (ADR-0052 A8): every
+    /// member must implement the same trait specialization with one
+    /// contract after substituting that member for `Self`. Dispatch then
+    /// selects the active member at run time.
+    fn union_trait_method(
+        &self,
+        union: &UnionType,
+        receiver_ty: &Type,
+        field: &str,
+        span: crate::diag::Span,
+    ) -> Result<Option<UnionTraitMethod>> {
+        let mut resolved = Vec::new();
+        let mut missing = Vec::new();
+        for member in &union.members {
+            match self.trait_method_for_concrete_type(member, field, span)? {
+                Some((trait_impl, method, substitutions)) => {
+                    resolved.push((member.clone(), trait_impl, method, substitutions));
+                }
+                None => missing.push(member.to_string()),
+            }
+        }
+        if resolved.is_empty() {
+            return Ok(None);
+        }
+        if !missing.is_empty() {
+            return Err(Diagnostic::coded_at(
+                "AU2999",
+                span,
+                format!(
+                    "method `{field}` is not implemented by every member of `{receiver_ty}`: `{}` has no implementation",
+                    missing.join("`, `")
+                ),
+            )
+            .with_help("select the member with a type pattern first, or implement the trait for every member"));
+        }
+        let contract = |trait_impl: &TraitImplInfo,
+                        method: &TraitImplMethodInfo,
+                        substitutions: &HashMap<String, Type>| {
+            (
+                trait_impl.trait_name.clone(),
+                trait_impl
+                    .trait_args
+                    .iter()
+                    .map(|arg| substitute_type(arg, substitutions))
+                    .collect::<Vec<_>>(),
+                method.decl.receiver,
+                method.signature.param_passings.clone(),
+                method
+                    .signature
+                    .params
+                    .iter()
+                    .map(|param| substitute_type(param, substitutions))
+                    .collect::<Vec<_>>(),
+                substitute_type(&method.signature.return_type, substitutions),
+            )
+        };
+        let (first_member, first_impl, first_method, first_substitutions) = &resolved[0];
+        let first_contract = contract(first_impl, first_method, first_substitutions);
+        for (member, trait_impl, method, substitutions) in &resolved[1..] {
+            let candidate = contract(trait_impl, method, substitutions);
+            if candidate != first_contract {
+                return Err(Diagnostic::coded_at(
+                    "AU2999",
+                    span,
+                    format!(
+                        "method `{field}` on `{receiver_ty}` has different contracts for `{first_member}` and `{member}`; select the member with a type pattern first"
+                    ),
+                )
+                .with_help("a union dispatches a trait method only when every member shares one trait specialization, receiver mode, parameter contract, and result type"));
+            }
+        }
+        let (_, _, method, substitutions) = resolved.swap_remove(0);
+        let (_, _, receiver, param_passings, param_types, return_type) = first_contract;
+        Ok(Some(UnionTraitMethod {
+            receiver,
+            decl_type_params: method.decl.type_params.clone(),
+            decl_params: method.decl.params.clone(),
+            param_passings,
+            param_types,
+            return_type,
+            type_param_bounds: method.type_param_bounds.clone(),
+            rng_clone_safe_type_params: method.signature.rng_clone_safe_type_params.clone(),
+            array_equality_safe_type_params: method
+                .signature
+                .array_equality_safe_type_params
+                .clone(),
+            substitutions,
+        }))
+    }
+
+    /// Types one operand of a binary expression under its hint. For `==` and
+    /// `!=` against a union, a member operand is injected for the comparison
+    /// only; an operand that is not a member reports AU2003 as an
+    /// incomparable pair rather than a failed injection (ADR-0052 A6).
+    fn type_equality_operand(
+        &self,
+        op: BinaryOp,
+        operand: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+        hint: Option<&Type>,
+    ) -> Result<Type> {
+        match self.type_of_expr_hint(operand, locals, hint) {
+            Err(error)
+                if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                    && error.code == "AU2010"
+                    && matches!(hint, Some(Type::Union(_))) =>
+            {
+                let union_ty = hint.expect("checked union hint");
+                let actual = self
+                    .type_of_expr_without_move_state(operand, locals, None)
+                    .map(|ty| ty.to_string())
+                    .unwrap_or_else(|_| "the other operand".to_string());
+                Err(Diagnostic::coded_at(
+                    "AU2003",
+                    operand.span,
+                    format!(
+                        "cannot compare `{union_ty}` and `{actual}`: expected the same union type or an eligible member"
+                    ),
+                )
+                .with_help("compare a direct member value, or select the member with a type pattern first"))
+            }
+            other => other,
+        }
+    }
+
     fn equality_operand_hint(
         &self,
         left: &Expr,
@@ -6702,14 +6868,16 @@ impl<'a> FunctionChecker<'a> {
                 } else {
                     None
                 };
-                let mut left_ty = self.type_of_expr_hint(
+                let mut left_ty = self.type_equality_operand(
+                    *op,
                     left,
                     locals,
                     contextual_left_expected.as_ref().or(operand_expected),
                 )?;
                 let locals_after_left = locals.clone();
                 let right_hint = array_element_type(&left_ty).unwrap_or(&left_ty);
-                let mut right_ty = self.type_of_expr_hint(right, locals, Some(right_hint))?;
+                let mut right_ty =
+                    self.type_equality_operand(*op, right, locals, Some(right_hint))?;
                 if let Some(right_element) = array_element_type(&right_ty) {
                     if Self::is_numeric_literal_expr(left) {
                         left_ty = self.type_of_expr_hint(left, locals, Some(right_element))?;
@@ -7799,6 +7967,19 @@ impl<'a> FunctionChecker<'a> {
                             left_ty, right_ty
                         ),
                     ))
+                } else if matches!(left_ty, Type::Union(_)) {
+                    // Unions have no ordering or arithmetic even when every
+                    // member does (ADR-0052 A6).
+                    Err(Diagnostic::coded_at(
+                        "AU2003",
+                        span,
+                        format!(
+                            "operator `{}` is not supported for union `{}`: unions have no ordering or arithmetic",
+                            binary_operator_symbol(op),
+                            left_ty
+                        ),
+                    )
+                    .with_help("select one member with a type pattern before comparing or computing"))
                 } else {
                     Err(Diagnostic::at(
                         span,
@@ -13290,6 +13471,66 @@ impl<'a> FunctionChecker<'a> {
                                 )
                                 .map(|checked| checked.return_type);
                         }
+                    }
+                }
+                if let Type::Union(union) = &receiver_ty {
+                    if field == "clone" {
+                        if !args.is_empty() {
+                            return Err(Diagnostic::coded_at(
+                                "AU2004",
+                                span,
+                                "`clone` does not take arguments",
+                            ));
+                        }
+                        if self.builtin_duplication_member(&receiver_ty).is_none() {
+                            return Err(Diagnostic::coded_at(
+                                "AU3007",
+                                span,
+                                format!(
+                                    "cannot clone `{receiver_ty}` because a member does not support cloning"
+                                ),
+                            )
+                            .with_help("clone only unions whose every member is Copy or clones itself"));
+                        }
+                        return Ok(receiver_ty.clone());
+                    }
+                    if let Some(resolved) =
+                        self.union_trait_method(union, &receiver_ty, field, span)?
+                    {
+                        self.enforce_rng_clone_obligations_before_method_inference(
+                            &format!("method `{}`", field),
+                            &resolved.rng_clone_safe_type_params,
+                            &resolved.substitutions,
+                            &resolved.decl_type_params,
+                            span,
+                        )?;
+                        let receiver_borrows = self.prepare_method_receiver_borrows(
+                            field,
+                            resolved.receiver,
+                            object,
+                            span,
+                            locals,
+                        )?;
+                        return self
+                            .type_check_callable_args_seeded(
+                                &format!("method `{}`", field),
+                                &resolved.decl_type_params,
+                                &resolved.decl_params,
+                                &resolved.param_passings,
+                                &resolved.param_types,
+                                &resolved.return_type,
+                                &resolved.type_param_bounds,
+                                &resolved.rng_clone_safe_type_params,
+                                &resolved.array_equality_safe_type_params,
+                                args,
+                                span,
+                                locals,
+                                expected,
+                                resolved.substitutions,
+                                receiver_borrows,
+                                ClosureArgumentPolicy::Reject,
+                            )
+                            .map(|checked| checked.return_type);
                     }
                 }
                 if let Type::TypeParam(type_param_name) = &receiver_ty {

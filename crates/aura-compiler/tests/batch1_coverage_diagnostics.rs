@@ -37,10 +37,18 @@ fn loan_closure_cannot_be_stored_in_an_annotated_list() {
 }
 
 #[test]
-fn union_task_results_require_all_member_transfer_validation() {
-    rejects(
+fn union_task_results_transfer_when_every_member_transfers() {
+    check_source(
         "def make() -> int64 | str:\n    return 1\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make)\n        print(task.result_or(2, timeout=1s))\n",
-        "requires all-member Transfer validation",
+    )
+    .expect("a union whose members are all Transfer crosses the task boundary");
+}
+
+#[test]
+fn union_task_results_name_the_non_transfer_member() {
+    rejects(
+        "def make() -> int64 | TaskGroup:\n    return 1\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make)\n        print(task.result_or(2, timeout=1s))\n",
+        "member `TaskGroup` of `TaskGroup | int64`",
     );
 }
 

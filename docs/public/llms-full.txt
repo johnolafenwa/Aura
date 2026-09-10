@@ -5426,6 +5426,10 @@ as related information. EOF with an unclosed delimiter reports the expected
 closer and labels the opener. These locations and labels are preserved by
 analysis JSON and the LSP bridge.
 
+`AU2003` also reports an incomparable union pair (`cannot compare
+`U` and `T`: expected the same union type or an eligible member`) and any
+ordering or arithmetic operator on a union.
+
 `AU2010` through `AU2015` belong to the Batch 1 union, alias, narrowing, and
 callable surface. `AU2010` reports a value that is not a direct member of the
 expected union, a union spelling without enough context, or a type
@@ -5987,6 +5991,15 @@ Shared and mutable matches lock the original source for the arm, including
 when the selected payload is Copy. Replacing the whole union to change its
 tag is allowed after the conflicting arm access ends.
 
+A union is Copy when every member is Copy and otherwise moves; `.clone()`
+is available when every member is Copy or clones itself, and cloning copies
+the active payload. A union crosses a task boundary when every member is
+Transfer. Two values of one union are equal when their active members agree
+and the payloads are equal, and a union compares symmetrically with a value
+that injects as one of its members; see
+[equality](/manual/expressions#arithmetic-and-comparison). Printing a union
+renders its active payload, or `None`, without a tag. Unions have no ordering.
+
 The existing `Option[T]` library and `T?` spelling remain available during
 Batch 1 phase 1; their removal belongs to phase 2.
 
@@ -6459,7 +6472,9 @@ implementation-defined.
 Batch 1 phase 1 adds normalized union type arms, unit-member cases, singleton
 type arms, nested union payload patterns, and AU2013 coverage diagnostics on
 both backends, together with `is None` and `is not None` conditional
-narrowing of stable places and AU2014 stale-narrowing diagnostics. Guards preserve candidate ownership until commitment, and
+narrowing of stable places and AU2014 stale-narrowing diagnostics, generic
+union members, and the union property rules: all-member Copy, clone, and
+Transfer, member-injected equality, and active-member trait dispatch. Guards preserve candidate ownership until commitment, and
 mutable arms retain member type and source locks.
 
 Nominal and generic enums, positional and named payloads, qualified and
@@ -7410,6 +7425,23 @@ has static type `Option[T]`, a bare `None` on the other side denotes
 `Option.None` of that same specialization. The rule is symmetric. Unit
 `None == None` is `true` and unit `None != None` is `false`; a qualified
 `Option.None` with no context for its type argument is rejected.
+
+Union equality follows the ratified member rule. Two values of the same
+normalized union are equal exactly when their active members agree and the
+payloads are equal; equality is available only when every member defines
+it, so a union with a callable, `random.Rng`, opaque handle, or `Array`
+member reports `AU2008` whatever its current member. When exactly one operand
+has a union type, the other operand is injected for the comparison only under
+the [union injection](/manual/types#scalar-types) rules: a typed member value
+selects its member, a literal that fits several members is `AU2011`, and a
+nonmember or a different normalized union is `AU2003`. The rule is symmetric
+(`value == 1` and `1 == value`), evaluates each operand once, and neither moves
+nor clones a payload. Comparing with `None` works when the union has a `None`
+member and establishes no narrowing fact. Where a hashing operation is
+available, a union hashes as its active member, so a member value and the
+union holding it hash alike and may share a dictionary or set slot; different
+members compare unequal but may collide. Ordering and arithmetic are never
+available on a union, even when every member supports them (`AU2003`).
 
 `value is None` and `value is not None` are the two `None` tests. They sit at
 the comparison level, produce `bool`, and evaluate their operand exactly once
@@ -9331,6 +9363,16 @@ An implementation target must have a concrete or generic named outer type such a
 Two implementations with exactly the same trait specialization and target are duplicates and are rejected. More general and more specialized overlapping patterns may coexist. Dispatch selects the unique applicable implementation with greatest structural specificity; equal-best matches are ambiguous and rejected. Source order is never a tie breaker.
 
 Aura 0.3 does not impose a separate orphan-rule restriction, but an implementation must refer to known visible types and traits and participates only where that implementation is present in the loaded module/package context.
+
+A union value dispatches a trait method when every member implements the
+same trait specialization with one contract: the same receiver mode,
+parameter modes and types, and owned result type after substituting each
+member for `Self`. The active member's implementation runs; a `mut self`
+method mutates the payload in place while the tag stays fixed, and an
+`own self` method consumes the union. A result written as `Self` that would
+differ per member is not one contract; match the member and declare the
+result union explicitly. There is no duck typing over common method names,
+no `impl` for an anonymous union, and no inferred trait intersection.
 
 ## Implementation Method Conformance
 
@@ -15682,6 +15724,12 @@ type, the known type contextually types the literal recursively. The rule is
 symmetric. Each equality link in a comparison chain applies the same
 contextual typing before enforcing exact operand-type equality.
 
+Union `==` and `!=` require the same normalized union on both sides, or one
+union operand and one operand that injects as a direct member; every member
+must define equality. The result is `bool`, both operands are read, and no
+narrowing fact results. Ordering and arithmetic operators reject union
+operands (`AU2003`).
+
 Operator operands are not implicitly widened. An integer literal may be contextually typed to match an integer operand, or a `float32`/`float64` operand when the literal is exactly representable in that floating type. A floating literal may adopt the other operand's floating type. Non-literal values require an explicit numeric cast or integer `.to_float()` conversion.
 
 Integer power requires a non-negative exponent. A negative exponent visible in
@@ -15902,6 +15950,15 @@ An `impl` identifies one trait specialization and one target type pattern. Its m
 For a concrete receiver, the checker chooses the unique applicable implementation with greatest specificity. If multiple equally specific implementations apply, the call or operator is ambiguous and rejected. Source order is not a tie breaker.
 
 For a type parameter, available methods and operators come from its declared bounds. If multiple bounds expose an indistinguishable method, the access is ambiguous unless the language can resolve one unique contract.
+
+A union receiver has a trait method when every member resolves that method
+through the same trait specialization with one contract after substituting
+the member for `Self`: the same receiver mode, parameter modes and types,
+and result type. The call then dispatches on the active member; a member
+without an implementation, or a differing contract, is rejected with
+`AU2999`. A mutable call locks the union's tag for the call, and a consuming
+call consumes the whole union. `.clone()` is available when every member is
+Copy or clones itself.
 
 A type parameter may be a union member. Unifying such a union with an
 argument requires every concrete member of the pattern to be a member of the
@@ -16644,10 +16701,12 @@ positions:
 - `copy class` values whose fields are all copyable
 - user enum values when every declared payload type is statically copyable
 - `Option[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` when all payload types are copyable
+- union values when every member type is copyable
 
 Move values transfer ownership:
 
 - tuple values with at least one move element
+- union values with at least one move member
 - `str`
 - `list[T]`
 - `dict[K, V]`
@@ -16722,7 +16781,8 @@ Accepted ADR-0033 defines the static property used at a task boundary.
 worker to another; it is separate from both Copy and clone safety. `Transfer`
 is derived by the compiler and is not a builtin trait that source code can
 implement or assert. An ordinary user trait also named `Transfer` does not
-affect this structural classification.
+affect this structural classification. A union is Transfer when every member
+is Transfer, and a member that is not names the failing member in `AU3008`.
 
 All copy types and `str` are `Transfer`. `list[T]`, `set[T]`, `dict[K, V]`,
 tuples, classes, and enums are `Transfer` exactly when all of their stored

@@ -555,6 +555,7 @@ struct NativeCodegen<'a> {
     union_inject: FuncId,
     union_tag_test: FuncId,
     none_test: FuncId,
+    union_active_payload: FuncId,
     union_take_payload: FuncId,
     enum_variant: FuncId,
     variant_matches: FuncId,
@@ -1076,6 +1077,7 @@ impl<'a> NativeCodegen<'a> {
             union_inject => ("aura_direct_union_inject", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             union_tag_test => ("aura_direct_union_tag_test", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             none_test => ("aura_direct_none_test", [types::I64], Some(types::I64)),
+            union_active_payload => ("aura_direct_union_active_payload", [types::I64, types::I64], Some(types::I64)),
             union_take_payload => ("aura_direct_union_take_payload", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             enum_variant => ("aura_direct_enum_variant", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_matches => ("aura_direct_variant_matches", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1541,6 +1543,7 @@ impl<'a> NativeCodegen<'a> {
             union_inject,
             union_tag_test,
             none_test,
+            union_active_payload,
             union_take_payload,
             enum_variant,
             variant_matches,
@@ -2572,6 +2575,9 @@ impl<'a> NativeCodegen<'a> {
         let none_test = self
             .object
             .declare_func_in_func(self.none_test, builder.func);
+        let union_active_payload = self
+            .object
+            .declare_func_in_func(self.union_active_payload, builder.func);
         let union_take_payload = self
             .object
             .declare_func_in_func(self.union_take_payload, builder.func);
@@ -3339,6 +3345,7 @@ impl<'a> NativeCodegen<'a> {
             union_inject,
             union_tag_test,
             none_test,
+            union_active_payload,
             union_take_payload,
             enum_variant,
             variant_matches,
@@ -4612,6 +4619,7 @@ struct FunctionCompiler<'a> {
     union_inject: cranelift_codegen::ir::FuncRef,
     union_tag_test: cranelift_codegen::ir::FuncRef,
     none_test: cranelift_codegen::ir::FuncRef,
+    union_active_payload: cranelift_codegen::ir::FuncRef,
     union_take_payload: cranelift_codegen::ir::FuncRef,
     enum_variant: cranelift_codegen::ir::FuncRef,
     variant_matches: cranelift_codegen::ir::FuncRef,
@@ -8741,6 +8749,12 @@ impl<'a> FunctionCompiler<'a> {
             alternative.union_payloads.clear();
             for segment in segments {
                 if let DirectType::Opaque(Type::Union(union)) = &ty {
+                    if segment == crate::native_runtime::DIRECT_UNION_ACTIVE_PAYLOAD_PROJECTION {
+                        // A trait method's receiver write-back selects the
+                        // active member at run time; there is no static tag
+                        // metadata to retain past this point.
+                        break;
+                    }
                     let index = crate::mir::union_payload_projection_index(segment)
                         .filter(|index| *index < union.members.len())
                         .ok_or_else(|| format!("invalid union payload projection `{segment}`"))?;
@@ -15119,6 +15133,32 @@ impl<'a> FunctionCompiler<'a> {
                 field, object_ty
             ));
         }
+        // A union receiver dispatches on its active member (ADR-0052 A8):
+        // the payload is the receiver, and a mutable method writes back
+        // through the active payload projection so the tag cannot change.
+        let union_receiver_place;
+        let (object, receiver_place) = if let Type::Union(_) = object_ty {
+            let consumes = candidates[0].1.receiver == Some(MirReceiverKind::Value);
+            let union_value = self.ensure_opaque(object)?;
+            let consume_flag = self.builder.ins().iconst(types::I64, i64::from(consumes));
+            let inst = self.builder.ins().call(
+                self.union_active_payload,
+                &[union_value.values[0], consume_flag],
+            );
+            let payload = self.owned_opaque_result(
+                self.builder.inst_results(inst).to_vec(),
+                Type::named("Unknown"),
+            );
+            union_receiver_place = receiver_place.map(|place| {
+                format!(
+                    "{place}.{}",
+                    crate::native_runtime::DIRECT_UNION_ACTIVE_PAYLOAD_PROJECTION
+                )
+            });
+            (payload, union_receiver_place.as_deref())
+        } else {
+            (object, receiver_place)
+        };
         if candidates.len() == 1 {
             let Type::Named(candidate_name, _) = &candidates[0].0 else {
                 return Err(format!(

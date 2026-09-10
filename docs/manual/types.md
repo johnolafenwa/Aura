@@ -134,10 +134,12 @@ positions:
 - `copy class` values whose fields are all copyable
 - user enum values when every declared payload type is statically copyable
 - `Option[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` when all payload types are copyable
+- union values when every member type is copyable
 
 Move values transfer ownership:
 
 - tuple values with at least one move element
+- union values with at least one move member
 - `str`
 - `list[T]`
 - `dict[K, V]`
@@ -212,7 +214,8 @@ Accepted ADR-0033 defines the static property used at a task boundary.
 worker to another; it is separate from both Copy and clone safety. `Transfer`
 is derived by the compiler and is not a builtin trait that source code can
 implement or assert. An ordinary user trait also named `Transfer` does not
-affect this structural classification.
+affect this structural classification. A union is Transfer when every member
+is Transfer, and a member that is not names the failing member in `AU3008`.
 
 All copy types and `str` are `Transfer`. `list[T]`, `set[T]`, `dict[K, V]`,
 tuples, classes, and enums are `Transfer` exactly when all of their stored

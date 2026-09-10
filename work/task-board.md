@@ -87,8 +87,16 @@ Last updated: 2026-09-10
   time; the validator accepts specialized union arguments; the semantic
   interface schema is 10. Four run-pass and three check-fail fixtures, the
   generics chapter, and the backend-boundary note are updated.
-- Next: commit the generic-member family, then union properties,
-  layout/interfaces/drop plans, nullable FFI results, the callable families,
+- Union properties family (2026-09-10): union equality is active-member
+  equality shared by both backends and by dictionary and set keys, with
+  member operands injected for the comparison only (AU2003 for nonmembers or
+  different unions, AU2011 for ambiguous literals); Copy, clone, and
+  Transfer derive from every member; trait methods dispatch on the active
+  member when every member shares one contract, including mutable and
+  consuming receivers on both backends; ordering and arithmetic on unions
+  are AU2003. Four run-pass and six check-fail fixtures plus Manual updates.
+- Next: commit the union-properties family, then layout/interfaces/drop
+  plans, nullable FFI results, the callable families,
   editor/docs/reference-agent updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.

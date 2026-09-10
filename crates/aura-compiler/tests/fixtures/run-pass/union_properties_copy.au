@@ -1,0 +1,18 @@
+def show(value: int64 | None) -> int64:
+    if value is None:
+        return 0
+    return value
+
+def main():
+    value: int64 | None = 4
+    copy = value
+    print(show(value) + show(copy))
+    pair: (int64 | None, bool) = (value, true)
+    again = pair
+    print(show(pair[0]) + show(again[0]))
+    text: str | None = "a"
+    cloned = text.clone()
+    print(cloned is None)
+    print(text is None)
+    moved = text
+    print(moved is None)

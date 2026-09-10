@@ -17805,6 +17805,11 @@ impl<'a> Lowerer<'a> {
         {
             return method.decl.receiver;
         }
+        if let Type::Union(union) = &receiver_type {
+            return self
+                .union_trait_member(union, field)
+                .and_then(|(_, receiver)| receiver);
+        }
         self.trait_method_for_receiver(&receiver_type, field)
             .and_then(|(method, _)| method.decl.receiver)
     }
@@ -17864,8 +17869,48 @@ impl<'a> Lowerer<'a> {
         let receiver_type = self
             .specialized_bound_receiver_type(object_expr)
             .or_else(|| self.infer_expr_type(object_expr))?;
+        if let Type::Union(union) = &receiver_type {
+            return self
+                .union_trait_member(union, field)
+                .map(|(trait_name, _)| trait_name);
+        }
         self.bounded_trait_method_for_receiver(&receiver_type, field)
             .map(|(trait_name, _, _, _)| trait_name)
+    }
+
+    /// The trait every member of a union implements for `field`, with the
+    /// receiver mode of that method; the checker has already required one
+    /// contract across members (ADR-0052 A8), so dispatch keys on the trait
+    /// and the active member at run time.
+    fn union_trait_member(
+        &self,
+        union: &crate::sema::UnionType,
+        field: &str,
+    ) -> Option<(String, Option<ReceiverKind>)> {
+        let mut identity: Option<(String, Option<ReceiverKind>)> = None;
+        for member in &union.members {
+            let (trait_impl, method) = self
+                .trait_impls_in_scope()
+                .filter_map(|trait_impl| {
+                    let substitutions = self.trait_impl_substitutions(trait_impl, member)?;
+                    let method = trait_impl.methods.get(field)?;
+                    Some((
+                        crate::sema::trait_impl_specificity(trait_impl),
+                        trait_impl,
+                        method,
+                        substitutions,
+                    ))
+                })
+                .max_by_key(|(specificity, _, _, _)| *specificity)
+                .map(|(_, trait_impl, method, _)| (trait_impl, method))?;
+            let candidate = (trait_impl.trait_name.clone(), method.decl.receiver);
+            match &identity {
+                Some(existing) if *existing != candidate => return None,
+                Some(_) => {}
+                None => identity = Some(candidate),
+            }
+        }
+        identity
     }
 
     fn specialized_bound_receiver_type(&self, object_expr: &Expr) -> Option<Type> {

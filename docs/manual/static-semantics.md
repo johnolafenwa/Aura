@@ -214,6 +214,12 @@ type, the known type contextually types the literal recursively. The rule is
 symmetric. Each equality link in a comparison chain applies the same
 contextual typing before enforcing exact operand-type equality.
 
+Union `==` and `!=` require the same normalized union on both sides, or one
+union operand and one operand that injects as a direct member; every member
+must define equality. The result is `bool`, both operands are read, and no
+narrowing fact results. Ordering and arithmetic operators reject union
+operands (`AU2003`).
+
 Operator operands are not implicitly widened. An integer literal may be contextually typed to match an integer operand, or a `float32`/`float64` operand when the literal is exactly representable in that floating type. A floating literal may adopt the other operand's floating type. Non-literal values require an explicit numeric cast or integer `.to_float()` conversion.
 
 Integer power requires a non-negative exponent. A negative exponent visible in
@@ -434,6 +440,15 @@ An `impl` identifies one trait specialization and one target type pattern. Its m
 For a concrete receiver, the checker chooses the unique applicable implementation with greatest specificity. If multiple equally specific implementations apply, the call or operator is ambiguous and rejected. Source order is not a tie breaker.
 
 For a type parameter, available methods and operators come from its declared bounds. If multiple bounds expose an indistinguishable method, the access is ambiguous unless the language can resolve one unique contract.
+
+A union receiver has a trait method when every member resolves that method
+through the same trait specialization with one contract after substituting
+the member for `Self`: the same receiver mode, parameter modes and types,
+and result type. The call then dispatches on the active member; a member
+without an implementation, or a differing contract, is rejected with
+`AU2999`. A mutable call locks the union's tag for the call, and a consuming
+call consumes the whole union. `.clone()` is available when every member is
+Copy or clones itself.
 
 A type parameter may be a union member. Unifying such a union with an
 argument requires every concrete member of the pattern to be a member of the

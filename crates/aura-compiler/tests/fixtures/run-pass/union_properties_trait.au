@@ -1,0 +1,34 @@
+trait Named:
+    def name(self) -> str
+    def rename(mut self, tag: own str)
+
+class Dog:
+    tag: str
+
+class Cat:
+    tag: str
+
+impl Named for Dog:
+    def name(self) -> str:
+        return "dog " + self.tag
+
+    def rename(mut self, tag: own str):
+        self.tag = tag
+
+impl Named for Cat:
+    def name(self) -> str:
+        return "cat " + self.tag
+
+    def rename(mut self, tag: own str):
+        self.tag = tag
+
+def describe(pet: Dog | Cat) -> str:
+    return pet.name()
+
+def main():
+    mut pet: Dog | Cat = Cat(tag="tom")
+    print(pet.name())
+    pet.rename("felix")
+    print(describe(pet))
+    pet = Dog(tag="rex")
+    print(describe(pet))

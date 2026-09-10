@@ -69,6 +69,27 @@ pub(crate) fn runtime_member_type(value: &Value) -> Option<Type> {
     }
 }
 
+/// Active-member equality between two values of which at least one is a
+/// union: the active member identities must match and the payloads must be
+/// equal. Different tags are unequal even when the payloads coincide.
+pub(crate) fn union_values_equal(left: &Value, right: &Value) -> bool {
+    let (Some(left_identity), Some(right_identity)) =
+        (member_identity(left), member_identity(right))
+    else {
+        return false;
+    };
+    if !member_matches(&left_identity, &right_identity) {
+        return false;
+    }
+    let payload = |value: &Value| -> Value {
+        match value {
+            Value::Union(union) => union.payload.clone(),
+            other => other.clone(),
+        }
+    };
+    payload(left) == payload(right)
+}
+
 /// Whether a value is unit `None` or a union currently holding it.
 pub(crate) fn is_none_value(value: &Value) -> bool {
     matches!(member_identity(value), Some(Type::Unit))

@@ -25,6 +25,10 @@ as related information. EOF with an unclosed delimiter reports the expected
 closer and labels the opener. These locations and labels are preserved by
 analysis JSON and the LSP bridge.
 
+`AU2003` also reports an incomparable union pair (`cannot compare
+`U` and `T`: expected the same union type or an eligible member`) and any
+ordering or arithmetic operator on a union.
+
 `AU2010` through `AU2015` belong to the Batch 1 union, alias, narrowing, and
 callable surface. `AU2010` reports a value that is not a direct member of the
 expected union, a union spelling without enough context, or a type
