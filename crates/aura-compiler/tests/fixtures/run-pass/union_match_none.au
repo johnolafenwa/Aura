@@ -1,0 +1,9 @@
+def main():
+    value: int64 | str | None = None
+    match value:
+        case int64 as number:
+            print(number)
+        case str as text:
+            print(text)
+        case None:
+            print("missing")

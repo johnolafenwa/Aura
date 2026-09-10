@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-09-09
+Last updated: 2026-09-10
 
 ## Batch 1 phase 1 (in progress)
 
@@ -32,7 +32,31 @@ Last updated: 2026-09-09
   nine fixture suites, 378 CLI tests, native acceptance, and 424 forced parity
   cases. Borrowed storage and named/method/indirect call-layout regressions
   are closed. Clippy and formatting pass; frozen source hashes are unchanged.
-- Next: commit injection, then type patterns/exhaustiveness and the ordered families,
+- Injection committed as `3f9f95a`. Type patterns/exhaustiveness is in progress:
+  the checker pattern module is extracted; 51 focused pattern cases and
+  167 common MIR security regressions pass after the container callable
+  identity closure and the independent review's ten findings (see the work
+  note's 2026-09-10 sections). Structural payload views cover
+  nested enums, imported generic types, and the retained Option library. The
+  shared public/deserialized MIR validator now enforces payload proofs and
+  layout, mutation/move/cleanup authority, payload-return containment, and
+  nominal metadata uniqueness before both runtimes. Post-fix verification
+  passes all 1,906 compiler unit tests, all nine fixture suites, 34 CLI unit
+  tests, all 378 CLI product tests and their integration packages, and
+  warning-denied workspace Clippy. The final audit's runtime-selected
+  container bypass, a return-path laundering gap, and forged call-result and
+  parameter metadata are closed with dual-backend regressions; regressions the
+  uncommitted work introduced in ordinary programs are repaired. Indirect
+  calls and task starts are now fail-closed on missing callable identity, with
+  closure, `items`, and `copy` identities recorded and a latent over-strict
+  consuming-call rule removed. Daybreak Blue was unavailable and its absence is
+  recorded rather than substituted. An accidental checkout of the validator was
+  recovered from the rollout logs and verified against twelve recorded hashes.
+  The final-file unit, integration, CLI, and forced parity reruns pass; the
+  coverage floor check measures 95.29/96.10/94.03 against unchanged floors of
+  96.30/97.21/94.71, so a coverage-recovery change follows the family commit
+  before the narrowing family.
+- Next: complete type-pattern gates and commit, then the ordered families,
   editor/docs/reference-agent updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.

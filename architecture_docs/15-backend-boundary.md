@@ -245,3 +245,31 @@ operand storage for named, method, and indirect function-signature calls,
 including metadata supplied through the public MIR interface.
 Native storage layout, allocation-free union locals, generic tag remapping,
 property dispatch, and callable layouts remain the later ordered families.
+
+## Batch 1 phase 1: union type patterns
+
+`sema/patterns.rs` now owns pattern checking, guard capabilities and coverage.
+MIR emits `UnionTagTest` with a canonical type and member index, guarded
+payload loans, and `UnionTakePayload` after an owned guard commits. The common
+validator tracks true-edge tag facts through physical loan origins, intersects
+facts at joins, invalidates them on mutation or move, and merges possibly
+consumed storage at joins. Reinitialization begins a new storage generation.
+Payload views cannot increase capability or escape through an arm-local return.
+
+The interpreter rechecks active tags before projecting, writing or taking a
+payload. Native view alternatives retain structural union base/type/index
+metadata, including through projected aliases, and compare it at CFG joins.
+Native runtime helpers also recheck the active member before payload access.
+No native emitter chooses a preferred member or decides exhaustiveness.
+
+Alternative arms lower separately where their payload sources differ. A failed
+guard skips the remaining alternatives of that source arm. Partial-pattern
+failure releases previously acquired payload views; successful owned arms end
+probe loans before moving into distinct owned slots. Mutable bindings update
+their selected storage. Typed nested nominal patterns project through recorded
+enum layouts into the original storage, so early returns, loop exits, and `try`
+need no payload reconstruction. Every enum/union prefix requires its own
+physical-source tag proof, including through generic payloads and nested views.
+Ancestor loans remain live until their arm-local descendants have ended.
+These changes preserve the existing ownership ABI and frame contract. Final
+inline union storage, generic tag remapping and drop plans remain A9 work.

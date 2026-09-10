@@ -309,6 +309,7 @@ fn args_materialize_process_run(args: &[MirArg]) -> bool {
 
 fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
     match value {
+        Rvalue::UnionTagTest { .. } | Rvalue::UnionTakePayload { .. } => false,
         Rvalue::Use(value)
         | Rvalue::UnionInject { value, .. }
         | Rvalue::Unary { value, .. }
@@ -1206,6 +1207,14 @@ impl Env {
         while index < rest.len() {
             let segment = &rest[index];
             value = match value {
+                Value::EnumVariant(variant) => {
+                    let index = enum_projection_index(variant, segment)?;
+                    &variant.payloads[index]
+                }
+                Value::Union(union) => {
+                    check_union_projection(union, segment)?;
+                    &union.payload
+                }
                 Value::Instance(instance) => instance.fields.get(segment).ok_or_else(|| {
                     Diagnostic::new(format!(
                         "class `{}` has no field `{}` in MIR place `{}`",
@@ -1590,6 +1599,35 @@ fn split_place_segments(place: &str) -> Result<Vec<String>> {
     Ok(segments)
 }
 
+fn check_union_projection(union: &crate::runtime_value::UnionValue, segment: &str) -> Result<()> {
+    let index = segment
+        .strip_prefix("__union_payload_")
+        .and_then(|value| value.parse::<usize>().ok());
+    if index != Some(union.member_index)
+        || segment != format!("__union_payload_{}", union.member_index)
+    {
+        return Err(Diagnostic::new(
+            "union payload projection does not select the active member",
+        ));
+    }
+    Ok(())
+}
+
+fn enum_projection_index(
+    variant: &crate::runtime_value::EnumVariantValue,
+    segment: &str,
+) -> Result<usize> {
+    let Some((name, index)) = crate::mir::enum_payload_projection(segment) else {
+        return Err(Diagnostic::new("invalid enum payload projection"));
+    };
+    if name != variant.variant_name || index >= variant.payloads.len() {
+        return Err(Diagnostic::new(
+            "enum payload projection does not select the active variant",
+        ));
+    }
+    Ok(index)
+}
+
 fn write_nested_place(
     current: &mut Value,
     segments: &[&str],
@@ -1602,6 +1640,24 @@ fn write_nested_place(
         )));
     };
     match current {
+        Value::EnumVariant(variant) => {
+            let index = enum_projection_index(variant, segment)?;
+            if rest.is_empty() {
+                variant.payloads[index] = value;
+                Ok(())
+            } else {
+                write_nested_place(&mut variant.payloads[index], rest, value, full_place)
+            }
+        }
+        Value::Union(union) => {
+            check_union_projection(union, segment)?;
+            if rest.is_empty() {
+                union.payload = value;
+                Ok(())
+            } else {
+                write_nested_place(&mut union.payload, rest, value, full_place)
+            }
+        }
         Value::Instance(instance) => {
             if rest.is_empty() {
                 instance.fields.insert((*segment).to_string(), value);
@@ -1646,6 +1702,9 @@ fn take_nested_place(value: &mut Value, segments: &[String], full_place: &str) -
         )));
     };
     match value {
+        Value::Union(_) => Err(Diagnostic::new(
+            "union payload moves require a checked UnionTakePayload operation",
+        )),
         Value::Instance(instance) => {
             if rest.is_empty() {
                 return instance.fields.remove(segment).ok_or_else(|| {
@@ -1695,6 +1754,14 @@ fn nested_place_mut<'a>(
         return Ok(value);
     };
     let child = match value {
+        Value::EnumVariant(variant) => {
+            let index = enum_projection_index(variant, segment)?;
+            &mut variant.payloads[index]
+        }
+        Value::Union(union) => {
+            check_union_projection(union, segment)?;
+            &mut union.payload
+        }
         Value::Instance(instance) => instance.fields.get_mut(segment).ok_or_else(|| {
             Diagnostic::new(format!(
                 "class `{}` has no field `{}` in MIR place `{full_place}`",
@@ -4071,6 +4138,42 @@ impl MirRuntime {
                     class_name: class_name.clone(),
                     fields: values,
                 })))
+            }
+            Rvalue::UnionTagTest {
+                place,
+                union_type,
+                member_index,
+            } => {
+                let Value::Union(union) = env.place_ref(place)? else {
+                    return Err(Diagnostic::new(
+                        "union tag test requires an active union value",
+                    ));
+                };
+                if &union.union_type != union_type {
+                    return Err(Diagnostic::new("union tag test type identity mismatch"));
+                }
+                Ok(RvalueOutcome::Value(Value::Bool(
+                    union.member_index == *member_index,
+                )))
+            }
+            Rvalue::UnionTakePayload {
+                place,
+                union_type,
+                member_index,
+                ..
+            } => {
+                let Value::Union(union) = env.place_ref(place)? else {
+                    return Err(Diagnostic::new("union take requires an active union value"));
+                };
+                if &union.union_type != union_type || union.member_index != *member_index {
+                    return Err(Diagnostic::new(
+                        "union take member or type identity mismatch",
+                    ));
+                }
+                let Value::Union(union) = env.take_place(place)? else {
+                    unreachable!("checked union take")
+                };
+                Ok(RvalueOutcome::Value(union.payload))
             }
             Rvalue::UnionInject {
                 value,

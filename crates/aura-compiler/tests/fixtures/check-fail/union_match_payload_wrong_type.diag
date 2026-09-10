@@ -1,0 +1,5 @@
+error[AU2002]: cannot assign value of type `str` to `number` of type `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_match_payload_wrong_type.au:5:13
+  |
+5 |             number = "wrong"
+  |             ^

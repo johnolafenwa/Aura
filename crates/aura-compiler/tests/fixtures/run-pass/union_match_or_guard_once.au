@@ -1,0 +1,15 @@
+enum Packet:
+    Left(int64 | None)
+    Right(int64 | None)
+def guard(value: int64) -> bool:
+    print(value)
+    return false
+def main():
+    value = Packet.Left(42)
+    match value:
+        case Packet.Left(int64 as number) | Packet.Right(int64 as number) if guard(number):
+            print(0)
+        case Packet.Left(int64 as number) | Packet.Right(int64 as number):
+            print(number)
+        case Packet.Left(None) | Packet.Right(None):
+            print(0)

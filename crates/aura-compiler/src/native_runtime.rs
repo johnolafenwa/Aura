@@ -7006,6 +7006,62 @@ pub extern "C-unwind" fn aura_direct_value_has_runtime_type(value: *mut OpaqueVa
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_tag_test(
+    value: *mut OpaqueValue,
+    type_ptr: *const u8,
+    type_len: usize,
+    member_index: usize,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let expected = canonical_runtime_type_from_name(&decode_bytes(type_ptr, type_len))
+            .unwrap_or_else(|| runtime_error("invalid union tag type"));
+        unsafe {
+            with_value(value, |value| {
+                let Value::Union(union) = value else {
+                    runtime_error("union tag test requires an active union");
+                };
+                if union.union_type != expected {
+                    runtime_error("union tag type identity mismatch");
+                }
+                i64::from(union.member_index == member_index)
+            })
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_take_payload(
+    value: *mut OpaqueValue,
+    type_ptr: *const u8,
+    type_len: usize,
+    member_index: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let expected = canonical_runtime_type_from_name(&decode_bytes(type_ptr, type_len))
+            .unwrap_or_else(|| runtime_error("invalid union take type"));
+        let payload = unsafe {
+            value_mut(value, |value| {
+                let Value::Union(union) = value else {
+                    runtime_error("union take requires an active union");
+                };
+                if union.union_type != expected || union.member_index != member_index {
+                    runtime_error("union take member or type identity mismatch");
+                }
+                let Value::Union(union) = std::mem::replace(value, Value::Unit) else {
+                    unreachable!()
+                };
+                union.payload
+            })
+        };
+        boxed_value(payload)
+    })
+}
+
+fn direct_union_projection(union: &crate::runtime_value::UnionValue, field: &str) -> bool {
+    field == format!("__union_payload_{}", union.member_index)
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_union_inject(
     type_ptr: *const u8,
     type_len: usize,
@@ -7301,6 +7357,17 @@ pub extern "C-unwind" fn aura_direct_instance_get_field(
         let field = decode_bytes(field_ptr, field_len);
         let cloned = unsafe {
             with_value(value, |value| {
+                if let Value::EnumVariant(variant) = value {
+                    let index = direct_enum_projection_index(variant, &field)
+                        .unwrap_or_else(|message| runtime_error(message));
+                    return try_clone_array_containing_value(&variant.payloads[index]);
+                }
+                if let Value::Union(union) = value {
+                    if !direct_union_projection(union, &field) {
+                        runtime_error("union payload projection does not select the active member");
+                    }
+                    return try_clone_array_containing_value(&union.payload);
+                }
                 let Value::Instance(instance) = value else {
                     runtime_error(format!(
                         "cannot access field `{}` on non-instance `{}`",
@@ -7402,6 +7469,19 @@ pub extern "C-unwind" fn aura_direct_instance_set_field(
     })
 }
 
+fn direct_enum_projection_index(
+    variant: &crate::runtime_value::EnumVariantValue,
+    segment: &str,
+) -> std::result::Result<usize, String> {
+    let Some((name, index)) = crate::mir::enum_payload_projection(segment) else {
+        return Err("invalid enum payload projection".to_string());
+    };
+    if name != variant.variant_name || index >= variant.payloads.len() {
+        return Err("enum payload projection does not select the active variant".to_string());
+    }
+    Ok(index)
+}
+
 fn set_direct_instance_field_owned(
     value: &mut Value,
     segments: &[&str],
@@ -7412,6 +7492,33 @@ fn set_direct_instance_field_owned(
         return Err("direct runtime received an empty instance assignment path".to_string());
     };
     match value {
+        Value::EnumVariant(variant) => {
+            let index = direct_enum_projection_index(variant, projection)?;
+            if rest.is_empty() {
+                variant.payloads[index] = new_value;
+                Ok(())
+            } else {
+                set_direct_instance_field_owned(
+                    &mut variant.payloads[index],
+                    rest,
+                    full_path,
+                    new_value,
+                )
+            }
+        }
+        Value::Union(union) => {
+            if !direct_union_projection(union, projection) {
+                return Err(
+                    "union payload projection does not select the active member".to_string()
+                );
+            }
+            if rest.is_empty() {
+                union.payload = new_value;
+                Ok(())
+            } else {
+                set_direct_instance_field_owned(&mut union.payload, rest, full_path, new_value)
+            }
+        }
         Value::Instance(instance) => {
             if rest.is_empty() {
                 instance.fields.insert((*projection).to_string(), new_value);

@@ -1,0 +1,7 @@
+def main():
+    value: int64 | str = 1
+    match value:
+        case 1:
+            pass
+        case _:
+            pass

@@ -1,0 +1,5 @@
+error[AU2013]: type arm `bool` is not a direct member of `int64 | str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_match_nonmember.au:4:14
+  |
+4 |         case bool as flag:
+  |              ^

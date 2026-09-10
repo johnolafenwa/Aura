@@ -19,7 +19,7 @@ use crate::call::{BuiltinAssociatedFunction, BuiltinMember};
 use crate::diag::Span;
 use crate::ffi::FfiType;
 use crate::mir::{
-    BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirExternCall, MirFormatPart,
+    BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirEnum, MirExternCall, MirFormatPart,
     MirFunction, MirMapEntry, MirMethod, MirModule, MirReceiverKind, MirTraitImpl, Operand, Rvalue,
     Terminator, NATIVE_LOOP_SAFEPOINT_INTERVAL,
 };
@@ -385,6 +385,7 @@ struct NativeCodegen<'a> {
     function_default_binders: HashMap<String, FuncId>,
     cleanup_thunks: HashMap<(String, String), FuncId>,
     classes: HashMap<String, MirClass>,
+    enums: HashMap<String, MirEnum>,
     trait_impls: Vec<MirTraitImpl>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
@@ -552,6 +553,8 @@ struct NativeCodegen<'a> {
     tuple_element: FuncId,
     tuple_take_element: FuncId,
     union_inject: FuncId,
+    union_tag_test: FuncId,
+    union_take_payload: FuncId,
     enum_variant: FuncId,
     variant_matches: FuncId,
     variant_payload: FuncId,
@@ -1070,6 +1073,8 @@ impl<'a> NativeCodegen<'a> {
             tuple_element => ("aura_direct_tuple_element", [types::I64, types::I64], Some(types::I64)),
             tuple_take_element => ("aura_direct_tuple_take_element", [types::I64, types::I64], Some(types::I64)),
             union_inject => ("aura_direct_union_inject", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            union_tag_test => ("aura_direct_union_tag_test", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            union_take_payload => ("aura_direct_union_take_payload", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             enum_variant => ("aura_direct_enum_variant", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_matches => ("aura_direct_variant_matches", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_payload => ("aura_direct_variant_payload", [types::I64, types::I64], Some(types::I64)),
@@ -1360,6 +1365,11 @@ impl<'a> NativeCodegen<'a> {
             function_default_binders,
             cleanup_thunks,
             classes,
+            enums: module
+                .enums
+                .iter()
+                .map(|layout| (layout.name.clone(), layout.clone()))
+                .collect(),
             trait_impls,
             function_return_types,
             function_param_types,
@@ -1527,6 +1537,8 @@ impl<'a> NativeCodegen<'a> {
             tuple_element,
             tuple_take_element,
             union_inject,
+            union_tag_test,
+            union_take_payload,
             enum_variant,
             variant_matches,
             variant_payload,
@@ -2551,6 +2563,12 @@ impl<'a> NativeCodegen<'a> {
         let union_inject = self
             .object
             .declare_func_in_func(self.union_inject, builder.func);
+        let union_tag_test = self
+            .object
+            .declare_func_in_func(self.union_tag_test, builder.func);
+        let union_take_payload = self
+            .object
+            .declare_func_in_func(self.union_take_payload, builder.func);
         let enum_variant = self
             .object
             .declare_func_in_func(self.enum_variant, builder.func);
@@ -3139,6 +3157,7 @@ impl<'a> NativeCodegen<'a> {
             writeback_locals,
             mutable_param_indices,
             classes: self.classes.clone(),
+            enums: self.enums.clone(),
             trait_impls: self.trait_impls.clone(),
             return_type: function.return_type.clone(),
             owned_opaque_temporaries: HashSet::new(),
@@ -3312,6 +3331,8 @@ impl<'a> NativeCodegen<'a> {
             tuple_element,
             tuple_take_element,
             union_inject,
+            union_tag_test,
+            union_take_payload,
             enum_variant,
             variant_matches,
             variant_payload,
@@ -4029,6 +4050,14 @@ struct DirectViewPlace {
 struct DirectViewAlternative {
     place: String,
     conditions: Vec<(Variable, i64)>,
+    union_payloads: Vec<DirectUnionPayload>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DirectUnionPayload {
+    base: String,
+    union_type: Type,
+    member_index: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4044,6 +4073,7 @@ impl DirectViewPlace {
             alternatives: vec![DirectViewAlternative {
                 place,
                 conditions: Vec::new(),
+                union_payloads: Vec::new(),
             }],
         }
     }
@@ -4189,6 +4219,8 @@ fn direct_view_maps_equivalent(
                     && left_place.alternatives.iter().all(|left_alternative| {
                         right_place.alternatives.iter().any(|right_alternative| {
                             left_alternative.place == right_alternative.place
+                                && left_alternative.union_payloads
+                                    == right_alternative.union_payloads
                                 && left_alternative.conditions.len()
                                     == right_alternative.conditions.len()
                                 && left_alternative.conditions.iter().all(|condition| {
@@ -4394,6 +4426,7 @@ struct FunctionCompiler<'a> {
     writeback_locals: Vec<(String, DirectType)>,
     mutable_param_indices: HashMap<String, usize>,
     classes: HashMap<String, MirClass>,
+    enums: HashMap<String, MirEnum>,
     trait_impls: Vec<MirTraitImpl>,
     return_type: Type,
     owned_opaque_temporaries: HashSet<Value>,
@@ -4570,6 +4603,8 @@ struct FunctionCompiler<'a> {
     tuple_element: cranelift_codegen::ir::FuncRef,
     tuple_take_element: cranelift_codegen::ir::FuncRef,
     union_inject: cranelift_codegen::ir::FuncRef,
+    union_tag_test: cranelift_codegen::ir::FuncRef,
+    union_take_payload: cranelift_codegen::ir::FuncRef,
     enum_variant: cranelift_codegen::ir::FuncRef,
     variant_matches: cranelift_codegen::ir::FuncRef,
     variant_payload: cranelift_codegen::ir::FuncRef,
@@ -5157,6 +5192,7 @@ impl<'a> FunctionCompiler<'a> {
                                 format!("{}.{}", origin.place, projection)
                             },
                             conditions,
+                            union_payloads: origin.union_payloads.clone(),
                         };
                         if !alternatives.contains(&alternative) {
                             alternatives.push(alternative);
@@ -5615,6 +5651,47 @@ impl<'a> FunctionCompiler<'a> {
             Rvalue::Member { object, field } => {
                 let object = self.load_operand(object)?;
                 self.extract_field(object, field)
+            }
+            Rvalue::UnionTagTest {
+                place,
+                union_type,
+                member_index,
+            } => {
+                let value = self.load_operand(&Operand::Place(place.clone()))?;
+                let value = self.ensure_opaque(value)?;
+                let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
+                let (ptr, len) = self.string_constant(encoded.as_bytes())?;
+                let index = self.builder.ins().iconst(types::I64, *member_index as i64);
+                let call = self
+                    .builder
+                    .ins()
+                    .call(self.union_tag_test, &[value.values[0], ptr, len, index]);
+                Ok(ValueRef {
+                    values: self.builder.inst_results(call).to_vec(),
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                })
+            }
+            Rvalue::UnionTakePayload {
+                place,
+                union_type,
+                member_type,
+                member_index,
+            } => {
+                let value = self.load_operand(&Operand::Place(place.clone()))?;
+                let value = self.ensure_opaque(value)?;
+                let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
+                let (ptr, len) = self.string_constant(encoded.as_bytes())?;
+                let index = self.builder.ins().iconst(types::I64, *member_index as i64);
+                let call = self
+                    .builder
+                    .ins()
+                    .call(self.union_take_payload, &[value.values[0], ptr, len, index]);
+                let payload = self.owned_opaque_result(
+                    self.builder.inst_results(call).to_vec(),
+                    member_type.clone(),
+                );
+                let member = ensure_direct_type(member_type, &self.classes, "union payload")?;
+                self.coerce_value(payload, &member)
             }
             Rvalue::UnionInject {
                 value,
@@ -8633,10 +8710,40 @@ impl<'a> FunctionCompiler<'a> {
 
     fn resolve_view_place(&self, place: &str) -> std::result::Result<DirectViewPlace, String> {
         let (root, projection) = place.split_once('.').unwrap_or((place, ""));
-        if let Some(source) = self.view_places.get(root) {
-            return Ok(source.clone().project(projection));
+        let mut resolved = if let Some(source) = self.view_places.get(root) {
+            source.clone().project(projection)
+        } else {
+            DirectViewPlace::static_place(place.to_string())
+        };
+        for alternative in &mut resolved.alternatives {
+            let mut segments = alternative.place.split('.');
+            let mut base = segments.next().unwrap_or_default().to_string();
+            let Ok(mut ty) = self.local_type(&base) else {
+                continue;
+            };
+            alternative.union_payloads.clear();
+            for segment in segments {
+                if let DirectType::Opaque(Type::Union(union)) = &ty {
+                    let index = crate::mir::union_payload_projection_index(segment)
+                        .filter(|index| *index < union.members.len())
+                        .ok_or_else(|| format!("invalid union payload projection `{segment}`"))?;
+                    alternative.union_payloads.push(DirectUnionPayload {
+                        base: base.clone(),
+                        union_type: Type::Union(union.clone()),
+                        member_index: index,
+                    });
+                }
+                let Some(projected) =
+                    direct_field_type_with_enums(&ty, segment, &self.classes, &self.enums)
+                else {
+                    break;
+                };
+                ty = projected;
+                base.push('.');
+                base.push_str(segment);
+            }
         }
-        Ok(DirectViewPlace::static_place(place.to_string()))
+        Ok(resolved)
     }
 
     fn type_of_place(&self, place: &str) -> std::result::Result<DirectType, String> {
@@ -8647,11 +8754,12 @@ impl<'a> FunctionCompiler<'a> {
                     .split('.')
                     .filter(|segment| !segment.is_empty())
                 {
-                    ty = direct_field_type(&ty, field, &self.classes).ok_or(format!(
-                        "direct backend does not know field `{}` on `{}`",
-                        field,
-                        render_direct_type(&ty)
-                    ))?;
+                    ty = direct_field_type_with_enums(&ty, field, &self.classes, &self.enums)
+                        .ok_or(format!(
+                            "direct backend does not know field `{}` on `{}`",
+                            field,
+                            render_direct_type(&ty)
+                        ))?;
                 }
                 return Ok(ty);
             }
@@ -8669,11 +8777,13 @@ impl<'a> FunctionCompiler<'a> {
             .ok_or("direct backend encountered an empty place".to_string())?;
         let mut ty = self.local_type(root)?;
         for field in segments {
-            ty = direct_field_type(&ty, field, &self.classes).ok_or(format!(
-                "direct backend does not know field `{}` on `{}`",
-                field,
-                render_direct_type(&ty)
-            ))?;
+            ty = direct_field_type_with_enums(&ty, field, &self.classes, &self.enums).ok_or(
+                format!(
+                    "direct backend does not know field `{}` on `{}`",
+                    field,
+                    render_direct_type(&ty)
+                ),
+            )?;
         }
         Ok(ty)
     }
@@ -8935,6 +9045,7 @@ impl<'a> FunctionCompiler<'a> {
                 let selected = self.view_alternative_condition(&DirectViewAlternative {
                     place: String::new(),
                     conditions,
+                    union_payloads: Vec::new(),
                 });
                 let set_block = self.builder.create_block();
                 let next_block = self.builder.create_block();
@@ -9180,7 +9291,9 @@ impl<'a> FunctionCompiler<'a> {
                     ty: DirectType::Opaque(Type::named("Unknown")),
                 };
                 self.mark_temporary_opaque_owned(&loaded);
-                if let Some(field_ty) = direct_field_type(&object.ty, field, &self.classes) {
+                if let Some(field_ty) =
+                    direct_field_type_with_enums(&object.ty, field, &self.classes, &self.enums)
+                {
                     self.coerce_value(loaded, &field_ty)
                 } else {
                     Ok(loaded)
@@ -16008,6 +16121,7 @@ fn validate_rvalue(
     classes: &HashMap<String, MirClass>,
 ) -> std::result::Result<(), String> {
     match rvalue {
+        Rvalue::UnionTagTest { .. } | Rvalue::UnionTakePayload { .. } => Ok(()),
         Rvalue::Use(operand) | Rvalue::UnionInject { value: operand, .. } => {
             validate_operand(operand)
         }
@@ -16444,6 +16558,8 @@ fn infer_rvalue_type(
 ) -> Option<DirectType> {
     match rvalue {
         Rvalue::Use(operand) => infer_operand_type(operand, variable_types, classes),
+        Rvalue::UnionTagTest { .. } => direct_type(&Type::named("bool"), classes),
+        Rvalue::UnionTakePayload { member_type, .. } => direct_type(member_type, classes),
         Rvalue::UnionInject { union_type, .. } => direct_type(union_type, classes),
         Rvalue::ModuleConstant { .. } => None,
         Rvalue::Closure { signature, .. } => Some(DirectType::Opaque(signature.clone())),
@@ -17878,6 +17994,37 @@ fn infer_try_type(
     }
 }
 
+fn direct_field_type_with_enums(
+    ty: &DirectType,
+    field: &str,
+    classes: &HashMap<String, MirClass>,
+    enums: &HashMap<String, MirEnum>,
+) -> Option<DirectType> {
+    if let Some((variant, index)) = crate::mir::enum_payload_projection(field) {
+        let DirectType::Opaque(Type::Named(name, args)) = ty else {
+            return None;
+        };
+        let layout = enums.get(name)?;
+        if args.len() != layout.type_params.len() {
+            return None;
+        }
+        let payload = layout
+            .variants
+            .iter()
+            .find(|candidate| candidate.name == variant)?
+            .payloads
+            .get(index)?;
+        let substitutions = layout
+            .type_params
+            .iter()
+            .cloned()
+            .zip(args.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        return direct_type(&substitute_type(payload, &substitutions), classes);
+    }
+    direct_field_type(ty, field, classes)
+}
+
 fn direct_field_type(
     ty: &DirectType,
     field: &str,
@@ -17889,6 +18036,10 @@ fn direct_field_type(
     if let DirectType::Opaque(Type::Tuple(elements)) = ty {
         let index = field.parse::<usize>().ok()?;
         return direct_type(elements.get(index)?, classes);
+    }
+    if let DirectType::Opaque(Type::Union(union)) = ty {
+        let index = crate::mir::union_payload_projection_index(field)?;
+        return direct_type(union.members.get(index)?, classes);
     }
     let DirectType::Opaque(Type::Named(class_name, args)) = ty else {
         return None;

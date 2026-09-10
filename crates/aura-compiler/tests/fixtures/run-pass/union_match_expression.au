@@ -1,0 +1,7 @@
+def main():
+    value: int64 | str | None = 41
+    result = match value:
+        case int64 as number: number + 1
+        case str as text: text.len()
+        case None: 0
+    print(result)

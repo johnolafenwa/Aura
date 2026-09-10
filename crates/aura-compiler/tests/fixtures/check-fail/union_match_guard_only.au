@@ -1,0 +1,7 @@
+def main():
+    value: int64 | None = 1
+    match value:
+        case int64 as number if number > 0:
+            print(number)
+        case None:
+            pass

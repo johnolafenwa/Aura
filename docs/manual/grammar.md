@@ -572,10 +572,13 @@ closed-pattern
     | INTEGER
     | "-", (INTEGER | FLOAT)
     | tuple-pattern
+    | type-pattern
     | binding-pattern
     | variant-pattern ;
 
 binding-pattern = IDENT ;
+
+type-pattern = type, "as", IDENT ;
 
 variant-pattern
     = identifier-path,
@@ -589,6 +592,9 @@ tuple-pattern
 ```
 
 Pattern parsing uses these contextual rules:
+
+- `Type as name` selects a direct union member or the same singleton type;
+  a type alias must expand to one member, and `None` selects the unit member
 
 - exact `_` is the wildcard
 - one unparenthesized, unqualified name beginning with lowercase ASCII or `_` is a binding

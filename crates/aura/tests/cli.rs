@@ -235,6 +235,7 @@ fn hold_native_runtime_build_locks(target_dir: &std::path::Path) -> Vec<fs::File
                 .read(true)
                 .write(true)
                 .create(true)
+                .truncate(true)
                 .open(&lock_path)
                 .expect("native runtime lock should be openable");
             fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
@@ -911,6 +912,7 @@ fn adr0038_cfg_view_module(reverse_branch_storage: bool, include_dead_loan: bool
     };
 
     MirModule {
+        enums: Vec::new(),
         functions: vec![main, update],
         classes: vec![MirClass {
             name: "Pair".to_string(),
@@ -1127,6 +1129,7 @@ fn adr0038_closure_branch_module(flag: bool, reverse_branch_storage: bool) -> Mi
     });
     let main = adr0038_closure_main(blocks, locals);
     MirModule {
+        enums: Vec::new(),
         functions: vec![main, adr0038_set_capture_function()],
         classes: Vec::new(),
         trait_impls: Vec::new(),
@@ -1329,6 +1332,7 @@ fn adr0038_selector_reuse_module() -> MirModule {
         locals,
     );
     MirModule {
+        enums: Vec::new(),
         functions: vec![
             main,
             adr0038_choose_pair_field_function(),
@@ -11554,7 +11558,8 @@ fn module_qualified_spawn_target_runs_across_commands() {
         String::from_utf8_lossy(&check.stderr)
     );
 
-    for command in ["run"] {
+    {
+        let command = "run";
         let output = Command::new(aura_bin())
             .arg(command)
             .arg(&source_path)

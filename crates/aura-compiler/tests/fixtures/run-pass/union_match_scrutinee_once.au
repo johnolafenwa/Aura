@@ -1,0 +1,9 @@
+def make() -> int64 | str:
+    print("make")
+    return 42
+def main():
+    match make():
+        case int64 as number:
+            print(number)
+        case str as text:
+            print(text)

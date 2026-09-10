@@ -2,6 +2,13 @@
 
 This crate contains the Aura compiler bootstrap library.
 
+The Batch 1 type-foundation surface includes transparent aliases, normalized
+unions, contextual member injection, and exhaustive `Type as name` patterns.
+Shared, mutable, and owned matching lower through common tag, loan, and take
+operations consumed by both execution backends. The compiler service and
+persisted semantic artifacts use schema 9 for these checked contracts.
+The Option library remains until the separate phase 2 migration.
+
 ## Testing Approach
 
 This crate should be developed test-first.

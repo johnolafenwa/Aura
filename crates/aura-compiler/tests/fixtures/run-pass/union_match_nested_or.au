@@ -1,0 +1,10 @@
+enum Packet:
+    Left(int64 | None)
+    Right(int64 | None)
+def main():
+    value = Packet.Right(42)
+    match value:
+        case Packet.Left(int64 as number) | Packet.Right(int64 as number):
+            print(number)
+        case Packet.Left(None) | Packet.Right(None):
+            print("missing")

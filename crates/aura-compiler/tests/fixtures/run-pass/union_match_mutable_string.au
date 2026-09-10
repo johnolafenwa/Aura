@@ -1,0 +1,8 @@
+def main():
+    mut value: int64 | str = "before"
+    match mut value:
+        case int64 as number:
+            print(number)
+        case str as text:
+            text = "after"
+    print(value)

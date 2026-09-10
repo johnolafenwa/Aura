@@ -1,0 +1,14 @@
+enum Packet:
+    Data(int64 | None)
+def main():
+    mut value = Packet.Data(None)
+    match mut value:
+        case Packet.Data(int64 as number):
+            number += 1
+        case Packet.Data(None):
+            print("missing")
+    match value:
+        case Packet.Data(int64 as number):
+            print(number)
+        case Packet.Data(None):
+            print("missing")

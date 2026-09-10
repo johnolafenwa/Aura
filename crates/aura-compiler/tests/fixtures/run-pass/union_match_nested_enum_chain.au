@@ -1,0 +1,19 @@
+enum Inner:
+    Data(int64 | str)
+enum Outer:
+    Item(Inner)
+def bump(value: mut Outer) -> int64:
+    match mut value:
+        case Outer.Item(Inner.Data(int64 as number)):
+            number += 1
+            return number
+        case Outer.Item(Inner.Data(str as text)):
+            return 0
+def main():
+    mut value = Outer.Item(Inner.Data(41))
+    print(bump(value=value))
+    match value:
+        case Outer.Item(Inner.Data(int64 as number)):
+            print(number)
+        case Outer.Item(Inner.Data(str as text)):
+            print(text)

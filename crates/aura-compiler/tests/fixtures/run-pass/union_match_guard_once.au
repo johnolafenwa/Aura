@@ -1,0 +1,18 @@
+class Counter:
+    count: int64
+    def tick(mut self) -> bool:
+        self.count += 1
+        return false
+def main():
+    mut counter = Counter(count=0)
+    value: int64 | str = 42
+    match value:
+        case int64 as first if counter.tick():
+            print(0)
+        case int64 as second if counter.tick():
+            print(0)
+        case int64 as number:
+            print(number)
+        case str as text:
+            print(text)
+    print(counter.count)

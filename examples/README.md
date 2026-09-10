@@ -420,6 +420,10 @@ printed-output order unless they explicitly coordinate that order.
 
 ### `enums/`
 
+- `union_type_patterns.au`
+  - transparent union alias, exhaustive type arms, and mutable member access
+  - prints `42` twice
+
 - `result_match.au`
   - enum declarations, owned payload variants, an explicit `own` parameter,
     and exhaustive consuming `match`

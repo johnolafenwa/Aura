@@ -1,0 +1,8 @@
+def main():
+    mut value: int64 | None = 1
+    match value:
+        case int64 as number:
+            value = None
+            print(number)
+        case None:
+            pass

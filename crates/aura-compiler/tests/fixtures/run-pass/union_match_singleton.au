@@ -1,0 +1,6 @@
+type Count = int64 | int
+def main():
+    value: Count = 42
+    match value:
+        case Count as number:
+            print(number)

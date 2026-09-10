@@ -1,0 +1,13 @@
+type ToolValue = int64 | str | None
+
+def main():
+    mut value: ToolValue = 41
+    match mut value:
+        case int64 as number:
+            number += 1
+            print(number)
+        case str as text:
+            print(text)
+        case None:
+            print("missing")
+    print(value)

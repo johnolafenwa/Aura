@@ -1,0 +1,16 @@
+from union_pattern_support.packet import Inner, Outer
+def bump(value: mut Outer[Inner]) -> int64:
+    match mut value:
+        case Outer.Item(Inner.Data(int64 as number)):
+            number += 1
+            return number
+        case Outer.Item(Inner.Data(str as text)):
+            return 0
+def main():
+    mut value = Outer[Inner].Item(Inner.Data(41))
+    print(bump(value=value))
+    match value:
+        case Outer.Item(Inner.Data(int64 as number)):
+            print(number)
+        case Outer.Item(Inner.Data(str as text)):
+            print(text)

@@ -1,0 +1,7 @@
+def main():
+    value: int64 | str = "text"
+    match value:
+        case int64 as number:
+            print(number)
+        case str as text:
+            print(text)

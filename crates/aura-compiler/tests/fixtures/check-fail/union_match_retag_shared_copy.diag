@@ -1,0 +1,7 @@
+error[AU3002]: cannot mutate `value` while `value` remains shared by a bare match
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_match_retag_shared_copy.au:5:13
+  |
+5 |             value = None
+  |             ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/union_match_retag_shared_copy.au:3:5: bare `match value` starts here
+  = help: finish the selected match arm before mutating `value`, or use `match mut value` when the arm must update it

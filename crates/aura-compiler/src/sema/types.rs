@@ -1719,3 +1719,79 @@ pub(super) fn unify_type_pattern(
         }
     }
 }
+
+/// Payload shapes of the retained built-in nominal enums. Shared by checking
+/// and MIR metadata so backends consume one structural representation.
+pub(crate) fn builtin_enum_variants(ty: &Type) -> Option<Vec<(String, Vec<Type>)>> {
+    match ty {
+        Type::Named(name, args) if name == "Option" && args.len() == 1 => Some(vec![
+            ("Some".to_string(), vec![args[0].clone()]),
+            ("None".to_string(), Vec::new()),
+        ]),
+        Type::Named(name, args) if name == "Result" && args.len() == 2 => Some(vec![
+            ("Ok".to_string(), vec![args[0].clone()]),
+            ("Err".to_string(), vec![args[1].clone()]),
+        ]),
+        Type::Named(name, args) if name == "SendError" && args.len() == 1 => Some(vec![
+            ("Closed".to_string(), vec![args[0].clone()]),
+            ("Cancelled".to_string(), vec![args[0].clone()]),
+            ("TimedOut".to_string(), vec![args[0].clone()]),
+            ("Full".to_string(), vec![args[0].clone()]),
+        ]),
+        Type::Named(name, args) if name == "QueueReceive" && args.len() == 1 => Some(vec![
+            ("Item".to_string(), vec![args[0].clone()]),
+            ("Closed".to_string(), Vec::new()),
+            ("TimedOut".to_string(), Vec::new()),
+            ("Cancelled".to_string(), Vec::new()),
+        ]),
+        Type::Named(name, args) if name == "TaskResult" && args.len() == 1 => Some(vec![
+            ("Ready".to_string(), vec![args[0].clone()]),
+            ("Error".to_string(), vec![Type::named("str")]),
+            ("TimedOut".to_string(), Vec::new()),
+            ("Cancelled".to_string(), Vec::new()),
+        ]),
+        Type::Named(name, args) if name == "WaitAny" && args.len() == 1 => Some(vec![
+            (
+                "Ready".to_string(),
+                vec![Type::named("int64"), args[0].clone()],
+            ),
+            (
+                "Error".to_string(),
+                vec![Type::named("int64"), Type::named("str")],
+            ),
+            ("TimedOut".to_string(), Vec::new()),
+            ("Cancelled".to_string(), Vec::new()),
+        ]),
+        Type::Named(name, args) if name == "WaitAll" && args.len() == 1 => Some(vec![
+            (
+                "Ready".to_string(),
+                vec![Type::Named("list".to_string(), vec![args[0].clone()])],
+            ),
+            (
+                "Error".to_string(),
+                vec![Type::named("int64"), Type::named("str")],
+            ),
+            ("TimedOut".to_string(), Vec::new()),
+            ("Cancelled".to_string(), Vec::new()),
+        ]),
+        Type::Named(name, args) if name == "SelectOutcome" && args.len() == 2 => Some(vec![
+            (
+                "Queue".to_string(),
+                vec![
+                    Type::named("int64"),
+                    Type::Named("QueueReceive".to_string(), vec![args[0].clone()]),
+                ],
+            ),
+            (
+                "Task".to_string(),
+                vec![
+                    Type::named("int64"),
+                    Type::Named("TaskResult".to_string(), vec![args[1].clone()]),
+                ],
+            ),
+            ("Deadline".to_string(), vec![Type::named("int64")]),
+            ("Cancelled".to_string(), Vec::new()),
+        ]),
+        _ => None,
+    }
+}

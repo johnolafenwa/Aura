@@ -2154,6 +2154,11 @@ impl<'a> AnalysisBuilder<'a> {
         bindings: &mut Vec<(String, Type, usize)>,
     ) {
         match pattern {
+            Pattern::Type(pattern) => bindings.push((
+                pattern.binding.name.clone(),
+                self.lower_analysis_type_ref(&pattern.ty),
+                pattern.binding.span.line,
+            )),
             Pattern::Or(pattern) => {
                 // Every alternative has the same checked binding set. Record
                 // the first once so completion/hover expose one logical arm
@@ -2204,6 +2209,7 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn visit_match_pattern_occurrences(&mut self, pattern: &Pattern, expected_type: Option<&Type>) {
         match pattern {
+            Pattern::Type(_) => {}
             Pattern::Or(pattern) => {
                 for alternative in &pattern.alternatives {
                     self.visit_match_pattern_occurrences(alternative, expected_type);

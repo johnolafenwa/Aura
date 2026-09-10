@@ -124,8 +124,8 @@ fn depth_guard_restores_capacity_on_drop_and_after_rejection() {
 
     let error = budget
         .enter(TEST_SPAN)
-        .err()
-        .expect("a third active frame must exceed the injected depth limit");
+        .map(|_| ())
+        .expect_err("a third active frame must exceed the injected depth limit");
     assert_eq!(error.code, "AU2999");
     assert_eq!(
         error.message,

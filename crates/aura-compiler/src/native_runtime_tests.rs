@@ -5894,7 +5894,7 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
     .is_empty());
     assert_eq!(
         expect_variant_value(
-            super::process_error_from_io(io::Error::new(io::ErrorKind::Other, "io failure")),
+            super::process_error_from_io(io::Error::other("io failure")),
             "Error",
             "Io",
         )
@@ -5951,7 +5951,7 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
         Ok(Value::Int(IntegerValue::from_signed(70)))
     }));
     let ready_payloads = expect_variant_ptr(
-        super::aura_direct_wait_any(task_vec(&[ready_task.clone()])),
+        super::aura_direct_wait_any(task_vec(std::slice::from_ref(&ready_task))),
         "WaitAny",
         "Ready",
     );
@@ -5966,7 +5966,7 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
     let error_task =
         TaskValue::from_handle(thread::spawn(|| Err(Diagnostic::new("wait_any failed"))));
     let error_payloads = expect_variant_ptr(
-        super::aura_direct_wait_any(task_vec(&[error_task.clone()])),
+        super::aura_direct_wait_any(task_vec(std::slice::from_ref(&error_task))),
         "WaitAny",
         "Error",
     );
@@ -6025,7 +6025,7 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
     }));
     assert!(expect_variant_ptr(
         super::aura_direct_wait_any_timeout_value(
-            task_vec(&[slow_task.clone()]),
+            task_vec(std::slice::from_ref(&slow_task)),
             duration_value(0)
         ),
         "WaitAny",
@@ -6034,7 +6034,7 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
     .is_empty());
     assert!(expect_variant_ptr(
         super::aura_direct_wait_all_timeout_value(
-            task_vec(&[slow_task.clone()]),
+            task_vec(std::slice::from_ref(&slow_task)),
             duration_value(0)
         ),
         "WaitAll",
@@ -9693,15 +9693,12 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
         1,
         bool_value(true),
     )));
-    assert_eq!(
-        expect_bool_boxed(super::aura_direct_unary_value_at(
-            1,
-            bool_value(false),
-            1,
-            1
-        )),
-        true
-    );
+    assert!(expect_bool_boxed(super::aura_direct_unary_value_at(
+        1,
+        bool_value(false),
+        1,
+        1
+    )));
     assert_eq!(
         expect_int(super::aura_direct_binary_value(
             0,
@@ -11232,12 +11229,12 @@ fn native_runtime_direct_concurrency_wrappers_cover_cancelled_paths() {
         );
 
         expect_variant_ptr(
-            super::aura_direct_wait_any(task_vec(&[task_value.clone()])),
+            super::aura_direct_wait_any(task_vec(std::slice::from_ref(&task_value))),
             "WaitAny",
             "Cancelled",
         );
         expect_variant_ptr(
-            super::aura_direct_wait_all(task_vec(&[task_value.clone()])),
+            super::aura_direct_wait_all(task_vec(std::slice::from_ref(&task_value))),
             "WaitAll",
             "Cancelled",
         );
@@ -14280,23 +14277,23 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     assert_eq!(normalize_vec_index(-1, 5), Some(4));
     assert_eq!(normalize_vec_index(-6, 5), None);
 
-    assert_eq!(value_type_name(&Value::Bool(true)), "bool");
-    assert_eq!(value_type_name(&Value::Unit), "None");
+    assert_eq!(value_type_name(Value::Bool(true)), "bool");
+    assert_eq!(value_type_name(Value::Unit), "None");
     assert_eq!(
-        value_type_name(&Value::ModuleNamespace(ModuleNamespaceValue {
+        value_type_name(Value::ModuleNamespace(ModuleNamespaceValue {
             path: "pkg.tools".to_string(),
         })),
         "module pkg.tools"
     );
     assert_eq!(
-        value_type_name(&Value::Instance(InstanceValue {
+        value_type_name(Value::Instance(InstanceValue {
             class_name: "Point".to_string(),
             fields: Default::default(),
         })),
         "Point"
     );
     assert_eq!(
-        value_type_name(&Value::EnumVariant(EnumVariantValue {
+        value_type_name(Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".to_string(),
             variant_name: "Ready".to_string(),
             payloads: Vec::new(),
@@ -14304,12 +14301,12 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         "Status"
     );
     assert_eq!(
-        value_type_name(&Value::Int(IntegerValue::from_signed(1))),
+        value_type_name(Value::Int(IntegerValue::from_signed(1))),
         "integer"
     );
-    assert_eq!(value_type_name(&Value::Float(1.5)), "float64");
+    assert_eq!(value_type_name(Value::Float(1.5)), "float64");
     assert_eq!(
-        value_type_name(&Value::Vec(VecValue {
+        value_type_name(Value::Vec(VecValue {
             element_type: crate::sema::Type::named("int32"),
             elements: Vec::new(),
         })),
@@ -14325,42 +14322,42 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         Type::Named("Array".to_string(), vec![Type::named("int64")])
     );
     assert_eq!(
-        value_type_name(&Value::Set(SetValue {
+        value_type_name(Value::Set(SetValue {
             element_type: crate::sema::Type::named("str"),
             elements: Vec::new(),
         })),
         "set"
     );
     assert_eq!(
-        value_type_name(&Value::Map(MapValue {
+        value_type_name(Value::Map(MapValue {
             key_type: crate::sema::Type::named("str"),
             value_type: crate::sema::Type::named("int32"),
             entries: Vec::new(),
         })),
         "dict"
     );
-    assert_eq!(value_type_name(&Value::Duration(5)), "Duration");
+    assert_eq!(value_type_name(Value::Duration(5)), "Duration");
     assert_value_metadata(
         &Value::Rng(RngValue::from_seed(42)),
         "random.Rng",
         "random.Rng",
     );
     assert_eq!(
-        value_type_name(&Value::Range(RangeValue { start: 1, end: 2 })),
+        value_type_name(Value::Range(RangeValue { start: 1, end: 2 })),
         "Range"
     );
     assert_eq!(
-        value_type_name(&Value::Channel(ChannelValue::new())),
+        value_type_name(Value::Channel(ChannelValue::new())),
         "Queue"
     );
     assert_eq!(
-        value_type_name(&Value::Task(TaskValue::from_handle(thread::spawn(|| Ok(
+        value_type_name(Value::Task(TaskValue::from_handle(thread::spawn(|| Ok(
             Value::Unit
         ))))),
         "Task"
     );
     assert_eq!(
-        value_type_name(&Value::TaskGroup(TaskGroupValue::new(
+        value_type_name(Value::TaskGroup(TaskGroupValue::new(
             &CancellationContext::default()
         ))),
         "TaskGroup"
@@ -15392,22 +15389,22 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     assert_eq!(runtime_span(1, 0), None);
     assert_eq!(runtime_span(2, 3), Some(crate::diag::Span::new(2, 3)));
 
-    assert_eq!(value_type_name(&Value::Unit), "None");
+    assert_eq!(value_type_name(Value::Unit), "None");
     assert_eq!(
-        value_type_name(&Value::ModuleNamespace(ModuleNamespaceValue {
+        value_type_name(Value::ModuleNamespace(ModuleNamespaceValue {
             path: "pkg.tools".to_string(),
         })),
         "module pkg.tools"
     );
     assert_eq!(
-        value_type_name(&Value::Instance(InstanceValue {
+        value_type_name(Value::Instance(InstanceValue {
             class_name: "Counter".to_string(),
             fields: BTreeMap::new(),
         })),
         "Counter"
     );
     assert_eq!(
-        value_type_name(&Value::EnumVariant(EnumVariantValue {
+        value_type_name(Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".to_string(),
             variant_name: "Ready".to_string(),
             payloads: Vec::new(),
@@ -15415,17 +15412,17 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
         "Status"
     );
     assert_eq!(
-        value_type_name(&Value::Channel(ChannelValue::new())),
+        value_type_name(Value::Channel(ChannelValue::new())),
         "Queue"
     );
     assert_eq!(
-        value_type_name(&Value::Task(TaskValue::from_handle(thread::spawn(|| Ok(
+        value_type_name(Value::Task(TaskValue::from_handle(thread::spawn(|| Ok(
             Value::Unit
         ))))),
         "Task"
     );
     assert_eq!(
-        value_type_name(&Value::TaskGroup(TaskGroupValue::new(
+        value_type_name(Value::TaskGroup(TaskGroupValue::new(
             &CancellationContext::default()
         ))),
         "TaskGroup"

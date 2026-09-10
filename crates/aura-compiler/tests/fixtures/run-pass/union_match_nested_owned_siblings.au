@@ -1,0 +1,12 @@
+enum Packet:
+    Data(list[int64] | None, list[str])
+def main():
+    value = Packet.Data([41, 42], ["tail"])
+    match own value:
+        case Packet.Data(list[int64] as values, tail) if values.len() == 2:
+            print(values.len())
+            print(tail.len())
+        case Packet.Data(list[int64] as values, tail):
+            print(0)
+        case Packet.Data(None, tail):
+            print(0)

@@ -10,6 +10,22 @@ The type system is designed to keep three facts visible:
 
 ## Scalar Types
 
+Transparent aliases use `type Name = Type`, with optional generic parameters
+and `public` visibility. For example, `type ToolValue = int64 | str | None`
+names a union of three existing types. Union identity ignores member order,
+flattens nested unions, removes duplicates, and collapses a single member to
+that member's type. `None` is the unit member; aliases introduce no runtime
+wrapper or new nominal identity.
+
+A value enters a union at an explicit expected-type boundary, such as an
+annotated binding or a declared parameter or result. Its type must be a direct
+member. Contextual numeric literals must have exactly one eligible member;
+ambiguous literals require a typed spelling or intermediate binding. There is
+no implicit conversion between unrelated unions or between containers with
+different element types. Select a member with the
+[type patterns](/manual/enums-and-match#union-type-patterns) described in the
+match chapter. `Option[T]` and `T?` remain supported during phase 1.
+
 | Type | Description |
 | --- | --- |
 | `bool` | Boolean value: `true` or `false`. |

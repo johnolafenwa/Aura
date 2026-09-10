@@ -1,0 +1,8 @@
+error[AU3002]: cannot move `items` out of a shared match on `value`
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_match_shared_move.au:7:27
+  |
+7 |             consume(items=items)
+  |                           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/union_match_shared_move.au:6:29: value is borrowed here
+  = help: write `match own value` to consume the scrutinee, or call `.copy()` to consume an independent copy
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/union_match_shared_move.au:7:32-7:32 with `.copy()`

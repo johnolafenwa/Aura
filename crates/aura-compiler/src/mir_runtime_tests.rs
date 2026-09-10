@@ -1401,6 +1401,7 @@ fn adr0038_mir_returned_loan_instruction_reports_handoff_errors_and_root_project
 fn test_runtime() -> MirRuntime {
     MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -2420,6 +2421,7 @@ def main():
 #[test]
 fn public_mir_execution_rejects_caller_supplied_ffi_metadata() {
     let forged = MirModule {
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -6655,7 +6657,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
         "Cancelled",
     );
     assert_process_error_variant(
-        super::process_error_from_io(io::Error::new(io::ErrorKind::Other, "io failed")),
+        super::process_error_from_io(io::Error::other("io failed")),
         "Io",
     );
 
@@ -6732,6 +6734,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
     let group = TaskGroupValue::new(&CancellationContext::default());
     let cancelled_runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -8915,8 +8918,8 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
             writeback_place: None,
         }],
     )
-    .err()
-    .expect("unknown MIR argument should fail");
+    .map(|_| ())
+    .expect_err("unknown MIR argument should fail");
     assert!(missing.message.contains("unknown MIR argument"));
 
     let duplicate = bind_builtin_args(
@@ -8956,8 +8959,8 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
             },
         ],
     )
-    .err()
-    .expect("extra positional MIR arguments should fail");
+    .map(|_| ())
+    .expect_err("extra positional MIR arguments should fail");
     assert!(too_many.message.contains("too many MIR arguments"));
 
     let optional_named_then_positional = bind_optional_builtin_args(
@@ -9002,8 +9005,8 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
             writeback_place: None,
         }],
     )
-    .err()
-    .expect("unknown optional MIR arguments should fail");
+    .map(|_| ())
+    .expect_err("unknown optional MIR arguments should fail");
     assert!(optional_unknown.message.contains("unknown MIR argument"));
 
     let optional_too_many = match bind_optional_builtin_args(
@@ -9037,8 +9040,8 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
             writeback_place: None,
         }],
     )
-    .err()
-    .expect("missing MIR arguments should fail");
+    .map(|_| ())
+    .expect_err("missing MIR arguments should fail");
     assert!(missing_required.message.contains("missing MIR argument"));
 
     let eval_error = evaluate_named_args(
@@ -9049,8 +9052,8 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
         }],
         &mut env,
     )
-    .err()
-    .expect("reading a missing MIR place should fail");
+    .map(|_| ())
+    .expect_err("reading a missing MIR place should fail");
     assert!(eval_error.message.contains("unknown MIR place `missing`"));
 
     let unit_value = evaluate_named_args(
@@ -9074,8 +9077,8 @@ fn mir_runtime_function_binding_reports_missing_and_invalid_writeback_arguments(
         default_function: None,
     }];
     assert!(bind_args(&params, Vec::new())
-        .err()
-        .expect("required function arguments must be present")
+        .map(|_| ())
+        .expect_err("required function arguments must be present")
         .message
         .contains("missing MIR argument `value`"));
 
@@ -9158,6 +9161,7 @@ fn mir_runtime_complexity_guard_rejects_excessive_instruction_counts() {
         terminator,
     };
     let module_with_blocks = |blocks: Vec<BasicBlock>| MirModule {
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -9177,6 +9181,7 @@ fn mir_runtime_complexity_guard_rejects_excessive_instruction_counts() {
     };
 
     let module = MirModule {
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -9555,6 +9560,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
     assert!(super::function_uses_lightweight_tasks(&process_run));
 
     let without_tasks = MirModule {
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![ordinary.clone()],
         classes: Vec::new(),
@@ -9564,6 +9570,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
     assert!(!super::module_uses_lightweight_tasks(&without_tasks));
 
     let with_top_level_process_run = MirModule {
+        enums: Vec::new(),
         constants: Vec::new(),
         functions: vec![ordinary],
         classes: Vec::new(),
@@ -10358,6 +10365,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -10882,6 +10890,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -11996,6 +12005,7 @@ fn mir_runtime_process_builtins_cover_spawn_timeout_and_cancelled_edges() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -13354,6 +13364,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
 
     let lookup_runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -13425,6 +13436,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
     };
     let mut converting_runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![from_function],
             classes: Vec::new(),
@@ -13467,6 +13479,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
     };
     let runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -13652,6 +13665,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
 
     let mut missing_entrypoint_runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
@@ -14651,6 +14665,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     cancellation_group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -16606,6 +16621,7 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -16735,6 +16751,7 @@ fn mir_runtime_single_consumer_task_results_claim_every_observing_attempt() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -17041,6 +17058,7 @@ fn mir_runtime_select_adapter_distinguishes_child_and_current_task_cancellation(
         .expect("queue should accept the ready value");
     let mut runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -17379,6 +17397,7 @@ fn mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_path
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -17440,6 +17459,7 @@ fn mir_runtime_print_tolerates_poisoned_stdout_lock() {
 
     let mut runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -17483,6 +17503,7 @@ fn mir_runtime_io_write_streams_to_stdout_sink() {
     });
     let mut runtime = MirRuntime::new_with_stdout_sink(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -17814,6 +17835,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
 
     let mut runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
@@ -17906,21 +17928,21 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
         }),
     );
     assert_eq!(
-        runtime.resolve_place_type("pair", &mut env),
+        runtime.resolve_place_type("pair", &env),
         Some(Type::Named(
             "Pair".to_string(),
             vec![Type::named("int32"), Type::named("bool")]
         ))
     );
     assert_eq!(
-        runtime.resolve_place_type("pair.left", &mut env),
+        runtime.resolve_place_type("pair.left", &env),
         Some(Type::named("int32"))
     );
     assert_eq!(
-        runtime.resolve_place_type("wrapped.0.left", &mut env),
+        runtime.resolve_place_type("wrapped.0.left", &env),
         Some(Type::named("int32"))
     );
-    assert_eq!(runtime.resolve_place_type("number.value", &mut env), None);
+    assert_eq!(runtime.resolve_place_type("number.value", &env), None);
     runtime
         .validate_value_fits_type(&Value::Bool(true), &Type::named("int32"), None)
         .expect("non-integer values are ignored by integer-width validation");
@@ -18266,6 +18288,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
     };
     let mut runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![close_fn, close_borrow_fn],
             classes: vec![
@@ -18717,15 +18740,16 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
     let runtime = test_runtime();
     assert_eq!(
         runtime
-            .resolve_place_type("root", &mut env)
+            .resolve_place_type("root", &env)
             .expect("root type should resolve"),
         Type::named("Box")
     );
-    assert!(runtime.resolve_place_type("root.value", &mut env).is_none());
-    assert!(runtime.resolve_place_type("missing", &mut env).is_none());
+    assert!(runtime.resolve_place_type("root.value", &env).is_none());
+    assert!(runtime.resolve_place_type("missing", &env).is_none());
 
     let typed_runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
@@ -18744,12 +18768,13 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
         CancellationContext::default(),
     );
     assert_eq!(
-        typed_runtime.resolve_place_type("root.value", &mut env),
+        typed_runtime.resolve_place_type("root.value", &env),
         Some(Type::named("int32"))
     );
 
     let mut no_top_level = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![MirFunction {
                 name: "main".to_string(),
@@ -18797,6 +18822,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
 
     let mut needs_receiver = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![MirFunction {
                 name: "update".to_string(),
@@ -18844,6 +18870,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
 
     let missing_main_runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: Vec::new(),
             classes: Vec::new(),
@@ -19403,6 +19430,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
 
     let mut runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![consume, mutate],
             classes: Vec::new(),
@@ -19538,6 +19566,7 @@ fn mir_function_value_runtime_rejects_missing_targets_defaults_and_malformed_tas
     let worker = function("worker", Vec::new());
     let mut runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![required, broken_default, worker],
             classes: Vec::new(),
@@ -19845,6 +19874,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
     };
     let mut runtime = MirRuntime::new(
         MirModule {
+            enums: Vec::new(),
             constants: Vec::new(),
             functions: vec![repeatable_body, consuming_body],
             classes: Vec::new(),

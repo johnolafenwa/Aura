@@ -2,6 +2,35 @@
 
 Enums let you define a type that can be one of several variants. Combined with `match`, they give you exhaustive pattern matching -- the compiler guarantees you handle every case.
 
+## Matching A Union Member
+
+Use a union when the alternatives are existing types, and select a member
+with `case Type as name`:
+
+```aura check-pass
+def main():
+    mut value: int64 | str | None = 41
+    match mut value:
+        case int64 as number:
+            number += 1
+            print(number)
+        case str as text:
+            print(text)
+        case None:
+            print("missing")
+    print(value)
+```
+
+The output is `42` on two lines. The integer arm changes the existing payload.
+It cannot replace that payload with a string; a tag change requires assigning
+the whole `value` after the arm ends. An ordinary `match value` borrows its
+non-Copy payload, while `match own value` consumes it after a guard commits.
+Guards do not count toward coverage, so include an unguarded arm for every
+member or a final `_`. Type arms also work inside an enum payload pattern.
+
+See [union_type_patterns.au](../examples/enums/union_type_patterns.au).
+`Option[T]` and `T?` remain supported in phase 1.
+
 ## Declaring An Enum
 
 ```aura check-pass

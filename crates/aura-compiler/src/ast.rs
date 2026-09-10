@@ -375,12 +375,20 @@ pub struct MatchExprArm {
 
 #[derive(Clone, Debug, Serialize)]
 pub enum Pattern {
+    Type(TypePattern),
     Or(OrPattern),
     Variant(VariantPattern),
     Tuple(TuplePattern),
     Binding(BindingPattern),
     Literal(LiteralPattern),
     Wildcard(Span),
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TypePattern {
+    pub ty: TypeRef,
+    pub binding: BindingPattern,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, Serialize)]

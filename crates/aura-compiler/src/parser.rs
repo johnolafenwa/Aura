@@ -23,6 +23,7 @@ fn parse_error(span: Span, message: impl Into<String>) -> Diagnostic {
 
 fn pattern_span(pattern: &Pattern) -> Span {
     match pattern {
+        Pattern::Type(pattern) => pattern.span,
         Pattern::Or(pattern) => pattern.span,
         Pattern::Variant(pattern) => pattern.span,
         Pattern::Tuple(pattern) => pattern.span,
@@ -1387,8 +1388,47 @@ impl Parser {
         Ok(Pattern::Or(crate::ast::OrPattern { alternatives, span }))
     }
 
+    fn at_type_pattern(&self) -> bool {
+        let mut depth = 0usize;
+        let function_type = self.at_simple(&TokenKind::KwDef);
+        for token in &self.tokens[self.index..] {
+            match &token.kind {
+                TokenKind::LParen | TokenKind::LBracket => depth += 1,
+                TokenKind::RParen | TokenKind::RBracket if depth > 0 => depth -= 1,
+                TokenKind::KwAs if depth == 0 => return true,
+                TokenKind::Pipe if depth == 0 && !function_type => return false,
+                TokenKind::Comma
+                | TokenKind::Colon
+                | TokenKind::KwIf
+                | TokenKind::RParen
+                | TokenKind::RBracket
+                    if depth == 0 =>
+                {
+                    return false
+                }
+                TokenKind::Newline | TokenKind::Eof => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn parse_pattern_inner(&mut self) -> Result<Pattern> {
         let span = self.current_span();
+        if self.at_type_pattern() {
+            let ty = self.parse_type()?;
+            self.expect_simple(TokenKind::KwAs)?;
+            let binding_span = self.current_span();
+            let name = self.expect_identifier()?;
+            return Ok(Pattern::Type(crate::ast::TypePattern {
+                ty,
+                binding: BindingPattern {
+                    name,
+                    span: binding_span,
+                },
+                span,
+            }));
+        }
         if self.eat_simple(&TokenKind::LParen).is_some() {
             if self.at_simple(&TokenKind::RParen) {
                 return Err(parse_error(span, "empty tuple patterns are not supported"));

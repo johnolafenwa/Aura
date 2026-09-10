@@ -55,8 +55,7 @@ fn alias_forward_references_and_generic_targets_expand_transparently() {
 #[test]
 fn unused_alias_targets_are_checked() {
     let error = check_source("type Broken = Missing\n")
-        .err()
-        .expect("unused aliases are still checked declarations");
+        .expect_err("unused aliases are still checked declarations");
     assert_eq!(error.code, "AU2001");
     assert_eq!(error.message, "unknown type `Missing`");
     assert_eq!(error.span, Some(aura_compiler::Span::new(1, 15)));
@@ -64,9 +63,8 @@ fn unused_alias_targets_are_checked() {
 
 #[test]
 fn aliases_share_the_item_namespace() {
-    let error = check_source("type Choice = int64\nclass Choice:\n    pass\n")
-        .err()
-        .expect("duplicate item");
+    let error =
+        check_source("type Choice = int64\nclass Choice:\n    pass\n").expect_err("duplicate item");
     assert!(error.message.contains("duplicate item `Choice`"), "{error}");
 }
 
@@ -136,8 +134,7 @@ fn function_return_union_display_preserves_precedence() {
 #[test]
 fn public_alias_cannot_conceal_a_private_nominal_type() {
     let error = check_source("class Secret:\n    pass\npublic type Visible = list[Secret]\n")
-        .err()
-        .expect("public expansion must be accessible");
+        .expect_err("public expansion must be accessible");
     assert_eq!(error.code, "AU2005");
     assert_eq!(
         error.message,
@@ -148,7 +145,7 @@ fn public_alias_cannot_conceal_a_private_nominal_type() {
 
 #[test]
 fn private_alias_in_public_signature_cannot_conceal_a_private_type() {
-    let error = check_source("class Secret:\n    pass\ntype Hidden = Secret\npublic def accept(value: Hidden):\n    pass\n").err().expect("public alias use must be accessible");
+    let error = check_source("class Secret:\n    pass\ntype Hidden = Secret\npublic def accept(value: Hidden):\n    pass\n").expect_err("public alias use must be accessible");
     assert_eq!(error.code, "AU2005");
     assert_eq!(
         error.message,
@@ -160,9 +157,7 @@ fn private_alias_in_public_signature_cannot_conceal_a_private_type() {
 #[test]
 fn alias_bounds_are_checked_even_when_the_target_erases_the_parameter() {
     let source = "trait Named:\n    def name(self) -> str\nclass Missing:\n    pass\ntype Marker[T: Named] = int64\ndef accept(value: Marker[Missing]):\n    pass\n";
-    let error = check_source(source)
-        .err()
-        .expect("specializing an alias checks its bounds");
+    let error = check_source(source).expect_err("specializing an alias checks its bounds");
     assert_eq!(error.code, "AU2002");
     assert_eq!(
         error.message,
@@ -173,9 +168,7 @@ fn alias_bounds_are_checked_even_when_the_target_erases_the_parameter() {
 
 #[test]
 fn unused_alias_bounds_are_resolved() {
-    let error = check_source("type Marker[T: Missing] = int64\n")
-        .err()
-        .expect("unknown alias bound");
+    let error = check_source("type Marker[T: Missing] = int64\n").expect_err("unknown alias bound");
     assert_eq!(error.code, "AU2001");
     assert_eq!(error.message, "unknown trait `Missing`");
 }
@@ -201,8 +194,7 @@ fn alias_bounds_apply_to_local_annotations_and_generic_proofs() {
     let error = check_source(&format!(
         "{prefix}def body():\n    value: Marker[Missing] = 1\n"
     ))
-    .err()
-    .expect("local specialization must check bounds");
+    .expect_err("local specialization must check bounds");
     assert_eq!(
         error.message,
         "type `Missing` does not implement trait `Named`"
@@ -214,8 +206,7 @@ fn alias_bounds_apply_to_local_annotations_and_generic_proofs() {
     let error = check_source(&format!(
         "{prefix}def rejected[T](value: Marker[T]):\n    pass\n"
     ))
-    .err()
-    .expect("unconstrained parameter is not proof");
+    .expect_err("unconstrained parameter is not proof");
     assert_eq!(
         error.message,
         "type parameter `T` does not satisfy trait bound `Named`"
@@ -232,7 +223,7 @@ fn exported_alias_bounds_keep_the_defining_trait_identity() {
 
 #[test]
 fn public_generic_alias_specialization_cannot_hide_private_type_arguments() {
-    let error = check_source("class Secret:\n    pass\ntype Identity[T] = T\npublic def accept(value: Identity[Secret]):\n    pass\n").err().expect("specialized expansion must be public");
+    let error = check_source("class Secret:\n    pass\ntype Identity[T] = T\npublic def accept(value: Identity[Secret]):\n    pass\n").expect_err("specialized expansion must be public");
     assert_eq!(error.code, "AU2005");
     assert_eq!(
         error.message,
@@ -244,9 +235,8 @@ fn public_generic_alias_specialization_cannot_hide_private_type_arguments() {
 fn same_spelling_trait_in_consumer_does_not_satisfy_imported_alias_bound() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/check-path-pass/alias_support/wrong_bound.au");
-    let error = aura_compiler::check_path(&path)
-        .err()
-        .expect("different defining traits are distinct");
+    let error =
+        aura_compiler::check_path(&path).expect_err("different defining traits are distinct");
     assert!(
         error
             .message
@@ -292,8 +282,7 @@ fn alias_constructor_specializations_enforce_alias_bounds() {
         let error = check_source(&format!(
             "{prefix}def main():\n    value = {constructor}(value=Missing())\n"
         ))
-        .err()
-        .expect("constructor specialization checks the alias bound");
+        .expect_err("constructor specialization checks the alias bound");
         assert_eq!(error.code, "AU2002", "{constructor}: {error}");
         assert!(
             error.message.contains("does not implement trait `Named`"),
@@ -313,8 +302,7 @@ fn alias_constructor_inference_preserves_nested_and_repeated_parameters() {
     let error = check_source(&format!(
         "{prefix}def main():\n    value = Nested(first=[42], second=\"wrong\")\n"
     ))
-    .err()
-    .expect("repeated parameter must agree");
+    .expect_err("repeated parameter must agree");
     assert_eq!(error.code, "AU2002");
 }
 
@@ -327,9 +315,7 @@ fn unions_reject_incomplete_and_non_value_members_with_the_union_diagnostic() {
         "union_member_trait",
     ] {
         let source = std::fs::read_to_string(root.join(format!("{name}.au"))).unwrap();
-        let error = check_source(&source)
-            .err()
-            .expect("member is not a complete value type");
+        let error = check_source(&source).expect_err("member is not a complete value type");
         assert_eq!(error.code, "AU2010", "{name}: {error}");
         assert_eq!(error.span.unwrap().column, 15);
     }
@@ -341,8 +327,7 @@ fn alias_diagnostics_keep_the_written_name_and_expansion() {
     let error = check_source(&format!(
         "{prefix}def accept(value: Count):\n    pass\ndef main():\n    accept(value=\"wrong\")\n"
     ))
-    .err()
-    .expect("argument mismatch");
+    .expect_err("argument mismatch");
     assert!(
         error
             .message
@@ -352,7 +337,6 @@ fn alias_diagnostics_keep_the_written_name_and_expansion() {
     let error = check_source(&format!(
         "{prefix}def main():\n    value: Count = \"wrong\"\n"
     ))
-    .err()
-    .expect("annotation mismatch");
+    .expect_err("annotation mismatch");
     assert!(error.message.contains("Count (= int64)"), "{error}");
 }

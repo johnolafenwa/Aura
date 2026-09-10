@@ -4,6 +4,50 @@ Enums define nominal sum types. Each value contains exactly one declared variant
 
 Aura uses enums for user data and for maintained runtime outcomes including `Option`, `Result`, queue operations, task waits, process status, supervisor events, and I/O errors.
 
+## Union Type Patterns
+
+A union can be matched by its direct member types:
+
+```aura
+def main():
+    mut value: int64 | str | None = 41
+    match mut value:
+        case int64 as number:
+            number += 1
+            print(number)
+        case str as text:
+            print(text)
+        case None:
+            print("missing")
+    print(value)
+```
+
+This prints `42` twice. `case Type as name` selects exactly one normalized
+member after transparent alias expansion. An alias for several members cannot
+stand for a single type arm. A matching type arm is irrefutable when the
+scrutinee type has collapsed to one member. Type patterns may also occur
+inside nominal enum payload patterns.
+
+An unguarded type arm covers its member; guards contribute no exhaustiveness
+coverage. A final `_` or name covers the remainder. Missing members, duplicate
+coverage, unreachable type arms, and nonmembers are rejected with AU2013.
+Or-patterns bind identical names, types, and capabilities. A bare union cannot
+be matched directly against a member literal: select the type, then use a
+guard or a nested match for the literal.
+
+Bare matches borrow non-Copy payloads and expose ordinary Copy values.
+`match mut` gives mutable payload bindings without an additional `mut` after
+`as`; replacement must preserve that member type. `match own` consumes the
+union, and moves the selected payload only after its guard succeeds. Failed
+patterns and guards release their temporary views. Payload views are local
+to the arm, and return, break, and continue release them before cleanup.
+Shared and mutable matches lock the original source for the arm, including
+when the selected payload is Copy. Replacing the whole union to change its
+tag is allowed after the conflicting arm access ends.
+
+The existing `Option[T]` library and `T?` spelling remain available during
+Batch 1 phase 1; their removal belongs to phase 2.
+
 ## Enum Declarations
 
 ```aura
@@ -407,6 +451,11 @@ payload order, and borrowed-match writeback are language-defined rather than
 implementation-defined.
 
 ## Status
+
+Batch 1 phase 1 adds normalized union type arms, unit-member cases, singleton
+type arms, nested union payload patterns, and AU2013 coverage diagnostics on
+both backends. Guards preserve candidate ownership until commitment, and
+mutable arms retain member type and source locks.
 
 Nominal and generic enums, positional and named payloads, qualified and
 contextual builtin construction, structural copy/move classification,
