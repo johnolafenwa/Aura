@@ -88,6 +88,8 @@ impl<'a> FunctionChecker<'a> {
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
+                    narrowed: BTreeMap::new(),
+                    stale_narrowing: BTreeMap::new(),
                 },
             );
         }
@@ -118,6 +120,8 @@ impl<'a> FunctionChecker<'a> {
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
+                narrowed: BTreeMap::new(),
+                stale_narrowing: BTreeMap::new(),
             });
         }
     }

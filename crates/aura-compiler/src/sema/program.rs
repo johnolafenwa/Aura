@@ -304,6 +304,7 @@ pub enum ImportedBinding {
 #[derive(Clone, Debug)]
 pub struct ModuleNamespace {
     pub union_injections: BTreeMap<super::UnionInjectionId, super::UnionInjection>,
+    pub narrowed_reads: BTreeMap<super::NarrowedReadId, super::NarrowedRead>,
     pub all_aliases: BTreeMap<String, AliasInfo>,
     pub aliases: BTreeMap<String, AliasInfo>,
     pub name: String,

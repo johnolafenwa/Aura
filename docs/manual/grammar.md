@@ -671,7 +671,10 @@ not-expression
 
 comparison-expression
     = bitwise-or-expression,
-      { comparison-operator, bitwise-or-expression } ;
+      ( { comparison-operator, bitwise-or-expression } | none-test ) ;
+
+none-test
+    = "is", [ "not" ], "None" ;
 
 comparison-operator
     = "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" | "not", "in" ;
@@ -741,7 +744,10 @@ one comparison level and chain the Python way rather than left-folding, so
 operators means the conjunction of its `n` adjacent comparisons, with each
 operand evaluated at most once. `not a == b` means `not (a == b)`, because
 prefix `not` binds looser than the comparison level, while `a not in b` is one
-comparison operator. Casts bind more tightly than power and arithmetic.
+comparison operator. `is` is a contextual word: `value is None` and
+`value is not None` are complete comparison-level forms that take no further
+comparison operator on either side, so `a is None == b` and `a < b is None`
+are syntax errors rather than chains. Casts bind more tightly than power and arithmetic.
 
 Comma-separated index expressions are accepted only for `Array[T]`, where
 one `int64` coordinate is required per runtime axis. Other indexable

@@ -1070,6 +1070,7 @@ fn public_ffi_handle_namespace(module_name: &str) -> ModuleNamespace {
     handle.module_name = module_name.to_string();
     ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -1105,6 +1106,7 @@ fn public_ffi_function_namespace(module_name: &str) -> ModuleNamespace {
     scalar.module_name = module_name.to_string();
     ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -2914,6 +2916,7 @@ fn ffi_extern_metadata_supports_from_and_qualified_import_calls() {
     scalar.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -2985,6 +2988,7 @@ fn ffi_qualified_imports_do_not_expose_private_extern_declarations() {
     hidden.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -3042,6 +3046,7 @@ fn ffi_qualified_imports_do_not_expose_private_opaque_handles() {
     hidden.module_name = "ffi_api".to_string();
     let namespace = ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -7722,6 +7727,7 @@ fn enum_info(name: &str, payload: Option<Type>) -> EnumInfo {
 fn namespace(path: &str) -> ModuleNamespace {
     ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -7807,6 +7813,8 @@ fn local_binding(
         captured: false,
         view: None,
         closure_loans: Vec::new(),
+        narrowed: BTreeMap::new(),
+        stale_narrowing: BTreeMap::new(),
     }
 }
 
@@ -14061,6 +14069,8 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             captured: false,
             view: None,
             closure_loans: Vec::new(),
+            narrowed: BTreeMap::new(),
+            stale_narrowing: BTreeMap::new(),
         },
     )]);
     checker
@@ -14094,6 +14104,8 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             captured: false,
             view: None,
             closure_loans: Vec::new(),
+            narrowed: BTreeMap::new(),
+            stale_narrowing: BTreeMap::new(),
         },
     )]);
     let borrowed_error = checker
@@ -14124,6 +14136,8 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             captured: false,
             view: None,
             closure_loans: Vec::new(),
+            narrowed: BTreeMap::new(),
+            stale_narrowing: BTreeMap::new(),
         },
     )]);
     let moved_error = checker
@@ -19280,6 +19294,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
+                narrowed: BTreeMap::new(),
+                stale_narrowing: BTreeMap::new(),
             },
         ),
         (
@@ -19325,6 +19341,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
+                narrowed: BTreeMap::new(),
+                stale_narrowing: BTreeMap::new(),
             },
         ),
         (
@@ -19348,6 +19366,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
+                narrowed: BTreeMap::new(),
+                stale_narrowing: BTreeMap::new(),
             },
         ),
     ]);
@@ -19498,6 +19518,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             captured: false,
             view: None,
             closure_loans: Vec::new(),
+            narrowed: BTreeMap::new(),
+            stale_narrowing: BTreeMap::new(),
         },
     )]);
     let receiver_error = match checker.prepare_method_receiver_borrows(
@@ -19800,6 +19822,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
     let remote_trait = trait_info("RemoteShow", Vec::new());
     let namespace = ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -23975,6 +23998,7 @@ fn imported_module_functions_are_first_class_values() {
     };
     let namespace = ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -24029,6 +24053,7 @@ fn nested_imported_module_functions_are_first_class_values() {
     };
     let helpers = ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -24056,6 +24081,7 @@ fn nested_imported_module_functions_are_first_class_values() {
     };
     let support = ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -24537,6 +24563,7 @@ fn imported_generic_function_values_specialize_as_values_and_task_targets() {
     };
     let namespace = ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),

@@ -1,0 +1,18 @@
+def check(left: str | None, right: str | None):
+    if left is not None and left.len() > 2:
+        print("long left")
+    if left is None or right is None:
+        print("some missing")
+    else:
+        print(left.len() + right.len())
+    if not (right is None):
+        print(right)
+    if not (left is not None and right is not None):
+        print("not both")
+    else:
+        print(left.len() * right.len())
+
+def main():
+    check("aura", "lang")
+    check(None, "x")
+    check("ab", None)

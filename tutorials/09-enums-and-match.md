@@ -31,6 +31,33 @@ member or a final `_`. Type arms also work inside an enum payload pattern.
 See [union_type_patterns.au](../examples/enums/union_type_patterns.au).
 `Option[T]` and `T?` remain supported in phase 1.
 
+## Testing For `None`
+
+A union with a `None` member does not need a `match` for the common
+"present or missing" question. `is None` and `is not None` narrow the tested
+place for the branch they select:
+
+```aura check-pass
+def describe(value: str | None):
+    if value is None:
+        print("missing")
+        return
+    print(value.len())
+
+def main():
+    describe(None)
+    describe("aura")
+```
+
+Inside the `else` branch, and after an `if value is None: return`, `value` is
+a plain `str`. The same works for `mut` locals, class fields, and views, and
+through `not`, `and`, and `or`. Assigning to the place, matching it with
+`match mut`, or passing it to a call with `mut` access ends the narrowing;
+using the member afterwards reports `AU2014`, so test the value again. Only
+`is None` and `is not None` narrow; `== None` compares without narrowing.
+
+See [union_narrowing.au](../examples/enums/union_narrowing.au).
+
 ## Declaring An Enum
 
 ```aura check-pass

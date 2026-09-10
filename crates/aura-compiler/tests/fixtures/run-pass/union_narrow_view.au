@@ -1,0 +1,15 @@
+class Profile:
+    name: str | None
+    visits: int64
+
+def main():
+    mut profile = Profile(name="aura", visits=0)
+    view shared = profile.name
+    if shared is not None:
+        print(shared.len())
+    view mut editable = profile.name
+    if editable is not None:
+        editable = "language"
+    print(profile.name)
+    if profile.name is not None:
+        print(profile.name.len())

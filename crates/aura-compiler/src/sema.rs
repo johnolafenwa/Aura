@@ -56,7 +56,7 @@ mod patterns;
 mod unions;
 #[cfg(test)]
 mod unions_security_tests;
-pub use unions::{UnionInjection, UnionInjectionId};
+pub use unions::{NarrowedRead, NarrowedReadId, UnionInjection, UnionInjectionId};
 mod type_budget;
 #[cfg(test)]
 mod type_budget_tests;
@@ -489,6 +489,31 @@ fn grouped_name(expr: &Expr) -> Option<&str> {
     }
 }
 
+/// Whether a loop body can leave through `break` (nested loops own their
+/// own breaks), which means the loop condition's false edge is not the only
+/// way past the loop.
+fn block_contains_break(body: &[Stmt]) -> bool {
+    body.iter().any(|stmt| match stmt {
+        Stmt::Break(_) => true,
+        Stmt::If(if_stmt) => {
+            if_stmt
+                .branches
+                .iter()
+                .any(|branch| block_contains_break(&branch.body))
+                || if_stmt
+                    .else_body
+                    .as_ref()
+                    .is_some_and(|body| block_contains_break(body))
+        }
+        Stmt::Match(match_stmt) => match_stmt
+            .arms
+            .iter()
+            .any(|arm| block_contains_break(&arm.body)),
+        Stmt::With(with_stmt) => block_contains_break(&with_stmt.body),
+        _ => false,
+    })
+}
+
 fn block_references_name(body: &[Stmt], name: &str) -> bool {
     body.iter().any(|stmt| stmt_references_name(stmt, name))
 }
@@ -698,7 +723,32 @@ struct LocalBinding {
     /// first-class views.
     view: Option<ViewBinding>,
     closure_loans: Vec<ViewBinding>,
+    /// Refinement facts established by `is None` tests (ADR-0052 A3/A4),
+    /// keyed by the projection path relative to this binding's root. The
+    /// empty path refines the whole binding. A fact lists the members the
+    /// place may still hold on the current path.
+    narrowed: BTreeMap<ProjectionPath, NarrowedFact>,
+    /// Facts invalidated by a later mutation, retained so a stale member use
+    /// reports AU2014 with the test and invalidation spans.
+    stale_narrowing: BTreeMap<ProjectionPath, StaleNarrowing>,
 }
+
+#[derive(Clone, Debug, PartialEq)]
+struct NarrowedFact {
+    members: Vec<Type>,
+    tested_at: crate::diag::Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct StaleNarrowing {
+    tested_at: crate::diag::Span,
+    invalidated_at: crate::diag::Span,
+    operation: &'static str,
+}
+
+/// One refinement produced by a condition: the place, the members it may
+/// still hold when the condition takes the associated branch, and the test.
+type NarrowingFacts = Vec<(PlacePath, Vec<Type>, crate::diag::Span)>;
 
 #[derive(Clone)]
 struct ExprResultEntry {
@@ -809,6 +859,9 @@ struct FunctionChecker<'a> {
     type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
     implicit_borrowed_params: BTreeMap<String, Type>,
     active_match_borrow_places: Rc<RefCell<Vec<ActiveMatchBorrow>>>,
+    /// Set while an argument bound to a `mut` union parameter is typed: the
+    /// declared union is exposed whole, so refinements do not apply.
+    suppress_narrowing: Rc<std::cell::Cell<bool>>,
     rng_clone_obligations: Rc<RefCell<BTreeSet<String>>>,
     array_equality_obligations: Rc<RefCell<BTreeSet<String>>>,
     expr_result_entries: Rc<RefCell<HashMap<usize, ExprResultEntry>>>,
@@ -816,12 +869,16 @@ struct FunctionChecker<'a> {
     closure_infos: Rc<RefCell<BTreeMap<ClosureId, ClosureInfo>>>,
     comprehension_infos: Rc<RefCell<BTreeMap<ComprehensionId, ComprehensionInfo>>>,
     union_injections: Rc<RefCell<BTreeMap<UnionInjectionId, UnionInjection>>>,
+    narrowed_reads: Rc<RefCell<BTreeMap<NarrowedReadId, NarrowedRead>>>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum BlockFlow {
     FallsThrough,
     AlwaysReturns,
+    /// Every path leaves through `break` or `continue` (or a return), so the
+    /// block never joins the statement that follows it.
+    Diverges,
 }
 
 impl<'a> FunctionChecker<'a> {
@@ -1643,6 +1700,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_bounds: BTreeMap::new(),
             implicit_borrowed_params: BTreeMap::new(),
             active_match_borrow_places: Rc::new(RefCell::new(Vec::new())),
+            suppress_narrowing: Rc::new(std::cell::Cell::new(false)),
             rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             array_equality_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             expr_result_entries: Rc::new(RefCell::new(HashMap::new())),
@@ -1650,6 +1708,7 @@ impl<'a> FunctionChecker<'a> {
             closure_infos: Rc::new(RefCell::new(BTreeMap::new())),
             comprehension_infos: Rc::new(RefCell::new(BTreeMap::new())),
             union_injections: type_names.union_injections.clone(),
+            narrowed_reads: type_names.narrowed_reads.clone(),
         }
     }
 
@@ -1692,6 +1751,8 @@ impl<'a> FunctionChecker<'a> {
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
             union_injections: self.union_injections.clone(),
+            narrowed_reads: self.narrowed_reads.clone(),
+            suppress_narrowing: self.suppress_narrowing.clone(),
         }
     }
 
@@ -1728,6 +1789,8 @@ impl<'a> FunctionChecker<'a> {
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
             union_injections: self.union_injections.clone(),
+            narrowed_reads: self.narrowed_reads.clone(),
+            suppress_narrowing: self.suppress_narrowing.clone(),
         }
     }
 
@@ -1760,6 +1823,8 @@ impl<'a> FunctionChecker<'a> {
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
             union_injections: self.union_injections.clone(),
+            narrowed_reads: self.narrowed_reads.clone(),
+            suppress_narrowing: self.suppress_narrowing.clone(),
         }
     }
 
@@ -1792,6 +1857,8 @@ impl<'a> FunctionChecker<'a> {
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
             union_injections: self.union_injections.clone(),
+            narrowed_reads: self.narrowed_reads.clone(),
+            suppress_narrowing: self.suppress_narrowing.clone(),
         }
     }
 
@@ -1959,6 +2026,359 @@ impl<'a> FunctionChecker<'a> {
         ))
     }
 
+    /// The stable place an `is None` test may refine: a local, parameter,
+    /// receiver, or view root reached through fixed fields and literal tuple
+    /// positions. Indexed elements, calls, and temporaries produce no fact.
+    fn narrowable_place(&self, expr: &Expr) -> Option<PlacePath> {
+        match &expr.kind {
+            ExprKind::Name(name) => Some(PlacePath::root(name.clone())),
+            ExprKind::Group(inner) => self.narrowable_place(inner),
+            ExprKind::Member { object, field } => {
+                Some(self.narrowable_place(object)?.with_field(field.clone()))
+            }
+            ExprKind::Index { object, index } => match &index.kind {
+                ExprKind::Int(position) => Some(
+                    self.narrowable_place(object)?
+                        .with_tuple(usize::try_from(*position).ok()?),
+                ),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn narrowed_member_type(&self, members: &[Type]) -> Type {
+        if let [single] = members {
+            return single.clone();
+        }
+        Type::normalize_union(
+            members.to_vec(),
+            self.module_name,
+            self.canonical_type_names,
+        )
+        .unwrap_or_else(|_| members[0].clone())
+    }
+
+    /// The refined type of a place on the current path when a fact proves a
+    /// single member. Facts that leave several members keep the declared
+    /// union as the value type (the runtime value still carries every tag)
+    /// and only sharpen match coverage.
+    fn narrowed_type_at(
+        &self,
+        path: &PlacePath,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Option<Type> {
+        if self.suppress_narrowing.get() {
+            return None;
+        }
+        let fact = locals.get(&path.root)?.narrowed.get(&path.projections)?;
+        match fact.members.as_slice() {
+            [single] => Some(single.clone()),
+            _ => None,
+        }
+    }
+
+    /// Records a single-member read for the lowering, which replaces the
+    /// union place by its payload projection at that expression.
+    fn record_narrowed_read(&self, span: crate::diag::Span, declared: &Type, member: &Type) {
+        let Type::Union(union) = declared else {
+            return;
+        };
+        let Some(member_index) = union
+            .members
+            .iter()
+            .position(|candidate| candidate == member)
+        else {
+            return;
+        };
+        self.narrowed_reads.borrow_mut().insert(
+            NarrowedReadId {
+                module_name: self.module_name.to_owned(),
+                line: span.line,
+                column: span.column,
+            },
+            NarrowedRead {
+                union_type: declared.clone(),
+                member_type: member.clone(),
+                member_index,
+            },
+        );
+    }
+
+    /// The scrutinee type a match must cover: a fact that leaves several
+    /// members shrinks the declared union to those members.
+    fn narrowed_scrutinee_type(
+        &self,
+        scrutinee: &Expr,
+        declared: Type,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Type {
+        if !matches!(declared, Type::Union(_)) {
+            return declared;
+        }
+        let Some(path) = self.narrowable_place(scrutinee) else {
+            return declared;
+        };
+        let Some(fact) = locals
+            .get(&path.root)
+            .and_then(|binding| binding.narrowed.get(&path.projections))
+        else {
+            return declared;
+        };
+        if fact.members.len() < 2 {
+            return declared;
+        }
+        self.narrowed_member_type(&fact.members)
+    }
+
+    /// The members a place may hold before a test: its live fact, or the
+    /// declared union members, or `None` alone for a unit-typed place.
+    fn current_narrowing_members(
+        &self,
+        place: &Expr,
+        path: &PlacePath,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<Option<Vec<Type>>> {
+        if let Some(fact) = locals
+            .get(&path.root)
+            .and_then(|binding| binding.narrowed.get(&path.projections))
+        {
+            return Ok(Some(fact.members.clone()));
+        }
+        let mut scratch = locals.clone();
+        self.suppress_narrowing.set(true);
+        let declared = self.type_of_expr(place, &mut scratch);
+        self.suppress_narrowing.set(false);
+        Ok(match declared? {
+            Type::Union(union) => Some(union.members.clone()),
+            Type::Unit => Some(vec![Type::Unit]),
+            _ => None,
+        })
+    }
+
+    /// The refinements a condition establishes on its true and false edges
+    /// (ADR-0052 A4): `is None` tests on stable places, `not`, and
+    /// short-circuit `and` / `or`. Other conditions establish nothing.
+    fn condition_narrowing(
+        &self,
+        condition: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<(NarrowingFacts, NarrowingFacts)> {
+        match &condition.kind {
+            ExprKind::Group(inner) => self.condition_narrowing(inner, locals),
+            ExprKind::Unary {
+                op: UnaryOp::Not,
+                expr: inner,
+            } => {
+                let (when_true, when_false) = self.condition_narrowing(inner, locals)?;
+                Ok((when_false, when_true))
+            }
+            ExprKind::IsNone {
+                value,
+                negated,
+                operator_span,
+            } => {
+                let Some(path) = self.narrowable_place(value) else {
+                    return Ok((Vec::new(), Vec::new()));
+                };
+                let Some(members) = self.current_narrowing_members(value, &path, locals)? else {
+                    return Ok((Vec::new(), Vec::new()));
+                };
+                let (absent, present): (Vec<Type>, Vec<Type>) = members
+                    .into_iter()
+                    .partition(|member| matches!(member, Type::Unit));
+                let fact = |members: Vec<Type>| -> NarrowingFacts {
+                    if members.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![(path.clone(), members, *operator_span)]
+                    }
+                };
+                if absent.is_empty() {
+                    // A place that cannot hold `None`: a constant test.
+                    return Ok((Vec::new(), Vec::new()));
+                }
+                let (is_none, is_present) = (fact(absent), fact(present));
+                Ok(if *negated {
+                    (is_present, is_none)
+                } else {
+                    (is_none, is_present)
+                })
+            }
+            ExprKind::Binary { op, left, right } if matches!(op, BinaryOp::And | BinaryOp::Or) => {
+                let (left_true, left_false) = self.condition_narrowing(left, locals)?;
+                let mut right_locals = locals.clone();
+                let under = if *op == BinaryOp::And {
+                    &left_true
+                } else {
+                    &left_false
+                };
+                self.apply_narrowing(under, &mut right_locals);
+                let (right_true, right_false) = self.condition_narrowing(right, &right_locals)?;
+                Ok(if *op == BinaryOp::And {
+                    (
+                        Self::concat_narrowing(&left_true, &right_true),
+                        Self::join_narrowing(
+                            &left_false,
+                            &Self::concat_narrowing(&left_true, &right_false),
+                        ),
+                    )
+                } else {
+                    (
+                        Self::join_narrowing(
+                            &left_true,
+                            &Self::concat_narrowing(&left_false, &right_true),
+                        ),
+                        Self::concat_narrowing(&left_false, &right_false),
+                    )
+                })
+            }
+            _ => Ok((Vec::new(), Vec::new())),
+        }
+    }
+
+    /// Facts that hold when both alternatives are possible: only places
+    /// refined on both sides survive, with the union of their member sets.
+    fn join_narrowing(left: &NarrowingFacts, right: &NarrowingFacts) -> NarrowingFacts {
+        left.iter()
+            .filter_map(|(path, members, span)| {
+                let (_, other, _) = right.iter().find(|(candidate, _, _)| candidate == path)?;
+                let mut merged = members.clone();
+                for member in other {
+                    if !merged.contains(member) {
+                        merged.push(member.clone());
+                    }
+                }
+                Some((path.clone(), merged, *span))
+            })
+            .collect()
+    }
+
+    /// Facts that hold in sequence: later refinements replace earlier ones
+    /// for the same place.
+    fn concat_narrowing(first: &NarrowingFacts, second: &NarrowingFacts) -> NarrowingFacts {
+        let mut facts = first
+            .iter()
+            .filter(|(path, _, _)| !second.iter().any(|(candidate, _, _)| candidate == path))
+            .cloned()
+            .collect::<Vec<_>>();
+        facts.extend(second.iter().cloned());
+        facts
+    }
+
+    fn apply_narrowing(&self, facts: &NarrowingFacts, locals: &mut HashMap<String, LocalBinding>) {
+        for (path, members, tested_at) in facts {
+            let Some(binding) = locals.get_mut(&path.root) else {
+                continue;
+            };
+            binding.stale_narrowing.remove(&path.projections);
+            binding.narrowed.insert(
+                path.projections.clone(),
+                NarrowedFact {
+                    members: members.clone(),
+                    tested_at: *tested_at,
+                },
+            );
+        }
+    }
+
+    /// Forgets every fact overlapping a place that was just assigned, moved,
+    /// or exposed to mutation, remembering it for AU2014.
+    fn invalidate_narrowing(
+        &self,
+        place: &PlacePath,
+        invalidated_at: crate::diag::Span,
+        operation: &'static str,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) {
+        let Some(binding) = locals.get_mut(&place.root) else {
+            return;
+        };
+        let stale = binding
+            .narrowed
+            .iter()
+            .filter(|(projection, _)| projection.overlaps(&place.projections))
+            .map(|(projection, fact)| (projection.clone(), fact.tested_at))
+            .collect::<Vec<_>>();
+        for (projection, tested_at) in stale {
+            binding.narrowed.remove(&projection);
+            binding.stale_narrowing.insert(
+                projection,
+                StaleNarrowing {
+                    tested_at,
+                    invalidated_at,
+                    operation,
+                },
+            );
+        }
+    }
+
+    /// AU2014: a member use through a place whose refinement was invalidated
+    /// after the test, without a live loan conflict.
+    fn reject_stale_narrowing(
+        &self,
+        path: &PlacePath,
+        span: crate::diag::Span,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let Some(binding) = locals.get(&path.root) else {
+            return Ok(());
+        };
+        if binding.narrowed.contains_key(&path.projections) {
+            return Ok(());
+        }
+        let Some((_, stale)) = binding
+            .stale_narrowing
+            .iter()
+            .find(|(projection, _)| projection.overlaps(&path.projections))
+        else {
+            return Ok(());
+        };
+        Err(Diagnostic::coded_at(
+            "AU2014",
+            span,
+            format!(
+                "narrowing of `{path}` no longer applies after {}; test the current value again",
+                stale.operation
+            ),
+        )
+        .with_secondary(stale.tested_at, "narrowed by this test")
+        .with_secondary(stale.invalidated_at, "invalidated here"))
+    }
+
+    /// Refinements of a loop body's entry state that the body itself can
+    /// invalidate must not be assumed on later iterations: the paths whose
+    /// facts did not survive one pass are removed before the body is checked
+    /// again from the same entry.
+    fn narrowing_killed_by_body(
+        entry: &HashMap<String, LocalBinding>,
+        after: &HashMap<String, LocalBinding>,
+    ) -> Vec<PlacePath> {
+        let mut killed = Vec::new();
+        for (name, binding) in entry {
+            for projection in binding.narrowed.keys() {
+                let survives = after
+                    .get(name)
+                    .is_some_and(|binding| binding.narrowed.contains_key(projection));
+                if !survives {
+                    killed.push(PlacePath {
+                        root: name.clone(),
+                        projections: projection.clone(),
+                    });
+                }
+            }
+        }
+        killed
+    }
+
+    fn forget_narrowing(paths: &[PlacePath], locals: &mut HashMap<String, LocalBinding>) {
+        for path in paths {
+            if let Some(binding) = locals.get_mut(&path.root) {
+                binding.narrowed.remove(&path.projections);
+            }
+        }
+    }
+
     fn merge_control_flow_moves(
         &self,
         locals: &mut HashMap<String, LocalBinding>,
@@ -2003,6 +2423,50 @@ impl<'a> FunctionChecker<'a> {
                         .get(&name)
                         .and_then(|binding| binding.stale_match_borrow_place.clone())
                 });
+                // A refinement survives a join only when every reachable path
+                // carries it; the surviving fact holds the union of members.
+                let mut merged_facts = BTreeMap::new();
+                if let Some(first) = branch_states.first().and_then(|state| state.get(&name)) {
+                    for (projection, fact) in &first.narrowed {
+                        let mut members = fact.members.clone();
+                        let mut on_every_path = true;
+                        for state in &branch_states[1..] {
+                            match state
+                                .get(&name)
+                                .and_then(|binding| binding.narrowed.get(projection))
+                            {
+                                Some(other) => {
+                                    for member in &other.members {
+                                        if !members.contains(member) {
+                                            members.push(member.clone());
+                                        }
+                                    }
+                                }
+                                None => {
+                                    on_every_path = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if on_every_path {
+                            merged_facts.insert(
+                                projection.clone(),
+                                NarrowedFact {
+                                    members,
+                                    tested_at: fact.tested_at,
+                                },
+                            );
+                        }
+                    }
+                }
+                if !branch_states.is_empty() {
+                    binding.narrowed = merged_facts;
+                    binding.stale_narrowing = branch_states
+                        .iter()
+                        .filter_map(|state| state.get(&name))
+                        .flat_map(|state| state.stale_narrowing.clone())
+                        .collect();
+                }
             }
         }
     }
@@ -2124,6 +2588,8 @@ impl<'a> FunctionChecker<'a> {
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
+                    narrowed: BTreeMap::new(),
+                    stale_narrowing: BTreeMap::new(),
                 },
             );
         }
@@ -2232,6 +2698,8 @@ impl<'a> FunctionChecker<'a> {
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
+                    narrowed: BTreeMap::new(),
+                    stale_narrowing: BTreeMap::new(),
                 },
             );
         }
@@ -2262,6 +2730,8 @@ impl<'a> FunctionChecker<'a> {
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
+                    narrowed: BTreeMap::new(),
+                    stale_narrowing: BTreeMap::new(),
                 },
             );
         }
@@ -2793,6 +3263,8 @@ impl<'a> FunctionChecker<'a> {
                         captured: false,
                         view: None,
                         closure_loans: Vec::new(),
+                        narrowed: BTreeMap::new(),
+                        stale_narrowing: BTreeMap::new(),
                     },
                 );
                 Ok(())
@@ -2865,6 +3337,7 @@ impl<'a> FunctionChecker<'a> {
         allow_return: bool,
     ) -> Result<BlockFlow> {
         let mut flow = BlockFlow::FallsThrough;
+        let mut diverges = false;
 
         for (stmt_index, stmt) in body.iter().enumerate() {
             self.expire_views_before(statement_span(stmt), locals);
@@ -3101,6 +3574,8 @@ impl<'a> FunctionChecker<'a> {
                                 last_use,
                             }),
                             closure_loans: Vec::new(),
+                            narrowed: BTreeMap::new(),
+                            stale_narrowing: BTreeMap::new(),
                         },
                     );
                 }
@@ -3312,10 +3787,16 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        branch_entry_states.push(fallthrough_locals.clone());
+                        let (when_true, when_false) =
+                            self.condition_narrowing(&branch.condition, &fallthrough_locals)?;
+                        let mut branch_entry = fallthrough_locals.clone();
+                        self.apply_narrowing(&when_true, &mut branch_entry);
+                        branch_entry_states.push(branch_entry);
+                        self.apply_narrowing(&when_false, &mut fallthrough_locals);
                     }
 
                     let mut all_return = true;
+                    let mut all_leave = true;
                     let mut branch_states = Vec::new();
                     let mut later_branches_reachable = true;
                     for (branch, branch_entry) in
@@ -3338,6 +3819,9 @@ impl<'a> FunctionChecker<'a> {
                             && self.const_bool_value(&branch.condition) != Some(false);
                         if branch_reachable && branch_flow != BlockFlow::AlwaysReturns {
                             all_return = false;
+                        }
+                        if branch_reachable && branch_flow == BlockFlow::FallsThrough {
+                            all_leave = false;
                             branch_states.push(branch_locals);
                         }
                         if later_branches_reachable
@@ -3364,10 +3848,14 @@ impl<'a> FunctionChecker<'a> {
                         )?;
                         if later_branches_reachable && else_flow != BlockFlow::AlwaysReturns {
                             all_return = false;
+                        }
+                        if later_branches_reachable && else_flow == BlockFlow::FallsThrough {
+                            all_leave = false;
                             else_state = Some(else_locals);
                         }
                     } else if later_branches_reachable {
                         all_return = false;
+                        all_leave = false;
                     }
 
                     if let Some(ref else_locals) = else_state {
@@ -3394,6 +3882,9 @@ impl<'a> FunctionChecker<'a> {
                     if all_return {
                         flow = BlockFlow::AlwaysReturns;
                         break;
+                    }
+                    if all_leave {
+                        diverges = true;
                     }
                 }
                 Stmt::Match(match_stmt) => {
@@ -3601,7 +4092,11 @@ impl<'a> FunctionChecker<'a> {
                             ),
                         ));
                     }
-                    let mut body_locals = locals.clone();
+                    let (when_true, when_false) =
+                        self.condition_narrowing(&while_stmt.condition, locals)?;
+                    let mut body_entry = locals.clone();
+                    self.apply_narrowing(&when_true, &mut body_entry);
+                    let mut body_locals = body_entry.clone();
                     self.check_block(
                         &while_stmt.body,
                         &mut body_locals,
@@ -3609,6 +4104,21 @@ impl<'a> FunctionChecker<'a> {
                         loop_depth + 1,
                         allow_return,
                     )?;
+                    let killed = Self::narrowing_killed_by_body(&body_entry, &body_locals);
+                    if !killed.is_empty() {
+                        // The body invalidates facts it was checked under; a
+                        // later iteration enters without them, so check again.
+                        Self::forget_narrowing(&killed, locals);
+                        Self::forget_narrowing(&killed, &mut body_entry);
+                        body_locals = body_entry.clone();
+                        self.check_block(
+                            &while_stmt.body,
+                            &mut body_locals,
+                            return_type,
+                            loop_depth + 1,
+                            allow_return,
+                        )?;
+                    }
                     if self.const_bool_value(&while_stmt.condition) != Some(false) {
                         self.reject_loop_carried_moves(
                             locals,
@@ -3616,7 +4126,10 @@ impl<'a> FunctionChecker<'a> {
                             "while",
                             while_stmt.span,
                         )?;
-                        let baseline_locals = locals.clone();
+                        let mut baseline_locals = locals.clone();
+                        if !block_contains_break(&while_stmt.body) {
+                            self.apply_narrowing(&when_false, &mut baseline_locals);
+                        }
                         self.merge_control_flow_moves(locals, &[&baseline_locals, &body_locals]);
                     }
                 }
@@ -3627,6 +4140,7 @@ impl<'a> FunctionChecker<'a> {
                             "`break` is only allowed inside a loop",
                         ));
                     }
+                    diverges = true;
                 }
                 Stmt::Continue(continue_stmt) => {
                     if loop_depth == 0 {
@@ -3635,10 +4149,14 @@ impl<'a> FunctionChecker<'a> {
                             "`continue` is only allowed inside a loop",
                         ));
                     }
+                    diverges = true;
                 }
             }
         }
 
+        if flow == BlockFlow::FallsThrough && diverges {
+            flow = BlockFlow::Diverges;
+        }
         Ok(flow)
     }
 
@@ -3688,6 +4206,8 @@ impl<'a> FunctionChecker<'a> {
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
+                narrowed: BTreeMap::new(),
+                stale_narrowing: BTreeMap::new(),
             },
         );
         self.check_block(
@@ -3731,6 +4251,7 @@ impl<'a> FunctionChecker<'a> {
                     .and_then(|binding| binding.view.as_ref())
                     .map(|_| place.root.as_str());
                 self.ensure_place_not_locked_by_view(&place, through_view, assign.span, locals)?;
+                self.invalidate_narrowing(&place, assign.span, "indexed assignment", locals);
             }
             if !self.is_mutable_place(object, locals)? {
                 if self.is_shared_self_place(object, locals) {
@@ -3903,6 +4424,7 @@ impl<'a> FunctionChecker<'a> {
                     .and_then(|binding| binding.view.as_ref())
                     .map(|_| path.root.as_str());
                 self.ensure_place_not_locked_by_view(&path, through_view, assign.span, locals)?;
+                self.invalidate_narrowing(&path, assign.span, "assignment", locals);
             }
             if !self.is_mutable_place(object, locals)? {
                 if self.is_shared_self_place(object, locals) {
@@ -4043,12 +4565,21 @@ impl<'a> FunctionChecker<'a> {
             self.ensure_pattern_binding_not_stale(binding_name, assign.span, existing)?;
         }
         let existing_ty = existing_binding.as_ref().map(|binding| binding.ty.clone());
+        // A compound assignment operates on the current member of a narrowed
+        // union local; a plain rebinding targets the declared type.
+        let narrowed_operand_ty = existing_binding
+            .as_ref()
+            .filter(|_| assign.op.is_some())
+            .and_then(|_| self.narrowed_type_at(&PlacePath::root(binding_name.clone()), locals));
         let mut borrow_info_locals = locals.clone();
         let locals_before_value = locals.clone();
         let value_ty = self.type_of_expr_hint(
             &assign.value,
             locals,
-            existing_ty.as_ref().or(annotation_ty.as_ref()),
+            narrowed_operand_ty
+                .as_ref()
+                .or(existing_ty.as_ref())
+                .or(annotation_ty.as_ref()),
         )?;
         self.reject_mutable_returned_view_value(&assign.value, locals, false)?;
         let direct_view_kind = self.direct_view_value_kind(&assign.value, locals)?;
@@ -4214,13 +4745,21 @@ impl<'a> FunctionChecker<'a> {
                 )?;
             }
 
+            let operand_ty = narrowed_operand_ty
+                .clone()
+                .unwrap_or_else(|| existing.ty.clone());
+            if let Some(member) = &narrowed_operand_ty {
+                self.record_narrowed_read(assign.span, &existing.ty, member);
+            }
             let final_value_ty = if let Some(op) = assign.op {
-                self.type_of_binary(assign.span, op, existing.ty.clone(), value_ty.clone())?
+                self.type_of_binary(assign.span, op, operand_ty.clone(), value_ty.clone())?
             } else {
                 value_ty.clone()
             };
+            let keeps_narrowed_member =
+                narrowed_operand_ty.is_some() && final_value_ty == operand_ty;
 
-            if final_value_ty != existing.ty {
+            if final_value_ty != existing.ty && !keeps_narrowed_member {
                 if matches!(final_value_ty, Type::Function { .. })
                     && matches!(existing.ty, Type::Function { .. })
                 {
@@ -4248,6 +4787,17 @@ impl<'a> FunctionChecker<'a> {
                     "operator right operand",
                     locals,
                 )?;
+            }
+            if assign.op.is_none() {
+                // The slot receives a new value: refinements of the old value
+                // cannot survive (ADR-0052 A3), and a later member use reports
+                // AU2014 instead of a plain type error.
+                self.invalidate_narrowing(
+                    &PlacePath::root(binding_name.clone()),
+                    assign.span,
+                    "assignment",
+                    locals,
+                );
             }
             if let Some(existing) = locals.get_mut(binding_name) {
                 if assign.op.is_none() {
@@ -4368,6 +4918,8 @@ impl<'a> FunctionChecker<'a> {
                         captured: false,
                         view: None,
                         closure_loans: Vec::new(),
+                        narrowed: BTreeMap::new(),
+                        stale_narrowing: BTreeMap::new(),
                     },
                 );
                 return Ok(());
@@ -4430,6 +4982,8 @@ impl<'a> FunctionChecker<'a> {
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
+                    narrowed: BTreeMap::new(),
+                    stale_narrowing: BTreeMap::new(),
                 },
             );
             return Ok(());
@@ -4457,8 +5011,28 @@ impl<'a> FunctionChecker<'a> {
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
+                narrowed: BTreeMap::new(),
+                stale_narrowing: BTreeMap::new(),
             },
         );
+        if let Some(previous) = existing_binding {
+            // A rebinding replaces the value: every earlier refinement of
+            // this local is stale from here on, and earlier stale records
+            // keep their spans for AU2014.
+            if let Some(binding) = locals.get_mut(binding_name) {
+                binding.stale_narrowing = previous.stale_narrowing;
+                for (projection, fact) in previous.narrowed {
+                    binding.stale_narrowing.insert(
+                        projection,
+                        StaleNarrowing {
+                            tested_at: fact.tested_at,
+                            invalidated_at: assign.span,
+                            operation: "assignment",
+                        },
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -4636,8 +5210,18 @@ impl<'a> FunctionChecker<'a> {
                 else_expr,
             } => {
                 self.type_of_expr(condition, locals)?;
-                let result_ty =
-                    self.conditional_result_hint(then_expr, else_expr, locals, expected)?;
+                let (when_true, when_false) = self.condition_narrowing(condition, locals)?;
+                let mut then_locals = locals.clone();
+                self.apply_narrowing(&when_true, &mut then_locals);
+                let mut else_locals = locals.clone();
+                self.apply_narrowing(&when_false, &mut else_locals);
+                let result_ty = self.conditional_result_hint(
+                    then_expr,
+                    else_expr,
+                    &then_locals,
+                    &else_locals,
+                    expected,
+                )?;
                 if type_contains_loan_closure(&result_ty) {
                     return Err(Diagnostic::coded_at(
                         "AU3010",
@@ -4648,9 +5232,7 @@ impl<'a> FunctionChecker<'a> {
                         "keep the loan closure in its matching inferred local and call it directly",
                     ));
                 }
-                let mut then_locals = locals.clone();
                 self.type_expr_consuming_result(then_expr, &mut then_locals, Some(&result_ty))?;
-                let mut else_locals = locals.clone();
                 self.type_expr_consuming_result(else_expr, &mut else_locals, Some(&result_ty))?;
                 self.merge_control_flow_moves(locals, &[&then_locals, &else_locals]);
                 Ok(result_ty)
@@ -4715,10 +5297,19 @@ impl<'a> FunctionChecker<'a> {
                 else_expr,
             } => {
                 self.type_of_expr(condition, locals)?;
-                let object_ty =
-                    self.conditional_result_hint(then_expr, else_expr, locals, expected_object)?;
-
+                let (when_true, when_false) = self.condition_narrowing(condition, locals)?;
                 let mut then_locals = locals.clone();
+                self.apply_narrowing(&when_true, &mut then_locals);
+                let mut else_locals = locals.clone();
+                self.apply_narrowing(&when_false, &mut else_locals);
+                let object_ty = self.conditional_result_hint(
+                    then_expr,
+                    else_expr,
+                    &then_locals,
+                    &else_locals,
+                    expected_object,
+                )?;
+
                 let (_, then_member_ty) = self.type_member_result_consuming(
                     then_expr,
                     field,
@@ -4727,7 +5318,6 @@ impl<'a> FunctionChecker<'a> {
                     Some(&object_ty),
                 )?;
 
-                let mut else_locals = locals.clone();
                 self.type_member_result_consuming(
                     else_expr,
                     field,
@@ -4867,11 +5457,15 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    /// Infers one result type for a conditional expression's arms. Each arm
+    /// is guessed under its own locals so `is None` narrowing facts from the
+    /// condition apply to the arm they select.
     fn conditional_result_hint(
         &self,
         then_expr: &Expr,
         else_expr: &Expr,
-        locals: &HashMap<String, LocalBinding>,
+        then_locals: &HashMap<String, LocalBinding>,
+        else_locals: &HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
         if let Some(expected) = expected {
@@ -4879,10 +5473,10 @@ impl<'a> FunctionChecker<'a> {
         }
 
         if let ExprKind::Group(inner) = &then_expr.kind {
-            return self.conditional_result_hint(inner, else_expr, locals, None);
+            return self.conditional_result_hint(inner, else_expr, then_locals, else_locals, None);
         }
         if let ExprKind::Group(inner) = &else_expr.kind {
-            return self.conditional_result_hint(then_expr, inner, locals, None);
+            return self.conditional_result_hint(then_expr, inner, then_locals, else_locals, None);
         }
         if let (ExprKind::Tuple(then_elements), ExprKind::Tuple(else_elements)) =
             (&then_expr.kind, &else_expr.kind)
@@ -4892,7 +5486,13 @@ impl<'a> FunctionChecker<'a> {
                     .iter()
                     .zip(else_elements)
                     .map(|(then_element, else_element)| {
-                        self.conditional_result_hint(then_element, else_element, locals, None)
+                        self.conditional_result_hint(
+                            then_element,
+                            else_element,
+                            then_locals,
+                            else_locals,
+                            None,
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
                 return Ok(Type::Tuple(element_types));
@@ -4906,7 +5506,13 @@ impl<'a> FunctionChecker<'a> {
                     .iter()
                     .zip(else_elements)
                     .map(|(then_element, else_element)| {
-                        self.conditional_result_hint(then_element, else_element, locals, None)
+                        self.conditional_result_hint(
+                            then_element,
+                            else_element,
+                            then_locals,
+                            else_locals,
+                            None,
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
                 if let Some(element_ty) = element_types.first() {
@@ -4924,7 +5530,13 @@ impl<'a> FunctionChecker<'a> {
                     .iter()
                     .zip(else_elements)
                     .map(|(then_element, else_element)| {
-                        self.conditional_result_hint(then_element, else_element, locals, None)
+                        self.conditional_result_hint(
+                            then_element,
+                            else_element,
+                            then_locals,
+                            else_locals,
+                            None,
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
                 if let Some(element_ty) = element_types.first() {
@@ -4946,13 +5558,15 @@ impl<'a> FunctionChecker<'a> {
                             self.conditional_result_hint(
                                 &then_entry.key,
                                 &else_entry.key,
-                                locals,
+                                then_locals,
+                                else_locals,
                                 None,
                             )?,
                             self.conditional_result_hint(
                                 &then_entry.value,
                                 &else_entry.value,
-                                locals,
+                                then_locals,
+                                else_locals,
                                 None,
                             )?,
                         ))
@@ -4971,8 +5585,8 @@ impl<'a> FunctionChecker<'a> {
             }
         }
 
-        let then_guess = self.type_of_expr_without_move_state(then_expr, locals, None);
-        let else_guess = self.type_of_expr_without_move_state(else_expr, locals, None);
+        let then_guess = self.type_of_expr_without_move_state(then_expr, then_locals, None);
+        let else_guess = self.type_of_expr_without_move_state(else_expr, else_locals, None);
         let (then_ty, else_ty) = match (then_guess, else_guess) {
             (Ok(then_ty), Ok(else_ty)) => (then_ty, else_ty),
             (Err(_), Ok(else_ty)) => return Ok(else_ty),
@@ -4984,10 +5598,10 @@ impl<'a> FunctionChecker<'a> {
             return Ok(merge_type_callable_contracts(&then_ty, &else_ty));
         }
         let then_adopts_else = self
-            .type_of_expr_without_move_state(then_expr, locals, Some(&else_ty))
+            .type_of_expr_without_move_state(then_expr, then_locals, Some(&else_ty))
             .is_ok_and(|actual| actual == else_ty);
         let else_adopts_then = self
-            .type_of_expr_without_move_state(else_expr, locals, Some(&then_ty))
+            .type_of_expr_without_move_state(else_expr, else_locals, Some(&then_ty))
             .is_ok_and(|actual| actual == then_ty);
         match (then_adopts_else, else_adopts_then) {
             (true, false) => return Ok(else_ty),
@@ -5031,7 +5645,8 @@ impl<'a> FunctionChecker<'a> {
         right: &Expr,
         locals: &HashMap<String, LocalBinding>,
     ) -> Option<Type> {
-        self.conditional_result_hint(left, right, locals, None).ok()
+        self.conditional_result_hint(left, right, locals, locals, None)
+            .ok()
     }
 
     fn result_consumption_needs_replay(expr: &Expr) -> bool {
@@ -5090,10 +5705,17 @@ impl<'a> FunctionChecker<'a> {
             );
         }
         match &expr.kind {
-            ExprKind::IsNone { .. } => Err(Diagnostic::at(
-                expr.span,
-                "None tests require Batch 1 flow checking",
-            )),
+            ExprKind::IsNone { value, .. } => {
+                // Any expression may be tested; a place whose type cannot hold
+                // `None` is a constant test with once-only evaluation. The
+                // tested operand is read as its declared union.
+                self.suppress_narrowing.set(true);
+                let tested = self.type_of_expr(value, locals);
+                self.suppress_narrowing.set(false);
+                tested?;
+                self.reject_mutable_returned_view_value(value, locals, false)?;
+                Ok(Type::named("bool"))
+            }
             ExprKind::Lambda {
                 captures,
                 params,
@@ -5144,7 +5766,14 @@ impl<'a> FunctionChecker<'a> {
                         }
                         return Err(diagnostic);
                     }
-                    return Ok(binding.ty.clone());
+                    let declared = binding.ty.clone();
+                    if let Some(member) =
+                        self.narrowed_type_at(&PlacePath::root(name.clone()), locals)
+                    {
+                        self.record_narrowed_read(expr.span, &declared, &member);
+                        return Ok(member);
+                    }
+                    return Ok(declared);
                 }
                 if let Some(function) = self.resolve_function_info(name) {
                     return self.function_value_type(
@@ -5546,9 +6175,18 @@ impl<'a> FunctionChecker<'a> {
                     .with_help("Aura has no implicit truthiness; compare the value explicitly"));
                 }
 
-                let result_ty =
-                    self.conditional_result_hint(then_expr, else_expr, locals, expected)?;
+                let (when_true, when_false) = self.condition_narrowing(condition, locals)?;
                 let mut then_locals = locals.clone();
+                self.apply_narrowing(&when_true, &mut then_locals);
+                let mut else_locals = locals.clone();
+                self.apply_narrowing(&when_false, &mut else_locals);
+                let result_ty = self.conditional_result_hint(
+                    then_expr,
+                    else_expr,
+                    &then_locals,
+                    &else_locals,
+                    expected,
+                )?;
                 let then_ty =
                     self.type_of_expr_hint(then_expr, &mut then_locals, Some(&result_ty))?;
                 if then_ty != result_ty {
@@ -5569,7 +6207,6 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
 
-                let mut else_locals = locals.clone();
                 let else_ty =
                     self.type_of_expr_hint(else_expr, &mut else_locals, Some(&result_ty))?;
                 if else_ty != result_ty {
@@ -5995,7 +6632,25 @@ impl<'a> FunctionChecker<'a> {
                     let left_ty = self.type_of_expr(left, locals)?;
                     let locals_after_left = locals.clone();
                     let mut right_locals = locals_after_left.clone();
+                    // The right operand only runs when the left operand took
+                    // the corresponding edge, so its refinements apply there.
+                    let (left_true, left_false) =
+                        self.condition_narrowing(left, &locals_after_left)?;
+                    self.apply_narrowing(
+                        if *op == BinaryOp::And {
+                            &left_true
+                        } else {
+                            &left_false
+                        },
+                        &mut right_locals,
+                    );
                     let right_ty = self.type_of_expr(right, &mut right_locals)?;
+                    for (name, binding) in right_locals.iter_mut() {
+                        if let Some(before) = locals_after_left.get(name) {
+                            binding.narrowed = before.narrowed.clone();
+                            binding.stale_narrowing = before.stale_narrowing.clone();
+                        }
+                    }
                     let borrow_locals = locals_before.clone();
                     let mut left_borrowed_places = Vec::new();
                     self.collect_expr_borrowed_places(
@@ -6423,7 +7078,18 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
+                if matches!(object_ty, Type::Union(_)) {
+                    if let Some(path) = self.member_access_path(object) {
+                        self.reject_stale_narrowing(&path, expr.span, locals)?;
+                    }
+                }
                 let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
+                if let Some(path) = self.member_access_path(expr) {
+                    if let Some(narrowed) = self.narrowed_type_at(&path, locals) {
+                        self.record_narrowed_read(expr.span, &member_ty, &narrowed);
+                        return Ok(narrowed);
+                    }
+                }
                 Ok(member_ty)
             }
             ExprKind::Index { object, index } => {
@@ -6502,6 +7168,15 @@ impl<'a> FunctionChecker<'a> {
                             ),
                         )
                     })?;
+                    let element_ty = match self.member_access_path(object).and_then(|path| {
+                        self.narrowed_type_at(&path.with_tuple(tuple_index), locals)
+                    }) {
+                        Some(narrowed) => {
+                            self.record_narrowed_read(expr.span, &element_ty, &narrowed);
+                            narrowed
+                        }
+                        None => element_ty,
+                    };
                     if !self.is_copy_type(&element_ty) {
                         return Err(Diagnostic::coded_at(
                             "AU3005",
@@ -9139,6 +9814,11 @@ impl<'a> FunctionChecker<'a> {
                 }
 
                 let receiver_ty = self.type_of_expr(object, locals)?;
+                if matches!(receiver_ty, Type::Union(_)) {
+                    if let Some(path) = self.member_access_path(object) {
+                        self.reject_stale_narrowing(&path, span, locals)?;
+                    }
+                }
                 if let Type::Named(receiver_name, _) = &receiver_ty {
                     if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                         if explicit_type_args.is_some() && builtin_member != BuiltinMember::ArrayMap

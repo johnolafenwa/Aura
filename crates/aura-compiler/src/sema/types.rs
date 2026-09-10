@@ -22,6 +22,8 @@ pub struct TypeDefinitions {
     budget: super::type_budget::ExpansionBudget,
     pub(crate) union_injections:
         std::rc::Rc<std::cell::RefCell<BTreeMap<super::UnionInjectionId, super::UnionInjection>>>,
+    pub(crate) narrowed_reads:
+        std::rc::Rc<std::cell::RefCell<BTreeMap<super::NarrowedReadId, super::NarrowedRead>>>,
     pub(super) union_probe_work: std::rc::Rc<std::cell::Cell<usize>>,
 }
 
@@ -50,6 +52,7 @@ impl From<BTreeMap<String, crate::diag::Span>> for TypeDefinitions {
             alias_templates: std::cell::RefCell::new(BTreeMap::new()),
             budget: Default::default(),
             union_injections: Default::default(),
+            narrowed_reads: Default::default(),
             union_probe_work: Default::default(),
         }
     }

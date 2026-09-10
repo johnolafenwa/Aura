@@ -1,0 +1,7 @@
+error[AU2014]: narrowing of `value` no longer applies after assignment; test the current value again
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_narrow_stale_assign.au:5:21
+  |
+5 |         print(value.len())
+  |                     ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/union_narrow_stale_assign.au:3:14: narrowed by this test
+  = related crates/aura-compiler/tests/fixtures/check-fail/union_narrow_stale_assign.au:4:9: invalidated here

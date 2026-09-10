@@ -1162,6 +1162,8 @@ impl<'a> FunctionChecker<'a> {
                     captured: mode != ClosureCaptureMode::MutableView,
                     view: None,
                     closure_loans: Vec::new(),
+                    narrowed: BTreeMap::new(),
+                    stale_narrowing: BTreeMap::new(),
                 },
             );
         }
@@ -1205,6 +1207,8 @@ impl<'a> FunctionChecker<'a> {
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
+                    narrowed: BTreeMap::new(),
+                    stale_narrowing: BTreeMap::new(),
                 },
             );
         }
@@ -1969,8 +1973,13 @@ impl<'a> FunctionChecker<'a> {
             let hinted_expected = substitute_type(expected, &substitutions);
             if *passing == ReceiverKind::BorrowMut && matches!(hinted_expected, Type::Union(_)) {
                 if let Some(argument) = argument {
+                    // A `mut` union parameter exposes the whole declared place;
+                    // a refinement of the argument does not narrow the contract.
+                    self.suppress_narrowing.set(true);
                     let actual =
-                        self.type_of_expr_without_move_state(&argument.value, locals, None)?;
+                        self.type_of_expr_without_move_state(&argument.value, locals, None);
+                    self.suppress_narrowing.set(false);
+                    let actual = actual?;
                     if actual != hinted_expected {
                         return Err(Diagnostic::coded_at("AU2010", argument.value.span,
                             format!("mutable argument requires exact type '{hinted_expected}', found '{actual}'")));
@@ -2360,6 +2369,12 @@ impl<'a> FunctionChecker<'a> {
                         let argument_place = self.borrow_call_place(&argument.value);
                         if let Some(place) = argument_place.as_ref() {
                             self.ensure_place_mutation_allowed(place, argument.span, locals)?;
+                            self.invalidate_narrowing(
+                                place,
+                                argument.span,
+                                "a call with mutable access",
+                                locals,
+                            );
                             let through_view = locals
                                 .get(&place.root)
                                 .and_then(|binding| binding.view.as_ref())

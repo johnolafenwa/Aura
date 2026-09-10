@@ -1,0 +1,6 @@
+def read() -> int64 | None:
+    return 1
+
+def main():
+    if read() is not None:
+        print(read() + 1)

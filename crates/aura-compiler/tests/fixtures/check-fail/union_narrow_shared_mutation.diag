@@ -1,0 +1,6 @@
+error[AU3003]: cannot rebind shared alias `counter`; shared aliases are non-assignable
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_narrow_shared_mutation.au:3:9
+  |
+3 |         counter += 1
+  |         ^
+  = help: use `counter` only for shared access; rebinding requires a separate `mut` value obtained through `own` input or a supported `.clone()`

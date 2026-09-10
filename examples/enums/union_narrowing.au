@@ -1,0 +1,25 @@
+class Profile:
+    name: str | None
+    visits: int64
+
+def describe(value: str | None):
+    if value is None:
+        print("missing")
+        return
+    print(value.len())
+
+def report(profile: Profile):
+    if profile.name is not None and profile.visits > 0:
+        print(profile.name)
+    else:
+        print("anonymous or new")
+
+def main():
+    describe(None)
+    describe("aura")
+    mut profile = Profile(name="aura", visits=0)
+    report(profile)
+    profile.visits += 1
+    report(profile)
+    profile.name = None
+    report(profile)

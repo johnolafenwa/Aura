@@ -176,6 +176,12 @@ impl<'a> FunctionChecker<'a> {
                 }
                 if let Some(place) = self.borrow_call_place(expr) {
                     self.ensure_place_mutation_allowed(&place, expr.span, locals)?;
+                    self.invalidate_narrowing(
+                        &place,
+                        expr.span,
+                        "a call with mutable access",
+                        locals,
+                    );
                 }
                 Ok(())
             }
@@ -195,6 +201,18 @@ impl<'a> FunctionChecker<'a> {
             return Ok(());
         }
         let place = PlacePath::root(name.to_string());
+        // A read narrowed to one Copy member copies that payload instead of
+        // consuming the union (ADR-0052 A3); a non-Copy member still moves
+        // the whole union.
+        if !self.suppress_narrowing.get() {
+            if let Some(fact) = binding.narrowed.get(&place.projections) {
+                if let [member] = fact.members.as_slice() {
+                    if self.is_copy_type(member) {
+                        return Ok(());
+                    }
+                }
+            }
+        }
         self.ensure_place_not_frozen_for_move(&place, span, locals)?;
         self.ensure_place_not_locked_by_view(&place, None, span, locals)?;
         let binding = locals
@@ -740,6 +758,7 @@ impl<'a> FunctionChecker<'a> {
                 .and_then(|binding| binding.view.as_ref())
                 .map(|_| place.root.as_str());
             self.ensure_place_not_locked_by_view(&place, through_view, span, locals)?;
+            self.invalidate_narrowing(&place, span, "a mutating method call", locals);
         }
         if self.is_mutable_place(object, locals)? {
             return Ok(());

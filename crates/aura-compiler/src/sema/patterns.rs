@@ -162,6 +162,8 @@ impl FunctionChecker<'_> {
         };
         let result = (|| {
             let scrutinee_ty = self.type_of_expr(&match_stmt.scrutinee, locals)?;
+            let scrutinee_ty =
+                self.narrowed_scrutinee_type(&match_stmt.scrutinee, scrutinee_ty, locals);
             if match_stmt.capability == ReceiverKind::Value {
                 if self.is_copy_type(&scrutinee_ty) {
                     if let Some(place) = self.borrow_call_place(&match_stmt.scrutinee) {
@@ -230,7 +232,7 @@ impl FunctionChecker<'_> {
                         loop_depth,
                         allow_return,
                     )?;
-                    if flow != BlockFlow::AlwaysReturns {
+                    if flow == BlockFlow::FallsThrough {
                         all_return = false;
                         arm_states.push(arm_locals);
                     }
@@ -479,7 +481,7 @@ impl FunctionChecker<'_> {
                         loop_depth,
                         allow_return,
                     )?;
-                    if arm_flow != BlockFlow::AlwaysReturns {
+                    if arm_flow == BlockFlow::FallsThrough {
                         all_return = false;
                         arm_states.push(arm_locals);
                     }
@@ -705,7 +707,7 @@ impl FunctionChecker<'_> {
                     loop_depth,
                     allow_return,
                 )?;
-                if arm_flow != BlockFlow::AlwaysReturns {
+                if arm_flow == BlockFlow::FallsThrough {
                     all_return = false;
                     arm_states.push(arm_locals);
                 }
@@ -911,6 +913,8 @@ impl FunctionChecker<'_> {
                         captured: false,
                         view: None,
                         closure_loans: Vec::new(),
+                        narrowed: BTreeMap::new(),
+                        stale_narrowing: BTreeMap::new(),
                     },
                 );
                 Ok(())
@@ -1089,6 +1093,7 @@ impl FunctionChecker<'_> {
         };
         let result = (|| {
             let scrutinee_ty = self.type_of_expr(scrutinee, locals)?;
+            let scrutinee_ty = self.narrowed_scrutinee_type(scrutinee, scrutinee_ty, locals);
             if borrow_mode == ReceiverKind::Value {
                 if self.is_copy_type(&scrutinee_ty) {
                     if let Some(place) = self.borrow_call_place(scrutinee) {

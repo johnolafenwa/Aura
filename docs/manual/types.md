@@ -24,7 +24,10 @@ ambiguous literals require a typed spelling or intermediate binding. There is
 no implicit conversion between unrelated unions or between containers with
 different element types. Select a member with the
 [type patterns](/manual/enums-and-match#union-type-patterns) described in the
-match chapter. `Option[T]` and `T?` remain supported during phase 1.
+match chapter, or test the `None` member with `is None` and `is not None`,
+which [narrow](/manual/enums-and-match#conditional-narrowing) a stable place
+to its remaining members for the selected branch. `Option[T]` and `T?` remain
+supported during phase 1.
 
 | Type | Description |
 | --- | --- |
@@ -469,7 +472,10 @@ does not change the underlying copy/move category.
 reports an unknown or unavailable type name. `AU2002` reports type mismatches,
 unresolved contextual literal typing, generic arity, payload, field, and
 annotation mismatches. `AU2003` reports unsupported numeric operators or
-casts, and `AU2004` reports invalid constructor argument binding. `AU2999`
+casts, and `AU2004` reports invalid constructor argument binding. `AU2010`
+reports a value that is not a direct member of its expected union, `AU2011`
+an ambiguous contextual literal, `AU2012` a cyclic transparent alias, and
+`AU2014` a member use whose `None`-test narrowing was invalidated. `AU2999`
 covers invalid recursive layouts and other type rejections without a narrower
 category. `AU3001` reports use of a moved non-copy value; `AU3002` reports a
 borrow conflict; `AU3003` reports mutation through an immutable place; and

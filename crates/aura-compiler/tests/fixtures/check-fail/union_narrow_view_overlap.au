@@ -1,0 +1,6 @@
+def main():
+    mut value: str | None = "aura"
+    if value is not None:
+        view text = value
+        value = None
+        print(text.len())

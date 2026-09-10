@@ -424,6 +424,11 @@ printed-output order unless they explicitly coordinate that order.
   - transparent union alias, exhaustive type arms, and mutable member access
   - prints `42` twice
 
+- `union_narrowing.au`
+  - `is None` and `is not None` tests that narrow a parameter and a class
+    field, an early `return` edge, and an `and` composition
+  - prints `missing`, `4`, `anonymous or new`, `aura`, `anonymous or new`
+
 - `result_match.au`
   - enum declarations, owned payload variants, an explicit `own` parameter,
     and exhaustive consuming `match`

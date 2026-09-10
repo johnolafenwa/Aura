@@ -1,0 +1,15 @@
+def read(flag: bool) -> str | None:
+    if flag:
+        return "x"
+    return None
+
+def main():
+    value: str | None = None
+    flag = value is None
+    print(flag)
+    other: str | None = "aura"
+    print(other is None)
+    print(other is not None)
+    print(read(true) is None)
+    print(read(false) is None)
+    print(read(false) is not None)

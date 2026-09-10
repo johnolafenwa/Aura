@@ -48,6 +48,7 @@ fn analysis_resolves_canonical_enums_from_the_module_registry() {
         "json".to_string(),
         crate::sema::ModuleNamespace {
             union_injections: Default::default(),
+            narrowed_reads: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -3460,6 +3461,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     let remote_program = checked_program(&remote_source);
     let mut tools_namespace = crate::sema::ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -3489,6 +3491,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         "inner".to_string(),
         crate::sema::ModuleNamespace {
             union_injections: Default::default(),
+            narrowed_reads: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -3519,6 +3522,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
             union_injections: Default::default(),
+            narrowed_reads: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -4441,6 +4445,7 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
             union_injections: Default::default(),
+            narrowed_reads: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -4454,6 +4459,7 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
                 "types".to_string(),
                 crate::sema::ModuleNamespace {
                     union_injections: Default::default(),
+                    narrowed_reads: Default::default(),
                     all_aliases: BTreeMap::new(),
                     aliases: BTreeMap::new(),
                     constants: BTreeMap::new(),
@@ -4674,6 +4680,7 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     let remote_program = checked_program(&remote_source);
     let tools_namespace = crate::sema::ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -4703,6 +4710,7 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
         "pkg".to_string(),
         crate::sema::ModuleNamespace {
             union_injections: Default::default(),
+            narrowed_reads: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -8914,4 +8922,47 @@ fn analysis_resolves_from_import_aliases_in_packages() {
         .find(|occurrence| occurrence.line == 4 && occurrence.start_character == 21)
         .expect("the imported function call should be an occurrence");
     assert!(make_call.definition.is_some(), "{}", make_call.hover);
+}
+
+#[test]
+fn narrowed_union_reads_carry_the_active_member_in_hover() {
+    let source = "class Profile:\n    name: str | None\n\ndef describe(value: str | None, profile: Profile):\n    if value is not None:\n        print(value.len())\n    if profile.name is None:\n        return\n    print(profile.name.len())\n";
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let narrowed_param = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 5 && occurrence.hover.contains("param value"))
+        .expect("the narrowed parameter read should be an occurrence");
+    assert!(
+        narrowed_param
+            .hover
+            .ends_with("Narrowed to `str` from `str | None` at this use."),
+        "{}",
+        narrowed_param.hover
+    );
+    let tested_param = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 4 && occurrence.hover.contains("param value"))
+        .expect("the tested parameter read should be an occurrence");
+    assert!(
+        !tested_param.hover.contains("Narrowed"),
+        "{}",
+        tested_param.hover
+    );
+    let narrowed_field = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 8 && occurrence.hover.contains("Narrowed to `str`"))
+        .expect("the narrowed field read should carry the member");
+    assert!(
+        narrowed_field.hover.contains("from `str | None`"),
+        "{}",
+        narrowed_field.hover
+    );
 }

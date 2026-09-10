@@ -5416,7 +5416,7 @@ the phase that owns the failure:
 | --- | --- | --- |
 | `AU10xx` | lexical analysis | `AU1001` invalid lexical input; `AU1002` invalid f-string delimiter |
 | `AU11xx` | parsing | `AU1101` invalid syntax |
-| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` unsupported syntax or feature; `AU2006` builtin method collision; `AU2007` builtin function redefinition; `AU2008` equality unavailable; `AU2999` general compile-time rejection |
+| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` unsupported syntax or feature; `AU2006` builtin method collision; `AU2007` builtin function redefinition; `AU2008` equality unavailable; `AU2010` union member or context; `AU2011` ambiguous union injection; `AU2012` cyclic type alias; `AU2013` union pattern coverage; `AU2014` invalidated narrowing; `AU2015` callable contract mismatch; `AU2999` general compile-time rejection |
 | `AU30xx` | ownership, loans, and transfer | `AU3001` moved value; `AU3002` borrow/loan conflict; `AU3003` mutability violation; `AU3004` ownership or place mode; `AU3005` non-copy indexed read; `AU3006` non-copy indexed compound assignment; `AU3007` non-cloneable state duplication; `AU3008` non-transferable task/Queue boundary; `AU3009` single-consumer task-result duplication; `AU3010` view escape or returned provenance |
 | `AU40xx` | runtime-checked traps | `AU4001` general runtime trap; `AU4002` arithmetic overflow or underflow; `AU4003` bounds or lookup violation; `AU4004` zero divisor; `AU4005` resource, allocation, or I/O failure; `AU4006` invalid runtime configuration; `AU4007` numeric Array shape or reduction violation |
 
@@ -5425,6 +5425,19 @@ that closer. A mismatched closer names the expected kind and labels its opener
 as related information. EOF with an unclosed delimiter reports the expected
 closer and labels the opener. These locations and labels are preserved by
 analysis JSON and the LSP bridge.
+
+`AU2010` through `AU2015` belong to the Batch 1 union, alias, narrowing, and
+callable surface. `AU2010` reports a value that is not a direct member of the
+expected union, or a union spelling without enough context. `AU2011` reports a
+literal that more than one member could accept. `AU2012` reports a cyclic
+transparent alias. `AU2013` reports missing, duplicate, unreachable, or
+nonmember union type arms. `AU2014` reports a member use through a place whose
+`None`-test narrowing was invalidated; its message is exactly
+`narrowing of \`PLACE\` no longer applies after OPERATION; test the current value again`,
+where the operation is `assignment`, `a mutable match`, `a call with mutable
+access`, or the mutating operation that exposed the place, and it carries two
+related labels: `narrowed by this test` at the test and `invalidated here` at
+the invalidation. `AU2015` is registered for callable contract mismatches.
 
 The registry is append-only. Once published, a code MUST NOT be reused,
 renumbered, or silently reassigned to a different diagnostic category. If a
@@ -5974,6 +5987,68 @@ tag is allowed after the conflicting arm access ends.
 The existing `Option[T]` library and `T?` spelling remain available during
 Batch 1 phase 1; their removal belongs to phase 2.
 
+## Conditional Narrowing
+
+`value is None` and `value is not None` test a union's `None` member without
+a match. When the tested operand is a stable place, the checker records a
+narrowing fact for each branch the test selects:
+
+```aura
+def describe(value: str | None):
+    if value is None:
+        print("missing")
+    else:
+        print(value.len())
+
+def main():
+    describe(None)
+    describe("aura")
+    mut local: int64 | None = 7
+    if local is not None:
+        local += 1
+        print(local)
+    local = None
+    if local is None:
+        print("cleared")
+```
+
+This prints `missing`, `4`, `8`, and `cleared`. Where `value is not None`
+holds, `value` has the effective type `str`; where it fails, `value` has the
+effective type `None`. Only `is None` and `is not None` narrow. `==` and `!=`
+compare values, and a `match` arm narrows its own binding instead.
+
+A stable place is an owned or `mut` local, a parameter or receiver, a fixed
+class field or tuple position reached through one of those, or a view. An
+index, a dictionary lookup, a call result, or any other temporary may be
+tested, but no fact attaches to a later evaluation; bind the value first.
+Narrowing never changes the capability of the place: a shared parameter
+gives shared payload access, a `mut` place or `view mut` gives mutable
+access, and an owned local may be consumed as the member, which consumes the
+whole union.
+
+Facts flow through `not`, parentheses, and short-circuit `and` and `or`. Both
+operands of `and` hold in its `true` branch, both operands of `or` fail in
+its `false` branch, and the right operand is checked under the left operand's
+fact. A branch that ends with `return`, `break`, or `continue` leaves its
+complement on the continuing path, so `if value is None: return` narrows the
+rest of the function, and `if value is None: continue` narrows the rest of
+the loop iteration. Where paths join, only facts present on every reachable
+path survive. A fact established before a `while` loop survives into the body
+only when no iteration can invalidate it.
+
+A fact ends when the place or an enclosing place is assigned, matched with
+`match mut`, or passed to a call with `mut` access. A later member use
+through that place is rejected with `AU2014`, which labels the test and the
+invalidation; test the current value again. Moving the place, including
+with `match own`, leaves it moved as usual, so a later use is `AU3001`. Writing through
+the narrowed payload, such as `local += 1` above, keeps the fact because it
+cannot change the member, and so does changing a proven-disjoint sibling
+field.
+
+A narrowed union with more than two members keeps its remaining member set
+for match coverage: after `if value is None: return`, a `match value` over
+`int64 | str | None` is exhaustive with only `int64` and `str` arms.
+
 ## Enum Declarations
 
 ```aura
@@ -6380,7 +6455,8 @@ implementation-defined.
 
 Batch 1 phase 1 adds normalized union type arms, unit-member cases, singleton
 type arms, nested union payload patterns, and AU2013 coverage diagnostics on
-both backends. Guards preserve candidate ownership until commitment, and
+both backends, together with `is None` and `is not None` conditional
+narrowing of stable places and AU2014 stale-narrowing diagnostics. Guards preserve candidate ownership until commitment, and
 mutable arms retain member type and source locks.
 
 Nominal and generic enums, positional and named payloads, qualified and
@@ -7274,7 +7350,11 @@ The form has lower precedence than `or` and associates to the right.
 `a if first else b if second else c` means
 `a if first else (b if second else c)`.
 
-Both arms are checked even when the condition is a literal. Ownership state is
+A condition that tests a union place with `is None` or `is not None`
+[narrows](/manual/enums-and-match#conditional-narrowing) that place in the arm
+the test selects, so `value + 1 if value is not None else 0` reads `value` as
+its non-`None` member. Both arms are checked even when the condition is a
+literal. Ownership state is
 checked independently for each arm and merged conservatively afterward. A
 non-copy value moved by either arm is therefore unavailable after the
 conditional expression. The surrounding use determines whether an arm is
@@ -7326,9 +7406,19 @@ Equality and inequality have one contextual `Option` rule: when either operand
 has static type `Option[T]`, a bare `None` on the other side denotes
 `Option.None` of that same specialization. The rule is symmetric. Unit
 `None == None` is `true` and unit `None != None` is `false`; a qualified
-`Option.None` with no context for its type argument is rejected. Aura rejects
-Python identity tests such as `value is None`; use `value == None`,
-`value != None`, or `match`.
+`Option.None` with no context for its type argument is rejected.
+
+`value is None` and `value is not None` are the two `None` tests. They sit at
+the comparison level, produce `bool`, and evaluate their operand exactly once
+as its declared type. `is` is contextual to these complete forms only:
+`None is value`, other identity comparisons, `isinstance`, and truthiness
+unwrapping are not accepted, and a `None` test cannot be chained with a
+comparison operator. A test on a place whose type has no `None` member is a
+constant test that still evaluates the operand. When the operand is a stable
+place of a union type, the test also establishes a narrowing fact for the
+branches it selects; see
+[conditional narrowing](/manual/enums-and-match#conditional-narrowing).
+Equality with `None` compares values and never narrows.
 
 Arithmetic and ordering may resolve through the corresponding operator trait.
 For non-numeric user types, `/` requests `Div.div`; `//` requests
@@ -8015,7 +8105,11 @@ member. `AU2002` means a type, constructor-payload, match-result, or index-type
 mismatch. `AU2003` means an unsupported unary, binary, compound, membership, or
 cast operator. `AU2004` means call or constructor argument binding failed.
 `AU2005` means an unsupported syntax or expression feature,
-including the exact generator-expression guidance recorded above. `AU2999`
+including the exact generator-expression guidance recorded above. `AU2010`
+means a value is not a direct member of its expected union, and `AU2011`
+means a literal that more than one member could accept. `AU2014` means a
+member use through a place whose `None`-test narrowing was invalidated by an
+assignment, mutable match, or call with mutable access. `AU2999`
 means an expression rejection without a narrower compile-time code. `AU3001`
 means use of a moved value; `AU3002` means a borrow conflict, including a later
 mutable borrow or consumption overlapping a retained non-copy binary operand,
@@ -8071,7 +8165,8 @@ call-site capability modifiers are unavailable. Eager owned list, set, and dicti
 comprehensions are implemented under Accepted ADR-0039.
 Integer base spellings, fixed-width bitwise operations, and shifts are
 Accepted under ADR-0047. Power, `round`, and `divmod` are Accepted under
-ADR-0048.
+ADR-0048. Contextual `is None` and `is not None` tests with short-circuit
+narrowing are implemented under the Batch 1 phase 1 design checkpoint.
 
 ## Source: docs/manual/ffi.md
 
@@ -10239,7 +10334,10 @@ not-expression
 
 comparison-expression
     = bitwise-or-expression,
-      { comparison-operator, bitwise-or-expression } ;
+      ( { comparison-operator, bitwise-or-expression } | none-test ) ;
+
+none-test
+    = "is", [ "not" ], "None" ;
 
 comparison-operator
     = "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" | "not", "in" ;
@@ -10309,7 +10407,10 @@ one comparison level and chain the Python way rather than left-folding, so
 operators means the conjunction of its `n` adjacent comparisons, with each
 operand evaluated at most once. `not a == b` means `not (a == b)`, because
 prefix `not` binds looser than the comparison level, while `a not in b` is one
-comparison operator. Casts bind more tightly than power and arithmetic.
+comparison operator. `is` is a contextual word: `value is None` and
+`value is not None` are complete comparison-level forms that take no further
+comparison operator on either side, so `a is None == b` and `a < b is None`
+are syntax errors rather than chains. Casts bind more tightly than power and arithmetic.
 
 Comma-separated index expressions are accepted only for `Array[T]`, where
 one `int64` coordinate is required per runtime axis. Other indexable
@@ -14889,6 +14990,12 @@ Conditions must have exactly type `bool`. Aura does not convert strings, numbers
 
 Conditions are evaluated in source order until one is `true`. Only the selected suite executes. Static checking analyzes branches independently and conservatively merges ownership, partial-move, and initialization state across paths that can continue.
 
+A condition that tests a union place with `is None` or `is not None`
+[narrows](/manual/enums-and-match#conditional-narrowing) that place inside
+the selected suite, and after the statement when the other branch cannot
+continue. An `elif` condition is checked under the facts of every failed
+condition before it.
+
 ## `while`
 
 A `while` statement evaluates its condition before each iteration:
@@ -14901,6 +15008,11 @@ def main():
 ```
 
 The condition must have type `bool`. A false first condition executes the body zero times. Aura 0.3 has no loop `else` clause.
+
+A `while` condition that tests a union place with `is None` or
+`is not None` narrows the place inside the body, and a body `continue` after
+such a test narrows the rest of that iteration. A fact established before the
+loop survives into the body only when no iteration can invalidate it.
 
 Moving a non-copy outer value for the first time inside a repeatable loop is rejected when it could make a later iteration invalid. Reinitialize the place on every continuing path or restructure ownership explicitly.
 
@@ -15203,8 +15315,10 @@ exactly `bool`; return values match the enclosing signature; iterables determine
 their loop binding contract; match patterns are compatible, reachable, and
 exhaustive where required; and `with` accepts only the maintained cleanup
 contract. Assertion conditions are exactly `bool` and messages are exactly
-`str`; an assertion does not refine later control flow. Contextual legality
-is checked after parsing.
+`str`; an assertion does not refine later control flow. `is None` and
+`is not None` conditions refine a stable union place for the paths they
+select, as described in [Static Semantics](/manual/static-semantics#conditions).
+Contextual legality is checked after parsing.
 
 ## Runtime Semantics
 
@@ -15246,7 +15360,10 @@ unresolved name or target. `AU2002` means an expected-type, condition,
 iteration, match, return, or assignment mismatch. `AU2003` means an unsupported
 compound-assignment operator. `AU2004` means call or target argument binding
 failed. `AU2005` means unsupported syntax or feature for a Python-shaped
-statement. `AU2999` means an exhaustiveness, contextual-legality, unsupported
+statement. `AU2013` means a union match is missing, duplicating, or cannot
+reach a type arm. `AU2014` means a member use through a place whose
+`None`-test narrowing was ended by an assignment, mutable match, or call with
+mutable access. `AU2999` means an exhaustiveness, contextual-legality, unsupported
 statement rejection without a narrower code. `AU3001` means use of a moved
 place; `AU3002` means a borrow conflict, including later access that mutably
 borrows or consumes an overlapping retained non-copy compound or indexed-
@@ -15520,6 +15637,23 @@ operations and do not dispatch through operator traits.
 `or`, and `not` also require boolean results under the rules above. Aura does
 not apply general truthiness conversion to strings, collections, resources, or
 user types.
+
+`place is None` and `place is not None` on a stable place of a union type
+establish narrowing facts: the place has the effective type `None` where the
+test holds and the union of its remaining members where it fails. Facts
+compose through `not`, parentheses, and short-circuit `and`/`or`, and a
+right operand of `and`/`or` is checked under the left operand's fact. An
+`if` branch, `while` body, or conditional-expression arm is checked under the
+facts its condition selects. A branch that diverges with `return`, `break`,
+or `continue` contributes nothing to the join, so its complement's facts
+continue after the statement. At a join, a place keeps only the facts present
+on every reachable path. A `while` body is checked twice so that a fact
+established before the loop survives only when no iteration can invalidate
+it. Assigning, moving, or mutably matching the place or an ancestor, or
+passing either to a call with mutable access, ends the fact; a later member
+use through the stale place is `AU2014`. A single remaining member is the
+effective type of the place; a larger remaining set only sharpens `match`
+coverage. Equality with `None` does not narrow.
 
 ### Assertions
 
@@ -16332,7 +16466,10 @@ ambiguous literals require a typed spelling or intermediate binding. There is
 no implicit conversion between unrelated unions or between containers with
 different element types. Select a member with the
 [type patterns](/manual/enums-and-match#union-type-patterns) described in the
-match chapter. `Option[T]` and `T?` remain supported during phase 1.
+match chapter, or test the `None` member with `is None` and `is not None`,
+which [narrow](/manual/enums-and-match#conditional-narrowing) a stable place
+to its remaining members for the selected branch. `Option[T]` and `T?` remain
+supported during phase 1.
 
 | Type | Description |
 | --- | --- |
@@ -16777,7 +16914,10 @@ does not change the underlying copy/move category.
 reports an unknown or unavailable type name. `AU2002` reports type mismatches,
 unresolved contextual literal typing, generic arity, payload, field, and
 annotation mismatches. `AU2003` reports unsupported numeric operators or
-casts, and `AU2004` reports invalid constructor argument binding. `AU2999`
+casts, and `AU2004` reports invalid constructor argument binding. `AU2010`
+reports a value that is not a direct member of its expected union, `AU2011`
+an ambiguous contextual literal, `AU2012` a cyclic transparent alias, and
+`AU2014` a member use whose `None`-test narrowing was invalidated. `AU2999`
 covers invalid recursive layouts and other type rejections without a narrower
 category. `AU3001` reports use of a moved non-copy value; `AU3002` reports a
 borrow conflict; `AU3003` reports mutation through an immutable place; and
@@ -23190,6 +23330,33 @@ member or a final `_`. Type arms also work inside an enum payload pattern.
 
 See [union_type_patterns.au](../examples/enums/union_type_patterns.au).
 `Option[T]` and `T?` remain supported in phase 1.
+
+## Testing For `None`
+
+A union with a `None` member does not need a `match` for the common
+"present or missing" question. `is None` and `is not None` narrow the tested
+place for the branch they select:
+
+```aura check-pass
+def describe(value: str | None):
+    if value is None:
+        print("missing")
+        return
+    print(value.len())
+
+def main():
+    describe(None)
+    describe("aura")
+```
+
+Inside the `else` branch, and after an `if value is None: return`, `value` is
+a plain `str`. The same works for `mut` locals, class fields, and views, and
+through `not`, `and`, and `or`. Assigning to the place, matching it with
+`match mut`, or passing it to a call with `mut` access ends the narrowing;
+using the member afterwards reports `AU2014`, so test the value again. Only
+`is None` and `is not None` narrow; `== None` compares without narrowing.
+
+See [union_narrowing.au](../examples/enums/union_narrowing.au).
 
 ## Declaring An Enum
 

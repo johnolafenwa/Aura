@@ -1520,6 +1520,7 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
         .unwrap_or_else(|| program.module_name.clone());
     let mut namespace = ModuleNamespace {
         union_injections: program.type_definitions.union_injections.borrow().clone(),
+        narrowed_reads: program.type_definitions.narrowed_reads.borrow().clone(),
         all_aliases: program
             .aliases_in_scope()
             .map(|(name, info)| (name.clone(), qualify_alias_info_for_export(program, info)))
@@ -1723,6 +1724,7 @@ fn insert_namespace_import(
     let root = bindings.entry(root_name.clone()).or_insert_with(|| {
         ImportedBinding::Module(ModuleNamespace {
             union_injections: Default::default(),
+            narrowed_reads: Default::default(),
             all_aliases: BTreeMap::new(),
             aliases: BTreeMap::new(),
             constants: BTreeMap::new(),
@@ -1770,6 +1772,7 @@ fn insert_namespace_import(
             .entry(segment.clone())
             .or_insert_with(|| ModuleNamespace {
                 union_injections: Default::default(),
+                narrowed_reads: Default::default(),
                 all_aliases: BTreeMap::new(),
                 aliases: BTreeMap::new(),
                 constants: BTreeMap::new(),

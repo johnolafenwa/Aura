@@ -1,0 +1,5 @@
+def main():
+    mut value: str | None = "aura"
+    if value is not None:
+        value = None
+        print(value.len())

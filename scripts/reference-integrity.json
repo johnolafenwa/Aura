@@ -474,74 +474,80 @@
       "stderr": ""
     },
     "docs/manual/enums-and-match.md#aura-10": {
+      "sha256": "468f80018ca3c3ab4df8c7717ffe7043c49311b5383016bc572166655ae3fba9",
+      "mode": "illustrative",
+      "reason": "Function fragment: Status is declared elsewhere on the page."
+    },
+    "docs/manual/enums-and-match.md#aura-11": {
       "sha256": "53753d6d347a01a32f3bd83ec7f21d897e3e507a4b098f5517b3eb3f0cd5c15a",
       "mode": "illustrative",
       "reason": "Pattern fragment: result is an input supplied by the surrounding example."
     },
-    "docs/manual/enums-and-match.md#aura-11": {
+    "docs/manual/enums-and-match.md#aura-12": {
       "sha256": "bbc80d866978220b95743f49c4052eeca19385b2d33605ee6ea2fa84dc378138",
       "mode": "illustrative",
       "reason": "Short-pattern fragment: result is an input supplied by the surrounding example."
     },
-    "docs/manual/enums-and-match.md#aura-12": {
+    "docs/manual/enums-and-match.md#aura-13": {
       "sha256": "ddbda25d8204ae6bd5b82611d899ceeb065562892c1235be179d2eb81ec58135",
       "mode": "run",
       "stdout": "hello\n",
       "stderr": ""
     },
-    "docs/manual/enums-and-match.md#aura-13": {
+    "docs/manual/enums-and-match.md#aura-14": {
       "sha256": "20c7c5eebf504ca6507908d9939f49572018c12dbd8e83735368344958ac24e9",
       "mode": "run",
       "stdout": "hello\nresult is still owned\n",
       "stderr": ""
     },
-    "docs/manual/enums-and-match.md#aura-14": {
+    "docs/manual/enums-and-match.md#aura-15": {
       "sha256": "f6234fc1d1c25ef44d92c65ca452f55e707a7535391bd81ea23b72733a59cf69",
       "mode": "illustrative",
       "reason": "Literal-pattern fragment: code is an input supplied by the surrounding example."
     },
     "docs/manual/enums-and-match.md#aura-2": {
+      "sha256": "b7f277913ed430899bccf33cbc00eac3f3ae81140aed3e726eb4e6a5186843f0",
+      "mode": "run",
+      "stdout": "missing\n4\n8\ncleared\n",
+      "stderr": ""
+    },
+    "docs/manual/enums-and-match.md#aura-3": {
       "sha256": "0bc9115127b8e41ef7a391a1b00b392f37fc9ae481770f214badcb8f32472193",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/enums-and-match.md#aura-3": {
+    "docs/manual/enums-and-match.md#aura-4": {
       "sha256": "f5078a080e2da2040f93683b46dab224d21438b661b9d253c7702144957ac5a8",
       "mode": "illustrative",
       "reason": "Bound-enum declaration fragment: Named is a trait declared outside this block."
     },
-    "docs/manual/enums-and-match.md#aura-4": {
+    "docs/manual/enums-and-match.md#aura-5": {
       "sha256": "5327a1b823af4f2f8f9ab789d6649620cd4a12fc5d8bb632d4e543e71422d29d",
       "mode": "illustrative",
       "reason": "Construction fragment: Status is declared in the preceding enum example."
     },
-    "docs/manual/enums-and-match.md#aura-5": {
+    "docs/manual/enums-and-match.md#aura-6": {
       "sha256": "3e08c84ffbd90830b7f4cacad29b7856afbe2942469b82eb7610e8411524e922",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/enums-and-match.md#aura-6": {
+    "docs/manual/enums-and-match.md#aura-7": {
       "sha256": "dbe800e2069dd18eefd1d52d280c1342126b1a0d13b4c10ba0b05b804a39777f",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/enums-and-match.md#aura-7": {
+    "docs/manual/enums-and-match.md#aura-8": {
       "sha256": "a99b01c58764fa481fcba39c9e45c59b6664ef1b4eb1590e53b9530fc21b6a1d",
       "mode": "illustrative",
       "reason": "Match fragment: ready and Status are established by preceding examples."
     },
-    "docs/manual/enums-and-match.md#aura-8": {
+    "docs/manual/enums-and-match.md#aura-9": {
       "sha256": "6fde6a7ad281570edd5fc42d3dffc0c8caaabf1095b99446c2ea16952b0a26ea",
       "mode": "illustrative",
       "reason": "Wildcard-match fragment: ready and Status are established by preceding examples."
-    },
-    "docs/manual/enums-and-match.md#aura-9": {
-      "sha256": "468f80018ca3c3ab4df8c7717ffe7043c49311b5383016bc572166655ae3fba9",
-      "mode": "illustrative",
-      "reason": "Function fragment: Status is declared elsewhere on the page."
     },
     "docs/manual/expressions.md#aura-1": {
       "sha256": "1176ae428130a317546c807ee5d89982956e2e8b4c7d5334a457613f0ff7b276",
@@ -989,7 +995,7 @@
       "reason": "Normative match-statement-and-pattern EBNF fragment interpreted by the grammar prose, not Aura source."
     },
     "docs/manual/grammar.md#ebnf-13": {
-      "sha256": "e389beba9a40dae74e463c8beef5210c752fc82b9807361943ae25c6dfaade7f",
+      "sha256": "649291b50c914914381ae8129978211e9599a8fc44fdaec6e371509f0dbd0a29",
       "mode": "illustrative",
       "reason": "Normative EBNF expression grammar, not an executable Aura program."
     },

@@ -17,7 +17,46 @@ pub struct UnionInjection {
     pub member_index: usize,
 }
 
+/// A read (or compound-assignment target) of a union place that the checker
+/// proved to hold exactly one member on the current path (ADR-0052 A3/A4).
+/// Keyed by the expression span; the lowering reads the payload projection.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct NarrowedReadId {
+    pub module_name: String,
+    pub line: usize,
+    pub column: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NarrowedRead {
+    pub union_type: Type,
+    pub member_type: Type,
+    pub member_index: usize,
+}
+
 impl Program {
+    pub(crate) fn narrowed_read(
+        &self,
+        module_name: &str,
+        span: crate::diag::Span,
+    ) -> Option<NarrowedRead> {
+        let id = NarrowedReadId {
+            module_name: module_name.to_owned(),
+            line: span.line,
+            column: span.column,
+        };
+        self.type_definitions
+            .narrowed_reads
+            .borrow()
+            .get(&id)
+            .cloned()
+            .or_else(|| {
+                find_namespace_in_modules(&self.module_registry, module_name)
+                    .or_else(|| find_namespace_in_modules(&self.imported_modules, module_name))
+                    .and_then(|namespace| namespace.narrowed_reads.get(&id).cloned())
+            })
+    }
+
     pub(crate) fn union_injection(
         &self,
         module_name: &str,

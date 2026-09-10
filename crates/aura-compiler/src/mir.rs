@@ -4753,9 +4753,24 @@ fn invalidate_union_facts_for_place(place: &str, state: &mut ValidatedLoanState)
         validated_loan_sources(place, &state.loans).unwrap_or_else(|_| vec![place.to_owned()]);
     state.active_union_tags.retain(|fact| {
         !fact.sources.iter().any(|source| {
-            resolved
-                .iter()
-                .any(|changed| mir_place_paths_overlap(source, changed))
+            resolved.iter().any(|changed| {
+                // Writing inside the proven payload cannot change the tag:
+                // a narrowed compound assignment keeps its proof.
+                let inside_payload = changed
+                    .strip_prefix(source.as_str())
+                    .and_then(|rest| rest.strip_prefix('.'))
+                    .is_some_and(|rest| {
+                        rest.strip_prefix(UNION_PAYLOAD_PROJECTION_PREFIX)
+                            .and_then(|index| {
+                                index
+                                    .split('.')
+                                    .next()
+                                    .and_then(|index| index.parse::<usize>().ok())
+                            })
+                            == Some(fact.member_index)
+                    });
+                mir_place_paths_overlap(source, changed) && !inside_payload
+            })
         })
     });
     state.active_enum_variants.retain(|fact| {
@@ -7100,6 +7115,22 @@ fn validate_function_loan_flow(
                         successor_state
                             .active_union_tags
                             .retain(|active| active != &fact);
+                        // A failed test on a two-member union proves the other
+                        // member, which narrowing relies on for `x is None`
+                        // false edges.
+                        if let Type::Union(union) = &fact.union_type {
+                            if union.members.len() == 2 {
+                                let other = ValidatedUnionTagFact {
+                                    sources: fact.sources.clone(),
+                                    union_type: fact.union_type.clone(),
+                                    member_index: 1 - fact.member_index,
+                                };
+                                successor_state
+                                    .active_union_tags
+                                    .retain(|active| active.sources != other.sources);
+                                successor_state.active_union_tags.push(other);
+                            }
+                        }
                     }
                 }
             }
@@ -9991,19 +10022,30 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
-        let target = self.render_assign_target(&assign.target);
-        let target_ty = match &assign.target {
-            AssignTarget::Name(name) => {
+        let narrowed_target = assign
+            .op
+            .and_then(|_| self.program.narrowed_read(self.module_name, assign.span));
+        let target = match (&assign.target, &narrowed_target) {
+            (AssignTarget::Name(name), Some(read)) => format!(
+                "{}.{UNION_PAYLOAD_PROJECTION_PREFIX}{}",
+                self.render_local_name(name),
+                read.member_index
+            ),
+            _ => self.render_assign_target(&assign.target),
+        };
+        let target_ty = match (&assign.target, &narrowed_target) {
+            (AssignTarget::Name(_), Some(read)) => Some(read.member_type.clone()),
+            (AssignTarget::Name(name), None) => {
                 self.local_types.get(&self.render_local_name(name)).cloned()
             }
-            AssignTarget::Member { object, field } => self.infer_expr_type(&Expr {
+            (AssignTarget::Member { object, field }, _) => self.infer_expr_type(&Expr {
                 kind: ExprKind::Member {
                     object: object.clone(),
                     field: field.clone(),
                 },
                 span: assign.span,
             }),
-            AssignTarget::Index { .. } => None,
+            (AssignTarget::Index { .. }, _) => None,
         };
         if let Some(op) = assign.op {
             let left = match &assign.target {
@@ -11006,7 +11048,6 @@ impl<'a> Lowerer<'a> {
 
         for (index, branch) in if_stmt.branches.iter().enumerate() {
             self.switch_to(next_condition_block);
-            let condition = self.lower_expr(&branch.condition);
             let then_block = self.new_block("if_then");
             let is_last = index + 1 == if_stmt.branches.len();
             let else_block = if is_last {
@@ -11023,11 +11064,8 @@ impl<'a> Lowerer<'a> {
                 self.new_block("if_next")
             };
 
-            self.terminate(Terminator::Branch {
-                condition,
-                then_label: self.label(then_block),
-                else_label: self.label(else_block),
-            });
+            let (then_label, else_label) = (self.label(then_block), self.label(else_block));
+            self.lower_condition_branch(&branch.condition, then_label, else_label);
 
             self.switch_to(then_block);
             let body_endings = ending_loans
@@ -12823,12 +12861,8 @@ impl<'a> Lowerer<'a> {
         self.terminate(Terminator::Goto(self.label(condition_block)));
 
         self.switch_to(condition_block);
-        let condition = self.lower_expr(&while_stmt.condition);
-        self.terminate(Terminator::Branch {
-            condition,
-            then_label: self.label(body_block),
-            else_label: self.label(after_block),
-        });
+        let (body_label, after_label) = (self.label(body_block), self.label(after_block));
+        self.lower_condition_branch(&while_stmt.condition, body_label, after_label);
 
         self.loop_stack.push(LoopLabels {
             break_label: self.label(after_block),
@@ -13064,16 +13098,249 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// The checker's single-member refinement recorded for this expression.
+    fn narrowed_read(&self, expr: &Expr) -> Option<crate::sema::NarrowedRead> {
+        if !matches!(
+            expr.kind,
+            ExprKind::Name(_) | ExprKind::Member { .. } | ExprKind::Index { .. }
+        ) {
+            return None;
+        }
+        self.program.narrowed_read(self.module_name, expr.span)
+    }
+
+    /// The union place a narrowed expression tests or reads: a stable local
+    /// place, or a view descriptor (with its stable child projection) whose
+    /// loan resolves to the tested physical place.
+    fn narrowed_base_place(&mut self, expr: &Expr) -> Option<String> {
+        let place = self.render_stable_place_expr_option(expr)?;
+        let root = place.split('.').next().unwrap_or(&place);
+        if !self.local_types.contains_key(root)
+            && self.scoped_local_name(root).is_none()
+            && !self.view_sources.contains_key(root)
+        {
+            return None;
+        }
+        Some(place)
+    }
+
+    /// A value read the checker proved to hold one member lowers to that
+    /// member's payload projection; the CFG carries the tag proof from the
+    /// test. A view root is read through a child loan of its descriptor, the
+    /// same way a type-pattern binding reads a payload through a view.
+    fn lower_narrowed_read(&mut self, expr: &Expr) -> Option<Operand> {
+        let read = self.narrowed_read(expr)?;
+        let base = self.narrowed_base_place(expr)?;
+        let projected = format!(
+            "{base}.{UNION_PAYLOAD_PROJECTION_PREFIX}{}",
+            read.member_index
+        );
+        let root = base.split('.').next().unwrap_or(&base).to_string();
+        if !self.view_sources.contains_key(&root) {
+            return Some(Operand::Place(projected));
+        }
+        let loan = self.new_typed_temp(read.member_type.clone());
+        self.emit(Instruction::Reborrow {
+            loan: loan.clone(),
+            parent: root.clone(),
+            projection: projected[root.len()..].trim_start_matches('.').to_string(),
+            mutable: false,
+        });
+        self.view_sources.insert(loan.clone(), projected);
+        self.loan_source_names.insert(loan.clone(), loan.clone());
+        if let Some(scope) = self.loan_scopes.last_mut() {
+            scope.push(loan.clone());
+        }
+        let value = self.new_typed_temp(read.member_type.clone());
+        self.emit(Instruction::ReadLoan {
+            target: value.clone(),
+            loan,
+        });
+        Some(Operand::Place(value))
+    }
+
+    /// Whether a condition contains an `is None` leaf that should lower as a
+    /// tag-test branch rather than a boolean value.
+    fn condition_has_none_test(condition: &Expr) -> bool {
+        match &condition.kind {
+            ExprKind::IsNone { .. } => true,
+            ExprKind::Group(inner) => Self::condition_has_none_test(inner),
+            ExprKind::Unary {
+                op: UnaryOp::Not,
+                expr: inner,
+            } => Self::condition_has_none_test(inner),
+            ExprKind::Binary {
+                op: BinaryOp::And | BinaryOp::Or,
+                left,
+                right,
+            } => Self::condition_has_none_test(left) || Self::condition_has_none_test(right),
+            _ => false,
+        }
+    }
+
+    /// Lowers `value is None` / `value is not None` used as a `bool` value.
+    /// A union operand is tested by its tag once; a place whose type cannot
+    /// hold `None` is a constant test that still evaluates its operand once.
+    fn lower_none_test_value(
+        &mut self,
+        expr: &Expr,
+        value: &Expr,
+        negated: bool,
+        operator_span: Span,
+    ) -> Operand {
+        let declared = self.infer_expr_type(value);
+        let none_index = match &declared {
+            Some(Type::Union(union)) => union
+                .members
+                .iter()
+                .position(|member| matches!(member, Type::Unit)),
+            _ => None,
+        };
+        let (Some(union_type @ Type::Union(_)), Some(member_index)) = (&declared, none_index)
+        else {
+            let is_none = declared == Some(Type::Unit);
+            self.lower_expr(value);
+            return Operand::Bool(is_none != negated);
+        };
+        let union_type = union_type.clone();
+        let place = match self.narrowed_base_place(value) {
+            Some(place) => place,
+            None => {
+                let tested = self.new_typed_temp(union_type.clone());
+                let operand = self.lower_expr_for_owned_value(value, Some(&union_type));
+                self.emit(Instruction::Assign {
+                    target: tested.clone(),
+                    value: Rvalue::Use(operand),
+                });
+                tested
+            }
+        };
+        let test = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: test.clone(),
+            value: Rvalue::UnionTagTest {
+                place,
+                union_type,
+                member_index,
+            },
+        });
+        if !negated {
+            return Operand::Place(test);
+        }
+        let _ = expr;
+        let result = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: result.clone(),
+            value: Rvalue::Unary {
+                op: UnaryOp::Not,
+                value: Operand::Place(test),
+                span: operator_span,
+            },
+        });
+        Operand::Place(result)
+    }
+
+    /// Lowers a condition as a branch chain so every `is None` leaf is its own
+    /// tag test whose proof flows into the selected successor (ADR-0052 A4).
+    fn lower_condition_branch(&mut self, condition: &Expr, then_label: String, else_label: String) {
+        match &condition.kind {
+            ExprKind::Group(inner) => self.lower_condition_branch(inner, then_label, else_label),
+            ExprKind::Unary {
+                op: UnaryOp::Not,
+                expr: inner,
+            } => self.lower_condition_branch(inner, else_label, then_label),
+            ExprKind::Binary {
+                op: op @ (BinaryOp::And | BinaryOp::Or),
+                left,
+                right,
+            } => {
+                let rest = self.new_block(if *op == BinaryOp::And {
+                    "cond_and"
+                } else {
+                    "cond_or"
+                });
+                let rest_label = self.label(rest);
+                if *op == BinaryOp::And {
+                    self.lower_condition_branch(left, rest_label, else_label.clone());
+                } else {
+                    self.lower_condition_branch(left, then_label.clone(), rest_label);
+                }
+                self.switch_to(rest);
+                self.lower_condition_branch(right, then_label, else_label);
+            }
+            ExprKind::IsNone { value, negated, .. } => {
+                let declared = self.infer_expr_type(value);
+                let none_index = match &declared {
+                    Some(Type::Union(union)) => union
+                        .members
+                        .iter()
+                        .position(|member| matches!(member, Type::Unit)),
+                    _ => None,
+                };
+                let tested = match (&declared, none_index) {
+                    (Some(union_type @ Type::Union(_)), Some(index)) => self
+                        .narrowed_base_place(value)
+                        .map(|place| (place, union_type.clone(), index)),
+                    _ => None,
+                };
+                let (true_label, false_label) = if *negated {
+                    (else_label, then_label)
+                } else {
+                    (then_label, else_label)
+                };
+                match tested {
+                    Some((place, union_type, member_index)) => {
+                        let test = self.new_typed_temp(Type::named("bool"));
+                        self.emit(Instruction::Assign {
+                            target: test.clone(),
+                            value: Rvalue::UnionTagTest {
+                                place,
+                                union_type,
+                                member_index,
+                            },
+                        });
+                        self.terminate(Terminator::Branch {
+                            condition: Operand::Place(test),
+                            then_label: true_label,
+                            else_label: false_label,
+                        });
+                    }
+                    None => {
+                        // A constant test still evaluates its operand once.
+                        let is_none = declared == Some(Type::Unit);
+                        self.lower_expr(value);
+                        self.terminate(Terminator::Branch {
+                            condition: Operand::Bool(is_none),
+                            then_label: true_label,
+                            else_label: false_label,
+                        });
+                    }
+                }
+            }
+            _ => {
+                let condition = self.lower_expr(condition);
+                self.terminate(Terminator::Branch {
+                    condition,
+                    then_label,
+                    else_label,
+                });
+            }
+        }
+    }
+
     fn lower_expr(&mut self, expr: &Expr) -> Operand {
         if let Some(function) = self.lower_function_value(expr) {
             return function;
         }
+        if let Some(narrowed) = self.lower_narrowed_read(expr) {
+            return narrowed;
+        }
         match &expr.kind {
-            ExprKind::IsNone { value, negated, .. } => {
-                let is_none = self.infer_expr_type(value) == Some(Type::Unit);
-                self.lower_expr(value);
-                Operand::Bool(is_none != *negated)
-            }
+            ExprKind::IsNone {
+                value,
+                negated,
+                operator_span,
+            } => self.lower_none_test_value(expr, value, *negated, *operator_span),
             ExprKind::Name(name) if name == "None" => Operand::Unit,
             ExprKind::BuiltinOmitted => Operand::Unit,
             ExprKind::Lambda { params, body, .. } => self.lower_lambda(expr, params, body),
@@ -14975,6 +15242,13 @@ impl<'a> Lowerer<'a> {
                     // stable child projection) through unchanged. Reading it
                     // into a temporary would sever the call origin from the
                     // mutable writeback place and manufacture owned storage.
+                    // A narrowed view borrows the proven payload projection.
+                    if let Some(read) = self.narrowed_read(expr) {
+                        return Operand::Place(format!(
+                            "{place}.{UNION_PAYLOAD_PROJECTION_PREFIX}{}",
+                            read.member_index
+                        ));
+                    }
                     return Operand::Place(place);
                 }
             }
@@ -15046,6 +15320,25 @@ impl<'a> Lowerer<'a> {
         };
         if self.is_non_owning_place_expr(expr) {
             return self.lower_expr_at_sequence_point(expr, expected);
+        }
+        if let Some(read) = self.narrowed_read(expr) {
+            if !type_is_copy_in_program(&read.member_type, self.program) {
+                if let Some(place) = self.render_addressable_place_expr_option(expr) {
+                    // Consuming a narrowed owned root moves the whole union
+                    // through its checked payload take (ADR-0052 A3).
+                    let target = self.new_typed_temp(read.member_type.clone());
+                    self.emit(Instruction::Assign {
+                        target: target.clone(),
+                        value: Rvalue::UnionTakePayload {
+                            place,
+                            union_type: read.union_type,
+                            member_type: read.member_type,
+                            member_index: read.member_index,
+                        },
+                    });
+                    return Operand::MovePlace(target);
+                }
+            }
         }
         if let (Some(place), Some(value_type)) = (
             self.render_addressable_place_expr_option(expr),
@@ -15417,13 +15710,21 @@ impl<'a> Lowerer<'a> {
         let else_block = self.new_block("conditional_else");
         let join_block = self.new_block("conditional_join");
 
-        let condition =
-            self.lower_expr_at_sequence_point(condition_expr, Some(&Type::named("bool")));
-        self.terminate(Terminator::Branch {
-            condition,
-            then_label: self.label(then_block),
-            else_label: self.label(else_block),
-        });
+        if Self::condition_has_none_test(condition_expr) {
+            // `is None` leaves branch on their tag tests so each arm carries
+            // the narrowing proof the checker relied on (ADR-0052 A4).
+            let then_label = self.label(then_block);
+            let else_label = self.label(else_block);
+            self.lower_condition_branch(condition_expr, then_label, else_label);
+        } else {
+            let condition =
+                self.lower_expr_at_sequence_point(condition_expr, Some(&Type::named("bool")));
+            self.terminate(Terminator::Branch {
+                condition,
+                then_label: self.label(then_block),
+                else_label: self.label(else_block),
+            });
+        }
 
         self.switch_to(then_block);
         let then_value = if arms_owned {
@@ -17607,6 +17908,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {
+        if let Some(read) = self.narrowed_read(expr) {
+            return Some(read.member_type);
+        }
         if let ExprKind::Call { callee, args } = &expr.kind {
             if let Some(expanded) = self.expanded_alias_callee(callee) {
                 return self.infer_expr_type(&Expr {

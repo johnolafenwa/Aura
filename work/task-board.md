@@ -60,7 +60,23 @@ Last updated: 2026-09-10
   eight unit tests, 30 dual-backend fixtures, two validator corrections, and
   a `match mut` view-lock fix) raises coverage to 95.85/96.76/94.45 and is
   committed with the remaining floor gap carried to the phase-end ratchet.
-- Next: complete type-pattern gates and commit, then the ordered families,
+- Narrowing and flow family (2026-09-10): `is None` / `is not None` refine
+  stable places (locals, parameters, fixed fields, tuple positions, views)
+  through `not`/`and`/`or`, `if`/`elif`/`while`, conditional expressions,
+  and diverging `return`/`break`/`continue` edges; joins keep facts on every
+  reachable path; assignment, `match mut`, and mutable call access end a fact
+  and a stale member use reports AU2014 with test and invalidation spans.
+  Single-member facts change the effective type through a span-keyed
+  `NarrowedRead` side table shared by the lowering and the analysis hover;
+  multi-member facts sharpen match coverage. Every `is None` leaf lowers to a
+  validator-proven tag-test branch on both backends. Probing found and fixed
+  two defects beyond the plan: the value form `flag = value is None` lowered
+  as a constant, and returning a narrowed Copy member of a shared parameter
+  was rejected as a borrowed move. Thirteen run-pass, eight check-fail, and
+  one parse-fail fixtures; Manual, tutorial 09, example, grammar, and the
+  AU2010–AU2015 registry rows are updated.
+- Next: commit the narrowing family, then generic members, union properties,
+  layout/interfaces/drop plans, nullable FFI results, the callable families,
   editor/docs/reference-agent updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.

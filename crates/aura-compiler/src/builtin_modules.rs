@@ -944,6 +944,7 @@ fn io_namespace() -> ModuleNamespace {
 
     ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -1095,6 +1096,7 @@ fn fs_namespace() -> ModuleNamespace {
 
     ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -1323,6 +1325,7 @@ fn net_namespace() -> ModuleNamespace {
 
     ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -1480,6 +1483,7 @@ fn process_namespace() -> ModuleNamespace {
 
     ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -1533,6 +1537,7 @@ fn random_namespace() -> ModuleNamespace {
 
     ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -1599,6 +1604,7 @@ fn function_only_namespace(name: &str, functions: Vec<FunctionInfo>) -> ModuleNa
         .collect::<BTreeMap<_, _>>();
     ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -2002,6 +2008,7 @@ fn json_namespace() -> ModuleNamespace {
     ]);
     ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -2122,6 +2129,7 @@ fn bytes_namespace() -> ModuleNamespace {
     let enums = BTreeMap::from([(error.decl.name.clone(), error)]);
     ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),

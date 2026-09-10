@@ -1,0 +1,16 @@
+def first_len(value: str | None) -> int64:
+    if value is None:
+        return 0 - 1
+    return value.len()
+
+def guarded(value: int64 | None) -> int64:
+    if value is not None:
+        return value + 1
+    print("absent")
+    return 0
+
+def main():
+    print(first_len(None))
+    print(first_len("abc"))
+    print(guarded(41))
+    print(guarded(None))

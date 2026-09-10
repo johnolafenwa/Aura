@@ -1,0 +1,12 @@
+def take(text: own str):
+    print(text.len())
+
+def main():
+    value: str | None = "owned"
+    if value is not None:
+        take(value)
+    other: str | None = None
+    if other is not None:
+        take(other)
+    else:
+        print("kept")

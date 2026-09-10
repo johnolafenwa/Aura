@@ -1,0 +1,19 @@
+class Profile:
+    name: str | None
+    visits: int64
+
+def report(profile: Profile):
+    if profile.name is None:
+        print("anonymous")
+    else:
+        print(profile.name.len())
+
+def main():
+    mut profile = Profile(name="aura", visits=0)
+    report(profile)
+    if profile.name is not None:
+        profile.visits += 1
+        print(profile.name)
+    print(profile.visits)
+    profile.name = None
+    report(profile)

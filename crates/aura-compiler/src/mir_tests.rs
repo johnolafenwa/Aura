@@ -7908,6 +7908,7 @@ fn namespace_from_program(name: &str, path: &str, program: &Program) -> ModuleNa
     }
     ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -7993,6 +7994,7 @@ def generic_helper[T](value: own T) -> T:
     reexport.enums.clear();
     let mut pkg = ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -8028,6 +8030,7 @@ def generic_helper[T](value: own T) -> T:
 
     let mut current = ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -8343,6 +8346,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
     );
     let mut imported_only_root = ModuleNamespace {
         union_injections: Default::default(),
+        narrowed_reads: Default::default(),
         all_aliases: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),

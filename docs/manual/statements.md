@@ -222,6 +222,12 @@ Conditions must have exactly type `bool`. Aura does not convert strings, numbers
 
 Conditions are evaluated in source order until one is `true`. Only the selected suite executes. Static checking analyzes branches independently and conservatively merges ownership, partial-move, and initialization state across paths that can continue.
 
+A condition that tests a union place with `is None` or `is not None`
+[narrows](/manual/enums-and-match#conditional-narrowing) that place inside
+the selected suite, and after the statement when the other branch cannot
+continue. An `elif` condition is checked under the facts of every failed
+condition before it.
+
 ## `while`
 
 A `while` statement evaluates its condition before each iteration:
@@ -234,6 +240,11 @@ def main():
 ```
 
 The condition must have type `bool`. A false first condition executes the body zero times. Aura 0.3 has no loop `else` clause.
+
+A `while` condition that tests a union place with `is None` or
+`is not None` narrows the place inside the body, and a body `continue` after
+such a test narrows the rest of that iteration. A fact established before the
+loop survives into the body only when no iteration can invalidate it.
 
 Moving a non-copy outer value for the first time inside a repeatable loop is rejected when it could make a later iteration invalid. Reinitialize the place on every continuing path or restructure ownership explicitly.
 
@@ -536,8 +547,10 @@ exactly `bool`; return values match the enclosing signature; iterables determine
 their loop binding contract; match patterns are compatible, reachable, and
 exhaustive where required; and `with` accepts only the maintained cleanup
 contract. Assertion conditions are exactly `bool` and messages are exactly
-`str`; an assertion does not refine later control flow. Contextual legality
-is checked after parsing.
+`str`; an assertion does not refine later control flow. `is None` and
+`is not None` conditions refine a stable union place for the paths they
+select, as described in [Static Semantics](/manual/static-semantics#conditions).
+Contextual legality is checked after parsing.
 
 ## Runtime Semantics
 
@@ -579,7 +592,10 @@ unresolved name or target. `AU2002` means an expected-type, condition,
 iteration, match, return, or assignment mismatch. `AU2003` means an unsupported
 compound-assignment operator. `AU2004` means call or target argument binding
 failed. `AU2005` means unsupported syntax or feature for a Python-shaped
-statement. `AU2999` means an exhaustiveness, contextual-legality, unsupported
+statement. `AU2013` means a union match is missing, duplicating, or cannot
+reach a type arm. `AU2014` means a member use through a place whose
+`None`-test narrowing was ended by an assignment, mutable match, or call with
+mutable access. `AU2999` means an exhaustiveness, contextual-legality, unsupported
 statement rejection without a narrower code. `AU3001` means use of a moved
 place; `AU3002` means a borrow conflict, including later access that mutably
 borrows or consumes an overlapping retained non-copy compound or indexed-

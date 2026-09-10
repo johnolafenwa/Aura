@@ -229,6 +229,23 @@ operations and do not dispatch through operator traits.
 not apply general truthiness conversion to strings, collections, resources, or
 user types.
 
+`place is None` and `place is not None` on a stable place of a union type
+establish narrowing facts: the place has the effective type `None` where the
+test holds and the union of its remaining members where it fails. Facts
+compose through `not`, parentheses, and short-circuit `and`/`or`, and a
+right operand of `and`/`or` is checked under the left operand's fact. An
+`if` branch, `while` body, or conditional-expression arm is checked under the
+facts its condition selects. A branch that diverges with `return`, `break`,
+or `continue` contributes nothing to the join, so its complement's facts
+continue after the statement. At a join, a place keeps only the facts present
+on every reachable path. A `while` body is checked twice so that a fact
+established before the loop survives only when no iteration can invalidate
+it. Assigning, moving, or mutably matching the place or an ancestor, or
+passing either to a call with mutable access, ends the fact; a later member
+use through the stale place is `AU2014`. A single remaining member is the
+effective type of the place; a larger remaining set only sharpens `match`
+coverage. Equality with `None` does not narrow.
+
 ### Assertions
 
 An `assert` condition must have exactly type `bool`. Its optional message must

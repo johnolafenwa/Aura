@@ -1,0 +1,11 @@
+class Profile:
+    name: str | None
+    visits: int64
+
+def main():
+    mut profile = Profile(name="aura", visits=0)
+    if profile.name is not None:
+        profile.visits += 1
+        profile.visits += 1
+        print(profile.name.len())
+    print(profile.visits)

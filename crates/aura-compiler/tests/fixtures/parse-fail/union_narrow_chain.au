@@ -1,0 +1,4 @@
+def main():
+    value: int64 | None = 1
+    if value is None == false:
+        print("no")

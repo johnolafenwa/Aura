@@ -1,0 +1,5 @@
+error[AU2999]: unsupported operands for binary expression: `int64 | None`
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_narrow_call_no_fact.au:6:15
+  |
+6 |         print(read() + 1)
+  |               ^
