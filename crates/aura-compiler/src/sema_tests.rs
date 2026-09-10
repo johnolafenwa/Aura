@@ -30536,3 +30536,119 @@ def main():
     }
     let _ = std::fs::remove_dir_all(&package);
 }
+
+#[test]
+fn source_type_refs_round_trip_every_complete_type_shape() {
+    use crate::ast::TypeRefKind;
+    let span = crate::diag::Span::new(3, 5);
+    let union = Type::normalize_union(
+        vec![Type::named("int64"), Type::named("str"), Type::Unit],
+        "main",
+        &BTreeMap::new(),
+    )
+    .expect("a three-member union normalizes");
+    let function = Type::Function {
+        params: vec![
+            FunctionParamContract {
+                keyword_only: false,
+                name: "left".to_string(),
+                ty: Type::Tuple(vec![Type::TypeParam("T".to_string()), union.clone()]),
+                passing: ReceiverKind::Value,
+                has_default: false,
+                default_erased: false,
+            },
+            FunctionParamContract {
+                keyword_only: true,
+                name: String::new(),
+                ty: Type::Named("list".to_string(), vec![Type::named("int64")]),
+                passing: ReceiverKind::BorrowMut,
+                has_default: true,
+                default_erased: false,
+            },
+            FunctionParamContract {
+                keyword_only: false,
+                name: "shared".to_string(),
+                ty: Type::named("str"),
+                passing: ReceiverKind::Borrow,
+                has_default: false,
+                default_erased: false,
+            },
+        ],
+        return_type: Box::new(Type::Unit),
+    };
+    let type_ref = function
+        .source_type_ref(span)
+        .expect("complete callable types render as source type references");
+    let TypeRefKind::Function {
+        params,
+        return_type,
+    } = type_ref.kind
+    else {
+        panic!("expected a function type reference");
+    };
+    assert_eq!(params.len(), 3);
+    assert_eq!(params[0].name.as_deref(), Some("left"));
+    assert!(matches!(params[0].ty.kind, TypeRefKind::Tuple(_)));
+    assert!(params[1].name.is_none());
+    assert!(params[1].keyword_only && params[1].has_default);
+    assert!(matches!(
+        return_type.kind,
+        TypeRefKind::Named { ref name, .. } if name == "None"
+    ));
+    assert!(matches!(
+        union.source_type_ref(span).expect("unions render").kind,
+        TypeRefKind::Union(ref members) if members.len() == 3
+    ));
+
+    let closure = Type::Closure {
+        params: Box::new(Vec::new()),
+        return_type: Box::new(Type::Unit),
+        captures: Box::new(Vec::new()),
+        call_kind: ClosureCallKind::Repeatable,
+    };
+    let error = closure
+        .source_type_ref(span)
+        .expect_err("closure types are not complete source types");
+    assert_eq!(error.code, "AU2010");
+    let module = Type::Module("pkg".to_string());
+    assert!(module.source_type_ref(span).is_err());
+}
+
+#[test]
+fn closure_types_have_canonical_keys_and_empty_unions_are_rejected() {
+    let closure = Type::Closure {
+        params: Box::new(vec![FunctionParamContract {
+            keyword_only: false,
+            name: "value".to_string(),
+            ty: Type::named("int64"),
+            passing: ReceiverKind::Borrow,
+            has_default: false,
+            default_erased: false,
+        }]),
+        return_type: Box::new(Type::named("str")),
+        captures: Box::new(vec![ClosureCapture {
+            name: "offset".to_string(),
+            ty: Type::named("int64"),
+            mode: ClosureCaptureMode::Copy,
+            span: crate::diag::Span::new(1, 1),
+        }]),
+        call_kind: ClosureCallKind::Consuming,
+    };
+    let key = closure.canonical_key("main", &BTreeMap::new());
+    assert!(key.contains("closure"), "{key}");
+    assert!(key.contains("offset"), "{key}");
+    let repeatable = Type::Closure {
+        params: Box::new(Vec::new()),
+        return_type: Box::new(Type::Unit),
+        captures: Box::new(Vec::new()),
+        call_kind: ClosureCallKind::Repeatable,
+    };
+    assert_ne!(
+        repeatable.canonical_key("main", &BTreeMap::new()),
+        key,
+        "call kinds and captures distinguish closure keys"
+    );
+    let error = Type::normalize_union(Vec::new(), "main", &BTreeMap::new())
+        .expect_err("a union needs at least one member");
+    assert_eq!(error.code, "AU2010");
+}

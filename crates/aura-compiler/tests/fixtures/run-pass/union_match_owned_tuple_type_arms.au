@@ -1,0 +1,18 @@
+def main():
+    pair: (int64 | str, int64 | str) = (1, "a")
+    match own pair:
+        case (int64 as left, str as right):
+            print(left)
+            print(right)
+        case _:
+            print(0)
+    other: (int64 | str, int64 | str) = ("b", 2)
+    match own other:
+        case (int64 as left, str as right):
+            print(left)
+            print(right)
+        case (str as text, int64 as number):
+            print(text)
+            print(number)
+        case _:
+            print(0)

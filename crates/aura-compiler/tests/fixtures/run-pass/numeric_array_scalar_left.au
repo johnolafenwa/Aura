@@ -1,0 +1,11 @@
+def main():
+    base = Array[float64].from_list([1.0, 2.0, 3.0, 4.0], [2, 2])
+    shifted = 1.5 + base
+    scaled = 2.0 * base
+    lowered = 10.0 - base
+    print(shifted.sum())
+    print(scaled.sum())
+    print(lowered.sum())
+    counts = Array[int64].from_list([1, 2, 3], [3])
+    print((10 + counts).sum())
+    print((3 * counts).sum())

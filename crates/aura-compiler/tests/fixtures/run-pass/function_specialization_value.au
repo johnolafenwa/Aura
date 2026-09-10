@@ -1,0 +1,8 @@
+def identity[T](value: own T) -> T:
+    return value
+
+def main():
+    pick = identity[int64]
+    print(pick(3))
+    label = identity[str]
+    print(label("aura"))

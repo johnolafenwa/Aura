@@ -1,0 +1,19 @@
+class Profile:
+    score: int64 | str
+    visits: int64
+
+def main():
+    mut profile = Profile(score=41, visits=0)
+    match mut profile.score:
+        case int64 as number:
+            number += 1
+            print(number)
+        case str as text:
+            print(text)
+    profile.visits += 1
+    match profile.score:
+        case int64 as number:
+            print(number)
+        case str as text:
+            print(text)
+    print(profile.visits)

@@ -3919,6 +3919,13 @@ impl<'a> FunctionChecker<'a> {
                 "`match mut` requires a mutable place scrutinee",
             ));
         }
+        // A mutable match takes exclusive access to the scrutinee for the
+        // whole statement, which no live view of that place may overlap.
+        let through_view = locals
+            .get(&access.root)
+            .and_then(|binding| binding.view.as_ref())
+            .map(|_| access.root.as_str());
+        self.ensure_place_not_locked_by_view(&place, through_view, span, locals)?;
         if let Some(active) = self
             .active_match_borrow_places
             .borrow()

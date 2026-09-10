@@ -1,0 +1,20 @@
+def main():
+    mut values: Array[float64] | None = Array[float64].from_list([1.0, 2.0, 3.0], [3])
+    match mut values:
+        case Array[float64] as array:
+            match array.set([0], 9.0):
+                case Option.Some(previous):
+                    print(previous)
+                case Option.None:
+                    print("none")
+            print(array.sum())
+            print(array.map(lambda value: value * 2.0).sum())
+            array.fill(1.0)
+            print(array.sum())
+        case None:
+            print(0)
+    match values:
+        case Array[float64] as array:
+            print(array.len())
+        case None:
+            print(0)

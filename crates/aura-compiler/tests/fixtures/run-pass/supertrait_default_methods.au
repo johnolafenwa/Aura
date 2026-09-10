@@ -1,0 +1,24 @@
+trait Named:
+    def name(self) -> str
+
+trait Labelled: Named:
+    def label(self) -> str:
+        return "name=" + self.name()
+
+class User:
+    handle: str
+
+impl Named for User:
+    def name(self) -> str:
+        return self.handle.clone()
+
+impl Labelled for User:
+    pass
+
+def describe[T: Labelled](item: T) -> str:
+    return item.label() + " / " + item.name()
+
+def main():
+    user = User(handle="aura")
+    print(user.label())
+    print(describe(user))

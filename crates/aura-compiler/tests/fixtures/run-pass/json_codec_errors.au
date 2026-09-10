@@ -1,0 +1,31 @@
+import json
+
+def main():
+    match json.parse("{\"a\": [1, 2]}"):
+        case Result.Ok(value):
+            print(json.dumps(value))
+            print(json.dumps(value, indent=Option.Some(2)))
+        case Result.Err(error):
+            print(error)
+    match json.parse("{bad"):
+        case Result.Ok(value):
+            print(json.dumps(value))
+        case Result.Err(error):
+            print(error)
+    match json.parse("[1, 2"):
+        case Result.Ok(value):
+            print(json.dumps(value))
+        case Result.Err(error):
+            print(error)
+    print(json.is_valid("[]"))
+    print(json.is_valid("nope"))
+    match json.parse_string_map("{\"k\": 1}"):
+        case Result.Ok(table):
+            print(table.len())
+        case Result.Err(message):
+            print(message)
+    match json.stringify_map({"b": "2", "a": "1"}):
+        case Result.Ok(text):
+            print(text)
+        case Result.Err(message):
+            print(message)

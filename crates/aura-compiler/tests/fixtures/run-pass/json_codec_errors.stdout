@@ -1,0 +1,13 @@
+{"a":[1,2]}
+{
+  "a": [
+    1,
+    2
+  ]
+}
+json.Error.Syntax(key must be a string, 1, 2)
+json.Error.Syntax(EOF while parsing a list, 1, 6)
+true
+false
+invalid type: integer `1`, expected a string at line 1 column 7
+{"a":"1","b":"2"}

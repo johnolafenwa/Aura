@@ -1,0 +1,14 @@
+def main():
+    word = "aura"
+    count = 42
+    ratio = 2.5
+    flag = true
+    print(f"[{word:>8}]")
+    print(f"[{word:<8}]")
+    print(f"[{word:^8}]")
+    print(f"[{count:>6}]")
+    print(f"[{count:<6}]")
+    print(f"[{count:^6}]")
+    print(f"[{ratio:>7}]")
+    print(f"[{flag:^7}]")
+    print(f"[{word:2}]")

@@ -12517,3 +12517,80 @@ def main() -> int32:
             if name == "Task" && args.as_slice() == [Type::named("int64")]
     ));
 }
+
+#[test]
+fn closure_body_move_scan_visits_every_rvalue_and_terminator_kind() {
+    // One program whose lowered MIR contains every rvalue and terminator shape
+    // the scan inspects, so a root that is never moved exercises each arm.
+    let source = r#"
+class Holder:
+    values: list[int64]
+enum Shape:
+    Circle(int64)
+    Square(int64)
+LIMIT: int64 = 3
+def parse(text: str) -> Result[int64, str]:
+    return Result[int64, str].Ok(text.len())
+def consume(item: own Holder):
+    pass
+def worker() -> int64:
+    return 1
+def run() -> Result[int64, str]:
+    holder = Holder(values=[1, 2])
+    pair = (1, "two")
+    first = pair[0]
+    total = first + LIMIT
+    text = f"{total} {first}"
+    shape = Shape.Circle(3)
+    match shape:
+        case Shape.Circle(radius):
+            print(radius)
+        case Shape.Square(side):
+            print(side)
+    tagged: int64 | str = 1
+    match tagged:
+        case int64 as number:
+            print(number)
+        case str as value:
+            print(value)
+    owned: list[int64] | None = [42]
+    match own owned:
+        case list[int64] as values:
+            print(values.len())
+        case None:
+            print(0)
+    items = {1, 2}
+    mapping = {"a": 1}
+    flag = not (total > 1)
+    widened = total as float64
+    add: def(int64) -> int64 = lambda value: value + total
+    print(add(1))
+    parsed = try parse(text)
+    with TaskGroup() as group:
+        task = group.start_with_stack(262144, worker)
+        print(task.result_or(0, timeout=1s))
+    assert flag or parsed >= 0, "message"
+    consume(holder)
+    return Result[int64, str].Ok(parsed)
+def main():
+    match run():
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(message):
+            print(message)
+"#;
+    let program = checked_program(source);
+    let module = lower(&program);
+    let run = module
+        .functions
+        .iter()
+        .find(|function| function.name == "run")
+        .expect("run should lower");
+    assert!(!function_body_moves_root(run, "never_used"));
+    assert!(function_body_moves_root(run, "holder"));
+    assert!(function_body_moves_root(run, "owned"));
+    for function in &module.functions {
+        // Every lowered function is scanned; none moves a root it does not know.
+        assert!(!function_body_moves_root(function, "never_used"));
+    }
+}

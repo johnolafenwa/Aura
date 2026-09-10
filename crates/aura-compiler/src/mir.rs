@@ -2390,9 +2390,12 @@ impl<'a> MirLoanValidationContext<'a> {
         let mut next_positional = 0usize;
         for arg in args {
             let index = if let Some(name) = arg.name.as_deref() {
+                // A contract keeps its declared parameter names even when the
+                // default metadata was erased at a type boundary; only an
+                // unnamed contract slot cannot be bound by name.
                 params
                     .iter()
-                    .position(|param| !param.default_erased && param.name == name)
+                    .position(|param| !param.name.is_empty() && param.name == name)
                     .ok_or_else(|| {
                         format!(
                             "invalid MIR indirect call from `{}` has unknown argument `{name}`",
@@ -3153,111 +3156,51 @@ fn rvalue_has_task_borrowed_closure(value: &Rvalue, state: &ValidatedLoanState) 
     }
 }
 
-fn authoritative_callable_for_rvalue(
-    value: &Rvalue,
-    state: &ValidatedLoanState,
-) -> Option<ValidatedCallable> {
-    let operand_callable = |operand: &Operand| match operand {
-        Operand::Function { name, signature } => Some(ValidatedCallable {
-            function: Some(name.clone()),
-            signature: (**signature).clone(),
-        }),
-        Operand::Place(place) | Operand::MovePlace(place) => {
-            state.authoritative_callables.get(place).cloned()
-        }
-        _ => None,
+/// The authoritative identity of an rvalue that `rebase_callable_rvalue`
+/// does not derive from an existing place: only closure values carry one.
+/// A closure value carries the exposed contract of its lowered body:
+/// `validate_loan_rvalue` rejects any closure whose signature disagrees
+/// with the declared body parameters, so the recorded signature is the
+/// body's authoritative contract (captures excluded).
+fn authoritative_callable_for_rvalue(value: &Rvalue) -> Option<ValidatedCallable> {
+    let Rvalue::Closure {
+        signature,
+        consuming,
+        ..
+    } = value
+    else {
+        return None;
     };
-    match value {
-        Rvalue::Use(Operand::Function { name, signature }) => Some(ValidatedCallable {
-            function: Some(name.clone()),
-            signature: (**signature).clone(),
-        }),
-        Rvalue::Use(Operand::Place(place) | Operand::MovePlace(place)) => {
-            state.authoritative_callables.get(place).cloned()
-        }
-        Rvalue::Try { value } | Rvalue::Cast { value, .. } => operand_callable(value),
-        Rvalue::TupleElement {
-            tuple: Operand::Place(place) | Operand::MovePlace(place),
-            index,
+    let (params, return_type, captures) = match signature {
+        Type::Function {
+            params,
+            return_type,
+        } => (params.clone(), return_type.clone(), Vec::new()),
+        Type::Closure {
+            params,
+            return_type,
+            captures,
             ..
-        } => state
-            .authoritative_callables
-            .get(&format!("{place}.{index}"))
-            .cloned(),
-        Rvalue::TupleTakeElement { place, index, .. } => state
-            .authoritative_callables
-            .get(&format!("{place}.{index}"))
-            .cloned(),
-        Rvalue::Member {
-            object: Operand::Place(place) | Operand::MovePlace(place),
-            field,
-        } => state
-            .authoritative_callables
-            .get(&format!("{place}.{field}"))
-            .cloned(),
-        Rvalue::UnionInject { .. } => None,
-        Rvalue::UnionTakePayload {
-            place,
-            member_index,
-            ..
-        } => state
-            .authoritative_callables
-            .get(&format!(
-                "{place}.{UNION_PAYLOAD_PROJECTION_PREFIX}{member_index}"
-            ))
-            .cloned(),
-        Rvalue::VariantPayload {
-            scrutinee: Operand::Place(place) | Operand::MovePlace(place),
-            variant_name,
-            index,
-        } => state
-            .authoritative_callables
-            .get(&format!(
-                "{place}.{ENUM_PAYLOAD_PROJECTION_PREFIX}{variant_name}_{index}"
-            ))
-            .cloned(),
-        // A closure value carries the exposed contract of its lowered body:
-        // `validate_loan_rvalue` rejects any closure whose signature disagrees
-        // with the declared body parameters, so the recorded signature is the
-        // body's authoritative contract (captures excluded).
-        Rvalue::Closure {
-            signature,
-            consuming,
-            ..
-        } => {
-            let (params, return_type, captures) = match signature {
-                Type::Function {
-                    params,
-                    return_type,
-                } => (params.clone(), return_type.clone(), Vec::new()),
-                Type::Closure {
-                    params,
-                    return_type,
-                    captures,
-                    ..
-                } => (
-                    params.as_ref().clone(),
-                    return_type.clone(),
-                    captures.as_ref().clone(),
-                ),
-                _ => return None,
-            };
-            Some(ValidatedCallable {
-                function: None,
-                signature: Type::Closure {
-                    params: Box::new(params),
-                    return_type,
-                    captures: Box::new(captures),
-                    call_kind: if *consuming {
-                        ClosureCallKind::Consuming
-                    } else {
-                        ClosureCallKind::Repeatable
-                    },
-                },
-            })
-        }
-        _ => None,
-    }
+        } => (
+            params.as_ref().clone(),
+            return_type.clone(),
+            captures.as_ref().clone(),
+        ),
+        _ => return None,
+    };
+    Some(ValidatedCallable {
+        function: None,
+        signature: Type::Closure {
+            params: Box::new(params),
+            return_type,
+            captures: Box::new(captures),
+            call_kind: if *consuming {
+                ClosureCallKind::Consuming
+            } else {
+                ClosureCallKind::Repeatable
+            },
+        },
+    })
 }
 
 fn rebase_authoritative_callables(
@@ -3498,7 +3441,7 @@ fn rebase_callable_rvalue(
                 })
                 .unwrap_or_default()
         }
-        _ => authoritative_callable_for_rvalue(value, state)
+        _ => authoritative_callable_for_rvalue(value)
             .map(|callable| vec![(target.to_owned(), callable)])
             .unwrap_or_default(),
     }
@@ -6925,17 +6868,10 @@ fn validate_loan_instruction(
                             function.name
                         ));
                     }
-                    let mut sources = validated_loan_sources(place, &state.loans)?;
-                    sources.sort();
-                    sources.dedup();
-                    if sources
-                        .iter()
-                        .any(|source| !state.taken_union_places.insert(source.clone()))
-                    {
-                        return Err(format!(
-                            "invalid MIR union payload take from `{place}` in `{}` consumes an already-taken union place",
-                            function.name
-                        ));
+                    // `validate_loan_rvalue` already rejected a take from an
+                    // already-taken place; record the consumed sources here.
+                    for source in validated_loan_sources(place, &state.loans)? {
+                        state.taken_union_places.insert(source);
                     }
                     invalidate_union_facts_for_place(place, state);
                 }
@@ -7060,21 +6996,14 @@ fn validate_function_loan_flow(
     for local in &function.local_types {
         validate_canonical_mir_identifier(function, &local.name, true)?;
     }
-    let mut blocks = BTreeMap::new();
-    for block in &function.blocks {
-        if blocks.insert(block.label.as_str(), block).is_some() {
-            return Err(format!(
-                "invalid MIR function `{}` has duplicate block label `{}`",
-                function.name, block.label
-            ));
-        }
-    }
-    if !blocks.contains_key(function.entry.as_str()) {
-        return Err(format!(
-            "invalid MIR function `{}` has missing entry block `{}`",
-            function.name, function.entry
-        ));
-    }
+    // Duplicate labels and the entry block were rejected when the context was
+    // built; unreachable blocks are not walked there, so every successor is
+    // still checked here before the flow walk trusts the label index.
+    let blocks = function
+        .blocks
+        .iter()
+        .map(|block| (block.label.as_str(), block))
+        .collect::<BTreeMap<_, _>>();
     for block in &function.blocks {
         for successor in mir_successors(&block.terminator) {
             if !blocks.contains_key(successor) {
@@ -7154,12 +7083,6 @@ fn validate_function_loan_flow(
             ));
         }
         for successor in mir_successors(&block.terminator) {
-            if !blocks.contains_key(successor) {
-                return Err(format!(
-                    "invalid MIR function `{}` branches to unknown block `{successor}`",
-                    function.name
-                ));
-            }
             let mut successor_state = state.clone();
             if let Terminator::Branch {
                 condition: Operand::Place(condition),

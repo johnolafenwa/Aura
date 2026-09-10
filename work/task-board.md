@@ -55,7 +55,11 @@ Last updated: 2026-09-10
   The final-file unit, integration, CLI, and forced parity reruns pass; the
   coverage floor check measures 95.29/96.10/94.03 against unchanged floors of
   96.30/97.21/94.71, so a coverage-recovery change follows the family commit
-  before the narrowing family.
+  before the narrowing family. The family is committed as `9ab3176`; the
+  recovery change (about 110 forged-MIR, checker, analysis, and runtime cases,
+  eight unit tests, 30 dual-backend fixtures, two validator corrections, and
+  a `match mut` view-lock fix) raises coverage to 95.85/96.76/94.45 and is
+  committed with the remaining floor gap carried to the phase-end ratchet.
 - Next: complete type-pattern gates and commit, then the ordered families,
   editor/docs/reference-agent updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected

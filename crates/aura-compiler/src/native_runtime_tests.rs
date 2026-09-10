@@ -21083,3 +21083,95 @@ fn direct_array_kernels_match_frozen_pre_vectorization_bits() {
         })
     });
 }
+
+#[test]
+fn direct_frame_metadata_materializes_call_frames_and_task_ancestry() {
+    use super::{
+        reset_direct_runtime_frame_materialization_count, DirectCallFrameStorage, DirectFrameText,
+        DirectRuntimeCallFrame, DirectRuntimeSourceSpan, DirectRuntimeTaskFrame,
+        DirectTaskAncestry, PreparedDirectTaskRuntimeState,
+        DIRECT_RUNTIME_FRAME_MATERIALIZATION_COUNT,
+    };
+    use crate::diag::{RuntimeSourceSpan, RuntimeTaskFrame, Span};
+
+    let static_text: &'static [u8] = b"main.au";
+    let path = unsafe { DirectFrameText::validate_static(static_text.as_ptr(), static_text.len()) }
+        .expect("valid UTF-8 static frame text");
+    assert_eq!(path.as_str(), "main.au");
+    assert!(unsafe { DirectFrameText::validate_static(std::ptr::null(), 0) }.is_err());
+    let invalid: &'static [u8] = &[0xff, 0xfe];
+    assert!(unsafe { DirectFrameText::validate_static(invalid.as_ptr(), invalid.len()) }.is_err());
+
+    let span = DirectRuntimeSourceSpan::point(Some(path.clone()), Span::new(3, 7));
+    let materialized = span.materialize();
+    assert_eq!(materialized.path.as_deref(), Some("main.au"));
+    assert_eq!(materialized.end, Span::new(3, 8));
+
+    reset_direct_runtime_frame_materialization_count();
+    let mut storage = DirectCallFrameStorage::default();
+    assert!(storage.pop().is_none());
+    assert!(storage.materialize_innermost_first().is_empty());
+    for index in 0..3 {
+        storage.push(DirectRuntimeCallFrame {
+            function: DirectFrameText::shared(format!("frame{index}")),
+            span: DirectRuntimeSourceSpan::point(None, Span::new(index + 1, 1)),
+        });
+    }
+    assert_eq!(storage.len(), 3);
+    assert!(storage.has_heap_spill());
+    let innermost_first = storage.materialize_innermost_first();
+    assert_eq!(innermost_first[0].function, "frame2");
+    assert_eq!(innermost_first[2].span.start, Span::new(1, 1));
+    assert_eq!(
+        storage
+            .pop()
+            .map(|frame| frame.function.materialize())
+            .as_deref(),
+        Some("frame2")
+    );
+    assert_eq!(
+        storage
+            .pop()
+            .map(|frame| frame.function.materialize())
+            .as_deref(),
+        Some("frame1")
+    );
+    assert_eq!(storage.len(), 1);
+    assert!(!storage.has_heap_spill());
+    assert_eq!(storage.materialize_innermost_first().len(), 1);
+    assert!(storage.pop().is_some());
+    assert!(storage.pop().is_none());
+    assert!(DIRECT_RUNTIME_FRAME_MATERIALIZATION_COUNT.with(|count| count.get()) >= 4);
+
+    let frames = (0..2)
+        .map(|index| RuntimeTaskFrame {
+            task_function: format!("task{index}"),
+            task_entry_span: RuntimeSourceSpan {
+                path: Some("worker.au".to_string()),
+                start: Span::new(1, 1),
+                end: Span::new(1, 2),
+            },
+            parent_function: "main".to_string(),
+            spawn_span: RuntimeSourceSpan {
+                path: None,
+                start: Span::new(9, 5),
+                end: Span::new(9, 6),
+            },
+        })
+        .collect::<Vec<_>>();
+    let ancestry = DirectTaskAncestry::from_runtime(frames.clone());
+    assert_eq!(ancestry.len(), 2);
+    assert_eq!(ancestry.materialize(), frames);
+    let extended = ancestry.prepend(DirectRuntimeTaskFrame::from_runtime(frames[0].clone()));
+    assert_eq!(extended.len(), 3);
+    assert_eq!(extended.materialize()[0].task_function, "task0");
+    // Dropping a snapshot that shares nodes with `extended` must leave the
+    // shared chain intact for the remaining owner.
+    drop(ancestry);
+    assert_eq!(extended.materialize().len(), 3);
+    let prepared = PreparedDirectTaskRuntimeState::new(extended.clone());
+    let state = prepared.into_state();
+    assert_eq!(state.task_ancestry.len(), 3);
+    drop(extended);
+    drop(state);
+}

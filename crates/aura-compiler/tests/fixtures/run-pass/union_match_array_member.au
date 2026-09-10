@@ -1,0 +1,13 @@
+def main():
+    values: Array[float64] | None = Array[float64].from_list([1.0, 2.0, 3.0], [3])
+    match values:
+        case Array[float64] as array:
+            print(array.len())
+        case None:
+            print(0)
+    empty: Array[float64] | None = None
+    match empty:
+        case Array[float64] as array:
+            print(array.len())
+        case None:
+            print(0)

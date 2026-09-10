@@ -1,0 +1,14 @@
+from imported_traits_support.shapes import Add, Shape, Square, largest
+
+def total[T: Add[T, T]](left: own T, right: own T) -> T:
+    return left + right
+
+def measure[T: Shape](shape: T) -> int64:
+    return shape.area() + shape.doubled()
+
+def main():
+    small = Square(side=2)
+    big = Square(side=3)
+    print(largest(small, big))
+    print(measure(small))
+    print(total(small, big).side)

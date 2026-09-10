@@ -1,0 +1,12 @@
+trait Add[Rhs, Out]:
+    def add(self, rhs: Rhs) -> Out
+class Money:
+    cents: int64
+impl Add[Money, Money] for Money:
+    def add(self, rhs: Money) -> Money:
+        return Money(cents=self.cents + rhs.cents)
+def total[T: Add[T, T]](left: own T, right: own T) -> T:
+    return left + right
+def main():
+    print(total(Money(cents=1), Money(cents=2)).cents)
+    print((Money(cents=5) + Money(cents=6)).cents)

@@ -17656,3 +17656,97 @@ fn vectorized_float_division_preserves_empty_and_allocation_error_precedence() {
         }
     }
 }
+
+#[test]
+fn runtime_value_helpers_report_backoff_capture_and_array_bounds_errors() {
+    use super::{
+        array_allocation_error, array_dtype_error, checked_array_element_count,
+        embedded_nominal_runtime_type_name, next_retry_runtime_backoff, nominal_runtime_base_name,
+        ArrayDType, ClosureCaptureValue, ClosureEnvironment,
+    };
+    use crate::sema::Type;
+
+    let doubled = next_retry_runtime_backoff(1_000).expect("small backoffs double");
+    assert_eq!(doubled, 2_000);
+    let overflow = next_retry_runtime_backoff(i128::MAX).expect_err("backoff overflow is reported");
+    assert!(
+        overflow.message.contains("overflowed"),
+        "{}",
+        overflow.message
+    );
+    let too_large =
+        next_retry_runtime_backoff(i128::MAX / 4).expect_err("host timer range is bounded");
+    assert!(
+        too_large.message.contains("host timer"),
+        "{}",
+        too_large.message
+    );
+
+    assert_eq!(nominal_runtime_base_name("Holder"), "Holder");
+    assert_eq!(embedded_nominal_runtime_type_name("Holder"), None);
+
+    let environment = ClosureEnvironment::new(
+        vec![
+            ClosureCaptureValue {
+                name: "count".to_string(),
+                ty: Type::named("int64"),
+                value: Value::Int(IntegerValue::from_signed(1)),
+                source_place: None,
+                mutable: true,
+            },
+            ClosureCaptureValue {
+                name: "label".to_string(),
+                ty: Type::named("str"),
+                value: Value::String("aura".to_string()),
+                source_place: None,
+                mutable: false,
+            },
+        ],
+        false,
+    );
+    environment
+        .write_back_mutable(0, Value::Int(IntegerValue::from_signed(2)))
+        .expect("mutable captures accept writebacks");
+    assert_eq!(
+        environment.capture_value(0).expect("captures are readable"),
+        Value::Int(IntegerValue::from_signed(2))
+    );
+    let immutable = environment
+        .write_back_mutable(1, Value::String("x".to_string()))
+        .expect_err("immutable captures reject writebacks");
+    assert!(
+        immutable.message.contains("not mutable"),
+        "{}",
+        immutable.message
+    );
+    let missing = environment
+        .write_back_mutable(5, Value::Unit)
+        .expect_err("unknown capture indices are rejected");
+    assert!(
+        missing.message.contains("no capture"),
+        "{}",
+        missing.message
+    );
+    assert!(environment.capture_value(5).is_err());
+
+    assert_eq!(
+        checked_array_element_count(&[2, 0, 3]).expect("zero dimensions"),
+        0
+    );
+    assert_eq!(
+        checked_array_element_count(&[2, 3]).expect("small shapes"),
+        6
+    );
+    let overflow = checked_array_element_count(&[1 << 40, 1 << 40])
+        .expect_err("overflowing shape products are rejected");
+    assert!(
+        overflow.message.contains("overflows") || overflow.message.contains("exceeds"),
+        "{}",
+        overflow.message
+    );
+    assert!(array_allocation_error("test", 4)
+        .message
+        .contains("4 array elements"));
+    let dtype = array_dtype_error(ArrayDType::Float64, &Value::Unit, 3);
+    assert!(dtype.message.contains("flat index 3"), "{}", dtype.message);
+}

@@ -435,3 +435,75 @@ fn checked_lowering_view_keeps_limits_without_recharging_semantic_aggregate() {
         "type expansion exceeds per-result node limit of 2"
     );
 }
+
+#[test]
+fn canonical_key_shape_counts_closure_parameters_and_captures() {
+    use super::callables::{
+        ClosureCallKind, ClosureCapture, ClosureCaptureMode, FunctionParamContract,
+    };
+    use crate::ast::ReceiverKind;
+    use std::collections::BTreeMap;
+
+    let closure = Type::Closure {
+        params: Box::new(vec![FunctionParamContract {
+            keyword_only: true,
+            name: "value".to_string(),
+            ty: Type::named("int64"),
+            passing: ReceiverKind::BorrowMut,
+            has_default: true,
+            default_erased: true,
+        }]),
+        return_type: Box::new(Type::Tuple(vec![Type::Unit, Type::named("str")])),
+        captures: Box::new(vec![
+            ClosureCapture {
+                name: "shared".to_string(),
+                ty: Type::Named("list".to_string(), vec![Type::named("int64")]),
+                mode: ClosureCaptureMode::SharedView,
+                span: TEST_SPAN,
+            },
+            ClosureCapture {
+                name: "owned".to_string(),
+                ty: Type::named("str"),
+                mode: ClosureCaptureMode::Move,
+                span: TEST_SPAN,
+            },
+            ClosureCapture {
+                name: "copied".to_string(),
+                ty: Type::named("int64"),
+                mode: ClosureCaptureMode::Copy,
+                span: TEST_SPAN,
+            },
+            ClosureCapture {
+                name: "mutable".to_string(),
+                ty: Type::named("int64"),
+                mode: ClosureCaptureMode::MutableView,
+                span: TEST_SPAN,
+            },
+        ]),
+        call_kind: ClosureCallKind::MutableRepeatable,
+    };
+    for call_kind in [
+        ClosureCallKind::Repeatable,
+        ClosureCallKind::Consuming,
+        ClosureCallKind::MutableRepeatable,
+    ] {
+        let Type::Closure {
+            params,
+            return_type,
+            captures,
+            ..
+        } = closure.clone()
+        else {
+            unreachable!()
+        };
+        let variant = Type::Closure {
+            params,
+            return_type,
+            captures,
+            call_kind,
+        };
+        ExpansionBudget::default()
+            .check_canonical_key(&variant, "main", &BTreeMap::new(), TEST_SPAN)
+            .expect("a small closure key fits the default budget");
+    }
+}

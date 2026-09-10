@@ -1,0 +1,23 @@
+def make() -> int64 | str:
+    return 7
+
+def main():
+    values = [1, 2, 3]
+    flag = true
+    view shared = values
+    if flag:
+        print(shared.len())
+    else:
+        print(0)
+    match make():
+        case int64 as number:
+            print(number)
+        case str as text:
+            print(text)
+    tagged: int64 | str = "text"
+    view seen = tagged
+    match seen:
+        case int64 as number:
+            print(number)
+        case str as text:
+            print(text)

@@ -1,0 +1,15 @@
+class User:
+    name: str
+
+def name(user: User) -> view str from user:
+    return view user.name
+
+def outer(user: User) -> view str from user:
+    return view name(user)
+
+def main():
+    user = User(name="aura")
+    view current = outer(user)
+    print(current)
+    view direct = name(user)
+    print(direct.len())

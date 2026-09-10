@@ -1,0 +1,14 @@
+class Holder:
+    name: str
+    count: int64
+
+def take(text: own str) -> int64:
+    return text.len()
+
+def main():
+    holder = Holder(name="aura", count=3)
+    print(take(holder.name))
+    print(holder.count)
+    pair = ("left", 2)
+    (left, right) = pair
+    print(take(left) + right)

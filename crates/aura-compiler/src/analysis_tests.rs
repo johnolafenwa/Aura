@@ -8736,3 +8736,182 @@ fn union_annotation_helpers_preserve_normalized_members() {
     );
     assert_eq!(super::lower_type_ref(&ty).to_string(), "int64 | None");
 }
+
+#[test]
+fn analysis_lowers_union_annotations_for_hover_text() {
+    let output =
+        analyze_source("def main():\n    value: int64 | str | None = 1\n    print(value)\n");
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let hover = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 1 && occurrence.start_character == 4)
+        .map(|occurrence| occurrence.hover.clone())
+        .expect("the union-typed local should have a hover occurrence");
+    assert!(hover.contains("int64") && hover.contains("str"), "{hover}");
+}
+
+#[test]
+fn specialized_builtin_receivers_complete_their_associated_functions() {
+    let source = "def main():\n    values = Array[float64].\n";
+    let completions = complete_source(source, 1, 28, Some('.'))
+        .expect("a specialized builtin receiver offers associated function completions");
+    let names = completions
+        .iter()
+        .map(|completion| completion.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"zeros"), "{names:?}");
+    assert!(names.contains(&"from_list"), "{names:?}");
+}
+
+fn completion_names(
+    source: &str,
+    line: usize,
+    character: usize,
+    trigger: Option<char>,
+) -> Vec<String> {
+    complete_source(source, line, character, trigger)
+        .expect("completion should succeed")
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect()
+}
+
+#[test]
+fn analysis_resolves_module_constants_inside_functions_and_completions() {
+    let source = "LIMIT: int64 = 3\nSCALE: int64 = LIMIT * 2\ndef main():\n    total = LIMIT + SCALE\n    print(total)\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let use_site = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 3 && occurrence.start_character == 12)
+        .expect("the constant use should be an occurrence");
+    let definition = use_site
+        .definition
+        .as_ref()
+        .expect("constants resolve to their declaration");
+    assert_eq!(definition.line, 0);
+    assert!(use_site.hover.contains("int64"), "{}", use_site.hover);
+    let names = completion_names(source, 4, 4, None);
+    assert!(names.iter().any(|name| name == "LIMIT"), "{names:?}");
+    assert!(names.iter().any(|name| name == "total"), "{names:?}");
+}
+
+#[test]
+fn analysis_completes_inside_comprehensions_and_after_filters() {
+    let source = "def main():\n    values = [1, 2, 3]\n    doubled = [item * 2 for item in values if item > 1]\n    print(doubled)\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let in_output = completion_names(source, 2, 15, None);
+    assert!(in_output.iter().any(|name| name == "item"), "{in_output:?}");
+    let after_filter = completion_names(source, 2, 47, None);
+    assert!(
+        after_filter.iter().any(|name| name == "item"),
+        "{after_filter:?}"
+    );
+    let nested_source = "def main():\n    values = [1, 2, 3]\n    pairs = [(item, other) for item in values for other in values if item < other]\n    print(pairs.len())\n";
+    let output = analyze_source(nested_source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let in_nested = completion_names(nested_source, 2, 20, None);
+    assert!(
+        in_nested.iter().any(|name| name == "other"),
+        "{in_nested:?}"
+    );
+}
+
+#[test]
+fn analysis_completes_trait_bound_members_on_generic_receivers() {
+    let source = "trait Shape:\n    def area(self) -> int64\nclass Square:\n    side: int64\nimpl Shape for Square:\n    def area(self) -> int64:\n        return self.side * self.side\ndef measure[T: Shape](shape: T) -> int64:\n    return shape.area()\ndef main():\n    print(measure(Square(side=2)))\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let names = completion_names(source, 8, 17, Some('.'));
+    assert!(names.iter().any(|name| name == "area"), "{names:?}");
+    let call = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 8 && occurrence.start_character == 17)
+        .expect("the bound member call should be an occurrence");
+    assert!(call.hover.contains("area"), "{}", call.hover);
+}
+
+#[test]
+fn analysis_binds_match_pattern_and_destructure_names() {
+    let source = "enum Shape:\n    Circle(int64)\n    Pair(int64, str)\ndef main():\n    shape = Shape.Pair(1, \"a\")\n    match shape:\n        case Shape.Circle(radius):\n            print(radius)\n        case Shape.Pair(count, label):\n            print(count)\n            print(label)\n    value: int64 | str = 1\n    match value:\n        case int64 as number:\n            print(number)\n        case str as text:\n            print(text)\n    (left, right) = (1, 2)\n    print(left + right)\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    for (line, column) in [
+        (7usize, 18usize),
+        (9, 18),
+        (10, 18),
+        (14, 18),
+        (16, 18),
+        (18, 10),
+    ] {
+        let occurrence = output
+            .occurrences
+            .iter()
+            .find(|occurrence| occurrence.line == line && occurrence.start_character == column)
+            .unwrap_or_else(|| panic!("binding use at {line}:{column} should be an occurrence"));
+        assert!(
+            occurrence.definition.is_some(),
+            "{line}:{column} {}",
+            occurrence.hover
+        );
+    }
+    let names = completion_names(source, 10, 12, None);
+    assert!(names.iter().any(|name| name == "label"), "{names:?}");
+}
+
+#[test]
+fn analysis_tracks_views_returned_views_and_method_scopes() {
+    let source = "class User:\n    name: str\n    def title(self) -> view str from self:\n        return view self.name\n    def rename(mut self, name: own str):\n        self.name = name\ndef main():\n    mut user = User(name=\"aura\")\n    view current = user.title()\n    print(current.len())\n    view mut editable = user.name\n    editable = \"lang\"\n    print(user.name)\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let view_use = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 9 && occurrence.start_character == 10)
+        .expect("the view use should be an occurrence");
+    assert!(view_use.definition.is_some(), "{}", view_use.hover);
+    let in_method = completion_names(source, 5, 8, None);
+    assert!(in_method.iter().any(|name| name == "name"), "{in_method:?}");
+    assert!(in_method.iter().any(|name| name == "self"), "{in_method:?}");
+    let top_level = completion_names(source, 6, 0, None);
+    assert!(top_level.iter().any(|name| name == "User"), "{top_level:?}");
+}
+
+#[test]
+fn analysis_resolves_from_import_aliases_in_packages() {
+    let temp = TempDir::new("aura-analysis-from-import");
+    let root = temp.path();
+    fs::create_dir_all(root.join("support")).expect("support dir");
+    fs::write(
+        root.join("support").join("types.au"),
+        "public class Container:\n    public value: int64\npublic def make() -> Container:\n    return Container(value=1)\n",
+    )
+    .expect("support module");
+    let source = "from support.types import Container as Holder\nfrom support.types import make\n\ndef main():\n    holder: Holder = make()\n    print(holder.value)\n";
+    let main_path = root.join("main.au");
+    fs::write(&main_path, source).expect("main module");
+    let output = analyze_path_source(&main_path, source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let alias_occurrence = output
+        .occurrences
+        .iter()
+        .find(|occurrence| {
+            occurrence.hover.contains("Holder") || occurrence.hover.contains("Container")
+        })
+        .expect("the imported alias should appear in an occurrence");
+    assert!(
+        alias_occurrence.definition.is_some(),
+        "{}",
+        alias_occurrence.hover
+    );
+    let make_call = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 4 && occurrence.start_character == 21)
+        .expect("the imported function call should be an occurrence");
+    assert!(make_call.definition.is_some(), "{}", make_call.hover);
+}

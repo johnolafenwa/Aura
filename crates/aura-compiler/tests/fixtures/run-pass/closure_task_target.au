@@ -1,0 +1,5 @@
+def main():
+    worker: def(int64) -> int64 = lambda value: value + 1
+    with TaskGroup() as group:
+        task = group.start(worker, 41)
+        print(task.result_or(0, timeout=1s))

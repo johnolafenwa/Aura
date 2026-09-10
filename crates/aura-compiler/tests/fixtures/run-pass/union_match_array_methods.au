@@ -1,0 +1,18 @@
+def main():
+    values: Array[float64] | None = Array[float64].from_list([1.0, 2.0, 3.0], [3])
+    match values:
+        case Array[float64] as array:
+            print(array.len())
+            print(array.shape())
+            print(array.sum())
+            print(array.min())
+            print(array.max())
+            print(array.mean())
+            print(array.clone().len())
+            match array.get([1]):
+                case Option.Some(value):
+                    print(value)
+                case Option.None:
+                    print("missing")
+        case None:
+            print(0)

@@ -1,0 +1,22 @@
+enum Shape:
+    Circle(int64)
+    Square(int64)
+
+class Canvas:
+    shape: Shape
+    layers: int64
+
+def main():
+    mut canvas = Canvas(shape=Shape.Circle(3), layers=1)
+    match mut canvas.shape:
+        case Shape.Circle(radius):
+            radius += 2
+            print(radius)
+        case Shape.Square(side):
+            print(side)
+    match canvas.shape:
+        case Shape.Circle(radius):
+            print(radius)
+        case Shape.Square(side):
+            print(side)
+    print(canvas.layers)

@@ -1,0 +1,4 @@
+bytes.Error.InvalidHexDigit(0, 122)
+bytes.Error.InvalidBase64(0)
+bytes.Error.InvalidUtf8(0)
+bytes.Error.InvalidHexLength(3)
