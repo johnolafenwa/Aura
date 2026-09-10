@@ -309,7 +309,9 @@ fn args_materialize_process_run(args: &[MirArg]) -> bool {
 
 fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
     match value {
-        Rvalue::UnionTagTest { .. } | Rvalue::UnionTakePayload { .. } => false,
+        Rvalue::UnionTagTest { .. } | Rvalue::UnionTakePayload { .. } | Rvalue::NoneTest { .. } => {
+            false
+        }
         Rvalue::Use(value)
         | Rvalue::UnionInject { value, .. }
         | Rvalue::Unary { value, .. }
@@ -1603,14 +1605,22 @@ fn check_union_projection(union: &crate::runtime_value::UnionValue, segment: &st
     let index = segment
         .strip_prefix("__union_payload_")
         .and_then(|value| value.parse::<usize>().ok());
-    if index != Some(union.member_index)
-        || segment != format!("__union_payload_{}", union.member_index)
+    if index == Some(union.member_index)
+        && segment == format!("__union_payload_{}", union.member_index)
     {
-        return Err(Diagnostic::new(
-            "union payload projection does not select the active member",
-        ));
+        return Ok(());
     }
-    Ok(())
+    // A value tagged by a generic frame keeps that frame's symbolic layout
+    // until an operation in this frame retags it; the validated tag proof
+    // that dominates this projection already selected the active member.
+    let symbolic = matches!(&union.union_type, Type::Union(target)
+        if target.members.iter().any(|member| matches!(member, Type::TypeParam(_))));
+    if index.is_some() && symbolic {
+        return Ok(());
+    }
+    Err(Diagnostic::new(
+        "union payload projection does not select the active member",
+    ))
 }
 
 fn enum_projection_index(
@@ -2863,6 +2873,9 @@ impl MirRuntime {
                 function.signature = ty.clone();
                 Value::Function(function)
             }
+            (Value::Union(_), _) | (_, Type::Union(_)) => {
+                crate::union_runtime::coerce_union_boundary(value, ty)
+            }
             _ => value,
         };
         self.validate_value_fits_type(&coerced, ty, span)?;
@@ -3777,6 +3790,17 @@ impl MirRuntime {
             Rvalue::Use(operand) => Ok(RvalueOutcome::Value(
                 self.evaluate_owned_operand(operand, env)?,
             )),
+            Rvalue::NoneTest { value } => {
+                let is_none = match value {
+                    Operand::Place(place) | Operand::MovePlace(place) => {
+                        crate::union_runtime::is_none_value(env.place_ref(place)?)
+                    }
+                    other => crate::union_runtime::is_none_value(
+                        &self.evaluate_owned_operand(other, env)?,
+                    ),
+                };
+                Ok(RvalueOutcome::Value(Value::Bool(is_none)))
+            }
             Rvalue::ModuleConstant { key, initializer } => Ok(RvalueOutcome::SharedModuleConstant(
                 self.read_module_constant(key, initializer)?,
             )),
@@ -4144,17 +4168,25 @@ impl MirRuntime {
                 union_type,
                 member_index,
             } => {
-                let Value::Union(union) = env.place_ref(place)? else {
-                    return Err(Diagnostic::new(
-                        "union tag test requires an active union value",
-                    ));
+                let Type::Union(target) = union_type else {
+                    return Err(Diagnostic::new("union tag test requires a union type"));
                 };
-                if &union.union_type != union_type {
-                    return Err(Diagnostic::new("union tag test type identity mismatch"));
+                // Align the value to this frame's union so the payload
+                // projections proved by this test address the active member
+                // (ADR-0052 A7); a value that cannot be retagged in place is
+                // still tested structurally.
+                let active = match env.place_mut(place) {
+                    Ok(value) => {
+                        crate::union_runtime::align_union_value(value, target, "union tag test")
+                    }
+                    Err(_) => crate::union_runtime::aligned_member_index(
+                        env.place_ref(place)?,
+                        target,
+                        "union tag test",
+                    ),
                 }
-                Ok(RvalueOutcome::Value(Value::Bool(
-                    union.member_index == *member_index,
-                )))
+                .map_err(Diagnostic::new)?;
+                Ok(RvalueOutcome::Value(Value::Bool(active == *member_index)))
             }
             Rvalue::UnionTakePayload {
                 place,
@@ -4162,10 +4194,16 @@ impl MirRuntime {
                 member_index,
                 ..
             } => {
-                let Value::Union(union) = env.place_ref(place)? else {
-                    return Err(Diagnostic::new("union take requires an active union value"));
+                let Type::Union(target) = union_type else {
+                    return Err(Diagnostic::new("union take requires a union type"));
                 };
-                if &union.union_type != union_type || union.member_index != *member_index {
+                let active = crate::union_runtime::align_union_value(
+                    env.place_mut(place)?,
+                    target,
+                    "union take",
+                )
+                .map_err(Diagnostic::new)?;
+                if active != *member_index {
                     return Err(Diagnostic::new(
                         "union take member or type identity mismatch",
                     ));
@@ -4181,14 +4219,13 @@ impl MirRuntime {
                 member_index,
                 ..
             } => {
+                let Type::Union(target) = union_type else {
+                    return Err(Diagnostic::new("union injection requires a union type"));
+                };
                 let payload = self.evaluate_owned_operand(value, env)?;
-                Ok(RvalueOutcome::Value(Value::Union(Box::new(
-                    crate::runtime_value::UnionValue {
-                        union_type: union_type.clone(),
-                        member_index: *member_index,
-                        payload,
-                    },
-                ))))
+                crate::union_runtime::inject_union_member(target, *member_index, payload)
+                    .map(RvalueOutcome::Value)
+                    .map_err(Diagnostic::new)
             }
             Rvalue::EnumVariant {
                 enum_name,

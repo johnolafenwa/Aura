@@ -435,6 +435,15 @@ For a concrete receiver, the checker chooses the unique applicable implementatio
 
 For a type parameter, available methods and operators come from its declared bounds. If multiple bounds expose an indistinguishable method, the access is ambiguous unless the language can resolve one unique contract.
 
+A type parameter may be a union member. Unifying such a union with an
+argument requires every concrete member of the pattern to be a member of the
+argument and binds the parameter to the normalized remainder; an empty
+remainder or a remainder that could belong to more than one parameter
+requires explicit specialization (`AU2010`). Substituted unions are
+renormalized, and a generic body is checked once under its symbolic members:
+`is None` on `V | None` refines to `None` and to `V`, `is None` on a bare
+`V` is a runtime test, and `case V` is rejected (`AU2013`).
+
 Trait and implementation methods cannot declare default ordinary parameters in Aura 0.3. Trait default method bodies are permitted; a signature-only trait method has no body after its terminating newline.
 
 A clone-producing operation over unresolved generic types infers clone-safety

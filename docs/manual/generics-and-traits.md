@@ -70,6 +70,50 @@ ok = Result[int32, str].Ok(7)
 
 Explicit arguments must have exact arity and satisfy all substituted bounds. Specialization and indexing share bracket syntax; the parser rules that distinguish them are specified in [Grammar](/manual/grammar#explicit-specialization).
 
+### Type Parameters As Union Members
+
+A declared type parameter is a valid union member, and a generic alias may
+name such a union. Substitution renormalizes the union: `V | None` with
+`V = int64 | None` is `int64 | None`, and with `V = None` it is unit `None`.
+A generic union never keeps a phantom outer tag to tell those results apart.
+
+```aura
+type MaybeValue[V] = V | None
+
+def absent[V]() -> V | None:
+    return None
+
+def present[V](value: own V) -> V | None:
+    return value
+
+def main():
+    first: MaybeValue[int64] = present[int64](4)
+    if first is not None:
+        print(first + 1)
+    print(absent[int64 | None]() is None)
+    print(present[int64 | None](None) is None)
+```
+
+This prints `5`, `true`, and `true`. Inference reads a parameter that is a
+union member from the remaining members of the argument: every concrete
+member of the parameter's union must be a member of the argument, and the
+rest binds the parameter, so `V | None` infers `V = Dog` from `Dog` or
+`Dog | None` and `V = int64 | str` from `int64 | str | None`. An argument that
+leaves nothing for the parameter, such as `None`, or a union whose members
+could belong to more than one parameter, is rejected with `AU2010`; specialize
+explicitly rather than expecting the checker to invert normalization.
+
+Inside a generic body the checker cannot assume that `V`, `W`, and `None`
+are distinct. `value is None` and `value is not None` on `V | None` narrow to
+`None` and to `V`, and `V` there is only the non-`None` refinement; the test
+does not prove that `V` itself excludes `None`. A `None` test on a bare `V`
+value, or on a union whose only `None` could come from a type parameter, is
+decided at run time. A type arm `case V as inner` is rejected with `AU2013`
+because `V` is not proved to be one member disjoint from every other arm;
+write `case None` and a catch-all instead. Concrete union properties are
+derived from the concrete members after specialization; an unresolved member
+grants nothing without a bound.
+
 ## Inferred Clone-Safety Obligations
 
 Generic clone-safety obligations are inferred from clone-producing operations in callable bodies.
@@ -374,7 +418,9 @@ implementation methods always use ordinary method-definition syntax.
 
 Generic arguments are invariant and have exact arity. Inference is local and
 contextual, must resolve every declared parameter, and must satisfy every
-substituted bound. Trait satisfaction is nominal through a visible applicable
+substituted bound. A parameter that is a union member binds to the argument's
+remaining members; unions are renormalized after every substitution, and a
+generic body is checked once, universally, before any specialization. Trait satisfaction is nominal through a visible applicable
 `impl`, never structural. Implementations must conform after substituting
 receiver mode, parameter modes and types, owned return type, clone-safety
 obligations, and supertrait requirements. Dispatch selects one unique
@@ -385,7 +431,12 @@ only in its supported declaration contexts.
 ## Runtime Semantics
 
 Generic construction and calls use the statically resolved specialization;
-there is no runtime generic inference. Trait member and operator calls invoke
+there is no runtime generic inference. A union value built inside a generic
+body keeps the body's symbolic member layout until a concrete operation reads
+it; every union operation aligns the value to the union it names by the
+active member's identity, and a `V`-typed union payload flattens into its
+destination without a nested wrapper, so both execution paths agree on the
+one normalized value. Trait member and operator calls invoke
 the statically selected implementation, inheriting a trait default body when
 the implementation omits that method. Source order never resolves overlapping
 implementations. `try` invokes the selected `From[Source]` conversion before
@@ -410,7 +461,9 @@ concrete dispatch discharges them after substitution.
 implementation syntax. `AU2001` reports unknown types, traits, methods, and
 members. `AU2002` covers inference failure, generic arity, unsatisfied bounds,
 missing trait satisfaction, ambiguous equal-specificity dispatch, invalid
-specialization, and substituted type mismatch. `AU2003` reports an unsupported
+specialization, and substituted type mismatch. `AU2010` reports a type
+parameter that a union member argument cannot determine, and `AU2013` a
+type arm over a type parameter. `AU2003` reports an unsupported
 operator when no builtin rule or applicable operator trait supplies it.
 `AU2004` reports call argument binding and the prohibition on ordinary default
 arguments in trait methods. `AU2006` reports builtin method collisions.
@@ -461,6 +514,9 @@ implementations, unique-most-specific dispatch, operator traits, `Self`, and
 Ordinary `-> T` return values are owned. Generic functions and methods may
 instead declare `-> view [mut] T from origin`; trait implementations preserve
 the trait declaration's origin slot as well as its specialized pointee type.
+Type parameters as union members, renormalizing specialization, remainder
+inference, and universal generic body checks are implemented under the Batch
+1 phase 1 design checkpoint.
 Trait objects, dynamic dispatch, associated types,
 higher-kinded types, general
 subtyping, and arbitrary blanket implementation targets are unavailable.

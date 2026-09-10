@@ -755,6 +755,12 @@ pub enum Rvalue {
         member_type: Type,
         member_index: usize,
     },
+    /// `value is None` on a value whose static type is a type parameter or a
+    /// union whose only `None` can come from a type parameter: `true` when
+    /// the runtime value is unit `None` or a union holding it (ADR-0052 A7).
+    NoneTest {
+        value: Operand,
+    },
     /// Read a once-initialized immutable module value. The initializer thunk
     /// is shared by MIR and direct execution and guarded against re-entry.
     ModuleConstant {
@@ -2277,6 +2283,12 @@ impl<'a> MirLoanValidationContext<'a> {
         args: &'b [MirArg],
     ) -> std::result::Result<Vec<Option<&'b MirArg>>, String> {
         let bound = self.bind_call_args(callee, args)?;
+        let mut callee_type_params = BTreeSet::new();
+        for param in &callee.params {
+            collect_type_params_from_type(&param.ty, &mut callee_type_params);
+        }
+        collect_type_params_from_type(&callee.return_type, &mut callee_type_params);
+        let mut union_substitutions = HashMap::new();
         for (index, (param, arg)) in callee.params.iter().zip(&bound).enumerate() {
             let Some(arg) = arg else {
                 if param.default_function.is_none() {
@@ -2287,8 +2299,21 @@ impl<'a> MirLoanValidationContext<'a> {
                 }
                 continue;
             };
+            // A union parameter admits exactly its declared union, or the
+            // specialization of a generic callee's symbolic union that the
+            // supplied arguments determine consistently (ADR-0052 A7).
             if matches!(param.ty, Type::Union(_))
-                && self.operand_type(caller, &arg.value)?.as_ref() != Some(&param.ty)
+                && !self
+                    .operand_type(caller, &arg.value)?
+                    .as_ref()
+                    .is_some_and(|actual| {
+                        union_argument_specializes(
+                            &param.ty,
+                            actual,
+                            &callee_type_params,
+                            &mut union_substitutions,
+                        )
+                    })
             {
                 return Err(format!(
                     "invalid MIR call to `{}` in `{}` requires exact union type '{}' for parameter `{}`",
@@ -2975,6 +3000,95 @@ struct ValidatedTakenEnumPayload {
 }
 
 const UNION_PAYLOAD_PROJECTION_PREFIX: &str = "__union_payload_";
+
+/// Whether an argument union is the declared union parameter itself or a
+/// specialization of a generic callee's symbolic union (ADR-0052 A7). Every
+/// concrete member of the parameter must be a member of the argument after
+/// the substitutions already fixed by earlier arguments; the remaining
+/// argument members belong to the parameter's type-parameter members. A
+/// single type-parameter member binds to that remainder so later arguments
+/// stay consistent; several cannot be told apart here, which is the
+/// checker's explicit-specialization rule rather than a MIR shape defect.
+fn union_argument_specializes(
+    param_ty: &Type,
+    actual: &Type,
+    callee_type_params: &BTreeSet<String>,
+    substitutions: &mut HashMap<String, Type>,
+) -> bool {
+    if param_ty == actual {
+        return true;
+    }
+    let Type::Union(pattern) = param_ty else {
+        return false;
+    };
+    let substituted = crate::sema::substitute_type(param_ty, substitutions);
+    if !crate::sema::has_unresolved_type_params(&substituted)
+        || !pattern.members.iter().any(|member| {
+            matches!(member, Type::TypeParam(name) if callee_type_params.contains(name) && !substitutions.contains_key(name))
+        })
+    {
+        return substituted == *actual;
+    }
+    let mut params = Vec::new();
+    let mut concrete = Vec::new();
+    for member in &pattern.members {
+        match member {
+            Type::TypeParam(name)
+                if callee_type_params.contains(name) && !substitutions.contains_key(name) =>
+            {
+                if !params.contains(name) {
+                    params.push(name.clone());
+                }
+            }
+            other => match crate::sema::substitute_type(other, substitutions) {
+                Type::Union(inner) => concrete.extend(inner.members.iter().cloned()),
+                resolved => concrete.push(resolved),
+            },
+        }
+    }
+    let actual_members: Vec<Type> = match actual {
+        Type::Union(actual_union) => actual_union.members.clone(),
+        other => vec![other.clone()],
+    };
+    if !concrete
+        .iter()
+        .all(|member| actual_members.contains(member))
+    {
+        return false;
+    }
+    let remainder: Vec<Type> = actual_members
+        .into_iter()
+        .filter(|member| !concrete.contains(member))
+        .collect();
+    if remainder.is_empty() {
+        return false;
+    }
+    if params.len() == 1 {
+        let bound = if remainder.len() == 1 {
+            remainder[0].clone()
+        } else {
+            match actual {
+                Type::Union(actual_union) => {
+                    let keys = actual_union
+                        .members
+                        .iter()
+                        .zip(&actual_union.keys)
+                        .filter(|(member, _)| remainder.contains(member))
+                        .map(|(_, key)| key.clone())
+                        .collect();
+                    Type::Union(Box::new(crate::sema::UnionType {
+                        members: remainder,
+                        keys,
+                        module_name: actual_union.module_name.clone(),
+                    }))
+                }
+                _ => return false,
+            }
+        };
+        substitutions.insert(params.remove(0), bound);
+    }
+    true
+}
 const ENUM_PAYLOAD_PROJECTION_PREFIX: &str = "__variant_payload_";
 
 pub(crate) fn union_payload_projection_index(segment: &str) -> Option<usize> {
@@ -3676,6 +3790,7 @@ fn function_body_moves_root(function: &MirFunction, root: &str) -> bool {
     fn rvalue_moves(value: &Rvalue, root: &str) -> bool {
         match value {
             Rvalue::Use(operand)
+            | Rvalue::NoneTest { value: operand }
             | Rvalue::UnionInject { value: operand, .. }
             | Rvalue::Unary { value: operand, .. }
             | Rvalue::Cast { value: operand, .. }
@@ -5129,6 +5244,7 @@ fn validate_loan_rvalue(
         Ok(())
     };
     match value {
+        Rvalue::NoneTest { value } => operands(std::slice::from_ref(value)),
         Rvalue::UnionTagTest {
             place,
             union_type,
@@ -13159,6 +13275,26 @@ impl<'a> Lowerer<'a> {
         Some(Operand::Place(value))
     }
 
+    /// Whether `value is None` must be decided at runtime because the
+    /// operand's static type is a type parameter, or a union whose `None` can
+    /// only arrive through a type-parameter member (ADR-0052 A7).
+    fn none_test_is_dynamic(declared: Option<&Type>) -> bool {
+        match declared {
+            Some(Type::TypeParam(_)) => true,
+            Some(Type::Union(union)) => {
+                union
+                    .members
+                    .iter()
+                    .any(|member| matches!(member, Type::TypeParam(_)))
+                    && !union
+                        .members
+                        .iter()
+                        .any(|member| matches!(member, Type::Unit))
+            }
+            _ => false,
+        }
+    }
+
     /// Whether a condition contains an `is None` leaf that should lower as a
     /// tag-test branch rather than a boolean value.
     fn condition_has_none_test(condition: &Expr) -> bool {
@@ -13198,6 +13334,27 @@ impl<'a> Lowerer<'a> {
         };
         let (Some(union_type @ Type::Union(_)), Some(member_index)) = (&declared, none_index)
         else {
+            if Self::none_test_is_dynamic(declared.as_ref()) {
+                let operand = self.lower_expr(value);
+                let test = self.new_typed_temp(Type::named("bool"));
+                self.emit(Instruction::Assign {
+                    target: test.clone(),
+                    value: Rvalue::NoneTest { value: operand },
+                });
+                if !negated {
+                    return Operand::Place(test);
+                }
+                let result = self.new_typed_temp(Type::named("bool"));
+                self.emit(Instruction::Assign {
+                    target: result.clone(),
+                    value: Rvalue::Unary {
+                        op: UnaryOp::Not,
+                        value: Operand::Place(test),
+                        span: operator_span,
+                    },
+                });
+                return Operand::Place(result);
+            }
             let is_none = declared == Some(Type::Unit);
             self.lower_expr(value);
             return Operand::Bool(is_none != negated);
@@ -13298,6 +13455,19 @@ impl<'a> Lowerer<'a> {
                                 union_type,
                                 member_index,
                             },
+                        });
+                        self.terminate(Terminator::Branch {
+                            condition: Operand::Place(test),
+                            then_label: true_label,
+                            else_label: false_label,
+                        });
+                    }
+                    None if Self::none_test_is_dynamic(declared.as_ref()) => {
+                        let operand = self.lower_expr(value);
+                        let test = self.new_typed_temp(Type::named("bool"));
+                        self.emit(Instruction::Assign {
+                            target: test.clone(),
+                            value: Rvalue::NoneTest { value: operand },
                         });
                         self.terminate(Terminator::Branch {
                             condition: Operand::Place(test),

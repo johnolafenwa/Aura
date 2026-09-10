@@ -1,0 +1,26 @@
+type MaybeValue[V] = V | None
+
+def absent[V]() -> V | None:
+    return None
+
+def present[V](value: own V) -> V | None:
+    return value
+
+def main():
+    first: MaybeValue[int64] = present[int64](4)
+    if first is not None:
+        print(first + 1)
+    second = absent[str]()
+    if second is None:
+        print("absent")
+    nested: int64 | None = present[int64 | None](None)
+    print(nested is None)
+    print("one none" if nested is None else "value")
+    flattened = absent[int64 | None]()
+    print(flattened is None)
+    inner: int64 | None = 7
+    lifted: int64 | None = present[int64 | None](inner)
+    if lifted is not None:
+        print(lifted * 2)
+    unit = present[None](None)
+    print(unit is None)

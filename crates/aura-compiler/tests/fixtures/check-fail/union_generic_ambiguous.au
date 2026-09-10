@@ -1,0 +1,6 @@
+def pair[V, W](value: V | W | None) -> bool:
+    return value is None
+
+def main():
+    mixed: int64 | str | None = 1
+    print(pair(mixed))

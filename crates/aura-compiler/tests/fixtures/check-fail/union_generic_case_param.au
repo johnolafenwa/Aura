@@ -1,0 +1,9 @@
+def show[V](value: V | None) -> int64:
+    match value:
+        case V as inner:
+            return 1
+        case None:
+            return 0
+
+def main():
+    print(show[int64](3))

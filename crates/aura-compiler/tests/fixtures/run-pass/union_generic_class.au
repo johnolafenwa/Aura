@@ -1,0 +1,26 @@
+class Slot[V]:
+    value: V | None
+
+    def present(self) -> bool:
+        return self.value is not None
+
+    def clear(mut self):
+        self.value = None
+
+def make[V](value: own V) -> Slot[V]:
+    return Slot(value=value)
+
+def main():
+    slot = make[int64](7)
+    if slot.value is not None:
+        print(slot.value * 2)
+    print(slot.present())
+    nested = make[int64 | None](None)
+    print(nested.value is None)
+    print(nested.present())
+    mut direct = Slot[str](value="text")
+    print(direct.present())
+    direct.clear()
+    print(direct.present())
+    items: list[int64 | None] = [1, None]
+    print(len(items))

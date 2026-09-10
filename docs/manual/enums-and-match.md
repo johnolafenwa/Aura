@@ -24,7 +24,9 @@ def main():
 
 This prints `42` twice. `case Type as name` selects exactly one normalized
 member after transparent alias expansion. An alias for several members cannot
-stand for a single type arm. A matching type arm is irrefutable when the
+stand for a single type arm, and neither can a type parameter: `case V as
+inner` is rejected with AU2013 because `V` is not proved disjoint from the
+other arms; use `case None` and a catch-all. A matching type arm is irrefutable when the
 scrutinee type has collapsed to one member. Type patterns may also occur
 inside nominal enum payload patterns.
 

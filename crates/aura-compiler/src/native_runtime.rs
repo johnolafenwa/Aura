@@ -7015,17 +7015,28 @@ pub extern "C-unwind" fn aura_direct_union_tag_test(
     task_runtime_boundary(|| {
         let expected = canonical_runtime_type_from_name(&decode_bytes(type_ptr, type_len))
             .unwrap_or_else(|| runtime_error("invalid union tag type"));
+        let Type::Union(target) = &expected else {
+            runtime_error("union tag test requires a union type");
+        };
         unsafe {
-            with_value(value, |value| {
-                let Value::Union(union) = value else {
-                    runtime_error("union tag test requires an active union");
-                };
-                if union.union_type != expected {
-                    runtime_error("union tag type identity mismatch");
-                }
-                i64::from(union.member_index == member_index)
+            value_mut(value, |value| {
+                let active =
+                    crate::union_runtime::align_union_value(value, target, "union tag test")
+                        .unwrap_or_else(|message| runtime_error(message));
+                i64::from(active == member_index)
             })
         }
+    })
+}
+
+/// `value is None` on a type-parameter value: unit `None` itself or a union
+/// currently holding it (ADR-0052 A7).
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_none_test(value: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| {
+            i64::from(crate::union_runtime::is_none_value(value))
+        })
     })
 }
 
@@ -7039,12 +7050,14 @@ pub extern "C-unwind" fn aura_direct_union_take_payload(
     task_runtime_boundary(|| {
         let expected = canonical_runtime_type_from_name(&decode_bytes(type_ptr, type_len))
             .unwrap_or_else(|| runtime_error("invalid union take type"));
+        let Type::Union(target) = &expected else {
+            runtime_error("union take requires a union type");
+        };
         let payload = unsafe {
             value_mut(value, |value| {
-                let Value::Union(union) = value else {
-                    runtime_error("union take requires an active union");
-                };
-                if union.union_type != expected || union.member_index != member_index {
+                let active = crate::union_runtime::align_union_value(value, target, "union take")
+                    .unwrap_or_else(|message| runtime_error(message));
+                if active != member_index {
                     runtime_error("union take member or type identity mismatch");
                 }
                 let Value::Union(union) = std::mem::replace(value, Value::Unit) else {
@@ -7058,7 +7071,18 @@ pub extern "C-unwind" fn aura_direct_union_take_payload(
 }
 
 fn direct_union_projection(union: &crate::runtime_value::UnionValue, field: &str) -> bool {
-    field == format!("__union_payload_{}", union.member_index)
+    if field == format!("__union_payload_{}", union.member_index) {
+        return true;
+    }
+    // A value tagged by a generic frame keeps that frame's symbolic layout
+    // until an operation in this frame retags it; the validated tag proof
+    // that dominates this projection already selected the active member.
+    let symbolic = matches!(&union.union_type, Type::Union(target)
+        if target.members.iter().any(|member| matches!(member, Type::TypeParam(_))));
+    symbolic
+        && field
+            .strip_prefix("__union_payload_")
+            .is_some_and(|index| index.parse::<usize>().is_ok())
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -7081,14 +7105,9 @@ pub extern "C-unwind" fn aura_direct_union_inject(
         // Immediate owned calls pass a registered handle. Unlike an argument
         // buffer, this boundary has not already detached its registration.
         let payload = unsafe { consume_owned_value(payload) };
-        boxed_typed_value(
-            Value::Union(Box::new(crate::runtime_value::UnionValue {
-                union_type,
-                member_index,
-                payload,
-            })),
-            &name,
-        )
+        let injected = crate::union_runtime::inject_union_member(union, member_index, payload)
+            .unwrap_or_else(|message| runtime_error(message));
+        boxed_typed_value(injected, &name)
     })
 }
 

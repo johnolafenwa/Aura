@@ -260,6 +260,24 @@ The interpreter rechecks active tags before projecting, writing or taking a
 payload. Native view alternatives retain structural union base/type/index
 metadata, including through projected aliases, and compare it at CFG joins.
 Native runtime helpers also recheck the active member before payload access.
+
+## Batch 1 phase 1: generic union members
+
+Generic bodies execute once for every specialization on both paths, so a
+union written as `V | None` reaches the runtime with a symbolic member. The
+shared `union_runtime` module gives both backends one rule: a union value
+carries the union it was built with and a bare payload; every union
+operation aligns that value to the union the instruction names by the active
+member's identity (a concrete member of the value's union, or the runtime
+type of the payload behind a type-parameter member), retags it in place when
+the frame allows mutation, and rejects any active member the instruction's
+union cannot admit. Injecting a union-typed `V` payload flattens it into the
+destination, so `present[int64 | None](None)` and `absent[int64 | None]()`
+are the same value. The interpreter's `NoneTest` and the native
+`aura_direct_none_test` helper decide `value is None` on a type-parameter
+value at run time. The common validator accepts a union argument that is
+the specialization of a generic callee's symbolic union, and the semantic
+interface schema is version 10.
 No native emitter chooses a preferred member or decides exhaustiveness.
 
 Alternative arms lower separately where their payload sources differ. A failed

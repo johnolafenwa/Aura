@@ -1,0 +1,26 @@
+def inner[T](value: own T) -> T | None:
+    return value
+
+def outer[V](value: own V) -> V | None:
+    return inner[V](value)
+
+def widen[V](value: V | None) -> bool:
+    return value is None
+
+def describe[V](value: V | None) -> str:
+    if value is None:
+        return "missing"
+    return "present"
+
+def main():
+    result = outer[int64](4)
+    if result is not None:
+        print(result + 1)
+    print(outer[str]("x") is None)
+    wide: int64 | str | None = "a"
+    print(widen(wide))
+    print(widen[int64 | str](wide))
+    print(describe("text"))
+    both: str | None = None
+    print(describe(both))
+    print(describe[str](None))

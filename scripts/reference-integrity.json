@@ -837,56 +837,56 @@
       "stderr": ""
     },
     "docs/manual/generics-and-traits.md#aura-10": {
-      "sha256": "bfa32b149a1b9b9cfdffa8dbee9572c049e296b4993af6a521bed2dbc7324998",
+      "sha256": "603c9f8f8e98536ab1b5c44b8a8946f68e9e6df16ae13281d5a80b8e3afd11f8",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/generics-and-traits.md#aura-11": {
+      "sha256": "bfa32b149a1b9b9cfdffa8dbee9572c049e296b4993af6a521bed2dbc7324998",
+      "mode": "check",
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/generics-and-traits.md#aura-12": {
       "sha256": "4a6b6ada08a974291f24e1513ce66362f08c39d73c85f2a91fd7dd781d134037",
       "mode": "illustrative",
       "reason": "Implementation fragment: Greeter is declared in a preceding block."
     },
-    "docs/manual/generics-and-traits.md#aura-12": {
+    "docs/manual/generics-and-traits.md#aura-13": {
       "sha256": "24cc17220c237da5567fa9c9cf811854cd584f451cc6b04f322f3630929bc627",
       "mode": "illustrative",
       "reason": "Implementation fragment: Mapper and Doubler are declared outside this block."
     },
-    "docs/manual/generics-and-traits.md#aura-13": {
+    "docs/manual/generics-and-traits.md#aura-14": {
       "sha256": "3ca02c79131984237889a787a029521a108cd95ca24179acf1a39a09cf7c4cd6",
       "mode": "illustrative",
       "reason": "Generic implementation fragment: Mapper and Box are declared in preceding blocks."
     },
-    "docs/manual/generics-and-traits.md#aura-14": {
+    "docs/manual/generics-and-traits.md#aura-15": {
       "sha256": "b23583f8dcda874d255fcfa0873c6aa0f6f35f8d872e0b61f0b3d7b62b30b446",
       "mode": "illustrative",
       "reason": "Specialized implementation fragment: Displayable and Box are declared outside this block."
     },
-    "docs/manual/generics-and-traits.md#aura-15": {
+    "docs/manual/generics-and-traits.md#aura-16": {
       "sha256": "ce423c7ac40ca3374bd3b398308dd2021399342b32128125eee3a9f422d8e15d",
       "mode": "illustrative",
       "reason": "Dispatch fragment: Greeter is declared in a preceding block."
     },
-    "docs/manual/generics-and-traits.md#aura-16": {
+    "docs/manual/generics-and-traits.md#aura-17": {
       "sha256": "bd48f0158a3afd16076bc328a3b5548b308d2d950e52a4804f5a3cb403090bd4",
       "mode": "illustrative",
       "reason": "Dispatch fragment: Mapper is declared in a preceding block."
     },
-    "docs/manual/generics-and-traits.md#aura-17": {
+    "docs/manual/generics-and-traits.md#aura-18": {
       "sha256": "1fe83bf76b9982ccbaf11345f4bc90e93867b2eb38aeb7d49dae7d7e1c64a387",
       "mode": "illustrative",
       "reason": "Static-method fragment: Widget is an application type intentionally omitted from the trait example."
     },
-    "docs/manual/generics-and-traits.md#aura-18": {
+    "docs/manual/generics-and-traits.md#aura-19": {
       "sha256": "41c3b3545852cd2b70c0d18c5d89f28dbfada1823d2065fc0a38f9d7ab66fb44",
       "mode": "illustrative",
       "reason": "Supertrait fragment: Named is declared in a preceding block."
-    },
-    "docs/manual/generics-and-traits.md#aura-19": {
-      "sha256": "3c3315ee9b7bef9eb88cf678624a493577126b0d0610c82efde430324436d0fc",
-      "mode": "check",
-      "stdout": "ok\n",
-      "stderr": ""
     },
     "docs/manual/generics-and-traits.md#aura-2": {
       "sha256": "f1feffe4e2b1cc73fa182660ea0f4e63ec7d62f2ceaec51e968537b53a16e7e3",
@@ -894,42 +894,48 @@
       "reason": "Multi-bound function fragment: Display and Score are traits declared outside this block."
     },
     "docs/manual/generics-and-traits.md#aura-20": {
-      "sha256": "f1dec1ce299eec8a19afd2e38d4583bdd7beca03bccd7f1560d32cde43974c19",
+      "sha256": "3c3315ee9b7bef9eb88cf678624a493577126b0d0610c82efde430324436d0fc",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/generics-and-traits.md#aura-21": {
-      "sha256": "8f47643bfe6d7db2bb009efd2e0fcf7d414dabb2c34ec7448f6a07db2da3c341",
+      "sha256": "f1dec1ce299eec8a19afd2e38d4583bdd7beca03bccd7f1560d32cde43974c19",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
     "docs/manual/generics-and-traits.md#aura-22": {
+      "sha256": "8f47643bfe6d7db2bb009efd2e0fcf7d414dabb2c34ec7448f6a07db2da3c341",
+      "mode": "check",
+      "stdout": "ok\n",
+      "stderr": ""
+    },
+    "docs/manual/generics-and-traits.md#aura-23": {
       "sha256": "ffa3f5e55021c2220a6edbbcf8c39db0e864bee21c0187058222e45d908b58e6",
       "mode": "check-fail",
       "exit_code": 1,
       "stderr_contains": "AU3007"
     },
-    "docs/manual/generics-and-traits.md#aura-23": {
+    "docs/manual/generics-and-traits.md#aura-24": {
       "sha256": "a76ab7cbebc842bf43e5e7b51df78d3e1c3faaa5ae5b64621c9d2de37757857f",
       "mode": "check-fail",
       "exit_code": 1,
       "stderr_contains": "AU3007"
     },
-    "docs/manual/generics-and-traits.md#aura-24": {
+    "docs/manual/generics-and-traits.md#aura-25": {
       "sha256": "79e50379e5b9af3f14a85051eeb57cfda861b563982c7f95e30b5993ff0dbbf7",
       "mode": "check-fail",
       "exit_code": 1,
       "stderr_contains": "AU3007"
     },
-    "docs/manual/generics-and-traits.md#aura-25": {
+    "docs/manual/generics-and-traits.md#aura-26": {
       "sha256": "e93ce5924eb38c6e027d9da01f447b3e852f007e7bc0fe49cef81188c3da7b3f",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/generics-and-traits.md#aura-26": {
+    "docs/manual/generics-and-traits.md#aura-27": {
       "sha256": "5a37b876aeab870b18f01f5540988ec87ffff89f57e988972e5875f2870bc9b8",
       "mode": "check-fail",
       "exit_code": 1,
@@ -951,25 +957,25 @@
       "reason": "Specialization fragment: Box and identity are declared in the preceding generic-declaration block."
     },
     "docs/manual/generics-and-traits.md#aura-6": {
+      "sha256": "cd42050269c2a3c61d64e9a9454a3577702e1d680d53edfa5ae64217d51afdd3",
+      "mode": "run",
+      "stdout": "5\ntrue\ntrue\n",
+      "stderr": ""
+    },
+    "docs/manual/generics-and-traits.md#aura-7": {
       "sha256": "6804bbec326139c2d1e679c721dfba0b074d13d83454430439b199cbfc8004ee",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/generics-and-traits.md#aura-7": {
+    "docs/manual/generics-and-traits.md#aura-8": {
       "sha256": "f2e720ccae2c8baabb2a0530654dc1a3753d4c59b63c51152b651c33aa8d2aea",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""
     },
-    "docs/manual/generics-and-traits.md#aura-8": {
-      "sha256": "12bc19a490b11fb9c4df2e04b392449491b92cc3a7bc472a521721720c6fb0eb",
-      "mode": "check",
-      "stdout": "ok\n",
-      "stderr": ""
-    },
     "docs/manual/generics-and-traits.md#aura-9": {
-      "sha256": "603c9f8f8e98536ab1b5c44b8a8946f68e9e6df16ae13281d5a80b8e3afd11f8",
+      "sha256": "12bc19a490b11fb9c4df2e04b392449491b92cc3a7bc472a521721720c6fb0eb",
       "mode": "check",
       "stdout": "ok\n",
       "stderr": ""

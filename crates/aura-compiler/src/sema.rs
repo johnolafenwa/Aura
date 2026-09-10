@@ -62,13 +62,13 @@ mod type_budget;
 mod type_budget_tests;
 mod types;
 pub(crate) use types::builtin_enum_variants;
+pub(crate) use types::UnionType;
 use types::{
-    collect_type_params_from_type, collect_type_ref_type_params, has_unresolved_type_params,
-    lower_type, lower_type_with_self, merged_type_param_scope, substitute_trait_bounds,
-    type_param_scope, unify_type_pattern,
+    collect_type_params_from_type, collect_type_ref_type_params, lower_type, lower_type_with_self,
+    merged_type_param_scope, substitute_trait_bounds, type_param_scope, unify_type_pattern,
 };
 pub(crate) use types::{
-    substitute_alias_type, substitute_trait_bound, substitute_type,
+    has_unresolved_type_params, substitute_alias_type, substitute_trait_bound, substitute_type,
     substitutions_from_decl_type_args, trait_impl_specificity, trait_impl_specificity_parts,
     type_pattern_matches,
 };
@@ -8159,13 +8159,15 @@ impl<'a> FunctionChecker<'a> {
                     Err(error) => return Err(error),
                 };
             if let Err(error) = unify_type_pattern(&field_info.ty, &actual, &mut substitutions) {
-                return Err(Diagnostic::at(
-                    argument.span,
-                    format!(
-                        "field `{}` expects `{}`, found `{}` ({})",
-                        field_name, hinted_field_ty, actual, error.message
-                    ),
-                ));
+                let message = format!(
+                    "field `{}` expects `{}`, found `{}` ({})",
+                    field_name, hinted_field_ty, actual, error.message
+                );
+                return Err(if error.code == "AU2010" {
+                    Diagnostic::coded_at("AU2010", argument.span, message)
+                } else {
+                    Diagnostic::at(argument.span, message)
+                });
             }
             let resolved_field_ty = substitute_type(&field_info.ty, &substitutions);
             if type_contains_loan_closure(&actual) {

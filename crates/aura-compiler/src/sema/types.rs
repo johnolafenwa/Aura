@@ -1390,7 +1390,16 @@ pub(crate) fn type_pattern_matches(
     substitutions: &mut HashMap<String, Type>,
 ) -> bool {
     match pattern {
-        Type::Union(_) => pattern == actual,
+        Type::Union(union) => {
+            let mut trial = substitutions.clone();
+            match unify_union_pattern(union, actual, &mut trial, Some(type_params)) {
+                Ok(()) => {
+                    *substitutions = trial;
+                    true
+                }
+                Err(_) => false,
+            }
+        }
         Type::TypeParam(name) if type_params.contains(name) => {
             if let Some(existing) = substitutions.get(name) {
                 if existing != actual {
@@ -1508,7 +1517,7 @@ pub(crate) fn type_pattern_matches(
     }
 }
 
-pub(super) fn has_unresolved_type_params(ty: &Type) -> bool {
+pub(crate) fn has_unresolved_type_params(ty: &Type) -> bool {
     match ty {
         Type::Union(union) => union.members.iter().any(has_unresolved_type_params),
         Type::Unit => false,
@@ -1554,21 +1563,116 @@ pub(crate) fn substitutions_from_decl_type_args(
         .collect()
 }
 
+/// Unifies a union pattern that may still mention type parameters with an
+/// actual type (ADR-0052 A7). Concrete pattern members must be members of
+/// the actual type after the known substitutions are applied; the remaining
+/// actual members bind the single unbound parameter member to their
+/// normalized union. Two unbound parameters cannot be told apart from a
+/// union argument, and an empty remainder leaves the parameter unresolved;
+/// both require explicit specialization rather than inverted normalization.
+pub(super) fn unify_union_pattern(
+    pattern: &UnionType,
+    actual: &Type,
+    substitutions: &mut HashMap<String, Type>,
+    inferable: Option<&BTreeSet<String>>,
+) -> Result<()> {
+    let rendered_pattern = Type::Union(Box::new(pattern.clone()));
+    let substituted = substitute_type(&rendered_pattern, substitutions);
+    let mut concrete: Vec<Type> = Vec::new();
+    let mut params: Vec<String> = Vec::new();
+    for member in &pattern.members {
+        match member {
+            Type::TypeParam(name)
+                if !substitutions.contains_key(name)
+                    && inferable.is_none_or(|names| names.contains(name)) =>
+            {
+                if !params.contains(name) {
+                    params.push(name.clone());
+                }
+            }
+            other => {
+                let resolved = substitute_type(other, substitutions);
+                match resolved {
+                    Type::Union(inner) => concrete.extend(inner.members.iter().cloned()),
+                    resolved => concrete.push(resolved),
+                }
+            }
+        }
+    }
+    let (actual_members, actual_keys): (Vec<Type>, Vec<String>) = match actual {
+        Type::Union(actual_union) => (actual_union.members.clone(), actual_union.keys.clone()),
+        other => (vec![other.clone()], vec![String::new()]),
+    };
+    let mut remainder_members = Vec::new();
+    let mut remainder_keys = Vec::new();
+    for (member, key) in actual_members.iter().zip(actual_keys.iter()) {
+        if concrete.iter().any(|candidate| candidate == member) {
+            continue;
+        }
+        remainder_members.push(member.clone());
+        remainder_keys.push(key.clone());
+    }
+    if params.is_empty() {
+        // Every parameter member is already bound (or belongs to an enclosing
+        // scope): the substituted pattern must match exactly.
+        return if &substituted == actual {
+            Ok(())
+        } else {
+            Err(Diagnostic::new(format!(
+                "expected `{substituted}`, found `{actual}`"
+            )))
+        };
+    }
+    if params.len() > 1 && !remainder_members.is_empty() {
+        return Err(Diagnostic::coded(
+            "AU2010",
+            format!(
+                "cannot infer `{}` from `{actual}`; the union members cannot be assigned to more than one type parameter, so specialize the callable explicitly",
+                params.join("` and `")
+            ),
+        ));
+    }
+    if remainder_members.is_empty() {
+        return Err(Diagnostic::coded(
+            "AU2010",
+            format!(
+                "cannot infer `{}` from `{actual}`; every member is already named by `{rendered_pattern}`, so specialize the callable explicitly",
+                params.join("` and `")
+            ),
+        ));
+    }
+    let bound = if remainder_members.len() == 1 {
+        remainder_members.remove(0)
+    } else if matches!(actual, Type::Union(_)) {
+        Type::Union(Box::new(UnionType {
+            members: remainder_members,
+            keys: remainder_keys,
+            module_name: pattern.module_name.clone(),
+        }))
+    } else {
+        unreachable!("a non-union actual contributes at most one remainder member")
+    };
+    let name = params.remove(0);
+    let bound = match substitutions.get(&name) {
+        Some(existing) if existing != &bound => {
+            return Err(Diagnostic::new(format!(
+                "conflicting inferred types for `{name}`: `{existing}` and `{bound}`"
+            )))
+        }
+        Some(existing) => merge_type_callable_contracts(existing, &bound),
+        None => bound,
+    };
+    substitutions.insert(name, bound);
+    Ok(())
+}
+
 pub(super) fn unify_type_pattern(
     pattern: &Type,
     actual: &Type,
     substitutions: &mut HashMap<String, Type>,
 ) -> Result<()> {
     match pattern {
-        Type::Union(_) => {
-            if pattern == actual {
-                Ok(())
-            } else {
-                Err(Diagnostic::new(format!(
-                    "expected `{pattern}`, found `{actual}`"
-                )))
-            }
-        }
+        Type::Union(union) => unify_union_pattern(union, actual, substitutions, None),
         Type::Unit => {
             if actual == &Type::Unit {
                 Ok(())

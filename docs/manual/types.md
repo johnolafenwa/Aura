@@ -15,7 +15,10 @@ and `public` visibility. For example, `type ToolValue = int64 | str | None`
 names a union of three existing types. Union identity ignores member order,
 flattens nested unions, removes duplicates, and collapses a single member to
 that member's type. `None` is the unit member; aliases introduce no runtime
-wrapper or new nominal identity.
+wrapper or new nominal identity. A declared type parameter may be a member,
+and substitution renormalizes the result, so `V | None` with `V = int64 | None`
+is `int64 | None`; see
+[type parameters as union members](/manual/generics-and-traits#type-parameters-as-union-members).
 
 A value enters a union at an explicit expected-type boundary, such as an
 annotated binding or a declared parameter or result. Its type must be a direct

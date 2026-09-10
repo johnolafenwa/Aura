@@ -75,7 +75,19 @@ Last updated: 2026-09-10
   was rejected as a borrowed move. Thirteen run-pass, eight check-fail, and
   one parse-fail fixtures; Manual, tutorial 09, example, grammar, and the
   AU2010–AU2015 registry rows are updated.
-- Next: commit the narrowing family, then generic members, union properties,
+- Generic members family (2026-09-10): type parameters are union members
+  end to end. The checker infers a parameter from the remainder of a union
+  argument (AU2010 when nothing or more than one parameter could take it),
+  re-types arguments under the resolved union, and keeps `case V` at AU2013.
+  Both backends share a structural union identity: values built in generic
+  bodies keep their symbolic layout and every union operation aligns them by
+  the active member, flattening union-typed `V` payloads, so
+  `present[int64 | None](None)` and `absent[int64 | None]()` agree. A
+  `NoneTest` rvalue decides `is None` on bare type-parameter values at run
+  time; the validator accepts specialized union arguments; the semantic
+  interface schema is 10. Four run-pass and three check-fail fixtures, the
+  generics chapter, and the backend-boundary note are updated.
+- Next: commit the generic-member family, then union properties,
   layout/interfaces/drop plans, nullable FFI results, the callable families,
   editor/docs/reference-agent updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected

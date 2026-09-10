@@ -554,6 +554,7 @@ struct NativeCodegen<'a> {
     tuple_take_element: FuncId,
     union_inject: FuncId,
     union_tag_test: FuncId,
+    none_test: FuncId,
     union_take_payload: FuncId,
     enum_variant: FuncId,
     variant_matches: FuncId,
@@ -1074,6 +1075,7 @@ impl<'a> NativeCodegen<'a> {
             tuple_take_element => ("aura_direct_tuple_take_element", [types::I64, types::I64], Some(types::I64)),
             union_inject => ("aura_direct_union_inject", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             union_tag_test => ("aura_direct_union_tag_test", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            none_test => ("aura_direct_none_test", [types::I64], Some(types::I64)),
             union_take_payload => ("aura_direct_union_take_payload", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             enum_variant => ("aura_direct_enum_variant", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_matches => ("aura_direct_variant_matches", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1538,6 +1540,7 @@ impl<'a> NativeCodegen<'a> {
             tuple_take_element,
             union_inject,
             union_tag_test,
+            none_test,
             union_take_payload,
             enum_variant,
             variant_matches,
@@ -2566,6 +2569,9 @@ impl<'a> NativeCodegen<'a> {
         let union_tag_test = self
             .object
             .declare_func_in_func(self.union_tag_test, builder.func);
+        let none_test = self
+            .object
+            .declare_func_in_func(self.none_test, builder.func);
         let union_take_payload = self
             .object
             .declare_func_in_func(self.union_take_payload, builder.func);
@@ -3332,6 +3338,7 @@ impl<'a> NativeCodegen<'a> {
             tuple_take_element,
             union_inject,
             union_tag_test,
+            none_test,
             union_take_payload,
             enum_variant,
             variant_matches,
@@ -4604,6 +4611,7 @@ struct FunctionCompiler<'a> {
     tuple_take_element: cranelift_codegen::ir::FuncRef,
     union_inject: cranelift_codegen::ir::FuncRef,
     union_tag_test: cranelift_codegen::ir::FuncRef,
+    none_test: cranelift_codegen::ir::FuncRef,
     union_take_payload: cranelift_codegen::ir::FuncRef,
     enum_variant: cranelift_codegen::ir::FuncRef,
     variant_matches: cranelift_codegen::ir::FuncRef,
@@ -5539,6 +5547,15 @@ impl<'a> FunctionCompiler<'a> {
             Rvalue::Use(operand) => {
                 let integer_hint = target.scalar_kind().filter(|kind| kind.is_integer());
                 self.load_operand_with_integer_hint(operand, integer_hint)
+            }
+            Rvalue::NoneTest { value } => {
+                let loaded = self.load_operand(value)?;
+                let loaded = self.ensure_opaque(loaded)?;
+                let call = self.builder.ins().call(self.none_test, &[loaded.values[0]]);
+                Ok(ValueRef {
+                    values: self.builder.inst_results(call).to_vec(),
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                })
             }
             Rvalue::ModuleConstant { key, initializer } => {
                 let thunk = *self.function_thunk_refs.get(initializer).ok_or_else(|| {
@@ -16122,9 +16139,9 @@ fn validate_rvalue(
 ) -> std::result::Result<(), String> {
     match rvalue {
         Rvalue::UnionTagTest { .. } | Rvalue::UnionTakePayload { .. } => Ok(()),
-        Rvalue::Use(operand) | Rvalue::UnionInject { value: operand, .. } => {
-            validate_operand(operand)
-        }
+        Rvalue::Use(operand)
+        | Rvalue::NoneTest { value: operand }
+        | Rvalue::UnionInject { value: operand, .. } => validate_operand(operand),
         Rvalue::ModuleConstant { .. } => Ok(()),
         Rvalue::Closure {
             signature,
@@ -16558,7 +16575,9 @@ fn infer_rvalue_type(
 ) -> Option<DirectType> {
     match rvalue {
         Rvalue::Use(operand) => infer_operand_type(operand, variable_types, classes),
-        Rvalue::UnionTagTest { .. } => direct_type(&Type::named("bool"), classes),
+        Rvalue::UnionTagTest { .. } | Rvalue::NoneTest { .. } => {
+            direct_type(&Type::named("bool"), classes)
+        }
         Rvalue::UnionTakePayload { member_type, .. } => direct_type(member_type, classes),
         Rvalue::UnionInject { union_type, .. } => direct_type(union_type, classes),
         Rvalue::ModuleConstant { .. } => None,

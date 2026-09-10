@@ -1,0 +1,5 @@
+error[AU2013]: type arm `V` is not proved to denote one direct, disjoint member
+ --> crates/aura-compiler/tests/fixtures/check-fail/union_generic_case_param.au:3:14
+  |
+3 |         case V as inner:
+  |              ^

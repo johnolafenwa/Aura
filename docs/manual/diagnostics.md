@@ -27,7 +27,8 @@ analysis JSON and the LSP bridge.
 
 `AU2010` through `AU2015` belong to the Batch 1 union, alias, narrowing, and
 callable surface. `AU2010` reports a value that is not a direct member of the
-expected union, or a union spelling without enough context. `AU2011` reports a
+expected union, a union spelling without enough context, or a type
+parameter that a union member argument cannot determine. `AU2011` reports a
 literal that more than one member could accept. `AU2012` reports a cyclic
 transparent alias. `AU2013` reports missing, duplicate, unreachable, or
 nonmember union type arms. `AU2014` reports a member use through a place whose
@@ -294,7 +295,7 @@ imported module is never mislabeled with the entry module's path.
 
 The arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while continuing to validate
-the fields they use. The compiler-service semantic-interface version is `9`.
+the fields they use. The compiler-service semantic-interface version is `10`.
 
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the

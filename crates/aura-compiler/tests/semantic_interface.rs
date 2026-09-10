@@ -5,8 +5,8 @@ use std::path::PathBuf;
 #[test]
 fn the_current_language_surface_has_a_compiler_owned_semantic_interface_schema() {
     assert_eq!(
-        SEMANTIC_INTERFACE_SCHEMA_VERSION, 9,
-        "checked type patterns and union payload operations require schema 9 across compiler services and native cache keys"
+        SEMANTIC_INTERFACE_SCHEMA_VERSION, 10,
+        "structural union identity and dynamic None tests for generic members require schema 10 across compiler services and native cache keys"
     );
 }
 

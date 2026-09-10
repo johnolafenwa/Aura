@@ -2934,7 +2934,7 @@ The JSON result is an array of `{ "name": str, "kind": str, "detail": str }` obj
 `ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aura 0.3. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
 
 `aura lsp` is a persistent JSON-lines compiler service. Every request requires
-`semantic_interface_version: 9` plus string fields `method`, `path`, and
+`semantic_interface_version: 10` plus string fields `method`, `path`, and
 `source`; `id` is optional and is echoed in the response. Supported requests
 are:
 
@@ -2944,7 +2944,7 @@ are:
 ```
 
 Each response is one line containing the same `id`,
-`semantic_interface_version: 9`, and either `result` or an `error` string.
+`semantic_interface_version: 10`, and either `result` or an `error` string.
 Paths give the virtual source a package/import context; ranges and completion
 positions are zero-based. A missing or different semantic interface version is
 an incompatible request and returns a schema-mismatch error.
@@ -3150,7 +3150,7 @@ The parser, checker, package resolver, diagnostic model, analysis engine, and MI
 
 `aura run --backend auto` prefers the direct backend and degrades to the MIR runtime only when direct building or launching is unavailable. Once a direct child runs, an Aura trap, signal termination, wait failure, or diagnostic-protocol failure is a final program/execution outcome and never triggers MIR fallback. Human mode prints an actual fallback reason on standard error before the MIR program runs; JSON mode includes it in the final structured report after execution. A forced `direct` run never degrades, so a parity or benchmark caller cannot silently measure the other backend. Every backend observes the same program arguments, standard output, exit code, and complete runtime diagnostic, including typed call frames and task ancestry.
 
-The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `9`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
+The native path is content-addressed. A successful direct build atomically publishes its binary, that artifact's SHA-256, and a key-bound unique entry identity into a cache keyed by native cache format `v5`, compiler-owned semantic-interface schema version `10`, this compiler's version, the host target, the backend, the exact linked runtime archive content, its ordered native link arguments, and the complete lowered program, which already incorporates the entry source and every resolved dependency source. The format and semantic identities are independent key fields: changing compiler-owned type or ownership metadata invalidates artifacts even if the native container format remains readable. Cache artifacts above 512 MiB are simply not retained; the just-built program still runs. A later run with the same inputs requires a regular directory and bounded regular sidecars, verifies the entry identity, digest, artifact size, execute permission, and platform-native executable shape, and only then uses the entry. It launches a private copy of exactly those verified bytes through a no-shell-fallback native execution path, so replacement of the shared cache pathname after verification cannot substitute different bytes. Missing or mismatched metadata, truncation, a non-regular member, a lost execute permission, or an executable-format/architecture rejection makes the entry a cache miss: Aura quarantines and removes that exact entry, then rebuilds before running. A temporary-directory failure, process-resource failure, `noexec` mount, or other environmental launch failure is not evidence that verified cache bytes are corrupt; Aura preserves the entry and reports or falls back according to the selected backend.
 
 On maintained Unix hosts, cache establishment is coordinated across processes. A short runtime-identity lock protects source-checkout runtime discovery, and a separate writer lock for each content key protects the miss/recheck/build/publish sequence. Therefore, N concurrent cold runs of the same program perform one build; after that publication, the other N-1 processes recheck and consume the verified entry. Existing verified hits take the optimistic read path and do not wait for a writer holding that key. Locks are released before linking output is executed, while atomic publication and invalidation continue to ensure that readers never observe a partial entry and a stale invalidator cannot delete a replacement published for the same key.
 
@@ -3173,7 +3173,7 @@ streaming contract is ratified.
 
 `AURA_CACHE_DIR` selects the cache directory; the default is `~/.cache/aura/native`. The directory is a trust boundary. Its colocated SHA-256 detects corruption but does not authenticate bytes written by a hostile account, so the root must be private to the current OS user and every writer with access to it must be trusted. On the maintained Unix hosts, Aura rejects a root that is owned by another user or writable by group/other and creates or tightens accepted cache directories to mode `0700`. Private launch copies are removed after the child exits. Each launch carries an inherited exclusive lease, so later cleanup preserves the directory while either the `aura` parent or native child is still using it. Interrupted cache-publication, memo, and quarantine stages are collected only after their encoded 24-hour grace period and confirmation that their owner process is gone. An installed immutable runtime can still perform a direct build when caching is disabled or unavailable; no cache lock is required merely to build, and the uncached artifact is not retained.
 
-ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `9`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
+ADR-0031 ratifies the command split: `aura run` defaults to `mir` for the interactive edit-run path, while `aura build` defaults to `auto` for artifact production. Maintained measurements put a cold miss at about 1.3 seconds; a direct hello-world executable is roughly 57 MB of statically linked runtime. Each cache hit reads, hashes, and privately materializes the artifact, and workloads dominated by programs seen once, including CI, still pay the cold path on every program. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; every JSON-lines request and response identifies semantic-interface schema version `10`. A missing or different identity closes the incompatible service and invalidates all document analysis before the lexical recovery path is used, so cached function-type or ownership metadata cannot cross compiler versions. The lexical fallback is recovery-only and is not a second language implementation.
 
 Backend parity is a release gate. A construct accepted by one maintained
 execution backend must have the same observable result or complete diagnostic
@@ -5428,7 +5428,8 @@ analysis JSON and the LSP bridge.
 
 `AU2010` through `AU2015` belong to the Batch 1 union, alias, narrowing, and
 callable surface. `AU2010` reports a value that is not a direct member of the
-expected union, or a union spelling without enough context. `AU2011` reports a
+expected union, a union spelling without enough context, or a type
+parameter that a union member argument cannot determine. `AU2011` reports a
 literal that more than one member could accept. `AU2012` reports a cyclic
 transparent alias. `AU2013` reports missing, duplicate, unreachable, or
 nonmember union type arms. `AU2014` reports a member use through a place whose
@@ -5695,7 +5696,7 @@ imported module is never mislabeled with the entry module's path.
 
 The arrays are an additive schema-version-1 extension. Schema-version-1
 readers MUST ignore unrecognized object members while continuing to validate
-the fields they use. The compiler-service semantic-interface version is `9`.
+the fields they use. The compiler-service semantic-interface version is `10`.
 
 The process exits unsuccessfully after emitting a JSON error report. Tools MUST
 parse standard error as one JSON document in JSON mode and MUST NOT scrape the
@@ -5963,7 +5964,9 @@ def main():
 
 This prints `42` twice. `case Type as name` selects exactly one normalized
 member after transparent alias expansion. An alias for several members cannot
-stand for a single type arm. A matching type arm is irrefutable when the
+stand for a single type arm, and neither can a type parameter: `case V as
+inner` is rejected with AU2013 because `V` is not proved disjoint from the
+other arms; use `case None` and a catch-all. A matching type arm is irrefutable when the
 scrutinee type has collapsed to one member. Type patterns may also occur
 inside nominal enum payload patterns.
 
@@ -9168,6 +9171,50 @@ ok = Result[int32, str].Ok(7)
 
 Explicit arguments must have exact arity and satisfy all substituted bounds. Specialization and indexing share bracket syntax; the parser rules that distinguish them are specified in [Grammar](/manual/grammar#explicit-specialization).
 
+### Type Parameters As Union Members
+
+A declared type parameter is a valid union member, and a generic alias may
+name such a union. Substitution renormalizes the union: `V | None` with
+`V = int64 | None` is `int64 | None`, and with `V = None` it is unit `None`.
+A generic union never keeps a phantom outer tag to tell those results apart.
+
+```aura
+type MaybeValue[V] = V | None
+
+def absent[V]() -> V | None:
+    return None
+
+def present[V](value: own V) -> V | None:
+    return value
+
+def main():
+    first: MaybeValue[int64] = present[int64](4)
+    if first is not None:
+        print(first + 1)
+    print(absent[int64 | None]() is None)
+    print(present[int64 | None](None) is None)
+```
+
+This prints `5`, `true`, and `true`. Inference reads a parameter that is a
+union member from the remaining members of the argument: every concrete
+member of the parameter's union must be a member of the argument, and the
+rest binds the parameter, so `V | None` infers `V = Dog` from `Dog` or
+`Dog | None` and `V = int64 | str` from `int64 | str | None`. An argument that
+leaves nothing for the parameter, such as `None`, or a union whose members
+could belong to more than one parameter, is rejected with `AU2010`; specialize
+explicitly rather than expecting the checker to invert normalization.
+
+Inside a generic body the checker cannot assume that `V`, `W`, and `None`
+are distinct. `value is None` and `value is not None` on `V | None` narrow to
+`None` and to `V`, and `V` there is only the non-`None` refinement; the test
+does not prove that `V` itself excludes `None`. A `None` test on a bare `V`
+value, or on a union whose only `None` could come from a type parameter, is
+decided at run time. A type arm `case V as inner` is rejected with `AU2013`
+because `V` is not proved to be one member disjoint from every other arm;
+write `case None` and a catch-all instead. Concrete union properties are
+derived from the concrete members after specialization; an unresolved member
+grants nothing without a bound.
+
 ## Inferred Clone-Safety Obligations
 
 Generic clone-safety obligations are inferred from clone-producing operations in callable bodies.
@@ -9472,7 +9519,9 @@ implementation methods always use ordinary method-definition syntax.
 
 Generic arguments are invariant and have exact arity. Inference is local and
 contextual, must resolve every declared parameter, and must satisfy every
-substituted bound. Trait satisfaction is nominal through a visible applicable
+substituted bound. A parameter that is a union member binds to the argument's
+remaining members; unions are renormalized after every substitution, and a
+generic body is checked once, universally, before any specialization. Trait satisfaction is nominal through a visible applicable
 `impl`, never structural. Implementations must conform after substituting
 receiver mode, parameter modes and types, owned return type, clone-safety
 obligations, and supertrait requirements. Dispatch selects one unique
@@ -9483,7 +9532,12 @@ only in its supported declaration contexts.
 ## Runtime Semantics
 
 Generic construction and calls use the statically resolved specialization;
-there is no runtime generic inference. Trait member and operator calls invoke
+there is no runtime generic inference. A union value built inside a generic
+body keeps the body's symbolic member layout until a concrete operation reads
+it; every union operation aligns the value to the union it names by the
+active member's identity, and a `V`-typed union payload flattens into its
+destination without a nested wrapper, so both execution paths agree on the
+one normalized value. Trait member and operator calls invoke
 the statically selected implementation, inheriting a trait default body when
 the implementation omits that method. Source order never resolves overlapping
 implementations. `try` invokes the selected `From[Source]` conversion before
@@ -9508,7 +9562,9 @@ concrete dispatch discharges them after substitution.
 implementation syntax. `AU2001` reports unknown types, traits, methods, and
 members. `AU2002` covers inference failure, generic arity, unsatisfied bounds,
 missing trait satisfaction, ambiguous equal-specificity dispatch, invalid
-specialization, and substituted type mismatch. `AU2003` reports an unsupported
+specialization, and substituted type mismatch. `AU2010` reports a type
+parameter that a union member argument cannot determine, and `AU2013` a
+type arm over a type parameter. `AU2003` reports an unsupported
 operator when no builtin rule or applicable operator trait supplies it.
 `AU2004` reports call argument binding and the prohibition on ordinary default
 arguments in trait methods. `AU2006` reports builtin method collisions.
@@ -9559,6 +9615,9 @@ implementations, unique-most-specific dispatch, operator traits, `Self`, and
 Ordinary `-> T` return values are owned. Generic functions and methods may
 instead declare `-> view [mut] T from origin`; trait implementations preserve
 the trait declaration's origin slot as well as its specialized pointee type.
+Type parameters as union members, renormalizing specialization, remainder
+inference, and universal generic body checks are implemented under the Batch
+1 phase 1 design checkpoint.
 Trait objects, dynamic dispatch, associated types,
 higher-kinded types, general
 subtyping, and arbitrary blanket implementation targets are unavailable.
@@ -15844,6 +15903,15 @@ For a concrete receiver, the checker chooses the unique applicable implementatio
 
 For a type parameter, available methods and operators come from its declared bounds. If multiple bounds expose an indistinguishable method, the access is ambiguous unless the language can resolve one unique contract.
 
+A type parameter may be a union member. Unifying such a union with an
+argument requires every concrete member of the pattern to be a member of the
+argument and binds the parameter to the normalized remainder; an empty
+remainder or a remainder that could belong to more than one parameter
+requires explicit specialization (`AU2010`). Substituted unions are
+renormalized, and a generic body is checked once under its symbolic members:
+`is None` on `V | None` refines to `None` and to `V`, `is None` on a bare
+`V` is a runtime test, and `case V` is rejected (`AU2013`).
+
 Trait and implementation methods cannot declare default ordinary parameters in Aura 0.3. Trait default method bodies are permitted; a signature-only trait method has no body after its terminating newline.
 
 A clone-producing operation over unresolved generic types infers clone-safety
@@ -16180,7 +16248,7 @@ youngest-first task ancestry. Each public schema-version-1 frame span has its
 own required source `path`; the analysis/LSP editor shape permits an optional
 `file_path` for source-only analysis. The public diagnostic schema remains
 version `1` because the always-present arrays are an additive extension;
-compiler-service/editor transport uses semantic schema version `9`. This
+compiler-service/editor transport uses semantic schema version `10`. This
 version includes structural function values, import aliases, and the expanded
 numeric expression surface, and forwards the same diagnostic records.
 
@@ -16457,7 +16525,10 @@ and `public` visibility. For example, `type ToolValue = int64 | str | None`
 names a union of three existing types. Union identity ignores member order,
 flattens nested unions, removes duplicates, and collapses a single member to
 that member's type. `None` is the unit member; aliases introduce no runtime
-wrapper or new nominal identity.
+wrapper or new nominal identity. A declared type parameter may be a member,
+and substitution renormalizes the result, so `V | None` with `V = int64 | None`
+is `int64 | None`; see
+[type parameters as union members](/manual/generics-and-traits#type-parameters-as-union-members).
 
 A value enters a union at an explicit expected-type boundary, such as an
 annotated binding or a declared parameter or result. Its type must be a direct

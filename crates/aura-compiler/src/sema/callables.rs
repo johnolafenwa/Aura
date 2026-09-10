@@ -2050,6 +2050,16 @@ impl<'a> FunctionChecker<'a> {
                 let span = argument
                     .map(|argument| argument.span)
                     .unwrap_or(param_decl.span);
+                if error.code == "AU2010" {
+                    return Err(Diagnostic::coded_at(
+                        "AU2010",
+                        span,
+                        format!(
+                            "argument type mismatch for {}: {}",
+                            callee_name, error.message
+                        ),
+                    ));
+                }
                 let detail = self
                     .written_alias_type(&param_decl.ty, &hinted_expected)
                     .map(|expected| format!("expected {expected}, found {actual}"))
@@ -2068,27 +2078,63 @@ impl<'a> FunctionChecker<'a> {
         }
 
         for type_param in callee_type_params {
-            let Some(resolved) = substitutions.get(type_param) else {
-                return Err(Diagnostic::at(
-                    span,
-                    format!(
-                        "cannot infer type parameter `{}` for {}",
-                        type_param, callee_name
-                    ),
-                ));
+            let unresolved = match substitutions.get(type_param) {
+                None => true,
+                Some(resolved) => matches!(
+                    resolved,
+                    Type::TypeParam(name)
+                        if name == type_param && !self.type_params.contains_key(name)
+                ),
             };
-            if matches!(
-                resolved,
-                Type::TypeParam(name)
-                    if name == type_param && !self.type_params.contains_key(name)
-            ) {
-                return Err(Diagnostic::at(
+            if !unresolved {
+                continue;
+            }
+            // A parameter that only occurs as a union member cannot be read
+            // back from a member argument such as `None`; the union rule asks
+            // for explicit specialization instead of inverted normalization
+            // (ADR-0052 A7).
+            let only_union_member = param_types.iter().any(|param| {
+                matches!(param, Type::Union(union)
+                    if union.members.iter().any(|member| matches!(member, Type::TypeParam(name) if name == type_param)))
+            });
+            if only_union_member {
+                return Err(Diagnostic::coded_at(
+                    "AU2010",
                     span,
                     format!(
-                        "cannot infer type parameter `{}` for {}",
+                        "cannot infer type parameter `{}` for {} from its union member arguments; specialize the callable explicitly",
                         type_param, callee_name
                     ),
                 ));
+            }
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "cannot infer type parameter `{}` for {}",
+                    type_param, callee_name
+                ),
+            ));
+        }
+
+        // An argument typed before its union parameter resolved is typed
+        // again under the resolved union so the checker records the boundary
+        // injection it implies (ADR-0052 A7).
+        for ((argument, actual, _, _), expected) in resolved_args.iter_mut().zip(param_types.iter())
+        {
+            let Some(argument) = argument else {
+                continue;
+            };
+            if !has_unresolved_type_params(expected) {
+                continue;
+            }
+            let resolved = substitute_type(expected, &substitutions);
+            if *actual == resolved || !matches!(resolved, Type::Union(_)) {
+                continue;
+            }
+            if let Ok(retyped) =
+                self.type_of_expr_without_move_state(&argument.value, locals, Some(&resolved))
+            {
+                *actual = retyped;
             }
         }
 
