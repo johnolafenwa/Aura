@@ -12175,6 +12175,7 @@ where
                 result_is_copy,
                 stack_size,
                 task_ancestry: DirectTaskAncestry::default(),
+                mutable_capture_indices: Vec::new(),
             },
             register_before_submit,
         )
@@ -12189,6 +12190,7 @@ struct DirectTaskSpawn {
     result_is_copy: bool,
     stack_size: Option<usize>,
     task_ancestry: DirectTaskAncestry,
+    mutable_capture_indices: Vec<usize>,
 }
 
 unsafe fn spawn_direct_task_with_external_state_and_ancestry<R>(
@@ -12206,6 +12208,7 @@ where
         result_is_copy,
         stack_size,
         task_ancestry,
+        mutable_capture_indices,
     } = spawn;
     // Build the full state on the spawning task's stack. The child coroutine
     // receives only the ready box pointer, keeping the 272-byte state
@@ -12229,6 +12232,15 @@ where
                 }
                 let args = unsafe { &*(args_address as *const Vec<i64>) };
                 let result_ptr = unsafe { thunk(args.as_ptr(), args.len()) };
+                // A Mutable stored target's environment-owned captures are
+                // taken mutably by the thunk and stay claimed by this child;
+                // its single invocation is over, so release them here (C8).
+                for index in &mutable_capture_indices {
+                    let handle = args[*index];
+                    if handle != 0 {
+                        unsafe { aura_direct_release_value(handle as *mut OpaqueValue) };
+                    }
+                }
                 unsafe { consume_direct_task_result(result_ptr, result_is_copy) }
             }))
         })
@@ -12282,6 +12294,7 @@ pub unsafe extern "C-unwind" fn aura_direct_start_task_call(
             stack_size_present,
             stack_size,
             task_ancestry: DirectTaskAncestry::default(),
+            mutable_capture_indices: Vec::new(),
         })
     }
 }
@@ -12373,6 +12386,7 @@ pub unsafe extern "C-unwind" fn aura_direct_start_task_call_with_frames(
             stack_size_present,
             stack_size,
             task_ancestry,
+            mutable_capture_indices: Vec::new(),
         })
     }
 }
@@ -12460,6 +12474,12 @@ pub unsafe extern "C-unwind" fn aura_direct_start_task_function_with_frames(
             ),
         ),
     });
+    let mutable_capture_indices = closure_captures
+        .iter()
+        .enumerate()
+        .filter(|(_, capture)| capture.mutable && capture.source_place.is_none())
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
     let (args_ptr, arg_count) = if closure_captures.is_empty() {
         (args_ptr, arg_count)
     } else {
@@ -12493,6 +12513,7 @@ pub unsafe extern "C-unwind" fn aura_direct_start_task_function_with_frames(
             stack_size_present,
             stack_size,
             task_ancestry,
+            mutable_capture_indices,
         })
     }
 }
@@ -12547,6 +12568,9 @@ struct DirectTaskCall {
     stack_size_present: i64,
     stack_size: i64,
     task_ancestry: DirectTaskAncestry,
+    /// Argument slots holding environment-owned captures a Mutable stored
+    /// target takes mutably; the child releases them after its one call.
+    mutable_capture_indices: Vec<usize>,
 }
 
 unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
@@ -12554,6 +12578,7 @@ unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
         thunk_ptr,
         args_ptr,
         arg_count,
+        mutable_capture_indices,
         returns_handle,
         task_group,
         result_is_copy,
@@ -12644,6 +12669,7 @@ unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
                     result_is_copy: result_is_copy != 0,
                     stack_size,
                     task_ancestry,
+                    mutable_capture_indices,
                 },
                 |task| {
                     group.register_task(task.clone());

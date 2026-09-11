@@ -5683,7 +5683,13 @@ impl MirRuntime {
             .ok_or_else(|| {
                 Diagnostic::new(format!("unknown MIR function `{}`", function_value.name))
             })?;
-        self.require_task_startable_function(&function)?;
+        // Environment-owned captures of a Mutable stored target are child-owned
+        // state (C8); only public mutable parameters imply a parent writeback.
+        let capture_count = function_value
+            .closure_environment
+            .as_ref()
+            .map_or(0, |environment| environment.capture_count());
+        self.require_task_startable_function(&function, capture_count)?;
         // Capture evaluation and target-owned defaults both happen in the
         // parent task. The child receives a complete declaration-ordered
         // argument vector, so a dynamically selected target cannot defer its
@@ -5851,10 +5857,15 @@ impl MirRuntime {
         Ok(())
     }
 
-    fn require_task_startable_function(&self, function: &MirFunction) -> Result<()> {
+    fn require_task_startable_function(
+        &self,
+        function: &MirFunction,
+        capture_count: usize,
+    ) -> Result<()> {
         if let Some(param) = function
             .params
             .iter()
+            .skip(capture_count)
             .find(|param| param.passing == MirReceiverKind::BorrowMut)
         {
             return Err(Diagnostic::coded(

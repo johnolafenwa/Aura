@@ -5913,12 +5913,23 @@ fn validate_loan_rvalue(
                                     args,
                                     state,
                                 )?,
-                            Type::Callable(callable) => context.validate_owned_typed_call_args(
-                                function,
-                                &callable.params,
-                                args,
-                                state,
-                            )?,
+                            Type::Callable(callable) => {
+                                // A stored target must carry the Transfer
+                                // proof of a `TaskCallable`; an ordinary
+                                // erased callable hides its environment (C8).
+                                if !callable.task {
+                                    return Err(format!(
+                                        "invalid MIR task call in `{}` starts an erased callable without a Transfer proof",
+                                        function.name
+                                    ));
+                                }
+                                context.validate_owned_typed_call_args(
+                                    function,
+                                    &callable.params,
+                                    args,
+                                    state,
+                                )?
+                            }
                             _ => {
                                 return Err(format!(
                                     "invalid MIR task call in `{}` has no authoritative callable contract",
@@ -16193,6 +16204,25 @@ impl<'a> Lowerer<'a> {
                             substitutions: std::collections::HashMap::new(),
                             display_name: "function value".to_string(),
                         }),
+                        Type::Callable(callable) => Some(TaskStartTarget {
+                            function_name: None,
+                            params: Vec::new(),
+                            param_types: callable
+                                .params
+                                .iter()
+                                .map(|param| param.ty.clone())
+                                .collect(),
+                            param_passings: callable
+                                .params
+                                .iter()
+                                .map(|param| param.passing)
+                                .collect(),
+                            param_contracts: callable.params.clone(),
+                            return_type: callable.return_type.clone(),
+                            type_params: Vec::new(),
+                            substitutions: std::collections::HashMap::new(),
+                            display_name: "stored task target".to_string(),
+                        }),
                         _ => None,
                     })
                 }),
@@ -16374,6 +16404,21 @@ impl<'a> Lowerer<'a> {
                     type_params: Vec::new(),
                     substitutions: std::collections::HashMap::new(),
                     display_name: "function value".to_string(),
+                }),
+                Type::Callable(callable) => Some(TaskStartTarget {
+                    function_name: None,
+                    params: Vec::new(),
+                    param_types: callable
+                        .params
+                        .iter()
+                        .map(|param| param.ty.clone())
+                        .collect(),
+                    param_passings: callable.params.iter().map(|param| param.passing).collect(),
+                    param_contracts: callable.params.clone(),
+                    return_type: callable.return_type.clone(),
+                    type_params: Vec::new(),
+                    substitutions: std::collections::HashMap::new(),
+                    display_name: "stored task target".to_string(),
                 }),
                 _ => None,
             }),
@@ -19939,6 +19984,9 @@ impl<'a> Lowerer<'a> {
                 "Option".to_string(),
                 vec![args.first().cloned().unwrap_or(Type::Unit)],
             )),
+            // `result_or` yields the task's own result type, so a local bound
+            // from a function-valued task result keeps its callable type.
+            ("Task", "result_or") => args.first().cloned(),
             ("TaskGroup", "start") | ("TaskGroup", "start_with_stack") => Some(Type::Named(
                 "Task".to_string(),
                 vec![Type::named("Unknown")],

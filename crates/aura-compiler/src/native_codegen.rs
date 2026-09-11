@@ -15352,6 +15352,7 @@ impl<'a> FunctionCompiler<'a> {
             match infer_operand_type(function, &self.variable_types, &self.classes) {
                 Some(DirectType::Opaque(Type::Function { params, .. })) => params,
                 Some(DirectType::Opaque(Type::Closure { params, .. })) => *params,
+                Some(DirectType::Opaque(Type::Callable(callable))) => callable.params,
                 _ => Vec::new(),
             };
         let arg_count_value = self

@@ -9758,31 +9758,37 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
         blocks: Vec::new(),
     };
     runtime
-        .require_task_startable_function(&by_value)
+        .require_task_startable_function(&by_value, 0)
         .expect("by-value MIR functions should be task-startable");
     runtime
-        .require_task_startable_function(&MirFunction {
-            params: vec![MirParam {
-                name: "value".to_string(),
-                passing: crate::mir::MirReceiverKind::Borrow,
-                ty: Type::named("str"),
-                default_function: None,
-                keyword_only: false,
-            }],
-            ..by_value.clone()
-        })
+        .require_task_startable_function(
+            &MirFunction {
+                params: vec![MirParam {
+                    name: "value".to_string(),
+                    passing: crate::mir::MirReceiverKind::Borrow,
+                    ty: Type::named("str"),
+                    default_function: None,
+                    keyword_only: false,
+                }],
+                ..by_value.clone()
+            },
+            0,
+        )
         .expect("shared borrowed MIR parameters should be task-startable");
     let task_start_error = runtime
-        .require_task_startable_function(&MirFunction {
-            params: vec![MirParam {
-                name: "value".to_string(),
-                passing: crate::mir::MirReceiverKind::BorrowMut,
-                ty: Type::named("int32"),
-                default_function: None,
-                keyword_only: false,
-            }],
-            ..by_value
-        })
+        .require_task_startable_function(
+            &MirFunction {
+                params: vec![MirParam {
+                    name: "value".to_string(),
+                    passing: crate::mir::MirReceiverKind::BorrowMut,
+                    ty: Type::named("int32"),
+                    default_function: None,
+                    keyword_only: false,
+                }],
+                ..by_value
+            },
+            0,
+        )
         .expect_err("mutable borrowed params should not be task-startable in MIR");
     assert_eq!(task_start_error.code, "AU3002");
     assert_eq!(

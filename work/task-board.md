@@ -121,9 +121,14 @@ Last updated: 2026-09-10
   proof for task callables, owned-capture mutation making closures Mutable
   with environment writeback on both backends, calls through fields and
   elements, and erased identities validated at every boundary; schema 13.
-- Next: commit the packing family, then TaskCallable targets, bound methods,
-  stored argument-origin views, Shared callback sites, editor/docs/
-  reference-agent updates, full gates and integration.
+- TaskCallable targets family (2026-09-11): every `TaskGroup` start method
+  takes a stored `TaskCallable` target by move on both backends, Mutable
+  targets own their captures in the child, ordinary erased callables are
+  refused by checker and validator, and function-valued task results keep
+  their callable type.
+- Next: commit the TaskCallable family, then bound methods, stored
+  argument-origin views, Shared callback sites, editor/docs/reference-agent
+  updates, full gates and integration.
 - Option removal and all phase 2 signature changes remain excluded; protected
   user files and coverage floors remain unchanged.
 - Work and handoff ledger: [2026-09-09-batch-1-phase-1.md](2026-09-09-batch-1-phase-1.md).

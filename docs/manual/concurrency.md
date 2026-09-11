@@ -78,8 +78,14 @@ with group = TaskGroup():
 | `cancel` | `cancel() -> None` | Signals cancellation to child tasks. |
 
 All four start methods accept capture-free function values, which are copy
-values and satisfy `Transfer`, plus closure values whose complete captured
-environment is Transfer. Existing direct named-function and
+values and satisfy `Transfer`, closure values whose complete captured
+environment is Transfer, and stored `TaskCallable[...]` values, whose packing
+proved every capture Transfer (see [Closures](/manual/closures#typing-rules)).
+A stored target is moved into the start for one child call, whether its call
+kind is Shared, Mutable, or Consuming; a Mutable target's captures are
+child-owned state with no parent writeback. An ordinary erased `Callable`
+target is rejected with `AU3008` because its environment is hidden. Existing
+direct named-function and
 associated-method-without-`self` targets remain accepted, including explicit
 generic targets written as `function[Types]` or
 `Type.associated_method[Types]` in the callable slot. Associated methods do not

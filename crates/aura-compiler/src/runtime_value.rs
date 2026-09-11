@@ -386,6 +386,15 @@ pub struct ClosureEnvironment {
 }
 
 impl ClosureEnvironment {
+    /// The number of captured values the environment was created with.
+    pub(crate) fn capture_count(&self) -> usize {
+        self.captures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map_or(0, Vec::len)
+    }
+
     pub fn new(captures: Vec<ClosureCaptureValue>, consuming: bool) -> Self {
         Self {
             captures: Mutex::new(Some(captures)),

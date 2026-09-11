@@ -12058,6 +12058,29 @@ impl<'a> FunctionChecker<'a> {
                                                     return_type.clone(),
                                                     Some(captures.as_slice()),
                                                 ),
+                                                // A stored target is admitted only as a
+                                                // `TaskCallable`, whose packing proved every
+                                                // capture Transfer (C8); an ordinary erased
+                                                // `Callable` hides its environment.
+                                                Type::Callable(callable) => {
+                                                    if !callable.task {
+                                                        return Err(Diagnostic::coded_at(
+                                                            "AU3008",
+                                                            args[target_index].span,
+                                                            format!(
+                                                                "task target of type `{target_ty}` hides its environment and is not Transfer"
+                                                            ),
+                                                        )
+                                                        .with_help(
+                                                            "pack the closure as `TaskCallable[...]`, which proves every capture Transfer when it is created",
+                                                        ));
+                                                    }
+                                                    (
+                                                        callable.params.clone(),
+                                                        Box::new(callable.return_type.clone()),
+                                                        None,
+                                                    )
+                                                }
                                                 _ => return Err(named_target_error),
                                             };
                                         if let Some(captures) = closure_captures {
@@ -12143,7 +12166,9 @@ impl<'a> FunctionChecker<'a> {
                                             format!("task result `{checked_return}`"),
                                             args[target_index].span,
                                         )?;
-                                        if closure_captures.is_some() {
+                                        if closure_captures.is_some()
+                                            || matches!(target_ty, Type::Callable(_))
+                                        {
                                             self.consume_value_expr(
                                                 &args[target_index].value,
                                                 locals,

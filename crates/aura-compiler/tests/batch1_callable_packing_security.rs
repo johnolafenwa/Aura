@@ -95,3 +95,29 @@ fn packed_values_run_with_backend_parity() {
     assert_eq!(run_mir(&mir).expect("the program runs").stdout, "1\n");
     emit_host_native_object(&mir).expect("the direct backend accepts the packed value");
 }
+
+const TASK_SOURCE: &str = "type Job = TaskCallable[def() -> int64]\n\ndef make_job(seed: int64) -> Job:\n    base = seed\n    return Job(lambda: base + 1)\n\ndef main():\n    with TaskGroup() as group:\n        task = group.start(make_job(1))\n        print(task.result_or(-1, timeout=1s))\n";
+
+#[test]
+fn forged_stored_task_target_cannot_drop_its_transfer_proof() {
+    let mut encoded = encode(TASK_SOURCE);
+    // Forge the factory's declared result from `TaskCallable` to an
+    // ordinary erased `Callable`: the value the task start receives no
+    // longer carries a Transfer proof, and the start's expected target
+    // contract must refuse it.
+    let make_job = function_mut(&mut encoded, "make_job");
+    let callable = make_job
+        .get_mut("return_type")
+        .and_then(|ty| ty.get_mut("Callable"))
+        .expect("the factory returns an erased callable");
+    assert_eq!(callable["task"], json!(true));
+    callable["task"] = json!(false);
+    assert_rejected(encoded, "callable");
+}
+
+#[test]
+fn stored_task_targets_run_with_backend_parity() {
+    let mir = lower_source_to_mir(TASK_SOURCE).expect("stored task targets lower");
+    assert_eq!(run_mir(&mir).expect("the program runs").stdout, "2\n");
+    emit_host_native_object(&mir).expect("the direct backend accepts the stored target");
+}

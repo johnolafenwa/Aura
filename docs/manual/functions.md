@@ -461,7 +461,10 @@ argument is first copied or moved into task-owned capture storage: `own` target
 parameters consume their capture, while bare shared parameters access that
 storage for the duration of the child call. `mut` targets are rejected because
 mutable access to detached capture
-storage has no caller-visible writeback contract. See [Concurrency](/manual/concurrency).
+storage has no caller-visible writeback contract. A stored
+`TaskCallable[...]` value is also a target, moved into the start for one child
+call; an ordinary erased `Callable` is not, because its environment was never
+proven Transfer (`AU3008`). See [Concurrency](/manual/concurrency).
 
 ## `main`
 

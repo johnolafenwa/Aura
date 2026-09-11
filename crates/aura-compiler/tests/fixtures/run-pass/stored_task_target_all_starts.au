@@ -1,0 +1,43 @@
+class Counter:
+    total: int64
+
+    def bump(mut self) -> int64:
+        self.total = self.total + 1
+        return self.total
+
+type Work = TaskCallable[def(value: int64) -> int64]
+type Job = TaskCallable[def() -> int64]
+type Scaler = TaskCallable[def(value: int64, factor: int64 = ...) -> int64]
+type Ticker = TaskCallable[mut def() -> int64]
+
+def mark(label: str, value: int64) -> int64:
+    print(label)
+    return value
+
+def scale(value: int64, factor: int64 = mark("default-factor", 3)) -> int64:
+    return value * factor
+
+def make_adder(amount: int64) -> Work:
+    offset = amount
+    return Work(lambda value: value + offset)
+
+def make_job(seed: int64) -> Job:
+    base = seed
+    return Job(lambda: base * 10)
+
+def make_ticker(start: int64) -> Ticker:
+    counter = Counter(total=start)
+    return Ticker(lambda [own counter]: counter.bump())
+
+def main():
+    with TaskGroup() as group:
+        adder = group.start(make_adder(1), mark("supplied-value", 41))
+        print(adder.result_or(-1, timeout=1s))
+        scaled = group.start(Scaler(scale), 7)
+        print(scaled.result_or(-1, timeout=1s))
+        job = group.start_with_stack(262144, make_job(4))
+        print(job.result_or(-1, timeout=1s))
+        ticker = group.start(make_ticker(5))
+        print(ticker.result_or(-1, timeout=1s))
+        group.start_soon(make_job(5))
+        group.start_soon_with_stack(262144, make_adder(2), 3)

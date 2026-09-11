@@ -340,9 +340,11 @@ Owned callable storage holds owned captures only; loan captures stay in
 local loan closures. A packed value keeps the closure's existing environment
 as its storage, so packing allocates no second environment on either
 backend; the checkpoint's inline-buffer plan is the native ABI target this
-representation stands in for. `TaskCallable[...]` values are packed and
-validated, but the `TaskGroup` start methods do not accept a stored target
-yet.
+representation stands in for. A `TaskCallable[...]` value is a stored task
+target: every `TaskGroup` start method takes it by move for one child call,
+whether Shared, Mutable, or Consuming, and a Mutable target's captures are
+child-owned state with no parent writeback (see
+[Concurrency](/manual/concurrency)).
 Explicit lists accept local identifiers; project a field into a named view
 before capturing it.
 

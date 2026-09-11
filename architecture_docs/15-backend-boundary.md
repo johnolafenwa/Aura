@@ -387,3 +387,15 @@ task starts, and function operands, and merges disagreeing identities under
 one erased element type into that contract. Runtime type patterns admit a
 function or closure signature for an erased declared type when the ABI
 matches and the kind is admitted. The semantic interface schema is 13.
+
+## Batch 1 phase 1: stored task targets
+
+A `TaskCallable[...]` value is the same boxed function value as any packed
+callable; only its type carries the Transfer proof its packing established
+(Q21 A). Every start method resolves a stored target from its erased
+contract on both backends, and the checker and the validator both refuse an
+ordinary erased `Callable` target. A Mutable stored target's mutably taken,
+environment-owned captures are child-owned: the interpreter's startable
+check skips them, and the direct runtime releases the child's claim on
+those handles after the single invocation, so a normally completed task
+retains nothing. Parent-evaluated defaults and task ancestry are unchanged.
